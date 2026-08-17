@@ -6,8 +6,14 @@
 import * as v from 'valibot';
 import type { CodemodeProvider } from '../rlm.js';
 import type { ReportToolDeps } from './builtins.js';
+import { dispatchReport } from './report-tool.js';
+import { TOOL_REACH } from './registry.js';
 
-const ReportStatusSchema = v.picklist(['progress', 'completed', 'blocked']);
+/** Positional args arrive untyped from the sandbox; narrowing them to two
+ *  strings is this surface's only job. Which statuses exist, and what an empty
+ *  body is refused with, belong to the one dispatcher both surfaces call — not
+ *  to a second picklist here, which is what they used to disagree over. */
+const PositionalSchema = v.tuple([v.string(), v.string()]);
 
 const TYPES = `export declare const report: {
   /** Report progress, completion, or a blocker on your current assignment
@@ -22,22 +28,19 @@ const TYPES = `export declare const report: {
  *  mid-session, but the convention matches every other provider here. */
 export function createReportCodemodeProvider(deps: () => ReportToolDeps): CodemodeProvider {
   return {
-    name: 'report',
+    name: TOOL_REACH.report.codemode,
     types: TYPES,
     positionalArgs: true,
     tools: {
       send: {
         description: 'Report progress, completion, or a blocker to the workspace orchestrator.',
         execute: async (...args: unknown[]) => {
-          const status = v.safeParse(ReportStatusSchema, args[0]);
-          const content = v.safeParse(v.pipe(v.string(), v.trim(), v.minLength(1)), args[1]);
-          if (!status.success) return { error: 'report.send requires a valid status' };
-          if (!content.success) return { error: 'report.send requires non-empty content' };
-          try {
-            return await deps().report({ status: status.output, content: content.output });
-          } catch (err) {
-            return { error: err instanceof Error ? err.message : String(err) };
+          const positional = v.safeParse(PositionalSchema, [args[0], args[1]]);
+          if (!positional.success) {
+            return { error: 'report.send requires a status and content, both strings' };
           }
+          const [status, content] = positional.output;
+          return await dispatchReport(deps(), { status, content });
         },
       },
     },

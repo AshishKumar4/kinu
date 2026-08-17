@@ -1,13 +1,82 @@
 /**
  * Canonical tool registry — the single source of truth for Proteus's built-in
- * tool names and descriptions. Consumed by:
+ * tool names, how the model REACHES each of them, and their descriptions.
+ * Consumed by:
  *   - tools/builtins.ts      (factory for the built-in ToolSet)
+ *   - tools/*-codemode.ts    (each namespace takes its NAME from TOOL_REACH)
+ *   - execution/sandbox-errors.ts (where a capability actually is, when a
+ *                            model reaches for a native tool inside the sandbox)
  *   - prompting/surface.ts   (crafted-tool projection of the live ToolSet)
+ *   - conformance/manifest.ts (per-root wiring, keyed by these names)
  *   - cf-backend/orchestrator.ts  (getToolList, getToolDescriptions, beforeTurn)
  *   - cli surfaces           (chat-loop, tui)
  *
  * Changing any name here is a breaking change to prompts, UI, and MCTS scoring.
  */
+
+// ── The reach axis (single source) ──────────────────────────────────────────
+// Until this declaration existed, how the model reaches a capability was
+// emergent rather than stated: native meant "whichever names buildBuiltinTools
+// happened to put in the ToolSet", codemode meant "whichever
+// createXCodemodeProvider some backend actor class happened to call", and the
+// Tools panel guessed `nativeNames.has(name) ? 'native' : 'codemode'` — a
+// binary that cannot say "neither", so the one deps-gated builtin (`report`)
+// rendered as codemode-only on the orchestrator, an actor that has it on no
+// surface at all.
+//
+// `codemode` is a NAMESPACE and not a boolean because it is not always the
+// capability's own name: `run` and `file` are reached inside the sandbox
+// through the shared `workspace` primitives they already dispatch into, so
+// they own no namespace of their own. A capability OWNS its namespace exactly
+// when `codemode` equals its own key, which is what every *-codemode.ts factory
+// relies on: each takes its provider `name` straight from this table.
+//
+// Reach is not permission. What a given actor gets is reach ∩ the deps its
+// backend wires; the per-root record of which roots wire what, with a stated
+// reason for every deliberate absence, is conformance/manifest.ts.
+
+export type ToolReach =
+  | { readonly native: true; readonly codemode: string | null }
+  | { readonly native: false; readonly codemode: string };
+
+/**
+ * Every capability the model can call by name, and where it can call it.
+ *
+ * The native rows come first, in registration order. Adding one GROWS the
+ * standing tool surface, which is 8 by deliberate design (10 → 8, 2026-08-13:
+ * every native tool is a standing choice the model weighs on every turn it is
+ * not the answer to, and selection accuracy degrades with choice count).
+ * unit-tools.test.ts pins both the count and the names against this table, so
+ * growth is a decision and never a side effect of editing it.
+ */
+export const TOOL_REACH = {
+  execute_tools: { native: true, codemode: null },
+  run: { native: true, codemode: 'workspace' },
+  file: { native: true, codemode: 'workspace' },
+  agents: { native: true, codemode: 'agents' },
+  memory: { native: true, codemode: 'memory' },
+  tasks: { native: true, codemode: 'tasks' },
+  web: { native: true, codemode: 'web' },
+  report: { native: true, codemode: 'report' },
+  // Codemode-only by decision, not by omission: a governed high-blast-radius
+  // lane, the agent's own self-steering, and the sandbox's recursive-LM
+  // primitive. None of the three is the answer to enough turns to earn a
+  // standing top-level choice, and `llm.query` is only meaningful as code
+  // feeding code in the first place.
+  release: { native: false, codemode: 'release' },
+  agent: { native: false, codemode: 'agent' },
+  llm: { native: false, codemode: 'llm' },
+} as const satisfies Record<string, ToolReach>;
+
+type CapabilityName = keyof typeof TOOL_REACH;
+
+/** The capabilities handed to the model as tool definitions, derived from the
+ *  reach declaration — so BUILTIN_TOOL_SPECS and BUILTIN_TOOL_DESCRIPTIONS
+ *  cannot compile without an entry for a newly-native capability, and
+ *  BUILTIN_TOOLS cannot list one the declaration does not call native. */
+export type BuiltinToolName = {
+  [K in CapabilityName]: (typeof TOOL_REACH)[K]['native'] extends true ? K : never
+}[CapabilityName];
 
 export const BUILTIN_TOOLS = [
   'execute_tools',
@@ -18,15 +87,20 @@ export const BUILTIN_TOOLS = [
   'tasks',
   'web',
   'report',
-] as const;
-
-export type BuiltinToolName = (typeof BUILTIN_TOOLS)[number];
+] as const satisfies readonly BuiltinToolName[];
 
 /** Whitelist applied in beforeTurn() on the CF backend. */
 export const ACTIVE_TOOLS = [...BUILTIN_TOOLS] as const;
 
 /** Set form for O(1) membership checks in hot paths (e.g. craft score filter). */
 export const BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set(BUILTIN_TOOLS);
+
+/** Narrows a name that arrived off the wire — a sandbox ReferenceError, an
+ *  MCTS score row — to the native surface, so TOOL_REACH can be indexed with
+ *  it without a cast. */
+export function isBuiltinToolName(value: string): value is BuiltinToolName {
+  return BUILTIN_TOOL_NAMES.has(value);
+}
 
 export interface BuiltinToolSpec {
   name: BuiltinToolName;
@@ -72,11 +146,20 @@ export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 export const DELEGATION_FRAME =
   'One delegation ladder keyed on how long the helper needs to live.';
 
-/** The two spawn rungs of the delegation ladder, rendered verbatim in both
- *  the `agents` docstring and the prompt's Delegation section. */
+/** The two spawn rungs of the delegation ladder. Rendered verbatim into the
+ *  `agents` schema description, which every family reads for SELECTION; the
+ *  prompt's Delegation section indexes the same rungs in its own words and
+ *  carries only the operational doctrine no schema does (prompt.ts). */
 export const DELEGATION_RUNGS = {
   fork:
-    'Fork (action=fork) on two triggers. Breadth: work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
+    // Opens on the payoff in the CALLER'S currency, which nothing in the
+    // delegation surface said before: the section's only use of "cheapest"
+    // argued for NOT reaching for the ladder. Literally true of a head — it
+    // runs on its own inherited window and only its settled result comes back
+    // into this one (heads/controller.ts) — so it is a fact about the mechanism
+    // and not a sales line, which is the one idea worth taking from the
+    // deepseek harness's `so it does not consume this conversation's context`.
+    'Fork (action=fork) to spend someone else\'s context instead of your own — each fork reads, searches and runs in its own window and hands you back only the answer. Two triggers. Breadth: work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
     'Doubt: your first attempt failed, two approaches are both plausible, the step ahead is expensive to undo, or you cannot check your own output — being unsure is itself a reason to fork. ' +
     'Each fork is you on the same workspace, files and sandbox, running its own multi-step tool loop concurrently (web search/fetch, exec), then merging back and disappearing; takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you. ' +
     // The payoff-before-limitation ORDER is deliberate and preserved: opening
@@ -117,6 +200,50 @@ export const MEMORY_NOTE_ACTIONS = ['save', 'search', 'sessions'] as const;
 /** Present only where a FactsStore is wired. */
 export const MEMORY_FACT_ACTIONS = ['remember', 'recall', 'forget'] as const;
 
+/** The memory actions a runtime can actually perform — the ONE expression of
+ *  the facts gate, so the enum the model is shown, the vocabulary a refusal
+ *  names, and the set the dispatcher accepts cannot disagree. (Sibling of
+ *  `agentsActionsFor`, which does the same job for `agents`.) */
+export function memoryActionsFor(hasFacts: boolean): readonly MemoryToolAction[] {
+  return hasFacts ? [...MEMORY_NOTE_ACTIONS, ...MEMORY_FACT_ACTIONS] : MEMORY_NOTE_ACTIONS;
+}
+
+/** The `web` plane's two actions. Beside the other tool vocabularies rather
+ *  than inline in builtins.ts, so the schema enum, the dispatcher's accepted
+ *  set and a refusal's wording are one symbol. */
+export const WEB_TOOL_ACTIONS = ['search', 'fetch'] as const;
+export type WebToolAction = (typeof WEB_TOOL_ACTIONS)[number];
+
+/** The `file` plane's three actions — the one file/execution surface's whole
+ *  vocabulary, declared beside its siblings for the same reason. */
+export const FILE_TOOL_ACTIONS = ['read', 'write', 'edit'] as const;
+export type FileToolAction = (typeof FILE_TOOL_ACTIONS)[number];
+
+/**
+ * The one wording for "the model sent a discriminant that is not in the
+ * vocabulary" — shared by every native dispatcher, because they used to
+ * disagree about it and the disagreement was the defect: `tasks` answered
+ * `unknown tasks action 'list">'`, naming what the model typed and none of the
+ * words that would have worked, so the retry repeated the mistake.
+ *
+ * Both halves earn their place. The vocabulary is what makes the next call
+ * succeed. The echo is what tells the model WHICH of its arguments was wrong
+ * when a call carried several — and it is `JSON.stringify`d so a malformed
+ * fragment reads as a string literal rather than blending into the message.
+ *
+ * `received` is typed as the caller's DECLARED type, which is a string on
+ * every dispatcher: this runs after the parse has already refused it, so its
+ * only job is to render what arrived.
+ */
+export function unknownActionError(
+  tool: string,
+  field: string,
+  received: string,
+  allowed: readonly string[],
+): string {
+  return `${tool} requires \`${field}\` — one of ${allowed.join(', ')}; got ${JSON.stringify(received)}`;
+}
+
 // ── Task-list doctrine (single source) ──────────────────────────────────────
 // `tasks` is its own tool rather than three more actions on `memory` because
 // the two answer different questions. `memory` is what the agent will want to
@@ -128,8 +255,74 @@ export const MEMORY_FACT_ACTIONS = ['remember', 'recall', 'forget'] as const;
 // put four more properties on the schema the model reads for every durable-
 // state decision.
 
-export const TASKS_TOOL_ACTIONS = ['add', 'update', 'list'] as const;
+export const TASKS_TOOL_ACTIONS = ['add', 'update', 'list', 'mode'] as const;
 export type TasksToolAction = (typeof TASKS_TOOL_ACTIONS)[number];
+
+// ── Stance doctrine (single source) ─────────────────────────────────────────
+// A stance is HOW the agent is working right now. It is not a permission: what
+// a turn may do is decided by the Plan/Auto axis (prompting/surface.ts's
+// WorkMode), and Plan is enforced structurally — submit_plan exists only on a
+// Plan turn and `release.*` is mechanically removed from the namespace. A
+// stance only adds lines to the operating guidance, so no stance can widen or
+// narrow that. It rides `tasks` because it is the same kind of state the task
+// list is: the agent's own record of the work in front of it.
+//
+// `general` is the default and renders NOTHING. That is deliberate — the
+// absence of constraint is how the agent already works, and giving the default
+// a paragraph would spend the model's attention saying so.
+
+export const AGENT_STANCES = ['general', 'research', 'build', 'audit'] as const;
+export type AgentStance = (typeof AGENT_STANCES)[number];
+export const DEFAULT_AGENT_STANCE: AgentStance = 'general';
+
+/** Narrows a stored config value or a model-supplied argument to a stance. */
+export function isAgentStance(value: string | null | undefined): value is AgentStance {
+  return AGENT_STANCES.some((stance) => stance === value);
+}
+
+export interface AgentStanceSpec {
+  /** What picking this stance is for. Schema-only — the enum description the
+   *  model reads when it decides, mirroring BuiltinToolSpec.whenToUse. */
+  pick: string;
+  /** The lines added to the prompt's operating guidance while this stance is
+   *  set. Rendered verbatim by prompt.ts and written nowhere else. */
+  guidance: readonly string[];
+}
+
+export const AGENT_STANCE_SPECS = {
+  general: {
+    pick: 'the default — work the way the task in front of you needs',
+    guidance: [],
+  },
+  research: {
+    pick: 'understanding something before deciding what to do about it',
+    guidance: [
+      'Research stance: read the code, logs and data yourself, and name the file and line each claim rests on.',
+      'Say which parts you confirmed, which are still open, and what evidence would close them.',
+    ],
+  },
+  build: {
+    pick: 'carrying a change through to something that runs',
+    guidance: [
+      'Build stance: carry the change through to something that runs, and show the command output that proves it.',
+      'Keep each changed line traceable to the request or to the root cause behind it.',
+    ],
+  },
+  audit: {
+    pick: 'going over a surface end to end and reporting what is there',
+    guidance: [
+      'Audit stance: cover the whole surface in front of you, and give every finding a file and line.',
+      'Lead with what matters most, and say what you checked to reach each finding.',
+    ],
+  },
+} satisfies Record<AgentStance, AgentStanceSpec>;
+
+/** The stance choices, composed from the same specs the prompt renders so
+ *  there is one place to edit. Read by the `tasks` docstring below and by the
+ *  `stance` property description in tools/builtins.ts — the two places a model
+ *  can learn a stance exists. */
+export const STANCE_CHOICES: string =
+  AGENT_STANCES.map((stance) => `${stance} = ${AGENT_STANCE_SPECS[stance].pick}`).join('. ');
 
 export type MemoryToolAction =
   | (typeof MEMORY_NOTE_ACTIONS)[number]
@@ -307,8 +500,15 @@ export const BUILTIN_TOOL_SPECS = {
       "Spawn and talk to helper agents: ephemeral forks of yourself, persistent subordinates in this workspace, and the owner's other workspace agents.",
     whenToUse:
       `${DELEGATION_FRAME} ${DELEGATION_RUNGS.fork} ${DELEGATION_RUNGS.staff} ${DELEGATION_CONVERSE}`,
+    // The same three facts as positives. This field's LABEL still frames them
+    // ("Avoid when: …", renderToolSchemaDescription below), which is the honest
+    // place for the framing; the sentences inside it do not have to be
+    // prohibitions, and this was the one delegation surface that read as one.
+    // The race half gained the remedy it was missing — the fix for two forks
+    // over one resource is one fork that owns it, which is what the head's own
+    // prompt already tells the child to do (heads/head-inference.ts).
     whenNotToUse:
-      'Do not delegate a single short coherent change you can simply do directly, or forks that would race on the same mutable resource. Caution: every subordinate or peer message wakes that agent for a full turn, so send purposeful work.',
+      'A single short coherent change is yours to make directly. Forks that would write the same mutable resource belong in one fork that owns it. Every subordinate or peer message wakes that agent for a full turn, so each one carries real work.',
     result:
       'fork produces the merged (or mcts-scored) answer with per-fork outputs — on a live session the call hands back a background job at spawn and that answer arrives as the wake when it settles; staff/dismiss return roster state. '
       + 'ask/send return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
@@ -323,12 +523,13 @@ export const BUILTIN_TOOL_SPECS = {
   memory: memoryToolSpec(true),
   tasks: {
     name: 'tasks',
-    summary: 'Your own task list for the work in front of you — write down the steps, mark one active, close it when it lands.',
+    summary: 'Your own task list and working stance — write down the steps, mark one active, close it when it lands, and set how you are working.',
     whenToUse:
       'Use whenever the work ahead is more than a step or two, and at the moment you learn a step has parts: '
       + 'add writes several titles in one call, so one call records the whole plan; pass parent to file them under a task you already wrote. '
       + 'update moves one item to active as you start it and done as you finish it, or to dropped when it turns out not to be needed. '
-      + 'list reads the whole list back, closed items included.',
+      + 'list reads the whole list back, closed items included. '
+      + `mode sets the stance you work in — ${STANCE_CHOICES} — and reads the current one back when called with no stance.`,
     // A standing fact about where the list is READ, which is what makes
     // keeping it current worth the call.
     doctrine:
@@ -338,7 +539,8 @@ export const BUILTIN_TOOL_SPECS = {
     result:
       'add returns the new ids in order, with any title it refused and why. '
       + 'update returns the item at its new status, and says how many of its subtasks are still open when you close a parent. '
-      + 'list returns every item, each task carrying its subtasks.',
+      + 'list returns every item, each task carrying its subtasks. '
+      + 'mode returns the stance now in force; its guidance joins your operating guidance from your next turn, and it never changes what a turn is allowed to do.',
     example: "tasks({action:'add', titles:['Reproduce the 502', 'Patch the gateway timeout', 'Add a regression test']})",
   },
   web: {
@@ -386,3 +588,36 @@ export const BUILTIN_TOOL_DESCRIPTIONS = {
   web: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.web),
   report: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.report),
 } satisfies Record<BuiltinToolName, string>;
+
+/**
+ * The `execute_tools` docstring the model actually receives: this registry's
+ * doctrine for the tool, the two standing facts about the sandbox itself, then
+ * the TypeScript declaration of every namespace that sandbox binds.
+ *
+ * BOTH backends compose it here, because until they did they described one tool
+ * two incompatible ways and neither was complete. The CF backend passed no
+ * description to @cloudflare/codemode's createCodeTool, so production shipped
+ * the vendor's generic DEFAULT_DESCRIPTION — "Execute code to achieve a goal."
+ * — with none of BUILTIN_TOOL_SPECS.execute_tools reaching the model at all,
+ * and with a worked example calling `codemode.searchWeb(...)`, a shape
+ * cf-backend/execute-tools.ts is coded to throw on. The CLI passed the
+ * doctrine and discarded every provider's `types`, so its model was never told
+ * that `agents.fork`, `memory.save`, `tasks.add` or `llm.query` are callable.
+ *
+ * `typeBlock` is the namespace declarations, assembled per backend: CF hands
+ * codemode its own `{{types}}` placeholder and lets it substitute (it can
+ * generate a declaration from a tool's input schema, which the CLI cannot);
+ * the CLI joins its providers' declared `types`.
+ */
+export function renderExecuteToolsDescription(typeBlock: string): string {
+  return [
+    BUILTIN_TOOL_DESCRIPTIONS.execute_tools,
+    // Two facts about the sandbox, not advice: it is a JavaScript isolate, and
+    // it returns the value your code produces. The code SHAPE is deliberately
+    // not constrained — the crafted-tool preamble reaches every shape now
+    // (cf-backend/crafted-tool-registry.ts injectPreamble), so a statement
+    // body, a trailing expression and an async arrow are all equally correct.
+    'The sandbox is a JavaScript isolate: write statements, a single trailing expression, or one `async (...) => { … }` arrow — whichever fits — and the value your code produces comes back as the result. Type annotations, interfaces and generics do not parse there.',
+    `Namespaces bound in this sandbox:\n${typeBlock}`,
+  ].join('\n\n');
+}

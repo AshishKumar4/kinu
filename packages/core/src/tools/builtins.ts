@@ -59,10 +59,14 @@ import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
-  MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS, TASKS_TOOL_ACTIONS,
+  memoryActionsFor, TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS, unknownActionError, type WebToolAction,
+  AGENT_STANCES, STANCE_CHOICES,
 } from './registry.js';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store.js';
+import { createAgentConfigStore } from '../config/store.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
+import { dispatchReport, type ReportToolInput } from './report-tool.js';
+import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types.js';
 import { createFileToolSteer } from './run-file-steer.js';
 import { createFileTool } from './file-tool.js';
 import { TurnFileLedger } from './file-ledger.js';
@@ -311,8 +315,10 @@ function memoizeCraftedExecute(factory: CraftedToolExecute): CraftedToolExecute 
   };
 }
 
+const WebActionSchema = v.picklist(WEB_TOOL_ACTIONS);
+
 interface WebToolInput {
-  action: 'search' | 'fetch';
+  action: WebToolAction;
   query?: string;
   limit?: number;
   url?: string;
@@ -533,7 +539,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       properties: {
         action: {
           type: 'string',
-          enum: [...MEMORY_NOTE_ACTIONS, ...(facts ? MEMORY_FACT_ACTIONS : [])],
+          enum: [...memoryActionsFor(!!facts)],
           description: facts
             ? 'remember/recall/forget a keyed fact, save/search prose notes, or read past session transcripts (sessions)'
             : 'save a note, search memory notes, or recall past session transcripts (sessions)',
@@ -568,14 +574,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     execute: async (args: MemoryToolInput) => runMemoryAction(args),
   });
 
-  // ── 6. tasks — the agent's own task list ──────────────────────────────────
+  // ── 6. tasks — the agent's own task list and working stance ───────────────
   // Unconditional, like `file` and `memory`: it needs one SQL handle and every
-  // runtime has one. The store is constructed here rather than injected for
-  // the same reason SessionSearchStore is — it holds no state of its own.
+  // runtime has one. Both stores are constructed here rather than injected for
+  // the same reason SessionSearchStore is — neither holds state of its own.
   // Dispatch lives in tasks-tool.ts, shared verbatim with the `tasks.*`
   // codemode namespace (tasks-codemode.ts).
   const taskList = new TaskListStore(rt.storage.sql);
-  const runTasksAction = createTasksDispatcher(taskList);
+  const runTasksAction = createTasksDispatcher(taskList, createAgentConfigStore(rt.storage.sql));
   tools.tasks = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.tasks,
     inputSchema: jsonSchema<TasksToolInput>({
@@ -584,7 +590,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         action: {
           type: 'string',
           enum: [...TASKS_TOOL_ACTIONS],
-          description: 'add tasks, update one task\'s status, or list the whole task list',
+          description: 'add tasks, update one task\'s status, list the whole task list, or set the stance you are working in',
         },
         titles: {
           type: 'array',
@@ -600,6 +606,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           type: 'string',
           enum: [...TASK_STATUSES],
           description: 'For action=update: active when you start the item, done when it is finished, dropped when it is no longer needed, open to reopen it.',
+        },
+        stance: {
+          type: 'string',
+          enum: [...AGENT_STANCES],
+          description: `For action=mode: ${STANCE_CHOICES}. Omit to read the stance you are in now.`,
         },
       },
       required: ['action'],
@@ -623,7 +634,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         properties: {
           action: {
             type: 'string',
-            enum: ['search', 'fetch'],
+            enum: [...WEB_TOOL_ACTIONS],
             description: 'search the live web for ranked results, or fetch one URL as markdown',
           },
           query: { type: 'string', description: 'For action=search: the search query.' },
@@ -633,8 +644,16 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         required: ['action'],
       }),
       execute: async (args: WebToolInput) => {
+        // The declared union is a request to the provider, not a guarantee
+        // about what arrives: the AI SDK leaves `Schema.validate` undefined for
+        // a jsonSchema-declared input. Refused WITH the vocabulary, so the
+        // model's next call can succeed.
+        const action = v.safeParse(WebActionSchema, args.action);
+        if (!action.success) {
+          return { error: unknownActionError('web', 'action', args.action, WEB_TOOL_ACTIONS) };
+        }
         try {
-          switch (args.action) {
+          switch (action.output) {
             case 'search': {
               if (!args.query) return { error: 'web.search requires `query`' };
               const res = await webSearch.search(args.query, args.limit !== undefined ? { limit: args.limit } : undefined);
@@ -652,8 +671,6 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               });
               return header + body;
             }
-            default:
-              return { error: `unknown web action '${String(args.action)}'` };
           }
         } catch (err) {
           return webErrorResult(err instanceof Error ? err : String(err));
@@ -667,26 +684,22 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     const report = deps.report;
     tools.report = tool({
       description: BUILTIN_TOOL_DESCRIPTIONS.report,
-      inputSchema: jsonSchema<{ status: 'progress' | 'completed' | 'blocked'; content: string }>({
+      inputSchema: jsonSchema<ReportToolInput>({
         type: 'object',
         properties: {
           status: {
             type: 'string',
-            enum: ['progress', 'completed', 'blocked'],
+            enum: [...SUBORDINATE_REPORT_STATUSES],
             description: 'completed = the assignment is done. blocked = you need input to continue. progress = significant mid-task update.',
           },
           content: { type: 'string', maxLength: 20000, description: 'What to tell the orchestrator — findings, the result, or what you are blocked on.' },
         },
         required: ['status', 'content'],
       }),
-      execute: async (args: { status: 'progress' | 'completed' | 'blocked'; content: string }) => {
-        if (!args.content?.trim()) return { error: 'report requires non-empty content' };
-        try {
-          return await report.report({ status: args.status, content: args.content });
-        } catch (err) {
-          return { error: err instanceof Error ? err.message : String(err) };
-        }
-      },
+      // The SAME dispatcher `report.*` in codemode calls, so one capability
+      // validates its two arguments one way on both surfaces (this body used to
+      // hand-check `content` and never check `status` at all).
+      execute: async (args: ReportToolInput) => dispatchReport(report, args),
     });
   }
 

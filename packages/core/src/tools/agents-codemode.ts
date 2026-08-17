@@ -33,7 +33,7 @@
 import { readExecSignal } from '../execution/signal.js';
 import * as v from 'valibot';
 import type { CodemodeProvider } from '../rlm.js';
-import type { AgentsToolAction } from './registry.js';
+import { TOOL_REACH, type AgentsToolAction } from './registry.js';
 import { isJsonObject, JsonValueSchema, type JsonObject } from '../utils/json.js';
 import {
   agentsActionsFor,
@@ -195,7 +195,11 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
   }
 
   return {
-    name: 'agents',
+    // The namespace name is the registry's declared reach for this capability,
+    // not a literal here: TOOL_REACH is what says `agents` is reachable in the
+    // sandbox at all, so a declaration that took that away would fail to
+    // compile rather than leave this provider advertising a dead namespace.
+    name: TOOL_REACH.agents.codemode,
     types: renderTypes(actions),
     tools,
     positionalArgs: true,

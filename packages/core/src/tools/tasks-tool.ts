@@ -1,10 +1,16 @@
 /**
  * The `tasks` tool's dispatch logic — add / update / list over one
- * TaskListStore.
+ * TaskListStore, plus `mode`, the agent's own working stance.
  *
  * Factored out so `tasks.*` can reach the SAME implementation from inside
  * execute_tools (tools/tasks-codemode.ts) that the native `tasks` tool
  * calls — one dispatcher, two callers, mirroring tools/memory-tool.ts.
+ *
+ * The stance lives in `agent_config` rather than a table of its own: it is one
+ * durable workspace value, which is exactly what AgentConfigStore is. It rides
+ * this tool because it is the same class of state as the task list — the
+ * agent's own record of the work in front of it — and because a ninth native
+ * tool is not on the table.
  */
 import {
   TaskListStore,
@@ -12,19 +18,26 @@ import {
   type TaskAddRejection,
   type TaskStatus,
 } from '../tasks/store.js';
+import type { AgentConfigStore } from '../config/store.js';
 import * as v from 'valibot';
-import type { TasksToolAction } from './registry.js';
+import {
+  isAgentStance, AGENT_STANCES, TASKS_TOOL_ACTIONS, unknownActionError,
+  type AgentStance, type TasksToolAction,
+} from './registry.js';
 
 const TaskStatusSchema = v.picklist(TASK_STATUSES);
+const TasksActionSchema = v.picklist(TASKS_TOOL_ACTIONS);
+const TitlesSchema = v.array(v.string());
 
 /** The task-list tool's one input shape. `titles` writes, `id` + `status`
- *  moves, and `list` needs neither. */
+ *  moves, `list` needs neither, and `stance` sets the working stance. */
 export interface TasksToolInput {
   action: TasksToolAction;
   titles?: string[];
   parent?: string;
   id?: string;
   status?: TaskStatus;
+  stance?: AgentStance;
 }
 
 interface TasksError {
@@ -61,18 +74,45 @@ interface TasksListed {
   not_shown?: number;
 }
 
-export type TasksToolResult = TasksError | TasksAdded | TaskUpdated | TasksListed;
+interface StanceSet {
+  stance: AgentStance;
+}
 
-/** Build a tasks dispatcher over one runtime's task list. Constructed once —
- *  the store holds no state of its own beyond the SQL handle. */
-export function createTasksDispatcher(taskList: TaskListStore): (input: TasksToolInput) => TasksToolResult {
+export type TasksToolResult = TasksError | TasksAdded | TaskUpdated | TasksListed | StanceSet;
+
+/** Build a tasks dispatcher over one runtime's task list and config. Both
+ *  stores are injected, not constructed: the codemode projection must share
+ *  the caller's exact TaskListStore instance (the one the dynamic-context
+ *  snapshot reads), and the config store is the same handle the backend reads
+ *  the stance from when it builds the turn's system prompt. */
+export function createTasksDispatcher(
+  taskList: TaskListStore,
+  config: AgentConfigStore,
+): (input: TasksToolInput) => TasksToolResult {
   return (args: TasksToolInput) => {
     const now = Date.now();
-    switch (args.action) {
+    // `action` arrives from the model, and the AI SDK does NOT validate a
+    // jsonSchema-declared tool input: `Schema.validate` is left undefined, so
+    // `safeValidateTypes` returns the raw JSON untouched. The declared
+    // `TasksToolAction` is therefore a claim about this value, not a fact — and
+    // the switch below has four literal cases, so an unrecognised action fell
+    // out of the bottom into a branch the compiler believes unreachable. The
+    // model was answered `unknown tasks action 'list">'`: true, useless, and
+    // silent about the four words that would have worked.
+    //
+    // Parsed the way `status` already is below, and answered the way `agents`
+    // answers an unavailable action (agents-tool.ts) — WITH the vocabulary,
+    // which is what makes the model's next call succeed instead of repeat.
+    const action = v.safeParse(TasksActionSchema, args.action);
+    if (!action.success) {
+      return { error: unknownActionError('tasks', 'action', args.action, TASKS_TOOL_ACTIONS) };
+    }
+    switch (action.output) {
       case 'add': {
-        const titles = args.titles ?? [];
-        if (titles.length === 0) return { error: 'tasks.add requires `titles` — one or more task titles' };
-        const { added, rejected } = taskList.add(titles, args.parent ?? null, now);
+        const titles = v.safeParse(TitlesSchema, args.titles ?? []);
+        if (!titles.success) return { error: 'tasks.add requires `titles` — an array of task titles' };
+        if (titles.output.length === 0) return { error: 'tasks.add requires `titles` — one or more task titles' };
+        const { added, rejected } = taskList.add(titles.output, args.parent ?? null, now);
         const result: TasksAdded = {
           added: added.map((task) => ({ id: task.id, title: task.title, parent: task.parentId })),
         };
@@ -113,8 +153,17 @@ export function createTasksDispatcher(taskList: TaskListStore): (input: TasksToo
         if (total > shown) result.not_shown = total - shown;
         return result;
       }
-      default:
-        return { error: `unknown tasks action '${String(args.action)}'` };
+      case 'mode': {
+        // No stance argument = read the current one. A named stance that is
+        // not one of ours is answered with the list rather than stored, so
+        // the model learns the vocabulary instead of silently getting general.
+        if (args.stance === undefined) return { stance: config.getStance() };
+        if (!isAgentStance(args.stance)) {
+          return { error: `tasks.mode requires \`stance\` — one of ${AGENT_STANCES.join(', ')}` };
+        }
+        config.setStance(args.stance);
+        return { stance: args.stance };
+      }
     }
   };
 }

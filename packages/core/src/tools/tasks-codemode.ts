@@ -10,12 +10,15 @@
 import type { CodemodeProvider } from '../rlm.js';
 import * as v from 'valibot';
 import { TASK_STATUSES, type TaskListStore } from '../tasks/store.js';
+import type { AgentConfigStore } from '../config/store.js';
+import { AGENT_STANCES, STANCE_CHOICES, TOOL_REACH } from './registry.js';
 import { decodeJsonValue } from '../utils/json.js';
 import { createTasksDispatcher } from './tasks-tool.js';
 
 const TitlesSchema = v.array(v.string());
 const ParentSchema = v.optional(v.string());
 const TaskStatusSchema = v.picklist(TASK_STATUSES);
+const StanceSchema = v.picklist(AGENT_STANCES);
 
 const TYPES = `export declare const tasks: {
   /** Write down the whole plan in one call — one title per task, in the
@@ -27,16 +30,23 @@ const TYPES = `export declare const tasks: {
   update(id: string, status: "open" | "active" | "done" | "dropped"): Promise<unknown>;
   /** Read the whole list back, closed items included. */
   list(): Promise<unknown>;
+  /** Set the stance you work in, or read it back with no argument.
+   *  ${STANCE_CHOICES} */
+  mode(stance?: ${AGENT_STANCES.map((stance) => `"${stance}"`).join(' | ')}): Promise<unknown>;
 };
 `;
 
-/** Build the codemode provider exposing `tasks.*` over one TaskListStore —
- *  constructed once by the caller (same instance the native tool uses),
- *  not per call: unlike memory/release deps, the store never rebinds. */
-export function createTasksCodemodeProvider(taskList: TaskListStore): CodemodeProvider {
-  const run = createTasksDispatcher(taskList);
+/** Build the codemode provider exposing `tasks.*` over one TaskListStore and
+ *  one AgentConfigStore — constructed once by the caller (the same instances
+ *  the native tool uses), not per call: unlike memory/release deps, neither
+ *  store rebinds. */
+export function createTasksCodemodeProvider(
+  taskList: TaskListStore,
+  config: AgentConfigStore,
+): CodemodeProvider {
+  const run = createTasksDispatcher(taskList, config);
   return {
-    name: 'tasks',
+    name: TOOL_REACH.tasks.codemode,
     types: TYPES,
     positionalArgs: true,
     tools: {
@@ -69,6 +79,15 @@ export function createTasksCodemodeProvider(taskList: TaskListStore): CodemodePr
       list: {
         description: 'Read the whole task list back, closed items included.',
         execute: async () => decodeJsonValue({ value: run({ action: 'list' }) }),
+      },
+      mode: {
+        description: `Set the stance you work in, or read it back with no argument. ${STANCE_CHOICES}`,
+        execute: async (...args: unknown[]) => {
+          const stance = v.safeParse(StanceSchema, args[0]);
+          return decodeJsonValue({
+            value: run({ action: 'mode', stance: stance.success ? stance.output : undefined }),
+          });
+        },
       },
     },
   };

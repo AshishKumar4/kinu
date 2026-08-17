@@ -28,6 +28,7 @@ import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { REASONING_EFFORTS, reasoningEffortOptions } from './strategy/effort.js';
 import { parseModelSpec } from './providers/types.js';
+import { TOOL_REACH } from './tools/registry.js';
 
 /** A provider's host-side result before the executor validates the VM boundary
  *  as JSON. Domain objects are allowed here; functions and symbols are not. */
@@ -86,7 +87,7 @@ export function createRLMProvider(
   currentSpec: () => string,
 ): CodemodeProvider {
   return {
-    name: 'llm',
+    name: TOOL_REACH.llm.codemode,
     types: 'export declare const llm: {\n' +
            '  /** Recursive LM call. Bounded depth=1 (sub-call has no llm.query in scope). */\n' +
            '  query(text: string, opts?: {\n' +

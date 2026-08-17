@@ -46,6 +46,7 @@
 import type { ModelMessage } from 'ai';
 import { DYNAMIC_CONTEXT_OPEN_TAG } from './sections.js';
 import { executorIsSelectable, type PromptExecutorInfo } from './surface.js';
+import { EXECUTOR_CAPABILITIES } from '../execution/types.js';
 import type { ActiveSkillSet, ActivationReason } from '../skills/types.js';
 
 /** Detached work the agent started and has not collected yet — one row of the
@@ -265,6 +266,27 @@ function executorLimitsSuffix(exec: PromptExecutorInfo): string {
   return parts.length > 0 ? ` (${parts.join(' ')})` : '';
 }
 
+/**
+ * What the environment declares it can run, as a status suffix.
+ *
+ * The `run` tool's own description tells the model that "available binaries and
+ * process features are listed in this workspace provider's capabilities"
+ * (tools/inline.ts). Until this rendered, that sentence pointed at a list the
+ * model was never given: the field was declared on PromptExecutorInfo,
+ * populated by the router, and read by nothing — so the model guessed, and a
+ * clone into an environment without the headroom for it read as a mystery.
+ *
+ * Rendered in the canonical union order rather than the declared Set's own
+ * iteration order: the workspace set is composed from a live session's
+ * enumeration, and an ordering flip that means nothing must not re-fingerprint
+ * this block.
+ */
+function executorCapabilitySuffix(exec: PromptExecutorInfo): string {
+  const declared = new Set(exec.capabilities ?? []);
+  const ordered = EXECUTOR_CAPABILITIES.filter((capability) => declared.has(capability));
+  return ordered.length > 0 ? ` — runs: ${ordered.join(', ')}` : '';
+}
+
 /** Bytes as the unit a memory cap is usually written in. One decimal at most,
  *  and never a rounded-UP figure: a cap must not read as more than it is. */
 function formatBytes(bytes: number): string {
@@ -356,9 +378,9 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   if (executors.length > 0) {
     sections.push([
       '## Execution status',
-      'Live availability for the runtimes described in the system prompt:',
+      'Live availability for the runtimes described in the system prompt, and what each one declares it can run:',
       ...executors.map((exec) =>
-        `- ${exec.name}: ${executorAvailabilityLabel(exec)}${executorLimitsSuffix(exec)}`),
+        `- ${exec.name}: ${executorAvailabilityLabel(exec)}${executorLimitsSuffix(exec)}${executorCapabilitySuffix(exec)}`),
     ].join('\n'));
   }
 
@@ -394,8 +416,34 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
 
   const present = sections.filter((section): section is string => section !== null);
   if (present.length === 0) return null;
-  const body = [DYNAMIC_CONTEXT_HEADER, ...present].join('\n\n');
+  const body = sealDelimiters([DYNAMIC_CONTEXT_HEADER, ...present].join('\n\n'));
   return `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="${fnv1a64(body)}">\n${body}\n</dynamic_context>`;
+}
+
+/** The block's own delimiter, wherever it appears inside the block's body. */
+const DELIMITER_IN_BODY = /<(\/?)dynamic_context/g;
+
+/**
+ * Neutralize the block's own delimiter inside its body.
+ *
+ * Every free-text plane in this block is authored by the model or by content
+ * the model read: task titles, background-job labels sliced off a tool input,
+ * fork rationales, the gated command an approval is waiting on, and the
+ * recovery ledger's verbatim echo of a previous call's ARGUMENTS. None of it is
+ * escaped, deliberately — the model has to read markdown, paths and code
+ * exactly as written, and an escaped body would be a worse lie than an
+ * unescaped one.
+ *
+ * So the one thing that must not survive into the body is the delimiter itself.
+ * A task titled `</dynamic_context>` would otherwise close the live-state
+ * ledger and let whatever followed open a forged one — and this block is
+ * precisely where the model reads which forks are running and which approvals
+ * are the human's, so a forgeable boundary here is a forgeable claim about the
+ * state of the system. Applied at the single point that wraps the body, so a
+ * plane added later cannot forget it.
+ */
+function sealDelimiters(body: string): string {
+  return body.replace(DELIMITER_IN_BODY, '&lt;$1dynamic_context');
 }
 
 /** The per-turn tail block (or null when there is nothing to say). */

@@ -2,6 +2,8 @@ import {
   AGENTS_TOOL_ACTIONS,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
+  DEFAULT_AGENT_STANCE,
+  type AgentStance,
   type AgentsToolAction,
   type BuiltinToolName,
 } from '../tools/registry.js';
@@ -15,8 +17,32 @@ import {
 import * as v from 'valibot';
 
 export type PromptBackend = 'cf' | 'cli-local' | 'cli-cloud';
+
+// ── The three axes of a turn ────────────────────────────────────────────────
+// These are three independent facts, and forcing them through one variable is
+// what made two of them unreachable. A background-job wake IS a resume AND it
+// IS build work; a Plan turn woken by a timer is BOTH. So:
+//
+//   WorkMode      — what the turn may do. 'plan' is read-only and structural
+//                   (submit_plan exists only there, release.* is removed);
+//                   'build' is the absence of constraint, shown as "Auto".
+//   TurnProvenance— why the turn is running. Adds an overlay, never a bar.
+//   AgentStance   — how the agent chose to work (tools/registry.ts). Guidance
+//                   only; it can neither widen nor narrow the other two.
+
 export type WorkMode = 'plan' | 'build';
-export type PromptMode = 'chat' | WorkMode | 'background_resume' | 'release' | 'cron';
+
+/**
+ * Why this turn is running. Orthogonal to WorkMode.
+ *
+ * Two values, because two are all that exist. `cron` and `release` were here
+ * and neither had a producer: a timer fire is published as an EVENT
+ * (`ingress: 'timer_alarm'`, events/ingress/triggers.ts) and reaches the agent
+ * through the reactor drain as `proteusEvent: 'event_drain'`, never under a
+ * timer- or cron-named event; and nothing anywhere stamps a release mode. The
+ * guidance written for both of them had therefore never reached a model.
+ */
+export type TurnProvenance = 'chat' | 'background_resume';
 
 const WorkModeSchema = v.picklist(['plan', 'build']);
 const TurnMetadataSchema = v.object({
@@ -33,38 +59,34 @@ export function isWorkMode<Value>(value: Value): value is Value & WorkMode {
   return v.is(WorkModeSchema, value);
 }
 
-/** Delegated work is either part of a read-only Plan turn or ordinary Build
- * work. Autonomous/chat overlays do not weaken the child: only an explicit
- * Plan parent propagates the mutation bar. */
-export function workModeForPromptMode(mode: PromptMode): WorkMode {
-  return mode === 'plan' ? 'plan' : 'build';
-}
-
 /**
- * The turn's prompt mode from the `proteusEvent` metadata a programmatic turn
- * carries (BackendHost.enqueueTurn stamps it; a real chat turn carries none).
+ * Why the turn is running, from the `proteusEvent` metadata a programmatic
+ * turn carries (BackendHost.enqueueTurn stamps it; a chat turn carries none).
  *
- * Shared by BOTH backends: the guidance that tells the agent it was woken by a
- * timer, or resumed to collect a background job's result, has to reach the
- * model identically whether the turn ran in a Durable Object or a local
- * process.
+ * Read from the EVENT alone. The work mode stamped beside it answers a
+ * different question, and letting that win here is what hid every wake:
+ * jobs/runner.ts stamps `proteusEvent: 'background_job'` AND
+ * `proteusMode: job.workMode` on the same message, and `work_mode` is never
+ * null, so the resume overlay could not render in production.
+ *
+ * Shared by BOTH backends: the guidance that tells the agent to collect a
+ * background job's result rather than start the work again has to reach the
+ * model identically in a Durable Object and in a local process.
  */
-export function promptModeForTurnEvent(proteusEvent: string | null | undefined): PromptMode {
-  const event = proteusEvent ?? '';
-  if (event === 'background_job') return 'background_resume';
-  if (event.includes('timer') || event.includes('cron')) return 'cron';
-  return 'chat';
-}
-
-/** Explicit user-selected Plan/Build mode wins over event provenance. Unknown
- * values are ignored so old or foreign clients cannot suppress the established
- * background/cron overlays. */
-export function promptModeForTurnMetadata<Metadata>(metadata: Metadata): PromptMode {
+export function turnProvenanceForMetadata<Metadata>(metadata: Metadata): TurnProvenance {
   const parsed = v.safeParse(TurnMetadataSchema, metadata);
   if (!parsed.success) return 'chat';
-  if (isWorkMode(parsed.output.proteusMode)) return parsed.output.proteusMode;
-  const event = v.safeParse(v.string(), parsed.output.proteusEvent);
-  return promptModeForTurnEvent(event.success ? event.output : null);
+  return parsed.output.proteusEvent === 'background_job' ? 'background_resume' : 'chat';
+}
+
+/** What the turn may do. Only an explicit, recognized `proteusMode` can raise
+ *  the Plan bar; everything else is ordinary unconstrained work. Delegated
+ *  children inherit this same value, so a Plan parent propagates its bar and
+ *  an autonomous wake never weakens one. */
+export function workModeForTurnMetadata<Metadata>(metadata: Metadata): WorkMode {
+  const parsed = v.safeParse(TurnMetadataSchema, metadata);
+  if (!parsed.success) return 'build';
+  return parsed.output.proteusMode === 'plan' ? 'plan' : 'build';
 }
 
 export interface PromptExecutorInfo {
@@ -101,7 +123,14 @@ export interface PromptSurfaceOptions {
   rlmAvailable?: boolean;
   externalTools?: readonly (PromptExternalToolInfo | string)[];
   backend?: PromptBackend;
-  mode?: PromptMode;
+  /** What the turn may do. Defaults to `build` — Auto, the absence of
+   *  constraint — which renders no guidance at all. */
+  workMode?: WorkMode;
+  /** Why the turn is running. Defaults to `chat`, which renders nothing. */
+  provenance?: TurnProvenance;
+  /** How the agent has chosen to work (set through `tasks` action=mode).
+   *  Guidance only: it never changes what `workMode` allows. */
+  stance?: AgentStance;
   /** Whether this Plan actor owns the submit_plan completion boundary. Heads
    * and subordinates report research back to their parent instead. */
   planSubmissionAvailable?: boolean;
@@ -117,7 +146,9 @@ export interface PromptSurface {
   selectableExecutors: PromptExecutorInfo[];
   model: PromptModelProfile;
   backend?: PromptBackend;
-  mode: PromptMode;
+  workMode: WorkMode;
+  provenance: TurnProvenance;
+  stance: AgentStance;
   planSubmissionAvailable: boolean;
 }
 
@@ -222,7 +253,9 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
     selectableExecutors: executors.filter(executorIsSelectable),
     model: resolvePromptModelProfile(opts.model),
     backend: opts.backend,
-    mode: opts.mode ?? 'chat',
+    workMode: opts.workMode ?? 'build',
+    provenance: opts.provenance ?? 'chat',
+    stance: opts.stance ?? DEFAULT_AGENT_STANCE,
     planSubmissionAvailable: opts.planSubmissionAvailable ?? false,
   };
 }

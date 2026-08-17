@@ -11,6 +11,7 @@ import type { CodemodeProvider } from '../rlm.js';
 import * as v from 'valibot';
 import { decodeJsonValue, type JsonValue } from '../utils/json.js';
 import { createMemoryDispatcher, type MemoryToolDeps } from './memory-tool.js';
+import { TOOL_REACH } from './registry.js';
 
 const SessionOptionsSchema = v.object({
   query: v.optional(v.string()),
@@ -99,7 +100,7 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
   }
 
   return {
-    name: 'memory',
+    name: TOOL_REACH.memory.codemode,
     types: `export declare const memory: {\n${TYPES_BASE}${hasFacts ? TYPES_FACTS : ''}\n};\n`,
     tools,
     positionalArgs: true,

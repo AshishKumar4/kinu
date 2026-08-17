@@ -34,6 +34,7 @@ import type { ScaffoldVersionView } from '../evolution/control.js';
 import type { ReplayEvalSummary } from '../evolution/replay.js';
 import type { TimerTrigger } from '../events/ingress/triggers.js';
 import { nanoid } from '../utils/nanoid.js';
+import { TOOL_REACH } from './registry.js';
 import { decodeJsonValue, JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json.js';
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
@@ -197,7 +198,7 @@ function errorMessage(input: { error: unknown }): string {
 
 export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
   return {
-    name: 'agent',
+    name: TOOL_REACH.agent.codemode,
     types: TYPES,
     positionalArgs: true,
     tools: {

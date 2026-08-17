@@ -30,7 +30,7 @@
 import * as v from 'valibot';
 import type { CodemodeProvider } from '../rlm.js';
 import { RELEASE_STATUSES } from '../release/index.js';
-import { releaseToolActions, type ReleaseToolAction } from './registry.js';
+import { releaseToolActions, TOOL_REACH, type ReleaseToolAction } from './registry.js';
 import { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from './release-tool.js';
 
 /** Per-action sandbox declaration + description. Split into two records
@@ -262,7 +262,7 @@ export function createReleaseCodemodeProvider(deps: () => ReleaseToolDeps): Code
   }
 
   return {
-    name: 'release',
+    name: TOOL_REACH.release.codemode,
     types: renderTypes(actions),
     tools,
     positionalArgs: true,

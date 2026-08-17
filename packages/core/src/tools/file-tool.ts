@@ -22,7 +22,9 @@ import type { TurnContextBudget } from '../context-budget.js';
 import { isVfsError, vfsAddressingHint } from '../vfs/errno.js';
 import { ensureDir, vfsDirname } from '../utils/vfs-helpers.js';
 import { memoryIndexPath } from '../memory/note.js';
-import { BUILTIN_TOOL_DESCRIPTIONS } from './registry.js';
+import {
+  BUILTIN_TOOL_DESCRIPTIONS, FILE_TOOL_ACTIONS, unknownActionError, type FileToolAction,
+} from './registry.js';
 import { applyFileEdits, readFileSlice, BOM, type FileEdit } from './file-edit.js';
 import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from './file-ledger.js';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS } from './clamp.js';
@@ -43,7 +45,7 @@ export interface FileToolDeps {
 }
 
 export interface FileToolInput {
-  action: 'read' | 'write' | 'edit';
+  action: FileToolAction;
   path: string;
   offset?: number;
   limit?: number;
@@ -130,11 +132,24 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
     }
   };
 
-  return async (args: FileToolInput): Promise<JsonValue> => {
-    const path = args.path.trim();
-    if (!path) return { error: 'file requires `path`.' };
+  const ActionSchema = v.picklist(FILE_TOOL_ACTIONS);
+  const PathSchema = v.pipe(v.string(), v.trim(), v.minLength(1));
 
-    switch (args.action) {
+  return async (args: FileToolInput): Promise<JsonValue> => {
+    // Declared types, not established ones: the AI SDK leaves
+    // `Schema.validate` undefined for a jsonSchema-declared tool input, so both
+    // of these are whatever the model emitted. `path.trim()` on a non-string
+    // threw out of the tool instead of answering, and an unrecognised action
+    // was answered without naming the three that work.
+    const parsed = v.safeParse(ActionSchema, args.action);
+    if (!parsed.success) {
+      return { error: unknownActionError('file', 'action', args.action, FILE_TOOL_ACTIONS) };
+    }
+    const parsedPath = v.safeParse(PathSchema, args.path);
+    if (!parsedPath.success) return { error: 'file requires `path`.' };
+    const path = parsedPath.output;
+
+    switch (parsed.output) {
       case 'read': {
         let content: string;
         try {
@@ -235,11 +250,6 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
           applied: outcome.applied.map((a) => ({ line: a.line, removed_lines: a.removedLines, added_lines: a.addedLines })),
         };
       }
-
-      default:
-        // Only a model that ignored the enum lands here. Naming the action
-        // back is what lets it correct itself.
-        return { error: `unknown file action '${String(args.action)}'` };
     }
   };
 }
@@ -254,7 +264,7 @@ export function createFileTool(deps: FileToolDeps): ToolSet[string] {
       properties: {
         action: {
           type: 'string',
-          enum: ['read', 'write', 'edit'],
+          enum: [...FILE_TOOL_ACTIONS],
           description: 'read the file, edit exact text inside it, or write it whole.',
         },
         path: { type: 'string', description: 'Path in this agent\'s own durable workspace filesystem; relative paths resolve at its root. Other environments have their own filesystems, reached through their namespaces in execute_tools.' },
