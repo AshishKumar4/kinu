@@ -29,15 +29,24 @@ const root = resolve(import.meta.dir, '..');
 const tracked = trackedTestFiles();
 const deploy = deployGates();
 
-/** Test files that deliberately run under no `bun test` tier, with the runner
- *  that does claim them. `tools/oxlint/anti-slop/**` needs Node's raw transfer
- *  for oxlint's RuleTester and ERRORS under bun, so it runs through
- *  `bun run test:anti-slop` (node --experimental-strip-types) inside
- *  `bun run lint`, which is deploy gate 1. Excluding it from bun's discovery is
- *  honest only because this list is asserted; an unasserted exclusion is how
- *  coverage disappears. */
+/**
+ * Path PREFIXES whose test files deliberately run under no `bun test` tier, each
+ * naming the runner that does claim them.
+ *
+ * `tools/oxlint/anti-slop/` needs Node's raw transfer for oxlint's RuleTester
+ * and ERRORS under bun, so it runs through `bun run test:anti-slop`
+ * (node --experimental-strip-types) inside `bun run lint`, which is deploy
+ * gate 1. A prefix rather than a file list because `rules.test.ts` is an
+ * aggregator that IMPORTS the 19 per-rule suites — naming only the files on the
+ * command line would leave those 19 reading as unclaimed.
+ *
+ * Excluding anything from bun's discovery is honest only because this list is
+ * asserted, and asserted with a denominator: a prefix matching zero tracked
+ * files is an excuse for nothing, and would silently excuse whatever is added
+ * under it next.
+ */
 const NON_BUN_RUNNERS = {
-  'tools/oxlint/anti-slop/gate.test.ts':
+  'tools/oxlint/anti-slop/':
     'bun run test:anti-slop — oxlint RuleTester requires Node raw transfer and throws under bun',
 };
 
@@ -182,15 +191,20 @@ describe('every test file is claimed by some runner', () => {
     // whole root tests/ directory, all of which a green CI badge covered for.
     const covered = new Set(gatesFor('ci', deploy).flatMap((gate) => claims(gate.run, tracked)));
     const unclaimed = tracked
-      .filter((path) => !covered.has(path) && !Object.hasOwn(NON_BUN_RUNNERS, path))
+      .filter((path) => !covered.has(path)
+        && !Object.keys(NON_BUN_RUNNERS).some((prefix) => path.startsWith(prefix)))
       .map((path) => `${path} — no tier runs this file`);
     expect(unclaimed).toEqual([]);
   });
 
-  test('every declared non-bun runner still names a real file', () => {
-    const files = new Set(tracked);
-    const stale = Object.keys(NON_BUN_RUNNERS).filter((path) => !files.has(path));
-    expect(stale).toEqual([]);
+  test('every declared non-bun runner still claims real files', () => {
+    // A prefix that matches nothing reads as a considered decision about a
+    // runner that no longer has anything to run, and pre-excuses the next file
+    // added under it.
+    const empty = Object.keys(NON_BUN_RUNNERS)
+      .filter((prefix) => !tracked.some((path) => path.startsWith(prefix)))
+      .map((prefix) => `${prefix} — declared as non-bun but matches no tracked test file`);
+    expect(empty).toEqual([]);
   });
 
   test('bun does not discover the files it cannot run', () => {

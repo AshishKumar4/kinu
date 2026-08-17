@@ -140,7 +140,11 @@ run_required_gate "Schema drift" bun scripts/schema-drift.ts
 # `gate:computed-style` is deliberately NOT here: it boots vite and Chrome over
 # 19 gallery frames (~68 s) and would fail this pipeline for environmental
 # reasons unrelated to the change under test. It is a deliberate standalone run.
+# Its DECISION LOGIC is guarded below, though — a gate kept off the path for its
+# cost still needs its own reasoning tested, or the thing that would have caught
+# `--radius` undefined at `:root` is itself unguarded.
 run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts
+run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts
 run_required_gate "Gate ladder wiring" bun test scripts/ladder.test.ts
 run_required_gate "Dead code" bun run gate:dead-code
 run_required_gate "Duplicate implementations" bun run gate:duplication

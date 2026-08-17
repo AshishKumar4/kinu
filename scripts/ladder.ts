@@ -262,6 +262,19 @@ export const LADDER: readonly Gate[] = [
       + 'which is what four independent instrument bugs cost us to learn.',
   },
   {
+    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts',
+    tier: 'ci',
+    seconds: 31.9,
+    catches: 'the two UI gates\' own decision logic, including the one that would have '
+      + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
+      + 'computed 0px. Both self-tests ran in NO tier until this line: the gates were '
+      + 'built, deliberately kept off the deploy path for their Chrome cost, and their '
+      + 'logic was then guarded by nothing anywhere.',
+    blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
+      + '19 frames at ~68s and stays a standalone run — a gate that fails because Chrome '
+      + 'is missing fails for a reason unrelated to the change under test.',
+  },
+  {
     run: 'bun run layergate',
     tier: 'ci',
     seconds: 25,

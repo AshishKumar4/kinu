@@ -31,6 +31,7 @@ const REQUIRED_GATES = [
   "bun scripts/secret-scan.ts",
   "bun scripts/schema-drift.ts",
   "bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts",
+  "bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts",
   "bun test scripts/ladder.test.ts",
   "bun run gate:dead-code",
   "bun run gate:duplication",
