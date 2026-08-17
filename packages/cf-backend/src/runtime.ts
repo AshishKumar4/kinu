@@ -29,7 +29,8 @@ import {
   observeWrites,
   type WorkspaceVFS,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
-  withApprovalGatedShell, type ShellApprovalPolicy,
+  withApprovalGatedShell, createInheritedApprovalPolicy,
+  type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
@@ -177,6 +178,33 @@ async function userCallerFor(actor: ActorRuntimeIdentity): Promise<UserCaller> {
   return { workspaceToken };
 }
 
+/** The root workspace DO's standing approval answers, for a facet riding it.
+ *
+ *  Both methods are already on `ORCHESTRATOR_RPC_SURFACE` (they arrive through
+ *  `AGENT_RPC_ACCESS`), so this needs no new RPC. They are fetched together so
+ *  one decision costs one round trip rather than two. */
+async function fetchRootApprovalPolicy(
+  env: Env, workspaceName: string,
+): Promise<{ mode: ShellApprovalMode; grants: readonly ApprovalGrant[] }> {
+  const rootView: Partial<RootApprovalClient> = {};
+  Object.assign(rootView, env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName)));
+  // SAFETY: checked by construction and pinned by a test. Both names are keys of
+  // AGENT_RPC_ACCESS (cli/rpc-gate.ts), and ORCHESTRATOR_RPC_SURFACE is built by
+  // spreading `Object.keys(AGENT_RPC_ACCESS)`, so their reachability is a
+  // consequence of that spread rather than a second list that could drift.
+  // unit-facet-grant-inheritance.test.ts asserts both are on the surface.
+  const root = rootView as RootApprovalClient;
+  const [mode, grants] = await Promise.all([
+    root.getShellApprovalMode(), root.getShellApprovalGrants(),
+  ]);
+  return { mode: mode.mode, grants: grants.grants };
+}
+
+interface RootApprovalClient {
+  getShellApprovalMode(): Promise<{ mode: ShellApprovalMode }>;
+  getShellApprovalGrants(): Promise<{ grants: readonly ApprovalGrant[] }>;
+}
+
 /** The credential source for a provider registry built inside an actor. Null
  *  when the workspace is unclaimed, leaving only env-bound providers usable —
  *  the pre-existing behaviour for an ownerless agent. */
@@ -309,14 +337,33 @@ export function createCFRuntime(
   // now parked on the owner and the model is told so — never told it ran.
   // A getter, so the queue is resolved at exec time like every other member of
   // this policy — see ShellApprovalPolicy's own doc on live reads.
-  const approvalPolicy: ShellApprovalPolicy = {
-    mode: () => memoryConfig.getShellApprovalMode(),
-    // Standing grants, same live read as the mode: an 'always' the owner gave
-    // in the needs-you queue takes effect on the very next command.
-    granted: (grant) => memoryConfig.getShellApprovalGrants()
-      .some((g) => g.rule === grant.rule && g.executor === grant.executor),
-    get deferrals() { return hooks.deferrals?.(); },
-  };
+  //
+  // ROOT vs FACET. `agent.name === actor.workspaceName` is the same test the
+  // sandbox handle uses below to decide who owns the container. A facet — a
+  // head, a subordinate — is a different Durable Object with its own empty
+  // `agent_config`, and grants are only ever written to the ROOT's, so a facet
+  // reading its own store found no grants and no mode and re-asked for consent
+  // the owner had already given on the workspace. Every agent in a workspace
+  // shares one container, so it must share that container's granted
+  // capabilities — or a subset, never a superset. `createInheritedApprovalPolicy`
+  // is that rule: the root's answers, intersected with any narrowing the facet
+  // recorded for itself, and no `remember`, so a facet can never widen.
+  const isRootActor = agent.name === actor.workspaceName;
+  const approvalPolicy: ShellApprovalPolicy = isRootActor
+    ? {
+      mode: () => memoryConfig.getShellApprovalMode(),
+      // Standing grants, same live read as the mode: an 'always' the owner gave
+      // in the needs-you queue takes effect on the very next command.
+      granted: (grant) => memoryConfig.getShellApprovalGrants()
+        .some((g) => g.rule === grant.rule && g.executor === grant.executor),
+      get deferrals() { return hooks.deferrals?.(); },
+    }
+    : createInheritedApprovalPolicy({
+      fetchRoot: () => fetchRootApprovalPolicy(env, actor.workspaceName),
+      // `[]` is the normal case and means "this facet has narrowed nothing",
+      // so it inherits the root's set whole.
+      ownGrants: () => memoryConfig.getShellApprovalGrants(),
+    });
   // The workspace shell is the authoritative Nimbus session's shell, over the
   // exact same bytes `vfs` addresses.
   // Gated at the Shell object, so what it wraps is transparent to the seam.

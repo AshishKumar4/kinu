@@ -71,6 +71,13 @@ export { OrchestratorAgent } from "./orchestrator.js";
 export { ExplorationAgent } from "./exploration.js";
 export { SubordinateAgent } from "./subordinate-agent.js";
 export { ProteusSandbox } from "./proteus-sandbox.js";
+// REQUIRED for outbound interception, and silent if forgotten. The Sandbox DO
+// builds its interception fetchers from `ctx.exports.ContainerProxy`, so
+// without this export `applyOutboundInterception` throws and no egress handler
+// ever runs — meaning every request would leave the container unintercepted
+// while the secret vault still believed it was substituting. Pinned by
+// tests/unit-egress-interception.test.ts.
+export { ContainerProxy } from "@cloudflare/sandbox";
 export { UserDO } from "./user/user-do.js";
 // Synthetic monitoring's durable state: open incidents + the alert outbox.
 export { MonitorDO } from "./monitor/monitor-do.js";

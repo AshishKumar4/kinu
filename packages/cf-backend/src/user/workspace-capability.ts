@@ -70,6 +70,15 @@ export const WORKSPACE_CAPABILITY_TIERS = {
    *  every write to it. A guest-steered agent holding the owner's GitHub PAT is
    *  repo takeover. */
   'credentials.other': 'full',
+  /** The egress secret vault: add, rotate, revoke, and list bindings. Binding
+   *  the owner's secret to a host is the same class of act as storing a
+   *  credential, so it sits beside `credentials.other` at `full`. */
+  'egress_secrets.manage': 'full',
+  /** Turning a placeholder in an intercepted request back into the real
+   *  secret. `full` because a tainted workspace must not be able to ask for
+   *  the substitution even though the container it rides already holds the
+   *  placeholder — the placeholder is not the authority, this call is. */
+  'egress_secrets.inject': 'full',
   /** Cloudflare AI Gateway discovery/selection — account administration, not
    *  inference. */
   'ai_gateway.admin': 'full',

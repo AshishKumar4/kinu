@@ -139,6 +139,17 @@ function makeNimbusNamespace(files: Record<string, string>) {
 function makeParentWorkspace(files: Record<string, string>) {
   const calls: ParentCall[] = [];
   const stub = {
+    // A facet's approval policy is its ROOT's — it reads these two off the
+    // parent rather than its own empty agent_config, which is what stops a head
+    // re-asking for consent the owner already gave on the workspace. Both are
+    // reachable through AGENT_RPC_ACCESS on ORCHESTRATOR_RPC_SURFACE.
+    async getShellApprovalMode() {
+      return { mode: 'strict' as const };
+    },
+    async getShellApprovalGrants() {
+      const grants: { rule: string; executor: string }[] = [];
+      return { grants };
+    },
     async execWorkspaceCommand(command: string) {
       calls.push({ method: 'execWorkspaceCommand', arg: command });
       // Enough of a shell to prove the round trip is one call, not a walk.

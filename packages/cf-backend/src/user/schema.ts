@@ -7,6 +7,7 @@ import {
   type SqlExec, type SqlExecutor,
 } from '@proteus/core';
 import { initAccessTokenTable } from '../cli/access-token-store.js';
+import { initEgressVaultTables } from './egress-vault.js';
 import { initWorkspaceCapabilityTables } from './workspace-capability.js';
 
 /** One-shot migration ledger version. Bump it when adding a migration that
@@ -82,6 +83,12 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
+
+  // Egress secrets: the owner's per-host secrets, spent by an agent's
+  // container without ever entering it. Same DO, same cipher, same key as
+  // `user_credentials` — a different row shape, because a binding carries a
+  // host and a placeholder that the `Credential` union has no room for.
+  initEgressVaultTables(sql, tagged);
 
   // User-level config (key/value). Defaults that new agents inherit:
   // default_model, default_strategy, default_inference_loop, default_approval_mode.
