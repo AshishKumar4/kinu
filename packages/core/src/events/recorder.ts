@@ -113,7 +113,10 @@ function stampRunEvent<Input extends RunEventInput>(input: Input, eventIndex: nu
   return { ...input, eventIndex, runId, timestamp: new Date().toISOString() };
 }
 
-function parseStoredRunEvent(payload: string): RunEvent {
+/** Validate one stored `run_events.payload` against the canonical union. The
+ *  single place a persisted event becomes a typed one — exported so readers
+ *  outside this class parse through it rather than re-declaring event shapes. */
+export function parseStoredRunEvent(payload: string): RunEvent {
   return v.parse(RunEventSchema, JSON.parse(payload));
 }
 

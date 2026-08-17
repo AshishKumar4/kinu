@@ -72,7 +72,20 @@ echo "────────────────────────�
 set +e
 bun test "${TARGETS[@]}" --reporter=junit --reporter-outfile="$JUNIT"
 TEST_STATUS=$?
-set -e
+
+# The behavioural tier, on vitest. Disjoint from the bun suites above by FILE
+# EXTENSION — bun matches only *.test.ts/_test/*.spec, never *.eval.ts — so the
+# two runners cannot reach each other and no bunfig ignore pattern has to be kept
+# in step with this. `bun --bun` is REQUIRED, not stylistic: the spine under test
+# opens the agent store through `bun:sqlite`, and node-hosted vitest fails at
+# import and collects ZERO tests, which would read as a clean tier.
+#
+# Its status is captured, never allowed to abort, for the same reason the bun
+# suites are: a live failure must still reach the ratchet and the spend report,
+# because "what did it cost before it failed" is what a reader needs.
+bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts
+EVAL_STATUS=$?
+if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$EVAL_STATUS; fi
 
 if [[ ! -f "$JUNIT" ]]; then
   echo "eval-tier: bun test produced no JUnit report (exit $TEST_STATUS) — nothing to measure" >&2

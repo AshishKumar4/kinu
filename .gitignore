@@ -68,3 +68,19 @@ CC-CORPUS-*.md
 # Harness defect guard: a literal `local:` directory appears when a `local://` URI
 # is resolved as a relative path. Never source; content lives in the run artifact.
 /local:/
+
+# vitest-evals tool-replay recordings. The eval tier sets
+# VITEST_EVALS_REPLAY_MODE=off, but `resolveReplayMode()` defaults to "auto" —
+# which RECORDS when no recording exists — so one tool declaring replay is enough
+# to create this. A recording serialises tool `input` and `output` VERBATIM, and
+# for an agent harness the inputs are where an `Authorization: Bearer` lives; a
+# synthetic token was measured surviving into it intact. Ignored so an accident
+# can never become a tracked file. Sanitising is per-tool and opt-in, so this
+# stays ignored even after a `sanitize` hook exists.
+/.vitest-evals/
+
+# Scratch for tests/evals-artifact-contract.test.ts. It must live inside the repo
+# so the child vitest can resolve `vitest/config` by walking up to node_modules —
+# a /tmp directory emits no report at all. Removed in afterAll; ignored so a
+# crashed run cannot leave a tracked file.
+/.eval-artifact-contract-*/

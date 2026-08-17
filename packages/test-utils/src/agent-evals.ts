@@ -20,9 +20,11 @@
  *      drives each one to a known non-zero score AND to a failing score, so a
  *      green assertion in a live suite is known to be capable of being red.
  */
+import * as v from 'valibot';
 import {
-  listForkRuns, STEER_BRANCH_RUN_ID_PREFIX, tableExists,
-  type ForkRunSummary, type SqlExecutor,
+  isFailingResultText, listForkRuns, parseStoredRunEvent, STEER_BRANCH_RUN_ID_PREFIX,
+  tableExists,
+  type ForkRunSummary, type RunEvent, type SqlExecutor,
 } from '@proteus/core';
 
 // ── (a) MCTS reached, branched, and ranked ───────────────────────
@@ -330,3 +332,377 @@ export function scoreDelegation(sql: SqlExecutor): DelegationScore {
     toolCalls,
   };
 }
+
+// ── (d) The uniform behavioural verdict ──────────────────────────
+
+/**
+ * One scorer's reading of one trajectory, in the shape every consumer needs.
+ *
+ * The three scorers above each return their own rich shape because each is read
+ * by a human looking at one specific mechanism. The scorers below are also read
+ * by machines — the run recorder that persists a run, and the comparator that
+ * pairs two runs through `packages/core/src/bench`'s paired statistics — and
+ * those need one shape, or every consumer grows a switch over scorer names.
+ *
+ * `rate` is null, never 0, when nothing was eligible. That distinction is the
+ * whole point: `0/0` is "the mechanism never got a chance", which is a fact
+ * about the TASK, while `0/7` is "it got seven chances and took none", which is
+ * a fact about the AGENT. Collapsing them into 0.0 is how a corpus that never
+ * exercised a mechanism comes to read as an agent that never uses it.
+ */
+export interface BehaviourScore {
+  /** Opportunities the mechanism actually had — the denominator. */
+  readonly eligible: number;
+  /** Of those, opportunities it took correctly — the numerator. */
+  readonly passed: number;
+  /** passed/eligible, or null when nothing was eligible. */
+  readonly rate: number | null;
+  /** One line of evidence naming the counts, for the run record. */
+  readonly detail: string;
+}
+
+/**
+ * A named behavioural instrument.
+ *
+ * Pure over `SqlExecutor` like its three predecessors, so it is runner-agnostic
+ * and self-testable without a credential. `asserts` is printed into run records
+ * so a stored number says what it measured, not just what it was called — a
+ * scorer whose meaning lives only in the reader's memory is a scorer whose
+ * meaning drifts.
+ */
+export interface BehaviourScorer {
+  readonly name: string;
+  readonly asserts: string;
+  readonly score: (sql: SqlExecutor) => BehaviourScore;
+}
+
+function verdict(eligible: number, passed: number, detail: string): BehaviourScore {
+  return { eligible, passed, rate: eligible === 0 ? null : passed / eligible, detail };
+}
+
+/**
+ * Every recorded event of one type, across every run, validated.
+ *
+ * PARSES THROUGH THE PRODUCTION PARSE. `parseStoredRunEvent` is the same
+ * function `RunEventRecorder.read` uses, so a payload reaches a scorer only if
+ * it satisfies the canonical union — which means the field reads below are
+ * compiler-checked against the producer's own declaration rather than against a
+ * local interface. Seven such interfaces were written for these scorers and then
+ * deleted: each was a copy of a shape the producer already owns, free to drift
+ * the day a field is renamed and silently reading `undefined` when it did.
+ *
+ * THE TYPE FILTER IS IN SQL, ON PURPOSE, and that is the one place this departs
+ * from `getRunEvents`. The recorder's reader parses a window and filters by type
+ * AFTER parsing, so a single malformed row of ANY type — a `step_finish` whose
+ * `messages` no longer satisfy the AI SDK's own schema, say — throws for every
+ * caller, including the six scorers that never look at that type. For a
+ * reporting harness that would turn one bad row into eight missing numbers. The
+ * `idx_run_events_type` index exists (events/recorder.ts:143) precisely so this
+ * narrowing is cheap.
+ *
+ * A malformed row of the type a scorer DOES read still throws, deliberately.
+ * That is a corrupt reward signal, and it must be loud rather than quietly
+ * lowering a denominator.
+ */
+function eventsOfType<K extends RunEvent['type']>(
+  sql: SqlExecutor, type: K,
+): Extract<RunEvent, { type: K }>[] {
+  const rows = sql<{ payload: string }>`
+    SELECT payload FROM run_events WHERE type = ${type}
+    ORDER BY run_id ASC, event_index ASC`;
+  return rows.map((row) => parseStoredRunEvent(row.payload))
+    .filter((event): event is Extract<RunEvent, { type: K }> => event.type === type);
+}
+
+// ── (e) Steering: every trigger, not just the delegation pair ─────
+
+/** The five mechanical triggers, mirroring the producer's picklist
+ *  (events/types.ts:152-153). Used only to order the per-trigger breakdown;
+ *  membership is enforced upstream by the canonical parse, not here.
+ *  `scoreDelegation` reports the two delegation arms in detail, while this
+ *  reports conversion across the whole steering mechanism — which is what "did
+ *  a steer convert" means when the steer was a repeat-breaker. */
+export const STEERING_TRIGGERS = [
+  'repeated_call', 'repeated_failure', 'no_progress',
+  'long_turn_no_delegation', 'turn_start_no_delegation',
+] as const;
+
+/**
+ * Did the harness's mechanical steer change what the model did next?
+ *
+ * A `turn_steering` row exists ONLY when an eligibility predicate fired, so the
+ * row count IS the count of eligible turns and no separate denominator query is
+ * needed.
+ *
+ * There is no branch here for a trigger this scorer does not recognise, because
+ * one is unreachable: `trigger` is a valibot picklist, so a trigger added to the
+ * producer without being added to the schema makes the canonical parse THROW
+ * before a scorer sees the row. That is the stronger guarantee — a new steer
+ * cannot quietly slip out of this denominator and read as a steer that never
+ * fired. `steeringConversion — a trigger outside the producer's picklist` pins
+ * it.
+ */
+export const steeringConversion: BehaviourScorer = {
+  name: 'steering_conversion',
+  asserts: 'a mechanical steer converted: the model did what the steer asked',
+  score(sql) {
+    const rows = eventsOfType(sql, 'turn_steering');
+    const converted = rows.filter((row) => row.converted === true).length;
+    const byTrigger = STEERING_TRIGGERS
+      .map((trigger) => ({ trigger, n: rows.filter((r) => r.trigger === trigger).length }))
+      .filter((entry) => entry.n > 0)
+      .map((entry) => `${entry.trigger}×${String(entry.n)}`);
+    return verdict(rows.length, converted,
+      `${String(converted)}/${String(rows.length)} steers converted` +
+      (byTrigger.length > 0 ? ` (${byTrigger.join(', ')})` : ''));
+  },
+};
+
+// ── (f) The in-episode craft loop actually closing ───────────────
+
+/**
+ * Did the agent build itself a tool and then reach for it again?
+ *
+ * `reused` is a subset of `crafted` by construction: the producer intersects the
+ * turn's earned invocations against the tools crafted in that same turn
+ * (orchestrator/craft-cycle.ts:150), and both sets are cleared per turn. So
+ * summing the two array lengths across rows is a well-formed rate, and cannot
+ * exceed 1 the way a naive cross-turn join would.
+ *
+ * The denominator is tools CRAFTED, not turns. A turn that crafted three tools
+ * and reused one is one third of the loop closing, not a pass.
+ */
+export const craftReuse: BehaviourScorer = {
+  name: 'craft_reuse',
+  asserts: 'the agent crafted a tool mid-episode and then reused it',
+  score(sql) {
+    const rows = eventsOfType(sql, 'craft_cycle');
+    const crafted = rows.reduce((n, row) => n + row.crafted.length, 0);
+    const reused = rows.reduce((n, row) => n + row.reused.length, 0);
+    const invoked = rows.reduce((n, row) => n + row.invoked.length, 0);
+    return verdict(crafted, reused,
+      `${String(reused)}/${String(crafted)} crafted tools reused, ` +
+      `${String(invoked)} crafted-tool invocations across ${String(rows.length)} crafting turns`);
+  },
+};
+
+// ── (g) Edits landing, and the exact-match failures they hit ─────
+
+/**
+ * Did the agent's edits actually land?
+ *
+ * This signal exists only because the `file` primitive reports it. A shell-based
+ * edit cannot produce this row at all — `sed -i` exits 0 whether or not it
+ * matched anything (events/types.ts:136-139) — so a corpus solved with shell
+ * edits scores a zero denominator here, which is the honest answer and not a
+ * pass.
+ *
+ * The dominant failure MODE is carried in `detail` rather than asserted:
+ * `not_found` says the model is inventing anchors, `stale` says it is editing
+ * from a read it never refreshed, and those call for different fixes.
+ */
+export const editLanding: BehaviourScorer = {
+  name: 'edit_landing',
+  asserts: 'attempted file edits applied rather than failing to match',
+  score(sql) {
+    const rows = eventsOfType(sql, 'file_edit');
+    const attempts = rows.reduce((n, row) => n + row.attempts, 0);
+    const applied = rows.reduce((n, row) => n + row.applied, 0);
+    const abandoned = rows.reduce((n, row) => n + row.abandonedPaths, 0);
+    const modes = new Map<string, number>();
+    for (const row of rows) {
+      for (const [mode, count] of Object.entries(row.failures)) {
+        if (count != null && count > 0) modes.set(mode, (modes.get(mode) ?? 0) + count);
+      }
+    }
+    const worst = [...modes.entries()].sort((a, b) => b[1] - a[1])
+      .map(([mode, n]) => `${mode}×${String(n)}`);
+    return verdict(attempts, applied,
+      `${String(applied)}/${String(attempts)} edits applied, ` +
+      `${String(abandoned)} paths abandoned` +
+      (worst.length > 0 ? `; failures ${worst.join(', ')}` : ''));
+  },
+};
+
+// ── (h) Recovery that TOOK, which is the only kind that counts ────
+
+/**
+ * Did the agent break a failure streak and STAY out of it?
+ *
+ * The naive scorer here cannot fail. An `execution_recovery` row is written only
+ * when a streak was already broken by a changed call that ran clean
+ * (events/types.ts:193-196), so counting recoveries against recoveries is
+ * `n/n = 1.00` on every run forever — a number that looks like a measurement
+ * and is a tautology.
+ *
+ * So the denominator is recovery FINDINGS and the numerator is findings that
+ * held. The producer names the falsifier itself: "the SAME signature failing
+ * again in a later turn is the direct falsifier that the finding did not take"
+ * (events/types.ts:206-209). A signature that reappears in any later recovery
+ * row means the injected finding did not stick, and that finding scores red.
+ */
+export const recoveryDurability: BehaviourScorer = {
+  name: 'recovery_durability',
+  asserts: 'a broken failure streak stayed broken — the finding took',
+  score(sql) {
+    const findings = eventsOfType(sql, 'execution_recovery')
+      .flatMap((row) => row.recoveries);
+    // Counted, not ordered. A signature recorded as recovered more than once
+    // necessarily failed again after the first recovery, so multiplicity alone
+    // is the falsifier and the scorer needs no cross-run event ordering — which
+    // it could not rely on anyway, since runs are read newest-first.
+    const seen = new Map<string, number>();
+    for (const finding of findings) {
+      const key = `${finding.tool}\u0000${finding.failedSignature}`;
+      seen.set(key, (seen.get(key) ?? 0) + 1);
+    }
+    const held = [...seen.values()].filter((n) => n === 1).length;
+    const recurring = [...seen.values()].filter((n) => n > 1).length;
+    const streak = findings.reduce((n, f) => n + f.failures, 0);
+    return verdict(seen.size, held,
+      `${String(held)}/${String(seen.size)} recovery findings held ` +
+      `(${String(recurring)} signatures failed again later), ` +
+      `${String(streak)} consecutive failures absorbed`);
+  },
+};
+
+// ── (i) Completion honesty, measured against the gate ────────────
+
+/**
+ * Did the run finish without the completion gate having to force a re-look?
+ *
+ * NOTE THE POLARITY, because it is the reverse of every other scorer here.
+ * `converted: true` means the gate handed the agent freshly observed state and
+ * the agent then MADE TOOL CALLS — i.e. it had claimed completion while real
+ * work remained, and the gate caught it (events/types.ts:162-169). So the good
+ * outcome is `converted: false`, and the numerator is the un-converted rows.
+ *
+ * A high conversion rate is therefore not a healthy mechanism, it is a model
+ * that habitually declares victory early — which is exactly the behaviour the
+ * owner asked to be able to see. Scoring this the obvious way round would
+ * reward the defect.
+ */
+export const completionHonesty: BehaviourScorer = {
+  name: 'completion_honesty',
+  asserts: 'the run finished on an honest claim — the gate found no work left',
+  score(sql) {
+    const rows = eventsOfType(sql, 'completion_gate');
+    const forced = rows.filter((row) => row.converted === true).length;
+    return verdict(rows.length, rows.length - forced,
+      `${String(rows.length - forced)}/${String(rows.length)} gated runs ended on an honest ` +
+      `completion claim (${String(forced)} were forced back to work)`);
+  },
+};
+
+// ── (j) Spilled context read back, not silently lost ─────────────
+
+/**
+ * When the turn spilled bulk output somewhere readable, did the agent read it?
+ *
+ * The denominator is `referenced` — trips whose spill write LANDED, so the agent
+ * genuinely had an address it could fetch (context-budget.ts:83-84). Trips that
+ * spilled without a resolvable reference are excluded: there was nothing to read
+ * back, so charging the agent for not reading it would score the harness's own
+ * failure against the model.
+ *
+ * The numerator is `followUps`, tool calls that cited a spill address
+ * (context-budget.ts:87-88). It is clamped to the denominator because one
+ * address may legitimately be cited twice, and a rate above 1 would break the
+ * paired statistics downstream rather than reporting enthusiasm.
+ */
+export const spillRetrieval: BehaviourScorer = {
+  name: 'spill_retrieval',
+  asserts: 'the agent read back bulk output the budget spilled to an address',
+  score(sql) {
+    const rows = eventsOfType(sql, 'context_budget');
+    const referenced = rows.reduce((n, row) => n + row.referenced, 0);
+    const followUps = rows.reduce((n, row) => n + row.followUps, 0);
+    const omitted = rows.reduce((n, row) => n + row.omittedChars, 0);
+    return verdict(referenced, Math.min(followUps, referenced),
+      `${String(followUps)} follow-ups against ${String(referenced)} readable spills, ` +
+      `${String(omitted)} chars withheld from the root`);
+  },
+};
+
+// ── (k) Tool calls that worked ───────────────────────────────────
+
+/**
+ * Did the agent's tool calls succeed?
+ *
+ * `tool_call_end` is the type production actually writes — `tool_call_start` is
+ * declared in the event union and emitted by NOTHING on either backend, which is
+ * the trap that made the first delegation scorer report zero forever. Verified
+ * again for this scorer rather than inherited on trust.
+ *
+ * TWO KINDS OF FAILURE, and counting only the first is a defect this scorer
+ * shipped with. `error` is the TRANSPORT discriminator: the tool itself threw. A
+ * command that ran fine and exited non-zero is an ordinary SUCCESSFUL result
+ * whose text begins `Error (exit N)` (`formatExecResult`, execution/
+ * exec-result.ts:66), so a scorer reading only `error` counts a failed build, a
+ * failed test run and a failed `git apply` as successes. That exact confusion
+ * graded a command exiting 3 as `accepted` at quality 0.70 in the evolution
+ * reward, and it is the inverted-contamination shape: the worst call in the turn
+ * contributing the best number. `isFailingResultText` is the one definition,
+ * living beside the renderer that writes the prefix.
+ *
+ * This is the coarsest instrument here and deliberately so: it is the one that
+ * still has a non-zero denominator on a task too small to craft, spill, steer or
+ * edit, so a run is never scored entirely on absent mechanisms.
+ */
+export const toolOutcomes: BehaviourScorer = {
+  name: 'tool_outcomes',
+  asserts: 'tool calls returned AND the command they ran did not fail',
+  score(sql) {
+    const rows = eventsOfType(sql, 'tool_call_end');
+    const threw = rows.filter((row) => row.error != null && row.error !== '');
+    // `result` is `JsonValue | undefined` on the validated event. Parsed to a
+    // string at this boundary rather than narrowed by representation, so a
+    // structured result simply is not a failure text.
+    const exitedNonZero = rows.filter((row) => {
+      const text = v.safeParse(v.string(), row.result);
+      return text.success && isFailingResultText(text.output);
+    });
+    const failed = threw.length + exitedNonZero.length;
+    const byTool = new Map<string, number>();
+    for (const row of rows) byTool.set(row.name, (byTool.get(row.name) ?? 0) + 1);
+    const mix = [...byTool.entries()].sort((a, b) => b[1] - a[1])
+      .map(([name, n]) => `${name}×${String(n)}`);
+    return verdict(rows.length, rows.length - failed,
+      `${String(rows.length - failed)}/${String(rows.length)} tool calls returned` +
+      (mix.length > 0 ? `; ${mix.join(', ')}` : ''));
+  },
+};
+
+// ── (l) Delegation, in the uniform shape ─────────────────────────
+
+/**
+ * `scoreDelegation`'s headline as a `BehaviourScorer`, so the ledger's oldest
+ * instrument is comparable across runs like the rest.
+ *
+ * A thin adapter and not a reimplementation: it calls the same function, so the
+ * per-arm detail keeps its one home and this cannot drift from it.
+ */
+export const delegationConversion: BehaviourScorer = {
+  name: 'delegation_conversion',
+  asserts: 'a delegation steer converted on a turn that was eligible to delegate',
+  score(sql) {
+    const score = scoreDelegation(sql);
+    return verdict(score.eligible, score.converted,
+      `${String(score.converted)}/${String(score.eligible)} eligible turns delegated; ` +
+      `${String(score.forkedRuns)} runs opened ${String(score.headsOpened)} heads ` +
+      `over ${String(score.completedTurns)} completed turns`);
+  },
+};
+
+/**
+ * The behavioural panel, in reporting order.
+ *
+ * Ordered coarse-signal-last so a reader scanning a run record meets the
+ * specific mechanisms first. Exported as the single list every consumer
+ * iterates: adding a scorer here is what puts it in run records, in the live
+ * suite and in cross-run comparison at once, with no second registration.
+ */
+export const BEHAVIOUR_SCORERS: readonly BehaviourScorer[] = [
+  delegationConversion, steeringConversion, craftReuse, editLanding,
+  recoveryDurability, completionHonesty, spillRetrieval, toolOutcomes,
+];

@@ -800,7 +800,7 @@ export {
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
-  formatExecResult, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
+  formatExecResult, isFailingResultText, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
   createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
@@ -906,6 +906,7 @@ export type {
 } from './events/index.js';
 export {
   initRunEventTables,
+  parseStoredRunEvent,
   RunEventRecorder,
   cacheHitRate,
   summarizeSteps,

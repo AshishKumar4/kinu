@@ -97,6 +97,7 @@
     "puppeteer-core": "^24.41.0",
     "typescript": "7.0.2",
     "vitest": "^4.1.10",
+    "vitest-evals": "0.16.1",
     "wrangler": "^4.95.0"
   },
   "patchedDependencies": {
