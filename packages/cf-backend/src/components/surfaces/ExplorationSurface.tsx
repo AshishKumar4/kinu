@@ -18,33 +18,25 @@
  * quality scoreboard are not here either: they measure the agent's trajectory
  * across scaffold versions and live under Agent → Evolution.
  */
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
-import {
-  GitForkIcon, TreeStructureIcon, WrenchIcon, BrainIcon, ArrowsOutIcon, ArrowLeftIcon,
-} from "@phosphor-icons/react";
-import { usageTotal } from "@proteus/core";
-import type {
-  ForkRunParams, ForkRunSummary, HeadRunHeadView, HeadRunView, HeadStep,
-} from "@proteus/core";
+import { GitForkIcon, TreeStructureIcon, ArrowsOutIcon, XIcon } from "@phosphor-icons/react";
+import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@proteus/core";
 import { ForkTree } from "@/components/fork-tree";
-import { cleanNodeLabel, findForkNode, isCompeted, treeStats } from "@/components/fork-tree-model";
+import { NodeTranscript } from "@/components/NodeTranscript";
+import { type ExplorerSelection } from "@/components/fork-tree-model";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
-import { fmtTokens } from "@/lib/format";
+import { useElementSize } from "@/hooks/use-element-size";
+import { EmptyState, EMPTY_HINTS, formatScore } from "./shared";
 import {
-  DetailSection, EmptyState, EMPTY_HINTS, formatScore, MarkdownContent, Metric, scoreColor,
-} from "./shared";
-import {
-  findHead, forkParamRows, FORK_REVALIDATE_MS, headRunToTree, settlePolicyOf,
-  useExplorationCanvas,
+  forkParamRows, FORK_REVALIDATE_MS, headRunToTree, settlePolicyOf, useExplorationCanvas,
 } from "./fork-runs";
-import * as v from "valibot";
 
 export interface ExplorationSurfaceProps {
   /** Trees of the searches in flight, keyed by search, fed by `mcts-progress`
@@ -58,19 +50,24 @@ export interface ExplorationSurfaceProps {
   /** Detached work can create or continue a fork without a streaming turn. */
   backgroundJobs: readonly BackgroundJob[];
   rpc: Rpc;
+  /** Per-branch journal-write counter, from the `head_activity` broadcast. What
+   *  makes an OPEN branch's transcript grow as that branch works. */
+  headActivity: ReadonlyMap<string, number>;
 }
 
-export function ExplorationSurface({ liveTrees, isStreaming, backgroundJobs, rpc }: ExplorationSurfaceProps) {
+export function ExplorationSurface({
+  liveTrees, isStreaming, backgroundJobs, rpc, headActivity,
+}: ExplorationSurfaceProps) {
   const { agentId } = useParams();
   const [focusedRunId, setFocusedRunId] = useState<string | null>(null);
-  /** The branch being watched, or null for the canvas. Selecting a branch OPENS
-   *  it — the canvas gives way to it the way the chat column gives way to a
-   *  subordinate's conversation — because a running fork is an agent doing work,
-   *  not a row of metadata. */
-  const [openBranch, setOpenBranch] = useState<{ runId: string; branchId: string } | null>(null);
+  /** The node being inspected, or null. It no longer REPLACES the canvas: the
+   *  canvas and the branch are two panes of the same view, because reading what
+   *  a branch did means looking at where it sits in the search at the same
+   *  time. */
+  const [selection, setSelection] = useState<ExplorerSelection | null>(null);
 
   const {
-    resource, reload, runs, params, trees, hasActiveWork,
+    resource, reload, runs, params, trees,
     exhausted, loadingMore, pageError, loadMore,
   } = useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees);
   // The list is the scroll container in both layouts, so the trigger lives on it
@@ -91,42 +88,56 @@ export function ExplorationSurface({ liveTrees, isStreaming, backgroundJobs, rpc
   // The newest fork is what the operator came to look at, so it is focused on
   // arrival; once they pick another, a later poll must not move the focus.
   const focused = runs.find((run) => run.id === focusedRunId) ?? runs[0]!;
-  const opened = openBranch === null ? null : runs.find((run) => run.id === openBranch.runId) ?? null;
+  const opened = selection === null ? null : runs.find((run) => run.id === selection.runId) ?? null;
 
   return (
     <div className="h-full min-h-0 flex flex-col gap-2 animate-fade-in">
       {resource.status === "error" && (
         <LoadFailure what="fresh fork runs" message={resource.message} onRetry={reload} />
       )}
-      {/* Stacked, the list is content-height (capped, then it scrolls) so it
-          cannot stretch into dead space above the canvas; side by side it fills
-          its column. */}
-      <div className="flex-1 min-h-0 grid gap-3 grid-rows-[auto_minmax(0,1fr)] @3xl:grid-rows-1 @3xl:grid-cols-[minmax(220px,280px)_minmax(0,1fr)]">
+      {/* Three panes once there is room for them: the runs, the canvas, the
+          branch. The canvas takes the whole height of its column and every
+          spare pixel of width, which is the proportion the tree needs and the
+          one a stack of fixed-height cards could never give it.
+
+          Narrower than that, three columns would leave the tree ~200px, so the
+          branch takes the canvas's place while it is open — and stacked
+          narrowest of all, the list is content-height (capped, then it scrolls)
+          so it cannot stretch into dead space above the canvas. */}
+      <div className="flex-1 min-h-0 grid gap-3 grid-rows-[auto_minmax(0,1fr)] @3xl:grid-rows-1 @3xl:grid-cols-[minmax(220px,280px)_minmax(0,1fr)] @6xl:grid-cols-[minmax(200px,250px)_minmax(0,1fr)_minmax(330px,400px)]">
         <div ref={listRef}
           className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto rounded-lg border p-border p-surface p-1.5 space-y-0.5">
           {runs.map((run) => (
             <ForkRunRow key={run.id} run={run} params={params.get(run.id)}
               selected={focused.id === run.id}
-              onSelect={() => { setOpenBranch(null); setFocusedRunId(run.id); }} />
+              onSelect={() => { setSelection(null); setFocusedRunId(run.id); }} />
           ))}
           <ScrollBoundary what="forks" count={runs.length}
             loading={loadingMore} exhausted={exhausted} error={pageError} onRetry={loadMore} />
         </div>
-        {opened !== null && openBranch !== null
-          ? <ForkBranchView
-              run={opened} branchId={openBranch.branchId} rpc={rpc}
-              tree={trees.get(opened.id) ?? null}
-              hasActiveWork={hasActiveWork}
-              onBack={() => setOpenBranch(null)}
-              onOpenBranch={(branchId) => setOpenBranch({ runId: opened.id, branchId })}
-            />
-          : <ForkCanvas
-              runs={runs} params={params} trees={trees} rpc={rpc}
-              focusedId={focused.id} hasActiveWork={hasActiveWork}
-              onFocus={setFocusedRunId}
-              onOpenBranch={(runId, branchId) => setOpenBranch({ runId, branchId })}
-              expandTo={(runId) => agentId ? `/mcts/${agentId}?run=${encodeURIComponent(runId)}` : null}
-            />}
+        <div className={`min-h-0 ${selection === null ? "" : "hidden @6xl:block"}`}>
+          <ForkCanvas
+            runs={runs} params={params} trees={trees}
+            focusedId={focused.id} selection={selection}
+            onFocus={setFocusedRunId}
+            onSelectNode={setSelection}
+            expandTo={agentId ? `/mcts/${agentId}?run=${encodeURIComponent(focused.id)}` : null}
+          />
+        </div>
+        <div className={`min-h-0 ${selection === null ? "hidden @6xl:block" : ""}`}>
+          {opened !== null && selection !== null
+            ? <ForkBranchView
+                run={opened} branchId={selection.nodeId} rpc={rpc}
+                trees={trees}
+                headActivity={headActivity}
+                onClose={() => setSelection(null)}
+                onOpenBranch={(branchId) => setSelection({ runId: opened.id, nodeId: branchId })}
+              />
+            : <div className="h-full rounded-lg border p-border p-surface flex items-center justify-center p-4">
+                <EmptyState icon={<TreeStructureIcon size={26} />} title="No branch open"
+                  hint="Pick a node on the canvas to read what that branch did." />
+              </div>}
+        </div>
       </div>
     </div>
   );
@@ -255,530 +266,152 @@ export function useForkRunTree(
 /* ── one branch, opened ────────────────────────────────────────── */
 
 /**
- * How long ago, in the coarsest unit that is still honest. Liveness is the whole
- * point of this line, and "4m ago" answers "is it stuck" where a timestamp does
- * not.
- */
-function ago(at: number, now: number): string {
-  const seconds = Math.max(0, Math.round((now - at) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  return minutes < 60 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`;
-}
-
-/**
- * What a branch is doing, right now — the thing the owner asked for by name:
- * *"I should be able to actually click and 'view' a subagent/fork here and see
- * what it is doing live."*
+ * A branch, opened.
  *
- * A fork's branches ARE agents: same inference loop, same tool surface, running
- * on the same workspace. So opening one takes over the pane the way a
- * subordinate's conversation takes over the chat column, rather than filling a
- * 360px card with metadata beside a tree. A running branch says when it started
- * and when it last recorded a step — the difference between working and wedged —
- * and its steps stream in as the journal receives them, because it revalidates
- * while the run is live.
+ * The owner's ask was for the chat, not a card: *"it should just be like a chat
+ * view except there are no user inputs or user messages."* So the body is
+ * {@link NodeTranscript}, which renders every step through the SAME
+ * `MessageView` the main thread uses; what stays here is the frame that says
+ * which fork this branch belongs to and how that fork settled — the one thing
+ * the transcript itself cannot know.
+ *
+ * The metadata card this replaced (a verdict grid, a clamped summary, and a step
+ * list that truncated reasoning to three lines and tool output to 160
+ * characters) could not answer "what did this branch actually do", which is the
+ * whole reason a reader opens one.
+ *
+ * Its own pane, beside the canvas rather than over it: reading what a branch did
+ * and seeing where it sits in the search are the same question, and answering it
+ * by replacing the tree meant losing the tree. So it closes with an X — a
+ * back-arrow to "all trees" would name a journey the reader never took, because
+ * the trees never left.
  */
 function ForkBranchView({
-  run, branchId, tree, rpc, hasActiveWork, onBack, onOpenBranch,
+  run, branchId, trees, rpc, headActivity, onClose, onOpenBranch,
 }: {
   run: ForkRunSummary;
   branchId: string;
-  tree: ForkNode | null;
+  /** Every drawn tree, keyed by run — the transcript names a node from it when
+   *  the store has no record of that node at all. */
+  trees: ReadonlyMap<string, ForkNode>;
   rpc: Rpc;
-  hasActiveWork: boolean;
-  onBack: () => void;
+  headActivity: ReadonlyMap<string, number>;
+  onClose: () => void;
   onOpenBranch: (branchId: string) => void;
 }) {
-  const { headRun, resource, reload } = useForkRunDetail(run, rpc, hasActiveWork);
-  const drawn = tree ?? (headRun ? headRunToTree(headRun) : null);
-  const node = drawn ? findForkNode(drawn, branchId) : null;
-  const head = headRun ? findHead(headRun, branchId) : null;
-  const competed = drawn ? isCompeted(drawn) : false;
-  const now = Date.now();
-
   return (
-    <div className="min-h-0 rounded-lg border p-border p-surface overflow-hidden flex flex-col">
-      <div className="px-4 py-3 border-b p-border shrink-0">
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={onBack}>
-            <ArrowLeftIcon size={12} className="mr-1" />All trees
-          </Button>
-          {node && (
-            <>
-              <span className={`size-1.5 rounded-full shrink-0 ${statusDot(node.status)} ${node.status === "running" ? "animate-pulse" : ""}`} />
-              <span className="text-[10px] uppercase p-text-3 tracking-normal">
-                {statusLabel(node, competed)}
-              </span>
-              <span className="text-[10px] p-text-3">depth {node.depth}</span>
-            </>
-          )}
+    <div className="h-full min-h-0 flex flex-col gap-2">
+      <div className="shrink-0 flex items-center gap-2 min-w-0">
+        <div className="min-w-0 flex-1 text-[10px] p-text-3 truncate">
+          in <span className="font-mono">{run.task}</span> · {describeSettle(run)}
         </div>
-        <div className="mt-2 min-w-0">
-          <div className="text-sm font-semibold p-text leading-snug line-clamp-2">
-            {cleanNodeLabel(node?.action ?? head?.task, head?.task ?? branchId)}
-          </div>
-          <div className="text-[10px] p-text-3 mt-1 truncate">
-            in <span className="font-mono">{run.task}</span> · {describeSettle(run)}
-          </div>
-          {head && (
-            <div className="text-[10px] p-text-3 mt-1 font-mono">
-              started {ago(head.spawnedAt, now)}
-              {head.lastStepAt === null
-                ? head.status === "running" ? " · no step recorded yet" : ""
-                : ` · last step ${ago(head.lastStepAt, now)}`}
-              {head.steps.length > 0 && ` · ${head.steps.length} steps`}
-            </div>
-          )}
-        </div>
+        <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close this branch"
+          title="Close this branch" className="shrink-0">
+          <XIcon size={12} />
+        </Button>
       </div>
-
-      <div className="p-4 overflow-y-auto min-h-0 space-y-4">
-        {resource.status === "error" && (
-          <LoadFailure what="this branch" message={resource.message} onRetry={reload} />
-        )}
-        {node === null && resource.status === "loading" && (
-          <div className="flex justify-center py-8"><Loader size="sm" /></div>
-        )}
-        {node && (competed
-          ? <CompetedVerdict node={node} path={pathTo(drawn!, node.id)} />
-          : <MergedVerdict node={node} head={head} />)}
-        {node?.observation && (
-          <DetailSection title={competed ? "Branch answer" : "Summary"}>
-            <div className="border p-border p-card px-3 py-2 text-[11px] p-text-2 leading-relaxed">
-              <MarkdownContent content={node.observation} />
-            </div>
-          </DetailSection>
-        )}
-        {head && <HeadTrace head={head} />}
-        {node && competed && <CompetedExtras node={node} rpc={rpc} />}
-        {drawn && node && (
-          <BranchNavigation root={drawn} node={node} competed={competed} onOpen={onOpenBranch} />
-        )}
-        {node === null && resource.status === "ready" && (
-          <EmptyState icon={<TreeStructureIcon size={28} />} title="This branch is no longer in the run"
-            hint="It was pruned or the run was rewritten while you were reading it." />
-        )}
-      </div>
+      <NodeTranscript
+        selection={{ runId: run.id, nodeId: branchId }}
+        trees={trees} rpc={rpc} headActivity={headActivity}
+        onSelect={onOpenBranch} />
     </div>
   );
 }
 
 /**
- * The canvas: every tree the workspace has grown, on one scrolling surface.
+ * The canvas: every tree the workspace has grown, on ONE surface.
  *
- * The surface used to render exactly one tree — the run selected in the list —
- * so a workspace with five forks showed one of them and the other four existed
- * only as rows. Choosing from the list now FOCUSES a tree rather than filtering
- * to it: the whole history stays on screen and the reader keeps the comparison
- * that made them open the tab.
+ * The surface once rendered exactly one tree — the run selected in the list — so
+ * a workspace with five forks showed one of them and the other four existed only
+ * as rows. Then it rendered one FIXED-HEIGHT canvas per run, stacked in cards,
+ * which is worse in the way that matters: the room a tree could use was decided
+ * before anyone knew how big the tree was, so a three-node merge held 300px it
+ * could not fill while a hundred-node search was squeezed into the same 300px,
+ * and a card's chrome and gutter were spent on every run.
  *
- * Bands stacked down the canvas rather than columns across it, because a tree is
- * drawn depth-to-the-right and is therefore wide and short. Each band carries
- * its run's dispatch parameters, so two runs of the same task are told apart by
- * what they were asked to do rather than by their ids.
+ * One canvas, one zoom, one scene. Every run is a band inside it under a soft
+ * boundary, sized to the tree it holds; the selected band is lit and the others
+ * recede without leaving. Choosing from the list FOCUSES a band — the view
+ * refits to it — rather than filtering to it, so the comparison that made the
+ * reader open the tab stays on screen.
  */
 function ForkCanvas({
-  runs, params, trees, rpc, focusedId, hasActiveWork, onFocus, onOpenBranch, expandTo,
+  runs, params, trees, focusedId, selection, onFocus, onSelectNode, expandTo,
 }: {
   runs: readonly ForkRunSummary[];
   params: ReadonlyMap<string, ForkRunParams>;
   trees: ReadonlyMap<string, ForkNode>;
-  rpc: Rpc;
   focusedId: string;
-  hasActiveWork: boolean;
+  selection: ExplorerSelection | null;
   onFocus: (runId: string) => void;
-  onOpenBranch: (runId: string, branchId: string) => void;
-  expandTo: (runId: string) => string | null;
-}) {
-  const bands = useRef(new Map<string, HTMLDivElement>());
-
-  // Focus scrolls, it does not filter. Only on a change of focus: a poll that
-  // grows a tree must not drag the canvas back to the focused band.
-  useEffect(() => {
-    bands.current.get(focusedId)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [focusedId]);
-
-  return (
-    <div className="min-h-0 overflow-y-auto rounded-lg border p-border p-surface p-2 space-y-2">
-      {runs.map((run) => (
-        <ForkCanvasBand
-          key={run.id} run={run} params={params.get(run.id)} tree={trees.get(run.id) ?? null}
-          rpc={rpc} hasActiveWork={hasActiveWork} focused={run.id === focusedId}
-          expandTo={expandTo(run.id)}
-          onFocus={() => onFocus(run.id)}
-          onOpenBranch={(branchId) => onOpenBranch(run.id, branchId)}
-          register={(el) => {
-            if (el) bands.current.set(run.id, el); else bands.current.delete(run.id);
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-/** How tall one band's tree gets. Enough for a depth-4 search to read without
- *  scrolling inside itself, short enough that three bands are visible at once —
- *  the comparison the canvas exists for. */
-const BAND_H = 300;
-
-function ForkCanvasBand({
-  run, params, tree, rpc, hasActiveWork, focused, expandTo, onFocus, onOpenBranch, register,
-}: {
-  run: ForkRunSummary;
-  params: ForkRunParams | undefined;
-  tree: ForkNode | null;
-  rpc: Rpc;
-  hasActiveWork: boolean;
-  focused: boolean;
+  onSelectNode: (selection: ExplorerSelection) => void;
+  /** Full-screen permalink for the focused run, or null outside a workspace. */
   expandTo: string | null;
-  onFocus: () => void;
-  onOpenBranch: (branchId: string) => void;
-  register: (el: HTMLDivElement | null) => void;
 }) {
-  const graphRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
+  const { attach, size } = useElementSize();
 
-  useEffect(() => {
-    const el = graphRef.current;
-    if (!el) return;
-    const resize = () => setWidth(el.clientWidth);
-    const ro = new ResizeObserver(resize);
-    ro.observe(el);
-    resize();
-    return () => ro.disconnect();
-  }, []);
-
-  const { headRun } = useForkRunDetail(run, rpc, hasActiveWork);
-  const drawn = tree ?? (headRun ? headRunToTree(headRun) : null);
-  const stats = drawn ? treeStats(drawn) : null;
-  const paramRows = forkParamRows(params);
-
-  return (
-    <div ref={register}
-      className={`rounded-md border p-2 transition-colors ${focused ? "p-border-accent p-elevated" : "p-border p-card"}`}>
-      <button type="button" onClick={onFocus} className="w-full text-left">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-          <span className={`size-1.5 rounded-full shrink-0 ${RUN_DOT[run.status]} ${run.status === "running" ? "animate-pulse" : ""}`} />
-          <span className="text-[11px] font-medium p-text truncate max-w-[60%]" title={run.task}>{run.task}</span>
-          <span className="text-[10px] p-text-3 font-mono">{describeSettle(run, params)}</span>
-          {expandTo && (
-            <Link to={expandTo} title="Open this fork full-screen"
-              onClick={(event) => event.stopPropagation()}
-              className="ml-auto flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-md p-text-3 hover:p-text transition-colors">
-              <ArrowsOutIcon size={11} />Expand
-            </Link>
-          )}
-        </div>
-        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] p-text-3 font-mono">
-          {paramRows.length > 0
-            ? paramRows.map((row) => (
-                <span key={row.label}>{row.label} <span className="p-text-2">{row.value}</span></span>
-              ))
-            : <span className="italic">dispatch parameters no longer recorded</span>}
-          {stats && <span>depth <span className="p-text-2">{stats.depth}</span></span>}
-        </div>
-      </button>
-      <div ref={graphRef} className="mt-2 overflow-hidden rounded-md border p-border p-surface"
-        style={{ height: BAND_H }}>
-        {drawn === null
-          ? <div className="h-full flex items-center justify-center px-4 text-center text-[11px] p-text-3">
-              No branches were ever written for this run. It stopped before the first one landed.
-            </div>
-          : width > 0 && (
-              <ForkTree root={drawn} width={width} height={BAND_H - 8}
-                onNodeClick={(node) => {
-                  onFocus();
-                  // The root IS the split, not a branch — there is nothing
-                  // running behind it to open.
-                  if (node.parentId !== null) onOpenBranch(node.id);
-                }}
-                selectedNode={null} />
-            )}
-      </div>
-    </div>
+  // Memoised on the identities the render actually depends on: the tree objects
+  // only swap when their rows changed, so a poll that changed nothing does not
+  // rebuild the scene. A fresh array here would redraw every tree per poll.
+  // The band's note is the settle line only: the dispatch parameters laid across
+  // every band are a sentence of numbers over the tree they describe. They are
+  // still what tells two runs of the same task apart, so the bar below states
+  // them for the FOCUSED fork — one fork at a time, where there is room.
+  const regions = useMemo(
+    () => runs.flatMap((run) => {
+      const root = trees.get(run.id);
+      return root
+        ? [{ runId: run.id, root, title: run.task, note: describeSettle(run, params.get(run.id)) }]
+        : [];
+    }),
+    [runs, trees, params],
   );
-}
 
-function pathTo(root: ForkNode, id: string): ForkNode[] {
-  const walk = (node: ForkNode, trail: ForkNode[]): ForkNode[] | null => {
-    const next = [...trail, node];
-    if (node.id === id) return next;
-    for (const child of node.children) {
-      const found = walk(child, next);
-      if (found) return found;
-    }
-    return null;
-  };
-  return walk(root, []) ?? [];
-}
+  const paramRows = forkParamRows(params.get(focusedId));
+  const empty = regions.length === 0;
 
-/* ── branch vocabulary and navigation ──────────────────────────── */
-
-function statusLabel(node: ForkNode, competed: boolean): string {
-  if (node.status === "running") return "running";
-  if (node.status === "failed") return "failed";
-  if (!competed) return node.parentId === null ? "the split" : "branch";
-  if (node.status === "terminal") return "winner";
-  if (node.status === "pruned") return "pruned";
-  return "candidate";
-}
-
-function statusDot(status: ForkNode["status"]): string {
-  if (status === "terminal") return "p-dot-success";
-  if (status === "failed") return "p-dot-danger";
-  if (status === "running") return "p-dot-warning";
-  return "p-dot-neutral";
-}
-
-/**
- * Walking the tree from inside a branch: the line that led here, and the
- * branches that came off it.
- *
- * The canvas is how you find a branch; this is how you follow one. Both were in
- * the old side panel, which is the pane the branch view replaced — the reader
- * still needs to get from a winner to the candidate it beat without going back
- * out to the tree and hunting for it.
- */
-function BranchNavigation({
-  root, node, competed, onOpen,
-}: {
-  root: ForkNode;
-  node: ForkNode;
-  competed: boolean;
-  onOpen: (branchId: string) => void;
-}) {
-  const path = pathTo(root, node.id);
   return (
-    <>
-      {path.length > 1 && (
-        <DetailSection title={competed ? "Search path" : "Path"}>
-          <div className="space-y-1">
-            {path.map((step, i) => (
-              <button key={step.id} type="button" disabled={step.parentId === null}
-                onClick={() => onOpen(step.id)}
-                className={`w-full flex items-start gap-2 rounded-md px-2 py-1 text-left transition-colors ${step.id === node.id ? "p-fill" : "p-card-hover"} disabled:cursor-default`}>
-                <span className="text-[9px] p-text-3 font-mono w-5 text-right shrink-0">{i}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-[10px] p-text-2 truncate">{cleanNodeLabel(step.action, "(the split)")}</div>
-                  <div className="text-[9px] p-text-3 font-mono">
-                    {step.id.slice(0, 12)}{step.value !== null && ` · ${formatScore(step.value)}`}
-                  </div>
-                </div>
-              </button>
+    <div className="h-full min-h-0 flex flex-col rounded-lg border p-border p-surface overflow-hidden">
+      <div className="shrink-0 flex items-center gap-3 px-3 py-1.5 border-b p-border">
+        <span className="text-[10px] uppercase tracking-normal p-text-3">
+          {regions.length === 1 ? "1 fork" : `${regions.length} forks`}
+        </span>
+        <span className="text-[10px] p-text-3 truncate">
+          {runs.find((run) => run.id === focusedId)?.task ?? ""}
+        </span>
+        {paramRows.length > 0 && (
+          <div className="hidden @xl:flex items-center gap-x-3 shrink-0 text-[10px] p-text-3 font-mono">
+            {paramRows.map((row) => (
+              <span key={row.label}>{row.label} <span className="p-text-2">{row.value}</span></span>
             ))}
-          </div>
-        </DetailSection>
-      )}
-
-      {node.children.length > 0 && (
-        <DetailSection title="Branches from here">
-          <div className="space-y-1">
-            {node.children.map((child) => (
-              <button key={child.id} type="button" onClick={() => onOpen(child.id)}
-                className="w-full flex items-start gap-2 rounded-md px-2 py-1 p-fill text-left p-card-hover transition-colors">
-                <span className={`mt-1 size-1.5 rounded-full shrink-0 ${statusDot(child.status)}`} />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[10px] p-text-2 truncate" title={cleanNodeLabel(child.action, child.id)}>
-                    {cleanNodeLabel(child.action, "(branch)")}
-                  </div>
-                  <div className="text-[9px] p-text-3 font-mono">
-                    {child.id.slice(0, 12)}
-                    {child.value !== null && ` · ${formatScore(child.value)}`}
-                    {child.visits !== null && ` · ${child.visits} visits`}
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </DetailSection>
-      )}
-    </>
-  );
-}
-
-const COMPETED_VERDICT = {
-  terminal: "Selected as the best branch in this search.",
-  pruned: "No longer being explored after scoring and comparison.",
-  failed: "The branch failed or could not be evaluated usefully.",
-  running: "Still running.",
-  open: "Still available for further exploration.",
-} satisfies Record<ForkNode["status"], string>;
-
-function CompetedVerdict({ node, path }: { node: ForkNode; path: ForkNode[] }) {
-  const visits = node.visits ?? 0;
-  const parentVisits = path.length >= 2 ? Math.max(1, path[path.length - 2]!.visits ?? 1) : Math.max(1, visits);
-  const uct = visits > 0
-    ? (node.value ?? 0) + Math.SQRT2 * Math.sqrt(Math.log(parentVisits) / visits)
-    : Infinity;
-  return (
-    <div className="rounded-lg border p-border p-elevated p-3">
-      <div className="flex items-start gap-3">
-        <div className={`text-3xl font-semibold leading-none tabular-nums ${scoreColor(node.value ?? 0)}`}>
-          {node.value === null ? "—" : formatScore(node.value)}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-medium p-text">Search verdict</div>
-          <div className="text-[11px] p-text-3 leading-relaxed mt-0.5">{COMPETED_VERDICT[node.status]}</div>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-2 mt-3">
-        <Metric label="Explored" value={`${visits}x`} />
-        <Metric label="Priority" value={isFinite(uct) ? uct.toFixed(2) : "new"} />
-        <Metric label="Depth" value={node.depth} />
-        <Metric label="Next branches" value={node.children.length} />
-      </div>
-    </div>
-  );
-}
-
-/** A merged fork ranked nothing, so the headline is what the branch DID — the
- *  numbers a head actually carries — never a score it never earned. */
-function MergedVerdict({ node, head }: { node: ForkNode; head: HeadRunHeadView | null }) {
-  if (!head) {
-    return (
-      <div className="rounded-lg border p-border p-elevated p-3">
-        <div className="text-[11px] font-medium p-text">The split</div>
-        <div className="text-[11px] p-text-3 leading-relaxed mt-0.5">
-          {node.children.length} branch{node.children.length === 1 ? "" : "es"} ran in parallel and were merged
-          into one answer. Nothing here was ranked against anything else.
-        </div>
-      </div>
-    );
-  }
-  // Tool calls are counted off the trace, which is the only place they exist:
-  // a head's calls are a property of the step that made them.
-  const toolCalls = head.steps.reduce((sum, step) => sum + step.toolCalls.length, 0);
-  return (
-    <div className="grid grid-cols-2 gap-2">
-      <Metric label="Steps" value={head.steps.length} />
-      <Metric label="Tools" value={toolCalls} />
-      {/* A head whose provider reported nothing shows a dash, not "0": this
-          panel is the user's account of what the branch cost, and a zero there
-          would say the fork was free. */}
-      <Metric label="Tokens" value={fmtTokens(usageTotal(head.usage))} />
-      <Metric label="Wall" value={head.wallClockMs > 0 ? `${head.wallClockMs}ms` : "running"} />
-    </div>
-  );
-}
-
-/** The code draft and full task text only a search node carries — the tree
- *  rows do not bring them down at depth. */
-function CompetedExtras({ node, rpc }: { node: ForkNode; rpc: Rpc }) {
-  const load = useCallback(
-    () => rpc<{ task: string; codeUsed: string | null } | null>("getMctsNodeDetail", [node.id]),
-    [rpc, node.id],
-  );
-  const { resource } = useAsyncResource(load);
-  const detail = lastValue(resource);
-  const codeUsed = detail?.codeUsed ?? node.codeUsed ?? null;
-  const task = detail?.task ?? node.task ?? "";
-  return (
-    <>
-      {codeUsed && (
-        <DetailSection title="Code draft">
-          <pre className="text-[10px] p-text-2 leading-relaxed whitespace-pre-wrap break-words max-h-56 overflow-y-auto rounded-md p-fill border p-border p-2">
-            {codeUsed}
-          </pre>
-        </DetailSection>
-      )}
-      {task && (
-        <details className="border p-border p-card px-3 py-2">
-          <summary className="cursor-pointer text-[10px] uppercase tracking-normal p-text-3">Original task</summary>
-          <p className="text-[11px] p-text-2 leading-relaxed whitespace-pre-wrap break-words mt-2">{task}</p>
-        </details>
-      )}
-    </>
-  );
-}
-
-/* ── a branch's trace (merged forks) ───────────────────────────── */
-
-/** Compact one-line digest of a tool call's input/output value. */
-function digestValue<Value>(value: Value): string {
-  if (value == null) return "";
-  if (v.is(v.string(), value)) return value;
-  try { return JSON.stringify(value); } catch { return String(value); }
-}
-
-// One reasoning step: ordinal + optional reasoning + prose + its tool calls
-// (name with input → output).
-function StepRow({ step, n }: { step: HeadStep; n: number }) {
-  return (
-    <div className="flex gap-2">
-      <span className="text-[9px] p-text-3 tabular-nums pt-0.5 w-4 shrink-0 text-right">{n}</span>
-      <div className="min-w-0 flex-1 space-y-1 border-l p-border pl-2">
-        {step.reasoning && (
-          <div className="flex items-start gap-1 text-[10px] p-text-3 italic">
-            <BrainIcon size={10} className="shrink-0 mt-0.5" />
-            <span className="line-clamp-3 whitespace-pre-wrap">{step.reasoning}</span>
           </div>
         )}
-        {step.text && <div className="text-[10px] p-text-2 whitespace-pre-wrap break-words">{step.text}</div>}
-        {step.toolCalls.map((t, i) => {
-          const inp = digestValue(t.input);
-          const out = digestValue(t.output);
-          return (
-            <div key={i} className="text-[10px] flex items-start gap-1">
-              <WrenchIcon size={10} className="p-text-3 shrink-0 mt-0.5" />
-              <div className="min-w-0">
-                <code className="p-accent">{t.name}</code>
-                {inp && <span className="p-text-3 break-all"> ({inp.length > 120 ? inp.slice(0, 120) + "…" : inp})</span>}
-                {out && <div className="p-text-3 break-all line-clamp-2">→ {out.length > 160 ? out.slice(0, 160) + "…" : out}</div>}
-              </div>
-            </div>
-          );
-        })}
+        {expandTo && (
+          <Link to={expandTo} title="Open the selected fork full-screen"
+            className="ml-auto shrink-0 flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-md p-text-3 hover:p-text transition-colors">
+            <ArrowsOutIcon size={11} />Expand
+          </Link>
+        )}
       </div>
-    </div>
-  );
-}
-
-function HeadTrace({ head }: { head: HeadRunHeadView }) {
-  return (
-    <>
-      {head.rationale && (
-        <DetailSection title="Rationale">
-          <p className="text-[11px] p-text-2 leading-relaxed whitespace-pre-wrap break-words">{head.rationale}</p>
-        </DetailSection>
-      )}
-
-      {head.errorMessage && (
-        <DetailSection title="Error">
-          <div className="text-[11px] p-danger break-words">{head.errorMessage}</div>
-        </DetailSection>
-      )}
-
-      <DetailSection title="Progress">
-        {head.steps.length > 0 ? (
-          <div className="space-y-1.5">
-            {head.steps.map((s, i) => <StepRow key={i} step={s} n={i + 1} />)}
+      {/* The graph gets the entire remaining height of the column — the whole
+          point of one canvas — and measures the element that is actually
+          mounted. */}
+      <div ref={attach} className="flex-1 min-h-0 relative">
+        {empty ? (
+          <div className="h-full flex items-center justify-center px-6 text-center text-[11px] p-text-3">
+            No branches were ever written for these runs. They stopped before the first one landed.
           </div>
+        ) : size.w > 0 && size.h > 0 ? (
+          <ForkTree
+            regions={regions} width={size.w} height={size.h}
+            selectedRunId={focusedId} selection={selection}
+            onSelectRun={onFocus}
+            onSelectNode={onSelectNode}
+          />
         ) : (
-          // "No steps" and "lost the trace" are different facts, and only the
-          // liveness the header shows can tell them apart — so say which this is
-          // rather than the one sentence that used to cover both.
-          <div className="text-[11px] p-text-3">
-            {head.status === "running"
-              ? "Nothing recorded yet — this branch has started but has not finished its first step."
-              : "This branch recorded no steps before it stopped."}
-          </div>
+          <div className="h-full flex items-center justify-center text-[11px] p-text-3">Sizing canvas…</div>
         )}
-      </DetailSection>
-
-      {head.decisions.length > 0 && (
-        <DetailSection title="Decisions">
-          <div className="space-y-1">
-            {head.decisions.map((d, i) => (
-              <div key={i} className="rounded-md p-fill border p-border p-2 text-[10px]">
-                <div className="p-text-2">{d.question}</div>
-                <div className="p-accent mt-0.5">→ {d.choice}</div>
-                {d.rationale && <div className="p-text-3 mt-0.5">{d.rationale}</div>}
-              </div>
-            ))}
-          </div>
-        </DetailSection>
-      )}
-    </>
+      </div>
+    </div>
   );
 }

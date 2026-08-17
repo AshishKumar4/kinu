@@ -8,6 +8,7 @@ import {
   LocalAgentSession,
   openWorkspaceCLI,
   resolveChatModel,
+  type CLIRuntime,
   type LocalModelResolver,
   type McpServerConfig,
   type SessionEvent,
@@ -167,7 +168,10 @@ export function autoTitleLocalWorkspace(
 
 export interface LocalAgentClientDeps {
   agentName: string;
-  rt: AgentRuntime;
+  /** `CLIRuntime`, not `AgentRuntime`: the session installs itself as this
+   *  runtime's model-call ledger, and typing the field down to `AgentRuntime`
+   *  would hide the channel the non-turn spend rows travel on. */
+  rt: CLIRuntime;
   db: Database;
   dbPath: string;
   info: WorkspaceInfo;

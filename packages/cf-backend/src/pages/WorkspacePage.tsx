@@ -9,7 +9,7 @@ import {
   ClockIcon,
   WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon,
   ClockCounterClockwiseIcon, UserPlusIcon, LightningIcon,
-  StackIcon, SparkleIcon,
+  StackIcon, SparkleIcon, ArrowBendUpRightIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
@@ -22,9 +22,10 @@ import type {
   FileRestoreChange, FileRestorePlan, JsonObject, JsonValue, Page, TakePickOutcome,
 } from "@proteus/core";
 import * as v from "valibot";
-import { useProteus } from "@/hooks/use-proteus";
+import { useProteus, type SteerRun } from "@/hooks/use-proteus";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
+import { useSteerActions } from "@/hooks/use-steer-actions";
 import { touchWorkspace } from "@/lib/user-api";
 import { describeError } from "@/hooks/use-async-resource";
 import { tolerate } from "@proteus/core/obs";
@@ -41,7 +42,7 @@ import { describeToolCall, isToolCallFailed, summarizeToolCall, summarizeToolRun
 import { groupMessageParts, type AnyToolPart } from "@/components/tool-call-grouping";
 import { liveTail } from "@/components/message-live-tail";
 import {
-  classifyProgrammaticTurn, eventVariantLabel, messageSignalId, parseDrainedEvents,
+  classifyProgrammaticTurn, eventVariantLabel, isSteeredMessage, messageSignalId, parseDrainedEvents,
   type DrainedEvent, type ProgrammaticTurn, type SignalCard,
 } from "@/components/background-event";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
@@ -653,6 +654,32 @@ function ProgrammaticTurnCard({ turn, text, state }: {
   return <DrainedEventsCard text={text} state={state} />;
 }
 
+/** The label a user message carries when it reached the model mid-turn instead
+ *  of starting a turn of its own. Without it a user bubble in the middle of an
+ *  assistant's work reads like a rendering bug rather than the steer it is. */
+function SteeredMark({ state }: { state: "queued" | "landed" }) {
+  return (
+    <span className="mt-1 inline-flex items-center gap-1 text-[10px] p-text-3">
+      <ArrowBendUpRightIcon size={10} weight="bold" />
+      {state === "queued" ? "queued — lands at the next step" : "steered mid-turn"}
+    </span>
+  );
+}
+
+/** A steer the server has taken but whose durable user row has not reached the
+ *  chat yet. Deliberately the SAME bubble a user message gets: it IS one, and
+ *  the only difference worth drawing is whether the model has it yet. */
+function SteerBubble({ steer }: { steer: SteerRun }) {
+  return (
+    <div className="flex flex-col items-end animate-fade-in">
+      <div className="max-w-[75%] px-4 py-2.5 rounded-xl rounded-br-md p-user-bubble p-body whitespace-pre-wrap">
+        {steer.text}
+      </div>
+      <SteeredMark state={steer.status} />
+    </div>
+  );
+}
+
 /** A subordinate's task assignment or progress report, mirrored into the main
  *  chat as a centered marker that links to that subordinate's tab. */
 function SubordinateEventCard({ event, workspace }: { event: SubordinateActivityEvent; workspace: string }) {
@@ -752,6 +779,7 @@ export const MessageView = memo(function MessageView({
             </button>
           )}
         </div>
+        {isSteeredMessage(message.metadata) && <SteeredMark state="landed" />}
         <MessageTimestamp createdAt={messageCreatedAt(message)} />
       </div>
     );
@@ -978,6 +1006,17 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
     setInput("");
   }, [input, state]);
 
+  const messageIds = useMemo(() => state.messages.map((msg) => msg.id), [state.messages]);
+  const { notice: steerNotice, steer, stop, liveSteers } = useSteerActions({
+    steerChat: state.steerChat,
+    abortChat: state.abortChat,
+    sendChat: (text) => state.sendChat(text),
+    draft: input,
+    setDraft: setInput,
+    steerRuns: state.steerRuns,
+    messageIds,
+  });
+
   if (state.connectionStatus === "connecting" && !state.agentStatus) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -1024,6 +1063,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
               isStreaming={state.isStreaming}
             />
           ))}
+          {liveSteers.map((s) => <SteerBubble key={s.steerId} steer={s} />)}
           {state.chatError && (
             <ChatErrorCard
               message={state.chatError}
@@ -1041,15 +1081,21 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
           value={input}
           onValueChange={setInput}
           onSend={send}
-          placeholder={`Message ${as?.displayName || subName}…`}
+          placeholder={state.isStreaming
+            ? `Steer ${as?.displayName || subName}…`
+            : `Message ${as?.displayName || subName}…`}
           disabled={state.connectionStatus !== "connected"}
           streaming={state.isStreaming}
-          onStop={state.abortChat}
+          onSteer={steer}
+          onStop={stop}
           modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="min-w-0 flex-1 basis-32 max-w-44" />}
-          notices={state.error
-            ? [{ id: "load", tone: "danger", text: state.error,
-                 action: { label: "Retry", icon: <ArrowsClockwiseIcon size={11} />, onClick: state.retryLoad } }]
-            : []}
+          notices={[
+            ...(state.error
+              ? [{ id: "load", tone: "danger" as const, text: state.error,
+                   action: { label: "Retry", icon: <ArrowsClockwiseIcon size={11} />, onClick: state.retryLoad } }]
+              : []),
+            ...(steerNotice ? [steerNotice] : []),
+          ]}
         />
       </div>
     </div>
@@ -1260,6 +1306,22 @@ export default function WorkspacePage() {
       .catch((err) => setBranchNotice(err instanceof Error ? err.message : String(err)));
   }, [chatInput, effectiveChatMode, state]);
 
+  /**
+   * Steer and Stop — the composer's mid-turn pair, shared with the subordinate
+   * column so both surfaces give the same account of where a message went.
+   */
+  const messageIds = useMemo(() => state.messages.map((msg) => msg.id), [state.messages]);
+  const { notice: steerNotice, steer: handleSteer, stop: handleStop, liveSteers } = useSteerActions({
+    steerChat: state.steerChat,
+    abortChat: state.abortChat,
+    sendChat: (text) => state.sendChat(text, [], effectiveChatMode),
+    draft: chatInput,
+    setDraft: setChatInput,
+    hasAttachments: pendingAttachments.length > 0,
+    steerRuns: state.steerRuns,
+    messageIds,
+  });
+
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.
   const onForkMessage = useCallback((mid: string) => setForkFor(mid), []);
 
@@ -1295,6 +1357,7 @@ export default function WorkspacePage() {
     const turn = classifyProgrammaticTurn(card.metadata);
     return turn ? [{ card, turn }] : [];
   }), [state.signalCards, messageCardIds]);
+
   const cardStateOf = <Metadata,>(metadata: Metadata) => {
     const id = messageSignalId(metadata);
     return id ? cardStates.get(id) : undefined;
@@ -1510,11 +1573,14 @@ export default function WorkspacePage() {
               {looseCards.map(({ card, turn }) => (
                 <ProgrammaticTurnCard key={card.id} turn={turn} text={card.text} state={card.state} />
               ))}
+              {liveSteers.map((steer) => <SteerBubble key={steer.steerId} steer={steer} />)}
               {state.branchRuns.map((run) => (
                 <BranchRunChip
                   key={run.branchId}
                   run={run}
                   takes={run.turnId ? takesByTurn[run.turnId] : undefined}
+                  rpc={state.rpc}
+                  headActivity={state.headActivity}
                   onPick={onPickTake}
                   onDismiss={() => state.dismissBranchRun(run.branchId)}
                 />
@@ -1552,10 +1618,11 @@ export default function WorkspacePage() {
                 value={chatInput}
                 onValueChange={setChatInput}
                 onSend={handleSend}
-                placeholder="Send a message..."
+                placeholder={state.isStreaming ? "Steer the running turn…" : "Send a message..."}
                 disabled={state.connectionStatus !== "connected"}
                 streaming={state.isStreaming}
-                onStop={state.abortChat}
+                onSteer={handleSteer}
+                onStop={handleStop}
                 onBranch={handleBranch}
                 mode={{ value: effectiveChatMode, onChange: setChatMode, locked: planAwaitingDecision }}
                 attachments={{
@@ -1586,6 +1653,7 @@ export default function WorkspacePage() {
                     text: "Checking what this turn changed on your device…" }] : []),
                   ...(restoreNotice ? [{ id: "restore", tone: "neutral" as const, text: restoreNotice,
                     onDismiss: () => setRestoreNotice(null) }] : []),
+                  ...(steerNotice ? [steerNotice] : []),
                 ]}
               />
             </div>
@@ -1611,6 +1679,7 @@ export default function WorkspacePage() {
             memoryContent={state.memoryContent}
             onSearchMemory={state.searchMemory}
             mctsTrees={state.mctsTrees}
+            headActivity={state.headActivity}
             isStreaming={state.isStreaming}
             executors={state.executors}
             executorOutputs={state.executorOutputs}

@@ -62,6 +62,7 @@ import {
   type DynamicContext, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
+  UserSteerDrain, type UserSteer, type UserSteerOutcome, type SteerStatusEvent,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
   OVERFLOW_RETRY_EVENT,
   // Shared turn lifecycle (run bracket, prompt-token trigger, overflow apply)
@@ -88,7 +89,13 @@ import {
   // Cumulative, label-scoped spend governor (opt-in; no label = no cap)
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   // The one normalized provider usage report
-  normalizeUsage, type Usage,
+  normalizeUsage, usageReported, type Usage,
+  // Non-turn model calls: the row type, its sink, and where a call with no run
+  // open is filed. The other 25 producers of workspace spend arrive this way.
+  WORKSPACE_RUN_ID, type ModelCallReport, type RunEventInput,
+  // The ONE catalog pricing, so a model_call row prices exactly as the ledger
+  // debits — and only when the rate belongs to the model that served it.
+  priceCall,
   // agent_facts world model
   createFactsStore, type FactsStore,
   // Per-turn device awareness (laptop runtime presence + change notice)
@@ -545,6 +552,14 @@ export abstract class ActorAgent extends Think<Env> {
     // be initialized before the getter caches its closure.
     this.compactionState = createCompactionStateStore(this.boundSql);
     this.registerCompactionExtension();
+    // The user steer-drain registers BEFORE the orchestrator's signal
+    // extension: a signal splice must never shift the indices the user-steer
+    // drain replays into durable history (the same ordering the CLI's
+    // ExtensionHost uses).
+    this.extensions.register({
+      name: 'proteus.user-steer',
+      prepareStep: (ctx) => this.userSteer.prepareStep(ctx),
+    });
     // The orchestrator's per-turn extension: the turn steering's observation
     // hooks plus the ONE mid-turn signal drain every producer feeds. Forwarded
     // through closures because `orch` is built lazily and this runs in the
@@ -580,9 +595,99 @@ export abstract class ActorAgent extends Think<Env> {
     // runs fire-and-forget and does NOT extend the busy window.
     this._inFlight = false;
     this._cliCwd = null;
+    // Order matters: the flag is already clear, so the leftover steer enqueues
+    // as a turn of its own instead of buffering for a turn that is over.
+    this.rerunLeftoverSteers();
     const completed = result.status === 'completed';
     const injectedSignals = this.orch.signals.settle({ completed });
     return { drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals };
+  }
+
+  /**
+   * Accept a message the user typed while a turn is running. `'idle'` means no
+   * turn was there to steer and the CALLER still owns the text — it must send
+   * it as an ordinary turn, because nothing was buffered here.
+   *
+   * `'mid-turn'` is announced immediately, before the model has it: the person
+   * who pressed Enter needs to know their words were taken and are waiting for
+   * the next step, which is a different fact from "the model read them"
+   * (announced again, as `landed`, when the drain actually happens). The id is
+   * minted HERE and carried through both announcements and the durable row, so
+   * a surface tracking a steer never sees the same one twice under two names.
+   */
+  protected acceptUserSteer(text: string): UserSteerOutcome {
+    const body = text.trim();
+    if (!body) throw new Error('steerTurn requires the message text');
+    const id = `steer-${nanoid(12)}`;
+    const outcome = this.userSteer.accept({ id, text: body });
+    if (outcome === 'mid-turn') {
+      this.broadcastSteerStatus('queued', id, body);
+      this.logActivity('steer_queued', body.slice(0, 120));
+    }
+    return outcome;
+  }
+
+  /**
+   * A drain happened: the model has these steers as of the step now starting.
+   *
+   * Each becomes a VERBATIM user row in the session tree — `addMessages`
+   * appends without enqueuing a turn and is explicitly safe from inside a live
+   * one, and the row parents off the current leaf (the message that started
+   * this turn), so the assistant answer chains after it. That chain is what
+   * makes the walk-back fork able to cut at a steer, exactly as it can on the
+   * CLI (local-session persist()).
+   *
+   * The row keeps the steer's own id, so the live chip and the durable message
+   * are the same thing to the chat pane and it renders one, never both.
+   */
+  private recordLandedSteers(steers: readonly UserSteer[]): void {
+    for (const steer of steers) {
+      if (steer.id) this.broadcastSteerStatus('landed', steer.id, steer.text);
+    }
+    void this.addMessages(steers.map((steer) => ({
+      id: steer.id ?? `steer-${nanoid(12)}`,
+      role: 'user' as const,
+      parts: [{ type: 'text' as const, text: steer.text }],
+      metadata: { proteusSteer: true },
+    }))).catch((err) =>
+      console.warn('[proteus] persisting a mid-turn steer failed:', errorMessage(err)));
+  }
+
+  /**
+   * Drop the in-flight turn's pending steers and hand their texts back — the
+   * abort path's half of the steer contract (core cancelCurrentWork calls this
+   * through `interruptSteers`). Stop means stop; it does not mean "stop and
+   * then do what I typed". But the surface already rendered them as sent, so
+   * they come back to the composer rather than disappearing.
+   */
+  protected interruptUserSteers(): string[] {
+    const dropped = this.userSteer.interrupt();
+    for (const steer of dropped) {
+      if (steer.id) this.broadcastSteerStatus('returned', steer.id, steer.text);
+    }
+    return dropped.map((steer) => steer.text);
+  }
+
+  /** The one place a steer's lifecycle reaches connected surfaces. Written as a
+   *  literal so the broadcast-wiring gate can see the channel it must prove has
+   *  a consumer. */
+  private broadcastSteerStatus(status: SteerStatusEvent['status'], steerId: string, text: string): void {
+    this.broadcast(JSON.stringify({ type: 'steer_status', status, steerId, text } satisfies SteerStatusEvent));
+  }
+
+  /**
+   * Steers that never saw a step boundary (the model was already writing its
+   * final answer) rerun as a USER-origin turn — no `proteusEvent` metadata, so
+   * every provenance decision downstream reads them as the user's own next
+   * message, which is what they are. Detached: a turn must never block on the
+   * next one's queue slot.
+   */
+  private rerunLeftoverSteers(): void {
+    const leftover = this.userSteer.takeLeftover();
+    if (leftover.length === 0) return;
+    void this.host.enqueueTurn({ text: leftover.map((steer) => steer.text).join('\n\n') })
+      .catch((err) =>
+        console.warn('[proteus] leftover steer rerun failed:', errorMessage(err)));
   }
 
   /** The settled turn's telemetry — the measured compaction trigger, the
@@ -787,6 +892,22 @@ export abstract class ActorAgent extends Think<Env> {
     this.budget.debit(tokens, opts);
   }
 
+  /**
+   * A facet's non-turn model call, filed in the ROOT workspace's event log.
+   *
+   * Same reason the mission ledger and the head journal are reached this way: a
+   * facet has its own SQLite, so a row it wrote locally would strand a
+   * workspace's spend one Durable Object away from the total that has to
+   * account for it. The owner asks what the WORKSPACE cost, and a recursive
+   * split's merge synthesis is part of that answer.
+   *
+   * Not `@callable`, exactly like `missionDebit`: a spend record must not be
+   * writable over the public WS/HTTP transport. Allowlisted in rpc-surface.ts.
+   */
+  async reportFacetModelCall(report: ModelCallReport): Promise<void> {
+    this.reportModelCall(report);
+  }
+
   // ── The subtree's head journal, over this actor's control plane ──────
   //
   // A recursive split runs on a facet with its own SQLite, so a journal it
@@ -806,6 +927,11 @@ export abstract class ActorAgent extends Think<Env> {
 
   async headJournalRecordReport(report: HeadReport): Promise<void> {
     this.headJournal.recordReport(report);
+    // Same channel as the per-step announcement, because a reader watching a
+    // branch needs its LAST write most: the summary, the status and the wall
+    // clock all land here, AFTER the final step. Announcing only steps left an
+    // open transcript stuck one write short of the answer it was waiting for.
+    this.broadcast(JSON.stringify({ type: 'head_activity', headId: report.id }));
   }
 
   async headJournalCacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): Promise<void> {
@@ -1127,6 +1253,48 @@ export abstract class ActorAgent extends Think<Env> {
     return this._eventRecorder;
   }
 
+  /**
+   * Record one non-turn model call in the durable run-event log.
+   *
+   * The turn loop's spend arrives as `step_finish` (`onStepEvent` above). This is
+   * the other 25 producers — judges, the fast tier, the evolution engine,
+   * compaction, a scaffold's own loop, a sandbox program's `llm.query`, the
+   * platform AI bindings — each of which used to drop the provider's report on
+   * the line that received it. Same log, same `Usage`; a `model_call` row rather
+   * than a `step_finish` one, so a judge's cold prompt never enters the turn
+   * loop's prefix-cache window.
+   *
+   * FILED UNDER THE CURRENT RUN, OR THE WORKSPACE. Half of these fire between
+   * runs (an evolution pass on a fiber, an embedding backfill at boot), and
+   * `_currentRunId` is empty then. Dropping those is the dishonesty this row
+   * exists to remove, so they go to the reserved workspace id instead.
+   *
+   * PRICED ONLY WHERE THE RATE IS THE CALL'S OWN. The catalog session tracks the
+   * ACTOR's model; a judge deliberately runs on a different one
+   * (`selectJudgeModel` picks cross-family on purpose). Pricing a judge call at
+   * the actor's rate would put a fabricated number in the ledger, so `usd` stays
+   * absent unless the call ran on the very model the catalog resolved — and an
+   * absent `usd` already means unpriced, never free.
+   */
+  protected reportModelCall(report: ModelCallReport): void {
+    try {
+      const event: Extract<RunEventInput, { type: 'model_call' }> = {
+        type: 'model_call', source: report.source,
+      };
+      if (usageReported(report.usage)) event.usage = report.usage;
+      if (report.spec !== undefined) event.spec = report.spec;
+      if (report.modelId !== undefined) event.modelId = report.modelId;
+      const pricing = report.spec === this.effectiveModelSpec()
+        ? this.modelCatalog.pricing()
+        : null;
+      const usd = pricing ? priceCall(report.usage, pricing) : undefined;
+      if (usd !== undefined) event.usd = usd;
+      this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, event);
+    } catch (err) {
+      console.warn('[proteus] event emit failed at model_call:', err);
+    }
+  }
+
   // ── EventsHub: per-agent ingress + persistence + dispatch. ──────────────
   // Load-bearing primitives (spec §1):
   //   - `agent_log`     unified append-only ledger (initEventsHubTables)
@@ -1367,6 +1535,26 @@ export abstract class ActorAgent extends Think<Env> {
   /** Standalone drains may span Think auto-continuations under one request id. */
   protected readonly _pendingDrainReplyTurns = new Map<string, string>();
 
+  /**
+   * Mid-turn steers — what the user typed while this turn was running. The
+   * SHARED core drain, so the USER semantics are defined in exactly one place
+   * for both backends: each steer persists as a verbatim user row (the
+   * walk-back fork cuts at user messages), an interrupt hands what the model
+   * never saw back to the composer, and anything left over reruns as a
+   * user-origin turn.
+   *
+   * Deliberately NOT `orch.signals`: a signal is never persisted and always
+   * re-delivers as a turn of its own, which is the opposite of all three.
+   */
+  protected readonly userSteer = new UserSteerDrain({
+    turnInFlight: () => this._inFlight,
+    // A drain is the moment the steer stops being "queued" and becomes
+    // something the model has. Both halves of saying so happen here: the
+    // durable user row (so the fork and every read model see it) and the
+    // broadcast every open surface renders it from.
+    onDrain: (texts) => this.recordLandedSteers(texts),
+  });
+
   /** The public extension seam on the cloud backend — the SAME ExtensionHost
    *  contract `runChat` drives on the CLI, bridged onto Think's subclass
    *  hooks: beforeTurn → onTurnStart + transformContext, beforeStep → the
@@ -1461,7 +1649,10 @@ export abstract class ActorAgent extends Think<Env> {
         shellId: this.shellId(),
         scaffoldPath: this.scaffoldPath(),
         capabilityToken: () => this.workspaceCapabilityToken(),
-      }, { deferrals: () => this.deferralChannel() });
+      }, {
+        deferrals: () => this.deferralChannel(),
+        reportModelCall: (report) => this.reportModelCall(report),
+      });
       this.configureRuntime(runtime);
       this._rt = runtime;
     }
@@ -2148,6 +2339,9 @@ export abstract class ActorAgent extends Think<Env> {
     this._cliCwd = readCliCwd(body);
     this._turnContinuity = readTurnContinuity(body);
     this._inFlight = true;
+    // Fresh splice coordinates for this streamText call. Steers already
+    // buffered survive — they were typed for the turn that is about to run.
+    this.userSteer.beginTurn();
     this.logActivity("beforeturn", "streamText() called next");
     // A real user message is the verdict on the previous turn — dispatch the
     // detached outcome review (Hermes-style forked background review). Runs

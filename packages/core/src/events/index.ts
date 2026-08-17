@@ -32,3 +32,14 @@ export {
   type CacheHitStats,
   type StepTelemetry,
 } from './step-stats.js';
+
+export {
+  SPEND_SOURCES,
+  SPEND_SOURCE_LABEL,
+  SPEND_SOURCE_DETAIL,
+  WORKSPACE_RUN_ID,
+  type ModelCallReport,
+  type ModelCallSpend,
+  type ModelCallSink,
+  type SpendSource,
+} from './model-call.js';

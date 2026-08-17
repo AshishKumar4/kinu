@@ -32,7 +32,9 @@ const { SubordinateAgent } = await import('../../src/subordinate-agent.js');
  *  workspace is empty, so nothing has written one. The soul is not declared:
  *  `setObservedSoul` pre-fills the cache the SYNCHRONOUS prompt builders read,
  *  while a turn refreshes that cache from the workspace filesystem below. */
-class HarnessOrchestratorAgent extends OrchestratorAgent {
+/** The orchestrator a test drives, named so suites import the contract instead
+ *  of reaching through `ReturnType<typeof orchestratorHarness>`. */
+export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }

@@ -15,6 +15,7 @@ import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture,
   MissionGovernor,
   type HeadInput, type WebSearchProvider, type AgentRuntime, type JsonObject,
+  type ModelCallReport,
 } from '@proteus/core';
 import { scratchDir, scratchPath, toolExecute } from '@proteus/test-utils';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime.js';
@@ -162,6 +163,42 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     expect(result.recommendations).toContain('ship it');
     expect(result.costSummary.headCount).toBe(2);
     expect(result.headIds).toHaveLength(2);
+  });
+
+  // The merge is the one model call in a split that the head journal does not
+  // carry: `summarizeCost` folds the HEADS' reports (core heads/controller.ts:
+  // 611-624), so an unreported merge is spend nothing counts. The heads must NOT
+  // report through here — their usage comes back in the journal, and two writers
+  // for one call is how a workspace total learns to double-count.
+  test('the merge reports its own spend as judge, and the heads report none', async () => {
+    const reports: ModelCallReport[] = [];
+    const db = new Database(':memory:');
+    initHeadsTables(makeExecRaw(db), makeSql(db));
+    const journal = new HeadJournal(makeSql(db));
+    const controller = new HeadController(
+      createCLIHeadRuntime(headDeps(fakeHeadsModel(), {
+        journal: () => journal,
+        reportModelCall: (report) => { reports.push(report); },
+      })),
+      journal,
+    );
+
+    await controller.run({
+      mode: 'build',
+      parentHeadId: null,
+      inheritedContext: [],
+      request: {
+        rationale: 'split the parser review',
+        heads: [
+          { task: 'review the lexer', rationale: 'utf-8 + tokens' },
+          { task: 'review the grammar', rationale: 'precedence + recovery' },
+        ],
+      },
+      parentBudget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+    });
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ source: 'judge', usage: { input: 8, output: 12 } });
   });
 
   test('merge synthesis uses low provider effort without an output cap', async () => {

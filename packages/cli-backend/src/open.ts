@@ -7,14 +7,13 @@
  * display compatibility with CLI commands.
  */
 
-import type { AgentRuntime } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
 import type { OAuthCredential } from '@proteus/core';
 import {
   initWorkspaceBaselineTable, initWorkspaceSchema, readSoul, summarizeSoul,
   getCurrentScaffoldVersion, memoryBytes,
 } from '@proteus/core';
-import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from './runtime.js';
+import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from './runtime.js';
 import type { LocalProviderCredentials } from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
 import type { Database } from 'bun:sqlite';
@@ -62,7 +61,7 @@ export async function openWorkspaceCLI(
   db: Database,
   dbPath: string,
   config: CLIOpenConfig,
-): Promise<{ rt: AgentRuntime; info: WorkspaceInfo }> {
+): Promise<{ rt: CLIRuntime; info: WorkspaceInfo }> {
   const sql = makeSql(db);
 
   // Every table a workspace has, on any backend — one list, in core. Opening

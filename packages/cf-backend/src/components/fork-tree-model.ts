@@ -8,6 +8,21 @@
 import type { ForkNode } from "@/lib/protocol";
 
 /**
+ * Which node, in which search, the reader is inspecting.
+ *
+ * Ids rather than the node itself, for the reason given on {@link findForkNode}:
+ * a poll that grows a tree replaces every node object in it, so a held node goes
+ * stale while an id never does. The run is part of the selection because the
+ * canvas draws every search at once, and a node id only identifies a node
+ * WITHIN its own search.
+ */
+export interface ExplorerSelection {
+	/** The search root's id — the key the tree maps are keyed by. */
+	runId: string;
+	nodeId: string;
+}
+
+/**
  * One readable line out of an agent-authored string. Actions and observations
  * are model prose — headings, bullets, backticks, hard wraps — and a node
  * label is a single line of it.
@@ -143,9 +158,17 @@ export function subtreeCount(node: ForkNode): number {
 }
 
 /**
- * Every abandoned branch that still carries a subtree. Folding these away is
+ * Every abandoned BRANCH that still carries a subtree. Folding these away is
  * what makes a search of several hundred nodes readable: they are the dense
  * low-value clusters, and the search already decided they do not matter.
+ *
+ * The root is excluded on purpose, and not as a special case: the root is the
+ * split itself, never a branch of itself, so "this branch was abandoned" is not
+ * a statement that can be made about it. It reads as one only because settling
+ * a search retires every node still open — `convergence.ts` prunes all but the
+ * winner, `abandonSearchTree` fails them all — and the root is always one of
+ * them. Walking from the root therefore matched the root first and returned a
+ * set of exactly one id: the whole search, hidden behind a single dot.
  */
 export function losingBranchIds(root: ForkNode): Set<string> {
 	const ids = new Set<string>();
@@ -156,7 +179,7 @@ export function losingBranchIds(root: ForkNode): Set<string> {
 		}
 		for (const child of node.children) walk(child);
 	};
-	walk(root);
+	for (const child of root.children) walk(child);
 	return ids;
 }
 

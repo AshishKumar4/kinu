@@ -8,6 +8,12 @@
  * same row, and a split nobody measured was recorded as a free one. Absence is
  * now SQL NULL and comes back as an absent `Usage` field.
  *
+ * And those two columns were the ONLY ones, so the other five fields a provider
+ * can report — a fork's cache reads and writes, its reasoning tokens, and its
+ * Workers AI `neurons`, which is the one cost figure a provider actually bills
+ * in — were dropped at persistence. Every field now has a column, derived from
+ * `USAGE_FIELDS` so a field added to the type cannot be forgotten here.
+ *
  * The migration half matters more than the fresh-table half. SQLite bakes
  * defaults and NOT NULL into the stored table definition and offers no ALTER
  * for either, so `CREATE TABLE IF NOT EXISTS` cannot reach a workspace created
@@ -20,15 +26,16 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { HeadJournal } from '../src/heads/journal.js';
-import { initHeadsTables } from '../src/heads/schema.js';
+import { HEAD_USAGE_COLUMNS, initHeadsTables } from '../src/heads/schema.js';
+import { USAGE_FIELDS } from '../src/usage.js';
 import type { HeadInput, HeadReport, MergeResult } from '../src/heads/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
 /**
  * The pre-change DDL, verbatim — `DEFAULT 0` on the head's token columns,
- * `NOT NULL` on the merge total, and BOTH post-release columns
- * (`file_changes_json`, `blind_spots_json`) absent, exactly as a workspace
- * created before them has it.
+ * `NOT NULL` on the merge total, the five non-token usage columns absent, and
+ * BOTH post-release columns (`file_changes_json`, `blind_spots_json`) absent,
+ * exactly as a workspace created before them has it.
  *
  * `file_changes_json` being absent here is the point of the fixture and not
  * incidental: `reconcileColumns` appends it at the END of the table, while the
@@ -79,6 +86,29 @@ function storedDefinition(db: Database, table: string): string {
   return rows[0]?.sql ?? '';
 }
 
+/** Every usage column of one head, named through the map rather than by hand: a
+ *  column added to `HEAD_USAGE_COLUMNS` is asserted below without editing here. */
+function storedUsageColumns(db: Database, id: string): Record<string, number | null> {
+  const columns = USAGE_FIELDS.map((field) => HEAD_USAGE_COLUMNS[field]);
+  return db.prepare<Record<string, number | null>, [string]>(
+    `SELECT ${columns.join(', ')} FROM head_journal WHERE id = ?`,
+  ).all(id)[0] ?? {};
+}
+
+/** What a head whose provider said nothing looks like in storage: NULL in every
+ *  usage column, never a row of zeros. */
+const NOTHING_REPORTED: Readonly<Record<string, null>> = Object.fromEntries(
+  USAGE_FIELDS.map((field) => [HEAD_USAGE_COLUMNS[field], null]),
+);
+
+/** One head as a Workers AI fork reports itself: most of the prompt served from
+ *  cache, and a FRACTIONAL neuron count that is the provider's own billing
+ *  measurement. Both were dropped on the line that received them. */
+const FULLY_REPORTED = {
+  input: 9_140, output: 312, cacheRead: 8_704, cacheWrite: 436,
+  cacheWrite1h: 128, reasoning: 96, neurons: 1_483.75,
+} as const;
+
 const spawn = (id: string, rootId: string): HeadInput => ({
   id, rootId, parentId: null, depth: 0, task: `task ${id}`, rationale: 'r',
   mode: 'build', inheritedContext: [], budget: { maxDepth: 3, spawnedAt: 1 },
@@ -99,17 +129,56 @@ const merge = (totalTokens: number | undefined): MergeResult => ({
 });
 
 describe('a fresh journal cannot fabricate a cost it was never told', () => {
-  test('a spawned head that has not reported has NULL token columns, not 0', () => {
+  test('every Usage field has a column, nullable and with no default', () => {
     const db = new Database(':memory:');
     initHeadsTables(makeExecRaw(db), makeSql(db));
-    const sql = makeSql(db);
-    new HeadJournal(sql).insertSpawn(spawn('h-live', 'run-live'));
+    const info = db.prepare<{ name: string; type: string; notnull: number; dflt_value: string | null }, []>(
+      `SELECT name, type, "notnull", dflt_value FROM pragma_table_info('head_journal')`,
+    ).all();
 
-    // insertSpawn names neither token column, so this is the DDL's own answer:
-    // with `DEFAULT 0` it claimed the head had spent nothing.
-    expect(sql<{ token_input: number | null; token_output: number | null }>`
-      SELECT token_input, token_output FROM head_journal WHERE id = 'h-live'`)
-      .toEqual([{ token_input: null, token_output: null }]);
+    // The map is total over `keyof Usage`, which the compiler enforces. This is
+    // the other half: that the list the DDL is generated from is the same list
+    // every other reader of a Usage walks.
+    expect(Object.keys(HEAD_USAGE_COLUMNS).sort()).toEqual([...USAGE_FIELDS].sort());
+
+    for (const field of USAGE_FIELDS) {
+      const column = info.find((c) => c.name === HEAD_USAGE_COLUMNS[field]);
+      expect(column).toBeDefined();
+      // NOT NULL or a default puts the fabricated zero back — and makes the
+      // column unreachable by ADD COLUMN on an existing workspace besides,
+      // which is how `cost_total_tokens INTEGER NOT NULL` became a defect.
+      expect(column?.notnull).toBe(0);
+      expect(column?.dflt_value).toBeNull();
+    }
+    // A neuron count is fractional; INTEGER affinity would round the one figure
+    // here that a provider actually bills in. Token counts are whole.
+    expect(info.find((c) => c.name === HEAD_USAGE_COLUMNS.neurons)?.type).toBe('REAL');
+    expect(info.find((c) => c.name === HEAD_USAGE_COLUMNS.input)?.type).toBe('INTEGER');
+  });
+
+  test('a spawned head that has not reported has NULL in every usage column, not 0', () => {
+    const db = new Database(':memory:');
+    initHeadsTables(makeExecRaw(db), makeSql(db));
+    new HeadJournal(makeSql(db)).insertSpawn(spawn('h-live', 'run-live'));
+
+    // insertSpawn names no usage column, so this is the DDL's own answer: with
+    // `DEFAULT 0` it claimed the head had spent nothing.
+    expect(storedUsageColumns(db, 'h-live')).toEqual(NOTHING_REPORTED);
+  });
+
+  test('a head whose provider reported cache reads and neurons round-trips both', () => {
+    const db = new Database(':memory:');
+    initHeadsTables(makeExecRaw(db), makeSql(db));
+    const journal = new HeadJournal(makeSql(db));
+    journal.recordSplit('run-cf', 'why', 1);
+    journal.insertSpawn(spawn('h-cf', 'run-cf'));
+    journal.recordReport(report('h-cf', FULLY_REPORTED));
+
+    expect(journal.readRun('run-cf')?.heads.find((h) => h.id === 'h-cf')?.usage)
+      .toEqual({ ...FULLY_REPORTED });
+    // REAL, so the fraction survives the round trip rather than being truncated.
+    expect(journal.readHead('h-cf')?.neurons).toBe(1_483.75);
+    expect(journal.readTree('run-cf')[0]?.token_cache_read).toBe(8_704);
   });
 
   test('an empty usage writes NULL and reads back as an absent field, a reported zero as 0', () => {
@@ -124,11 +193,9 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
     journal.recordReport(report('h-silent', {}));
     journal.recordReport(report('h-zero', { input: 0, output: 0 }));
 
-    expect(sql<{ id: string; token_input: number | null; token_output: number | null }>`
-      SELECT id, token_input, token_output FROM head_journal ORDER BY id`).toEqual([
-        { id: 'h-silent', token_input: null, token_output: null },
-        { id: 'h-zero', token_input: 0, token_output: 0 },
-      ]);
+    expect(storedUsageColumns(db, 'h-silent')).toEqual(NOTHING_REPORTED);
+    expect(storedUsageColumns(db, 'h-zero'))
+      .toEqual({ ...NOTHING_REPORTED, token_input: 0, token_output: 0 });
 
     // The distinction the columns now carry is the distinction the view serves:
     // one head said nothing, the other measured itself at zero.
@@ -176,10 +243,14 @@ describe('a workspace created under the old DDL is migrated, not left lying', ()
 
     // Named-column copy, not `SELECT *`: `merge_strategy` must NOT have landed
     // in the `file_changes_json` slot that reconcileColumns appended past it.
+    // The five usage columns the migration ADDED are NULL: this row predates
+    // them, and a migration is not a place to invent a count nobody reported.
     expect(journal.readHead('h-old')).toEqual({
       id: 'h-old', parent_id: 'p-old', root_id: 'run-old', depth: 1,
       task: 'the old task', rationale: 'the old why', status: 'completed',
       spawned_at: 11, completed_at: 22, token_input: 4321, token_output: 765,
+      token_cache_read: null, token_cache_write: null, token_cache_write_1h: null,
+      token_reasoning: null, neurons: null,
       wall_clock_ms: 4000, summary: 'what it found', error_message: null,
       merge_strategy: 'best_of',
     });
@@ -194,6 +265,22 @@ describe('a workspace created under the old DDL is migrated, not left lying', ()
     });
   });
 
+  test('and a full provider report binds against the columns reconcileColumns added', () => {
+    const db = legacyWorkspace();
+    initHeadsTables(makeExecRaw(db), makeSql(db));
+    const journal = new HeadJournal(makeSql(db));
+
+    // The workspace this has to work on is the one that already exists. Five of
+    // these columns did not, and `UPDATE ... SET token_cache_read = ?` against a
+    // table that never gained one does not silently drop the field — it throws,
+    // and takes the whole head report with it.
+    journal.recordReport(report('h-old', FULLY_REPORTED));
+
+    expect(journal.readRun('run-old')?.heads.find((h) => h.id === 'h-old')?.usage)
+      .toEqual({ ...FULLY_REPORTED });
+    expect(journal.readHead('h-old')?.neurons).toBe(1_483.75);
+  });
+
   test('and a NULL now binds where the old shape forced a fabricated zero', () => {
     const db = legacyWorkspace();
     initHeadsTables(makeExecRaw(db), makeSql(db));
@@ -205,9 +292,7 @@ describe('a workspace created under the old DDL is migrated, not left lying', ()
     journal.recordReport(report('h-old', {}));
     journal.cacheMerge('run-old', merge(undefined), 'best_of');
 
-    expect(sql<{ token_input: number | null; token_output: number | null }>`
-      SELECT token_input, token_output FROM head_journal WHERE id = 'h-old'`)
-      .toEqual([{ token_input: null, token_output: null }]);
+    expect(storedUsageColumns(db, 'h-old')).toEqual(NOTHING_REPORTED);
     expect(journal.readCachedMerge('run-old')?.costSummary.totalTokens).toBeUndefined();
   });
 

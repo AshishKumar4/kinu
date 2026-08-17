@@ -30,6 +30,10 @@ import {
   readActivityLog,
   summarizeSteps,
   usageReported,
+  // The whole workspace's spend, grouped by producer, with its own coverage
+  // fraction — `summarizeSteps` above is this agent's own turns only.
+  workspaceSpend,
+  normalizeUsage,
   initWorkspaceSchema,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
@@ -132,6 +136,7 @@ import {
   // ── Read models: the folds a surface asks for, one implementation each ──
   getAgentStatus, getChatHistoryPage, getToolList, readLatestSearchTree, readSearchTree,
   listForkRuns, readForkRun, type ForkRunSummary,
+  readNodeTranscript, type NodeTranscriptView,
   readExplorationCanvas, type ExplorationCanvasRun,
   type HeadStep,
   buildPendingActions, type PendingAction,
@@ -145,7 +150,7 @@ import {
   type DirEntry, type ExecutorWriteResult,
   cancelBackgroundJob, cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
   jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
-  type CancelWorkOutcome, type RetryOutcome,
+  type CancelWorkOutcome, type RetryOutcome, type UserSteerOutcome,
   getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
@@ -1139,9 +1144,13 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** The shared workspace-naming round-trip (same prompt and parser the create
-   *  path uses), against this workspace's review model. */
+   *  path uses), against this workspace's review model.
+   *
+   *  Reported as `fast` rather than `judge`: the review model is who serves it,
+   *  but naming a workspace is mechanical work, and grouping it with the judges
+   *  would make "what did grading cost" answer a question it did not ask. */
   private async suggestWorkspaceTitle(mission: string): Promise<string | null> {
-    const { text } = await generateText({
+    const result = await generateText({
       model: await this.getModelForReview(),
       system: WORKSPACE_TITLE_SYSTEM_PROMPT,
       prompt: workspaceTitlePrompt(mission),
@@ -1149,7 +1158,16 @@ export class OrchestratorAgent extends ActorAgent {
       // JSON, and a cap starves them into empty text.
       ...effortFor('judge'),
     });
-    return parseWorkspaceTitle(text);
+    // No `spec`: `getModelForReview` resolves the review model behind its own
+    // cache and hands back a `LanguageModel`, so this call site genuinely does
+    // not know which spec served it, and re-running the selection to find out
+    // would be a second resolution that could disagree with the first. The
+    // provider's own `modelId` identifies the model; `usd` therefore stays
+    // absent, which already means unpriced rather than free.
+    const modelId = result.response?.modelId;
+    const usage = normalizeUsage(result.usage);
+    this.reportModelCall(modelId ? { source: 'fast', usage, modelId } : { source: 'fast', usage });
+    return parseWorkspaceTitle(result.text);
   }
 
   /** Push a display name to all three homes: agent_config (source of truth),
@@ -1224,6 +1242,7 @@ export class OrchestratorAgent extends ActorAgent {
       jobRunner: this.jobRunner,
       activeToolControllers: this._activeToolControllers,
       broadcast: (payload) => this.broadcast(payload),
+      interruptSteers: () => this.interruptUserSteers(),
       onCancelled: ({ cancelledJobs, abortedTools }) => {
         this._inFlight = false;
         this.logActivity('work_cancelled', `${abortedTools} foreground, ${cancelledJobs.length} background`);
@@ -1938,6 +1957,21 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
+   * Steer the running turn with something the user just typed — the third
+   * composer action beside Stop and Branch, and the only one that neither
+   * abandons the turn nor forks it.
+   *
+   * `'idle'` means the turn ended before this arrived and NOTHING was buffered:
+   * the caller must send the text as an ordinary message. That distinction is
+   * the whole return value, because "it went into the running turn" and "it
+   * started a new one" are different events for the person who typed it.
+   */
+  @callable()
+  async steerTurn(text: string): Promise<{ landed: UserSteerOutcome }> {
+    return { landed: this.acceptUserSteer(text) };
+  }
+
+  /**
    * Steer-as-Branch: run a mid-turn redirect as ONE budgeted head against the
    * live turn's input conversation (the same snapshot heads inherit), in
    * parallel — the live turn is never interrupted. When both finish the pair
@@ -2432,7 +2466,14 @@ export class OrchestratorAgent extends ActorAgent {
       })).specs,
       judge: (spec) => ({
         spec,
-        llm: createCompletionLLM({ model: registry.resolveModel(spec), spec, stage: 'judge' }),
+        llm: createCompletionLLM({
+          model: registry.resolveModel(spec), spec, stage: 'judge',
+          // One call per judge per hand-labelled turn, on a model deliberately
+          // chosen from a different vendor family than the chat model — so this
+          // is spend the actor's own catalog rate cannot price and the step
+          // telemetry never saw.
+          spend: { source: 'judge', report: (report) => this.reportModelCall(report) },
+        }),
       }),
     });
   }
@@ -2503,6 +2544,22 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
+   * One branch's whole behaviour — the transcript the Exploration surfaces open
+   * when a node is clicked.
+   *
+   * One entry point across both fork mechanisms, unlike `getHeadRun` /
+   * `getSearchTree`: a reader who clicked a node wants the task, the steps and
+   * the answer whatever strategy produced it, and making the CLIENT choose the
+   * store is how the explorer ended up showing a one-line footer chip for a
+   * search node and nothing at all for a head. Core decides; see
+   * read-models/node-transcript.ts for what each store can honestly report.
+   */
+  @callable()
+  async getNodeTranscript(runId: string, nodeId: string): Promise<NodeTranscriptView | null> {
+    return readNodeTranscript(this.boundSql, runId, nodeId);
+  }
+
+  /**
    * One finished step of a head, written into the journal as it lands.
    *
    * A head runs in a FACET with its own storage, and the journal lives here — so
@@ -2514,10 +2571,17 @@ export class OrchestratorAgent extends ActorAgent {
    * `await deps.reportStep?.(…)` silently no-opped on every step of every head.
    * The visible consequence was every branch reading `STEPS 0 · TOOLS 0` with
    * "no step trace" for its whole life, running or finished.
+   *
+   * Announced as well as written, so an open transcript grows as the branch
+   * works instead of on a poll clock. The step itself is NOT on the wire: the
+   * same reasoning as `pending_actions_changed` — the client re-reads the ledger
+   * it already renders from, so one channel cannot start disagreeing with the
+   * other, and a subscriber that missed a frame is corrected by the next one.
    */
   @callable()
   async recordHeadStep(headId: string, seq: number, step: HeadStep): Promise<{ ok: true }> {
     this.headJournal.appendStep(headId, seq, step);
+    this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
     return { ok: true };
   }
 
@@ -2647,12 +2711,19 @@ export class OrchestratorAgent extends ActorAgent {
 
   /**
    * The Activity surface: what the newest request cost, what it was made of,
-   * and how the recent ones have behaved.
+   * how the recent ones have behaved — and what the WHOLE workspace spent.
    *
    * The retained sample is the run-event log itself — `step_finish` rows are
    * durable and indexed by type, so the percentile has a real window without a
    * second store. `steps` bounds it, and the bound is reported back on the
    * result so the reader can see what the numbers are over.
+   *
+   * `telemetry` and `spend` answer two different questions and are deliberately
+   * not merged. `telemetry` is THIS AGENT'S OWN TURNS: its prefix-cache EMA only
+   * means something over one prompt lineage, and a judge's cold prompt in that
+   * window would read as a cache regression the agent never had. `spend` is every
+   * producer in the workspace, grouped, with its own coverage fraction — the
+   * answer to "is this all of the usage, including the async models".
    */
   @callable()
   async getActivitySnapshot(opts?: { steps?: number; logs?: number }): Promise<ActivitySnapshot> {
@@ -2682,6 +2753,7 @@ export class OrchestratorAgent extends ActorAgent {
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.
       telemetry: summarizeSteps(steps, { windowLimit }),
+      spend: workspaceSpend({ events: this.eventRecorder, sql: this.boundSql }, { windowLimit }),
       budgets: this.budget.snapshot(),
       log: readActivityLog(this.boundSql, logLimit),
     };

@@ -13,6 +13,7 @@
  */
 
 import type { JsonObject } from '../utils/json.js';
+import type { ModelCallSink } from '../events/model-call.js';
 
 /** A Vectorize-shaped binding (subset we need). Duck-typed so core stays dep-free. */
 export interface VectorMutation {
@@ -274,17 +275,30 @@ export function createCloudflareVectorStore(opts: {
  * Other options: `@cf/baai/bge-base-en-v1.5` (768-dim), `@cf/baai/bge-large-en-v1.5` (1024-dim).
  *
  * The `aiBinding` is the `env.AI` Worker binding (typed `Ai` in workers-types).
+ *
+ * `reportModelCall` exists to make this producer's silence VISIBLE. The binding's
+ * response carries no usage field of any kind — no tokens, no neurons — so every
+ * report here is `usage: {}`, and that is not a gap in the wiring: it is the
+ * measurement. Indexing a large memory can be hundreds of embed calls, and a
+ * workspace total that omitted them entirely would claim full coverage while an
+ * entire producer was invisible. One report per REQUEST, so a batch of N chunks
+ * is one call — that is what the binding bills as one.
  */
 export function createWorkersAIEmbedder(opts: {
   aiBinding: { run: (model: string, input: { text: string | string[] }) => Promise<{ data?: number[][] }> };
   model?: string;
   dimensions?: number;
+  reportModelCall?: ModelCallSink;
 }): Embedder {
   const model = opts.model ?? '@cf/baai/bge-small-en-v1.5';
   const dimensions = opts.dimensions ?? 384;
+  const report = (): void => opts.reportModelCall?.({
+    source: 'platform', usage: {}, spec: `workers-ai/${model}`, modelId: model,
+  });
 
   async function runOne(text: string): Promise<number[]> {
     const result = await opts.aiBinding.run(model, { text });
+    report();
     const vec = result?.data?.[0];
     if (!vec || vec.length === 0) {
       throw new Error(`Workers AI embed returned no vector for model ${model}`);
@@ -298,9 +312,11 @@ export function createWorkersAIEmbedder(opts: {
     async embedBatch(texts: readonly string[]) {
       // bge endpoints accept an array; one request, one response with N vectors.
       const result = await opts.aiBinding.run(model, { text: [...texts] });
+      report();
       const vectors = result?.data ?? [];
       if (vectors.length !== texts.length) {
-        // Fallback: one-by-one (slow but correct).
+        // Fallback: one-by-one (slow but correct). Each of those requests
+        // reports itself, so the count stays one-per-request either way.
         return Promise.all(texts.map((t) => runOne(t)));
       }
       return vectors;

@@ -156,9 +156,45 @@ describe('readExplorationCanvas', () => {
     expect(page.items.map((entry) => entry.params?.policy)).toEqual(['mcts', 'merge', 'mcts']);
     expect(page.items.map((entry) => entry.tree.every((row) => row.root_id === entry.run.id)))
       .toEqual([true, true, true]);
-    // A merge keeps its branches in the journal, so it carries no tree rows.
-    expect(page.items.find((entry) => entry.run.id === 'm1')!.tree).toEqual([]);
+    // A merge keeps its branches in the journal, so it carries no tree rows —
+    // and carries the journalled run instead. Empty on BOTH halves is what
+    // "this fork recorded nothing" means, so the two must not be confusable.
+    const merge = page.items.find((entry) => entry.run.id === 'm1')!;
+    expect(merge.tree).toEqual([]);
+    expect(merge.head?.heads.map((head) => head.task)).toEqual(['angle 0', 'angle 1']);
+    // A competition's branches ARE its tree; there is no journalled run to fetch.
+    expect(page.items.filter((entry) => entry.run.settle === 'competed').map((entry) => entry.head))
+      .toEqual([null, null]);
     expect(page.items.find((entry) => entry.run.id === 's1')!.tree).toHaveLength(4);
+  });
+
+  test('a merged fork on a later page still carries its branches', () => {
+    const { db, sql } = freshDb();
+    // The merge is the OLDEST fork here, so it is off page one. The surface used
+    // to fetch the journalled half as ONE bounded `getHeadRuns` read taken
+    // beside page one, which is a second window over an overlapping set: every
+    // merged fork behind that window drew as "no branches were ever written"
+    // while the journal held them. The page a fork is on now carries both
+    // halves of it.
+    seedSplit(db, { rootId: 'm1', task: 'merge', at: 1_000, heads: 2, merged: true });
+    for (let i = 0; i < 4; i++) {
+      seedSearch(db, { rootId: `s${i}`, task: `t${i}`, at: 5_000 + i * 1_000, nodes: 1 });
+    }
+
+    const first = readExplorationCanvas(sql, null, 2);
+    expect(first.items.map((entry) => entry.run.id)).toEqual(['s3', 's2']);
+    expect(first.status).toBe('more');
+
+    let cursor: SeekCursor | null = first.status === 'more' ? first.next : null;
+    let merge: ExplorationCanvasRun | undefined;
+    for (let page = 0; cursor !== null && merge === undefined && page < 5; page++) {
+      const next: Page<ExplorationCanvasRun> = readExplorationCanvas(sql, cursor, 2);
+      merge = next.items.find((entry) => entry.run.id === 'm1');
+      cursor = next.status === 'more' ? next.next : null;
+    }
+    expect(merge?.run.settle).toBe('merged');
+    expect(merge?.head?.rootId).toBe('m1');
+    expect(merge?.head?.heads).toHaveLength(2);
   });
 
   test('a big tree costs one slot, not forty', () => {

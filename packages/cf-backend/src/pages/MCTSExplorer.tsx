@@ -7,53 +7,22 @@
  * row anyway. Drill-down, not a second rendering: the tree, its loader and the
  * adapters are the surface's own, imported rather than re-implemented.
  */
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useMemo, useState } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { ArrowLeftIcon, GitForkIcon, TreeStructureIcon } from "@phosphor-icons/react";
 import { ForkTree } from "@/components/fork-tree";
-import { cleanNodeLabel, findForkNode, terminalForkNode, treeStats } from "@/components/fork-tree-model";
+import { NodeTranscript } from "@/components/NodeTranscript";
+import {
+  findForkNode, terminalForkNode, treeStats, type ExplorerSelection,
+} from "@/components/fork-tree-model";
 import { EmptyState, EMPTY_HINTS, formatScore } from "@/components/surfaces/shared";
 import { describeSettle, useForkRunTree } from "@/components/surfaces/ExplorationSurface";
 import { selectForkRun, useExactForkRun, useLiveForkRuns } from "@/components/surfaces/fork-runs";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useProteus } from "@/hooks/use-proteus";
+import { useElementSize } from "@/hooks/use-element-size";
 import type { ForkRunSummary } from "@proteus/core";
-
-/**
- * Measure the element that is ACTUALLY mounted.
- *
- * This was a `useRef` here plus a `ResizeObserver` in a `[]` effect — but the
- * ref is attached inside `ExplorerBody`, which mounts only once the run has
- * LOADED. So on mount the observer bound the loading-placeholder div, that div
- * unmounted moments later, and no callback ever fired again: `dims` froze at
- * whatever the placeholder measured mid-layout. Measured as height 0, the tree
- * rendered at zero height — a blank canvas under a header and a footer that both
- * showed correct data, which is exactly how Expand failed in production.
- *
- * A callback ref cannot go stale that way: it fires with the real node on every
- * mount and with `null` on unmount, so the observer follows the element instead
- * of a snapshot of it taken before the element existed.
- */
-function useElementSize() {
-  const [size, setSize] = useState({ w: 0, h: 0 });
-  const observer = useRef<ResizeObserver | null>(null);
-  const attach = useCallback((el: HTMLDivElement | null): void => {
-    observer.current?.disconnect();
-    observer.current = null;
-    if (el === null) return;
-    const measure = (): void => setSize({ w: el.clientWidth, h: el.clientHeight });
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    observer.current = ro;
-    measure();
-  }, []);
-  useEffect(() => () => {
-    observer.current?.disconnect();
-    observer.current = null;
-  }, []);
-  return { attach, size };
-}
 
 export default function MCTSExplorer() {
   const { agentId } = useParams();
@@ -133,39 +102,61 @@ function ExplorerBody({
   const stats = tree ? treeStats(tree) : null;
   const winner = tree ? terminalForkNode(tree) : null;
   const selected = tree && selectedId ? findForkNode(tree, selectedId) : null;
+  // One fork, so one band. The canvas renderer takes a list because the
+  // Exploration surface draws every fork at once; drilling into one is that
+  // same renderer with a list of one, never a second rendering of the tree.
+  const regions = useMemo(
+    () => tree ? [{ runId: run.id, root: tree, title: run.task, note: describeSettle(run) }] : [],
+    [tree, run],
+  );
+  const selection: ExplorerSelection | null =
+    selectedId === null ? null : { runId: run.id, nodeId: selectedId };
 
   return (
     <>
-      <div ref={attach} className="flex-1 relative overflow-hidden p-surface">
-        {tree && resource.status === "error" && (
-          <LoadFailure what="the latest fork tree" message={resource.message} onRetry={reload}
-            className="absolute z-10 left-4 right-4 top-4 p-surface border p-border rounded-md px-3 py-2" />
-        )}
-        {!tree ? (
-          resource.status === "error" ? (
-            <LoadFailure what="this fork" message={resource.message} onRetry={reload} />
-          ) : resource.status === "loading" ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Loading tree…</div>
-            </div>
+      {/* Canvas and transcript side by side: the whole point of a full-screen
+          explorer is room, and a selected node that only produced a one-line
+          footer chip was the reason opening one told the reader nothing. */}
+      <div className="flex-1 min-h-0 flex">
+        <div ref={attach} className="flex-1 min-h-0 relative overflow-hidden p-surface">
+          {tree && resource.status === "error" && (
+            <LoadFailure what="the latest fork tree" message={resource.message} onRetry={reload}
+              className="absolute z-10 left-4 right-4 top-4 p-surface border p-border rounded-md px-3 py-2" />
+          )}
+          {!tree ? (
+            resource.status === "error" ? (
+              <LoadFailure what="this fork" message={resource.message} onRetry={reload} />
+            ) : resource.status === "loading" ? (
+              <div className="flex items-center justify-center h-full">
+                <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Loading tree…</div>
+              </div>
+            ) : (
+              <div className="h-full flex items-center justify-center">
+                <EmptyState icon={<GitForkIcon size={28} />} title="Nothing recorded for this fork"
+                  hint="The run stopped before its first branch was recorded." />
+              </div>
+            )
+          ) : dims.w > 0 && dims.h > 0 ? (
+            <ForkTree
+              regions={regions} width={dims.w} height={dims.h}
+              selectedRunId={run.id} selection={selection}
+              onSelectNode={(next) => setSelectedId(next.nodeId)} />
           ) : (
+            // A zero measurement must never render as nothing. `dims.w > 0 &&` alone
+            // produced a blank canvas under a correct header and footer, which read
+            // as "the tree is empty" rather than "we have not measured yet" — the
+            // whole reason the Expand view looked broken instead of loading.
             <div className="h-full flex items-center justify-center">
-              <EmptyState icon={<GitForkIcon size={28} />} title="Nothing recorded for this fork"
-                hint="The run stopped before its first branch was recorded." />
+              <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Sizing canvas…</div>
             </div>
-          )
-        ) : dims.w > 0 && dims.h > 0 ? (
-          <ForkTree root={tree} width={dims.w} height={dims.h}
-            onNodeClick={(node) => setSelectedId(node.id)} selectedNode={selected} />
-        ) : (
-          // A zero measurement must never render as nothing. `dims.w > 0 &&` alone
-          // produced a blank canvas under a correct header and footer, which read
-          // as "the tree is empty" rather than "we have not measured yet" — the
-          // whole reason the Expand view looked broken instead of loading.
-          <div className="h-full flex items-center justify-center">
-            <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Sizing canvas…</div>
-          </div>
-        )}
+          )}
+        </div>
+        <div className="w-[28rem] shrink-0 border-l p-border flex flex-col min-h-0 p-2">
+          <NodeTranscript
+            selection={selection}
+            trees={state.mctsTrees} rpc={state.rpc} headActivity={state.headActivity}
+            onSelect={setSelectedId} />
+        </div>
       </div>
       <div className="flex items-center justify-between px-5 py-2.5 border-t p-border">
         <div className="flex items-center gap-6 text-xs">
@@ -181,11 +172,14 @@ function ExplorerBody({
             </span>
           )}
         </div>
-        {selected && (
+        {/* The selected node's NAME now heads the transcript beside this row, so
+            only the two numbers the transcript does not carry stay here: a
+            branch's score and its rollout count are properties of the search,
+            not of the agent's behaviour. */}
+        {selected && (selected.value !== null || selected.visits !== null) && (
           <div className="flex items-center gap-4 text-xs animate-fade-in">
             <TreeStructureIcon size={13} className="p-text-3" />
-            <span className="p-text truncate max-w-[28rem]" title={selected.action}>{cleanNodeLabel(selected.action, "(root)")}</span>
-            {selected.value !== null && <span className="p-text-2">{formatScore(selected.value)}</span>}
+            {selected.value !== null && <span className="p-text-2">score <span className="p-text font-medium">{formatScore(selected.value)}</span></span>}
             {selected.visits !== null && <span className="p-text-2">n={selected.visits}</span>}
           </div>
         )}

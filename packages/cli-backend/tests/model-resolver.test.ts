@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
-import { DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema } from '@proteus/core';
-import type { JsonObject, JsonValue, LLMProviderConfig } from '@proteus/core';
+import {
+  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, usageTotal,
+} from '@proteus/core';
+import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport } from '@proteus/core';
 import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver.js';
 import { asFetchFunction } from '@proteus/core';
 import * as v from 'valibot';
@@ -36,6 +38,57 @@ describe('createLocalModelResolver', () => {
     } finally {
       server.stop(true);
     }
+  });
+
+  // This seam is the ONLY place that can see what a judge / fast-tier /
+  // reflection call cost, because `complete` returns text and nothing else. A
+  // call the provider said nothing about still reports: unmeasured spend has to
+  // be visible as unmeasured, never as free.
+  test('reports every completed call, silent providers included', async () => {
+    const reports: ModelCallReport[] = [];
+    let quiet = false;
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(request) {
+        const body = v.parse(JsonObjectSchema, await request.json());
+        const reply: JsonObject = {
+          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: String(body.model),
+          choices: [{ index: 0, message: { role: 'assistant', content: ' graded ' }, finish_reason: 'stop' }],
+        };
+        // The second answer carries NO usage block — a real Workers AI shape, and
+        // the case any `?? 0` on this path would turn into "the judge was free".
+        if (!quiet) reply.usage = { prompt_tokens: 41, completion_tokens: 7, total_tokens: 48 };
+        return Response.json(reply);
+      },
+    });
+    const llm: LLMProviderConfig = {
+      name: 'workers-ai',
+      baseURL: `http://127.0.0.1:${server.port}/v1`,
+      headers: { Authorization: 'Bearer test' },
+      model: '@cf/test/model',
+    };
+    try {
+      const judge = createLocalProviderLLM({
+        llm, spend: { source: 'judge', report: (report) => { reports.push(report); } },
+      });
+      expect(await judge.complete('grade this')).toBe('graded');
+      quiet = true;
+      await judge.complete('grade this too');
+    } finally {
+      server.stop(true);
+    }
+
+    expect(reports).toHaveLength(2);
+    expect(reports[0]?.source).toBe('judge');
+    // The spec the caller RESOLVED — what the catalog prices — not the served id.
+    expect(reports[0]?.spec).toBe('workers-ai/@cf/test/model');
+    // Through the reader the workspace total actually uses: the measured call
+    // names a token total, and the silent one names NONE — not zero. `cacheRead`
+    // and `reasoning` arrive as the openai-compatible adapter's fabricated zeros
+    // on both, which is normalizeUsage's known shape and not this seam's to fix.
+    expect(usageTotal(reports[0]?.usage ?? {})).toBe(48);
+    expect(usageTotal(reports[1]?.usage ?? {})).toBeUndefined();
   });
 
   test('normalizes Workers AI model ids to provider-style specs', async () => {

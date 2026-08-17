@@ -20,17 +20,60 @@
 
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import { reconcileColumns } from '../identity/columns.js';
+import { USAGE_FIELDS, type Usage } from '../usage.js';
 
 /**
- * One row per head. `token_input`/`token_output` are NULLable and carry NO
- * default on purpose: NULL means this head's provider never reported that
- * count, which is not the same claim as reporting zero. A head aborted before
- * its first model call spent an unknown number of tokens, and `DEFAULT 0` used
- * to record it as having spent none.
+ * Every {@link Usage} field's column in `head_journal`, keyed by the field it
+ * carries.
+ *
+ * Total over `keyof Usage`, so a field added to the type fails to compile here
+ * rather than being dropped on the way to storage. That is not hypothetical:
+ * only `input` and `output` had columns, so a fork's cache reads and its Workers
+ * AI `neurons` — the one figure a provider actually bills in — were discarded at
+ * persistence while every other producer's were kept.
+ */
+export const HEAD_USAGE_COLUMNS = {
+  input: 'token_input',
+  output: 'token_output',
+  cacheRead: 'token_cache_read',
+  cacheWrite: 'token_cache_write',
+  cacheWrite1h: 'token_cache_write_1h',
+  reasoning: 'token_reasoning',
+  neurons: 'neurons',
+} as const satisfies Readonly<Record<keyof Usage, string>>;
+
+/** One stored usage column, as every reader of a head row names it. */
+type HeadUsageColumn = (typeof HEAD_USAGE_COLUMNS)[keyof Usage];
+
+/** The usage half of a head row, as SQLite hands it back: NULL wherever the
+ *  provider said nothing. `heads/journal.ts` owns the one decoder. */
+export type StoredHeadUsage = { readonly [C in HeadUsageColumn]: number | null };
+
+/**
+ * The same columns as DDL, feeding the CREATE below AND the ADD COLUMN
+ * reconcile — one text, so a fresh workspace and a migrated one cannot end up
+ * with different types.
+ *
+ * `neurons` is REAL because Cloudflare's billing unit is FRACTIONAL, and it is
+ * the one figure here that is a provider's own measurement rather than something
+ * we priced — INTEGER affinity would round it. Every other field is a whole
+ * token count.
+ */
+const HEAD_USAGE_DDL: Readonly<Record<string, string>> = Object.fromEntries(
+  USAGE_FIELDS.map((field): [string, string] =>
+    [HEAD_USAGE_COLUMNS[field], field === 'neurons' ? 'REAL' : 'INTEGER']),
+);
+
+/**
+ * One row per head. Every usage column is NULLable and carries NO default on
+ * purpose: NULL means this head's provider never reported that count, which is
+ * not the same claim as reporting zero. A head aborted before its first model
+ * call spent an unknown number of tokens, and `DEFAULT 0` used to record it as
+ * having spent none.
  *
  * The invariant "absent means not reported, never zero" cannot be held by
  * application code alone while the DDL manufactures zeros underneath it — the
- * default WAS the fabricator here, because `insertSpawn` names neither column.
+ * default WAS the fabricator here, because `insertSpawn` names no usage column.
  */
 const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal (
   id TEXT PRIMARY KEY,
@@ -42,8 +85,7 @@ const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal (
   status TEXT NOT NULL,
   spawned_at INTEGER NOT NULL,
   completed_at INTEGER,
-  token_input INTEGER,
-  token_output INTEGER,
+${Object.entries(HEAD_USAGE_DDL).map(([column, type]) => `  ${column} ${type},`).join('\n')}
   wall_clock_ms INTEGER DEFAULT 0,
   summary TEXT,
   error_message TEXT,
@@ -55,12 +97,12 @@ const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal (
   merge_strategy TEXT NOT NULL DEFAULT 'synthesize'
 )`;
 
-const HEAD_JOURNAL_COLUMNS = [
+const HEAD_JOURNAL_COLUMNS: readonly string[] = [
   'id', 'parent_id', 'root_id', 'depth', 'task', 'rationale', 'status',
-  'spawned_at', 'completed_at', 'token_input', 'token_output', 'wall_clock_ms',
+  'spawned_at', 'completed_at', ...Object.keys(HEAD_USAGE_DDL), 'wall_clock_ms',
   'summary', 'error_message', 'decisions_json', 'artifacts_json',
   'tool_calls_json', 'child_head_ids_json', 'file_changes_json', 'merge_strategy',
-] as const;
+];
 
 /**
  * Cached merge results keyed by root_id — lets the orchestrator avoid
@@ -127,8 +169,17 @@ function rebuildIfStale(
   const definitionOf = (name: string): string | null =>
     sql<{ sql: string }>`
       SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${name}`[0]?.sql ?? null;
-  const list = columns.join(', ');
   const drain = (): void => {
+    // Narrowed to the columns the stranded table actually HAS. A rebuild resumed
+    // after a crash reads a table that was renamed out from under
+    // `reconcileColumns`, so it can be missing any column added post-release —
+    // naming one here fails the copy and strands the history for good. A column
+    // the old table never had has no value to carry, and the NULL it lands on is
+    // the right answer: that is what the column means.
+    const present = new Set(
+      sql<{ name: string }>`SELECT name FROM pragma_table_info(${legacy})`.map((row) => row.name),
+    );
+    const list = columns.filter((column) => present.has(column)).join(', ');
     execRaw(`INSERT OR IGNORE INTO ${table} (${list}) SELECT ${list} FROM ${legacy}`);
     execRaw(`DROP TABLE ${legacy}`);
   };
@@ -156,9 +207,13 @@ export function initHeadsTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
 
   execRaw(HEAD_JOURNAL_DDL);
 
-  // Journals created before heads reported their file changes predate the
-  // column, and CREATE TABLE IF NOT EXISTS will not add it to them.
-  reconcileColumns(sql, execRaw, 'head_journal', { file_changes_json: 'TEXT' });
+  // Journals created before heads reported their file changes predate that
+  // column, and journals created while only `input`/`output` had one predate the
+  // other five; CREATE TABLE IF NOT EXISTS will not add either to them. Every
+  // usage column is nullable, which is what makes it reachable by ADD COLUMN at
+  // all — SQLite rejects a NOT NULL add with no default.
+  reconcileColumns(sql, execRaw, 'head_journal',
+    { file_changes_json: 'TEXT', ...HEAD_USAGE_DDL });
 
   // After the column reconcile (the rebuild's SELECT names every column of the
   // DDL) and before the index pass (RENAME carries the old indexes onto the

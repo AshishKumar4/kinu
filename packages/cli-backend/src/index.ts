@@ -4,7 +4,8 @@
 
 export {
   createCLIRuntime, buildCLIHeadRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql,
-  createHostShell, withCheckpointedShell, type CLIRuntimeConfig, type LocalDb,
+  createHostShell, withCheckpointedShell,
+  type CLIRuntime, type CLIRuntimeConfig, type LocalDb,
 } from './runtime.js';
 export { createHostCheckpoints, type HostCheckpointsOpts } from './checkpoints.js';
 export { proteusHome } from './home.js';

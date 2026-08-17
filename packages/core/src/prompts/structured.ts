@@ -1,5 +1,7 @@
 import { generateText, type LanguageModel } from 'ai';
 import * as v from 'valibot';
+import type { ModelCallSpend } from '../events/model-call.js';
+import { normalizeUsage } from '../usage.js';
 import { parseJsonArray, parseJsonObject, type JsonObject, type JsonValue } from '../utils/json.js';
 
 const JSON_FENCE = /```(?:json)?\s*([\s\S]*?)```/i;
@@ -83,12 +85,27 @@ export async function generateJson<TOutput>(opts: {
   prompt: string;
   maxOutputTokens?: number;
   providerOptions?: Parameters<typeof generateText>[0]['providerOptions'];
+  /** Where this call is reported, and as whose spend. Four producers share this
+   *  one seam — the scaffold JSON judge, both head-merge paths and the GEPA
+   *  metric — so the label travels with the sink and is never assumed here.
+   *  Absent means this producer's spend is attributed to nothing. */
+  spend?: ModelCallSpend;
 }): Promise<TOutput> {
-  const { text } = await generateText({
+  const result = await generateText({
     model: opts.model,
     prompt: `${opts.prompt}\n\n${jsonObjectOnlyInstruction()}`,
     maxOutputTokens: opts.maxOutputTokens,
     providerOptions: opts.providerOptions,
   });
-  return v.parse(opts.schema, extractJsonObject(text));
+  // Before the extract-and-validate, and outside it: the call COMPLETED and was
+  // billed whether or not its output turns out to be JSON this schema accepts,
+  // and every caller handles that throw by falling back to something cheaper —
+  // so a report placed after it would drop exactly the spend of a bad model.
+  const spend = opts.spend;
+  spend?.report({
+    source: spend.source,
+    usage: normalizeUsage(result.totalUsage),
+    modelId: result.response.modelId,
+  });
+  return v.parse(opts.schema, extractJsonObject(result.text));
 }

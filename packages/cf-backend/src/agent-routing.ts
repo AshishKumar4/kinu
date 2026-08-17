@@ -15,29 +15,39 @@ import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG } from "@proteus/core";
 
 const ROOT_AGENT_PATH = `/agents/${ORCHESTRATOR_AGENT_SLUG}`;
 
+/**
+ * HTTP endpoints the transport itself serves beneath an actor path.
+ *
+ * The agents SDK does NOT put chat history on the socket: `useAgentChat` fetches
+ * it by appending this segment to the agent URL
+ * (`agents/chat/react.js` → `defaultGetInitialMessagesFetch`), and the DO answers
+ * it in `onRequest` (`@cloudflare/ai-chat` → `pathname.split('/').pop() === 'get-messages'`).
+ * The grammar below was closed against it, so the socket at
+ * `/agents/orchestrator-agent/<name>` connected while every mount of it also
+ * logged `GET /agents/orchestrator-agent/<name>/get-messages 404`:
+ * `isForeignAgentNamespacePath` called the SDK's own history fetch foreign, and
+ * the hook swallowed the 404 into an empty history. The pane then rendered only
+ * what arrived live after mount, which reads to the owner as "all my messages
+ * are gone" while the conversation sits intact in the DO.
+ *
+ * Named rather than opened to `[^/]+`, for three reasons that agree: a wildcard
+ * would re-admit arbitrary segments to a namespace deliberately pinned after the
+ * F1 account-takeover hole; this module's whole premise is that a path routes
+ * because it was named here; and `server.ts` runs the run-events, hub and files
+ * handlers over every admitted actor path, each parsing the tail itself. The
+ * SDK's endpoint set is small and known, so enumerating it costs nothing.
+ */
+const TRANSPORT_ENDPOINTS = ['get-messages'] as const;
+
 // The public agent transport has exactly two shapes: the workspace
 // orchestrator, and a SubordinateAgent facet beneath it. Every other facet or
 // namespace remains worker-only. A non-facet path may follow the subordinate
 // name, but another literal `sub` segment may not: the agents SDK treats that
-// marker as recursive facet routing.
-//
-// The orchestrator's own name may ALSO be followed by one of the agents SDK's
-// sibling endpoints. Omitting them is what broke the chat: the WebSocket at
-// `/agents/orchestrator-agent/<name>` connected, while
-// `/agents/orchestrator-agent/<name>/get-messages` — the SDK's history fetch —
-// matched nothing, so `isForeignAgentNamespacePath` called it foreign and the
-// worker answered 404. The pane then rendered only what arrived live after
-// mount, which reads to the owner as "all my messages are gone" while the
-// conversation sits intact in the DO.
-//
-// Enumerated rather than opened to `[^/]+`: a wildcard here would re-admit
-// arbitrary segments to a namespace we deliberately pinned after the F1
-// account-takeover hole, and the SDK's endpoint set is small and known.
-const SDK_ENDPOINTS = ['get-messages'] as const;
-const SDK_ENDPOINT_ALT = SDK_ENDPOINTS.join('|');
-
+// marker as recursive facet routing. The orchestrator's own name may ALSO be
+// followed by one of the transport endpoints enumerated above.
 export const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(
-  `^${ROOT_AGENT_PATH}/([^/]+)(?:$|/(?:${SDK_ENDPOINT_ALT})/?$`
+  `^${ROOT_AGENT_PATH}/([^/]+)(?:$`
+  + `|/(?:${TRANSPORT_ENDPOINTS.join('|')})/?$`
   + `|/sub/${SUBORDINATE_AGENT_SLUG}/[^/]+(?:/(?!sub(?:/|$))[^/]+)*/?$)`,
 );
 

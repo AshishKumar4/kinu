@@ -50,7 +50,9 @@ import Sidebar from "@/components/Sidebar";
 import { ModelPicker } from "@/components/ModelPicker";
 import { Composer, type ChatMode, type ComposerNotice } from "@/components/Composer";
 import { WorkspaceBar } from "@/components/WorkspaceBar";
-import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
+import { NodeTranscript } from "@/components/NodeTranscript";
+import { BranchRunChip } from "@/components/AlternateTakes";
+import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
@@ -62,16 +64,19 @@ import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { SupervisePage } from "@/pages/SupervisePage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
-import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript, type JsonValue } from "@proteus/core";
-import type { BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
+import {
+  BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, CHARS_PER_TOKEN, TOOL_REACH,
+  JsonObjectSchema, JsonValueSchema, mergeTranscript, seekPage, type JsonValue,
+} from "@proteus/core";
+import type { ActivitySnapshot, BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ExecutorInfo } from "@/lib/executors";
 import type {
-  ChatHistoryEntry, DirEntry, ExplorationCanvasRun, ForkRunParams, ForkRunSummary,
-  HeadRunView, MountInfo, Page, PageRequest, PendingAction, RunSummary, SearchNode,
+  ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun, ForkRunParams,
+  ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
+  PendingAction, ProducerSpend, RunSummary, SearchNode, Usage,
 } from "@proteus/core";
-import { seekPage } from "@proteus/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
 import * as v from "valibot";
 
@@ -239,6 +244,9 @@ const MCTS_TREE = buildTree(MCTS_ROWS);
 /** The frames render at most one tree; the surface keys them by search. */
 const MCTS_TREES: ReadonlyMap<string, ForkNode> = new Map([[MCTS_TREE.id, MCTS_TREE]]);
 const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
+/** No branch has written since this frame mounted, which is what a photograph
+ *  of a settled surface should say. A live one is its own frame. */
+const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
 /* ── Agent socket stub ──────────────────────────────────────────── */
 
@@ -469,7 +477,7 @@ const FORK_RUNS: ForkRunSummary[] = [
   },
   {
     id: "root-merge-1", task: "Check every other call site that indexes rules by kind",
-    startedAt: NOW - 52e5, status: "completed", settle: "merged", branches: 3, winnerScore: null,
+    startedAt: NOW - 52e5, status: "completed", settle: "merged", branches: 5, winnerScore: null,
   },
   {
     id: "root-merge-0", task: "Audit the CLI surface", startedAt: NOW - 9 * 36e5,
@@ -539,12 +547,168 @@ const MERGED_RUN: HeadRunView = {
       usage: { input: 1_020, output: 0 }, wallClockMs: 2_100,
       spawnedAt: NOW - 52e5, lastStepAt: null, decisions: [], steps: [],
     },
+    {
+      id: "root-merge-1-h3", task: "packages/checkout/src/pricing.ts", rationale: "the discount maths",
+      status: "completed", summary: "Indexes by kind twice inside the percentage path; both reads are behind the same guard.",
+      errorMessage: null, usage: { input: 6_240, output: 380 }, wallClockMs: 11_400,
+      spawnedAt: NOW - 52e5, lastStepAt: NOW - 512e4, decisions: [],
+      steps: [{ text: "The percentage branch reads rules[kind] before the null check.", toolCalls: [{ name: "file", input: { action: "read", path: "packages/checkout/src/pricing.ts" }, output: "…" }] }],
+    },
+    {
+      id: "root-merge-1-h4", task: "packages/api/src/coupon-routes.ts", rationale: "the public surface",
+      status: "running", summary: null, errorMessage: null,
+      usage: { input: 3_180, output: 90 }, wallClockMs: 4_600,
+      spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5, decisions: [],
+      steps: [{ text: "Walking the route handlers for a kind lookup.", toolCalls: [] }],
+    },
   ],
   merge: {
-    narrative: "One real call site left, in apply-coupon.ts, and the same ?? inferKind guard covers both reads. The cart serializer is already null-safe. The admin report could not be checked — that package is not in this sandbox.",
-    headCount: 3, totalTokens: 15_400,
+    narrative: "Three real call sites left — apply-coupon.ts and both reads in pricing.ts — and the same ?? inferKind guard covers all of them. The cart serializer is already null-safe. The admin report could not be checked; that package is not in this sandbox. The API routes are still being walked.",
+    headCount: 5, totalTokens: 24_820,
   },
 };
+
+/**
+ * The six things a node panel can be showing, as `getNodeTranscript` answers.
+ *
+ * Five are here because they used to be ONE blank pane, and the frame is where
+ * the claim that they now read differently is checked: a head that worked and
+ * reported, a head still working with a partial trace, a head that died having
+ * recorded nothing, a rollout that has no trace by construction, and a node
+ * neither store holds (the `null` below).
+ *
+ * The sixth is a mid-turn branch, keyed by the head id `branchHeadId` derives
+ * from a run id — the chat chip's view of the same read, and one head deep, so
+ * its search path has no ancestor to offer.
+ */
+const TRANSCRIPTS = {
+  "root-merge-1-h0": {
+    origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h0",
+    task: "Audit packages/checkout/src/apply-coupon.ts for every read of rules[kind], and decide whether the ?? inferKind guard belongs at the request edge or at each reader. The reported 500 comes through /api/cart/apply with a percentage coupon created after Tuesday's migration, whose kind column is null.",
+    rationale: "the reported 500",
+    status: "completed",
+    spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5, wallClockMs: 14_200,
+    usage: { input: 8_420, output: 610 },
+    steps: [
+      {
+        text: "Reading the handler and both of its callers before changing anything.",
+        reasoning: "The 500 is a dereference of `rules[kind]` where kind is null, so the fix has to sit where the dereference is — not where the value was created. That means I need every reader, not just the one in the stack trace.",
+        toolCalls: [
+          { name: "file", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "export function applyCoupon(cart: Cart, coupon: Coupon) {\n  const rule = rules[coupon.kind];\n  return rule.apply(cart, coupon);\n}" },
+          { name: "grep", input: { pattern: "rules\\[", path: "packages/checkout" }, output: "apply-coupon.ts:14\napply-coupon.ts:31\nvalidate.ts:9" },
+        ],
+      },
+      {
+        text: "Three readers, one shape. `validate.ts:9` already guards; the two in `apply-coupon.ts` do not.",
+        toolCalls: [
+          { name: "file", input: { action: "read", path: "packages/checkout/src/validate.ts" }, output: "const rule = rules[coupon.kind ?? inferKind(coupon)];" },
+        ],
+      },
+      {
+        text: "Guarding at the reader, and proving it with the suite.",
+        reasoning: "Guarding at the edge would still let a null through the cart serializer, which reads the same table on the lazy path.",
+        toolCalls: [
+          { name: "file", input: { action: "edit", path: "packages/checkout/src/apply-coupon.ts" }, output: "2 hunks applied" },
+          { name: "run", input: { command: "bun test packages/checkout" }, output: "42 pass\n0 fail\nRan 42 tests across 6 files. [1.21s]" },
+        ],
+      },
+    ],
+    answer: "Two more reads of `rules[kind]` in `apply-coupon.ts`, both fixed by the same `?? inferKind(coupon)` guard already used in `validate.ts:9`.\n\nGuarding at the **reader** rather than the request edge, because the cart serializer reads the same table on the lazy path and an edge guard would still let a null reach it. `bun test packages/checkout` is green (42 pass).",
+    decisions: [{
+      question: "Guard at the edge or at the reader?",
+      choice: "at the reader",
+      rationale: "the edge would still let a null through the cart serializer",
+    }],
+    errorMessage: null,
+    path: [
+      { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "completed" },
+      { id: "root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", depth: 1, status: "completed" },
+    ],
+    codeUsed: null,
+  },
+  "root-merge-1-h1": {
+    origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h1",
+    task: "Check packages/cart/src/serializer.ts — the lazy path that reads the same rules table.",
+    rationale: "the lazy path", status: "running",
+    spawnedAt: NOW - 42e3, lastStepAt: NOW - 9e3, wallClockMs: 0,
+    usage: { input: 5_110 },
+    steps: [{
+      text: "Opening the serializer.",
+      reasoning: "If this path already optional-chains, the guard belongs only in apply-coupon.",
+      toolCalls: [{ name: "file", input: { action: "read", path: "packages/cart/src/serializer.ts" }, output: "const rule = rules[coupon.kind]?.serialize;" }],
+    }],
+    answer: null, decisions: [], errorMessage: null,
+    path: [
+      { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "running" },
+      { id: "root-merge-1-h1", label: "packages/cart/src/serializer.ts", depth: 1, status: "running" },
+    ],
+    codeUsed: null,
+  },
+  "root-merge-1-h2": {
+    origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h2",
+    task: "Check packages/admin/src/coupon-report.ts — the reporting path.",
+    rationale: "the reporting path", status: "errored",
+    spawnedAt: NOW - 52e5, lastStepAt: null, wallClockMs: 2_100,
+    usage: { input: 1_020 },
+    steps: [], answer: null, decisions: [],
+    errorMessage: "the admin package is not checked out in this sandbox",
+    path: [
+      { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "completed" },
+      { id: "root-merge-1-h2", label: "packages/admin/src/coupon-report.ts", depth: 1, status: "errored" },
+    ],
+    codeUsed: null,
+  },
+  // A competed branch: one proposal, scored against its siblings, no tool loop.
+  // Its `observation` IS the whole output — which is why the trace pane says so
+  // instead of looking like a head whose steps went missing.
+  n003: {
+    origin: "rollout", runId: "n000", nodeId: "n003",
+    task: "Find why the SAVE20 coupon 500s",
+    rationale: "", status: "terminal",
+    spawnedAt: NOW - 34e5, lastStepAt: null, wallClockMs: 0, usage: {},
+    steps: [],
+    answer: "The percentage branch indexes `rules[coupon.kind]` and Tuesday's migration left `kind` null on every coupon created after it, so the lookup returns undefined and `.apply` throws. Guard the read with `?? inferKind(coupon)` — the shape `validate.ts` already uses — rather than backfilling the column, which would need a migration window the checkout path cannot take.",
+    decisions: [], errorMessage: null,
+    path: [
+      { id: "n000", label: "Find why the SAVE20 coupon 500s", depth: 0, status: "open" },
+      { id: "n001", label: "Look at the coupon rules table", depth: 1, status: "open" },
+      { id: "n003", label: "Guard the kind lookup at the reader", depth: 2, status: "terminal" },
+    ],
+    codeUsed: "const rule = rules[coupon.kind ?? inferKind(coupon)];\nif (!rule) throw new BadCoupon(coupon.code);\nreturn rule.apply(cart, coupon);",
+  },
+  // A Steer-as-Branch run: one head, its id derived from the run id, opened from
+  // the chat chip rather than from a canvas selection.
+  "steer-b7f21-head": {
+    origin: "head", runId: "steer-b7f21", nodeId: "steer-b7f21-head",
+    task: "Actually, check the staging snapshot first — I don't think the migration ran there.",
+    rationale: "mid-turn redirect",
+    status: "completed",
+    spawnedAt: NOW - 9e5, lastStepAt: NOW - 84e4, wallClockMs: 61_400,
+    usage: { input: 5_140, output: 380 },
+    steps: [
+      {
+        text: "Checking whether Tuesday's migration reached staging at all.",
+        reasoning: "If staging never ran it, the null `kind` column there proves nothing about production and the whole comparison is off.",
+        toolCalls: [
+          { name: "run", input: { command: "wrangler d1 migrations list proteus-staging" }, output: "0007_coupon_kind.sql  applied 2026-08-11" },
+        ],
+      },
+      {
+        text: "It did run, on the 11th. The snapshot is comparable after all.",
+        toolCalls: [],
+      },
+    ],
+    answer: "Staging applied `0007_coupon_kind.sql` on 2026-08-11, so its null `kind` rows predate the migration exactly as production's do — the snapshot is a fair reproduction and the guard is still the right fix.",
+    decisions: [], errorMessage: null,
+    path: [
+      { id: "steer-b7f21-head", label: "Check the staging snapshot first", depth: 0, status: "completed" },
+    ],
+    codeUsed: null,
+  },
+} satisfies Record<string, NodeTranscriptView>;
+
+/** Looked up by an arbitrary node id off the wire, which is what a Map is for. */
+const TRANSCRIPT_BY_NODE = new Map<string, NodeTranscriptView>(Object.entries(TRANSCRIPTS));
 
 /**
  * Agent → Evolution reads three shapes that are NOT arrays, so stubRpc's
@@ -621,13 +785,16 @@ const FORK_PARAMS: ForkRunParams[] = [
 
 /**
  * The canvas as the server composes it: ONE ROW PER FORK, each carrying its own
- * parameters and its own tree rows. Not three parallel collections keyed by root
- * id — that shape is what let the trees and the fork list beside them disagree.
+ * parameters and BOTH halves of its own branches — search rows for a
+ * competition, the journalled run for a merge. Not parallel collections keyed by
+ * root id, and not a separately bounded head-runs read: either shape is what let
+ * the trees and the fork list beside them disagree.
  */
 const CANVAS_ROWS: readonly ExplorationCanvasRun[] = FORK_RUNS.map((run) => ({
   run,
   params: FORK_PARAMS.find((entry) => entry.rootId === run.id) ?? null,
   tree: run.id === "n000" ? MCTS_ROWS.map(asSearchNode) : [],
+  head: run.id === MERGED_RUN.rootId ? MERGED_RUN : null,
 }));
 
 /** The generator writes the CLIENT's loose row shape, which is what the socket
@@ -686,8 +853,10 @@ const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   if (method === "getForkRun") return rpcResult(FORK_RUNS.find((run) => run.id === args?.[0]) ?? null).json<T>();
   if (method === "getSearchTree") return rpcResult(MCTS_ROWS).json<T>();
   if (method === "getHeadRun") return rpcResult(args?.[0] === MERGED_RUN.rootId ? MERGED_RUN : null).json<T>();
-  if (method === "getHeadRuns") return rpcResult([MERGED_RUN]).json<T>();
   if (method === "getMctsNodeDetail") return rpcResult(null).json<T>();
+  // A node NEITHER store holds answers null — the fifth state, and the one the
+  // panel must not render as "recorded nothing".
+  if (method === "getNodeTranscript") return rpcResult(TRANSCRIPT_BY_NODE.get(String(args?.[1])) ?? null).json<T>();
   return stubRpc<T>(method, args);
 };
 
@@ -811,7 +980,7 @@ function Shell(
             <div className="flex-1 min-w-0">
               <WorkSurface
                 surface={surface} onSurface={() => {}} pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]}
-                memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTrees={mctsTrees} isStreaming={false}
+                memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTrees={mctsTrees} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
                 backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={pendingActions}
                 rpc={rpc}
@@ -1366,7 +1535,7 @@ function ViewsFrame() {
           surface="view:deploy-health" onSurface={() => {}}
           agentViews={VIEW_TABS}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
-          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} isStreaming={false}
+          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()}
           onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
@@ -1591,7 +1760,7 @@ function WorkFrame() {
         <WorkSurface
           surface="Work" onSurface={() => {}}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
-          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} isStreaming={false}
+          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={PENDING_ACTIONS}
           rpc={workRpc}
@@ -1632,7 +1801,7 @@ function ApprovalsFrame() {
         <WorkSurface
           surface="Work" onSurface={() => {}}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
-          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} isStreaming={false}
+          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={PARKED_ONLY}
           rpc={approvalsRpc}
@@ -1661,7 +1830,7 @@ function WorkEmptyFrame() {
         <WorkSurface
           surface="Work" onSurface={() => {}}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
-          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} isStreaming={false}
+          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
           rpc={emptyRpc}
@@ -1755,7 +1924,7 @@ function EnvironmentFrame() {
         <WorkSurface
           surface="Environment" onSurface={() => {}}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
-          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} isStreaming={false}
+          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={ENVIRONMENT_EXECUTORS} executorOutputs={new Map()}
           onExecute={async () => ({})} lastActiveExecutor="workspace"
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
@@ -1890,6 +2059,193 @@ function SuperviseFrame() {
     </div>
   );
 }
+
+/* ── Activity ───────────────────────────────────────────────────── */
+
+/** The turn loop's own window over 344 steps. `cacheRead` is a SUBSET of
+ *  `input`, never an addition to it. */
+const AGENT_TOKENS: Usage = {
+  input: 21_480_312, output: 512_884, cacheRead: 18_942_006, reasoning: 41_220,
+};
+
+/** The same window as Workers AI reports it. `neurons` is Cloudflare's own
+ *  billing unit and comes back on every call — 0.120 per token, captured live —
+ *  and it is the figure the Cost block used to measure and then discard. */
+const AGENT_TOKENS_METERED: Usage = { ...AGENT_TOKENS, neurons: 2_639_183 };
+
+/**
+ * One producer per absence rule the Cost block claims, because the failure this
+ * frame exists to catch is a zero standing in for a silence:
+ *   agent    — Workers AI: measured, priced, and the only row reporting neurons
+ *   judge    — Anthropic: measured and priced, and reports NO neurons at all
+ *   fast     — 44 calls carried no catalog rate, so its dollars are a floor
+ *   head     — 2 calls reported nothing, so its tokens AND dollars are floors
+ *   mcts     — measured with no rate anywhere: dollars absent, never $0
+ *   platform — the embedder and toMarkdown: counted, never measured, ever
+ * Largest measured token total first and the unmeasured producer last, the order
+ * `workspaceSpend` returns them in (read-models/workspace-spend.ts).
+ */
+const ACTIVITY_PRODUCERS: ProducerSpend[] = [
+  {
+    source: "agent", calls: 344, callsWithoutUsage: 0, usage: AGENT_TOKENS_METERED,
+    usd: 11.98, unpricedCalls: 0,
+  },
+  {
+    source: "judge", calls: 62, callsWithoutUsage: 0,
+    usage: { input: 1_284_400, output: 96_120, cacheRead: 812_000 }, usd: 3.41, unpricedCalls: 0,
+  },
+  {
+    source: "fast", calls: 210, callsWithoutUsage: 0,
+    usage: { input: 402_118, output: 18_440, neurons: 50_467 }, usd: 0.0142, unpricedCalls: 44,
+  },
+  {
+    source: "head", calls: 12, callsWithoutUsage: 2,
+    usage: { input: 288_004, output: 31_902 }, usd: 0.86, unpricedCalls: 0,
+  },
+  {
+    source: "mcts", calls: 28, callsWithoutUsage: 0,
+    usage: { input: 96_210, output: 12_004, neurons: 12_986 }, unpricedCalls: 28,
+  },
+  { source: "platform", calls: 91, callsWithoutUsage: 91, usage: {}, unpricedCalls: 0 },
+];
+
+/** Every producer measuring and pricing everything, over a window that reached
+ *  the end of the log — the state the panel is allowed to state positively, and
+ *  an Anthropic workspace, so the neurons column must vanish rather than print a
+ *  column of dashes. */
+const CLEAN_PRODUCERS: ProducerSpend[] = [
+  {
+    source: "agent", calls: 344, callsWithoutUsage: 0, usage: AGENT_TOKENS,
+    usd: 11.98, unpricedCalls: 0,
+  },
+  {
+    source: "judge", calls: 62, callsWithoutUsage: 0,
+    usage: { input: 1_284_400, output: 96_120, cacheRead: 812_000 }, usd: 3.41, unpricedCalls: 0,
+  },
+  {
+    source: "fast", calls: 210, callsWithoutUsage: 0,
+    usage: { input: 402_118, output: 18_440 }, usd: 0.42, unpricedCalls: 0,
+  },
+];
+
+/** One step's exact composed content, so the frame photographs the whole surface
+ *  rather than the Cost block over an empty breakdown. */
+const ACTIVITY_CONTEXT: ContextComposition = {
+  segments: [
+    { plane: "system", label: "Core instructions", chars: 18_400, items: 1 },
+    { plane: "system", label: "Workspace brief", chars: 3_120, items: 1 },
+    { plane: "tools", label: "run", chars: 2_840, items: 1 },
+    { plane: "tools", label: "edit", chars: 3_610, items: 1 },
+    { plane: "tools", label: "read", chars: 2_180, items: 1 },
+    { plane: "messages", label: "tool", chars: 328_900, items: 96 },
+    { plane: "messages", label: "assistant", chars: 214_600, items: 58 },
+    { plane: "messages", label: "user", chars: 9_420, items: 11 },
+    { plane: "ephemeral", label: "Plan", chars: 1_980, items: 1 },
+    { plane: "ephemeral", label: "Open files", chars: 2_240, items: 1 },
+  ],
+  measuredChars: 587_290,
+  charsPerToken: CHARS_PER_TOKEN,
+  estimatedTokens: 146_822,
+};
+
+const ACTIVITY_LATEST = {
+  at: NOW - 90e3,
+  runId: "run-8c41f0",
+  stepIndex: 7,
+  usage: { input: 148_204, output: 1_842, cacheRead: 131_072, reasoning: 604, neurons: 18_005 },
+  context: ACTIVITY_CONTEXT,
+} satisfies NonNullable<ActivitySnapshot["latest"]>;
+
+const ACTIVITY_CACHE_HIT = {
+  samples: 344, last: 0.94, ema: 0.91, mean: 0.88, p95: 0.97, emaAlpha: 0.2,
+};
+
+const ACTIVITY_BUDGETS: ActivitySnapshot["budgets"] = [{
+  label: "checkout-fixes", parent: null, limits: { usd: 25 },
+  spent: { tokens: 24_222_394, usd: 16.26 }, remaining: { usd: 8.74 },
+  pricing: { blendedTokens: 0, source: "catalog" }, calls: 747, spawns: 3, exhausted: false,
+}];
+
+/**
+ * The panel's own question, photographed: `$11.98 over 344 priced steps` is the
+ * agent's turns, and the workspace spent $16.26+ over 747 calls of which 87.6%
+ * were measured at all. Every qualifier is live here — a truncated window, a
+ * silent producer, a partial one and 72 unpriced calls — which is the case the
+ * composed caveat line has to survive without becoming four paragraphs.
+ */
+const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
+  latest: ACTIVITY_LATEST,
+  contextWindow: 200_000,
+  telemetry: {
+    steps: 344, windowLimit: 2000, tokens: AGENT_TOKENS_METERED, cacheHit: ACTIVITY_CACHE_HIT,
+    usd: 11.98, pricedSteps: 344, unpricedSteps: 0, stepsWithoutUsage: 0,
+  },
+  spend: {
+    producers: ACTIVITY_PRODUCERS,
+    total: {
+      calls: 747, callsWithoutUsage: 93, unpricedCalls: 72, usd: 16.2642,
+      usage: {
+        input: 23_551_044, output: 671_350, cacheRead: 19_754_006, reasoning: 41_220,
+        neurons: 2_702_636,
+      },
+    },
+    coverage: {
+      calls: 747, measured: 654, reported: 654 / 747, silent: ["platform"], partial: ["head"],
+    },
+    windowLimit: 2000,
+    complete: false,
+  },
+  budgets: ACTIVITY_BUDGETS,
+  log: [],
+};
+
+/** The same workspace on a provider that reports no neurons, with nothing left
+ *  to qualify: 100% of known callers reported, every call priced, and the read
+ *  reached the end of the log. */
+const ACTIVITY_CLEAN: ActivitySnapshot = {
+  ...ACTIVITY_SNAPSHOT,
+  latest: { ...ACTIVITY_LATEST, usage: { input: 148_204, output: 1_842, cacheRead: 131_072, reasoning: 604 } },
+  telemetry: { ...ACTIVITY_SNAPSHOT.telemetry, tokens: AGENT_TOKENS },
+  spend: {
+    producers: CLEAN_PRODUCERS,
+    total: {
+      calls: 616, callsWithoutUsage: 0, unpricedCalls: 0, usd: 15.81,
+      usage: {
+        input: 23_166_830, output: 627_444, cacheRead: 19_754_006, reasoning: 41_220,
+      },
+    },
+    coverage: { calls: 616, measured: 616, reported: 1, silent: [], partial: [] },
+    windowLimit: 2000,
+    complete: true,
+  },
+};
+
+/** A workspace that has made no model call at all. `coverage.reported` is null
+ *  here, and the panel has to say there is no fraction rather than print 0% —
+ *  a call nobody made is not a call a provider failed to report. */
+const ACTIVITY_FRESH: ActivitySnapshot = {
+  latest: null,
+  contextWindow: null,
+  telemetry: {
+    steps: 0, windowLimit: 2000, tokens: {}, usd: 0, pricedSteps: 0, unpricedSteps: 0,
+    stepsWithoutUsage: 0,
+    cacheHit: { samples: 0, last: null, ema: null, mean: null, p95: null, emaAlpha: 0.2 },
+  },
+  spend: {
+    producers: [],
+    total: { calls: 0, callsWithoutUsage: 0, usage: {}, unpricedCalls: 0 },
+    coverage: { calls: 0, measured: 0, reported: null, silent: [], partial: [] },
+    windowLimit: 2000,
+    complete: true,
+  },
+  budgets: [],
+  log: [],
+};
+
+const activityRpc = (snapshot: ActivitySnapshot): Rpc =>
+  async <T,>(method: string, args?: unknown[]): Promise<T> => (
+    method === "getActivitySnapshot" ? rpcResult(snapshot).json<T>() : stubRpc<T>(method, args)
+  );
 
 /* ── Tool-call rendering states ─────────────────────────────────── */
 
@@ -2058,6 +2414,62 @@ function AgentFrame() {
   );
 }
 
+
+/**
+ * The node transcript, in every state it has.
+ *
+ * Five panels because five different facts used to render as one blank pane:
+ * a branch that worked and reported, one still working, one that died having
+ * recorded nothing, a rollout with no trace by construction, and a node the
+ * store does not hold. If any two of these photograph the same, that is the
+ * defect.
+ */
+function TranscriptFrame() {
+  return (
+    <div className="p-bg p-text min-h-screen p-5 space-y-5">
+      {[
+        ["Completed head — task, steps, highlighted report, search path", "root-merge-1-h0"],
+        ["Running head — partial trace, live liveness", "root-merge-1-h1"],
+        ["Head that died before its first step", "root-merge-1-h2"],
+        ["Competed rollout — one proposal, no trace by construction", "n003"],
+        ["A node neither store holds", "gone-1"],
+      ].map(([label, nodeId]) => (
+        <div key={nodeId} className="space-y-1.5">
+          <div className="text-[11px] uppercase tracking-wider p-text-3">{label}</div>
+          <div className="h-[34rem] w-[44rem] flex flex-col">
+            <NodeTranscript
+              selection={{ runId: nodeId!.startsWith("n") ? "n000" : "root-merge-1", nodeId: nodeId! }}
+              trees={MCTS_TREES} rpc={forkRpc} headActivity={NO_HEAD_ACTIVITY}
+              onSelect={() => {}} />
+          </div>
+        </div>
+      ))}
+      {/* The other reader of the same view: the chat chip, which knows its head
+          id by derivation and so needs no canvas selection. Both statuses,
+          because a running branch and a settled one offer different things
+          beside the disclosure. */}
+      <div className="space-y-1.5">
+        <div className="text-[11px] uppercase tracking-wider p-text-3">
+          Mid-turn branch chip — the transcript it opens in place
+        </div>
+        {(["running", "settled"] as const).map((status) => (
+          <BranchRunChip key={status}
+            run={{
+              branchId: "steer-b7f21", status,
+              task: "Actually, check the staging snapshot first — I don't think the migration ran there.",
+              takeSetId: undefined, turnId: undefined, message: undefined,
+            }}
+            rpc={forkRpc} headActivity={NO_HEAD_ACTIVITY}
+            // Unreachable here: the pick affordance only appears once a take set
+            // has hydrated, and this frame photographs the disclosure, not takes.
+            onPick={() => Promise.reject(new Error("no take set in this frame"))}
+            onDismiss={() => {}} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 async function mount() {
   let node: React.ReactNode;
   let entries = ["/"];
@@ -2080,6 +2492,7 @@ async function mount() {
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
+  else if (frame === "transcript") node = <TranscriptFrame />;
   else if (frame === "views") node = <ViewsFrame />;
   else if (frame === "viewblocks") node = <ViewBlocksFrame />;
   else if (frame === "viewfail") node = <ViewFailFrame />;
@@ -2090,6 +2503,11 @@ async function mount() {
   else if (frame === "approvals") node = <ApprovalsFrame />;
   else if (frame === "environment") node = <EnvironmentFrame />;
   else if (frame === "supervise") node = <SuperviseFrame />;
+  // Three states of one block: every qualifier live, nothing left to qualify,
+  // and a workspace that has spent nothing at all.
+  else if (frame === "activity") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />;
+  else if (frame === "activityclean") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />;
+  else if (frame === "activityempty") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />;
   else if (frame === "settings") {
     const { default: SettingsPage } = await import("@/pages/SettingsPage");
     // Routed, not bare: the page reads `agentId` off the route, and every

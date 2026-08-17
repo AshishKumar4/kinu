@@ -163,6 +163,32 @@ describe('folding', () => {
     expect(losingBranchIds(root).size).toBe(0);
   });
 
+  // convergence.ts:107-111 prunes every still-open node of a settled search
+  // except the winner, and the root matches that WHERE clause — so a converged
+  // tree's root carries status 'pruned', and an abandoned one's carries
+  // 'failed'. Folding "the topmost abandoned node" from the root down then
+  // selected the root itself and hid the entire search behind one dot.
+  test('a settled root is not a losing branch — the split is not a branch of itself', () => {
+    for (const status of ['pruned', 'failed'] as const) {
+      const root = node({
+        id: 'root', status,
+        children: [node({ id: 'a', children: [node({ id: 'a-kid' })] }), node({ id: 'b' })],
+      });
+      expect([...losingBranchIds(root)]).toEqual([]);
+    }
+  });
+
+  test('a settled root still folds the abandoned branches underneath it', () => {
+    const root = node({
+      id: 'root', status: 'pruned',
+      children: [
+        node({ id: 'lost', status: 'pruned', children: [node({ id: 'lost-kid' })] }),
+        node({ id: 'won', status: 'terminal' }),
+      ],
+    });
+    expect([...losingBranchIds(root)]).toEqual(['lost']);
+  });
+
   test('subtreeCount is the descendants a fold hides', () => {
     const root = node({ children: [node({ children: [node(), node()] }), node()] });
     expect(subtreeCount(root)).toBe(4);

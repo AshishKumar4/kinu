@@ -4,6 +4,7 @@
 
 import type {
 	ActivityLogEntry, ContextComposition, MissionBudgetSnapshot, StepTelemetry, Usage,
+	WorkspaceSpend,
 } from "@proteus/core";
 
 /**
@@ -280,7 +281,17 @@ export interface ActivitySnapshot {
 	/** The resolved model's context window, or null when the catalog has not
 	 *  answered — a percentage against a guessed window would be fiction. */
 	contextWindow: number | null;
+	/** The orchestrator's OWN turns, over a window of `step_finish` rows: what a
+	 *  step cost, and how the prefix cache has behaved. Deliberately not widened
+	 *  to the whole workspace — a judge's cold prompt in this window would read
+	 *  as a cache regression the agent never had. `spend` below is the workspace. */
 	telemetry: StepTelemetry;
+	/** Every model call the workspace can account for, grouped by producer, with
+	 *  its own coverage fraction. This is the answer to "is this ALL of the
+	 *  usage": `spend.coverage.reported` says what share of known calls the
+	 *  providers measured, and `spend.coverage.silent` names the producers that
+	 *  measured none. */
+	spend: WorkspaceSpend;
 	/** Mission budgets, empty when the workspace runs under no mission label
 	 *  (the default). `pricing.source` says how honest each USD figure is. */
 	budgets: MissionBudgetSnapshot[];

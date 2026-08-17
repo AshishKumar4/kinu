@@ -18,7 +18,8 @@ import type {
   HeadFileChange, HeadFileChangeSet, MergeResult, MergeStrategy, HeadRunView, HeadRunHeadView,
 } from './types.js';
 import { headProducedFindings } from './head-summary.js';
-import type { Usage } from '../usage.js';
+import { USAGE_FIELDS, type Usage } from '../usage.js';
+import { HEAD_USAGE_COLUMNS, type StoredHeadUsage } from './schema.js';
 
 const EvidenceKindSchema = v.picklist(['tool_output', 'fact', 'citation', 'artifact']);
 
@@ -35,22 +36,62 @@ function parseArray<T>(json: string | null): T[] {
 }
 
 /**
- * The two stored token columns as a {@link Usage}.
+ * The stored usage columns as a {@link Usage}.
  *
  * A NULL column becomes an ABSENT field, which is the whole point of the
  * columns having no default: it keeps "this head's provider never reported"
  * distinguishable from "this head reported zero" all the way out to the
  * surface, where the difference is a head that may have cost real money versus
  * one that demonstrably cost nothing.
+ *
+ * Exported for `read-models/workspace-spend.ts`, which reads the same row for
+ * the workspace total. Two decoders over one storage shape is how a head's
+ * cache reads end up counted on one surface and dropped on the other.
  */
-function storedUsage(row: { token_input: number | null; token_output: number | null }): Usage {
+export function storedUsage(row: StoredHeadUsage): Usage {
   const usage: { -readonly [K in keyof Usage]: number } = {};
-  if (row.token_input !== null) usage.input = row.token_input;
-  if (row.token_output !== null) usage.output = row.token_output;
+  for (const field of USAGE_FIELDS) {
+    const stored = row[HEAD_USAGE_COLUMNS[field]];
+    if (stored !== null) usage[field] = stored;
+  }
   return usage;
 }
 
-export interface HeadJournalRow {
+/**
+ * The columns behind a {@link HeadRunHeadView}, and the fold from them.
+ *
+ * `last_step_at` is an aggregate over `head_steps` rather than a column on the
+ * head row: the steps ARE the progress record, so a second field could only ever
+ * disagree with them.
+ *
+ * Usage arrives as {@link StoredHeadUsage}, not as two token columns: {@link
+ * storedUsage} folds every usage column the journal stores, and naming a subset
+ * here is how a cache-read or reasoning figure gets dropped on the way to a
+ * surface while every type still checks.
+ */
+interface HeadViewRow extends StoredHeadUsage {
+  id: string; task: string; rationale: string | null; status: string;
+  summary: string | null; error_message: string | null; wall_clock_ms: number;
+  spawned_at: number; last_step_at: number | null; decisions_json: string | null;
+}
+
+function headViewOf(row: HeadViewRow, steps: HeadStep[]): HeadRunHeadView {
+  return {
+    id: row.id, task: row.task, rationale: row.rationale ?? '', status: row.status,
+    summary: row.summary, errorMessage: row.error_message,
+    usage: storedUsage(row), wallClockMs: row.wall_clock_ms,
+    spawnedAt: row.spawned_at, lastStepAt: row.last_step_at,
+    decisions: parseArray<{ question?: unknown; choice?: unknown; rationale?: unknown }>(row.decisions_json)
+      .map((d) => ({
+        question: String(d?.question ?? ''),
+        choice: String(d?.choice ?? ''),
+        rationale: String(d?.rationale ?? ''),
+      })),
+    steps,
+  };
+}
+
+export interface HeadJournalRow extends StoredHeadUsage {
   id: HeadId;
   parent_id: HeadId | null;
   root_id: HeadId;
@@ -60,11 +101,6 @@ export interface HeadJournalRow {
   status: HeadReport['status'] | 'running';
   spawned_at: number;
   completed_at: number | null;
-  /** NULL when this head's provider never reported the count — the column has
-   *  no default for exactly that reason. `undefined` in the domain {@link Usage}
-   *  is the same statement; neither is ever 0. */
-  token_input: number | null;
-  token_output: number | null;
   wall_clock_ms: number;
   summary: string | null;
   error_message: string | null;
@@ -116,6 +152,11 @@ export class HeadJournal {
       completed_at = ${Date.now()},
       token_input = ${report.usage.input ?? null},
       token_output = ${report.usage.output ?? null},
+      token_cache_read = ${report.usage.cacheRead ?? null},
+      token_cache_write = ${report.usage.cacheWrite ?? null},
+      token_cache_write_1h = ${report.usage.cacheWrite1h ?? null},
+      token_reasoning = ${report.usage.reasoning ?? null},
+      neurons = ${report.usage.neurons ?? null},
       wall_clock_ms = ${report.wallClockMs},
       summary = ${report.summary},
       error_message = ${report.errorMessage ?? null},
@@ -253,6 +294,8 @@ export class HeadJournal {
     const rows = this.sql<HeadJournalRow>`
       SELECT id, parent_id, root_id, depth, task, rationale, status,
              spawned_at, completed_at, token_input, token_output,
+             token_cache_read, token_cache_write, token_cache_write_1h,
+             token_reasoning, neurons,
              wall_clock_ms, summary, error_message, merge_strategy
       FROM head_journal WHERE id = ${id}`;
     return rows[0] ?? null;
@@ -262,6 +305,8 @@ export class HeadJournal {
     return this.sql<HeadJournalRow>`
       SELECT id, parent_id, root_id, depth, task, rationale, status,
              spawned_at, completed_at, token_input, token_output,
+             token_cache_read, token_cache_write, token_cache_write_1h,
+             token_reasoning, neurons,
              wall_clock_ms, summary, error_message, merge_strategy
       FROM head_journal WHERE root_id = ${rootId}
       ORDER BY depth, spawned_at`;
@@ -345,19 +390,36 @@ export class HeadJournal {
     return row?.spawned_at == null ? null : this.assembleRun(rootId, row.spawned_at);
   }
 
+  /**
+   * One head, as a reader of a single branch needs it — the same projection
+   * {@link listRuns} folds, scoped to one id instead of to a run.
+   *
+   * Two scopings of ONE projection: the batch query in {@link assembleRun} joins
+   * every head of a run in a single pass (a per-head read there would be N+1),
+   * and this one answers a reader that opened exactly one branch and must not
+   * pay for its siblings' traces. Both hand their row to {@link headViewOf}, so
+   * neither can describe a head differently from the other.
+   */
+  readHeadView(headId: HeadId): HeadRunHeadView | null {
+    const row = this.sql<HeadViewRow>`
+      SELECT j.id, j.task, j.rationale, j.status, j.summary, j.error_message,
+             j.token_input, j.token_output, j.wall_clock_ms, j.spawned_at,
+             j.decisions_json, MAX(s.created_at) AS last_step_at
+      FROM head_journal j LEFT JOIN head_steps s ON s.head_id = j.id
+      WHERE j.id = ${headId}
+      GROUP BY j.id`[0];
+    return row ? headViewOf(row, this.readSteps(row.id)) : null;
+  }
+
   private assembleRun(rootId: HeadId, spawnedAt: number): HeadRunView {
-    type HeadRow = {
-      id: string; task: string; rationale: string | null; status: string;
-      summary: string | null; error_message: string | null;
-      token_input: number | null; token_output: number | null; wall_clock_ms: number;
-      spawned_at: number; last_step_at: number | null; decisions_json: string | null;
-    };
     // last_step_at comes from the trace itself rather than a column on the head
     // row: the steps ARE the progress record, so a second field could only ever
     // disagree with them.
-    const rows = this.sql<HeadRow>`
+    const rows = this.sql<HeadViewRow>`
       SELECT j.id, j.task, j.rationale, j.status, j.summary, j.error_message,
-             j.token_input, j.token_output, j.wall_clock_ms, j.spawned_at,
+             j.token_input, j.token_output, j.token_cache_read, j.token_cache_write,
+             j.token_cache_write_1h, j.token_reasoning, j.neurons,
+             j.wall_clock_ms, j.spawned_at,
              j.decisions_json, MAX(s.created_at) AS last_step_at
       FROM head_journal j LEFT JOIN head_steps s ON s.head_id = j.id
       WHERE j.root_id = ${rootId}
@@ -366,15 +428,9 @@ export class HeadJournal {
     // children; for top-level splits (synthetic root) nothing matches, so all
     // rows are heads.
     const rootRow = rows.find((h) => h.id === rootId) ?? null;
-    const heads: HeadRunHeadView[] = rows.filter((h) => h.id !== rootId).map((h) => ({
-      id: h.id, task: h.task, rationale: h.rationale ?? '', status: h.status,
-      summary: h.summary, errorMessage: h.error_message,
-      usage: storedUsage(h), wallClockMs: h.wall_clock_ms,
-      spawnedAt: h.spawned_at, lastStepAt: h.last_step_at,
-      decisions: parseArray<{ question?: unknown; choice?: unknown; rationale?: unknown }>(h.decisions_json)
-        .map((d) => ({ question: String(d?.question ?? ''), choice: String(d?.choice ?? ''), rationale: String(d?.rationale ?? '') })),
-      steps: this.readSteps(h.id),
-    }));
+    const heads: HeadRunHeadView[] = rows
+      .filter((h) => h.id !== rootId)
+      .map((h) => headViewOf(h, this.readSteps(h.id)));
 
     const runRow = this.sql<{ rationale: string | null }>`
       SELECT rationale FROM head_runs WHERE root_id = ${rootId}`[0];

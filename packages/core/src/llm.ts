@@ -12,6 +12,8 @@ import { generateText, streamText } from 'ai';
 import type { LanguageModel, StepResult, ToolSet } from 'ai';
 import * as v from 'valibot';
 import type { LLM } from './types/primitives.js';
+import type { ModelCallSpend } from './events/model-call.js';
+import { normalizeUsage } from './usage.js';
 import { parseModelSpec } from './providers/types.js';
 import { withRateLimitRetry } from './providers/rate-limit-retry.js';
 import {
@@ -29,6 +31,19 @@ export interface LLMProviderConfig {
   model: string;
   /** Max tokens for completions (default: 2048) */
   maxTokens?: number;
+  /**
+   * Where the calls this LLM makes are reported, and as whose spend.
+   *
+   * Both halves in one field because the source is the CALLER's to state: this
+   * factory builds the chat model on one line and a cross-family judge on the
+   * next (`identity/open.ts:102`, `:105`), so no literal belongs here, and two
+   * independent optional fields would let a caller wire the sink without the
+   * label and lose the attribution silently.
+   *
+   * Absent means this LLM's spend is attributed to nothing, which the coverage
+   * fraction states rather than hides.
+   */
+  spend?: ModelCallSpend;
 }
 
 /**
@@ -46,6 +61,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
   // Cost is controlled by reasoning effort. A cap applies only when the caller
   // explicitly configured one.
   const cap = config.maxTokens !== undefined ? { maxOutputTokens: config.maxTokens } : {};
+  const spend = config.spend;
 
   return {
     async *stream(opts) {
@@ -61,15 +77,37 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
       for await (const chunk of result.textStream) {
         yield chunk;
       }
+      // Usage is only knowable once the stream has finished, so the report goes
+      // here. A consumer that abandons the generator mid-way never reaches this
+      // line and reports nothing — honest, because the cost of a stream nobody
+      // drained is not something this seam ever learns. `totalUsage` rather than
+      // `usage`: the latter is the LAST step only.
+      if (spend) {
+        spend.report({
+          source: spend.source,
+          usage: normalizeUsage(await result.totalUsage),
+          modelId: (await result.response).modelId,
+        });
+      }
     },
 
     async complete(prompt) {
-      const { text } = await generateText({
+      const result = await generateText({
         model,
         prompt,
         ...cap,
       });
-      return text.trim();
+      // Reported even when the provider said nothing: `normalizeUsage` returns
+      // `{}` and the CALL still lands, which is what keeps a silent provider
+      // distinguishable from a free one. No `spec`: this factory is configured
+      // with a base URL and a model name rather than a catalog spec, and
+      // synthesizing one would name a route the catalog cannot price.
+      spend?.report({
+        source: spend.source,
+        usage: normalizeUsage(result.totalUsage),
+        modelId: result.response.modelId,
+      });
+      return result.text.trim();
     },
   };
 }
@@ -89,22 +127,37 @@ export function createCompletionLLM(opts: {
   /** `<provider>/<modelId>` — decides which provider's reasoning knob applies. */
   spec: string;
   stage: InferenceStage;
+  /** Where this model's calls are reported, and as whose spend. One field, both
+   *  halves: these callers are the outcome-ensemble judges AND the calibration
+   *  classifiers, so the same completion shape is `judge` in one and `fast` in
+   *  the other and only the caller knows which. Absent means this rater's spend
+   *  is attributed to nothing. */
+  spend?: ModelCallSpend;
 }): LLM {
   const providerOptions = reasoningEffortOptions(
     REASONING_EFFORT_FOR_STAGE[opts.stage],
     parseModelSpec(opts.spec).provider,
   );
+  const spend = opts.spend;
   return {
     stream() {
       throw new Error(`createCompletionLLM(${opts.spec}) has no streaming path`);
     },
     async complete(prompt) {
-      const { text } = await generateText({
+      const result = await generateText({
         model: opts.model,
         prompt,
         providerOptions,
       });
-      return text.trim();
+      // `spec` is what the caller resolved and therefore what the catalog
+      // prices; `modelId` is what the provider says served it.
+      spend?.report({
+        source: spend.source,
+        usage: normalizeUsage(result.totalUsage),
+        spec: opts.spec,
+        modelId: result.response.modelId,
+      });
+      return result.text.trim();
     },
   };
 }

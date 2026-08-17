@@ -26,6 +26,8 @@
 import { generateText } from 'ai';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
+import type { ModelCallSink } from './events/model-call.js';
+import { normalizeUsage } from './usage.js';
 import { REASONING_EFFORTS, reasoningEffortOptions } from './strategy/effort.js';
 import { parseModelSpec } from './providers/types.js';
 import { TOOL_REACH } from './tools/registry.js';
@@ -81,10 +83,19 @@ function errorMessage(input: { error: unknown }): string {
   return input.error instanceof Error ? input.error.message : String(input.error);
 }
 
-/** Build the codemode provider that exposes `llm.query(...)` to the sandbox. */
+/**
+ * Build the codemode provider that exposes `llm.query(...)` to the sandbox.
+ *
+ * `reportModelCall` is where each sub-call's cost is filed, as `sandbox` spend.
+ * It matters more here than at most seams: a program is free to fan out over as
+ * many slices as it likes, so this is the one producer whose per-turn spend has
+ * no structural bound — and until it reported, an unbounded fan-out was
+ * invisible. Optional: a backend that wires no sink runs exactly as before.
+ */
 export function createRLMProvider(
   resolver: RLMModelResolver,
   currentSpec: () => string,
+  reportModelCall?: ModelCallSink,
 ): CodemodeProvider {
   return {
     name: TOOL_REACH.llm.codemode,
@@ -125,15 +136,24 @@ export function createRLMProvider(
             parseModelSpec(normalizedSpec).provider,
           );
           try {
-            const { text: out } = await generateText({
+            const result = await generateText({
               model,
               system: opts.output.system ?? 'You are a helpful assistant. Answer concisely and directly.',
               prompt: text.output,
               maxOutputTokens: opts.output.maxOutputTokens,
               providerOptions,
             });
-            return out.trim();
+            reportModelCall?.({
+              source: 'sandbox',
+              usage: normalizeUsage(result.totalUsage),
+              spec: normalizedSpec,
+              modelId: result.response.modelId,
+            });
+            return result.text.trim();
           } catch (err) {
+            // A throw produced no usage and, as far as this seam can see, no
+            // bill — reporting it would count a call that cost nothing against
+            // the measured fraction.
             return { error: `llm.query: ${errorMessage({ error: err })}` };
           }
         },

@@ -52,6 +52,14 @@ export function isSteerBranchRunId(rootId: string): boolean {
   return rootId.startsWith(STEER_BRANCH_RUN_ID_PREFIX);
 }
 
+/** The single head a Steer-as-Branch run spawns, addressed from the run id
+ *  alone — what a chat chip holding a branchId needs to open that head's
+ *  transcript. Three call sites (the spawn, the chip, the tests) must agree on
+ *  it, so it is a name rather than a repeated template. */
+export function branchHeadId(rootId: string): string {
+  return `${rootId}-head`;
+}
+
 export interface BranchStartInput {
   /** The user's mid-turn redirect — the head's task. */
   task: string;
@@ -87,7 +95,11 @@ export async function startBranchHead(
   const rootId = input.id ?? newBranchId();
   const spawnedAt = Date.now();
   const headInput: HeadInput = {
-    id: `${rootId}-d1-0-${nanoid(6)}`,
+    // DERIVED from the run id, not random: a branch run has exactly one head
+    // and `rootId` is already unique, so the surface that holds a branchId can
+    // read that head's transcript (getNodeTranscript) without first listing the
+    // run to discover a random id.
+    id: branchHeadId(rootId),
     rootId,
     parentId: null,
     depth: 0,

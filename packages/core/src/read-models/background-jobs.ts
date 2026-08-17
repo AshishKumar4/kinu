@@ -96,6 +96,11 @@ export interface CancelWorkOutcome {
   ok: true;
   cancelledJobs: string[];
   abortedTools: number;
+  /** Mid-turn steers the abort dropped, handed back verbatim. An interrupt
+   *  means "stop", not "stop and then do what I typed" — but the surface
+   *  already rendered these as sent, so they return to the composer instead of
+   *  vanishing. Empty when nothing was pending. */
+  returnedSteers: string[];
 }
 
 export interface CancelWorkDeps {
@@ -103,6 +108,10 @@ export interface CancelWorkDeps {
   /** The foreground tool calls currently holding an abort handle. */
   readonly activeToolControllers: Set<AbortController>;
   readonly broadcast: (payload: string) => void;
+  /** Drop the in-flight turn's pending user steers and return their texts —
+   *  the backend's UserSteerDrain.interrupt(). Absent on surfaces with no
+   *  steer drain. */
+  readonly interruptSteers?: () => string[];
   /** Where a backend settles its own turn state once the abort is issued —
    *  clearing an in-flight flag, writing an activity line. Runs before the
    *  broadcast so a client that reacts to it reads settled state. */
@@ -120,12 +129,13 @@ export function cancelCurrentWork(deps: CancelWorkDeps): CancelWorkOutcome {
     }
     deps.activeToolControllers.delete(controller);
   }
-  deps.onCancelled?.({ cancelledJobs, abortedTools });
+  const returnedSteers = deps.interruptSteers?.() ?? [];
+  deps.onCancelled?.({ cancelledJobs, abortedTools, returnedSteers });
   deps.broadcast(JSON.stringify({
     type: 'work_cancelled',
     cancelledJobs,
     abortedTools,
     timestamp: Date.now(),
   }));
-  return { ok: true, cancelledJobs, abortedTools };
+  return { ok: true, cancelledJobs, abortedTools, returnedSteers };
 }

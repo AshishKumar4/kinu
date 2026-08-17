@@ -6,7 +6,10 @@
  * wiring cannot drift between them.
  */
 
-import { createDefaultWebSearchProvider, type AuthResolver, type WebSearchProvider } from "@proteus/core";
+import {
+  createDefaultWebSearchProvider,
+  type AuthResolver, type ModelCallSink, type WebSearchProvider,
+} from "@proteus/core";
 
 interface WebProviderEnv {
   readonly AI?: Env['AI'];
@@ -22,6 +25,7 @@ interface WebProviderEnv {
 export function buildCfWebSearchProvider(
   env: WebProviderEnv,
   resolveAuth: () => AuthResolver | undefined,
+  reportModelCall?: ModelCallSink,
 ): WebSearchProvider {
   const ai = env.AI;
   const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
@@ -36,6 +40,11 @@ export function buildCfWebSearchProvider(
       const name = (opts?.url ?? "page") + ".html";
       const blob = new Blob([html], { type: "text/html" });
       const out = await ai.toMarkdown([{ name, blob }]);
+      // A model ran and the account was billed neurons for it, but the binding
+      // returns only the markdown — so the CALL is reportable and its cost is
+      // not. Counted here rather than omitted, because a workspace total that
+      // silently drops a whole producer is the thing that cannot be trusted.
+      reportModelCall?.({ source: "platform", usage: {}, modelId: "toMarkdown" });
       const converted = out[0];
       return converted?.format === "markdown" ? converted.data : "";
     };

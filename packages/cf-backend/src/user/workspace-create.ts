@@ -8,6 +8,7 @@ import {
   parseWorkspaceTitle,
   renderSoulMarkdown,
   isReasoningEffort,
+  normalizeUsage,
   type ReasoningEffort,
 } from '@proteus/core';
 import type { OrchestratorAgent } from '../orchestrator.js';
@@ -143,7 +144,7 @@ async function applyGeneratedDisplayName(
 ): Promise<void> {
   const displayName = suggestDisplayName
     ? await suggestDisplayName(mission)
-    : await suggestCloudAgentDisplayName(env, userDO, caller, mission, modelSpec);
+    : await suggestCloudAgentDisplayName(env, userDO, caller, mission, modelSpec, agentName);
   if (!displayName) return;
   // SAFETY: Env.OrchestratorAgent is generated from the OrchestratorAgent binding and exposes its RPC methods.
   const orchestrator = env.OrchestratorAgent.get(
@@ -152,12 +153,22 @@ async function applyGeneratedDisplayName(
   await orchestrator.setAutoDisplayName(displayName);
 }
 
+/**
+ * `agentName` is here so the call can be filed against the workspace it names.
+ *
+ * This is the first model call of a workspace's life and it happens before any
+ * turn, so there is no run to attach it to — the reserved workspace run id is
+ * where the actor files exactly this case. Reported through the same cross-DO
+ * port a facet uses, because the total that has to account for it lives in that
+ * Durable Object and not in this Worker.
+ */
 async function suggestCloudAgentDisplayName(
   env: Env,
   userDO: CloudWorkspaceRegistry,
   caller: UserCaller,
   mission: string,
   modelSpec: string,
+  agentName: string,
 ): Promise<string | null> {
   const provider = createAgentProviderRegistry({ env, userDO: { stub: userDO, caller }, fetch });
   const result = await generateText({
@@ -168,6 +179,15 @@ async function suggestCloudAgentDisplayName(
     // JSON, so a cap starves them into empty text and the generic name wins.
     ...effortFor('reflection'),
   });
+  // SAFETY: Env.OrchestratorAgent is generated from the OrchestratorAgent binding and exposes its RPC methods.
+  const orchestrator = env.OrchestratorAgent.get(
+    env.OrchestratorAgent.idFromName(agentName),
+  ) as DurableObjectStub<OrchestratorAgent>;
+  const modelId = result.response?.modelId;
+  const usage = normalizeUsage(result.usage);
+  await orchestrator.reportFacetModelCall(modelId
+    ? { source: 'fast', usage, spec: modelSpec, modelId }
+    : { source: 'fast', usage, spec: modelSpec });
   return parseWorkspaceTitle(result.text);
 }
 

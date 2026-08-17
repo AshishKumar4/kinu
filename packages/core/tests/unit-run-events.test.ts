@@ -5,7 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  initRunEventTables, RunEventRecorder,
+  initRunEventTables, RunEventRecorder, WORKSPACE_RUN_ID,
   type RunEvent,
 } from '../src/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
@@ -188,6 +188,49 @@ describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
     }
     expect(recorder.count('run-1')).toBe(7);
     expect(recorder.count('no-such')).toBe(0);
+  });
+
+  /**
+   * Two changes met here, and carrying either one alone is silent.
+   *
+   * The window became `listRunsBefore(before, count)` ordered by MAX(rowid) — a
+   * decidable page. Independently, the reserved {@link WORKSPACE_RUN_ID} became
+   * the place a model call made BETWEEN runs is filed, and it is not a run.
+   * Keeping the new signature without the exclusion breaks no type and passes
+   * every gate: the only symptom is a fabricated run at the top of the owner's
+   * history. Keeping the exclusion without the ordering brings back an
+   * undecidable window. So both are asserted in one place.
+   *
+   * A real run sits beside the pseudo-run on purpose: an assertion that the list
+   * is EMPTY would read the same whether the clause worked or the query blew up.
+   */
+  test('the workspace bucket is filed but never listed as a run', () => {
+    const { recorder } = setup();
+    recorder.emit('run-A', { type: 'run_start', agentId: 'a' });
+    recorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'judge', usage: { input: 5 } });
+    recorder.emit('run-B', { type: 'run_start', agentId: 'a' });
+    recorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'fast', usage: { input: 7 } });
+
+    // Listed: the real runs, newest write first. NOT listed: the bucket, even
+    // though its rows are the most recently written in the log.
+    expect(recorder.listRunsBefore(null, 10).map((r) => r.runId)).toEqual(['run-B', 'run-A']);
+
+    // Excluded from the LIST, not from the log: every reader that names the
+    // bucket still gets its rows, which is how the spend read-model reaches them.
+    expect(recorder.count(WORKSPACE_RUN_ID)).toBe(2);
+    expect(recorder.read(WORKSPACE_RUN_ID).map((e) => e.type)).toEqual(['model_call', 'model_call']);
+
+    // And the exclusion does not perturb the page anchor: the bucket's rows are
+    // dropped before the grouping, so each real run's MAX(rowid) is its own and a
+    // one-per-page walk still reaches both exactly once.
+    const first = recorder.listRunsBefore(null, 1);
+    expect(first.map((r) => r.runId)).toEqual(['run-B']);
+    expect(recorder.listRunsBefore(recorder.runSeq('run-B'), 10).map((r) => r.runId))
+      .toEqual(['run-A']);
+
+    // The bucket has a position like anything else — it is a run id to `runSeq`,
+    // which is keyed explicitly and therefore not the list's business.
+    expect(recorder.runSeq(WORKSPACE_RUN_ID)).toBeGreaterThan(recorder.runSeq('run-B')!);
   });
 });
 

@@ -17,11 +17,18 @@
  * The model selector belongs here rather than in the workspace bar because it is
  * a property of the turn you are about to send. It already sat beside the
  * subordinate composer, so the bar was the outlier, not this.
+ *
+ * While a turn runs the right-hand group is THREE actions, not one: Stop
+ * abandons the turn, Branch answers the draft beside it, and Steer hands the
+ * draft to the turn already running. Before this the only mid-stream action was
+ * Stop and a bare Branch glyph — Enter called a send that early-returned while
+ * streaming, so typing to a working agent did nothing at all and said nothing
+ * about it.
  */
 import { useRef, type ReactNode } from "react";
 import { InputArea, Loader } from "@cloudflare/kumo";
 import {
-  PaperPlaneRightIcon, PaperclipIcon, StopIcon, GitBranchIcon,
+  PaperPlaneRightIcon, PaperclipIcon, StopIcon, GitBranchIcon, ArrowBendUpRightIcon,
   LightningIcon, NotePencilIcon, WarningCircleIcon, InfoIcon, CheckCircleIcon,
 } from "@phosphor-icons/react";
 import type { FileUIPart } from "ai";
@@ -142,7 +149,14 @@ export interface ComposerProps {
   /** The model selector, passed in because it is a connected component and this
    *  one has to stay renderable without a socket. */
   modelPicker?: ReactNode;
-  /** Run the draft as a parallel take instead of interrupting the live turn.
+  /**
+   * Send WITHOUT stopping the turn: the draft is spliced into the agent's next
+   * step. Wired ⇒ the composer keeps a working submit action while streaming,
+   * which is the difference between "you must stop the agent to say anything"
+   * and a conversation.
+   */
+  onSteer?: () => void;
+  /** Run the draft as a parallel take instead of steering or interrupting.
    *  Only offered mid-stream, and never in Plan mode. */
   onBranch?: () => void;
   textareaRef?: React.Ref<HTMLTextAreaElement>;
@@ -150,14 +164,22 @@ export interface ComposerProps {
 
 export function Composer({
   value, onValueChange, onSend, placeholder, disabled, streaming, onStop,
-  notices, mode, attachments, modelPicker, onBranch, textareaRef,
+  notices, mode, attachments, modelPicker, onSteer, onBranch, textareaRef,
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const empty = value.trim() === "" && (attachments?.parts.length ?? 0) === 0;
-  const canBranch = Boolean(onBranch) && streaming && value.trim() !== "" && mode?.value !== "plan";
+  const canBranch = Boolean(onBranch) && streaming && !empty && mode?.value !== "plan";
+  // While a turn runs the primary action STEERS it. Enter has to reach the same
+  // thing the button does — an Enter that silently does nothing is the defect
+  // this replaces, and the composer was in exactly that state whenever the
+  // agent was working.
+  const submit = streaming ? onSteer : onSend;
 
   return (
-    <div className="px-4 py-3 lg:px-6"
+    // @container: the action row labels itself when there is room and falls back
+    // to icons in a dragged-narrow chat column, without depending on which
+    // surface mounted it.
+    <div className="@container px-4 py-3 lg:px-6"
       onPaste={(e) => {
         if (attachments && e.clipboardData.files.length > 0) {
           e.preventDefault();
@@ -181,7 +203,7 @@ export function Composer({
         )}
 
         <InputArea ref={textareaRef} value={value} onValueChange={onValueChange}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit?.(); } }}
           placeholder={placeholder} disabled={disabled} rows={1}
           className="w-full max-h-56 resize-none overflow-y-auto !border-0 px-3.5 pt-3 pb-1 !bg-transparent !shadow-none !outline-none !ring-0 focus:!ring-0" />
 
@@ -209,20 +231,37 @@ export function Composer({
 
           {modelPicker}
 
+          {/* Three actions, one model, while the agent works: Stop abandons the
+              turn, Branch answers the draft beside it, Steer hands the draft to
+              the turn already running. They are named rather than tooltipped —
+              the moment a user needs to tell them apart is the moment they are
+              deciding, and a hover title is not available then. */}
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            {streaming && (
+              <button type="button" onClick={onStop}
+                className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2"
+                aria-label="Stop this turn"
+                title="Stop: abandon this turn. Anything you have queued comes back to the composer.">
+                <StopIcon size={14} weight="fill" />
+                <span className="hidden @[30rem]:inline p-meta">Stop</span>
+              </button>
+            )}
             {canBranch && (
               <button type="button" onClick={onBranch}
-                className="p-btn-quiet inline-flex size-8 cursor-pointer items-center justify-center"
-                aria-label="Run as a parallel branch"
-                title="Branch: run this as a parallel take without interrupting the live turn. Compare answers when both finish.">
+                className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2"
+                aria-label="Run the draft as a parallel branch"
+                title="Branch: answer this beside the live turn, then compare. Neither one interrupts the other.">
                 <GitBranchIcon size={15} />
+                <span className="hidden @[30rem]:inline p-meta">Branch</span>
               </button>
             )}
             {streaming
-              ? <button type="button" onClick={onStop}
-                  className="p-btn-quiet inline-flex size-8 cursor-pointer items-center justify-center"
-                  aria-label="Stop" title="Stop this turn">
-                  <StopIcon size={14} weight="fill" />
+              ? <button type="button" onClick={onSteer} disabled={empty || disabled || !onSteer}
+                  className="p-btn inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2.5"
+                  aria-label="Steer the running turn"
+                  title="Steer: give this to the turn already running. It lands at the agent's next step — nothing is interrupted.">
+                  <ArrowBendUpRightIcon size={15} weight="bold" />
+                  <span className="hidden @[30rem]:inline p-meta">Steer</span>
                 </button>
               : <button type="button" onClick={onSend} disabled={empty || disabled}
                   className="p-btn inline-flex size-8 cursor-pointer items-center justify-center"

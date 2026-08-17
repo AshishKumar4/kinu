@@ -27,6 +27,8 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLM, SqlExecutor } from '../types/primitives.js';
 import type { AgentConfigStore } from '../config/store.js';
 import { clampGepaEvalBudget } from '../config/store.js';
+import type { ModelCallSink } from '../events/model-call.js';
+import { normalizeUsage } from '../usage.js';
 import { effortFor } from '../strategy/effort.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { extractJsonObject, generateJson, jsonObjectOnlyInstruction } from '../prompts/structured.js';
@@ -106,6 +108,19 @@ export interface ScaffoldControl {
    * around. Backends build this over their cross-family review model.
    */
   readonly judge: JsonGenerator;
+  /**
+   * Where this plane's own model calls are reported, as `reflection` spend.
+   *
+   * Evolution is the largest non-turn producer in the system — a GEPA pass runs
+   * one candidate rollout plus one judge call per metric evaluation, times the
+   * eval budget, and none of it is a turn step. The rollout reports itself
+   * through the scaffold stream and the judge through whichever model the
+   * backend built it over; this field is for the piece that has no other seam,
+   * the reflection LM that rewrites the scaffold.
+   *
+   * Optional: a backend that wires no sink runs the plane exactly as before.
+   */
+  readonly reportModelCall?: ModelCallSink;
 }
 
 function scaffoldRunOptions(
@@ -539,8 +554,13 @@ export async function runScaffoldGepaOptimization(
 
   // 3. Reflection LM — rewrites the scaffold from the failure feedback.
   const reflectionLm = async (prompt: string): Promise<string> => {
-    const { text } = await generateText({ model, prompt, ...effortFor('scaffold_mutation') });
-    return text;
+    const result = await generateText({ model, prompt, ...effortFor('scaffold_mutation') });
+    control.reportModelCall?.({
+      source: 'reflection',
+      usage: normalizeUsage(result.totalUsage),
+      modelId: result.response.modelId,
+    });
+    return result.text;
   };
 
   // 4. Run GEPA, persisting every candidate + Pareto snapshot.
@@ -594,19 +614,32 @@ export async function runScaffoldGepaOptimization(
 
 /** Structured output over a review LanguageModel at the judge stage's
  *  reasoning effort — what the cf actor builds over its cross-family review
- *  model. */
-export function createJsonJudge(model: () => LanguageModel | Promise<LanguageModel>): JsonGenerator {
+ *  model. A bare sink rather than a `ModelCallSpend`: this factory IS one
+ *  producer, so it supplies the `judge` label itself, and `generateJson` below
+ *  is the substrate that needs telling. GEPA is the largest judge consumer in
+ *  the system, which is why this seam's silence hid a whole producer. */
+export function createJsonJudge(
+  model: () => LanguageModel | Promise<LanguageModel>,
+  reportModelCall?: ModelCallSink,
+): JsonGenerator {
   return async (opts) => generateJson({
     model: await model(),
     schema: opts.schema,
     prompt: opts.prompt,
     providerOptions: effortFor('judge').providerOptions,
+    spend: reportModelCall ? { source: 'judge', report: reportModelCall } : undefined,
   });
 }
 
 /** Structured output over core's `LLM` primitive — the same ask-for-JSON,
  *  extract, validate idiom `createStructuredJudge` uses, for a backend whose
- *  judge is an LLM rather than an ai-SDK LanguageModel. */
+ *  judge is an LLM rather than an ai-SDK LanguageModel.
+ *
+ *  No sink here, deliberately: `LLM.complete` returns text, so this side of the
+ *  seam never sees a usage report to forward. The `LLM` it is handed is the one
+ *  place that does, and it reports from its own construction
+ *  (`createCompletionLLM({ spend: { source: 'judge', report } })`). A second
+ *  channel here could only guess, or double-count. */
 export function createLlmJsonJudge(llm: LLM): JsonGenerator {
   return async (opts) =>
     v.parse(opts.schema, extractJsonObject(await llm.complete(`${opts.prompt}\n\n${jsonObjectOnlyInstruction()}`)));

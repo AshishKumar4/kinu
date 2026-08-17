@@ -88,6 +88,7 @@ export const AGENT_RPC_ACCESS = {
   getHeadRun: 'workspace.read',
   getHeadRuns: 'workspace.read',
   getMctsNodeDetail: 'workspace.read',
+  getNodeTranscript: 'workspace.read',
   getMctsSearchRuns: 'workspace.read',
   getMctsTree: 'workspace.read',
   getMemoryContent: 'workspace.read',
@@ -206,6 +207,7 @@ export const AGENT_RPC_ACCESS = {
   setSoul: 'interactive',
   setTurnFeedback: 'interactive',
   spawnSubordinate: 'interactive',
+  steerTurn: 'interactive',
 
   // ── Never remotely invokable (documented denial, same as off-table) ──
   destroyAgent: 'never',

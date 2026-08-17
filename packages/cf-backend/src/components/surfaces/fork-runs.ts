@@ -100,16 +100,18 @@ export function useLiveForkRuns(
 /**
  * Every tree the workspace has grown, on one canvas — one read per page.
  *
- * Each fork arrives WITH its own dispatch parameters and its own tree rows, so
- * the canvas cannot draw a tree for a fork the list does not have or label a
- * fork with another's parameters. It used to arrive as three parallel
- * collections re-associated here by root id, and those collections were bounded
- * separately — which is exactly how the canvas came to draw a listed fork with
- * no tree beside a tree for a fork it had not listed.
+ * Each fork arrives WITH its own dispatch parameters and BOTH halves of its own
+ * branches — the search rows of a competition, the journalled heads of a merge —
+ * so the canvas cannot draw a tree for a fork the list does not have, label a
+ * fork with another's parameters, or show a merged fork as empty because its
+ * branches were in a separately bounded read. All of that used to arrive as
+ * parallel collections re-associated here by root id, bounded separately, which
+ * is exactly how the canvas came to draw a listed fork with no tree beside a
+ * tree for a fork it had not listed.
  *
- * `liveTrees` are the socket-fed trees, keyed by search, and they WIN over the
- * polled rows for the searches they cover: a running search pushes a tree per
- * iteration, which no poll can match.
+ * `liveTrees` are the socket-fed trees, keyed by search, and they WIN over both
+ * polled projections for the searches they cover: a running search pushes a tree
+ * per iteration, which no poll can match.
  */
 export function useExplorationCanvas(
   rpc: Rpc,
@@ -118,6 +120,12 @@ export function useExplorationCanvas(
   liveTrees: ReadonlyMap<string, ForkNode>,
 ) {
   const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
+  // One read per page, both halves of every fork on it. The canvas draws EVERY
+  // fork, and a merged fork keeps its branches in the journal rather than in
+  // `search_nodes`, so the missing half used to be fetched separately — per band
+  // (N requests growing with the workspace's history), then as one bounded
+  // `getHeadRuns` beside a paginated list, which left page two's merged forks
+  // outside the window. `readExplorationCanvas` carries both.
   const load = useCallback(
     () => rpc<Page<ExplorationCanvasRun>>("getExplorationCanvas", [{ limit: FORK_RUN_LIMIT }]),
     [rpc],
@@ -161,10 +169,12 @@ export function useExplorationCanvas(
     return rows;
   }, [first, tail.fetched]);
 
+  /** Every fork's tree, whichever store recorded it. */
   const trees = useMemo(() => {
     const folded = new Map<string, ForkNode>();
     for (const entry of entries ?? []) {
       if (entry.tree.length > 0) folded.set(entry.run.id, buildTree([...entry.tree]));
+      else if (entry.head !== null) folded.set(entry.run.id, headRunToTree(entry.head));
     }
     for (const [rootId, tree] of liveTrees) folded.set(rootId, tree);
     return folded;
@@ -259,11 +269,6 @@ export function headRunToTree(run: HeadRunView): ForkNode {
       children: [],
     })),
   };
-}
-
-/** The head behind a node of a merged fork's tree, or null for its root. */
-export function findHead(run: HeadRunView, nodeId: string): HeadRunView["heads"][number] | null {
-  return run.heads.find((head) => head.id === nodeId) ?? null;
 }
 
 /* ── what the run was dispatched with ──────────────────────────── */
