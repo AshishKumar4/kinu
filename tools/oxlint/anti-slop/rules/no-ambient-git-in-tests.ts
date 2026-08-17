@@ -67,23 +67,66 @@ const GIT_SPAWNERS: ReadonlySet<string> = new Set([
  */
 export const TEST_FILE = /(^|\/)(tests?|__tests__)\/|\.(test|eval|spec)\.[cm]?[jt]sx?$/;
 
-/** The first argument's literal string, for the two shapes a spawn takes it in:
- *  `spawn("git", […])` and `spawn(["git", …])`. */
+/** The first argument's literal program name, for the three shapes a spawn takes
+ *  it in: `spawn("git", […])`, `spawn(["git", …])` and Bun's single-object
+ *  `Bun.spawnSync({ cmd: ["git", …] })`.
+ *
+ *  The object form was missing until an adversarial pass found the only live site
+ *  in the tree that this rule could not see — `packages/cli/tests/cc-corpus.test.ts`
+ *  asking `git check-ignore` whether the owner's mined sessions are ignored, with
+ *  `cwd` and nothing else. `cwd` did not protect it: with GIT_DIR pointed at
+ *  another repository the same question answers NOT-IGNORED. A matcher that knows
+ *  two of a runtime's three spellings certifies zero over the third. */
 function spawnedProgram(node: ESTree.CallExpression): string | null {
 	const [first] = node.arguments;
 	if (first === undefined) return null;
 	if (first.type === "Literal") return typeof first.value === "string" ? first.value : null;
-	if (first.type !== "ArrayExpression") return null;
-	const [head] = first.elements;
+	if (first.type === "TemplateLiteral") return first.quasis[0]?.value.cooked ?? null;
+	const list = first.type === "ObjectExpression" ? commandArray(first) : first;
+	if (list === null || list.type !== "ArrayExpression") return null;
+	const [head] = list.elements;
 	if (head === null || head === undefined || head.type !== "Literal") return null;
 	return typeof head.value === "string" ? head.value : null;
 }
 
+/** Bun's `cmd` array, which carries the program in the same first position. */
+function commandArray(options: ESTree.ObjectExpression): ESTree.Node | null {
+	for (const entry of options.properties) {
+		if (entry.type !== "Property" || entry.computed) continue;
+		const named =
+			(entry.key.type === "Identifier" && entry.key.name === "cmd") ||
+			(entry.key.type === "Literal" && entry.key.value === "cmd");
+		if (named) return entry.value;
+	}
+	return null;
+}
+
 /** `git`, however it is spelled as a program name. A path form still runs the
- *  same binary against the same environment. */
+ *  same binary against the same environment, and `exec`/`execSync` take a whole
+ *  command line rather than a program, so the program is the first token. Without
+ *  that, `execSync("git status")` — the natural spelling of the shell family, and
+ *  the same call with `shell: true` — read as a program literally named
+ *  "git status" and were certified clean. */
 function isGit(program: string): boolean {
-	const name = program.split("/").at(-1);
+	const name = program.trim().split(/\s+/u)[0]?.split("/").at(-1);
 	return name === "git" || name === "git.exe";
+}
+
+/** `Bun.$` takes no options object, so `.env()` in the chain it heads is the only
+ *  place the environment can be named — possibly behind `.nothrow()`/`.quiet()`.
+ *  Walking parents is safe here because oxlint hands plugin rules linked nodes. */
+function chainNamesEnv(tagged: ESTree.TaggedTemplateExpression): boolean {
+	let node: ESTree.Node = tagged;
+	while (node.parent?.type === "MemberExpression" && node.parent.object === node) {
+		const member: ESTree.MemberExpression = node.parent;
+		const call: ESTree.Node | null = member.parent;
+		if (call?.type !== "CallExpression" || call.callee !== member) return false;
+		if (!member.computed && member.property.type === "Identifier" && member.property.name === "env") {
+			return true;
+		}
+		node = call;
+	}
+	return false;
 }
 
 const spawnerName = (callee: ESTree.Expression): string | null => {
@@ -111,6 +154,25 @@ function passesEnv(node: ESTree.CallExpression): boolean {
 	);
 }
 
+/**
+ * KNOWN MISSED, deliberately, so the next reader inherits the boundary instead of
+ * rediscovering it. Measured by seeding each form into a linted test file and
+ * reading oxlint's diagnostics, not by reasoning about the matcher:
+ *
+ *   `const bin = 'git'; spawnSync(bin, …)`      — program is a binding, not a literal
+ *   `import { execFileSync as run }; run('git')` — spawner is a local alias
+ *   `promisify(exec)('git status')`              — spawner is a returned function
+ *   `spawnSync('sh', ['-c', 'git commit …'])`    — program is `sh`
+ *
+ * The first three need name resolution this rule does not have, and the fourth
+ * needs to read shell strings inside argument arrays — which would fire on every
+ * test that merely ASSERTS about a git command line, of which this repo has
+ * several (`unit-tool-call-grouping.test.ts` expects `describeCommand('git commit
+ * -m "fix"')`). Each is a narrower hole than the ones closed above, and none is
+ * worth a matcher that cries wolf. The gate beside this rule pins this list as a
+ * CAUGHT/MISSED table so a regression in either direction is visible.
+ */
+
 export const noAmbientGitInTestsRule = defineRule({
 	meta: {
 		type: "problem",
@@ -133,6 +195,16 @@ export const noAmbientGitInTestsRule = defineRule({
 				const program = spawnedProgram(node);
 				if (program === null || !isGit(program)) return;
 				if (passesEnv(node)) return;
+				context.report({ node, messageId: "ambientGit" });
+			},
+			// `Bun.$` is a tagged template with no options object at all, so it can
+			// only name its environment through `.env()` on the chain it heads.
+			TaggedTemplateExpression(node) {
+				if (!TEST_FILE.test(context.filename)) return;
+				if (spawnerName(node.tag) !== "$") return;
+				const program = node.quasi.quasis[0]?.value.cooked ?? null;
+				if (program === undefined || program === null || !isGit(program)) return;
+				if (chainNamesEnv(node)) return;
 				context.report({ node, messageId: "ambientGit" });
 			},
 		};

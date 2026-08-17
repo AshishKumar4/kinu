@@ -20,7 +20,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { git } from '@proteus/test-utils';
 import * as v from 'valibot';
 import {
   CI_EXEMPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims, deployGates,
@@ -390,12 +390,13 @@ describe('the hooks run the tiers they claim to', () => {
     // tiers never executed. `prepare` now installs the hooks on every `bun
     // install`, in developer checkouts and CI alike, so a wrong value here is
     // unambiguously a fault rather than an artefact of where the gate is running.
-    // `env: process.env` is deliberate and required by `no-ambient-git-in-tests`:
-    // the REAL repository's config is the subject here, so the ambient
-    // environment is the point rather than a hazard. Stating it is the whole ask.
-    const configured = execFileSync('git', ['config', '--get', 'core.hooksPath'], {
-      cwd: root, encoding: 'utf8', env: process.env,
-    }).trim();
+    // `git()` gives `-C root` AND a GIT_-free environment, which is what makes
+    // this ask about THIS checkout. `cwd` never did: with GIT_DIR pointing at an
+    // unrelated repository whose core.hooksPath is WRONG-REPO-HOOKS, the `cwd:
+    // root, env: process.env` form returned WRONG-REPO-HOOKS and the GIT_-free
+    // form returned .githooks. A hook exports GIT_DIR, so the test named after
+    // this checkout was answering about whatever the hook pointed at.
+    const configured = git(root, 'config', '--get', 'core.hooksPath').trim();
     expect(configured).toBe(HOOKS_DIR);
   });
 

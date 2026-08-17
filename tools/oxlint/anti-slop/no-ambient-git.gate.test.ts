@@ -111,37 +111,70 @@ for (const { rule } of cases) {
   );
 }
 
+/** The lint's own exclusions, read from the config so this count cannot claim a file oxlint skips. */
+const ignorePatterns: readonly string[] = config.ignorePatterns ?? [];
+
 /**
- * The live denominator. The rule keys on the `.test.ts` suffix and on a spawn helper's name, so
- * three things can each take it to zero on its own: the test files existing at all, the spawn
- * helpers being the ones it knows, and `@proteus/test-utils` still exporting the remedy the message
- * points at. A rule whose message names a helper nobody exports is advice, not a gate.
+ * The live denominator, and it must be the set the rule GOVERNS rather than the set a regex
+ * matches. Deriving it from `TEST_FILE` over `git ls-files` alone certified 646 files while the
+ * rule could reach 448 — the third appearance of this shape in this gate. Two whole populations
+ * were being counted that oxlint never sees:
+ *
+ *   168 files it cannot parse (159 `.patch`, 5 `.jsonl`, 4 `.py`), swept in by the directory arm
+ *       once it started matching everything under `tests/` — `tests/bench/patches/` is data.
+ *    30 files inside `.oxlintrc.json`'s own `ignorePatterns`, which is this plugin's directory.
+ *       Read from the config rather than hardcoded, so the two cannot drift apart. That blind
+ *       spot is where THIS FILE lives, and it holds five bare `git` spawns of its own
+ *       (`gate.test.ts` `git ls-files`, and the `git show`/`git ls-files` calls below): the rule
+ *       cannot govern its own gate, and the count must not pretend otherwise.
+ *
+ * Reported as a partition that has to add up, so a fourth category cannot appear silently.
  */
-function corpus(): { readonly testFiles: number; readonly remedyExports: readonly string[] } {
+function corpus(): {
+  readonly counted: number;
+  readonly governed: number;
+  readonly unparsable: number;
+  readonly ignoredByConfig: number;
+  readonly remedyExports: readonly string[];
+} {
   const tracked = spawnSync("git", ["ls-files"], {
     cwd: repoRoot,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
   assert.equal(tracked.status, 0, "git ls-files failed; the corpus cannot be counted");
-  // The rule's OWN pattern, imported rather than restated. A copy here would be
-  // free to drift narrower than the rule, and then this count would certify a
-  // population the rule does not govern — the same defect, one level up, and the
-  // one that already hid three sites in scripts/.
-  const testFiles = tracked.stdout.split("\n").filter((file) => TEST_FILE.test(file)).length;
+  // The rule's OWN pattern, imported rather than restated. A copy here would be free to drift
+  // narrower than the rule, and then this count would certify a population the rule does not
+  // govern — the same defect, one level up, and the one that already hid three sites in scripts/.
+  const counted = tracked.stdout.split("\n").filter((file) => TEST_FILE.test(file));
+  const parsable = counted.filter((file) => /\.[cm]?[jt]sx?$/.test(file));
+  const ignored = parsable.filter((file) =>
+    ignorePatterns.some((pattern) => file === pattern || file.startsWith(`${pattern}/`)),
+  );
 
   const helper = join(repoRoot, "packages/test-utils/src/git.ts");
   const source = readFileSync(helper, "utf8");
   const remedyExports = ["git", "gitEnv", "initRepo"].filter((name) =>
     new RegExp(`export (function|const) ${name}\\b`).test(source),
   );
-  return { testFiles, remedyExports };
+  return {
+    counted: counted.length,
+    governed: parsable.length - ignored.length,
+    unparsable: counted.length - parsable.length,
+    ignoredByConfig: ignored.length,
+    remedyExports,
+  };
 }
 
-const { testFiles, remedyExports } = corpus();
+const { counted, governed, unparsable, ignoredByConfig, remedyExports } = corpus();
 assert.ok(
-  testFiles > 0,
-  "found 0 files matching the `.test.ts` suffix this rule is scoped to; it would match nothing by construction",
+  governed > 0,
+  `${counted} files match the rule's TEST_FILE pattern but 0 of them are inside the lint: it would match nothing by construction`,
+);
+assert.equal(
+  counted,
+  governed + unparsable + ignoredByConfig,
+  "the corpus partition does not add up, so one of these populations is being counted twice or not at all",
 );
 assert.deepEqual(
   [...remedyExports].sort(),
@@ -168,6 +201,106 @@ assert.equal(
   0,
   `the tree still spawns git from ${liveHits.length} test site(s) with the ambient environment: ${JSON.stringify(liveHits.map((d) => d.filename))}`,
 );
+
+/**
+ * THE BOUNDARY, pinned in both directions, because "the rule catches git spawns" is not a testable
+ * sentence and the interesting failures are on the edges.
+ *
+ * Every row is seeded into a real file and run through the real `oxlint`, so this table is measured
+ * rather than reasoned about. That distinction is not pedantry here: the first version of this rule
+ * knew two of Bun's three spawn spellings and none of the shell family's, and an adversarial pass
+ * found the one live site in the tree it could not see — `packages/cli/tests/cc-corpus.test.ts`
+ * asking `git check-ignore` whether the owner's mined transcripts are ignored, with `cwd` and
+ * nothing else, while this gate asserted zero. `cwd` was not protecting it: with GIT_DIR pointed at
+ * another repository the same question answers NOT-IGNORED.
+ *
+ * The `caught: false` rows are the limit, on the record so the next reader inherits it. Three need
+ * name resolution the rule does not have; the fourth would have to read shell strings inside
+ * argument arrays, which fires on every test that merely ASSERTS about a git command line, and this
+ * repo has those. A rule that cried wolf there would be disabled within a week.
+ */
+const BOUNDARY: ReadonlyArray<{
+  readonly file: string;
+  readonly code: string;
+  readonly caught: boolean;
+}> = [
+  // Shapes that must fire.
+  { file: "b01.test.ts", code: "execFileSync('git', ['status'], { cwd: repo });", caught: true },
+  { file: "b02.test.ts", code: "spawnSync(['git', 'status'], { cwd: repo });", caught: true },
+  { file: "b03.test.ts", code: "execFileSync('/usr/bin/git', ['status'], { cwd: repo });", caught: true },
+  { file: "b04.test.ts", code: "execFileSync('git.exe', ['status'], { cwd: repo });", caught: true },
+  { file: "b05.test.ts", code: "childProcess.execFileSync('git', ['status'], { cwd: repo });", caught: true },
+  { file: "b06.test.ts", code: "childProcess?.execFileSync?.('git', ['status'], { cwd: repo });", caught: true },
+  { file: "b07.test.ts", code: "execFileSync('git', ['status']);", caught: true },
+  { file: "b08.test.ts", code: "Bun.spawnSync(['git', 'status'], { cwd: repo });", caught: true },
+  // The live site's shape: Bun's single-object form, which `spawnedProgram` did not read.
+  { file: "b09.test.ts", code: "Bun.spawnSync({ cmd: ['git', 'check-ignore', '-q', p], cwd: repo });", caught: true },
+  // The shell family takes a command LINE, so the program is the first token.
+  { file: "b10.test.ts", code: "execSync('git status', { cwd: repo });", caught: true },
+  { file: "b11.test.ts", code: "execSync(`git status`, { cwd: repo });", caught: true },
+  { file: "b12.test.ts", code: "spawnSync('git status', { shell: true, cwd: repo });", caught: true },
+  // `Bun.$` has no options object at all.
+  { file: "b13.test.ts", code: "await Bun.$`git commit -m seed`;", caught: true },
+  { file: "b14.test.ts", code: "await Bun.$`git status`.nothrow().quiet();", caught: true },
+  // The scope arms: a `.eval.` suffix, and a helper under `tests/` with no suffix at all.
+  { file: "b15.eval.ts", code: "execFileSync('git', ['worktree', 'add', d], { cwd: repo });", caught: true },
+  { file: "tests/build-repo.ts", code: "execFileSync('git', ['init', '-q'], { cwd: scratch });", caught: true },
+
+  // Green states: the environment is named, so the author has thought about it.
+  { file: "g01.test.ts", code: "execFileSync('git', ['status'], { cwd: repo, env: gitEnv() });", caught: false },
+  { file: "g02.test.ts", code: "Bun.spawnSync({ cmd: ['git', 'x'], cwd: repo, env: gitEnv() });", caught: false },
+  { file: "g03.test.ts", code: "await Bun.$`git status`.env(gitEnv());", caught: false },
+  { file: "g04.test.ts", code: "await Bun.$`git status`.nothrow().quiet().env(gitEnv());", caught: false },
+  { file: "g05.test.ts", code: "git(work, 'add', '-A');", caught: false },
+  { file: "g06.test.ts", code: "spawnSync('bash', ['-n', script], { cwd: repo });", caught: false },
+  { file: "g07.test.ts", code: "await Bun.$`ls -la ${dir}`;", caught: false },
+  // A test that merely ASSERTS about a git command line is not a spawn. This row is why the
+  // `sh -c` evasion below is left alone: catching it means reading argument strings, and this
+  // shape is real — packages/cf-backend/tests/unit-tool-call-grouping.test.ts is full of it.
+  { file: "g08.test.ts", code: "expect(describeCommand('git commit -m x')).toBe('Git commit');", caught: false },
+
+  // Known missed, deliberately. Each needs resolution this rule does not do.
+  { file: "m01.test.ts", code: "const bin = 'git';\nspawnSync(bin, ['status'], { cwd: repo });", caught: false },
+  { file: "m02.test.ts", code: "import { execFileSync as run } from 'node:child_process';\nrun('git', ['status'], { cwd: repo });", caught: false },
+  { file: "m03.test.ts", code: "const execp = promisify(exec);\nawait execp('git status', { cwd: repo });", caught: false },
+  { file: "m04.test.ts", code: "spawnSync('sh', ['-c', 'git commit -m seed'], { cwd: repo });", caught: false },
+];
+
+const boundaryDirectory = mkdtempSync(join(repoRoot, ".no-ambient-git-boundary-"));
+try {
+  for (const { file, code } of BOUNDARY) {
+    const absolute = join(boundaryDirectory, file);
+    mkdirSync(join(absolute, ".."), { recursive: true });
+    writeFileSync(absolute, `${code}\n`);
+  }
+  const run = spawnSync(
+    "./node_modules/.bin/oxlint",
+    ["-c", ".oxlintrc.json", "-f", "json", relative(repoRoot, boundaryDirectory)],
+    { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  assert.ok(run.stdout.length > 0, `oxlint produced no JSON for the boundary table:\n${run.stderr}`);
+  const report: LintReport = JSON.parse(run.stdout);
+  assert.equal(
+    report.number_of_files,
+    BOUNDARY.length,
+    `oxlint linted ${report.number_of_files} of ${BOUNDARY.length} boundary rows; a skipped row proves nothing about its shape`,
+  );
+  const fired = new Set(
+    report.diagnostics
+      .filter((d) => d.code === "anti-slop(no-ambient-git-in-tests)")
+      .map((d) => (d.filename ?? "").split("/").at(-1)),
+  );
+  const wrong = BOUNDARY.filter(
+    (row) => fired.has(row.file.split("/").at(-1)) !== row.caught,
+  ).map((row) => `${row.caught ? "expected CAUGHT, was silent" : "expected silent, fired"}: ${row.code}`);
+  assert.deepEqual(wrong, [], `the rule's boundary moved:\n  ${wrong.join("\n  ")}`);
+  process.stdout.write(
+    `no-ambient-git: boundary pinned — ${BOUNDARY.filter((r) => r.caught).length} shapes caught, ` +
+      `${BOUNDARY.filter((r) => !r.caught).length} silent (green states and documented limits)\n`,
+  );
+} finally {
+  rmSync(boundaryDirectory, { recursive: true, force: true });
+}
 
 const fixtures = mkdtempSync(join(repoRoot, ".no-ambient-git-gate-"));
 try {
@@ -224,7 +357,9 @@ try {
   }
 
   process.stdout.write(
-    `no-ambient-git: ${cases.length} rule proven red->green through oxlint over ${testFiles} test files, 0 raw git spawns remaining\n`,
+    `no-ambient-git: ${cases.length} rule proven red->green through oxlint over ${governed} governed test files ` +
+      `(${counted} match TEST_FILE: ${unparsable} unparsable by oxlint, ${ignoredByConfig} inside ignorePatterns), ` +
+      `0 raw git spawns remaining\n`,
   );
 } finally {
   rmSync(fixtures, { recursive: true, force: true });
