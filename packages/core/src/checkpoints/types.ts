@@ -118,8 +118,20 @@ export interface FileCheckpoints {
   /** Snapshot `dir` if not already done this turn. Resolves the checkpoint id,
    *  or null when skipped (already snapshotted, unchanged, or unavailable). */
   ensureCheckpoint(dir: string, reason?: string): Promise<string | null>;
-  /** All checkpoints for this agent across working directories, newest first. */
-  list(limit?: number): Promise<FileCheckpointEntry[]>;
+  /**
+   * Checkpoints for this agent across working directories, newest first.
+   *
+   * `turnId` FILTERS IN THE STORE, and that is the point rather than a
+   * convenience: retention is per working directory (`DEFAULT_CHECKPOINT_KEEP`)
+   * while `limit` is global across all of them, so a caller that reads a window
+   * and filters by turn itself loses any turn whose checkpoint is older than
+   * `limit` OTHER directories' checkpoints — while that checkpoint still exists
+   * and is still restorable. The web client did exactly that with a limit of 200
+   * and rendered the empty result as "This turn changed no files on your
+   * machine". Filtering before truncating makes an empty answer mean what it
+   * says: this turn has no checkpoint, not this reader could not reach it.
+   */
+  list(opts?: { limit?: number; turnId?: string }): Promise<FileCheckpointEntry[]>;
   /** What restoring to a checkpoint would change, relative to current state. */
   plan(dir: string, id: string): Promise<FileRestorePlan>;
   /** Restore `dir` exactly to the checkpoint (content, deletions, additions).

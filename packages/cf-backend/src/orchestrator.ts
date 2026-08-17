@@ -2230,12 +2230,16 @@ export class OrchestratorAgent extends ActorAgent {
    * those it is looking at.
    */
   @callable()
-  async listFileCheckpoints(limit = 50): Promise<FileCheckpointListing> {
+  async listFileCheckpoints(limit = 50, turnId?: string): Promise<FileCheckpointListing> {
     const availability = await this.checkpointStatus();
     if (!availability.available) return { availability, entries: [] };
     const { stub, caller } = await this.userHub();
+    // `turnId` reaches the DEVICE, so the store filters before it truncates. A
+    // caller that filtered a window here instead would lose any turn buried
+    // under `limit` other directories' checkpoints — retention is per directory,
+    // this limit is global. See FileCheckpoints.list.
     const result = await stub.deviceRpc(
-      caller, 'checkpointList', [this.name, Math.max(1, Math.min(500, limit))],
+      caller, 'checkpointList', [this.name, Math.max(1, Math.min(500, limit)), turnId ?? null],
     );
     return {
       availability,

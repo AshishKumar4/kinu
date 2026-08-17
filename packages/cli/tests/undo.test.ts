@@ -52,10 +52,10 @@ function realEngineClient(opts: { gitBin?: string } = {}) {
   // carries reachability with the entries, so no caller can read an empty list
   // as a statement about the turn.
   const checkpoints: FileCheckpointSurface = {
-    list: async (limit) => {
+    list: async (limit, turnId) => {
       const availability = await engine.status();
       if (!availability.available) return { availability, entries: [] };
-      return { availability, entries: await engine.list(limit) };
+      return { availability, entries: await engine.list({ limit, turnId }) };
     },
     plan: (dir, id) => engine.plan(dir, id),
     restore: (dir, id) => engine.restore(dir, id),
@@ -102,6 +102,55 @@ describe('performUndo', () => {
       expect(result.restored).toBe(true);
       expect(readFileSync(join(work, 'state.txt'), 'utf8')).toBe('before turn 0');
     } finally { cleanup(); }
+  });
+
+  /**
+   * A TURN IS RESTORED WHOLE, OR THE WINDOW IS LYING ABOUT SUCCESS.
+   *
+   * A turn takes one checkpoint per directory it touched, retention is per
+   * directory, and the browse limit is global across them — so a turn that
+   * touched three directories can arrive with only some of them inside the
+   * window. Acting on that window restored part of the turn and printed
+   * "✓ N file(s) restored", which is worse than a wrong message: the operator is
+   * told the undo succeeded while a directory stays clobbered.
+   *
+   * The engine here is real. `browseLimit` is forced to 2 so the newest-first
+   * window physically cannot hold all three of the turn's checkpoints, which is
+   * the same condition 200 reaches once enough directories are active.
+   */
+  test('a turn split across directories is restored whole, not just the part in the window', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'proteus-undo-split-'));
+    try {
+      const dirs = ['one', 'two', 'three'].map((name) => {
+        const dir = join(root, name);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'f.txt'), 'original');
+        return dir;
+      });
+      const engine = createHostCheckpoints({ agent: 'undo-split', base: join(root, 'shadow') });
+      engine.beginTurn({ turnId: 'wide-turn', sessionId: 'default' });
+      for (const dir of dirs) expect(await engine.ensureCheckpoint(dir)).toBeTruthy();
+      for (const dir of dirs) writeFileSync(join(dir, 'f.txt'), 'clobbered');
+
+      // The browse can only see 2 of the 3; a turn-keyed read sees all 3.
+      const browseLimit = 2;
+      const checkpoints: FileCheckpointSurface = {
+        list: async (limit, turnId) => ({
+          availability: await engine.status(),
+          entries: await engine.list({ limit: turnId === undefined ? browseLimit : limit, turnId }),
+        }),
+        plan: (dir, id) => engine.plan(dir, id),
+        restore: (dir, id) => engine.restore(dir, id),
+      };
+      expect(await engine.list({ limit: browseLimit })).toHaveLength(2);
+
+      const result = await performUndo({ checkpoints });
+      expect(result.restored).toBe(true);
+      // All three, not the two the window held.
+      for (const dir of dirs) {
+        expect(readFileSync(join(dir, 'f.txt'), 'utf8')).toBe('original');
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   test('"/undo 1" after a restore undoes the restore, as the success hint promises', async () => {

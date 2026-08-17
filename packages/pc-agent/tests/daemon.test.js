@@ -171,4 +171,42 @@ describe('daemon checkpoint protocol', () => {
       expect(list.map((e) => e.turnId)).toEqual(['t3', 't2']);
     } finally { cleanup(); }
   });
+
+  /**
+   * The cloud path's store answers "what did THIS turn change", so a limit
+   * cannot bury a checkpoint that exists. `listFileCheckpoints` forwards the
+   * turn id here as the third param; before it did, the DO read a global window
+   * and the web client filtered it itself, which is how a turn that had written
+   * plenty was reported as "It changed no device files."
+   */
+  test('checkpointList narrows by turn in the store, so a limit cannot bury a turn', async () => {
+    const { work, ctx, cleanup } = setup();
+    try {
+      const ws = fakeWs();
+      for (let i = 0; i < 3; i++) {
+        fs.writeFileSync(path.join(work, 'n.txt'), `v${i}`);
+        handle({
+          id: `e${i}`, method: 'exec', params: ['true'],
+          checkpoint: { agent: 'a', turnId: `t${i}`, sessionId: 's', dir: work },
+        }, ws, ctx);
+        await ws.response(`e${i}`);
+      }
+
+      // A limit of 1 keeps only the newest, so the oldest turn is outside it.
+      handle({ id: 'w', method: 'checkpointList', params: ['a', 1] }, ws, ctx);
+      const windowed = (await ws.response('w')).result;
+      expect(windowed.map((e) => e.turnId)).toEqual(['t2']);
+
+      // Keyed on that buried turn, the same limit returns it.
+      handle({ id: 'k', method: 'checkpointList', params: ['a', 1, 't0'] }, ws, ctx);
+      const keyed = (await ws.response('k')).result;
+      expect(keyed).toHaveLength(1);
+      expect(keyed[0].turnId).toBe('t0');
+
+      // A turn with no checkpoint still reads empty, so the narrowing did not
+      // make every turn look restorable.
+      handle({ id: 'n', method: 'checkpointList', params: ['a', 50, 'never-ran'] }, ws, ctx);
+      expect((await ws.response('n')).result).toEqual([]);
+    } finally { cleanup(); }
+  });
 });

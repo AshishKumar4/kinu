@@ -267,7 +267,11 @@ function createCheckpoints(opts = {}) {
       }
     },
 
-    list(agent, limit) {
+    // `turnId` filters HERE, before the limit truncates, because retention is
+    // per working directory while the limit is global across them: a caller that
+    // reads a window and filters by turn itself loses turns whose checkpoint
+    // still exists. See FileCheckpoints.list in @proteus/core.
+    list(agent, limit, turnId) {
       if (!probe()) return [];
       const agentBase = path.join(base, sanitizeAgent(agent));
       let stores;
@@ -286,6 +290,7 @@ function createCheckpoints(opts = {}) {
         const workdir = fs.readFileSync(marker, 'utf8').trim();
         for (const ref of storeRefs(gitDir, workdir)) {
           const meta = parseSubject(ref.subject);
+          if (turnId !== undefined && turnId !== null && meta.turnId !== turnId) continue;
           entries.push({ id: ref.id, dir: workdir, at: refTimestampMs(ref.ref), ...meta });
         }
       }
@@ -454,7 +459,7 @@ function handle(msg, ws, ctx) {
       rpc(ws, id, checkpoints ? checkpoints.status() : { available: false, reason: 'checkpoints are not configured' });
     } else if (method === 'checkpointList') {
       if (!checkpoints) return rpc(ws, id, []);
-      rpc(ws, id, checkpoints.list(params[0], params[1]));
+      rpc(ws, id, checkpoints.list(params[0], params[1], params[2]));
     } else if (method === 'checkpointPlan') {
       if (!checkpoints) return rpc(ws, id, null, 'checkpoints are not configured');
       rpc(ws, id, checkpoints.plan(params[0], params[1], params[2]));

@@ -171,6 +171,67 @@ describe('createHostCheckpoints', () => {
     } finally { cleanup(); }
   });
 
+  /**
+   * THE WINDOW CANNOT HIDE A CHECKPOINT THAT EXISTS.
+   *
+   * Retention is per WORKING DIRECTORY (`DEFAULT_CHECKPOINT_KEEP` = 50) while
+   * the reader's limit is global across every directory — the web client asks
+   * for 200 (WorkspacePage.tsx) and then filters by turn on the CLIENT. So once
+   * the operator has a handful of active directories, total entries pass the
+   * limit and a turn whose checkpoint is STILL RETAINED falls outside the
+   * window. The client saw an empty filter result and rendered it as a fact
+   * about the world: "This turn changed no files on your machine."
+   *
+   * Same class as the availability lie fixed above it, and the same class as the
+   * chat-history incident: a read that silently returns a short window, reported
+   * as an absence. Scaled down here (3 dirs x keep 4, read 6) because the defect
+   * is `limit < total retained`, not the literal 200.
+   */
+  test('a turn-keyed read finds a checkpoint the global window cannot reach', async () => {
+    const { root, engine, cleanup } = setup({ keep: 4 });
+    try {
+      const dirs = ['alpha', 'beta', 'gamma'].map((name) => {
+        const dir = join(root, name);
+        mkdirSync(dir, { recursive: true });
+        return dir;
+      });
+      // The turn under test is the OLDEST, in the FIRST directory, so every
+      // later checkpoint outranks it in a newest-first window.
+      const buried = 'turn-buried';
+      for (const [index, dir] of dirs.entries()) {
+        for (let i = 0; i < 4; i++) {
+          writeFileSync(join(dir, 'counter.txt'), `d${String(index)} v${String(i)}`);
+          engine.beginTurn({
+            turnId: index === 0 && i === 0 ? buried : `turn-${String(index)}-${String(i)}`,
+            sessionId: 's',
+          });
+          expect(await engine.ensureCheckpoint(dir)).toBeTruthy();
+        }
+      }
+
+      // It survived retention: per-directory pruning keeps 4 and each got 4.
+      const everything = await engine.list({ limit: 1000 });
+      expect(everything).toHaveLength(12);
+      expect(everything.filter((e) => e.turnId === buried)).toHaveLength(1);
+
+      // But the window the client uses cannot see it — this is the lie.
+      const windowed = await engine.list({ limit: 6 });
+      expect(windowed).toHaveLength(6);
+      expect(windowed.filter((e) => e.turnId === buried)).toHaveLength(0);
+
+      // A turn-keyed read finds it regardless of how many newer ones exist, and
+      // the limit cannot bury it, because the store filters before it truncates.
+      const keyed = await engine.list({ turnId: buried, limit: 6 });
+      expect(keyed).toHaveLength(1);
+      expect(keyed[0]!.turnId).toBe(buried);
+      expect(keyed[0]!.dir).toBe(dirs[0]);
+
+      // And a turn that genuinely has no checkpoint still reads empty, so the
+      // fix does not make every turn look restorable.
+      expect(await engine.list({ turnId: 'never-ran' })).toEqual([]);
+    } finally { cleanup(); }
+  });
+
   test('degrades honestly when git is not installed', async () => {
     const { work, engine, cleanup } = setup({ gitBin: '/nonexistent/definitely-not-git' });
     try {

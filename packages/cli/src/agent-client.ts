@@ -221,7 +221,11 @@ export interface DeviceConsentSurface {
  *  `list` carries reachability with the entries so a caller cannot read an empty
  *  list as a statement about the turn — see {@link FileCheckpointListing}. */
 export interface FileCheckpointSurface {
-  list(limit?: number): Promise<FileCheckpointListing>;
+  /** `turnId` narrows in the STORE, which is the only way to read one turn
+   *  completely: `limit` is global across working directories while retention is
+   *  per directory, so a window can hold part of a turn. See
+   *  FileCheckpoints.list in @proteus/core. */
+  list(limit?: number, turnId?: string): Promise<FileCheckpointListing>;
   plan(dir: string, id: string): Promise<FileRestorePlan>;
   restore(dir: string, id: string): Promise<FileRestoreResult>;
 }

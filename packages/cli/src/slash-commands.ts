@@ -360,9 +360,22 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
     return { text: lines.join('\n'), restored: false };
   }
 
+  // THE WINDOW CHOOSES; THE STORE ACTS. `list(200)` above is a browse — it ranks
+  // turns so `n` can address one. Acting on that window directly would restore
+  // PART of a turn and report it as whole: a turn snapshots one checkpoint per
+  // directory it touched, retention is per directory, and the limit is global, so
+  // a turn with dirs A, B, C can arrive with only A and B inside the window.
+  // `/undo 1` then restored two of three and printed "✓ N file(s) restored".
+  // Re-reading the chosen turn keyed by its id is the only way to hold all of it.
+  const chosen = turns[n - 1]!;
+  const chosenTurnId = chosen[0]!.turnId;
+  const group = chosenTurnId === null || chosenTurnId === undefined
+    ? chosen
+    : (await surface.list(undefined, chosenTurnId)).entries;
+
   const lines: string[] = [];
   let restored = false;
-  for (const entry of turns[n - 1]!) {
+  for (const entry of group) {
     const plan = await surface.plan(entry.dir, entry.id);
     if (plan.files.length === 0) {
       lines.push(`${entry.dir} — already matches that checkpoint, nothing to restore.`);

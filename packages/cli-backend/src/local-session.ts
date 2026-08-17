@@ -612,11 +612,16 @@ export class LocalAgentSession implements BackendHost {
    * Shadow-git file checkpoints (newest first) with the store's reachability, so
    * a caller cannot read an empty list as "this turn changed nothing" — the
    * store may simply not be configured, or git may be missing.
+   *
+   * `turnId` narrows IN THE STORE. A caller after one turn must pass it rather
+   * than filter a window itself: retention is per working directory and the
+   * limit is global, so a self-filtered window silently drops turns whose
+   * checkpoints still exist. See FileCheckpoints.list.
    */
-  async listFileCheckpoints(limit?: number): Promise<FileCheckpointListing> {
+  async listFileCheckpoints(limit?: number, turnId?: string): Promise<FileCheckpointListing> {
     const availability = await this.checkpointStatus();
     if (!availability.available || !this.rt.checkpoints) return { availability, entries: [] };
-    return { availability, entries: await this.rt.checkpoints.list(limit) };
+    return { availability, entries: await this.rt.checkpoints.list({ limit, turnId }) };
   }
 
   async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {

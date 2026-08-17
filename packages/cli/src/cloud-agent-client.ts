@@ -271,8 +271,9 @@ export class CloudAgentClient implements AgentClient {
     };
     // Checkpoints live on the user's device daemon; the DO forwards.
     this.checkpoints = {
-      list: async (limit) => v.parse(
-        FileCheckpointListingSchema, await this.callRpc('listFileCheckpoints', [limit ?? 50]),
+      list: async (limit, turnId) => v.parse(
+        FileCheckpointListingSchema,
+        await this.callRpc('listFileCheckpoints', [limit ?? 50, turnId ?? null]),
       ),
       plan: async (dir, id) => v.parse(FileRestorePlanSchema, await this.callRpc('planFileRestore', [dir, id])),
       restore: async (dir, id) => v.parse(

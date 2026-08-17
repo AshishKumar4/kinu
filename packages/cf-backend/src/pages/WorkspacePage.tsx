@@ -1334,8 +1334,14 @@ export default function WorkspacePage() {
     setRestoreNotice(null);
     setPlanning(true);
     try {
+      // Keyed on the turn IN THE STORE, not filtered here. Reading a window and
+      // filtering client-side is what produced "It changed no device files." on a
+      // turn that had written plenty: retention is per working directory while
+      // this limit is global across them, so once the operator had a few active
+      // directories a still-restorable checkpoint fell outside the newest 200 and
+      // the empty filter result was rendered as a fact about the turn.
       const { availability, entries } =
-        await state.rpc<FileCheckpointListing>('listFileCheckpoints', [200]);
+        await state.rpc<FileCheckpointListing>('listFileCheckpoints', [200, mid]);
       if (!availability.available) {
         // The store is not reachable. Saying anything about what the turn
         // changed would be a guess: this is where "It changed no device files."
@@ -1345,14 +1351,16 @@ export default function WorkspacePage() {
         );
         return;
       }
-      const matches = entries.filter((e) => e.turnId === mid);
-      if (matches.length === 0) {
+      // Now an empty answer means what it says: the store searched every
+      // directory for this turn and holds no checkpoint for it.
+      if (entries.length === 0) {
         setRestoreNotice(
           'This turn changed no files on your machine. File history covers your own device only — '
           + 'changes the agent made in its workspace or in a sandbox are not restorable here.',
         );
         return;
       }
+      const matches = entries;
       const plans: FileRestorePlan[] = [];
       for (const entry of matches) {
         plans.push(await state.rpc<FileRestorePlan>('planFileRestore', [entry.dir, entry.id]));

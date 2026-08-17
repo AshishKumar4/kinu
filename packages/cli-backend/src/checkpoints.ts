@@ -253,7 +253,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       return await snapshot(abs, turn, reason);
     },
 
-    async list(limit = 50): Promise<FileCheckpointEntry[]> {
+    async list(opts: { limit?: number; turnId?: string } = {}): Promise<FileCheckpointEntry[]> {
       if (!(await probeGit())) return [];
       const stores = await tolerateAsync(() => fs.readdir(agentBase), 'enoent') ?? [];
       const entries: FileCheckpointEntry[] = [];
@@ -264,11 +264,14 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
         const workdir = (await fs.readFile(markerPath, 'utf8')).trim();
         for (const ref of await storeRefs(gitDir, workdir)) {
           const meta = parseCheckpointSubject(ref.subject);
+          if (opts.turnId !== undefined && meta.turnId !== opts.turnId) continue;
           entries.push({ id: ref.id, dir: workdir, at: checkpointRefTimestampMs(ref.ref), ...meta });
         }
       }
       entries.sort((a, b) => b.at - a.at);
-      return entries.slice(0, Math.max(1, limit));
+      // Truncation is LAST, after any turn filter, so a limit can never hide a
+      // checkpoint that exists — see FileCheckpoints.list.
+      return entries.slice(0, Math.max(1, opts.limit ?? 50));
     },
 
     async plan(dir: string, id: string): Promise<FileRestorePlan> {
