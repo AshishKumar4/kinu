@@ -57,7 +57,7 @@ import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index.
 import { minimumPairsForSignificance, parseCorpus } from '../../packages/core/src/index.js';
 import {
   assessAdmissibility, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE, gitProvenance,
-  hardTaskCases,
+  hardTaskCases, hardTaskFor,
   liveChatModel, liveModelTarget, preRegister, reportLiveModelSpend, TASK_OUTCOME, UNCONFIGURED_LLM,
   writeRunRecord,
   type EvalArmState, type EvalObservation, type EvalRunRecord, type EvalTier,
@@ -255,15 +255,29 @@ const JUDGES = [
   'recovery_durability', 'completion_honesty', 'spill_retrieval', 'tool_outcomes',
 ].map(ledgerJudge).concat([tagExpectation]);
 
+/**
+ * Pairs the headline can actually be computed over.
+ *
+ * NOT `CORPUS.length`. `fullySolved` returns null for an observation with no
+ * `task_outcome` row and the comparator DROPS that pair by name, so a case with no
+ * verifier contributes no pair however many times it runs. Sized from the corpus
+ * as a whole, the first pilot printed "17 pairs can reach significance" when only
+ * 7 could — a 2.4x overstatement of the design's power, printed before the spend
+ * that the number was there to justify.
+ */
+const OUTCOME_BEARING = CORPUS.filter((c) => hardTaskFor(c) !== undefined).length;
+
 beforeAll(() => {
   model = liveChatModel(LLM);
-  const pre = preRegister(CORPUS.length, REPEATS);
+  const pre = preRegister(OUTCOME_BEARING, REPEATS);
   console.log('\n── behaviour eval tier ────────────────────────────────');
   console.log(`arm:     ${TIER} (${LLM.model})`);
   console.log(`         evolution ${ARM.evolution ? 'ON' : 'OFF'}, `
     + `${String(ARM.tools.length)} tools, seed ${String(SEED)}`);
   console.log(`corpus:  ${String(CORPUS.length)} tasks x ${String(REPEATS)} repeats `
     + `= ${String(CASES.length)} observations`);
+  console.log(`headline: ${String(OUTCOME_BEARING)} of those declare ground truth, so `
+    + `${String(OUTCOME_BEARING)} is the pair count — the rest are covariates only`);
   console.log(`design:  ${pre.note}`);
   console.log(`         the floor needs ${String(pre.minimumPairs)} DIFFERING pairs; `
     + `resolving 20pp at 80% power needs ${String(pre.pairsFor20pp)} tasks`);

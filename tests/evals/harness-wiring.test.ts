@@ -467,16 +467,17 @@ describe('tool-failure attribution over a real turn', () => {
  * row — and it proves it before a single paid episode, because the cost of
  * discovering this from a live run is a live run.
  *
- * The cheapest task by reference cost is used: the seam is the same for all seven,
- * and 79,998 oracle calls is the fastest way to exercise it.
+ * The cheapest task by target cost is used and is chosen at runtime: the seam is
+ * identical for all of them, and naming one here would make a corpus edit fail in
+ * a file that is about wiring.
  */
 describe('hard-task wiring — env resolves to a seeded task and a scored outcome', () => {
-  const task = HARD_TASKS.find((t) => t.id === 'hard-minmax-pair');
-  if (!task) throw new Error('hard-minmax-pair is missing from the corpus');
+  const task = HARD_TASKS.reduce((cheapest, t) =>
+    (t.problem.targetOps < cheapest.problem.targetOps ? t : cheapest));
   const evalCase = hardTaskCases().find((c) => c.id === task.id);
-  if (!evalCase) throw new Error('hard-minmax-pair produced no eval case');
+  if (!evalCase) throw new Error(`${task.id} produced no eval case`);
   const reference = task.seed.find((f) => f.path === REFERENCE_FILE);
-  if (!reference) throw new Error('hard-minmax-pair seeds no reference');
+  if (!reference) throw new Error(`${task.id} seeds no reference`);
 
   test('the reference is readable, the stub is replaceable, and the result is measured', async () => {
     // Content taken from the task, never retyped: if the seeded reference and the
@@ -495,8 +496,18 @@ describe('hard-task wiring — env resolves to a seeded task and a scored outcom
     // is that the candidate was measured at all: a broken seam reports "no usable
     // solution" with candOps 0, and this reports the reference's own cost.
     expect(outcome.rate).toBe(0);
-    expect(outcome.detail).toContain('79998 oracle calls vs reference 79998');
-    expect(outcome.detail).toContain('(1.00x)');
+    expect(outcome.detail).toMatch(/^(\d+) oracle calls vs reference \1 \(1\.00x\)/);
+
+    // The raw counts must survive as STRUCTURE, not only inside the sentence.
+    // `toScoreJson` dropped `measured` originally, so the first live pilot's
+    // numbers had to be recovered by parsing English out of `detail`. A ratio
+    // whose baseline does not survive beside it cannot be re-derived.
+    expect(outcome.measured).toMatchObject({
+      refOps: expect.any(Number),
+      candOps: expect.any(Number),
+      targetOps: task.problem.targetOps,
+      lowerBoundOps: task.problem.lowerBoundOps,
+    });
   }, 60_000);
 
   test('leaving the seeded stub in place scores 0 with the reason, not a missing row', async () => {
