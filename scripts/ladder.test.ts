@@ -20,6 +20,8 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import * as v from 'valibot';
 import {
   CI_EXEMPT, HOOKS_DIR, LADDER, TIERS, claims, deployGates, gatesFor, packageScripts,
   trackedTestFiles,
@@ -29,15 +31,24 @@ const root = resolve(import.meta.dir, '..');
 const tracked = trackedTestFiles();
 const deploy = deployGates();
 
-/** Test files that deliberately run under no `bun test` tier, with the runner
- *  that does claim them. `tools/oxlint/anti-slop/**` needs Node's raw transfer
- *  for oxlint's RuleTester and ERRORS under bun, so it runs through
- *  `bun run test:anti-slop` (node --experimental-strip-types) inside
- *  `bun run lint`, which is deploy gate 1. Excluding it from bun's discovery is
- *  honest only because this list is asserted; an unasserted exclusion is how
- *  coverage disappears. */
+/**
+ * Path PREFIXES whose test files deliberately run under no `bun test` tier, each
+ * naming the runner that does claim them.
+ *
+ * `tools/oxlint/anti-slop/` needs Node's raw transfer for oxlint's RuleTester
+ * and ERRORS under bun, so it runs through `bun run test:anti-slop`
+ * (node --experimental-strip-types) inside `bun run lint`, which is deploy
+ * gate 1. A prefix rather than a file list because `rules.test.ts` is an
+ * aggregator that IMPORTS the 19 per-rule suites — naming only the files on the
+ * command line would leave those 19 reading as unclaimed.
+ *
+ * Excluding anything from bun's discovery is honest only because this list is
+ * asserted, and asserted with a denominator: a prefix matching zero tracked
+ * files is an excuse for nothing, and would silently excuse whatever is added
+ * under it next.
+ */
 const NON_BUN_RUNNERS = {
-  'tools/oxlint/anti-slop/gate.test.ts':
+  'tools/oxlint/anti-slop/':
     'bun run test:anti-slop — oxlint RuleTester requires Node raw transfer and throws under bun',
 };
 
@@ -182,15 +193,20 @@ describe('every test file is claimed by some runner', () => {
     // whole root tests/ directory, all of which a green CI badge covered for.
     const covered = new Set(gatesFor('ci', deploy).flatMap((gate) => claims(gate.run, tracked)));
     const unclaimed = tracked
-      .filter((path) => !covered.has(path) && !Object.hasOwn(NON_BUN_RUNNERS, path))
+      .filter((path) => !covered.has(path)
+        && !Object.keys(NON_BUN_RUNNERS).some((prefix) => path.startsWith(prefix)))
       .map((path) => `${path} — no tier runs this file`);
     expect(unclaimed).toEqual([]);
   });
 
-  test('every declared non-bun runner still names a real file', () => {
-    const files = new Set(tracked);
-    const stale = Object.keys(NON_BUN_RUNNERS).filter((path) => !files.has(path));
-    expect(stale).toEqual([]);
+  test('every declared non-bun runner still claims real files', () => {
+    // A prefix that matches nothing reads as a considered decision about a
+    // runner that no longer has anything to run, and pre-excuses the next file
+    // added under it.
+    const empty = Object.keys(NON_BUN_RUNNERS)
+      .filter((prefix) => !tracked.some((path) => path.startsWith(prefix)))
+      .map((prefix) => `${prefix} — declared as non-bun but matches no tracked test file`);
+    expect(empty).toEqual([]);
   });
 
   test('bun does not discover the files it cannot run', () => {
@@ -259,9 +275,25 @@ describe('the hooks run the tiers they claim to', () => {
     expect(HOOKS_DIR.startsWith('/')).toBe(false);
     expect(readFileSync(resolve(root, 'scripts/ladder.ts'), 'utf8'))
       .toContain("'git', 'config', 'core.hooksPath', HOOKS_DIR");
-    // And something has to run it on a tree nobody has prepared.
+    // And something has to run it on a tree nobody has prepared: a fresh
+    // worktree, and a fresh CLONE — which setup-worktree.sh never sees.
     expect(readFileSync(resolve(root, 'scripts/setup-worktree.sh'), 'utf8'))
       .toContain('ladder.ts --install-hooks');
+    const pkg: unknown = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+    const scripts = v.parse(v.object({ scripts: v.record(v.string(), v.string()) }), pkg).scripts;
+    expect(scripts.prepare).toContain('ladder.ts --install-hooks');
+  });
+
+  test('core.hooksPath IS configured in this checkout', () => {
+    // The report inside `ladder --tier=…` states this; nothing failed on it, so
+    // the ladder could run all four tiers green in a checkout whose two cheapest
+    // tiers never executed. `prepare` now installs the hooks on every `bun
+    // install`, in developer checkouts and CI alike, so a wrong value here is
+    // unambiguously a fault rather than an artefact of where the gate is running.
+    const configured = execFileSync('git', ['config', '--get', 'core.hooksPath'], {
+      cwd: root, encoding: 'utf8',
+    }).trim();
+    expect(configured).toBe(HOOKS_DIR);
   });
 
   test('no hook invokes a gate directly', () => {

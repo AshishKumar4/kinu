@@ -19,6 +19,7 @@ import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import type { ToolSet } from 'ai';
 import type { SqlExecRow, SqlValue } from '@proteus/core';
+import * as v from 'valibot';
 import { mockAgentsSdk } from './agents-sdk.js';
 
 mockAgentsSdk();
@@ -26,10 +27,10 @@ mockAgentsSdk();
 const { OrchestratorAgent } = await import('../../src/orchestrator.js');
 const { SubordinateAgent } = await import('../../src/subordinate-agent.js');
 
-/** The two turn preconditions that read the workspace filesystem. This harness
- *  has none (`env.NIMBUS_SESSION` is inert), so it declares them satisfied
- *  instead of faking a filesystem: the soul via `setObservedSoul`, the scaffold
- *  via `declareScaffoldPresent`. */
+/** The scaffold precondition a turn checks, declared satisfied — the harness
+ *  workspace is empty, so nothing has written one. The soul is not declared:
+ *  `setObservedSoul` pre-fills the cache the SYNCHRONOUS prompt builders read,
+ *  while a turn refreshes that cache from the workspace filesystem below. */
 class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
@@ -90,15 +91,72 @@ function makeCtx(db: Database): AgentContext {
   return partialContext as AgentContext;
 }
 
+/**
+ * The workspace filesystem, empty — a fresh workspace, which is a state every
+ * root is genuinely in.
+ *
+ * An inert `{}` binding was not one: a turn reads the workspace for real (SOUL.md
+ * via readSoul, then AGENTS.md via collectWorkspaceAgentsMd, and both are
+ * documented to report a failed read as a failure rather than an absence), so an
+ * inert binding turns every one of those reads into a Nimbus SDK TypeError and
+ * the harness can only answer it by declaring one more precondition satisfied
+ * per read. Answering as an empty session exercises the production path instead.
+ *
+ * The whole VFS surface `nimbusSessionFiles` binds, and nothing else: there is no
+ * shell here, so a test that needs one says so by failing rather than by getting
+ * a command that reports success. `unit-nimbus-lifecycle.test.ts` replaces the
+ * binding outright where it needs to observe session lifecycle events.
+ */
+function emptyWorkspaceSession() {
+  const files = new Map<string, string>();
+  const directories = new Set(['/home', '/home/user']);
+  const stub = {
+    _rpcReady: async () => ({ ok: true as const, preinstalled: [] }),
+    _rpcExists: async (path: string) => files.has(path) || directories.has(path),
+    _rpcStat: async (path: string) => {
+      const content = files.get(path);
+      if (content !== undefined) return { type: 'file', size: content.length, mtime: 0, mode: 0o644 };
+      return directories.has(path) ? { type: 'directory', size: 0, mtime: 0, mode: 0o755 } : null;
+    },
+    _rpcReadFile: async (path: string) => files.get(path) ?? null,
+    _rpcReadFileBytes: async (path: string) => {
+      const content = files.get(path);
+      return content === undefined ? null : new TextEncoder().encode(content);
+    },
+    _rpcWriteFile: async (path: string, content: string | Uint8Array) => {
+      const bytes = v.safeParse(v.instance(Uint8Array), content);
+      files.set(path, bytes.success ? new TextDecoder().decode(bytes.output) : v.parse(v.string(), content));
+      const parts = path.split('/');
+      for (let i = 2; i < parts.length; i++) directories.add(parts.slice(0, i).join('/'));
+    },
+    _rpcReaddir: async (path: string) => {
+      const prefix = `${path.replace(/\/$/, '')}/`;
+      const entries = new Map<string, 'file' | 'directory'>();
+      for (const directory of directories) {
+        const rest = directory.startsWith(prefix) ? directory.slice(prefix.length) : '';
+        if (rest && !rest.includes('/')) entries.set(rest, 'directory');
+      }
+      for (const file of files.keys()) {
+        if (!file.startsWith(prefix)) continue;
+        const rest = file.slice(prefix.length);
+        const slash = rest.indexOf('/');
+        if (rest) entries.set(slash < 0 ? rest : rest.slice(0, slash), slash < 0 ? 'file' : 'directory');
+      }
+      return [...entries].map(([name, type]) => ({ name, type }));
+    },
+    _rpcMkdir: async (path: string) => { directories.add(path); },
+    _rpcDeleteFile: async (path: string) => { files.delete(path); directories.delete(path); },
+  };
+  return { idFromName: (name: string) => name, get: () => stub };
+}
+
 /** Env with the bindings actor construction reaches. LOADER and UserDO are
  *  present-but-inert: deps construction captures them; using them throws. */
 function makeEnv(): Env {
   const bindings = {
     PROTEUS_MAX_STEPS: '10',
     LOADER: { get: () => { throw new Error('harness LOADER: codemode is not executable under bun'); } },
-    // Runtime construction now requires the hosted-workspace binding. The
-    // handle remains lazy, so surface-composition tests do not call this stub.
-    NIMBUS_SESSION: {},
+    NIMBUS_SESSION: emptyWorkspaceSession(),
     AI_GATEWAY_URL: 'https://gateway.invalid/v1',
     AI_GATEWAY_AUTH: 'harness-token',
     UserDO: {

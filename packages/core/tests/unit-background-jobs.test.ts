@@ -9,7 +9,7 @@ import { makeSql, makeExecRaw } from './helpers.js';
 
 function newStore() {
   const db = new Database(':memory:');
-  initBackgroundJobsTable(makeExecRaw(db));
+  initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
   return new BackgroundJobStore(makeSql(db));
 }
 

@@ -13,10 +13,10 @@
 
 import {
   generateText, tool, jsonSchema,
-  type ToolSet, type LanguageModel,
+  type ToolSet, type LanguageModel, type ModelMessage,
 } from 'ai';
 import {
-  type HeadInput, type HeadReport, type HeadId, type HeadStep,
+  type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
   type Evidence, type Decision, type ArtifactRef,
   budgetExhausted,
 } from './types.js';
@@ -25,7 +25,6 @@ import { missionCallUsage, type MissionBudgetRefusal, type MissionScope } from '
 import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summary.js';
 import { HeadFileChanges } from './file-changes.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { isJsonObject, projectJsonValue, type JsonObject } from '../utils/json.js';
 
 /**
@@ -278,14 +277,61 @@ export function buildHeadSystemPrompt(
   ].join('\n');
 }
 
-/** The head's opening message — the inherited conversation + its assigned task. */
-export function buildHeadMessages(input: HeadInput): Array<{ role: 'user' | 'assistant'; content: string }> {
-  const lines: string[] = ['Here is the conversation you inherit:', ''];
-  for (const m of input.inheritedContext) {
-    lines.push(`[${m.role}${m.toolName ? `/${m.toolName}` : ''}] ${evidenceWindow(m.content, EVIDENCE_BUDGETS.inheritedMessage)}`);
+/**
+ * The head's conversation — the inherited messages, structurally, then its task.
+ *
+ * A head used to receive its whole inheritance flattened into ONE user message
+ * of `[role/toolName] text` prose lines, while a SubordinateAgent received real
+ * structured messages. That asymmetry is why a fork could not be watched the
+ * way a subordinate can: there was no per-message structure left to render, so
+ * clicking into a fork showed a wall of prose instead of a conversation. One
+ * inherited message becomes one ModelMessage here, carrying its own role.
+ *
+ * No re-windowing: `inheritedContext` arrives already capped per message at
+ * EVIDENCE_BUDGETS.inheritedMessage by orchestrator/heads-support.ts, which is
+ * the single place that policy lives.
+ */
+export function buildHeadMessages(input: HeadInput): ModelMessage[] {
+  return [
+    ...input.inheritedContext.map(inheritedAsModelMessage),
+    // Last, so the assigned task is the live instruction rather than one more
+    // turn of history the model has to rank against the rest.
+    { role: 'user', content: `Now focus on your assigned task: ${input.task}` },
+  ];
+}
+
+/**
+ * One inherited message as a ModelMessage the provider will accept standalone.
+ *
+ * 'user' and 'assistant' pass through — that is the whole point, and the SDK is
+ * fine with consecutive same-role messages, so nothing is merged.
+ *
+ * The other two roles are remapped deliberately, and both remaps keep the
+ * message's identity in its text rather than dropping it:
+ *
+ *   - 'tool' CANNOT be emitted as a role:'tool' ModelMessage. The SDK requires
+ *     a matching preceding assistant tool-call part with the same toolCallId,
+ *     and a SerializedMessage carries only a toolName and a text body — there
+ *     is no id to match, and inventing one makes every head request malformed
+ *     at the provider. It becomes a user message that names the producing tool.
+ *
+ *   - 'system' would otherwise become a second system prompt competing with
+ *     buildHeadSystemPrompt for authority over how the head behaves. Inherited
+ *     system entries are narration about the conversation (the omission
+ *     disclosure from inheritedContextOmissionNote is the one the runtime
+ *     actually produces), not instructions to the head, so they are reported to
+ *     the head as a user message instead of issued to it as policy.
+ */
+function inheritedAsModelMessage(m: SerializedMessage): ModelMessage {
+  switch (m.role) {
+    case 'user':
+    case 'assistant':
+      return { role: m.role, content: m.content };
+    case 'tool':
+      return { role: 'user', content: `[inherited tool result${m.toolName ? ` from ${m.toolName}` : ''}]\n${m.content}` };
+    case 'system':
+      return { role: 'user', content: `[inherited system note]\n${m.content}` };
   }
-  lines.push('', `Now focus on your assigned task: ${input.task}`);
-  return [{ role: 'user', content: lines.join('\n') }];
 }
 
 /**

@@ -43,6 +43,37 @@ export interface MemoryIndexDelta {
 	deletedIds: string[];
 }
 
+/**
+ * The `memory_chunks` FTS5 index tables.
+ *
+ * Standalone so a workspace's schema initializer can create them without
+ * constructing a store (core's `initWorkspaceSchema` calls this). Every
+ * composition root that builds a MemoryStore also gets them via
+ * {@link MemoryStore.ensureSchema}, which delegates here — one DDL, one
+ * source of truth.
+ */
+export function initMemoryChunkTables(sql: SqlExecutor): void {
+	void sql`
+		CREATE TABLE IF NOT EXISTS memory_chunks (
+			id         TEXT PRIMARY KEY,
+			path       TEXT    NOT NULL,
+			start_line INTEGER NOT NULL,
+			end_line   INTEGER NOT NULL,
+			hash       TEXT    NOT NULL,
+			text       TEXT    NOT NULL,
+			updated_at INTEGER NOT NULL
+		)
+	`;
+	void sql`CREATE INDEX IF NOT EXISTS idx_mc_path ON memory_chunks(path)`;
+	void sql`
+		CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts USING fts5(
+			text,
+			content='memory_chunks',
+			content_rowid='rowid'
+		)
+	`;
+}
+
 export class MemoryStore {
 	private vfs: ReadWriteVFS;
 	private sql: SqlExecutor;
@@ -70,25 +101,7 @@ export class MemoryStore {
 	}
 
 	ensureSchema(): void {
-		void this.sql`
-			CREATE TABLE IF NOT EXISTS memory_chunks (
-				id         TEXT PRIMARY KEY,
-				path       TEXT    NOT NULL,
-				start_line INTEGER NOT NULL,
-				end_line   INTEGER NOT NULL,
-				hash       TEXT    NOT NULL,
-				text       TEXT    NOT NULL,
-				updated_at INTEGER NOT NULL
-			)
-		`;
-		void this.sql`CREATE INDEX IF NOT EXISTS idx_mc_path ON memory_chunks(path)`;
-		void this.sql`
-			CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts USING fts5(
-				text,
-				content='memory_chunks',
-				content_rowid='rowid'
-			)
-		`;
+		initMemoryChunkTables(this.sql);
 	}
 
 	shouldIndex(path: string): boolean {
@@ -120,7 +133,12 @@ export class MemoryStore {
 			const start = Math.max(0, lineRange.start - 1);
 			const end = Math.min(lines.length, lineRange.end);
 			return lines.slice(start, end).join("\n");
-		} catch { return null; }
+		} catch (err) {
+			// Only a missing file is absence. Any other read failure must surface:
+			// null here is indistinguishable from a file that is legitimately empty.
+			if (!isMissingFileError(err)) throw err;
+			return null;
+		}
 	}
 
 	async readCurated(): Promise<string | null> {
@@ -237,14 +255,21 @@ export class MemoryStore {
 				.filter((name: string) => /^\d{4}-\d{2}-\d{2}\.md$/.test(name))
 				.sort((a: string, b: string) => b.localeCompare(a))
 				.map((name: string) => `${this.logsDir}/${name}`);
-		} catch {
+		} catch (err) {
+			// A logs directory that was never created is genuinely no logs. Any
+			// other readdir failure must not read as an empty history.
+			if (!isMissingFileError(err)) throw err;
 			return [];
 		}
 	}
 
 	async listFiles(prefix?: string): Promise<string[]> {
 		const dir = prefix ?? this.memoryDir;
-		try { return await this.vfs.readdir(dir); } catch { return []; }
+		try { return await this.vfs.readdir(dir); }
+		catch (err) {
+			if (!isMissingFileError(err)) throw err;
+			return [];
+		}
 	}
 }
 

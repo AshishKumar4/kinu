@@ -78,7 +78,7 @@ export const noModuleMockingRule = defineRule({
         "Replace module mocking with dependency injection through a real interface, service layer, or faithful test implementation.",
     },
   },
-  create(context) {
+  createOnce(context) {
     return {
       CallExpression(node) {
         if (node.callee.type === "Super" || node.callee.type === "V8IntrinsicExpression") return;

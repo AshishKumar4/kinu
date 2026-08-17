@@ -59,7 +59,7 @@ function delivery(over: Partial<WebhookDelivery> & { trigger_id: string }): Webh
 describe('local webhook ingress', () => {
   test('a bearer-authed delivery publishes an event the next turn drains', async () => {
     const session = localSession();
-    const webhook = session.createDurableWebhook({
+    const webhook = await session.createDurableWebhook({
       label: 'ci', auth_mode: 'bearer', secret: 'deploy-key',
     });
     // No URL is promised: this backend has nothing listening.
@@ -82,7 +82,7 @@ describe('local webhook ingress', () => {
 
   test('an hmac-signed delivery is admitted on the same signed material', async () => {
     const session = localSession();
-    const webhook = session.createDurableWebhook({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
+    const webhook = await session.createDurableWebhook({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
     const now = Date.now();
     const body_text = '{"build":"green"}';
 
@@ -98,7 +98,7 @@ describe('local webhook ingress', () => {
 
   test('a wrong bearer is refused, and refusal leaves no event behind', async () => {
     const session = localSession();
-    const webhook = session.createDurableWebhook({
+    const webhook = await session.createDurableWebhook({
       label: 'ci', auth_mode: 'bearer', secret: 'deploy-key',
     });
 
@@ -111,7 +111,7 @@ describe('local webhook ingress', () => {
 
   test('the local rate window refuses past the configured budget', async () => {
     const session = localSession();
-    const webhook = session.createDurableWebhook({
+    const webhook = await session.createDurableWebhook({
       label: 'ci', auth_mode: 'bearer', secret: 'k', rate_limit_per_min: 1,
     });
     const send = (n: number) => session.acceptWebhookDelivery(delivery({
@@ -125,7 +125,7 @@ describe('local webhook ingress', () => {
 
   test('a cancelled webhook stops accepting deliveries', async () => {
     const session = localSession();
-    const webhook = session.createDurableWebhook({
+    const webhook = await session.createDurableWebhook({
       label: 'ci', auth_mode: 'bearer', secret: 'k',
     });
 

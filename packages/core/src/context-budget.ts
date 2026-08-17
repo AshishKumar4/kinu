@@ -176,14 +176,14 @@ export class TurnContextBudget {
  * archive. The counter for "the drop-content-keep-the-path recipe is actually
  * being followed", including the `llm.query`-over-slices and fork-cites-spill
  * shapes: both reach the payload through its path.
+ *
+ * A tool call's arguments are what the model sent as JSON, so serializing them
+ * cannot fail. It is not guarded: arguments that will not serialize mean the
+ * accumulator is holding something other than a tool input, and reporting that
+ * as "cites no spill" would retire the defect as a metric of zero.
  */
 export function citesSpillAddress<Args>(args: Args): boolean {
-  let text: string | undefined;
-  try {
-    text = JSON.stringify(args);
-  } catch {
-    return false;
-  }
+  const text = JSON.stringify(args);
   if (!text) return false;
   return SPILL_DIR_VALUES.some((dir) => text.includes(`${dir}/`));
 }

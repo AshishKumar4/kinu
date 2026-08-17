@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { hostname, platform } from 'node:os';
 import { defaultOrigin, logout, pollCliAuth, startCliAuth, whoami } from '../cloud-api.js';
 import { loadConfigFile, saveConfigFile } from '../config.js';
-import { ACCENT, DIM, OK } from '../display.js';
+import { ACCENT, DIM, OK, WARN } from '../display.js';
 
 export async function authCommand(opts: { origin?: string }): Promise<void> {
   const origin = defaultOrigin(opts);
@@ -54,7 +54,14 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
   const config = loadConfigFile();
   const origin = defaultOrigin(opts);
   if (config.accessToken) {
-    try { await logout(origin, config.accessToken); } catch { /* local logout still clears */ }
+    try {
+      await logout(origin, config.accessToken);
+    } catch (error) {
+      // The local session is cleared either way, but a server session that
+      // outlived the logout is the one thing the user needs to hear about.
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
+    }
   }
   saveConfigFile({ ...config, accessToken: undefined, tokenExpiresAt: undefined, user: undefined });
   console.log(`${OK('✓')} Logged out`);

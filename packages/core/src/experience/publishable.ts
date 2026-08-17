@@ -172,13 +172,10 @@ export function listPublishable(
     .map((lesson) => lessonCandidate(src, lesson.id))
     .filter((c): c is PublishableCandidate => !isRefusal(c));
 
-  let facts: PublishableCandidate[] = [];
-  try {
-    facts = src.facts.recentTopK(limit)
-      .filter((f) => f.confidence >= EXPERIENCE_MIN_FACT_CONFIDENCE)
-      .map((f) => factCandidate(src, f.key))
-      .filter((c): c is PublishableCandidate => !isRefusal(c));
-  } catch { /* agent_facts not initialized in this runtime */ }
+  const facts = src.facts.recentTopK(limit)
+    .filter((f) => f.confidence >= EXPERIENCE_MIN_FACT_CONFIDENCE)
+    .map((f) => factCandidate(src, f.key))
+    .filter((c): c is PublishableCandidate => !isRefusal(c));
 
   return [...crafts, ...lessons, ...facts].slice(0, limit);
 }

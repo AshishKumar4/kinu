@@ -53,30 +53,30 @@ export function watchDeviceConsents(
 
   const tick = async () => {
     if (abort.signal.aborted || presenting) return;
-    let pending: PendingDeviceConsent[];
     try {
-      pending = await consents.listPending();
-    } catch {
-      return; // transient — keep polling
-    }
-    if (abort.signal.aborted) return;
+      const pending = await consents.listPending();
+      if (abort.signal.aborted) return;
 
-    // Forget ids that left the pending list — they can never reappear, and
-    // the set stays bounded across a long turn.
-    const live = new Set(pending.map((item) => item.consentId));
-    for (const id of handled) if (!live.has(id)) handled.delete(id);
+      // Forget ids that left the pending list — they can never reappear, and
+      // the set stays bounded across a long turn.
+      const live = new Set(pending.map((item) => item.consentId));
+      for (const id of handled) if (!live.has(id)) handled.delete(id);
 
-    const consent = pending.find((item) => !handled.has(item.consentId));
-    if (!consent) return;
+      const consent = pending.find((item) => !handled.has(item.consentId));
+      if (!consent) return;
 
-    presenting = true;
-    try {
+      presenting = true;
       const outcome = await opts.present(consent, abort.signal);
       handled.add(consent.consentId);
       if (outcome === 'cancelled') {
-        // The turn settled mid-question: deny best-effort so the blocked
-        // device RPC unblocks instead of waiting out its timeout.
-        void consents.resolve(consent.consentId, 'deny').catch(() => {});
+        // The turn settled mid-question: deny so the blocked device RPC unblocks instead of
+        // waiting out its timeout. Reported here rather than below because 'cancelled' means the
+        // signal aborted, and the outer guard would drop the one failure that leaves a device hung.
+        try {
+          await consents.resolve(consent.consentId, 'deny');
+        } catch (err) {
+          opts.note('error', `Could not withdraw the PC access request — the device waits out its timeout: ${err instanceof Error ? err.message : String(err)}`);
+        }
         return;
       }
       if (outcome === null) return; // instructions printed — nothing to resolve

@@ -159,10 +159,19 @@ describe("selectInjectableCraftedTools — one policy with core", () => {
     expect(err.message).toContain("not codemode.doubleIt(args)");
   });
 
-  test("a broken craft store yields an empty selection, not a throw", () => {
+  test("a broken craft store surfaces its failure rather than an empty selection", () => {
     const { sql } = createTestSql();
     const store = makeCraftStore([]);
-    store.list = () => { throw new Error("not initialized"); };
     expect(selectInjectableCraftedTools(store, sql)).toEqual([]);
+
+    // The empty selection above is what a HEALTHY store with no tools returns,
+    // so answering a broken one the same way made them indistinguishable — and
+    // the selection feeds both the sandbox preamble and the codemode type
+    // surface, so the model's own tools would just be gone with nothing saying
+    // why. `crafted_tools` is created by createCFRuntime before anything reads
+    // it (and is declared EVERYWHERE in the conformance manifest), so a store
+    // that cannot list is a fault.
+    store.list = () => { throw new Error("not initialized"); };
+    expect(() => selectInjectableCraftedTools(store, sql)).toThrow("not initialized");
   });
 });

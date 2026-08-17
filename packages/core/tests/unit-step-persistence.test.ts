@@ -29,7 +29,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { runChat, type ChatEvent } from '../src/chat.ts';
+import { runChat, INTERRUPTED_TURN, type ChatEvent } from '../src/chat.ts';
 import { createChatModel } from '../src/llm.ts';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder.ts';
 import { TurnAccumulator, type StepLike } from '../src/orchestrator/turn-accumulator.ts';
@@ -334,7 +334,7 @@ describe('the durable record and the history the caller persists are one constru
       const abort = new AbortController();
       const history: ModelMessage[] = [];
       let calls = 0;
-      try {
+      const cutTurn = async (): Promise<void> => {
         for await (const ev of runChat({
           model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }],
           tools, maxSteps: 20, signal: abort.signal,
@@ -343,7 +343,8 @@ describe('the durable record and the history the caller persists are one constru
           if (ev.type === 'tool-call') { calls += 1; if (calls === 2) abort.abort(); }
           if (ev.type === 'done') history.push(...ev.responseMessages);
         }
-      } catch { /* INTERRUPTED_TURN, asserted elsewhere */ }
+      };
+      await expect(cutTurn()).rejects.toThrow(INTERRUPTED_TURN);
 
       const transcript = recorder.transcript('run-cut-tail');
       // Step 1 completed and is durable; step 2 never completed and is not.

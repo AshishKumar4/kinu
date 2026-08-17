@@ -1,4 +1,4 @@
-import { existsSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { cloudflare } from "@cloudflare/vite-plugin";
@@ -20,10 +20,8 @@ const nimbusAssets = join(
   "public/_assets",
 );
 const staged = resolve(__dirname, "public/_assets");
-const stagedTarget = (): string | null => {
-  try { return readlinkSync(staged); } catch { return null; }
-};
-if (stagedTarget() !== nimbusAssets) {
+const stagedLink = lstatSync(staged, { throwIfNoEntry: false });
+if (!stagedLink?.isSymbolicLink() || readlinkSync(staged) !== nimbusAssets) {
   rmSync(staged, { recursive: true, force: true });
   symlinkSync(nimbusAssets, staged, "dir");
 }

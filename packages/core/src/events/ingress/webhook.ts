@@ -110,14 +110,14 @@ export interface RegisteredWebhook {
  * returned `secret_id` (only it knows where its secrets live) and publishes
  * whatever URL its transport answers on.
  */
-export function registerDurableWebhook(
+export async function registerDurableWebhook(
   registry: TriggerRegistry,
   opts: RegisterWebhookOpts,
   now: number,
-): RegisteredWebhook {
+): Promise<RegisteredWebhook> {
   const rate_limit_per_min = normalizeWebhookRateLimitPerMin(opts.rate_limit_per_min);
   const secret_id = `webhook_secret_${Math.random().toString(36).slice(2, 12)}`;
-  const trigger_id = registry.register({
+  const trigger_id = await registry.register({
     kind: 'webhook_durable',
     spec: {
       label: opts.label,

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initUserTables } from '../src/user/schema.js';
-import { sqlExec } from './helpers/user-do.js';
+import { sqlExec, taggedSql } from './helpers/user-do.js';
 
 function columns(db: Database, table: string): string[] {
   return db.prepare<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((row) => row.name);
@@ -33,7 +33,7 @@ describe('UserDO schema bootstrap', () => {
       INSERT INTO user_devices (id, token, label) VALUES ('dev-old', 'raw-secret', 'old laptop');
     `);
 
-    initUserTables(sqlExec(db));
+    initUserTables(sqlExec(db), taggedSql(db));
 
     expect(columns(db, 'user_devices')).toContain('token_hash');
     expect(columns(db, 'user_devices')).not.toContain('token');
@@ -56,7 +56,7 @@ describe('UserDO schema bootstrap', () => {
       VALUES ('raw-cli-token', 'old cli', 1);
     `);
 
-    initUserTables(sqlExec(db));
+    initUserTables(sqlExec(db), taggedSql(db));
 
     expect(columns(db, 'user_cli_tokens')).toContain('token_hash');
     expect(columns(db, 'user_cli_tokens')).not.toContain('token');
@@ -67,13 +67,13 @@ describe('UserDO schema bootstrap', () => {
 
   test('preserves current hash-token rows', () => {
     const db = new Database(':memory:');
-    initUserTables(sqlExec(db));
+    initUserTables(sqlExec(db), taggedSql(db));
     db.prepare(`
       INSERT INTO user_cli_tokens (token_hash, label, created_at, expires_at)
       VALUES (?, ?, ?, ?)
     `).run('a'.repeat(64), 'current cli', 1, 2);
 
-    initUserTables(sqlExec(db));
+    initUserTables(sqlExec(db), taggedSql(db));
 
     const tokens = db.prepare<{ n: number }, []>('SELECT COUNT(*) AS n FROM user_cli_tokens').get();
     expect(required(tokens).n).toBe(1);
@@ -82,7 +82,7 @@ describe('UserDO schema bootstrap', () => {
 
   test('the raw-token reset is one-shot: never re-drops once the migration version is recorded', () => {
     const db = new Database(':memory:');
-    initUserTables(sqlExec(db)); // records the migration ledger version
+    initUserTables(sqlExec(db), taggedSql(db)); // records the migration ledger version
 
     // Simulate a FUTURE shape change that happens to look "legacy" to the old
     // boot heuristic (a `token` column). Pre-fix, every boot re-triggered the
@@ -92,7 +92,7 @@ describe('UserDO schema bootstrap', () => {
       INSERT INTO user_devices (id, token_hash, label, token) VALUES ('dev-1', 'hash', 'laptop', 'future-shape');
     `);
 
-    initUserTables(sqlExec(db));
+    initUserTables(sqlExec(db), taggedSql(db));
 
     expect(columns(db, 'user_devices')).toContain('token');
     const devices = db.prepare<{ n: number }, []>('SELECT COUNT(*) AS n FROM user_devices').get();
@@ -102,7 +102,7 @@ describe('UserDO schema bootstrap', () => {
 
   test('records the schema version after the first boot', () => {
     const db = new Database(':memory:');
-    initUserTables(sqlExec(db));
+    initUserTables(sqlExec(db), taggedSql(db));
     const row = db.prepare<{ value: string }, []>(`SELECT value FROM user_schema_meta WHERE key = 'version'`).get();
     expect(Number(required(row).value)).toBeGreaterThanOrEqual(1);
     db.close();
@@ -111,7 +111,7 @@ describe('UserDO schema bootstrap', () => {
   test('creates hash-only CLI agent websocket ticket table', () => {
     const db = new Database(':memory:');
 
-    initUserTables(sqlExec(db));
+    initUserTables(sqlExec(db), taggedSql(db));
 
     const ticketColumns = columns(db, 'cli_agent_connect_tickets');
     expect(ticketColumns).toContain('ticket_hash');
@@ -128,7 +128,7 @@ describe('UserDO schema bootstrap', () => {
 
   test('peer-grant store: default deny, idempotent grant, revoke', () => {
     const db = new Database(':memory:');
-    initUserTables(sqlExec(db));
+    initUserTables(sqlExec(db), taggedSql(db));
 
     const has = (u: string, a: string) =>
       !!db.prepare(`SELECT 1 FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`).get(u, a);

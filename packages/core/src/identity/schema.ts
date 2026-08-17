@@ -141,19 +141,27 @@ const FORK_LINEAGE_DDL = `CREATE TABLE IF NOT EXISTS fork_lineage (
 
 /** Initialize state local to one full-loop actor without materializing a
  * workspace ownership root or independent fork lineage. */
-export function initActorTables(execRaw: RawSqlExec): void {
+export function initActorTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   for (const ddl of ACTOR_DDL) execRaw(ddl);
-  initSearchTables(execRaw);
-  initScaffoldTables(execRaw);
+  // Table creation first, reconciliation second, in the same call: both
+  // helpers CREATE their own tables before asking `pragma_table_info` which
+  // columns are missing. Dropping either call does not degrade to a no-op —
+  // `reconcileColumns` throws on an absent table — so an actor without these
+  // would fail at open, not run without search or scaffold state.
+  initSearchTables(execRaw, sql);
+  initScaffoldTables(execRaw, sql);
   initViewTables(execRaw);
 }
 
 /** Initialize all workspace tables. Idempotent — safe to call on every startup. */
-export function initAllTables(execRaw: RawSqlExec): void {
+export function initAllTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   execRaw(WORKSPACE_IDENTITY_DDL);
-  // Columns added after this table's first release; see columns.ts.
-  reconcileColumns(execRaw, 'workspace_identity', [`mission TEXT NOT NULL DEFAULT ''`]);
-  initActorTables(execRaw);
+  // `mission` was added after this table shipped. `CREATE TABLE IF NOT EXISTS` is a
+  // no-op on a workspace that predates it, while summarizeSoul writes it on every
+  // fork — so the column is reconciled here, at the table's own DDL, by asking
+  // `pragma_table_info` rather than by adding it and swallowing the failure.
+  reconcileColumns(sql, execRaw, 'workspace_identity', { mission: `TEXT NOT NULL DEFAULT ''` });
+  initActorTables(execRaw, sql);
   execRaw(FORK_LINEAGE_DDL);
 }
 
@@ -168,14 +176,27 @@ export function migrateWorkspaceStorage(sql: SqlExecutor, execRaw: RawSqlExec): 
   adoptLegacyForkLineage(sql, execRaw);
 }
 
+/**
+ * Whether a table exists in this workspace database.
+ *
+ * Exists so "the table is absent" is a VALUE a caller can branch on rather
+ * than an exception it has to catch. A `catch` around a query cannot tell a
+ * missing table from a syntax error, a locked database or a constraint
+ * violation, and conflating them is how `workspace_capability` stayed invisible
+ * for months. Portable across both backends — DO SQLite and bun:sqlite both
+ * expose `sqlite_master`.
+ */
+export function tableExists(sql: SqlExecutor, table: string): boolean {
+  return sql<{ name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}
+  `.length > 0;
+}
+
 /** Move the pre-rename `agent_identity` row (identical columns) into
  *  workspace_identity. Without it an older local workspace loses its id, name
  *  and creation date, and openWorkspace rejects it as having no identity. */
 function adoptLegacyAgentIdentity(sql: SqlExecutor): void {
-  const legacyTable = sql<{ name: string }>`
-    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_identity'
-  `;
-  if (legacyTable.length === 0) return;
+  if (!tableExists(sql, 'agent_identity')) return;
 
   const claimed = sql<{ c: number }>`SELECT COUNT(*) AS c FROM workspace_identity`[0]?.c ?? 0;
   // `SELECT *`: owner_user_id was added to agent_identity after its first

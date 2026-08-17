@@ -44,16 +44,11 @@ export function selectInjectableCraftedTools(
   craftStore: CraftStore,
   sql: SqlExecutor,
 ): Array<{ name: string; code: string; description: string }> {
-  let rows: Array<{ name: string; code: string; description: string }>;
-  try {
-    rows = craftStore.list().map(r => ({
-      name: r.name,
-      code: (r.code ?? '').trim(),
-      description: r.description ?? '',
-    })).filter(t => t.name && t.code && !t.code.startsWith('//'));
-  } catch {
-    return [];
-  }
+  const rows = craftStore.list().map(r => ({
+    name: r.name,
+    code: (r.code ?? '').trim(),
+    description: r.description ?? '',
+  })).filter(t => t.name && t.code && !t.code.startsWith('//'));
   return filterByEffectiveScore(sql, rows);
 }
 

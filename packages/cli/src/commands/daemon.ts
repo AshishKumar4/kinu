@@ -1,12 +1,14 @@
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { Database } from 'bun:sqlite';
 import { DEFAULT_SESSION_REFLECTION_INTERVAL } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import {
   LocalAgentSession,
   openWorkspaceCLI,
   resolveChatModel,
+  writeSecretFile,
   type SessionEvent,
 } from '@proteus/cli-backend';
 import {
@@ -83,8 +85,6 @@ export function ensureLocalDaemonRunning(): void {
 /** The new daemon's pid, or null when a live daemon already owns the pidfile. */
 function startDaemon(opts: { quiet?: boolean } = {}): number | null {
   ensureAgentHome();
-  mkdirSync(AGENT_HOME, { recursive: true });
-  chmodSync(AGENT_HOME, 0o700);
   if (readLivePid()) return null;
 
   const entry = process.argv[1];
@@ -132,21 +132,26 @@ async function stopDaemon(): Promise<number | null> {
   const pid = readLivePid(); // clears a stale pidfile on its way out
   if (pid === null) return null;
 
-  try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+  // A pid that vanished between the liveness probe and the signal is the one
+  // tolerable outcome; EPERM means it is alive and not ours, and claiming we
+  // stopped it would be a lie.
+  tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
   if (!await waitForExit(pid, STOP_GRACE_MS)) {
-    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
     if (!await waitForExit(pid, STOP_FORCE_MS)) {
       throw new Error(`Local scheduler daemon (pid ${pid}) did not exit.`);
     }
   }
-  try { unlinkSync(PID_PATH); } catch { /* already gone */ }
+  // The daemon unlinks its own pidfile on exit, so it is often already gone.
+  tolerate(() => unlinkSync(PID_PATH), 'enoent');
   return pid;
 }
 
 async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    try { process.kill(pid, 0); } catch { return true; }
+    const gone = tolerate(() => process.kill(pid, 0), 'esrch') === undefined;
+    if (gone) return true;
     if (Date.now() >= deadline) return false;
     await sleep(50);
   }
@@ -189,7 +194,7 @@ async function runDaemonLoop(): Promise<void> {
   }
 
   log('local scheduler daemon stopped');
-  try { unlinkSync(PID_PATH); } catch { /* already gone */ }
+  tolerate(() => unlinkSync(PID_PATH), 'enoent');
 }
 
 async function tickAgent(name: string, now: number): Promise<number | null> {
@@ -231,7 +236,11 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
       // Last, so any turn this tick just ran is in the window it evolves over.
       await session.runDueEvolution();
     } finally {
-      await session.end().catch(() => {});
+      try {
+        await session.end();
+      } catch (error) {
+        log(`${name}: session teardown failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     return nextTriggerAt(db);
   } finally {
@@ -273,21 +282,23 @@ function logSessionEvent(agentName: string, event: SessionEvent): void {
 }
 
 function readLivePid(): number | null {
-  try {
-    const pid = Number(readFileSync(PID_PATH, 'utf-8').trim());
-    if (!Number.isInteger(pid) || pid <= 0) return null;
-    process.kill(pid, 0);
-    return pid;
-  } catch {
-    try { unlinkSync(PID_PATH); } catch { /* already gone */ }
+  const contents = tolerate(() => readFileSync(PID_PATH, 'utf-8'), 'enoent');
+  if (contents === undefined) return null;
+  const pid = Number(contents.trim());
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  // Only ESRCH means the pidfile outlived its daemon. EPERM means the process
+  // is alive and merely not ours to signal — treating that as dead would have
+  // us delete a live daemon's pidfile and report no daemon at all.
+  if (tolerate(() => process.kill(pid, 0), 'esrch') === undefined) {
+    tolerate(() => unlinkSync(PID_PATH), 'enoent');
     return null;
   }
+  return pid;
 }
 
 function writePid(pid: number | undefined): void {
   if (!pid) return;
-  writeFileSync(PID_PATH, `${pid}\n`, { mode: 0o600 });
-  try { chmodSync(PID_PATH, 0o600); } catch { /* nop */ }
+  writeSecretFile(PID_PATH, `${pid}\n`);
 }
 
 function log(message: string): void {

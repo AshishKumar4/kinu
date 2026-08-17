@@ -74,7 +74,14 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     exiting = true;
     unsubscribe();
     // close() flushes a partial evolution window; cap it so Ctrl+C never hangs.
-    try { await Promise.race([client.close(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* best effort */ }
+    const cap = Promise.withResolvers<void>();
+    setTimeout(cap.resolve, 5000);
+    try {
+      await Promise.race([client.close(), cap.promise]);
+    } catch (err) {
+      console.log(WARN('\n  This session did not close cleanly — its last evolution window may not have flushed.'));
+      console.log(formatFailure(err));
+    }
     console.log(DIM('\n  Goodbye.\n'));
     rl.close();
     process.exit(0);
@@ -209,7 +216,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   };
 
   const handleFork = async (ref: string | undefined) => {
-    const history = await client.history().catch(() => []);
+    const history = await client.history();
     const candidates = forkCandidates(history);
     if (candidates.length === 0) {
       console.log(WARN('  No user messages to walk back to.'));
@@ -236,8 +243,10 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       client = result.client;
       unsubscribe = client.subscribe(onClientEvent);
       typing = createTypingIndicator(client.agentName);
-      await previous.close().catch(() => {});
+      // Bring the replacement up first: a failure closing the old session must not leave the loop
+      // holding a client that was never connected.
       await client.connect();
+      await previous.close();
     }
     console.log(`\n${DIM('Forked')} ${ACCENT(result.label)} ${DIM('— edit the message and press Enter to resend.')}\n`);
     pendingPrefill = picked.text;

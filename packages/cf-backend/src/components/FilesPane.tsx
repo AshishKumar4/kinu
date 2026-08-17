@@ -31,6 +31,7 @@ import { useParams } from "react-router";
 import type { Rpc } from "@/lib/protocol";
 import { joinDir, parentDir, type DirEntry } from "@proteus/core";
 import * as v from "valibot";
+import { tolerate } from "@proteus/core/obs";
 
 interface FileState { content?: string; truncated?: boolean; error?: string }
 interface ExecutorDirectoryResponse { path?: string; entries?: DirEntry[]; error?: string }
@@ -120,8 +121,14 @@ export function FilesPane({ execName, rpc }: { execName: string; rpc: Rpc }) {
           { method: "PUT", body: f },
         );
         if (!res.ok) {
-          const parsed = v.safeParse(UploadErrorSchema, await res.json().catch(() => null));
-          const detail = parsed.success ? parsed.output.error : undefined;
+          // A non-JSON error body is still the server's own reason, so it
+          // reaches the user as text instead of being replaced by a bare status.
+          const body = await res.text();
+          const parsed = v.safeParse(
+            UploadErrorSchema,
+            tolerate<unknown>(() => JSON.parse(body), 'malformed-input'),
+          );
+          const detail = parsed.success ? parsed.output.error : body.trim() || undefined;
           throw new Error(detail ?? `upload failed (${res.status})`);
         }
         setUploads((prev) => prev.filter((u) => u.name !== f.name));

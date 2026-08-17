@@ -49,6 +49,7 @@ export async function deliverCloudFork(input: {
       throw new AggregateError(
         [cause, rollback],
         `fork creation failed and cleanup also failed for "${input.name}"`,
+        { cause: rollback },
       );
     }
     throw cause;

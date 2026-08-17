@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/identity/fork.ts b/packages/core/src/identity/fork.ts
-index 89d93884..3fd742df 100644
 --- a/packages/core/src/identity/fork.ts
 +++ b/packages/core/src/identity/fork.ts
-@@ -111,7 +111,7 @@ export async function snapshotWorkspaceForFork(
-   const messages = source<ForkSnapshot['messages'][number]>`
-     SELECT id, session_id, parent_id, role, content, created_at
-     FROM messages
--    WHERE created_at <= ${forkPointMs} AND session_id = 'default'
-+    WHERE created_at < ${forkPointMs} AND session_id = 'default'
-     ORDER BY created_at ASC
-   `;
-   const conversationHistory = source<ForkSnapshot['conversationHistory'][number]>`
+@@ -107,7 +107,7 @@ export async function snapshotWorkspaceForFork(
+ export async function snapshotWorkspaceForFork(
+   source: SqlExecutor, sourceVfs: VFS, untilMessageId: string,
+ ): Promise<ForkSnapshot> {
+-  const messages = sessionTreeAncestry(source, untilMessageId);
++  const messages = sessionTreeAncestry(source, untilMessageId).slice(0, -1);
+   if (messages.length === 0) {
+     throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
+   }

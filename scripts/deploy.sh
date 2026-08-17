@@ -91,6 +91,14 @@ if [ -n "$(git -C "$PROTEUS_ROOT" status --porcelain 2>/dev/null)" ]; then
   exit 1
 fi
 echo ""
+# Preflight FIRST — before the tool checks, before `bun install`, before any
+# gate. Its whole job is to refuse to report on a poisoned environment, so it
+# has to run before anything that could be poisoned: an exhausted $TMPDIR inode
+# table surfaces later as a 5-second timeout inside an unrelated filesystem
+# test, which reads as a code regression and is not one. Running it at gate 1
+# still left `bun install` and the wrangler auth probe ahead of it. It repairs
+# nothing; `--reclaim` is explicit and separate.
+run_required_gate "Environment preflight" bun scripts/preflight.ts
 
 # ── Pre-flight: verify npx + wrangler auth ───────────────────────
 if ! command -v npx >/dev/null 2>&1; then
@@ -119,12 +127,6 @@ echo -e "${BOLD}Step 1: Required pre-deploy gates${NC}"
 # credential-free gates used by the repository workflows, plus the complete
 # package test script and both Layergate proofs. No environment variable may
 # skip one when this production deploy path is running.
-# Preflight runs BEFORE every other gate on purpose: its whole job is to refuse
-# to report on a poisoned environment. Without it, an exhausted $TMPDIR inode
-# table surfaces two minutes later as a 5-second timeout inside an unrelated
-# filesystem test, which reads as a code regression and is not one. It repairs
-# nothing; `--reclaim` is explicit and separate.
-run_required_gate "Environment preflight" bun scripts/preflight.ts
 run_required_gate "Strict lint and TypeScript" bun run check
 run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
 run_required_gate "Agent-utils, Core, and compaction suites" bun run test
@@ -137,13 +139,24 @@ run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts
 run_required_gate "Secret scanner self-test" bun test scripts/secret-scan.test.ts
 run_required_gate "Secret scan" bun scripts/secret-scan.ts
 run_required_gate "Schema drift" bun scripts/schema-drift.ts
+# Traces are a separate switch from logs and wrangler does not inherit
+# `observability` into a named environment, so this asserts every deployable
+# environment has them on — and proves the tracer is live by observing real
+# spans under workerd with and without a tail sink, so green cannot come from
+# an empty result. Credential-free, 0.3 s.
+run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
 # `gate:computed-style` is deliberately NOT here: it boots vite and Chrome over
 # 19 gallery frames (~68 s) and would fail this pipeline for environmental
 # reasons unrelated to the change under test. It is a deliberate standalone run.
+# Its DECISION LOGIC is guarded below, though — a gate kept off the path for its
+# cost still needs its own reasoning tested, or the thing that would have caught
+# `--radius` undefined at `:root` is itself unguarded.
 run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts
+run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts
 run_required_gate "Gate ladder wiring" bun test scripts/ladder.test.ts
 run_required_gate "Dead code" bun run gate:dead-code
 run_required_gate "Duplicate implementations" bun run gate:duplication
+run_required_gate "Cross-backend capability parity" bun run gate:capability-parity
 run_required_gate "Durable Object cold start" bun run gate:do-init
 run_required_gate "Unreachable RPC surface" bun run gate:reachability
 run_required_gate "Platform fact catalog" bun run gate:platform

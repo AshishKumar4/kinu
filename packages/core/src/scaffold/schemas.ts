@@ -7,10 +7,10 @@
  * through it were missing `status` and `parent_version`.
  */
 
+import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import { reconcileColumns } from '../identity/columns.js';
-import type { RawSqlExec } from '../types/primitives.js';
 
-export function initScaffoldTables(execRaw: RawSqlExec): void {
+export function initScaffoldTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   // status: 'current' | 'pending' | 'rolled_back' | 'historical'
   // Drives shadow-mode rollout in scaffold/shadow.ts. Existing rows
   // (created before this column landed) default to 'current'.
@@ -32,12 +32,17 @@ export function initScaffoldTables(execRaw: RawSqlExec): void {
       pathology      TEXT
     )
   `);
-  // Columns added after this table's first release; see identity/columns.ts.
-  reconcileColumns(execRaw, 'scaffold_versions', [
-    `status TEXT NOT NULL DEFAULT 'current'`,
-    'parent_version INTEGER',
-    'pathology TEXT',
-  ]);
+  // Workspaces whose scaffold_versions predates a column still have to gain it,
+  // and ADD COLUMN has no IF NOT EXISTS. Asked, not attempted-and-swallowed:
+  // SQLite reports `duplicate column name`, `no such table`, a locked table and
+  // a read-only database through the same throw, so the old catch reported this
+  // migration as successful in all four cases — on the table that records which
+  // version of its own loop the agent is running.
+  reconcileColumns(sql, execRaw, 'scaffold_versions', {
+    status: `TEXT NOT NULL DEFAULT 'current'`,
+    parent_version: 'INTEGER',
+    pathology: 'TEXT',
+  });
 
   execRaw(`
     CREATE TABLE IF NOT EXISTS scaffold_regression_fixtures (

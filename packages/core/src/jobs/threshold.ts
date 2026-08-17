@@ -10,6 +10,7 @@
 // result." When too many jobs are already in flight the detach is refused
 // instead: the work is cancelled and the model is told why.
 import * as v from 'valibot';
+import { tolerate } from '../obs/index.js';
 
 /** Who owns the session, which is what makes a detach cheap or expensive.
  *  Not a toggle — every session has exactly one of these, fixed at construction. */
@@ -110,11 +111,8 @@ export function isBackgroundHandle<T>(value: T): value is T & BackgroundHandle {
 export function isBackgroundOutcomeText(result: string): boolean {
   const text = result.trimStart();
   if (!text.startsWith('{')) return false;
-  try {
-    return v.safeParse(v.object({ background: v.boolean(), kind: v.string() }), JSON.parse(text)).success;
-  } catch {
-    return false;
-  }
+  const parsed: unknown = tolerate(() => JSON.parse(text), 'malformed-input');
+  return v.safeParse(v.object({ background: v.boolean(), kind: v.string() }), parsed).success;
 }
 
 /** What `onThreshold` decided: the job it minted, or why it refused. */

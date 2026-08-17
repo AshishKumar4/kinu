@@ -326,8 +326,11 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (path === undefined) return false;
         try {
           return await touch(() => box.files.exists(path));
-        } catch {
-          return false;
+        } catch (err) {
+          // The `<tool> error: …` shape every sibling here uses, and the reason
+          // `false` could not carry: a boolean answer means the path is absent,
+          // never that Nimbus could not be asked.
+          return `exists error: ${errorMessage({ error: err })}`;
         }
       },
     },

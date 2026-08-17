@@ -224,7 +224,7 @@ async function ingestLabels(target: AgentTarget, file: string | undefined, opts:
   const labeler = opts.labeler ?? process.env.USER ?? 'owner';
   const result = target.mode === 'cloud'
     ? await cloudRpc(target, 'recordOutcomeLabeling', LabelIngestResultSchema, [labeler, decodeJsonValue({ value: parsed.labels })])
-    : recordLocalOutcomeLabels(target.localName, { labeler, labels: parsed.labels });
+    : await recordLocalOutcomeLabels(target.localName, { labeler, labels: parsed.labels });
 
   if (opts.json) {
     console.log(JSON.stringify({ ...result, skipped: parsed.skipped, labeler }, null, 2));

@@ -1,5 +1,6 @@
 import { resolveCloudOrigin } from './config.js';
 import { decodeJsonValue, JsonValueSchema, type JsonValue, type ReasoningEffort } from '@proteus/core';
+import { tolerateAsync } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 export interface CliAuthStart {
@@ -366,12 +367,15 @@ async function cloudJson<T>(
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
   });
   const contentType = res.headers.get('content-type') ?? '';
+  // The body is the server's, not ours: a JSON content-type over an unparseable payload (a proxy
+  // error page) is tolerated and leaves the status line to speak. A body we cannot READ is a
+  // transport failure and propagates — it is not an empty error.
   const body: JsonValue = contentType.includes('application/json')
-    ? await res.json().then((value) => decodeJsonValue({ value })).catch(() => ({}))
-    : { error: await res.text().catch(() => '') };
+    ? (await tolerateAsync(async () => decodeJsonValue({ value: await res.json() }), 'malformed-input')) ?? {}
+    : { error: await res.text() };
   if (!res.ok) {
     const error = v.safeParse(v.object({ error: v.string() }), body);
-    const message = error.success ? error.output.error : `HTTP ${res.status}`;
+    const message = error.success && error.output.error ? error.output.error : `HTTP ${res.status}`;
     throw new Error(message);
   }
   return v.parse(schema, body);

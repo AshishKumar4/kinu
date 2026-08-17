@@ -35,7 +35,7 @@ const CONTEXT_FREE_ANSWER = "I don't have a codename on record for you.";
 
 async function setup(): Promise<AgentRuntime> {
   const { rt } = createTestRuntime();
-  initScaffoldTables(rt.storage.execRaw);
+  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initShadowTables(rt.storage.execRaw);
   rt.executor = createEvalExecutor();
   void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)

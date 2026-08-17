@@ -112,3 +112,45 @@ export function report(
   }
   return 1;
 }
+
+/**
+ * The THIRD verdict, for a gate whose evidence is unreachable — a deployed
+ * assertion needing a credential nobody has yet, a browser that is not
+ * installed. It exists because the alternative is worse than useless: a gate
+ * that prints "skipped" and exits 0 is indistinguishable from a gate that
+ * passed, and it WILL be read as a pass. That is not a hypothetical. Measured
+ * 2026-08-17 on a deployed Cloudflare worker: a `tailStream`-only trace
+ * consumer threw `Handler does not export a tail() function.` five times, once
+ * per traced invocation, while the observed worker returned HTTP 200 with
+ * `isTraced` true throughout and every trace event was dropped — the exception
+ * landing in a DIFFERENT worker's log stream. Every signal available to the
+ * person who would look was green. A GREEN SIGNAL FROM THE OBSERVED SYSTEM SAYS
+ * NOTHING ABOUT WHETHER THE OBSERVER RECEIVED ANYTHING.
+ *
+ * So: NON-ZERO BY DEFAULT. A blocked gate fails the build until someone states,
+ * in the invocation, that they know it is blocked and why — which puts the
+ * acknowledgement in the command that ran rather than in a comment nobody
+ * reads. `acknowledgedBy` is the environment variable that carries it; naming
+ * the variable in the failure output is the whole affordance.
+ */
+export function blocked(
+  gate: string,
+  reason: string,
+  acknowledgedBy: string,
+): number {
+  const acknowledgement = (process.env[acknowledgedBy] ?? '').trim();
+  if (acknowledgement.length > 0) {
+    console.log(`${gate}: BLOCKED and acknowledged — ${reason} (${acknowledgedBy}=${acknowledgement})`);
+    return 0;
+  }
+  console.error(
+    `${gate}: BLOCKED — ${reason}\n`
+    + '  This is NOT a pass. The gate could not observe the thing it asserts, so it\n'
+    + '  reports non-zero: a skip that exits 0 is read as a pass by every human and\n'
+    + '  every CI badge that sees it.\n'
+    + `  fix:       remove the blocker.\n`
+    + `  or:        acknowledge it for this run with ${acknowledgedBy}=<who/why>, which\n`
+    + '             records the acknowledgement in the invocation instead of in a comment.',
+  );
+  return 1;
+}

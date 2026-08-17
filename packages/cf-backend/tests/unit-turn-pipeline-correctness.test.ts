@@ -17,6 +17,7 @@ const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'heads', 'head-runtime.ts'), 'utf8');
 const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
 const facetSpawn = readFileSync(join(import.meta.dir, '..', 'src', 'facet-spawn.ts'), 'utf8');
+const ownedModelServices = readFileSync(join(import.meta.dir, '..', 'src', 'owned-model-services.ts'), 'utf8');
 const generateJson = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'prompts', 'structured.ts'), 'utf8');
 const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
 
@@ -61,7 +62,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(headRuntime).toContain('sharedParent: parentWorkspaceName');
     expect(headRuntime).not.toContain('sharedParent: orchestrator.name');
     // A recursive split re-uses the ROOT it was given, never its own facet name.
-    expect(exploration).toContain('sharedParent: this.getSharedParent()');
+    expect(exploration).toContain('sharedParent: this.identity.parentWorkspace()');
     // The spawn seam is what turns that into the child facet's persisted parent.
     expect(facetSpawn).toContain('await stub.setSharedParent(identity.sharedParent)');
   });
@@ -122,7 +123,18 @@ describe('turn-pipeline correctness wiring', () => {
 
   test('provider-agnostic auxiliary calls use low effort without implicit output caps', () => {
     expect(exploration).not.toContain('maxOutputTokens');
-    expect(exploration.match(/reasoningEffortOptions\('low'/g)?.length).toBe(1);
+    // Low effort is no longer DERIVED here. Both auxiliary calls (the MCTS
+    // rollout and the recursive-split merge) ask the shared owner-scoped
+    // services for it, and those services are the single place that turns an
+    // effort level into provider options — pinned globally below rather than by
+    // counting occurrences in this one file, which is strictly stronger: it
+    // catches a second derivation added ANYWHERE, not just in exploration.ts.
+    expect(exploration).not.toContain('reasoningEffortOptions');
+    // Three askers: the MCTS rollout, the pruned-branch reflection, and the
+    // recursive-split merge. All three used to funnel through one local helper
+    // that derived the options itself; now they all ask the shared services.
+    expect(exploration.match(/resolveModelWithEffort\([^)]*'low'\)/g)?.length).toBe(3);
+    expect(ownedModelServices.match(/reasoningEffortOptions\(/g)?.length).toBe(1);
     expect(headRuntime).not.toContain('maxOutputTokens');
     expect(headRuntime).toContain("reasoningEffortOptions('low', parseModelSpec(spec).provider)");
 

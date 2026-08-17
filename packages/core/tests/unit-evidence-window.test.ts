@@ -77,7 +77,7 @@ describe('the readers can see the end of a long turn', () => {
 
   test('the shadow judge is shown, and the trial row records, how the live turn ended', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initShadowTables(rt.storage.execRaw);
     void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (0, ${Date.now()}, 'initial', 'current')`;
@@ -120,7 +120,7 @@ describe('the readers can see the end of a long turn', () => {
   // number the judge was shown was wrong by four orders of magnitude.
   test('the orchestrated path windows once, so the omission count is the true one', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initShadowTables(rt.storage.execRaw);
     void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (0, ${Date.now()}, 'initial', 'current')`;
@@ -179,7 +179,7 @@ describe('the readers can see the end of a long turn', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     initTurnOutcomeTables(makeExecRaw(db), sql);
-    initReplayTables(makeExecRaw(db));
+    initReplayTables(makeExecRaw(db), sql);
     recordTurnOutcome(sql, {
       turnId: 'good', outcome: 'accepted', confidence: 1, source: 'classifier',
       userMessage: trajectory(20_000, `ASK-${ending}`),

@@ -5,6 +5,7 @@ import {
   decodeCodexAccountId,
   tokensToCredential,
 } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@proteus/cli-backend';
 import { setCloudCredential } from '../cloud-api.js';
 import { loadConfigFile, resolveCloudSession, saveConfigFile, setDefaultModel, updateConfigFile, type ProteusConfig } from '../config.js';
@@ -56,6 +57,7 @@ export async function storeProviderSecret(opts: {
     throw new Error(
       `Your Proteus account did not accept the key (${err instanceof Error ? err.message : String(err)}). `
       + 'Nothing was saved. Try again, or re-run with --local to keep the key on this machine.',
+      { cause: err },
     );
   }
   opts.clearLocally();
@@ -66,8 +68,8 @@ export async function storeProviderSecret(opts: {
 /** Whether the Proteus Worker could reach this endpoint at all: https, and not
  *  a loopback or link-local host. */
 function reachableFromTheInternet(baseURL: string): boolean {
-  let url: URL;
-  try { url = new URL(baseURL); } catch { return false; }
+  const url = tolerate(() => new URL(baseURL), 'malformed-input');
+  if (!url) return false;
   if (url.protocol !== 'https:') return false;
   return !/^(localhost|127\.|0\.0\.0\.0|\[?::1\]?|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(url.hostname);
 }

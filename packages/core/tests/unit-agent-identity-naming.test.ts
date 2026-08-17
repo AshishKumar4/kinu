@@ -216,13 +216,16 @@ describe('automatic workspace titling — applying it', () => {
     expect(persisted).toHaveLength(2);
   });
 
-  test('a generation failure is non-fatal: the deterministic title stands and the heal stays done', async () => {
+  test('the deterministic title lands before generation, so its failure cannot leave the placeholder', async () => {
     const { stored, persisted, persist } = workspace();
 
-    expect(await applyWorkspaceTitle(stored, {
+    // The failure reaches the caller — cf's maybeAutoTitleWorkspace and the
+    // CLI's autoTitleLocalWorkspace both log it. Absorbed here, a dead review
+    // model and a refused `persist` would both report "titled".
+    await expect(applyWorkspaceTitle(stored, {
       persist,
       suggest: async () => { throw new Error('no model configured'); },
-    })).toBe('Audit the OAuth callback flow');
+    })).rejects.toThrow('no model configured');
     expect(persisted).toEqual(['Audit the OAuth callback flow']);
     expect(stored).toMatchObject({ displayName: 'Audit the OAuth callback flow', nameOrigin: 'auto' });
     expect(planWorkspaceTitle(stored)).toBe(null);

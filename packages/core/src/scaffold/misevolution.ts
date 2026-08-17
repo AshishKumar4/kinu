@@ -162,19 +162,17 @@ export function checkMisevolution(source: string): MisevolutionVerdict {
 /**
  * Record a misevolution veto in the shared evolution event log (the same
  * table the EvolutionEngine emits to), so every hard veto leaves a durable,
- * queryable reason. Best-effort: the table may not exist in minimal setups.
+ * queryable reason. `evolution_events` is part of every workspace's table set
+ * (identity/schema.ts), so a failure here is a real write failure and the veto
+ * is the one thing that must not go unrecorded.
  */
 export function recordMisevolutionVeto(
   sql: SqlExecutor,
   args: { surface: MisevolutionSurface; violation: MisevolutionViolation; detail: string },
 ): void {
-  try {
-    void sql`INSERT INTO evolution_events (type, message, data, created_at)
-        VALUES ('misevolution_veto',
-                ${`Misevolution veto [${args.surface}/${args.violation.criterionId}]: ${args.violation.reason}`},
-                ${JSON.stringify({ surface: args.surface, criterionId: args.violation.criterionId, detail: args.detail.slice(0, 500) })},
-                ${Date.now()})`;
-  } catch {
-    // evolution_events not initialized — the veto still blocks acceptance.
-  }
+  void sql`INSERT INTO evolution_events (type, message, data, created_at)
+      VALUES ('misevolution_veto',
+              ${`Misevolution veto [${args.surface}/${args.violation.criterionId}]: ${args.violation.reason}`},
+              ${JSON.stringify({ surface: args.surface, criterionId: args.violation.criterionId, detail: args.detail.slice(0, 500) })},
+              ${Date.now()})`;
 }

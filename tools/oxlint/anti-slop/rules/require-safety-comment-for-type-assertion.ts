@@ -2,6 +2,8 @@ import { defineRule } from "@oxlint/plugins";
 
 import type { ESTree, SourceCode } from "@oxlint/plugins";
 
+import { lexicalTypeParameterNames } from "../shared/lexical-type-parameters.ts";
+
 type TypeAssertion = ESTree.TSAsExpression | ESTree.TSTypeAssertion;
 
 const commentOwnerKinds = new Set([
@@ -45,22 +47,8 @@ function statesConcreteEvidence(comment: string): boolean {
   );
 }
 
-function lexicalTypeParameterNames(node: ESTree.Node): ReadonlySet<string> {
-  const names = new Set<string>();
-  let current: ESTree.Node | null = node.parent;
-  while (current !== null && current.type !== "Program") {
-    if ("typeParameters" in current) {
-      for (const parameter of current.typeParameters?.params ?? []) {
-        names.add(parameter.name.name);
-      }
-    }
-    current = current.parent;
-  }
-  return names;
-}
-
 function assertsCallerSelectedType(sourceCode: SourceCode, node: TypeAssertion): boolean {
-  const typeParameters = lexicalTypeParameterNames(node);
+  const typeParameters = lexicalTypeParameterNames(node, sourceCode.visitorKeys);
   if (typeParameters.size === 0) return false;
   const identifiers = sourceCode.getText(node.typeAnnotation).match(/[A-Za-z_$][\w$]*/gu) ?? [];
   return identifiers.some((identifier) => typeParameters.has(identifier));
@@ -96,6 +84,12 @@ function isUnverifiableAssertion(sourceCode: SourceCode, node: TypeAssertion): b
   );
 }
 
+/**
+ * PROTEUS-LOCAL: upstream accepts the mere presence of a `SAFETY:` comment. A comment cannot
+ * establish a caller-selected generic, recover evidence from `any`, or validate raw JSON, so those
+ * are rejected outright, and a `SAFETY:` note must name concrete evidence rather than assert
+ * safety. See tools/oxlint/anti-slop/upstream.json.
+ */
 /** Require every non-const type assertion to state the invariant TypeScript cannot express. */
 export const requireSafetyCommentForTypeAssertionRule = defineRule({
   meta: {

@@ -107,12 +107,11 @@ export function auditPage(): PageAudit {
         if (rule instanceof CSSGroupingRule) walk(rule.cssRules);
       }
     };
-    try {
-      walk(sheet.cssRules);
-    } catch {
-      // A cross-origin stylesheet throws on cssRules. The gallery loads none,
-      // but a font CDN added later must not turn this gate into a crash.
-    }
+    // No guard around `cssRules`: the gallery's CSS arrives as same-origin
+    // inline <style> (vite in dev, and every seeded scenario in the gate's own
+    // test), so it is always readable. A sheet this could not read would have
+    // to fail the run, not shrink `checked` behind a verdict that reads clean.
+    walk(sheet.cssRules);
     return flat;
   };
 

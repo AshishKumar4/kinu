@@ -6,8 +6,9 @@
  * list of runs, and the provenance/cost fold across runs — are the same three
  * everywhere. None of them touches storage the log does not already own.
  *
- * All three are read-tolerant: a workspace can predate `run_events`, and a
- * history panel that throws instead of showing nothing is strictly worse.
+ * `run_events` is a table `initWorkspaceSchema` creates, so an unreadable log
+ * is a broken workspace, not an empty history: the error reaches the surface
+ * instead of a history panel that shows the same nothing an idle agent shows.
  */
 
 import type { RunEventQuery, RunEventRecorder } from '../events/recorder.js';
@@ -33,20 +34,17 @@ export interface RunSummary extends Pick<RunListEntry, 'runId' | 'eventCount'> {
 /** One run's durable events — what an SSE resume replays from (`since` = last
  *  seen index). */
 export function getRunEvents(events: RunEventRecorder, runId: string, opts: RunEventQuery = {}): RunEvent[] {
-  try { return events.read(runId, opts); }
-  catch { return []; }
+  return events.read(runId, opts);
 }
 
 /** Recent runs with their latest timestamp + event count, newest first. */
 export function listRuns(events: RunEventRecorder, limit = 50): RunListEntry[] {
-  try { return events.listRuns(limit); }
-  catch { return []; }
+  return events.listRuns(limit);
 }
 
 /**
  * Recent runs folded with the per-run `run_start` (what caused it) and the
- * summed `turn_end` token usage — the cross-run history + budget view. A run
- * whose events are unreadable still reports its bare summary.
+ * summed `turn_end` token usage — the cross-run history + budget view.
  */
 export function getRunSummaries(events: RunEventRecorder, limit = 30): RunSummary[] {
   return listRuns(events, limit).map((run) => {

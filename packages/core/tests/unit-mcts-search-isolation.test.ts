@@ -23,8 +23,8 @@ import type { AgentRuntime } from '../src/types/agent-runtime.js';
 import type { LLM } from '../src/types/primitives.js';
 
 function initTables(rt: AgentRuntime): void {
-  initSearchTables(rt.storage.execRaw);
-  initScaffoldTables(rt.storage.execRaw);
+  initSearchTables(rt.storage.execRaw, rt.storage.sql);
+  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initCraftScoreTables(rt.storage.execRaw);
   initMctsSearchTable(rt.storage.execRaw);
 }

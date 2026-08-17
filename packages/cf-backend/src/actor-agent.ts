@@ -79,6 +79,7 @@ import {
   nanoid,
   // Branching heads
   HeadController, HeadJournal,
+  type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
   type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type MergeResult,
   // Canonical memory-note read (the dynamic-context MEMORY.md tail)
   readMemoryTail,
@@ -129,7 +130,7 @@ import {
   // AGENTS.md (agents.md standard) — cloud workspace discovery
   collectWorkspaceAgentsMd,
   mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
-  uiMessageText,
+  uiMessageText, tableExists,
   // memory.* / tasks.* — codemode projections of the same-named native tools
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject, type JsonValue,
@@ -145,6 +146,7 @@ import {
   type PromptCacheStrategy,
 } from "@proteus/core";
 import type { CodemodeProvider, DeferredApprovalChannel } from "@proteus/core";
+import { tolerate } from "@proteus/core/obs";
 import type { UserDO } from "./user/user-do.js";
 import type { UserCaller } from "./user/workspace-capability.js";
 import { sha256Hex } from "./lib/crypto.js";
@@ -217,10 +219,10 @@ const McpToolSurfaceSchema = v.object({
 
 function parseClientRpcFrame<Message>(message: Message): ClientRpcFrame | null {
   if (!v.is(v.string(), message)) return null;
-  try {
-    const parsed = v.parse(ClientRpcFrameSchema, JSON.parse(message));
-    return { id: parsed.id, method: parsed.method };
-  } catch { return null; }
+  const json = tolerate<unknown>(() => JSON.parse(message), 'malformed-input');
+  if (json === undefined) return null;
+  const frame = v.safeParse(ClientRpcFrameSchema, json);
+  return frame.success ? { id: frame.output.id, method: frame.output.method } : null;
 }
 
 function errorMessage<Thrown>(thrown: Thrown): string {
@@ -393,8 +395,8 @@ export abstract class ActorAgent extends Think<Env> {
     // A plain read. It used to create the table it selects from and swallow
     // every failure as `null`, which is what made a missing `workspace_capability`
     // read as "this workspace holds no token" — indistinguishable from the truth,
-    // and the reason nobody noticed the table had no owner. The schema path owns
-    // it now (`ensureCapabilitySchema`), so a failure here is a real failure.
+    // and the reason nobody noticed the table had no owner. The constructor owns
+    // it now (`initCapabilitySchema`), so a failure here is a real failure.
     const rows = this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`;
     return rows[0]?.token || null;
   }
@@ -421,16 +423,24 @@ export abstract class ActorAgent extends Think<Env> {
     return { ok: true };
   }
 
-  /** Create every table this actor activation needs, before anything reads one.
-   *  Each root declares the planes it alone carries; this is the shared step
-   *  each of them calls. Flag-gated per activation by the root's `_schemaReady`.
+  /** The workspace's identity table. Created from the constructor rather than a
+   *  root's `ensureSchema()` because the constructor is the only point guaranteed
+   *  to precede every read and write of it on BOTH cf roots: the SDK does not
+   *  guarantee `onStart` runs before an RPC (see `OrchestratorAgent.claimOwner`),
+   *  and the orchestrator installs a token into a subordinate by a direct DO RPC
+   *  that enters no root's `ensureSchema`.
    *
-   *  `workspace_capability` earns its place here the hard way: it used to be
-   *  created lazily by `workspaceCapabilityToken()`, i.e. by a READ performing
-   *  DDL, and its only reliable creator turned out to be `onStart`'s scaffold
-   *  probe failing on its way into the workspace filesystem. A table that exists
-   *  because an unrelated call threw is a table with no owner. */
-  protected ensureCapabilitySchema(): void {
+   *  It earns that placement the hard way: it used to be created lazily by
+   *  `workspaceCapabilityToken()`, i.e. by a READ performing DDL, and its only
+   *  reliable creator turned out to be `onStart`'s scaffold probe failing on its
+   *  way into the workspace filesystem. A table that exists because an unrelated
+   *  call threw is a table with no owner.
+   *
+   *  Per-root by design — `cli` has no user plane, so core's
+   *  `initWorkspaceSchema` must NOT own it: `core/conformance/manifest.ts`
+   *  declares `workspace_capability` WIRED for cf-orchestrator and cf-subordinate
+   *  and absent for cli. */
+  private initCapabilitySchema(): void {
     this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_capability (
       id    INTEGER PRIMARY KEY CHECK (id = 1),
       token TEXT NOT NULL
@@ -489,6 +499,8 @@ export abstract class ActorAgent extends Think<Env> {
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
+    // Before any read or write of it can happen — see initCapabilitySchema.
+    this.initCapabilitySchema();
     // Scoped `pta_…` access tokens reach this DO over ticket-authenticated
     // websockets, and the REST scope gate never sees websocket frames — so
     // out-of-scope @callable requests are rejected here, ahead of the
@@ -772,6 +784,31 @@ export abstract class ActorAgent extends Think<Env> {
     this.budget.debit(tokens, opts);
   }
 
+  // ── The subtree's head journal, over this actor's control plane ──────
+  //
+  // A recursive split runs on a facet with its own SQLite, so a journal it
+  // wrote locally would strand its rows one DO away from the head_steps they
+  // must join against — the C2 defect that made a depth-2 head unreadable.
+  // These four are the writes HeadController performs, exposed as the same kind
+  // of cross-DO port missionGuard/missionDebit use: worker-side DO RPC reachable
+  // on a stub and nowhere else, never `@callable`, allowlisted in rpc-surface.ts.
+
+  async headJournalRecordSplit(rootId: HeadId, rationale: string, spawnedAt: number): Promise<void> {
+    this.headJournal.recordSplit(rootId, rationale, spawnedAt);
+  }
+
+  async headJournalInsertSpawn(input: HeadInput): Promise<void> {
+    this.headJournal.insertSpawn(input);
+  }
+
+  async headJournalRecordReport(report: HeadReport): Promise<void> {
+    this.headJournal.recordReport(report);
+  }
+
+  async headJournalCacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): Promise<void> {
+    this.headJournal.cacheMerge(rootId, result, strategy);
+  }
+
   /** True while a keepAlive heartbeat is holding the DO open for evolution. */
   private _evolutionSettling = false;
 
@@ -936,11 +973,8 @@ export abstract class ActorAgent extends Think<Env> {
    * default; a custom scaffold can wrap or replace it.
    */
   protected _transformInferenceResult(result: StreamableResult): StreamableResult {
-    let version = 0;
-    try {
-      version = this.sql<{ v: number }>`
-        SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions WHERE status = 'current'`[0]?.v ?? 0;
-    } catch { /* table not initialized yet → treat as un-evolved */ }
+    const version = this.sql<{ v: number }>`
+      SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions WHERE status = 'current'`[0]?.v ?? 0;
 
     return scaffoldInferenceTransform({
       currentVersion: version,
@@ -966,7 +1000,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this._host) {
       const getHeadRuntime = () => this.getCFHeadRuntime();
       this._host = {
-        broadcast: (event) => { try { this.broadcast(JSON.stringify(event)); } catch { /* nop */ } },
+        broadcast: (event) => this.broadcast(JSON.stringify(event)),
         enqueueTurn: async ({ text, metadata, idempotencyKey }) => {
           const drainTurnId = v.is(v.string(), metadata?.drainTurnId)
             ? metadata.drainTurnId
@@ -1395,10 +1429,8 @@ export abstract class ActorAgent extends Think<Env> {
     const elapsed = this._turnT0 > 0 ? Math.round(performance.now() - this._turnT0) : 0;
     const now = Date.now();
     console.log(`[proteus:${String(elapsed).padStart(6)}ms] ${event}${detail ? ` — ${detail}` : ""}`);
-    try {
-      void this.sql`INSERT INTO activity_log (event, detail, elapsed_ms, created_at)
-        VALUES (${event}, ${detail ?? null}, ${elapsed}, ${now})`;
-    } catch { /* table may not exist on very first start */ }
+    void this.sql`INSERT INTO activity_log (event, detail, elapsed_ms, created_at)
+      VALUES (${event}, ${detail ?? null}, ${elapsed}, ${now})`;
   }
 
   protected get rt(): CFRuntime {
@@ -1489,7 +1521,7 @@ export abstract class ActorAgent extends Think<Env> {
         onExecutorUsed: (name) => {
           if (this._executorsUsedThisTurn.has(name)) return;
           this._executorsUsedThisTurn.add(name);
-          try { this.config.setLastActiveExecutor(name); } catch { /* best-effort capture */ }
+          this.config.setLastActiveExecutor(name);
         },
       }));
     }
@@ -1628,17 +1660,12 @@ export abstract class ActorAgent extends Think<Env> {
 
   // ── Think lifecycle overrides ──────────────────────────────────
 
-  /** Think calls `getModel()` synchronously per turn — cache to avoid
-   *  reconstructing on every turn when the stored spec hasn't changed. */
-  private _cachedModel: LanguageModel | null = null;
-  private _cachedModelSpec: string | null = null;
+  /** Think calls `getModel()` synchronously per turn. The memo lives in
+   *  OwnedModelServices, which every actor shares, so there is one cache and one
+   *  invalidation rather than a per-class copy. */
   getModel(): LanguageModel {
     this.logActivity("getmodel");
-    const stored = this.getStoredModelId();
-    if (this._cachedModel && this._cachedModelSpec === stored) return this._cachedModel;
-    const model = this.ownedModelServices.resolveModel(stored);
-    this._cachedModel = model; this._cachedModelSpec = stored;
-    return model;
+    return this.ownedModelServices.resolveModel(this.getStoredModelId());
   }
 
   /**
@@ -1731,19 +1758,13 @@ export abstract class ActorAgent extends Think<Env> {
    * stale score-filtered view across turns even as usage shifts.
    */
   private _craftCacheKey(): string {
-    try {
-      const craft = this.sql<{ cnt: number; latest: number }>`
-        SELECT COUNT(*) as cnt, COALESCE(MAX(updated_at), 0) as latest FROM crafted_tools`;
-      const scores = (() => {
-        try {
-          return this.sql<{ lastUsed: number }>`
-            SELECT COALESCE(MAX(last_used_at), 0) as lastUsed FROM craft_scores`;
-        } catch { return [{ lastUsed: 0 }]; }
-      })();
-      const { cnt, latest } = craft[0] ?? { cnt: 0, latest: 0 };
-      const lastUsed = scores[0]?.lastUsed ?? 0;
-      return `${cnt}:${latest}:${lastUsed}`;
-    } catch { return ""; }
+    const craft = this.sql<{ cnt: number; latest: number }>`
+      SELECT COUNT(*) as cnt, COALESCE(MAX(updated_at), 0) as latest FROM crafted_tools`;
+    const scores = this.sql<{ lastUsed: number }>`
+      SELECT COALESCE(MAX(last_used_at), 0) as lastUsed FROM craft_scores`;
+    const { cnt, latest } = craft[0] ?? { cnt: 0, latest: 0 };
+    const lastUsed = scores[0]?.lastUsed ?? 0;
+    return `${cnt}:${latest}:${lastUsed}`;
   }
 
   getTools(): ToolSet {
@@ -1880,31 +1901,32 @@ export abstract class ActorAgent extends Think<Env> {
    * orchestrator level; this is a second safety net for head spawns).
    */
   protected readInheritedContext(): SerializedMessage[] {
-    try {
-      type Row = { id: string; role: string; content: string; created_at: string };
-      const rows = this.sql<Row>`
+    // The agents SDK's session provider creates assistant_messages on its first
+    // append, so an agent that has not run a turn has none. Asked directly:
+    // catching instead made "no conversation yet" indistinguishable from a read
+    // that blew up, and a head handed [] reports "I found nothing" rather than
+    // "I could not see the parent" — the defect owners actually hit.
+    if (!tableExists(this.boundSql, 'assistant_messages')) return [];
+    type Row = { id: string; role: string; content: string; created_at: string };
+    const rows = this.sql<Row>`
+      SELECT id, role, content, created_at
+      FROM (
         SELECT id, role, content, created_at
-        FROM (
-          SELECT id, role, content, created_at
-          FROM assistant_messages
-          ORDER BY created_at DESC
-          LIMIT ${INHERITED_CONTEXT_CAP}
-        ) sub
-        ORDER BY created_at ASC`;
-      const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages`[0]?.n ?? rows.length;
-      return inheritedContextFromRows(
-        rows.map((r) => ({
-          id: r.id,
-          role: r.role,
-          content: uiMessageText(r.content),
-          createdAt: Date.parse(r.created_at) || 0,
-        })),
-        total,
-      );
-    } catch {
-      // assistant_messages table may not yet exist on a fresh agent.
-      return [];
-    }
+        FROM assistant_messages
+        ORDER BY created_at DESC
+        LIMIT ${INHERITED_CONTEXT_CAP}
+      ) sub
+      ORDER BY created_at ASC`;
+    const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages`[0]?.n ?? rows.length;
+    return inheritedContextFromRows(
+      rows.map((r) => ({
+        id: r.id,
+        role: r.role,
+        content: uiMessageText(r.content),
+        createdAt: Date.parse(r.created_at) || 0,
+      })),
+      total,
+    );
   }
 
   /** Stream head_split / head_merge into the durable event log so SSE
@@ -1952,9 +1974,10 @@ export abstract class ActorAgent extends Think<Env> {
 
     // No identity, no user-level tools: advertising descriptors the actor can
     // no longer dispatch just spends context on calls that will be refused.
-    let caller: UserCaller;
-    try { caller = await this.userCaller(); }
-    catch { return {}; }
+    // Asked rather than caught: userCaller() throws only when no token has been
+    // issued, and a real failure reading one must not silently empty the surface.
+    if (!(await this.workspaceCapabilityToken())) return {};
+    const caller = await this.userCaller();
 
     let watermark: number;
     try { watermark = await userDOStub.userMcp_updatedAt(caller); }
@@ -2043,8 +2066,9 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   protected effectiveModelProviderFamily(): string {
-    try { return parseModelSpec(this.effectiveModelSpec()).provider; }
-    catch { return ''; }
+    const spec = this.effectiveModelSpec();
+    if (!spec) return '';
+    return parseModelSpec(spec).provider;
   }
 
   /** Prompt model context from the RESOLVED spec. The raw stored id is null
@@ -2576,14 +2600,12 @@ export abstract class ActorAgent extends Think<Env> {
                 ${`Fiber "${ctx.name}" recovered after interruption`},
                 ${JSON.stringify({ name: ctx.name, fiberId: ctx.id, snapshot, createdAt: ctx.createdAt })},
                 ${Date.now()})`;
-      try {
-        await this.rt.memory.append(
-          'memory/MEMORY.md',
-          `\n### Fiber recovery (${new Date().toISOString().split('T')[0]})\n` +
-          `Fiber "${ctx.name}" was interrupted (likely DO eviction) and recovered. ` +
-          `Snapshot at interruption: ${summary}\n`,
-        );
-      } catch { /* memory may not be initialized yet */ }
+      await this.rt.memory.append(
+        'memory/MEMORY.md',
+        `\n### Fiber recovery (${new Date().toISOString().split('T')[0]})\n` +
+        `Fiber "${ctx.name}" was interrupted (likely DO eviction) and recovered. ` +
+        `Snapshot at interruption: ${summary}\n`,
+      );
     } catch (err) {
       console.error('[proteus] onFiberRecovered handler failed:', err);
     }
@@ -2592,10 +2614,9 @@ export abstract class ActorAgent extends Think<Env> {
   /** Invalidate every cache that depends on the resolved model so the next
    *  getModel() / providerRegistry() call rebuilds. */
   protected invalidateModelCaches(): void {
-    this._cachedModel = null;
-    this._cachedModelSpec = null;
-    // Provider registry caches per-agent OAuth refreshers; rebuild so a
-    // disconnected provider stops being marked available.
+    // Drops the resolved model AND the provider registry, which caches
+    // per-agent OAuth refreshers — rebuilt so a disconnected provider stops
+    // being marked available.
     this.ownedModelServices.invalidate();
   }
 

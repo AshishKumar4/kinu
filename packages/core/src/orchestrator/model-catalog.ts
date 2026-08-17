@@ -22,7 +22,7 @@
 
 import { contextWindowForModel } from '../context-window.js';
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer.js';
-import { parseModelSpec, type ModelInfo, type ModelPricing } from '../providers/types.js';
+import type { ModelInfo, ModelPricing } from '../providers/types.js';
 
 export class ModelCatalogSession {
   private cached: { spec: string; info: ModelInfo | null } | null = null;
@@ -58,9 +58,9 @@ export class ModelCatalogSession {
 
   acceptedMedia(): ReadonlySet<MediaModality> {
     const info = this.info();
-    const spec = this.deps.effectiveSpec();
-    let provider: string | undefined;
-    try { provider = parseModelSpec(spec).provider; } catch { /* bare or pre-claim spec */ }
+    // Only the provider segment is read here (it selects the transport
+    // ceiling), and a bare or pre-claim spec simply has none.
+    const [provider] = this.deps.effectiveSpec().trim().split('/');
     return acceptedMediaForModel({
       provider,
       catalogInputModalities: info?.inputModalities,
@@ -71,6 +71,13 @@ export class ModelCatalogSession {
     try {
       const info = await this.deps.lookup(spec);
       if (info && this.cached?.spec === spec) this.cached.info = info;
-    } catch { /* catalog unavailable — static fallbacks stay authoritative */ }
+    } catch (error) {
+      // Nothing to propagate to: info() must never block, so this promise is
+      // deliberately floating. The static fallbacks stay authoritative, but an
+      // empty catalog is otherwise indistinguishable from a priced one that
+      // reports nothing — so the reason is stated once, with the spec.
+      console.warn(`[proteus] model catalog lookup failed for ${spec}:`,
+        error instanceof Error ? error.message : error);
+    }
   }
 }

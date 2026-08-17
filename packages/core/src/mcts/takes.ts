@@ -15,6 +15,7 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { MergeResult } from '../heads/types.js';
 import type { SearchNode } from '../types/mcts.js';
 import { recordTurnOutcome } from '../evolution/outcomes.js';
+import { reconcileColumns } from '../identity/columns.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
@@ -84,7 +85,7 @@ export interface TakePickOutcome extends TakePickRecord {
   continuationQueued: boolean;
 }
 
-export function initAlternateTakesTable(execRaw: RawSqlExec): void {
+export function initAlternateTakesTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
   execRaw(`CREATE TABLE IF NOT EXISTS alternate_takes (
     id TEXT PRIMARY KEY,
     turn_id TEXT,
@@ -98,8 +99,7 @@ export function initAlternateTakesTable(execRaw: RawSqlExec): void {
     picked_at INTEGER
   )`);
   // Tables created before Steer-as-Branch lack the source column.
-  try { execRaw(`ALTER TABLE alternate_takes ADD COLUMN source TEXT NOT NULL DEFAULT 'mcts'`); }
-  catch { /* column already exists */ }
+  reconcileColumns(sql, execRaw, 'alternate_takes', { source: `TEXT NOT NULL DEFAULT 'mcts'` });
 }
 
 /** Node ids on the path from `node` up to the root (inclusive of `node`). */
@@ -306,29 +306,20 @@ interface RawTakeRow {
 }
 
 function toTakeSet(r: RawTakeRow): AlternateTakeSet {
-  let candidates: AlternateTakeCandidate[] = [];
-  try {
-    const parsed = v.safeParse(AlternateTakeCandidatesSchema, JSON.parse(r.candidates));
-    if (parsed.success) candidates = parsed.output;
-  } catch { /* malformed row — surface an empty set rather than crash reads */ }
   return {
     id: r.id, turnId: r.turn_id, sessionId: r.session_id, task: r.task,
     source: r.source === 'branch' ? 'branch' : r.source === 'heads' ? 'heads' : 'mcts',
     winnerNodeId: r.winner_node_id, chosenNodeId: r.chosen_node_id,
-    candidates, createdAt: r.created_at, pickedAt: r.picked_at,
+    candidates: v.parse(AlternateTakeCandidatesSchema, JSON.parse(r.candidates)),
+    createdAt: r.created_at, pickedAt: r.picked_at,
   };
 }
 
-/** Recent take sets, newest first. Missing table = no takes (the table is
- *  created by the first MCTS run). */
+/** Recent take sets, newest first. */
 export function listAlternateTakeSets(sql: SqlExecutor, opts: { limit?: number } = {}): AlternateTakeSet[] {
-  try {
-    return sql<RawTakeRow>`
-      SELECT * FROM alternate_takes ORDER BY created_at DESC, id DESC LIMIT ${opts.limit ?? 50}`
-      .map(toTakeSet);
-  } catch {
-    return [];
-  }
+  return sql<RawTakeRow>`
+    SELECT * FROM alternate_takes ORDER BY created_at DESC, id DESC LIMIT ${opts.limit ?? 50}`
+    .map(toTakeSet);
 }
 
 export function latestAlternateTakeSet(sql: SqlExecutor): AlternateTakeSet | null {
@@ -372,16 +363,14 @@ export function recordTakePick(
   let userMessage = set.task;
   let assistantResponse = '';
   if (set.turnId) {
-    try {
-      const msg = sql<{ response: string; request: string | null }>`
-        SELECT m.content AS response, u.content AS request
-        FROM messages m LEFT JOIN messages u ON u.id = m.parent_id
-        WHERE m.id = ${set.turnId} LIMIT 1`[0];
-      if (msg) {
-        assistantResponse = msg.response;
-        if (msg.request) userMessage = msg.request;
-      }
-    } catch { /* messages mirror unavailable — record the verdict anyway */ }
+    const msg = sql<{ response: string; request: string | null }>`
+      SELECT m.content AS response, u.content AS request
+      FROM messages m LEFT JOIN messages u ON u.id = m.parent_id
+      WHERE m.id = ${set.turnId} LIMIT 1`[0];
+    if (msg) {
+      assistantResponse = msg.response;
+      if (msg.request) userMessage = msg.request;
+    }
   }
 
   const outcome = changedAnswer ? 'corrected' : 'accepted';
@@ -444,7 +433,5 @@ export function recordGroundedHeadsTake(sql: SqlExecutor, merge: MergeResult, ta
   const heads = merge.headScores
     .filter((s) => s.status === 'completed')
     .map((s) => ({ id: s.id, text: s.text, score: s.score }));
-  try {
-    recordHeadsTakeSet(sql, { task, heads });
-  } catch { /* no takes table yet — the first MCTS/heads run creates it */ }
+  recordHeadsTakeSet(sql, { task, heads });
 }

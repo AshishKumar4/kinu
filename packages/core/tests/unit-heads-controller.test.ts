@@ -33,7 +33,7 @@ import { makeSql, makeExecRaw } from './helpers.js';
 
 function newJournal() {
   const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db));
+  initHeadsTables(makeExecRaw(db), makeSql(db));
   const sql = makeSql(db);
   return { sql, journal: new HeadJournal(sql), db };
 }

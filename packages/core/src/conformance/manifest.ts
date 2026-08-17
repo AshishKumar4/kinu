@@ -182,6 +182,10 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     head_steps: EVERYWHERE,
     head_merge_results: EVERYWHERE,
     mcts_search_runs: EVERYWHERE,
+    // Created by initWorkspaceSchema on every root, not by "the first MCTS run",
+    // so a reader that finds no table is a fault rather than an empty result
+    // nobody can tell from no takes (workspace-schema.ts:184).
+    alternate_takes: EVERYWHERE,
 
     // ── events hub ──
     agent_log: EVERYWHERE,
@@ -267,6 +271,18 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // through acceptWebhookDelivery.
     webhook_rate_windows: {
       'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
+      cli: WIRED,
+    },
+    // The plaintext HMAC/bearer secret a registered webhook was created with.
+    // Present on a local session from boot — `local-session.ts` builds the store
+    // in its constructor — and only once a webhook is actually registered on cf,
+    // where the orchestrator memoizes it (`_webhookSecrets ??=`). The split is
+    // real rather than cosmetic: `identity/archive.ts` deliberately excludes this
+    // table from a workspace archive because it is a live ingress credential, so
+    // a restore does not resurrect one.
+    webhook_secrets: {
+      'cf-orchestrator': { absent: LAZY_ON_FIRST_USE('registerDurableWebhook') },
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
       cli: WIRED,
     },

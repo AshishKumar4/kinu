@@ -11,8 +11,9 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { AGENT_HOME, loadConfigFile, requireAuthConfig, updateConfigFile } from './config.js';
-import { listCloudDevices, registerCloudDevice, type CloudDevice } from './cloud-api.js';
+import { classify, tolerate } from '@proteus/core/obs';
+import { AGENT_HOME, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config.js';
+import { listCloudDevices, registerCloudDevice } from './cloud-api.js';
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
 const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
@@ -52,7 +53,7 @@ export type ConnectDeviceResult =
 export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {}): Promise<ConnectDeviceResult> {
   if (opts.session && persistentDaemonPid() !== null) {
     // The persistent daemon owns device.json and its credentials — leave it alone.
-    const devices = await listCloudDevices(auth.origin, auth.token).catch((): CloudDevice[] => []);
+    const devices = await listCloudDevices(auth.origin, auth.token);
     return { kind: 'already-running', connected: devices.some((device) => device.connected) };
   }
   if (!nodeAvailable()) {
@@ -138,18 +139,18 @@ let anyDeviceConnected: boolean | null = null;
 export async function shouldOfferDeviceConnect(): Promise<boolean> {
   if (offerConsumed) return false;
   if (loadConfigFile().deviceConnectPromptDismissed) return false;
-  let auth: DeviceAuth;
-  try {
-    auth = requireAuthConfig();
-  } catch {
-    return false;
-  }
+  const auth = resolveCloudSession();
+  if (!auth) return false;
   if (anyDeviceConnected === null) {
     try {
       const devices = await listCloudDevices(auth.origin, auth.token);
       anyDeviceConnected = devices.some((device) => device.connected);
-    } catch {
-      return false; // can't tell — never nag on a transient failure
+    } catch (error) {
+      // Never nag when the answer is unknown — an unreachable cloud is not evidence that no device
+      // is connected. A malformed origin is ours, not the network's: swallowing it would disable
+      // the prompt for good with nothing to show for it.
+      if (classify({ cause: error }) === 'malformed-input') throw error;
+      return false;
     }
   }
   if (anyDeviceConnected) return false;
@@ -228,10 +229,8 @@ async function waitForDeviceConnected(auth: DeviceAuth, deviceId: string, onPoll
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, CONNECT_POLL_MS));
     onPoll?.();
-    try {
-      const devices = await listCloudDevices(auth.origin, auth.token);
-      if (devices.some((device) => device.id === deviceId && device.connected)) return true;
-    } catch { /* transient — keep polling until the deadline */ }
+    const devices = await listCloudDevices(auth.origin, auth.token);
+    if (devices.some((device) => device.id === deviceId && device.connected)) return true;
   }
   return false;
 }
@@ -246,7 +245,9 @@ function persistentDaemonPid(): number | null {
 function stopPersistentDaemon(): void {
   const pid = persistentDaemonPid();
   if (pid) {
-    try { process.kill(pid, 'SIGTERM'); } catch { /* raced its exit */ }
+    // ESRCH only: the daemon raced its own exit. Anything else means it is still running and the
+    // pidfile removal below would forget a daemon nobody can stop.
+    tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
   }
   rmSync(PID_PATH, { force: true });
 }
@@ -266,8 +267,20 @@ function installSessionCleanup(): void {
   });
 }
 
+/**
+ * Whether `pid` exists. `kill(pid, 0)` reports absence as ESRCH and *presence under another user*
+ * as EPERM, so treating every failure as death reported a live daemon as gone — and a session
+ * daemon was then started alongside it while its pidfile was deleted.
+ */
 function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (classify({ cause: error }) === 'esrch') return false;
+    if (error instanceof Error && 'code' in error && error.code === 'EPERM') return true;
+    throw error;
+  }
 }
 
 function nodeAvailable(): boolean {

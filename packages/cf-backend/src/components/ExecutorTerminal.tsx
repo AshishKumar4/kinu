@@ -63,7 +63,7 @@ export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTermi
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(ref.current);
-    try { fit.fit(); } catch { /* ignore */ }
+    fit.fit();
     termRef.current = term;
     fitRef.current = fit;
     term.write(`\x1b[2m# ${executor} — type a command, Enter to run\x1b[0m\r\n`);
@@ -116,7 +116,7 @@ export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTermi
       }
     });
 
-    const onResize = () => { try { fit.fit(); } catch { /* ignore */ } };
+    const onResize = () => fit.fit();
     window.addEventListener("resize", onResize);
 
     return () => {

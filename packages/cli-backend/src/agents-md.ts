@@ -8,16 +8,15 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { AgentsMdFile } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 
 export function discoverAgentsMd(cwd: string): AgentsMdFile[] {
   const files: AgentsMdFile[] = [];
   let dir = resolve(cwd);
   for (;;) {
     const candidate = join(dir, 'AGENTS.md');
-    try {
-      const content = readFileSync(candidate, 'utf8');
-      if (content.trim()) files.push({ path: candidate, content });
-    } catch { /* absent or unreadable — keep walking */ }
+    const content = tolerate(() => readFileSync(candidate, 'utf8'), 'enoent');
+    if (content?.trim()) files.push({ path: candidate, content });
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;

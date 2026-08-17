@@ -141,8 +141,8 @@ export function crossSiteRejection(request: Request): Response | null {
 }
 
 function originOf(value: string | null): string | null {
-  if (!value) return null;
-  try { return new URL(value).origin; } catch { return null; }
+  if (!value || !URL.canParse(value)) return null;
+  return new URL(value).origin;
 }
 
 /** Public routes on the app's own host that bypass auth. (Preview hosts are

@@ -13,6 +13,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives.js';
+import { parseJsonValue } from '../utils/json.js';
 import type { ScaffoldStatus } from './shadow.js';
 
 export interface ScaffoldArchiveEntry {
@@ -116,14 +117,11 @@ export function listRejectedProposals(sql: SqlExecutor, limit = 50): RejectedPro
   const rejected: RejectedProposal[] = [];
 
   for (const entry of listScaffoldArchive(sql, limit).filter((e) => e.status === 'rolled_back')) {
-    let judgeRationales: string[] = [];
-    try {
-      judgeRationales = sql<{ judge_rationale: string | null }>`
-        SELECT judge_rationale FROM scaffold_evaluations
-        WHERE pending_version = ${entry.version} AND winner = 'current'
-        ORDER BY evaluated_at DESC LIMIT 3`
-        .flatMap((r) => (r.judge_rationale ? [r.judge_rationale] : []));
-    } catch { /* no evaluations table — the rollback itself still stands */ }
+    const judgeRationales = sql<{ judge_rationale: string | null }>`
+      SELECT judge_rationale FROM scaffold_evaluations
+      WHERE pending_version = ${entry.version} AND winner = 'current'
+      ORDER BY evaluated_at DESC LIMIT 3`
+      .flatMap((r) => (r.judge_rationale ? [r.judge_rationale] : []));
     const decisive = entry.wins + entry.losses;
     rejected.push({
       kind: 'rolled_back',
@@ -139,31 +137,26 @@ export function listRejectedProposals(sql: SqlExecutor, limit = 50): RejectedPro
     });
   }
 
-  try {
-    const vetoes = sql<{ message: string; data: string | null; created_at: number }>`
-      SELECT message, data, created_at FROM evolution_events
-      WHERE type = 'misevolution_veto' ORDER BY created_at DESC LIMIT ${limit}`;
-    for (const veto of vetoes) {
-      let detail = '';
-      let surface = 'scaffold';
-      try {
-        const parsed = v.parse(VetoDataSchema, JSON.parse(veto.data ?? '{}'));
-        detail = parsed.detail ?? '';
-        surface = parsed.surface ?? 'scaffold';
-      } catch { /* malformed payload — the message still carries the reason */ }
-      if (surface !== 'scaffold') continue;
-      rejected.push({
-        kind: 'misevolution_veto',
-        version: null,
-        at: veto.created_at,
-        rationale: detail,
-        reason: veto.message,
-        pathology: null,
-        trials: 0, wins: 0, losses: 0, ties: 0,
-        judgeRationales: [],
-      });
-    }
-  } catch { /* no evolution_events table — rollbacks alone are the answer */ }
+  const vetoes = sql<{ message: string; data: string | null; created_at: number }>`
+    SELECT message, data, created_at FROM evolution_events
+    WHERE type = 'misevolution_veto' ORDER BY created_at DESC LIMIT ${limit}`;
+  for (const veto of vetoes) {
+    // `data` is written by recordMisevolutionVeto in this same package, so a
+    // payload that will not parse is corruption in our own row, not a foreign
+    // format to shrug at.
+    const parsed = v.parse(VetoDataSchema, parseJsonValue(veto.data ?? '{}'));
+    if ((parsed.surface ?? 'scaffold') !== 'scaffold') continue;
+    rejected.push({
+      kind: 'misevolution_veto',
+      version: null,
+      at: veto.created_at,
+      rationale: parsed.detail ?? '',
+      reason: veto.message,
+      pathology: null,
+      trials: 0, wins: 0, losses: 0, ties: 0,
+      judgeRationales: [],
+    });
+  }
 
   return rejected.sort((a, b) => b.at - a.at).slice(0, limit);
 }

@@ -29,6 +29,7 @@ import {
   createWorkspace as createWorkspaceFilesystem,
   nextWorkspaceGeneration,
 } from '@proteus/core/workspace';
+import { tolerate, tolerateAsync } from '@proteus/core/obs';
 import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
 import { createSandboxedExecutor } from './executor.js';
@@ -173,11 +174,9 @@ function adaptMemory(store: MemoryStore, vfs: VFS): Memory {
     write: (path, content) => store.writeFile(path, content),
     append: (path, content) => store.appendToFile(path, content),
     async index(path) {
-      try {
-        const raw = await vfs.readFile(path, { encoding: 'utf8' });
-        const content = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
-        await store.indexFile(path, content);
-      } catch { /* file may not exist */ }
+      const raw = await tolerateAsync(() => vfs.readFile(path, { encoding: 'utf8' }), 'enoent');
+      if (raw === undefined) return;
+      await store.indexFile(path, raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw);
     },
     search(query, limit = 10) {
       return Promise.resolve(store.search(query, limit));
@@ -365,6 +364,14 @@ export function createCLIRuntime(
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
     agentId, agentName, memory, craftStore, judgeModel, fastLlm,
     spawnBranch: spawn, abortBranch: abort,
+    // A CLI branch is a forked child process with its own SQLite FILE, not a
+    // facet inside a shared durable object. `abort` already does the whole
+    // reap — SIGTERM the child and drop it from `activeBranches` — so there is
+    // no further resource for a terminal release to hand back and the two
+    // verbs are genuinely the same operation here. The distinction is real on
+    // CF, where release additionally WIPES the facet's SQLite out of the root
+    // DO's shared quota; it is degenerate on this backend, not overlooked.
+    releaseBranch: abort,
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
@@ -470,6 +477,7 @@ export function buildCLIHeadRuntime(
     sql, execRaw, vfs, llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     agentId: opts.agentId, agentName: opts.agentName, memory, craftStore, judgeModel: parent.judgeModel,
     spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
+    releaseBranch: parent.releaseBranch,
     executionRouter, shell,
   };
   if (checkpoints) runtimeOptions.checkpoints = checkpoints;
@@ -513,10 +521,10 @@ export function createHostShell(cwd: string): Shell {
         const onAbort = () => {
           const pid = child.pid;
           if (!pid) return;
-          try { process.kill(-pid, 'SIGTERM'); } catch {}
+          tolerate(() => process.kill(-pid, 'SIGTERM'), 'esrch');
           setTimeout(() => {
             if (!settled) {
-              try { process.kill(-pid, 'SIGKILL'); } catch {}
+              tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
             }
           }, 1500).unref();
         };

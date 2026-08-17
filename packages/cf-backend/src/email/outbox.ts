@@ -87,10 +87,12 @@ const OutboxDbRowSchema = v.object({
 export class EmailOutbox {
   /** `scheduleRetry` arms the host's timer for a backed-off re-drive. Without
    *  it the outbox has no scheduler of its own and a failed send only retries
-   *  if some unrelated timer happens to wake the agent. */
+   *  if some unrelated timer happens to wake the agent. Awaited: on a Durable
+   *  Object arming is a storage write, and an unawaited one is cancelled
+   *  silently on reset (`do.wait_until.no_op`). */
   constructor(
     private readonly sql: SqlExec,
-    private readonly scheduleRetry: (at: number) => void = () => {},
+    private readonly scheduleRetry: (at: number) => Promise<void> = async () => {},
   ) {}
 
   ensureSchema(): void {
@@ -171,12 +173,12 @@ export class EmailOutbox {
       return { status: 'sent', messageId };
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
-      this.recordFailure(key, error, now);
+      await this.recordFailure(key, error, now);
       return { status: 'failed', messageId, error };
     }
   }
 
-  private recordFailure(key: string, error: string, now: number): void {
+  private async recordFailure(key: string, error: string, now: number): Promise<void> {
     const row = this.row(key);
     const attempts = (row?.attempt_count ?? 0) + 1;
     if (attempts >= MAX_SEND_ATTEMPTS) {
@@ -191,7 +193,7 @@ export class EmailOutbox {
       `UPDATE email_outbox SET attempt_count = ?, next_attempt_at = ?, last_error = ? WHERE idempotency_key = ?`,
       attempts, next, error, key,
     );
-    this.scheduleRetry(next);
+    await this.scheduleRetry(next);
   }
 
   private row(key: string): OutboxDbRow | null {

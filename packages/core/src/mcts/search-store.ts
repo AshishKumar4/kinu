@@ -128,7 +128,10 @@ export class MctsSearchStore {
       FROM mcts_search_runs WHERE status='running' AND task=${task}
       ORDER BY updated_at DESC`;
     for (const row of rows) {
-      const config = safeParseConfig(row.config_json);
+      // `begin` wrote this column with JSON.stringify, so a row that will not
+      // parse is corruption. Resuming on a fabricated default would re-enter
+      // the search with one branch and no budget and call it a resume.
+      const config = v.parse(PersistedMCTSConfigSchema, JSON.parse(row.config_json));
       if ((config.mode ?? 'build') !== mode) continue;
       return {
         rootId: row.root_id,
@@ -193,12 +196,4 @@ export class MctsSearchStore {
       updatedAt: r.updated_at,
     }));
   }
-}
-
-function safeParseConfig(json: string): PersistedMCTSConfig {
-  try {
-    const parsed = v.safeParse(PersistedMCTSConfigSchema, JSON.parse(json));
-    if (parsed.success) return parsed.output;
-  } catch { /* fall through */ }
-  return { budget: 0, branches: 1 };
 }

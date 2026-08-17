@@ -11,6 +11,7 @@
  */
 
 import { JsonArraySchema, JsonObjectSchema, type JsonObject } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 export type McpTransport = 'auto' | 'sse' | 'streamable-http';
@@ -135,8 +136,8 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
     throw new Error('`serverUrl` is required.');
   }
   const serverUrl = parsedServerUrl.output;
-  let parsed: URL;
-  try { parsed = new URL(serverUrl); } catch { throw new Error('`serverUrl` is not a valid URL.'); }
+  if (!URL.canParse(serverUrl)) throw new Error('`serverUrl` is not a valid URL.');
+  const parsed = new URL(serverUrl);
   const isHttps = parsed.protocol === 'https:';
   const isLocalDev = parsed.protocol === 'http:' && (
     parsed.hostname === 'localhost'
@@ -192,22 +193,16 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
  *  unparseable, which the rest of the pipeline treats as "allow all". */
 export function parseAllowedTools(raw: string | null | undefined): string[] | null {
   if (!raw) return null;
-  try {
-    const parsed = v.safeParse(StringArraySchema, JSON.parse(raw));
-    if (parsed.success) return parsed.output;
-  } catch { /* fall through */ }
-  return null;
+  const parsed = v.safeParse(StringArraySchema, tolerate(() => JSON.parse(raw), 'malformed-input'));
+  return parsed.success ? parsed.output : null;
 }
 
 /** Decode the `headers` SQL column into a header map. Returns null when unset
  *  or malformed, which the pipeline treats as "no custom headers". */
 export function parseMcpHeaders(raw: string | null | undefined): Record<string, string> | null {
   if (!raw) return null;
-  try {
-    const parsed = v.safeParse(HeaderRecordSchema, JSON.parse(raw));
-    if (parsed.success) return parsed.output;
-  } catch { /* fall through */ }
-  return null;
+  const parsed = v.safeParse(HeaderRecordSchema, tolerate(() => JSON.parse(raw), 'malformed-input'));
+  return parsed.success ? parsed.output : null;
 }
 
 /** Build the transport options that carry custom auth headers for a private/

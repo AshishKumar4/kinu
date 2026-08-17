@@ -27,6 +27,7 @@ import {
   type CheckpointAvailability, type CheckpointTurnMeta, type FileCheckpoints,
   type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan, type FileRestoreResult,
 } from '@proteus/core';
+import { classify, tolerateAsync } from '@proteus/core/obs';
 
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
@@ -86,7 +87,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     }
     return new Promise((resolveRun, rejectRun) => {
       execFile(gitBin, args, { cwd, env, timeout: GIT_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
-        if (err?.code === 'ENOENT') {
+        if (classify({ cause: err }) === 'enoent') {
           gitAvailable = false;
           rejectRun(new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT));
           return;
@@ -103,8 +104,13 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     if (gitAvailable !== null) return gitAvailable;
     try {
       await runGit(['--version'], homedir(), isolatedEnv());
-    } catch { /* runGit set gitAvailable=false */ }
-    gitAvailable = gitAvailable ?? true;
+    } catch (error) {
+      // runGit records a missing binary in `gitAvailable` before it rejects.
+      // A rejection that did NOT record one is something else entirely and
+      // must not be reported as "git is not installed".
+      if (gitAvailable !== false) throw error;
+    }
+    gitAvailable ??= true;
     return gitAvailable;
   }
 
@@ -240,22 +246,16 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     },
 
     async ensureCheckpoint(dir: string, reason = 'pre-mutation'): Promise<string | null> {
-      try {
-        if (!(await probeGit())) return null;
-        const abs = resolve(dir);
-        if (turnDone.has(abs)) return null;
-        turnDone.add(abs);
-        return await snapshot(abs, turn, reason);
-      } catch {
-        // Snapshot failures must never block the mutation they precede.
-        return null;
-      }
+      if (!(await probeGit())) return null;
+      const abs = resolve(dir);
+      if (turnDone.has(abs)) return null;
+      turnDone.add(abs);
+      return await snapshot(abs, turn, reason);
     },
 
     async list(limit = 50): Promise<FileCheckpointEntry[]> {
       if (!(await probeGit())) return [];
-      let stores: string[];
-      try { stores = await fs.readdir(agentBase); } catch { return []; }
+      const stores = await tolerateAsync(() => fs.readdir(agentBase), 'enoent') ?? [];
       const entries: FileCheckpointEntry[] = [];
       for (const name of stores) {
         const gitDir = join(agentBase, name);
@@ -296,7 +296,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
         if (change.kind !== 'delete') continue;
         const target = resolve(abs, change.path);
         if (!target.startsWith(abs)) continue; // defense: git emits relative paths only
-        try { await fs.unlink(target); } catch { /* already gone */ }
+        await tolerateAsync(() => fs.unlink(target), 'enoent');
       }
       const read = await runGit(['read-tree', id], abs, env);
       if (read.code !== 0) throw new Error(`checkpoint read-tree failed: ${read.stderr.trim()}`);

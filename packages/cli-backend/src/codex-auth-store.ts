@@ -10,18 +10,17 @@ import {
 } from '@proteus/core';
 import * as v from 'valibot';
 import {
-  chmodSync,
   closeSync,
-  existsSync,
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
+import { tolerate } from '@proteus/core/obs';
+import { writeSecretFile } from './secret-file.js';
 
 const storedCodexCredentialSchema = v.object({
   accessToken: v.optional(v.string()),
@@ -134,22 +133,19 @@ function credentialToConfig(credential: OAuthCredential): StoredCodexCredential 
   };
 }
 
+/**
+ * The config file, or `{}` when it has not been written yet. A file that exists
+ * but does not parse propagates: reading it as empty would make `save` overwrite
+ * every provider credential in it with only the one being saved.
+ */
 function readConfig(configPath: string): ProteusConfigFile {
-  if (!existsSync(configPath)) return {};
-  try {
-    return v.parse(proteusConfigSchema, JSON.parse(readFileSync(configPath, 'utf-8')));
-  } catch {
-    return {};
-  }
+  const raw = tolerate(() => readFileSync(configPath, 'utf-8'), 'enoent');
+  if (raw === undefined) return {};
+  return v.parse(proteusConfigSchema, JSON.parse(raw));
 }
 
 function writeConfig(configPath: string, config: ProteusConfigFile): void {
-  mkdirSync(dirname(configPath), { recursive: true });
-  const tmp = `${configPath}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  try { chmodSync(tmp, 0o600); } catch {}
-  renameSync(tmp, configPath);
-  try { chmodSync(configPath, 0o600); } catch {}
+  writeSecretFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 function withLock<T>(configPath: string, fn: () => T): T {
@@ -159,8 +155,10 @@ function withLock<T>(configPath: string, fn: () => T): T {
   try {
     return fn();
   } finally {
-    try { closeSync(fd); } catch {}
-    try { unlinkSync(lockPath); } catch {}
+    closeSync(fd);
+    // The stale-lock breaker in acquireLock can unlink a lock another process
+    // still holds, so the lock being gone already is a real outcome here.
+    tolerate(() => unlinkSync(lockPath), 'enoent');
   }
 }
 
@@ -173,12 +171,12 @@ function acquireLock(lockPath: string): number {
       return fd;
     } catch (err) {
       if (!isAlreadyExists({ error: err })) throw err;
-      try {
+      tolerate(() => {
         const ageMs = Date.now() - statSync(lockPath).mtimeMs;
         if (ageMs > 30_000) unlinkSync(lockPath);
-      } catch {}
+      }, 'enoent');
       if (Date.now() - started > 30_000) {
-        throw new Error(`Timed out waiting for Codex auth lock: ${lockPath}`);
+        throw new Error(`Timed out waiting for Codex auth lock: ${lockPath}`, { cause: err });
       }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
     }

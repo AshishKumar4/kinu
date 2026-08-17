@@ -32,7 +32,6 @@ import {
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
 } from './types.js';
-import { HeadJournal } from './journal.js';
 import { headProducedFindings } from './head-summary.js';
 import { MergeOutputSchema, type MergeOutput } from './merge-schema.js';
 import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation.js';
@@ -69,6 +68,46 @@ export interface HeadGrounding {
   /** Independent merge synthesis samples; median-scored one wins. Default
    *  DEFAULT_CONFIG.heads.mergeSamples. */
   readonly mergeSamples?: number;
+}
+
+/**
+ * Where a split's journal rows land.
+ *
+ * A port rather than the concrete `HeadJournal` because a RECURSIVE split
+ * runs on a facet that must not keep a journal of its own. When a depth-1 head
+ * journalled locally, its children's spawn/report rows lived on that
+ * intermediate facet while their step rows were written to the root, so the
+ * surface's `head_journal` -> `head_steps` join could never match and a depth-2
+ * head was unreadable from anywhere. Both halves now go to the same place.
+ *
+ * `HeadJournal` satisfies this structurally; the CF facet supplies an
+ * RPC-backed implementation pointed at its root orchestrator. Each method may
+ * be async for that reason.
+ */
+export interface HeadJournalPort {
+  recordSplit(rootId: HeadId, rationale: string, spawnedAt: number): void | Promise<void>;
+  insertSpawn(input: HeadInput): void | Promise<void>;
+  recordReport(report: HeadReport): void | Promise<void>;
+  cacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): void | Promise<void>;
+}
+
+/**
+ * The ROOT's journal: the port plus the two reads only a run's root can serve.
+ *
+ * Run reclamation resolves a top-level split's identity against every unfinished
+ * run in the store, and retires the heads of the attempt it reclaims. Both are
+ * whole-store operations, so a facet holding an RPC port aimed at its root
+ * cannot answer them and must not pretend to — it never needs to, because a
+ * recursive split always carries a `parentHeadId` and so never resolves a
+ * top-level run. `HeadJournal` satisfies this structurally.
+ */
+export interface HeadRootJournal extends HeadJournalPort {
+  findResumableRun(task: string): HeadId | null;
+  abandonRunning(reason: string, scope: { readonly rootId: HeadId }): void;
+}
+
+function isRootJournal(journal: HeadJournalPort): journal is HeadRootJournal {
+  return 'findResumableRun' in journal && 'abandonRunning' in journal;
 }
 
 /** What the controller asks the runtime to do per child head. */
@@ -114,10 +153,16 @@ export type SplitPhaseEvent =
 export const RECLAIMED_RUN_REASON =
   'Interrupted before it reported. This fork was restarted, and the branches below it are the retry.';
 
+/** The score a head carries when nothing grounded can be said about it — no
+ *  judge is wired, or the one that is could not be reached. Mid-range on
+ *  purpose: a 0 would rank a head below one that genuinely failed, and a 1
+ *  would credit work nobody scored. */
+const NO_GROUNDED_SIGNAL = 0.5;
+
 export class HeadController {
   constructor(
     private readonly runtime: HeadRuntime,
-    private readonly journal: HeadJournal,
+    private readonly journal: HeadJournalPort,
   ) {}
 
   /**
@@ -138,9 +183,18 @@ export class HeadController {
    * branches that died with it.
    */
   private resolveTopLevelRun(task: string): HeadId {
-    const resumed = this.journal.findResumableRun(task);
+    const journal = this.journal;
+    if (!isRootJournal(journal)) {
+      // Not a degrade: minting a fresh id here is exactly the defect above, so a
+      // facet's port reaching this is a wiring error and says so.
+      throw new Error(
+        'A top-level split must run against the ROOT workspace journal — run reclamation reads every '
+        + 'unfinished run in the store. A recursive split has to pass parentHeadId.',
+      );
+    }
+    const resumed = journal.findResumableRun(task);
     if (!resumed) return nanoid();
-    this.journal.abandonRunning(RECLAIMED_RUN_REASON, { rootId: resumed });
+    journal.abandonRunning(RECLAIMED_RUN_REASON, { rootId: resumed });
     return resumed;
   }
 
@@ -186,7 +240,16 @@ export class HeadController {
     // Anchor the run identity before spawning so its heads group under one root
     // (top-level splits have a synthetic root with no head row of its own). On a
     // reclaimed run this rewrites nothing: the row already carries this task.
-    this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
+    //
+    // Awaited only when there IS something to await. The journal is a port now —
+    // a depth-2 split's rows cross an RPC to the root — but a local HeadJournal
+    // returns void, and `await`ing void still yields to the microtask queue.
+    // That reordering is load-bearing: a re-drive of the same fork resolves its
+    // run identity and retires the previous attempt's heads, so if this call
+    // yields before those heads are recorded, the reclamation finds nothing to
+    // retire and the interrupted attempt stays `running` forever.
+    const splitRecorded = this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
+    if (splitRecorded !== undefined) await splitRecorded;
 
     // Spawn all children concurrently.
     const spawnPromises = opts.request.heads.map(async (h, idx) => {
@@ -208,7 +271,10 @@ export class HeadController {
         mergeStrategy: strategy,
       };
       if (opts.missionLabels?.length) Object.assign(input, { missionLabels: opts.missionLabels });
-      this.journal.insertSpawn(input);
+      // Same as recordSplit above: a local journal writes the row before this
+      // returns, and nothing may push that write behind a microtask.
+      const spawnRecorded = this.journal.insertSpawn(input);
+      if (spawnRecorded !== undefined) await spawnRecorded;
       return this.runtime.spawnHead(input);
     });
 
@@ -235,7 +301,7 @@ export class HeadController {
           : parentBudget.maxWallClockMs - (Date.now() - startedAt);
         try {
           const report = await raceWithTimeout(h, remainingMs);
-          this.journal.recordReport(report);
+          await this.journal.recordReport(report);
           return report;
         } catch (err) {
           // Either the abort failed or a requested deadline blew.
@@ -253,7 +319,7 @@ export class HeadController {
             wallClockMs: Date.now() - startedAt,
             errorMessage: err instanceof Error ? err.message : String(err),
           };
-          this.journal.recordReport(failed);
+          await this.journal.recordReport(failed);
           return failed;
         }
       }),
@@ -275,7 +341,7 @@ export class HeadController {
       handles.map((h) => h.id),
       headScores,
     );
-    this.journal.cacheMerge(rootId, mergeResult, strategy);
+    await this.journal.cacheMerge(rootId, mergeResult, strategy);
     opts.onPhase?.({
       kind: 'merge',
       rootId,
@@ -294,7 +360,22 @@ export class HeadController {
    * band, so a head whose work ran outscores one whose didn't. A non-completed
    * head gets the floor (0) without a judge call. Always returns one entry per
    * head carrying the head's text + status (the Alternate-Takes candidate); when
-   * no grounding seam is wired the score is a neutral 0.5 (no grounded signal).
+   * no grounded signal is available the score is a neutral
+   * {@link NO_GROUNDED_SIGNAL}.
+   *
+   * Settled per head, because the evaluator's judge is a PROVIDER call and this
+   * caller has no branch to fail. The MCTS engine drives the same evaluator
+   * under its own allSettled and answers a judge failure by reporting the
+   * branch failed and scoring it 0; there is no equivalent here — a rejection
+   * propagates out of `run` and takes the whole split with it, so a single 429
+   * discards findings the heads have already produced and paid for, the merge
+   * that would have carried them, and the `head_merge` ledger row that is the
+   * only durable trace a fork ran at all. The heads' work outlives its judge.
+   *
+   * A head whose judge could not be reached is therefore scored exactly as one
+   * with no grounding seam — that IS its epistemic state — and the reason is
+   * stated on the way past, because a neutral score is otherwise
+   * indistinguishable from a workspace that never wired a judge.
    */
   private async scoreHeads(
     reports: readonly HeadReport[],
@@ -303,12 +384,12 @@ export class HeadController {
   ): Promise<readonly HeadScore[]> {
     const g = mode === 'plan' ? undefined : this.runtime.grounding;
     const siblings = reports.map(headTrajectory);
-    return Promise.all(
+    const settled = await Promise.allSettled(
       reports.map(async (r, i): Promise<HeadScore> => {
         const base = { id: r.id, text: r.summary, status: r.status } as const;
         // No grounding seam → no honest outcome signal; a neutral score keeps
         // the take candidate without inventing a verdict.
-        if (!g) return { ...base, score: 0.5, grounding: 'judge' };
+        if (!g) return { ...base, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
         // A head that never completed produced no trustworthy outcome — floor it
         // without a judge call so it ranks below a head that ran.
         if (r.status !== 'completed') return { ...base, score: 0, grounding: 'judge' };
@@ -325,6 +406,15 @@ export class HeadController {
         return { ...base, score: evaluation.score, grounding: evaluation.grounding };
       }),
     );
+    return settled.map((outcome, i) => {
+      if (outcome.status === 'fulfilled') return outcome.value;
+      const r = reports[i]!;
+      // The reason itself, not its `message`: a provider error carries the url
+      // and cause that say WHICH judge broke, and AI SDK call errors routinely
+      // have an empty message.
+      console.warn(`[proteus] head ${r.id} could not be scored — reporting no grounded signal:`, outcome.reason);
+      return { id: r.id, text: r.summary, status: r.status, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
+    });
   }
 
   /**
@@ -446,10 +536,24 @@ export class HeadController {
 
     // Score each candidate synthesis with the grounded judge and keep the
     // median — the same median ensemble the MCTS evaluator uses.
+    //
+    // Settled, for the reason scoreHeads is: the judge is a PROVIDER call, and
+    // k valid syntheses are already in hand. `score === null` below already
+    // degrades to the first sample, so a judge that answers unusably costs the
+    // ensemble and not the merge — but under Promise.all a judge that REJECTS
+    // took the whole synthesis with it, discarding those samples and the
+    // head_merge row. Only reachable with mergeSamples > 1, which is why no
+    // test caught it; k defaults to 1.
     const judge = g.judge ?? g.explorer;
-    const scored = await Promise.all(
+    const settled = await Promise.allSettled(
       samples.map(async (s) => ({ sample: s, score: await scoreMergeNarrative(judge, rationale, s.narrative) })),
     );
+    const scored = settled.map((outcome, i) => {
+      if (outcome.status === 'fulfilled') return outcome.value;
+      // The reason itself, not its `message` — see scoreHeads.
+      console.warn('[proteus] a merge sample could not be scored — dropping it from the ensemble:', outcome.reason);
+      return { sample: samples[i]!, score: null };
+    });
     const usable = scored.filter((x): x is { sample: MergeOutput; score: number } => x.score !== null);
     if (usable.length === 0) return { ok: true, output: samples[0]! };
     const medianScore = median(usable.map((x) => x.score));
@@ -476,7 +580,11 @@ export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number | undefi
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<never>((_resolve, reject) => {
     timeoutHandle = setTimeout(() => {
-      h.abort('wall-clock budget exhausted').catch(() => undefined);
+      // The deadline rejects immediately; the abort is what stops the head from
+      // burning budget past it. A head that survives its abort is a live facet
+      // nobody is waiting for, so that failure surfaces rather than being
+      // absorbed — the zero-budget path above throws it for the same reason.
+      void h.abort('wall-clock budget exhausted');
       reject(new Error(`wall-clock budget exceeded after ${timeoutMs}ms`));
     }, timeoutMs);
   });
@@ -544,7 +652,9 @@ function headTrajectory(r: HeadReport): string {
 
 /** Score ONE merge synthesis narrative for how well it answers the split — the
  *  k-sample-median selector over merge candidates. Mirrors a judge sample in
- *  evaluation.ts: unparseable/failed → null (dropped, never 0). */
+ *  evaluation.ts: text that carries no score → null (dropped, never 0). A judge
+ *  that FAILS is not a low score and is not dropped — it propagates, so a
+ *  broken judge cannot look like every candidate being unscoreable. */
 async function scoreMergeNarrative(judge: LLM, rationale: string, narrative: string): Promise<number | null> {
   const prompt = `You are scoring how well a synthesized answer resolves a task that was explored by several parallel reasoning heads.
 
@@ -558,12 +668,7 @@ Score from 0.0 to 1.0 for how completely and correctly the answer resolves the t
 JSON shape:
 {"score": <float 0.0-1.0>, "rationale": "<15 words max>"}
 ${jsonObjectOnlyInstruction()}`;
-  let text: string;
-  try {
-    text = await judge.complete(prompt);
-  } catch {
-    return null;
-  }
+  const text = await judge.complete(prompt);
   const match = text.match(/"score"\s*:\s*(-?\d+(?:\.\d+)?)/);
   if (!match) return null;
   const score = Number(match[1]);

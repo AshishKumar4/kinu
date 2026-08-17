@@ -203,10 +203,13 @@ describe('createCompactionStateStore', () => {
     expect(store.loadPromptTokens('missing', 10)).toBeNull();
   });
 
-  test('a corrupt plan_json row degrades to null instead of throwing', () => {
+  // A plan_json that is not JSON is corruption of our own persisted state, not
+  // an absent plan: returning null told the caller "no plan yet", so the row
+  // stayed corrupt and every load silently re-planned from scratch.
+  test('a corrupt plan_json row surfaces instead of reading as no plan', () => {
     const { db, store } = stateRig();
     db.prepare(`INSERT INTO compaction_state (session_key, plan_json) VALUES ('s1', 'not json')`).run();
-    expect(store.plans.load('s1')).toBeNull();
+    expect(() => store.plans.load('s1')).toThrow(SyntaxError);
   });
 
   test('force-compaction arms once and is consumed exactly once (never loops)', () => {

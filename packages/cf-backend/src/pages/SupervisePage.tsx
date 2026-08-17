@@ -104,14 +104,19 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
     finally { setBusy(false); }
   }, [rpc, reload]);
 
-  /** Resolves only when the status write landed — "Run" starts a chat turn on
-   *  the back of this, and must not do so for a task that stayed pending. */
-  const setStatus = useCallback(async (id: string, status: ProposedTask["status"]) => {
+  /** Resolves true only when the status write landed — "Run" starts a chat turn
+   *  on the back of this, and must not do so for a task that stayed pending.
+   *  The failure is reported here, so a caller that has nothing to add is not
+   *  forced to silence a rejection. */
+  const setStatus = useCallback(async (id: string, status: ProposedTask["status"]): Promise<boolean> => {
     setActionErr(null);
-    try { await rpc("setCurriculumTaskStatus", [id, status]); reload(); }
-    catch (e) {
+    try {
+      await rpc("setCurriculumTaskStatus", [id, status]);
+      reload();
+      return true;
+    } catch (e) {
       setActionErr(`Couldn't mark the task ${status}: ${describeError(e)}`);
-      throw e;
+      return false;
     }
   }, [rpc, reload]);
 
@@ -154,9 +159,9 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
                 {t.status === "pending" && (
                   <div className="flex items-center gap-2 mt-2">
                     <button className={`p-btn ${btnSmCls}`}
-                      onClick={() => void setStatus(t.id, "accepted").then(() => onRunTask(t.task), () => {})}><PlayIcon size={12} />Run</button>
-                    <Button size="sm" variant="ghost" icon={<CheckIcon size={12} />} onClick={() => void setStatus(t.id, "accepted").catch(() => {})}>Accept</Button>
-                    <Button size="sm" variant="ghost" icon={<XIcon size={12} />} onClick={() => void setStatus(t.id, "rejected").catch(() => {})}>Reject</Button>
+                      onClick={() => void setStatus(t.id, "accepted").then((landed) => { if (landed) onRunTask(t.task); })}><PlayIcon size={12} />Run</button>
+                    <Button size="sm" variant="ghost" icon={<CheckIcon size={12} />} onClick={() => void setStatus(t.id, "accepted")}>Accept</Button>
+                    <Button size="sm" variant="ghost" icon={<XIcon size={12} />} onClick={() => void setStatus(t.id, "rejected")}>Reject</Button>
                   </div>
                 )}
               </div>

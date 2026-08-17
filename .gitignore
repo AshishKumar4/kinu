@@ -56,3 +56,15 @@ CC-CORPUS-*.md
 
 # Preserved harbor job artifacts (raw trial evidence, not source)
 /bench-artifacts/
+
+# Cloudflare-internal research never belongs in a public repo. Nimbus kept its
+# dossiers under this path, compiled from internal source, and only their
+# citations escaped — into a shipped production constant.
+/docs/research/
+
+# UI verification screenshots — proof-of-work, regenerated on demand, never source.
+/.ui-proof/
+
+# Harness defect guard: a literal `local:` directory appears when a `local://` URI
+# is resolved as a relative path. Never source; content lives in the run artifact.
+/local:/

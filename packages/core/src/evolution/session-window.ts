@@ -28,7 +28,8 @@
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { CompletedTurn } from './types.js';
-import { JsonObjectSchema, JsonValueSchema } from '../utils/json.js';
+import { JsonObjectSchema, JsonValueSchema, parseJsonValue } from '../utils/json.js';
+import { tolerate } from '../obs/index.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
 
@@ -172,10 +173,9 @@ export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
 /** A row written by another version of this code is skipped, not fatal — the
  *  window is a buffer, and one unreadable turn must not stall the cadence. */
 function decode(row: WindowRow): CompletedTurn | null {
-  try {
-    const parsed = v.safeParse(CompletedTurnSchema, JSON.parse(row.turn));
-    return parsed.success ? parsed.output : null;
-  } catch {
-    return null;
-  }
+  const parsed = v.safeParse(
+    CompletedTurnSchema,
+    tolerate(() => parseJsonValue(row.turn), 'malformed-input'),
+  );
+  return parsed.success ? parsed.output : null;
 }

@@ -7,15 +7,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorkspace } from '../src/identity/create.js';
 import {
-  captureWorkspaceBaseline,
   getExecutorDiff,
   getWorkspaceDiff,
   initWorkspaceBaselineTable,
-  readWorkspaceFiles,
   resetWorkspaceBaseline,
 } from '../src/read-models/workspace-diff.js';
 import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types.js';
-import { createTestRuntime, makeAgentDatabase } from './helpers.js';
+import type { SqlValue } from '../src/types/primitives.js';
+import { MAX_LINES_PER_FILE } from '../src/vfs/diff.js';
+import { collectWorkspaceTextFiles, createTestRuntime, makeAgentDatabase } from './helpers.js';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
 
@@ -69,7 +69,7 @@ describe('workspace diff lifecycle', () => {
     }
     await rt.storage.vfs.writeFile('app.ts', 'export const visible = true;');
 
-    const files = await readWorkspaceFiles(rt);
+    const files = await collectWorkspaceTextFiles(rt);
 
     expect(files['app.ts']).toBe('export const visible = true;');
     expect(Object.keys(files).some((path) => path.startsWith('.git/'))).toBe(false);
@@ -83,28 +83,128 @@ describe('workspace diff lifecycle', () => {
     }
     await rt.storage.vfs.writeFile('app.ts', 'export const visible = true;');
 
-    const files = await readWorkspaceFiles(rt);
+    const files = await collectWorkspaceTextFiles(rt);
 
     expect(files['app.ts']).toBe('export const visible = true;');
     expect(Object.keys(files).some((path) => path.startsWith('binary-'))).toBe(false);
   });
 
-  test('failed baseline replacement keeps the previous generation active and reports the error', () => {
+  test('the change-set never holds more than one baseline body at a time', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    for (let i = 0; i < 20; i++) await rt.storage.vfs.writeFile(`f-${i}.txt`, `v1 ${i}`);
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('f-7.txt', 'v2 7');
+
+    // The invariant is PEAK RESIDENCY, not total reads: comparing a file against
+    // its baseline necessarily reads that baseline, but the bodies must arrive
+    // one at a time. The old shape returned every body in ONE array and held it
+    // beside the whole workspace map and the diff output — three copies, each up
+    // to 400 x 256 KiB = 102.4 MiB, against a ~200 MiB silent-reset wall. So
+    // what is measured here is the largest number of bodies any single query
+    // result carried.
+    //
+    // Matched on the query's own text rather than by inspecting row shapes,
+    // because `content FROM vfs_baseline` appears in BOTH the per-path read and
+    // the batch read it replaced — so the measurement is not silently vacuous
+    // against the shape it exists to rule out. The path-list query and the
+    // INSERTs do not contain it.
+    const sql = rt.storage.sql;
+    let baselineRowsRead = 0;
+    let peakBodiesInOneResult = 0;
+    rt.storage.sql = <T>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+      const rows = sql<T>(query, ...values);
+      const text = query.join('?');
+      if (text.includes('vfs_baseline')) baselineRowsRead += rows.length;
+      if (text.includes('content FROM vfs_baseline')) {
+        peakBodiesInOneResult = Math.max(peakBodiesInOneResult, rows.length);
+      }
+      return rows;
+    };
+
+    const result = await getWorkspaceDiff(rt);
+
+    expect(result.files.map((f) => f.path)).toEqual(['f-7.txt']);
+    // Denominator: the baseline really does hold every file, so a peak of one
+    // is a bound and not an empty table.
+    expect(baselineRowsRead).toBeGreaterThan(20);
+    expect(peakBodiesInOneResult).toBe(1);
+  });
+
+  test('an appended log is diffed exactly, however long the file is', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    // 8,000 short lines: under the 256 KiB admission gate, far over what a
+    // whole-file alignment can afford. Only the differing region is aligned, and
+    // an append has none on the baseline side.
+    const lines = 8000;
+    const before = Array.from({ length: lines }, (_, i) => `${i % 10}`.repeat(9)).join('\n');
+    await rt.storage.vfs.writeFile('agent.log', before);
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('agent.log', `${before}\nappended`);
+
+    const result = await getWorkspaceDiff(rt);
+
+    const file = result.files.find((f) => f.path === 'agent.log');
+    if (!file) throw new Error('the changed file must appear in the change-set');
+    expect(file.status).toBe('changed');
+    expect(file.added).toBe(1);
+    expect(file.removed).toBe(0);
+    // The body is bounded, and says so.
+    expect(file.lines.length).toBe(MAX_LINES_PER_FILE);
+    expect(file.truncated).toBe(true);
+  });
+
+  test('a wholly rewritten long file is listed with true totals rather than dropped', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    // No shared head or tail, so the differing region IS the file and the bound
+    // is what stands between this and a table the isolate cannot hold.
+    const lines = 8000;
+    const before = Array.from({ length: lines }, (_, i) => `${i % 10}`.repeat(9)).join('\n');
+    const after = Array.from({ length: lines }, (_, i) => `${(i % 10) + 1}`.repeat(9)).join('\n');
+    await rt.storage.vfs.writeFile('bundle.min.js', before);
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('bundle.min.js', after);
+
+    const result = await getWorkspaceDiff(rt);
+
+    const file = result.files.find((f) => f.path === 'bundle.min.js');
+    if (!file) throw new Error('the oversized file must still appear in the change-set');
+    expect(file.status).toBe('changed');
+    expect(file.truncated).toBe(true);
+    expect(file.lines).toEqual([]);
+    // Coarse but true: every line out, every line in. Nothing here claims an
+    // alignment that was never computed.
+    expect(file.removed).toBe(lines);
+    expect(file.added).toBe(lines);
+  });
+
+  test('failed baseline replacement keeps the previous generation active and reports the error', async () => {
     const { rt, db } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
-    captureWorkspaceBaseline(rt, { 'old.txt': 'old' });
+    await rt.storage.vfs.writeFile('old.txt', 'old');
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('bad.txt', 'bad');
     db.exec(`CREATE TRIGGER reject_bad_baseline BEFORE INSERT ON vfs_baseline
       WHEN NEW.path = 'bad.txt' BEGIN SELECT RAISE(FAIL, 'forced baseline failure'); END`);
 
-    expect(() => captureWorkspaceBaseline(rt, { 'good.txt': 'good', 'bad.txt': 'bad' })).toThrow('forced baseline failure');
-    const active = db.query("SELECT path, content FROM vfs_baseline WHERE active = 1 AND path <> ''").all();
-    expect(active).toEqual([{ path: 'old.txt', content: 'old' }]);
+    await expect(resetWorkspaceBaseline(rt)).rejects.toThrow('forced baseline failure');
+    const rows = db.query<{ path: string; content: string; active: number }, []>(
+      "SELECT path, content, active FROM vfs_baseline WHERE path <> ''",
+    ).all();
+    // The generation that failed is neither active nor left behind, and the
+    // previous one still holds the content it was captured with.
+    expect(rows.filter((r) => r.path === 'bad.txt')).toEqual([]);
+    expect(rows.filter((r) => r.active === 0)).toEqual([]);
+    expect(rows.find((r) => r.path === 'old.txt')).toMatchObject({ content: 'old', active: 1 });
   });
 
   test('a directory traversal failure is surfaced instead of becoming an empty diff', async () => {
     const { rt } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
-    captureWorkspaceBaseline(rt, { 'kept.txt': 'before' });
+    await rt.storage.vfs.writeFile('kept.txt', 'before');
+    await resetWorkspaceBaseline(rt);
     rt.storage.vfs.readdir = async () => {
       throw new Error('authoritative VFS unavailable');
     };
@@ -115,7 +215,8 @@ describe('workspace diff lifecycle', () => {
   test('a file read failure cannot advance or partially replace the active baseline', async () => {
     const { rt, db } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
-    captureWorkspaceBaseline(rt, { 'kept.txt': 'before' });
+    await rt.storage.vfs.writeFile('kept.txt', 'before');
+    await resetWorkspaceBaseline(rt);
     await rt.storage.vfs.writeFile('kept.txt', 'after');
     const readFile = rt.storage.vfs.readFile.bind(rt.storage.vfs);
     rt.storage.vfs.readFile = async (path, options) => {
@@ -124,8 +225,12 @@ describe('workspace diff lifecycle', () => {
     };
 
     await expect(resetWorkspaceBaseline(rt)).rejects.toThrow('could not read "kept.txt"');
-    const active = db.query("SELECT path, content FROM vfs_baseline WHERE active = 1 AND path <> ''").all();
-    expect(active).toEqual([{ path: 'kept.txt', content: 'before' }]);
+    const rows = db.query<{ path: string; content: string; active: number }, []>(
+      "SELECT path, content, active FROM vfs_baseline WHERE path <> ''",
+    ).all();
+    expect(rows.filter((r) => r.active === 0)).toEqual([]);
+    // Still the captured content, not the unreadable newer one.
+    expect(rows.find((r) => r.path === 'kept.txt')).toMatchObject({ content: 'before', active: 1 });
   });
 
   test('a failed git subcommand is an Output error, never an empty successful diff', async () => {

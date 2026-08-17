@@ -127,18 +127,11 @@ erDiagram
         INTEGER created_at "Epoch ms"
     }
     messages {
-        TEXT id PK "Message ID"
-        TEXT session_id "Session (default 'default')"
-        TEXT parent_id "Parent message ID"
+        TEXT id PK "Message ID — the SDK's id, so it is what the UI can point at"
+        TEXT session_id "Session ('default' chat, 'mcts' search)"
+        TEXT parent_id "Parent message — these edges ARE the session tree"
         TEXT role "user/assistant/system"
-        TEXT content "Message content"
-        INTEGER created_at "Epoch ms"
-    }
-    conversation_history {
-        INTEGER id PK "Auto-increment ID"
-        TEXT session_id "Session (default 'default')"
-        TEXT role "Message role"
-        TEXT message "JSON-encoded message"
+        TEXT content "Plain text (flattened for FTS and the outcome joins)"
         INTEGER created_at "Epoch ms"
     }
     executor_output {
@@ -253,8 +246,8 @@ pass:
 2. `initAllTables` — `workspace_identity`, `search_nodes`, `scaffold_versions`,
    `scaffold_regression_fixtures`, `task_history`, `craft_scores`, `fibers`,
    `vfs_files` (via the canonical agent-utils `VFS_SCHEMA_DDL`), `messages`,
-   `conversation_history`, `evolution_events`, `crafted_tools`,
-   `executor_output`, `activity_log`, `fork_lineage`.
+   `evolution_events`, `crafted_tools`, `executor_output`, `activity_log`,
+   `fork_lineage`.
 3. Each subsystem's own `init*` from the table above.
 4. `subordinateRoster.ensureSchema()` and the orchestrator-local inline tables.
 5. `memoryStore.ensureSchema()` and `craftStore.ensureSchema()` create their

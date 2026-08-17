@@ -71,9 +71,14 @@ async function main(): Promise<void> {
     await createWorkspace(backendDb, {
       name: input.workspaceName, purpose: input.purpose, llm: analyst,
     });
-    initSearchTables((ddl: string) => db.exec(ddl));
-    initScaffoldTables((ddl: string) => db.exec(ddl));
-    initCraftScoreTables((ddl: string) => db.exec(ddl));
+    // `initSearchTables` and `initScaffoldTables` read `pragma_table_info` to decide which columns
+    // are missing rather than adding them speculatively and swallowing the duplicate-column error,
+    // so they need a reader as well as a writer.
+    const sql = makeSql(db);
+    const execRaw = (ddl: string): void => { db.exec(ddl); };
+    initSearchTables(execRaw, sql);
+    initScaffoldTables(execRaw, sql);
+    initCraftScoreTables(execRaw);
   }
 
   const rt = createCLIRuntime(backendDb, { dbPath: input.dbPath, llm: analyst });

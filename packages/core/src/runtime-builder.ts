@@ -18,7 +18,7 @@ import type {
   Schedule,
   Shell,
 } from './types/primitives.js';
-import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch, RequestShellApproval } from './types/agent-runtime.js';
+import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch, ReleaseBranch, RequestShellApproval } from './types/agent-runtime.js';
 import type { ExecutionRouter } from './execution/types.js';
 import type { FileCheckpoints } from './checkpoints/types.js';
 import type { TurnFileLedger } from './tools/file-ledger.js';
@@ -44,6 +44,7 @@ export interface RuntimeComponents {
   /** Branch lifecycle callbacks */
   spawnBranch: SpawnBranch;
   abortBranch: AbortBranch;
+  releaseBranch: ReleaseBranch;
   /**
    * Optional router for the runtime's registered execution environments. When
    * provided, the canonical `run` and `execute_tools` factories in core will
@@ -99,6 +100,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     fastLlm: components.fastLlm,
     spawnBranch: components.spawnBranch,
     abortBranch: components.abortBranch,
+    releaseBranch: components.releaseBranch,
     executionRouter: components.executionRouter,
     shell: components.shell,
     checkpoints: components.checkpoints,

@@ -16,41 +16,27 @@ import {
   reconcileSessionTree, sessionTreeAncestry, chatPaneAncestry, snapshotWorkspaceForFork,
   initAllTables, writeSoul,
 } from '../src/index.js';
-import type { RawSqlExec, SqlExecutor, VFS } from '../src/types/primitives.js';
-import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers.js';
+import type { SqlExecutor } from '../src/types/primitives.js';
+import {
+  createTestWorkspace, makeSql, makeExecRaw, SDK_SESSION_DDL, type TestWorkspace,
+} from './helpers.js';
 
-interface WorkspaceFixture {
-  db: Database;
-  sql: SqlExecutor;
-  execRaw: RawSqlExec;
-  vfs: VFS;
-}
-
-/** The SDK's own DDL, verbatim from `agents`' AgentSessionProvider.ensureTable —
- *  including `DATETIME DEFAULT CURRENT_TIMESTAMP`, which is why the tree's clock
- *  has one-second resolution and a timestamp cut could never be exact. */
-const SDK_SESSION_DDL = `CREATE TABLE IF NOT EXISTS assistant_messages (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL DEFAULT '',
-  parent_id TEXT,
-  role TEXT NOT NULL,
-  content TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)`;
-
-function fresh(): WorkspaceFixture {
-  const db = new Database(':memory:');
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
-  initAllTables(execRaw);
-  execRaw(SDK_SESSION_DDL);
-  return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs };
+/** The production workspace schema plus the SDK's own session store.
+ *
+ *  It was a hand-picked subset built on `initAllTables`, which does not create
+ *  `memory_chunks` — so `snapshotWorkspaceForFork` had to tolerate an absence
+ *  only this harness produced, and that tolerance is what let a fork drop the
+ *  parent's memory index in production. */
+function fresh(): TestWorkspace {
+  const ws = createTestWorkspace();
+  ws.execRaw(SDK_SESSION_DDL);
+  return ws;
 }
 
 /** Append to the SDK's store the way it does: the serialized UI message,
  *  parented on the caller's choice or on the latest leaf. */
 function sdkAppend(
-  { sql }: WorkspaceFixture,
+  { sql }: TestWorkspace,
   msg: { id: string; role: string; text: string; parentId?: string | null; at: string },
 ): void {
   const content = JSON.stringify({
@@ -68,7 +54,7 @@ function sdkAppend(
 /** What the deleted turn-end summary wrote: the last user message with a NULL
  *  parent and the final assistant message, for completed turns only. */
 function legacySummary(
-  { sql }: WorkspaceFixture,
+  { sql }: TestWorkspace,
   turn: { userId: string; userText: string; assistantId: string; assistantText: string; at: number },
 ): void {
   void sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
@@ -82,7 +68,7 @@ function legacySummary(
  * He resumed a poisoned session, so the turn before his fork attempt never
  * reached "completed" and the summary never ran for it.
  */
-function seedInterruptedSession(ws: WorkspaceFixture): void {
+function seedInterruptedSession(ws: TestWorkspace): void {
   void ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'src'}, ${100})`;
   sdkAppend(ws, { id: 'u1', role: 'user', text: 'first ask', parentId: null, at: '2026-08-16 22:00:00' });
   sdkAppend(ws, { id: 'a1', role: 'assistant', text: 'first answer', at: '2026-08-16 22:00:01' });
@@ -193,7 +179,7 @@ describe('reconcileSessionTree', () => {
   test('does nothing where the SDK store does not exist (the CLI writes `messages` itself)', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
-    initAllTables(makeExecRaw(db));
+    initAllTables(makeExecRaw(db), sql);
     void sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
       VALUES (${'m1'}, ${'default'}, ${null}, ${'user'}, ${'cli message'}, ${1_000})`;
 
@@ -237,7 +223,7 @@ describe('the projection is bounded by the turn, not by the transcript', () => {
   }
 
   /** A transcript of `turns` completed turns, fully projected. */
-  function seedProjected(ws: WorkspaceFixture, turns: number): string {
+  function seedProjected(ws: TestWorkspace, turns: number): string {
     void ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'S'}, ${'s'}, ${100})`;
     let last = '';
     for (let i = 0; i < turns; i++) {

@@ -65,6 +65,7 @@ function buildComponents(
     memory, craftStore, judgeModel,
     spawnBranch: async () => mockBranch,
     abortBranch: async () => {},
+    releaseBranch: async () => {},
   });
 }
 
@@ -80,7 +81,7 @@ export async function createWorkspace(
 ): Promise<AgentRuntime> {
   const { sql, execRaw } = wrapDatabase(db);
 
-  initAllTables(execRaw);
+  initAllTables(execRaw, sql);
   initWorkspaceBaselineTable(execRaw);
   const workspace = createInlineWorkspace(db);
 

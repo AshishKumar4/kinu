@@ -180,7 +180,7 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     // some unrelated timer woke the agent and the sweep noticed the row.
     const { sql } = makeSql();
     const armed: number[] = [];
-    const box = new EmailOutbox(sql, (at) => { armed.push(at); });
+    const box = new EmailOutbox(sql, async (at) => { armed.push(at); });
     box.ensureSchema();
     const failing = fakeBinding(() => { throw new Error('down'); });
 
@@ -194,7 +194,7 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
   test('a dead-lettered intent arms nothing — there is no next attempt', async () => {
     const { sql } = makeSql();
     const armed: number[] = [];
-    const box = new EmailOutbox(sql, (at) => { armed.push(at); });
+    const box = new EmailOutbox(sql, async (at) => { armed.push(at); });
     box.ensureSchema();
     const failing = fakeBinding(() => { throw new Error('permanent'); });
     await box.send(failing.binding, 'dead', message(), 0);

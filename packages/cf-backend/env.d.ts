@@ -10,7 +10,6 @@
 // paths guard with `if (env.AI && typeof env.AI !== "string") { ... }` and
 // transparently fall through to the gateway (AI_GATEWAY_URL + AI_GATEWAY_AUTH).
 import type { OrchestratorAgent } from "./src/orchestrator.js";
-import type { ExplorationAgent } from "./src/exploration.js";
 import type { ProteusSandbox } from "./src/proteus-sandbox.js";
 import type { UserDO } from "./src/user/user-do.js";
 import type { MonitorDO } from "./src/monitor/monitor-do.js";
@@ -31,7 +30,6 @@ declare global {
     NIMBUS_RUNTIME_CACHE?: string;
     LOADER: WorkerLoader;
     OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
-    ExplorationAgent: DurableObjectNamespace<ExplorationAgent>;
     /** Per-user DO: profile + agent registry + credentials + defaults. */
     UserDO: DurableObjectNamespace<UserDO>;
     /** Singleton DO holding synthetic monitoring's open incidents + alert outbox. */

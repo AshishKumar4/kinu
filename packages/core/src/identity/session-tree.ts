@@ -34,7 +34,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives.js';
-import { uiMessageText } from '../read-models/status.js';
+import { uiMessageText } from '../utils/ui-message.js';
 
 /**
  * Bound on an ancestry walk, and the cycle guard. Matches the bound `agents`'
@@ -76,19 +76,44 @@ function hasSdkStore(sql: SqlExecutor): boolean {
 }
 
 /**
- * A row of the SDK's store as a tree node: the serialized UI message flattened
- * to text, and its whole-second `YYYY-MM-DD HH:MM:SS` stamp read as UTC ms —
- * the store writes `CURRENT_TIMESTAMP`, which SQLite renders in UTC with no zone
- * marker, so the `Z` is what stops the host's local offset from being applied.
+ * The pane's whole-second `YYYY-MM-DD HH:MM:SS` stamp as UTC ms — the store
+ * writes `CURRENT_TIMESTAMP`, which SQLite renders in UTC with no zone marker,
+ * so the `Z` is what stops the host's local offset from being applied.
  */
+function paneStampMs(createdAt: string): number {
+  return Date.parse(`${createdAt.replace(' ', 'T')}Z`);
+}
+
+/** A row of the SDK's store as a tree node: the serialized UI message flattened
+ *  to text, and its stamp read as ms. */
 function paneRowToNode(row: ChatPaneRow): SessionTreeNode {
   return {
     id: row.id,
     parent_id: row.parent_id,
     role: row.role,
     content: uiMessageText(row.content),
-    created_at: Date.parse(`${row.created_at.replace(' ', 'T')}Z`),
+    created_at: paneStampMs(row.created_at),
   };
+}
+
+/** The ancestry in `messages` — the CLI's only store, and the fallback for an id
+ *  the SDK's store does not have. */
+function messagesAncestry(sql: SqlExecutor, messageId: string): SessionTreeNode[] {
+  return sql<SessionTreeNode & { depth: number }>`
+    WITH RECURSIVE ancestry(id, parent_id, depth) AS (
+      SELECT id, parent_id, 0 FROM messages
+      WHERE id = ${messageId} AND session_id = ${CHAT_SESSION_ID}
+      UNION ALL
+      SELECT m.id, m.parent_id, a.depth + 1
+      FROM messages m JOIN ancestry a ON m.id = a.parent_id
+      WHERE m.session_id = ${CHAT_SESSION_ID} AND a.depth < ${SESSION_TREE_MAX_DEPTH}
+    )
+    SELECT m.id, m.parent_id, m.role, m.content, m.created_at, a.depth
+    FROM ancestry a JOIN messages m ON m.id = a.id
+    ORDER BY a.depth DESC
+  `.map(({ id, parent_id, role, content, created_at }) => ({
+    id, parent_id, role, content, created_at,
+  }));
 }
 
 /**
@@ -109,7 +134,73 @@ function paneRowToNode(row: ChatPaneRow): SessionTreeNode {
 export function sessionTreeAncestry(sql: SqlExecutor, messageId: string): SessionTreeNode[] {
   const pane = chatPaneAncestry(sql, messageId);
   if (pane.length > 0) return pane.map(paneRowToNode);
-  return sql<SessionTreeNode & { depth: number }>`
+  return messagesAncestry(sql, messageId);
+}
+
+/** The ancestry as a fork carries it across a process boundary. */
+export interface ForkAncestry {
+  /** The chain for the plain `messages` table, root first, with `content` null
+   *  wherever {@link ForkAncestry.pane} carries the same id: the plain row is a
+   *  flattened projection of the rich one, so carrying both ships one
+   *  conversation twice — 14.4 MiB beside 20.5 MiB for a real long session. */
+  chain: Array<{
+    id: string; parent_id: string | null;
+    role: string; content: string | null; created_at: number;
+  }>;
+  /** The same chain in the SDK's store, verbatim; empty where it has none. */
+  pane: ChatPaneRow[];
+}
+
+/**
+ * Both halves of the ancestry a fork copies, and the elision between them.
+ *
+ * Here rather than in `identity/fork.ts` because which store owns the tree is
+ * decided once in this module, and the elision is only sound because both halves
+ * are the same walk from the same node: where the pane owns the tree the plain
+ * chain IS its flattening, id for id. A prefix cut could not say that, which is
+ * why it had to carry the text twice.
+ */
+export function forkAncestry(sql: SqlExecutor, messageId: string): ForkAncestry {
+  const pane = chatPaneAncestry(sql, messageId);
+  if (pane.length === 0) return { chain: messagesAncestry(sql, messageId), pane };
+  return {
+    pane,
+    chain: pane.map((row) => ({
+      id: row.id,
+      parent_id: row.parent_id,
+      role: row.role,
+      content: null,
+      created_at: paneStampMs(row.created_at),
+    })),
+  };
+}
+
+/**
+ * UTF-8 bytes of the stored text the ancestry of `messageId` would carry.
+ *
+ * Computed by SQLite over the same edges, so it costs no JS memory: a caller
+ * that has to refuse an over-budget copy must be able to know the size without
+ * building the thing it is refusing. `CAST(… AS BLOB)` because `LENGTH` over
+ * TEXT counts characters. The recursion is written out again rather than reusing
+ * the row walks above for exactly that reason — projecting `content` is the one
+ * thing this must not do.
+ */
+export function sessionTreeAncestryBytes(sql: SqlExecutor, messageId: string): number {
+  if (hasSdkStore(sql)) {
+    const pane = sql<{ b: number }>`
+      WITH RECURSIVE ancestry(id, parent_id, depth) AS (
+        SELECT id, parent_id, 0 FROM assistant_messages WHERE id = ${messageId}
+        UNION ALL
+        SELECT am.id, am.parent_id, a.depth + 1
+        FROM assistant_messages am JOIN ancestry a ON am.id = a.parent_id
+        WHERE a.depth < ${SESSION_TREE_MAX_DEPTH}
+      )
+      SELECT COALESCE(SUM(LENGTH(CAST(am.content AS BLOB))), 0) AS b
+      FROM ancestry a JOIN assistant_messages am ON am.id = a.id
+    `[0]!.b;
+    if (pane > 0) return pane;
+  }
+  return sql<{ b: number }>`
     WITH RECURSIVE ancestry(id, parent_id, depth) AS (
       SELECT id, parent_id, 0 FROM messages
       WHERE id = ${messageId} AND session_id = ${CHAT_SESSION_ID}
@@ -118,12 +209,9 @@ export function sessionTreeAncestry(sql: SqlExecutor, messageId: string): Sessio
       FROM messages m JOIN ancestry a ON m.id = a.parent_id
       WHERE m.session_id = ${CHAT_SESSION_ID} AND a.depth < ${SESSION_TREE_MAX_DEPTH}
     )
-    SELECT m.id, m.parent_id, m.role, m.content, m.created_at, a.depth
+    SELECT COALESCE(SUM(LENGTH(CAST(m.content AS BLOB))), 0) AS b
     FROM ancestry a JOIN messages m ON m.id = a.id
-    ORDER BY a.depth DESC
-  `.map(({ id, parent_id, role, content, created_at }) => ({
-    id, parent_id, role, content, created_at,
-  }));
+  `[0]!.b;
 }
 
 /**

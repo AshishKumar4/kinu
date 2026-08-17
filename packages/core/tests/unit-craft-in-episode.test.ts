@@ -134,14 +134,17 @@ describe('the craft ledger — where an in-episode observation lands', () => {
     expect(ledger.names()).toEqual(['kept']);
   });
 
-  test('a store that throws yields no names rather than failing the turn', () => {
+  test('a store that cannot answer is a fault, not a runtime with no crafted tools', () => {
     const db = new Database(':memory:');
     initCraftScoreTables(makeExecRaw(db));
     const ledger = createCraftLedger({
       craftStore: { list: () => { throw new Error('not initialized'); } },
       sql: makeSql(db),
     });
-    expect(ledger.names()).toEqual([]);
+    // `crafted_tools` belongs to the one workspace schema, so a store that
+    // cannot list is a broken database. Answered as an empty set, the agent
+    // re-crafts tools it already owns and every call to them goes unscored.
+    expect(() => ledger.names()).toThrow('not initialized');
   });
 
   test('observations accumulate through the existing EMA, not a parallel score', () => {
@@ -209,11 +212,12 @@ describe('the craft ledger — where an in-episode observation lands', () => {
     expect(reseeded?.score).toBe(earned);
   });
 
-  test('a runtime without the score table loses the observation, never the turn', () => {
-    const db = new Database(':memory:');
-    const ledger = createCraftLedger({ craftStore: { list: () => [] }, sql: makeSql(db) });
-    expect(() => ledger.observe(['x'], 0.7)).not.toThrow();
-    expect(ledger.observe(['x'], 0.7)).toEqual([]);
-    expect(() => seedCraftScore(makeSql(db), 'x')).not.toThrow();
+  test('an observation of a never-seeded tool opens its row rather than retiring it', () => {
+    const { ledger, db } = ledgerFixture();
+    expect(ledger.observe(['x'], CRAFT_INVOCATION_QUALITY.returned)).toEqual([]);
+    const opened = db.query<{ score: number; uses: number }, []>(
+      `SELECT score, uses FROM craft_scores WHERE tool_name='x'`,
+    ).get();
+    expect(opened).toEqual({ score: CRAFT_INVOCATION_QUALITY.returned, uses: 1 });
   });
 });

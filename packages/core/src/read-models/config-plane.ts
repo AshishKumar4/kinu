@@ -60,8 +60,8 @@ export function setModel(deps: SetModelDeps, spec: string) {
     deps.config.setModel(normalized);
     deps.onChanged();
     return { ok: true, spec: normalized };
-  } catch (err) {
-    throw new Error(`setModel(${spec}) failed: ${err instanceof Error ? err.message : String(err)}`);
+  } catch (error) {
+    throw new Error(`setModel(${spec}) failed`, { cause: error });
   }
 }
 

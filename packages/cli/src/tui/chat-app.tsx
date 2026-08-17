@@ -229,7 +229,10 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         const previous = client;
         setClient(result.client);
         onClientChange?.(result.client);
-        void previous.close().catch(() => {});
+        void previous.close().catch((closeError) => {
+          const reason = closeError instanceof Error ? closeError.message : String(closeError);
+          addMessage({ role: 'system', content: `The pre-fork session did not close cleanly: ${reason}` });
+        });
       }
       setMessages((prev) => {
         const pivot = findForkPivot(prev, point);
@@ -261,7 +264,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
     stream.clear();
     setTurnPhase(null);
     await client.resumeConversation(selected.info.id);
-    const history = await client.history().catch(() => []);
+    const history = await client.history();
     setActiveSessionId(client.cliSession.id);
     setMessages([
       { id: `resume-${selected.info.id}`, role: 'system', content: `Resumed ${selected.label}` },
@@ -572,7 +575,9 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
             if (hintedTakesRef.current === set.id) return;
             hintedTakesRef.current = set.id;
             addMessage({ role: 'system', content: `${set.candidates.length} takes — /takes to compare` });
-          }).catch(() => {});
+          }).catch((takesError) => {
+            addMessage({ role: 'system', content: errorLine(`This turn's takes could not be read: ${takesError instanceof Error ? takesError.message : String(takesError)}`) });
+          });
         }
         break;
       }
@@ -607,7 +612,13 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
           if (!cancelled && history.length > 0) {
             setMessages([welcomeMessage(client.agentName), ...history]);
           }
-        } catch { /* hydration is best effort; the welcome message stands */ }
+        } catch (historyError) {
+          // An unread history renders as an empty transcript, which is exactly
+          // what a brand-new workspace looks like. Say which this is.
+          if (!cancelled) {
+            addMessage({ role: 'system', content: errorLine(`Earlier messages could not be loaded: ${historyError instanceof Error ? historyError.message : String(historyError)}`) });
+          }
+        }
       }
       skipHydrationRef.current = false;
       await client.connect();
@@ -621,22 +632,25 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       cancelled = true;
       unsubscribe();
     };
-  }, [client, deviceConnect.offerIfUnconnected, handleClientEvent, hydrateHistory]);
+  }, [addMessage, client, deviceConnect.offerIfUnconnected, handleClientEvent, hydrateHistory]);
 
   useEffect(() => {
     let cancelled = false;
+    const note = (line: string) => {
+      if (!cancelled) addMessage({ role: 'system', content: errorLine(line) });
+    };
     void client.status()
       .then((next) => {
         if (cancelled) return;
         setStatus(next);
         setModelSpec((current) => current || (next.model ?? ''));
       })
-      .catch(() => {});
+      .catch((error) => note(`Workspace status could not be read: ${error instanceof Error ? error.message : String(error)}`));
     void client.listModels()
       .then((menu) => { if (!cancelled) setModelCatalog(menu.models); })
-      .catch(() => {});
+      .catch((error) => note(`The model catalog could not be read: ${error instanceof Error ? error.message : String(error)}`));
     return () => { cancelled = true; };
-  }, [client]);
+  }, [addMessage, client]);
 
   // Watch pending device consents while a turn is processing (cloud agents).
   // The shared watcher presents each consent once (no re-show when a poll tick
@@ -952,9 +966,15 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   let currentClient = opts.client;
 
   const cleanup = async () => {
-    try { await currentClient.close(); } catch { /* best effort */ }
+    let closeFailure: string | null = null;
+    try {
+      await currentClient.close();
+    } catch (error) {
+      closeFailure = error instanceof Error ? error.message : String(error);
+    }
     root.render(<box />);
     renderer.destroy();
+    if (closeFailure) console.error(`\n  The workspace did not close cleanly: ${closeFailure}`);
     console.log('\n  Goodbye.\n');
     process.exit(0);
   };

@@ -8,18 +8,14 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import {
-  forkWorkspace, initAllTables, writeSoul, readForkLineage, writeForkSnapshot,
+  forkWorkspace, writeSoul, readForkLineage, writeForkSnapshot,
   type ForkSnapshot, type ForkTransport,
 } from '../src/index.js';
-import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers.js';
+import { createTestWorkspace } from './helpers.js';
 
 async function sourceWorkspace() {
-  const db = new Database(':memory:');
-  const sql = makeSql(db);
-  initAllTables(makeExecRaw(db));
-  const vfs = createWorkspaceBundle(db).vfs;
+  const { db, sql, vfs } = createTestWorkspace();
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'atlas'}, ${100})`;
   await writeSoul(vfs, sql, 'help with testing');
   void sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hello'}, ${1000})`;
@@ -146,10 +142,7 @@ describe('forkWorkspace', () => {
 
   test('the delivered snapshot lands a complete fork', async () => {
     const src = await sourceWorkspace();
-    const tgtDb = new Database(':memory:');
-    const tgt = makeSql(tgtDb);
-    initAllTables(makeExecRaw(tgtDb));
-    const tgtVfs = createWorkspaceBundle(tgtDb).vfs;
+    const { db: tgtDb, sql: tgt, vfs: tgtVfs } = createTestWorkspace();
 
     const out = await forkWorkspace({
       sql: src.sql,

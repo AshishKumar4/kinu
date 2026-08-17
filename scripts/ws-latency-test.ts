@@ -9,6 +9,8 @@
  * Usage: bun scripts/ws-latency-test.ts [base-url] [agent-name]
  */
 
+import { tolerate } from "../packages/core/src/obs/index.js";
+
 const BASE_URL = process.argv[2] ?? "http://localhost:5173";
 const AGENT_NAME = process.argv[3] ?? "latency-test-agent";
 const TIMEOUT_MS = 120_000;
@@ -133,11 +135,10 @@ async function measureChatLatency(message: string): Promise<TimingResult> {
             return;
           }
 
-          // Parse the chunk body to identify content type
+          // A body chunk is JSON when it carries a typed stream event and plain text otherwise.
           if (msg.body) {
-            try {
-              const chunk = JSON.parse(msg.body);
-
+            const chunk = tolerate(() => JSON.parse(msg.body), "malformed-input");
+            if (chunk !== undefined) {
               if (result.firstContentChunkMs < 0) {
                 result.firstContentChunkMs = performance.now() - t0;
                 result.firstContentPreview = JSON.stringify(chunk).slice(0, 120);
@@ -156,10 +157,17 @@ async function measureChatLatency(message: string): Promise<TimingResult> {
                 result.firstTextMs = performance.now() - t0;
                 console.log(`  [${result.firstTextMs.toFixed(0)}ms] First TEXT chunk: "${(chunk.textDelta ?? "").slice(0, 60)}"`);
               }
-            } catch { /* non-JSON body */ }
+            }
           }
         }
-      } catch {}
+      } catch (error) {
+        // A frame this handler cannot process makes every remaining milestone meaningless, so the
+        // run reports the reason instead of returning -1s that read as "the model never spoke".
+        result.error = `Frame handling failed: ${error instanceof Error ? error.message : String(error)}`;
+        clearTimeout(timer);
+        ws.close();
+        resolve(result);
+      }
     });
   });
 }

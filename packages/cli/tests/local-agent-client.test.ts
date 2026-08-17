@@ -338,8 +338,8 @@ describe('/takes — Alternate Takes over a real local client', () => {
 
     // Seed a near-tied convergence (what think-mcts captures mid-turn), then
     // run a turn so the session claims it.
-    initSearchTables(rt.storage.execRaw);
-    initAlternateTakesTable(rt.storage.execRaw);
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
         VALUES ('r', 'win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)

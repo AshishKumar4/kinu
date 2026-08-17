@@ -288,10 +288,11 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
       // The metadata map is cold until loadConfig() runs (a resumed session
       // resolves its stored model before ever listing models), and defaulting
       // an unknown reasoning model to Chat Completions breaks it outright
-      // (gpt-5.6: "use /v1/responses"). Metadata is authoritative when
-      // present; otherwise fall back to the model family, and warm the map
-      // for subsequent creates.
-      if (!metadata) void loadConfig().catch(() => {});
+      // (gpt-5.6: "use /v1/responses"). Metadata is authoritative when present;
+      // otherwise fall back to the model family. The map warms itself on the
+      // model's FIRST REQUEST — customFetch resolves the config on the way out,
+      // where a failure reaches the caller instead of disappearing into a
+      // detached warm-up nobody awaited.
       const useResponsesAPI = metadata
         ? metadata.reasoning === true || metadata.apiNpm === '@ai-sdk/openai'
         : isOpenAIReasoningFamily(modelId);
@@ -348,20 +349,19 @@ function createOpenCodeModel(
     let body = init?.body;
     const textBody = v.safeParse(v.string(), body);
     if (textBody.success) {
-      try {
-        const parsed = v.parse(JsonObjectSchema, JSON.parse(textBody.output));
-        parsed.model = upstreamModel;
-        if (useResponsesAPI) rewriteOpenCodeResponsesBody(parsed);
-        // OpenAI Chat Completions uses max_completion_tokens instead of max_tokens.
-        const maxTokens = v.safeParse(v.number(), parsed.max_tokens);
-        if (!useResponsesAPI && providerId === 'openai' && maxTokens.success) {
-          parsed.max_completion_tokens = maxTokens.output;
-          delete parsed.max_tokens;
-        }
-        body = JSON.stringify(parsed);
-      } catch {
-        // Body is not JSON — leave as-is.
+      // The body is the ai-SDK's own request json. Failing to read it means the
+      // model id was never remapped, so the request would reach the provider
+      // naming a model it does not have — a 404 three layers from the cause.
+      const parsed = v.parse(JsonObjectSchema, JSON.parse(textBody.output));
+      parsed.model = upstreamModel;
+      if (useResponsesAPI) rewriteOpenCodeResponsesBody(parsed);
+      // OpenAI Chat Completions uses max_completion_tokens instead of max_tokens.
+      const maxTokens = v.safeParse(v.number(), parsed.max_tokens);
+      if (!useResponsesAPI && providerId === 'openai' && maxTokens.success) {
+        parsed.max_completion_tokens = maxTokens.output;
+        delete parsed.max_tokens;
       }
+      body = JSON.stringify(parsed);
     }
 
     const response = await modelFetch(url, { ...init, headers, body, signal: init?.signal });
@@ -455,14 +455,27 @@ async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo
   const child = spawnFn(['models', '--verbose'], {});
   child.stdin?.end();
 
-  const stdout = await readAll(child.stdout).catch(() => '');
-  const exitCode = await child.exit;
+  // Drained concurrently with the exit: the verbose listing is far larger than a
+  // pipe buffer, so awaiting the exit first would deadlock.
+  const [read, exitCode] = await Promise.all([readAllOutcome(child.stdout), child.exit]);
   if (exitCode !== 0) {
-    const stderr = await readAll(child.stderr).catch(() => '');
-    throw new Error(`Could not read opencode models: ${stderr.trim() || `exit ${exitCode}`}`);
+    const stderrRead = await readAllOutcome(child.stderr);
+    const detail = 'text' in stderrRead
+      ? stderrRead.text.trim()
+      : `stderr unreadable: ${stderrRead.error instanceof Error ? stderrRead.error.message : String(stderrRead.error)}`;
+    throw new Error(`Could not read opencode models: ${detail || `exit ${exitCode}`}`);
   }
+  if ('error' in read) {
+    throw new Error(
+      '`opencode models --verbose` exited 0 but its output could not be read',
+      { cause: read.error },
+    );
+  }
+  const stdout = read.text;
 
   const models: OpenCodeModelInfo[] = [];
+  // Entries this cannot read, reported with their denominator below.
+  const unreadable: string[] = [];
   // The verbose output alternates: "provider/model-id\n{...json...}" per model.
   const header = /^([^\s/]+\/[^\s]+)\n\{/gm;
   let match: RegExpExecArray | null;
@@ -493,10 +506,18 @@ async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo
         reasoning: metadata.capabilities?.reasoning,
         apiNpm: metadata.api?.npm || undefined,
       });
-    } catch {
-      // Skip malformed JSON entries.
+    } catch (error) {
+      unreadable.push(`${id}: ${error instanceof Error ? error.message : String(error)}`);
     }
     header.lastIndex = end;
+  }
+  // An unreadable entry is opencode's output format having changed, and the
+  // symptom — a short or empty model list — reads exactly like a small account.
+  if (unreadable.length > 0) {
+    console.warn(
+      `[proteus] opencode models --verbose: ${unreadable.length} of `
+      + `${models.length + unreadable.length} entries could not be read — ${unreadable.join('; ')}`,
+    );
   }
   return models;
 }
@@ -534,18 +555,41 @@ async function readAll(stream: SpawnedOpenCode['stdout']): Promise<string> {
   return out;
 }
 
+/** `readAll`, with a read failure carried out as a value rather than thrown:
+ *  the child's exit code says whether a dead stream is already explained, and
+ *  that decision cannot be made inside a catch. */
+async function readAllOutcome(
+  stream: SpawnedOpenCode['stdout'],
+): Promise<{ text: string } | { error: unknown }> {
+  try {
+    return { text: await readAll(stream) };
+  } catch (error) {
+    return { error };
+  }
+}
+
 // ─── Availability probe ──────────────────────────────────────────────────────
 
 export async function probeOpenCode(
   authPath: string,
   spawnFn: OpenCodeSpawn,
 ): Promise<OpenCodeAvailability> {
-  // Check if opencode binary exists.
+  // Check if opencode binary exists. The output is unused — the read is what
+  // lets the child exit — but a read that fails while `--version` itself
+  // SUCCEEDED is not the missing binary the exit code accounts for.
   const versionChild = spawnFn(['--version'], {});
   versionChild.stdin?.end();
-  await readAll(versionChild.stdout).catch(() => '');
-  const versionExit = await versionChild.exit;
+  const [versionRead, versionExit] = await Promise.all([
+    readAllOutcome(versionChild.stdout),
+    versionChild.exit,
+  ]);
   if (versionExit !== 0) return { binary: false, authenticated: false };
+  if ('error' in versionRead) {
+    throw new Error(
+      '`opencode --version` exited 0 but its output could not be read',
+      { cause: versionRead.error },
+    );
+  }
 
   // Check if auth.json exists and has a valid token.
   if (!existsSync(authPath)) return { binary: true, authenticated: false };

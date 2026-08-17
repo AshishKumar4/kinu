@@ -94,7 +94,7 @@ export async function stopCommand(name: string, opts: InspectOpts = {}): Promise
     return;
   }
 
-  const cancelled = markLocalBackgroundJobsCancelled(target.localName);
+  const cancelled = await markLocalBackgroundJobsCancelled(target.localName);
   if (opts.json) {
     printJson({
       ok: true,

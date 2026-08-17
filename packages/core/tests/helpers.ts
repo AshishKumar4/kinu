@@ -24,9 +24,54 @@ import type {
 import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-runtime.js';
 import type { CraftedTool } from '../src/types/craft.js';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json.js';
-import type { AgentDatabase } from '../src/identity/inline-primitives.js';
+import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives.js';
 import { createWorkspace, nextWorkspaceGeneration } from '../src/vfs/nimbus-workspace.js';
-import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema.js';
+import { initWorkspaceSchema } from '../src/identity/workspace-schema.js';
+import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff.js';
+
+/** One in-memory workspace database with the three SQL handles onto it. */
+export interface TestWorkspace {
+  readonly db: Database;
+  readonly sql: SqlExecutor;
+  readonly execRaw: RawSqlExec;
+  readonly vfs: VFS;
+}
+
+/**
+ * A workspace database carrying the PRODUCTION schema.
+ *
+ * `initWorkspaceSchema` rather than a hand-picked subset: a harness that
+ * creates fewer tables than a real workspace tests a shape no workspace ever
+ * has, and the code under test then has to tolerate absences that only the
+ * harness produces. That tolerance is what hid a fork silently dropping the
+ * parent's assistant messages and memory index.
+ */
+export function createTestWorkspace(): TestWorkspace {
+  const db = new Database(':memory:');
+  const sql = makeSql(db);
+  const execRaw = makeExecRaw(db);
+  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
+  return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs };
+}
+
+/**
+ * The agents SDK's own session-store DDL, verbatim from
+ * `AgentSessionProvider.ensureTable`. `created_at` is a whole-second DATETIME —
+ * the reason a fork cut cannot be a timestamp comparison.
+ *
+ * Deliberately NOT part of `createTestWorkspace`: the SDK creates this table on
+ * its first append, so a real workspace that has never run a turn does not have
+ * it, and the code under test has to keep answering that absence correctly.
+ * A test that needs the table seeds it explicitly, from this one definition.
+ */
+export const SDK_SESSION_DDL = `CREATE TABLE IF NOT EXISTS assistant_messages (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL DEFAULT '',
+  parent_id TEXT,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`;
 
 // ── SqlExecutor from bun:sqlite ──────────────────────────────────
 
@@ -93,11 +138,27 @@ export function createMemoryVFS(db: Database): VFS {
   return createWorkspaceBundle(db).vfs;
 }
 
-/** `vfs`, with every call ordered after `seeded` — so a fixture's own seed can
- *  never land on top of what a test wrote. */
-function afterSeed(vfs: VFS, seeded: Promise<unknown>): VFS {
+/**
+ * `vfs`, with every call ordered after the fixture's own seed — so a fixture's seed can never land
+ * on top of what a test wrote.
+ *
+ * `seed` is a THUNK, run at most once on the first VFS call, not a promise started eagerly. An
+ * eagerly-started seed is a floating promise racing the test: a test that never touches the VFS and
+ * closes its database still had a `writeFile` in flight, and it landed as
+ * `RangeError: Cannot use a closed database` from inside nimbus's sqlite-vfs, attributed to
+ * whichever test happened to be running. Deferring it means a test that does not use the
+ * filesystem never starts one. A seed FAILURE is still not absorbed — it rejects the first VFS
+ * call, because a suite silently running against a workspace with no scaffold is how a production
+ * swallow gets excused as "the test target lacks the file".
+ */
+function afterSeed(vfs: VFS, seed: () => Promise<void>): VFS {
+  let seeded: Promise<void> | null = null;
   const chain = <A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
-    async (...args: A): Promise<R> => { await seeded; return fn(...args); };
+    async (...args: A): Promise<R> => {
+      seeded ??= seed();
+      await seeded;
+      return fn(...args);
+    };
   return {
     readFile: chain((p: string, o?: { encoding?: string }) => vfs.readFile(p, o)),
     writeFile: chain((p: string, d: string | Uint8Array) => vfs.writeFile(p, d)),
@@ -154,47 +215,18 @@ export function makeAgentDatabase(db: Database): AgentDatabase {
 
 // ── In-memory Memory ─────────────────────────────────────────────
 
+/**
+ * The Memory a test runtime gets: the SAME inline primitive the local CLI path
+ * builds, over the same `memory_chunks` shape.
+ *
+ * It used to be a hand-rolled copy with a third schema, `(id, path, content)`.
+ * Once `initWorkspaceSchema` created the real seven-column table the copy's
+ * insert failed on every call, and the catch around it reported a file as
+ * indexed — so every memory assertion in this suite was passing against a
+ * memory that had never stored anything.
+ */
 export function createMemoryMemory(db: Database, vfs: VFS): Memory {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS memory_chunks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      path TEXT NOT NULL,
-      content TEXT NOT NULL
-    )
-  `);
-
-  return {
-    async write(path, content) { await vfs.writeFile(path, content); },
-    async append(path, content) {
-      try {
-        const existing = v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }));
-        await vfs.writeFile(path, existing + content);
-      } catch {
-        await vfs.writeFile(path, content);
-      }
-    },
-    async index(path) {
-      try {
-        const content = v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }));
-        db.run('INSERT INTO memory_chunks (path, content) VALUES (?, ?)', [path, content]);
-      } catch { /* file may not exist */ }
-    },
-    async search(query, limit = 10) {
-      const rows = db.query(
-        'SELECT path, content FROM memory_chunks WHERE content LIKE ? LIMIT ?',
-      ).all(`%${query}%`, limit).map((row) => v.parse(v.object({
-        path: v.string(), content: v.string(),
-      }), row));
-      return rows.map((r, i) => ({
-        path: r.path, startLine: 0, endLine: 0, snippet: r.content.slice(0, 200), score: 1 - i * 0.1,
-      }));
-    },
-    async read(path) {
-      try {
-        return v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }));
-      } catch { return null; }
-    },
-  };
+  return createInlineMemory(makeAgentDatabase(db), vfs);
 }
 
 // ── Mock LLM ─────────────────────────────────────────────────────
@@ -362,27 +394,23 @@ export function createTestRuntime(opts?: {
   // building a second bundle over the same database would be two filesystems
   // again, which is the thing this design removed.
   const workspace = createWorkspaceBundle(db);
-  // The scaffold seed is a real file write, so it is a promise. Every access
-  // chains behind it rather than racing it: a test that writes its own
-  // scaffold must not be overtaken by the seed landing afterwards.
-  const seeded = workspace.vfs.mkdir('scaffold', { recursive: true })
-    .then(() => workspace.vfs.writeFile('scaffold/agent.js', 'initial'))
-    .catch(() => {});
-  const vfs = afterSeed(workspace.vfs, seeded);
+  // The scaffold seed is a real file write, so it is a promise. `afterSeed` runs it on the first
+  // VFS call and orders every later call behind it: a test that writes its own scaffold cannot be
+  // overtaken by the seed landing afterwards, and a test that never touches the filesystem never
+  // starts a write that could outlive its database. A failed seed is NOT absorbed.
+  const vfs = afterSeed(workspace.vfs, () =>
+    workspace.vfs.mkdir('scaffold', { recursive: true })
+      .then(() => workspace.vfs.writeFile('scaffold/agent.js', 'initial')));
   const memory = createMemoryMemory(db, vfs);
   const craftStore = createMemoryCraftStore(db);
   const llm = createMockLLM(opts?.llmResponses);
   const executor = createMockExecutor();
   const schedule = createMemorySchedule(db);
 
-  // Initialize tables needed by EvolutionEngine and identity system
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default',
-    parent_id TEXT, role TEXT NOT NULL, content TEXT NOT NULL,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-  )`);
-  db.exec(WORKSPACE_IDENTITY_DDL);
-
+  // The PRODUCTION schema, for the reason spelled out on createTestWorkspace:
+  // a hand-picked subset tests a shape no workspace ever has, and the code
+  // under test is then forced to tolerate absences only this harness produces.
+  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
 
   const identity: Identity = {
     id: 'test-agent-id',
@@ -413,6 +441,7 @@ export function createTestRuntime(opts?: {
     shell: workspace.shell,
     spawnBranch: async () => mockBranch,
     abortBranch: async () => {},
+    releaseBranch: async () => {},
   };
 
   return { rt, db };
@@ -441,4 +470,14 @@ export function createMockSession(): import('../src/mcts/record-node.js').Sessio
       return result;
     },
   };
+}
+
+/** Collect the workspace text-file walk into a map. Production never does this
+ *  — holding every body at once is the defect `walkWorkspaceTextFiles` exists
+ *  to prevent — but a test asserting the walk's admission policy wants the
+ *  whole result in one place. */
+export async function collectWorkspaceTextFiles(rt: AgentRuntime): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  await walkWorkspaceTextFiles(rt, (path, content) => { out[path] = content; });
+  return out;
 }

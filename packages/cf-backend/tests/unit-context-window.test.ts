@@ -76,11 +76,16 @@ describe("catalogModelInfo", () => {
     expect(info?.inputModalities).toEqual(["text", "image"]);
   });
 
-  test("returns null for unknown providers, unknown models, and catalog failures", async () => {
+  test("returns null for unknown providers and unknown models, and surfaces a catalog it cannot read", async () => {
     expect(await catalogModelInfo(undefined, deps, "x")).toBeNull();
     const noMatch = { listModels: async () => [{ id: "other" }] };
     expect(await catalogModelInfo(noMatch, deps, "x")).toBeNull();
+    // Null for a failed READ would be the same answer as "no such model", which
+    // is how every model silently ends up on a static context window. The
+    // degraded path is kept where it can say so instead: the lookup seam
+    // (ModelCatalogSession.armLookup) records the reason and leaves the static
+    // fallbacks authoritative.
     const throws = { listModels: async () => { throw new Error("offline"); } };
-    expect(await catalogModelInfo(throws, deps, "x")).toBeNull();
+    await expect(catalogModelInfo(throws, deps, "x")).rejects.toThrow("offline");
   });
 });

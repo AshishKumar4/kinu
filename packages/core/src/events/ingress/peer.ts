@@ -74,8 +74,10 @@ export interface ReceiveResult {
 export interface SenderDeps {
   /** Sender-side outbox row writer (e.g., direct SQL on the sender's DO). */
   enqueueOutboxRow(row: OutboxRow): void;
-  /** Ask the sender's host to wake up and dispatch the new outbox row. */
-  scheduleDispatch(at: number): void;
+  /** Ask the sender's host to wake up and dispatch the new outbox row. Awaited:
+   *  on the cloud backend this is a Durable Object storage write, and a Durable
+   *  Object has no way to retain an unawaited one (`do.wait_until.no_op`). */
+  scheduleDispatch(at: number): Promise<void>;
 }
 
 export interface OutboxRow {
@@ -134,11 +136,11 @@ const OutboxStateSchema = v.object({
 const NextRetrySchema = v.object({ next: v.nullable(v.number()) });
 
 /** Sender API: enqueue a peer message. Returns the outbox row id. */
-export function enqueueOutboundPeer(
+export async function enqueueOutboundPeer(
   deps: SenderDeps,
   opts: SendOptions,
   now: number,
-): string {
+): Promise<string> {
   const id = ulid();
   deps.enqueueOutboxRow({
     id,
@@ -148,7 +150,7 @@ export function enqueueOutboundPeer(
     causality_event_id: opts.caused_by_event_id ?? null,
     next_attempt_at: now,
   });
-  deps.scheduleDispatch(now);
+  await deps.scheduleDispatch(now);
   return id;
 }
 
@@ -245,8 +247,9 @@ export interface PeerHubDeps {
   deliver(receiver_agent_name: string, msg: PeerMessage): Promise<ReceiveResult>;
   isSameOwner(sender_user_id: string): Promise<boolean>;
   hasGrant(sender_agent_name: string, sender_user_id: string): Promise<boolean>;
-  /** Arm the host's alarm so pending outbox rows are re-driven after eviction. */
-  scheduleDispatch(at: number): void;
+  /** Arm the host's alarm so pending outbox rows are re-driven after eviction.
+   *  Awaited for the same reason as SenderDeps.scheduleDispatch. */
+  scheduleDispatch(at: number): Promise<void>;
   /** A new external event was admitted — wake the agent loop (drain). */
   onAdmitted(): void;
   now?(): number;
@@ -330,11 +333,8 @@ export class PeerHub {
     if (!row) return false;
     if (row.receiver_agent_name !== msg.sender_agent_name) return false;
     if (row.receiver_user_id !== msg.sender_user_id) return false;
-    try {
-      return v.parse(OutboxPayloadSchema, parseJsonObject(row.payload)).reply_expected === true;
-    } catch {
-      return false;
-    }
+    const payload = v.safeParse(OutboxPayloadSchema, parseJsonObject(row.payload));
+    return payload.success && payload.output.reply_expected === true;
   }
 
   /** Match a transport reply envelope to a live ask waiter. */
@@ -353,7 +353,7 @@ export class PeerHub {
 
   /** Fire-and-forget. */
   async send(input: { agent: string; userId: string; topic: string; message: string; mode: WorkMode }): Promise<PeerSendOutcome> {
-    const id = this.enqueue(input.agent, input.userId, input.topic, input.message, input.mode, false);
+    const id = await this.enqueue(input.agent, input.userId, input.topic, input.message, input.mode, false);
     await this.dispatchOutbox();
     const row = this.outboxState(id);
     if (row?.state === 'dlq') return { status: 'rejected', reason: row.last_error ?? 'rejected by receiver' };
@@ -362,7 +362,7 @@ export class PeerHub {
 
   /** Send-and-await over the async transport. */
   async ask(input: { agent: string; userId: string; topic: string; message: string; timeoutMs: number; mode: WorkMode }): Promise<PeerAskOutcome> {
-    const askId = this.enqueue(input.agent, input.userId, input.topic, input.message, input.mode, true);
+    const askId = await this.enqueue(input.agent, input.userId, input.topic, input.message, input.mode, true);
     const wait = this.registerWaiter(askId, input.timeoutMs);
     await this.dispatchOutbox();
     const row = this.outboxState(askId);
@@ -404,7 +404,7 @@ export class PeerHub {
     } catch {
       return { delivered: false, detail: 'malformed peer_back holder_addr' };
     }
-    this.enqueue(holder.agent_name, holder.user_id, PEER_REPLY_TOPIC, {
+    await this.enqueue(holder.agent_name, holder.user_id, PEER_REPLY_TOPIC, {
       in_reply_to: holder.ask_id,
       content: payload,
     }, holder.mode, false);
@@ -413,15 +413,15 @@ export class PeerHub {
     return { delivered: true };
   }
 
-  private enqueue(
+  private async enqueue(
     receiverAgent: string,
     receiverUserId: string,
     topic: string,
     body: JsonValue,
     mode: WorkMode,
     replyExpected: boolean,
-  ): string {
-    return enqueueOutboundPeer({
+  ): Promise<string> {
+    return await enqueueOutboundPeer({
       enqueueOutboxRow: (row) => {
         this.deps.sql.exec(
           `INSERT INTO peer_outbox
@@ -465,7 +465,7 @@ export class PeerHub {
         if (blocked.has(receiverKey)) continue;
         if (row.next_attempt_at > now) {
           blocked.add(receiverKey);
-          this.deps.scheduleDispatch(row.next_attempt_at);
+          await this.deps.scheduleDispatch(row.next_attempt_at);
           continue;
         }
 
@@ -517,7 +517,7 @@ export class PeerHub {
               `UPDATE peer_outbox SET attempt_count = ?, next_attempt_at = ?, last_error = ? WHERE id = ?`,
               attempts, next, message, row.id,
             );
-            this.deps.scheduleDispatch(next);
+            await this.deps.scheduleDispatch(next);
           }
           blocked.add(receiverKey);   // preserve per-receiver ordering
         }

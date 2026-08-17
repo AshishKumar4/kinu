@@ -656,6 +656,92 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     ]);
   });
 
+  // The invariant the frozen index can violate on its own, and the only one
+  // that costs a turn rather than a cache hit: `streamText` throws
+  // AI_MissingToolResultsError client-side for an assistant tool-call whose
+  // `tool` answer does not immediately follow it, so a block woven into that
+  // gap makes every later turn of the session fail identically.
+  test('a frozen index that has become a tool result rides after the pair, not through it', () => {
+    // Exactly the CLI shape: the turn-start steer makes turn 1's step-0 array
+    // two messages long, so the block freezes at 2 — and on the next turn
+    // index 2 is the tool result answering the assistant message at index 1.
+    const ledger = new DynamicContextLedger();
+    const firstTurn: ModelMessage[] = [
+      { role: 'user', content: 'add caching' },
+      { role: 'user', content: 'steer' },
+    ];
+    const frozen = ledger.weave(firstTurn, state)[2]!;
+    expect(isDynamicBlock(String(frozen.content))).toBe(true);
+
+    const nextTurn: ModelMessage[] = [
+      { role: 'user', content: 'add caching' },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'run', input: {} }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'run', output: { type: 'text', value: 'ok' } }] },
+      { role: 'assistant', content: 'done' },
+      { role: 'user', content: 'and now the docs' },
+    ];
+    const out = ledger.weave(nextTurn, state);
+
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'user', 'assistant', 'user']);
+    // Same block object: the repair moves where it lands, never its bytes.
+    expect(out[3]).toBe(frozen);
+    expect(ledger.size).toBe(1);
+  });
+
+  test('the block steps over EVERY tool message answering a turn, not just the first', () => {
+    // Two calls answered in two separate `tool` messages. Landing between them
+    // breaks the prompt exactly as landing before the first one does, so a
+    // single-step advance is still a broken prompt.
+    const ledger = new DynamicContextLedger();
+    const result = (id: string): ModelMessage => ({
+      role: 'tool',
+      content: [{ type: 'tool-result', toolCallId: id, toolName: 'run', output: { type: 'text', value: 'ok' } }],
+    });
+    const firstTurn: ModelMessage[] = [
+      { role: 'user', content: 'do both' },
+      { role: 'user', content: 'steer' },
+    ];
+    const frozen = ledger.weave(firstTurn, state)[2]!;
+
+    const nextTurn: ModelMessage[] = [
+      { role: 'user', content: 'do both' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'c1', toolName: 'run', input: {} },
+          { type: 'tool-call', toolCallId: 'c2', toolName: 'run', input: {} },
+        ],
+      },
+      result('c1'),
+      result('c2'),
+      { role: 'assistant', content: 'both done' },
+    ];
+    const out = ledger.weave(nextTurn, state);
+
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'tool', 'user', 'assistant']);
+    expect(out[4]).toBe(frozen);
+  });
+
+  test('a block whose slot is not a tool result stays at exactly its birth index', () => {
+    // The common case, stated as its own assertion because the repair above is
+    // only affordable if it is inert here: a moved block would shift the bytes
+    // the provider prefix cache is keyed on for every ordinary turn.
+    const ledger = new DynamicContextLedger();
+    const history: ModelMessage[] = [{ role: 'user', content: 'q1' }, { role: 'user', content: 'steer' }];
+    const frozen = ledger.weave(history, state)[2]!;
+
+    history.push(
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'run', input: {} }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'run', output: { type: 'text', value: 'ok' } }] },
+    );
+    const out = ledger.weave(history, state);
+
+    // Index 2 is the assistant message, so nothing moves: the block still
+    // renders after exactly two messages.
+    expect(out.indexOf(frozen)).toBe(2);
+    expect(out.map((m) => m.role)).toEqual(['user', 'user', 'user', 'assistant', 'tool']);
+  });
+
   test('nothing to say → no block is born and none is removed', () => {
     const ledger = new DynamicContextLedger();
     const out = ledger.weave([{ role: 'user', content: 'hi' }], {});

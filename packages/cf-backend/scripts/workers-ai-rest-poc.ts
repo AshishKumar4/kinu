@@ -63,12 +63,8 @@ const response = await fetch(endpoint, {
 });
 
 const text = await response.text();
-let body: JsonValue = text;
-try {
-  body = parseJsonValue(text);
-} catch {
-  // Keep raw body.
-}
+const decoded = tolerate(() => parseJsonValue(text), 'malformed-input');
+const body: JsonValue = decoded === undefined ? text : decoded;
 
 console.log(JSON.stringify({
   ok: response.ok,

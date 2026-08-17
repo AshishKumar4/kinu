@@ -84,8 +84,7 @@ function decodeJson(raw: string, label: string): JsonValue {
   try {
     return parseJsonValue(raw);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`${label} is not valid JSON: ${detail}`);
+    throw new Error(`${label} is not valid JSON`, { cause: error });
   }
 }
 

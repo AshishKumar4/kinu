@@ -35,8 +35,7 @@ export async function walkRecursive(
 
 	async function walk(dir: string, depth: number): Promise<void> {
 		if (entries.length >= maxEntries) { truncated = true; return; }
-		let names: string[];
-		try { names = await vfs.readdir(dir); } catch { return; }
+		const names = await vfs.readdir(dir);
 
 		for (const name of names) {
 			if (entries.length >= maxEntries) { truncated = true; return; }

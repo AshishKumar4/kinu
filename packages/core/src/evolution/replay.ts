@@ -25,6 +25,8 @@ import {
   TURN_OUTCOMES,
   type TurnOutcomeRow,
 } from './outcomes.js';
+import { reconcileColumns } from '../identity/columns.js';
+import { tolerate } from '../obs/index.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { nanoid } from '../utils/nanoid.js';
@@ -43,7 +45,7 @@ import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stat
  */
 export const DEFAULT_REPLAY_SAMPLE_SIZE = 20;
 
-export function initReplayTables(execRaw: RawSqlExec): void {
+export function initReplayTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   execRaw(`CREATE TABLE IF NOT EXISTS replay_evals (
     id TEXT PRIMARY KEY,
     ran_at INTEGER NOT NULL,
@@ -61,8 +63,7 @@ export function initReplayTables(execRaw: RawSqlExec): void {
   // bounds are stored rather than recomputed. Rows written before they
   // existed keep NULLs; listReplayEvals reconstructs those exactly from the
   // stored mean and sample size.
-  try { execRaw(`ALTER TABLE replay_evals ADD COLUMN score_lo REAL`); } catch { /* exists */ }
-  try { execRaw(`ALTER TABLE replay_evals ADD COLUMN score_hi REAL`); } catch { /* exists */ }
+  reconcileColumns(sql, execRaw, 'replay_evals', { score_lo: 'REAL', score_hi: 'REAL' });
 }
 
 export interface ReplayInstanceResult {
@@ -206,31 +207,26 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
 
 /** The persisted loss curve, newest first — what the UI could chart. */
 export function listReplayEvals(sql: SqlExecutor, limit = 50): ReplayEvalSummary[] {
-  try {
-    const rows = sql<{
-      id: string; ran_at: number; sample_size: number; accepted_n: number;
-      negative_n: number; mean_score: number; loss: number;
-      scaffold_version: number | null; details: string;
-      score_lo: number | null; score_hi: number | null;
-    }>`SELECT * FROM replay_evals ORDER BY ran_at DESC, id DESC LIMIT ${limit}`;
-    return rows.map((r) => {
-      let results: ReplayInstanceResult[] = [];
-      try {
-        const parsed = v.safeParse(v.array(ReplayInstanceResultSchema), parseJsonValue(r.details));
-        if (parsed.success) results = parsed.output;
-      } catch { /* malformed details — summary numbers still stand */ }
-      // Pre-interval rows carry no bounds; mean and n determine them exactly.
-      const interval: ScoreInterval = r.score_lo != null && r.score_hi != null
-        ? { mean: r.mean_score, lo: r.score_lo, hi: r.score_hi, n: r.sample_size }
-        : wilsonInterval(r.mean_score * r.sample_size, r.sample_size);
-      return {
-        id: r.id, ranAt: r.ran_at, sampleSize: r.sample_size,
-        acceptedCount: r.accepted_n, negativeCount: r.negative_n,
-        meanScore: r.mean_score, loss: r.loss, interval,
-        scaffoldVersion: r.scaffold_version, results,
-      };
-    });
-  } catch {
-    return [];
-  }
+  const rows = sql<{
+    id: string; ran_at: number; sample_size: number; accepted_n: number;
+    negative_n: number; mean_score: number; loss: number;
+    scaffold_version: number | null; details: string;
+    score_lo: number | null; score_hi: number | null;
+  }>`SELECT * FROM replay_evals ORDER BY ran_at DESC, id DESC LIMIT ${limit}`;
+  return rows.map((r) => {
+    // Malformed details are the one tolerable corruption here: the summary
+    // numbers live in the row's own columns, so the point on the curve stands.
+    const details = tolerate(() => parseJsonValue(r.details), 'malformed-input');
+    const parsed = v.safeParse(v.array(ReplayInstanceResultSchema), details);
+    // Pre-interval rows carry no bounds; mean and n determine them exactly.
+    const interval: ScoreInterval = r.score_lo != null && r.score_hi != null
+      ? { mean: r.mean_score, lo: r.score_lo, hi: r.score_hi, n: r.sample_size }
+      : wilsonInterval(r.mean_score * r.sample_size, r.sample_size);
+    return {
+      id: r.id, ranAt: r.ran_at, sampleSize: r.sample_size,
+      acceptedCount: r.accepted_n, negativeCount: r.negative_n,
+      meanScore: r.mean_score, loss: r.loss, interval,
+      scaffoldVersion: r.scaffold_version, results: parsed.success ? parsed.output : [],
+    };
+  });
 }

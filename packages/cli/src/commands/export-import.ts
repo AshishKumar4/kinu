@@ -24,6 +24,7 @@ import {
   type ArchiveCursor,
   type ArchivePage,
 } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import { createInlineWorkspace } from '@proteus/core/identity';
 import { agentDbPath, agentDir, ensureAgentHome, requireStoredAuthConfig } from '../config.js';
 import { resolveAgentTarget } from '../agent-target.js';
@@ -200,15 +201,16 @@ function isSqliteDatabaseFile(path: string): boolean {
   }
 }
 
-/** The workspace an archive came from — a better default name than the file's. */
+/** The workspace an archive came from — a better default name than the file's.
+ *  Null when the first line is not one of our headers: not every file handed to
+ *  `import` is an archive, and that is a domain answer, not a failure. */
 function archiveWorkspaceName(path: string): string | null {
   for (const line of readLines(path)) {
-    try {
-      const header = v.parse(ArchiveHeaderSchema, JSON.parse(line));
-      return header.t === 'header' ? header.workspace ?? null : null;
-    } catch {
-      return null;
-    }
+    const value: unknown = tolerate(() => JSON.parse(line), 'malformed-input');
+    if (value === undefined) return null;
+    const parsed = v.safeParse(ArchiveHeaderSchema, value);
+    if (!parsed.success || parsed.output.t !== 'header') return null;
+    return parsed.output.workspace ?? null;
   }
   return null;
 }

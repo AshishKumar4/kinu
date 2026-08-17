@@ -39,6 +39,7 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
+import { tolerate } from "@proteus/core/obs";
 import { Button } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import {
@@ -302,14 +303,13 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
   deserializeAttachment(): JsonValue | null { return null; }
 
   send(raw: string): void {
-    let frame: { type?: string; id?: string; method?: string };
-    try {
-      const parsed = v.safeParse(v.object({
-        type: v.optional(v.string()), id: v.optional(v.string()), method: v.optional(v.string()),
-      }), JSON.parse(raw));
-      if (!parsed.success) return;
-      frame = parsed.output;
-    } catch { return; }
+    const json = tolerate<unknown>(() => JSON.parse(raw), 'malformed-input');
+    if (json === undefined) return;
+    const parsed = v.safeParse(v.object({
+      type: v.optional(v.string()), id: v.optional(v.string()), method: v.optional(v.string()),
+    }), json);
+    if (!parsed.success) return;
+    const frame = parsed.output;
     if (frame.type !== "rpc" || !frame.method) return;
     const method = frame.method;
     const result = AGENT_RPC.has(method)

@@ -118,7 +118,7 @@ describe("the merge the parent reads back names each head's file changes", () =>
 describe('the head journal makes a split\'s file changes queryable', () => {
   test('a recorded report round-trips, and heads that changed nothing are absent', () => {
     const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db));
+    initHeadsTables(makeExecRaw(db), makeSql(db));
     const journal = new HeadJournal(makeSql(db));
     const base = {
       rootId: 'run-1', parentId: null, depth: 0, rationale: 'r',
@@ -153,7 +153,7 @@ describe('the head journal makes a split\'s file changes queryable', () => {
       wall_clock_ms INTEGER DEFAULT 0, summary TEXT, error_message TEXT,
       decisions_json TEXT, artifacts_json TEXT, tool_calls_json TEXT, child_head_ids_json TEXT,
       merge_strategy TEXT NOT NULL DEFAULT 'synthesize')`);
-    initHeadsTables(makeExecRaw(db));
+    initHeadsTables(makeExecRaw(db), makeSql(db));
     const journal = new HeadJournal(makeSql(db));
     journal.insertSpawn({
       id: 'h', rootId: 'run-2', parentId: null, depth: 0, task: 't', rationale: 'r',

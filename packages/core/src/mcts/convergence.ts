@@ -93,18 +93,13 @@ export async function converge(
     `[0];
     if (winnerCode?.code_used && isCraftable(winnerCode.code_language)
         && winner.value > DEFAULT_CONFIG.mcts.craftExtractionThreshold) {
-      try {
-        await maybeStoreCraftedTool(rt, winnerCode.code_used, winner.value);
-      } catch {
-        // Craft extraction failure is non-fatal
-      }
+      await maybeStoreCraftedTool(rt, winnerCode.code_used, winner.value);
     }
 
-    try {
-      captureAlternateTakes(rt.storage.sql, { rootId, task: winner.task, winnerId: winner.id, epsilon: takesEpsilon });
-    } catch {
-      // alternate_takes may not exist in minimal test runtimes — non-fatal.
-    }
+    // The near-tied rivals of the answer the user is about to see. Capturing
+    // them is the only preference signal this turn produces, so a capture that
+    // fails settles nothing quietly.
+    captureAlternateTakes(rt.storage.sql, { rootId, task: winner.task, winnerId: winner.id, epsilon: takesEpsilon });
   }
 
   // Close the tree: the winner becomes terminal and every other open node in
@@ -139,21 +134,19 @@ export function abandonSearchTree(sql: SqlExecutor, rootId: string): void {
 }
 
 /** Record the task outcome into task_history — the per-task ledger behind the
- *  agent-info "Tasks" stat and scaffold error-rate monitoring. */
+ *  agent-info "Tasks" stat and scaffold error-rate monitoring. Both the scaffold
+ *  version and task_history come from the workspace schema every backend
+ *  initializes, so neither is optional: a search that cannot write its own
+ *  outcome must say so rather than leave the ledger short one settled task. */
 async function recordTaskOutcome(
   rt: AgentRuntime,
   task: string,
   outcome: 'success' | 'error',
   score: number,
 ): Promise<void> {
-  let scaffoldVersion = 0;
-  try { scaffoldVersion = await rt.identity.scaffold.version(); } catch { /* scaffold-less backend */ }
-  try {
-    void rt.storage.sql`
-  INSERT INTO task_history (task, scaffold_version, outcome, score)
-      VALUES (${task.slice(0, 500)}, ${scaffoldVersion}, ${outcome}, ${score})
-    `;
-  } catch {
-    // task_history may not exist in minimal test runtimes — non-fatal.
-  }
+  const scaffoldVersion = await rt.identity.scaffold.version();
+  void rt.storage.sql`
+    INSERT INTO task_history (task, scaffold_version, outcome, score)
+    VALUES (${task.slice(0, 500)}, ${scaffoldVersion}, ${outcome}, ${score})
+  `;
 }

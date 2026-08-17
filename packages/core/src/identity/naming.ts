@@ -1,6 +1,7 @@
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import * as v from 'valibot';
 import { isPlaceholderMission } from './soul.js';
+import { tolerate } from '../obs/index.js';
 
 const WorkspaceTitleSchema = v.object({ title: v.string() });
 
@@ -216,7 +217,12 @@ export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePl
  *  placeholder never survives a failed model call, then upgrade to the
  *  generated one. `persist` writes the title AND marks its origin 'auto',
  *  which is what makes this one-shot — the plan can no longer match.
- *  Generation failures are swallowed: the deterministic title stands. */
+ *
+ *  A failed generation is not swallowed here. The deterministic title has
+ *  already landed by then, so it stands whatever happens next, and the caller
+ *  is the one that knows whether a titling failure is worth reporting — a
+ *  catch here reported "titled" for a dead review model, an unroutable
+ *  provider and a failing `persist` alike. */
 export async function applyWorkspaceTitle(
   state: WorkspaceTitleState,
   effects: {
@@ -231,13 +237,11 @@ export async function applyWorkspaceTitle(
     await effects.persist(plan.provisional);
     title = plan.provisional;
   }
-  try {
-    const suggested = (await effects.suggest?.(plan.mission))?.trim();
-    if (suggested && suggested !== title) {
-      await effects.persist(suggested);
-      title = suggested;
-    }
-  } catch { /* the deterministic title stands */ }
+  const suggested = (await effects.suggest?.(plan.mission))?.trim();
+  if (suggested && suggested !== title) {
+    await effects.persist(suggested);
+    title = suggested;
+  }
   return title;
 }
 
@@ -264,12 +268,9 @@ export function workspaceTitlePrompt(mission: string): string {
  *  model returned nothing usable. Only a title: the slug is not the model's to
  *  choose (see {@link workspaceSlug}). */
 export function parseWorkspaceTitle(raw: string): string | null {
-  let parsed: unknown;
-  try {
-    parsed = extractJsonObject(raw);
-  } catch {
-    return null;
-  }
+  // The one failure a title parse tolerates: the model did not return JSON.
+  const parsed = tolerate(() => extractJsonObject(raw), 'malformed-input');
+  if (parsed === undefined) return null;
   const title = v.safeParse(WorkspaceTitleSchema, parsed);
   if (!title.success) return null;
   return cleanTitle(title.output.title) || null;

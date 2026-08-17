@@ -38,12 +38,8 @@ export function deviceTag(deviceId: string): string {
 /** The deviceId a hibernatable socket was accepted for, or null for sockets
  *  owned by the agents SDK (their attachments carry `__pk`, not `device`). */
 export function deviceIdFromSocket(ws: DeviceSocket): string | null {
-  try {
-    const attachment = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
-    return attachment.success ? attachment.output.device : null;
-  } catch {
-    return null;
-  }
+  const attachment = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
+  return attachment.success ? attachment.output.device : null;
 }
 
 interface TunnelEntry {
@@ -60,7 +56,7 @@ export class DeviceSocketHub {
   accept(deviceId: string, server: DeviceSocket): void {
     this.dropTunnel(deviceId);
     for (const old of this.ctx.getWebSockets(deviceTag(deviceId))) {
-      try { old.close(1000, 'replaced by a new connection'); } catch { /* nop */ }
+      if (old.readyState === WS_OPEN) old.close(1000, 'replaced by a new connection');
     }
     this.ctx.acceptWebSocket(server, [deviceTag(deviceId)]);
     server.serializeAttachment({ device: deviceId });
@@ -125,7 +121,7 @@ export class DeviceSocketHub {
   close(deviceId: string, reason: string): void {
     this.dropTunnel(deviceId);
     for (const ws of this.ctx.getWebSockets(deviceTag(deviceId))) {
-      try { ws.close(1000, reason); } catch { /* nop */ }
+      if (ws.readyState === WS_OPEN) ws.close(1000, reason);
     }
   }
 }

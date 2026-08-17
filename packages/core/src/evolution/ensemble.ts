@@ -101,6 +101,7 @@
 import * as v from 'valibot';
 import type { LLM, SqlExecutor } from '../types/primitives.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { tolerate } from '../obs/index.js';
 import { formatScoreInterval } from '../utils/stats.js';
 import {
   calibrationUniverse, labelingItem, renderLabelingEvidence, OUTCOME_LABEL_HELP,
@@ -164,12 +165,14 @@ export function buildEnsembleJudgePrompt(item: LabelingItem): string {
   );
 }
 
+const VerdictSchema = v.object({ verdict: v.picklist(OUTCOME_LABELS) });
+
+/** The panel verdict a model gave, or null when it answered without one — a
+ *  hole in the measurement the caller counts, never an abstention. */
 function parseVerdict(raw: string): OutcomeLabel | null {
-  try {
-    return v.parse(v.object({ verdict: v.picklist(OUTCOME_LABELS) }), extractJsonObject(raw)).verdict;
-  } catch {
-    return null;
-  }
+  const answer = tolerate(() => extractJsonObject(raw), 'malformed-input');
+  const parsed = v.safeParse(VerdictSchema, answer);
+  return parsed.success ? parsed.output.verdict : null;
 }
 
 // ── Running the panel ────────────────────────────────────────────
@@ -232,6 +235,22 @@ function goldLabeledItems(universe: ReadonlyArray<UniverseRow>, sql: SqlExecutor
 }
 
 /**
+ * The panel, in the two stages it really has.
+ *
+ * Choosing WHICH models judge is free — a spec is a string. Turning a spec into
+ * a judge resolves a model, which reaches the signed-in session and the stored
+ * provider keys. Collapsing the two put that credential requirement ahead of
+ * both free preconditions below, so `proteus label ensemble` answered "Not
+ * authenticated" to a workspace whose real missing step was hand labels, and to
+ * a one-model panel that could never have run at all. The order is decided here,
+ * once, for every backend.
+ */
+export interface EnsemblePanel {
+  specs(): Promise<readonly string[]>;
+  judge(spec: string): EnsembleJudge;
+}
+
+/**
  * Put every hand-labeled turn to every judge, and store what comes back.
  *
  * Turns a judge has already answered are skipped, and each verdict is written
@@ -242,14 +261,16 @@ function goldLabeledItems(universe: ReadonlyArray<UniverseRow>, sql: SqlExecutor
  * them to a retry is the difference between an affordable command and one
  * nobody runs twice.
  *
- * A judge that errors or answers unusably on a turn simply has no row for it;
- * that turn then has no unanimous panel verdict and drops out of the report,
- * counted rather than quietly treated as an abstention — an outage is not the
- * same finding as a disagreement.
+ * A judge that answers unusably on a turn simply has no row for it; that turn
+ * then has no unanimous panel verdict and drops out of the report, counted
+ * rather than quietly treated as an abstention — an unreadable answer is not
+ * the same finding as a disagreement. A failed CALL is neither: it propagates,
+ * so a rate limit stops the run instead of being recorded as a hundred
+ * unusable answers, and the next run resumes from the rows already stored.
  */
 export async function runEnsemble(
   sql: SqlExecutor,
-  judges: ReadonlyArray<EnsembleJudge>,
+  panel: EnsemblePanel,
   opts: { now?: number } = {},
 ): Promise<EnsembleRunResult> {
   // Prerequisites in the order the owner would fix them: a ledger, then labels
@@ -260,9 +281,11 @@ export async function runEnsemble(
   if (universe.length === 0) return { run: null, gap: { kind: 'no_population', judges: [] } };
   const items = goldLabeledItems(universe, sql);
   if (items.length === 0) return { run: null, gap: { kind: 'no_gold_labels', judges: [] } };
-  if (judges.length < 2) {
-    return { run: null, gap: { kind: 'too_few_judges', judges: judges.map((j) => j.spec) } };
+  const specs = await panel.specs();
+  if (specs.length < 2) {
+    return { run: null, gap: { kind: 'too_few_judges', judges: [...specs] } };
   }
+  const judges = specs.map((spec) => panel.judge(spec));
 
   const done = new Set(ensembleLabels(sql).map((row) => `${row.outcomeId}\n${row.model}`));
   const judged: EnsembleRun['judged'] = [];
@@ -290,20 +313,15 @@ export async function runEnsemble(
   return { run: { judged, turns: items.length, alreadyJudged }, gap: null };
 }
 
-/** One judge's blind verdict on one turn, or null when it errored or answered
- *  unusably. Exported because the behavioural corpus (behavior-labels.ts)
- *  scores the same panel over different turns, and a second copy of "ask,
- *  parse, swallow" would be a second place for the prompt and the parse to
- *  drift apart. */
+/** One judge's blind verdict on one turn, or null when it answered unusably.
+ *  Exported because the behavioural corpus (behavior-labels.ts) scores the same
+ *  panel over different turns, and a second copy of "ask, parse" would be a
+ *  second place for the prompt and the parse to drift apart. */
 export async function askEnsembleJudge(
   judge: EnsembleJudge,
   item: LabelingItem,
 ): Promise<OutcomeLabel | null> {
-  try {
-    return parseVerdict(await judge.llm.complete(buildEnsembleJudgePrompt(item)));
-  } catch {
-    return null;
-  }
+  return parseVerdict(await judge.llm.complete(buildEnsembleJudgePrompt(item)));
 }
 
 /** The panel's verdict for one turn: what every judge said, or `unclear` when

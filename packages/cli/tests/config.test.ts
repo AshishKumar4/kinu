@@ -75,7 +75,9 @@ describe("CLI config safety", () => {
     expect(out.effortSet).toEqual({ kind: "effort-set", effort: "high" });
     expect(out.invalid).toMatchObject({ kind: "text", text: expect.stringContaining("Usage") });
     expect(out.config).toMatchObject({ model: "openai/gpt-5.5", reasoningEffort: "high" });
-    expect(out.invalidLoaded).toBeUndefined();
+    // A config file with one invalid field is reported, not silently replaced by
+    // defaults: defaulting would discard the whole file and read as a first run.
+    expect(out.invalidRejection).toContain('is not a valid Proteus config');
   });
 });
 
@@ -254,7 +256,7 @@ interface PreferenceWriteResult {
   effortSet: JsonValue;
   invalid: JsonValue;
   config: JsonObject;
-  invalidLoaded?: JsonValue;
+  invalidRejection: string | null;
 }
 
 const PreferenceWriteResultSchema: v.GenericSchema<PreferenceWriteResult> = v.object({
@@ -263,7 +265,7 @@ const PreferenceWriteResultSchema: v.GenericSchema<PreferenceWriteResult> = v.ob
   effortSet: JsonValueSchema,
   invalid: JsonValueSchema,
   config: JsonObjectSchema,
-  invalidLoaded: v.optional(JsonValueSchema),
+  invalidRejection: v.nullable(v.string()),
 });
 
 function runPreferenceWrite(): PreferenceWriteResult {
@@ -285,8 +287,9 @@ function runPreferenceWrite(): PreferenceWriteResult {
     const invalid = await executeEffortCommand(effortClient, 'extreme');
     const config = loadConfigFile();
     writeFileSync(CONFIG_PATH, JSON.stringify({ ...config, reasoningEffort: 'extreme' }));
-    const invalidLoaded = loadConfigFile().reasoningEffort;
-    console.log(JSON.stringify({ modelResult, effortShow, effortSet, invalid, config, invalidLoaded }));
+    let invalidRejection: string | null = null;
+    try { loadConfigFile(); } catch (error) { invalidRejection = error instanceof Error ? error.message : String(error); }
+    console.log(JSON.stringify({ modelResult, effortShow, effortSet, invalid, config, invalidRejection }));
   `;
   const proc = Bun.spawnSync({
     cmd: [process.execPath, "-e", script],

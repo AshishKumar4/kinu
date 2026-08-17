@@ -11,6 +11,7 @@
 // drive subscription calls, so nothing here is reachable from cf-backend.
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import { JsonObjectSchema } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import type { JsonObject, ModelProvider, ModelInfo, ProviderDeps } from '@proteus/core';
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as v from 'valibot';
@@ -148,12 +149,20 @@ async function runToString(spawn: ClaudeSpawn, args: string[]): Promise<{ code: 
     return { code: null, stdout: '' };
   }
   child.stdin?.end();
-  // A missing binary surfaces as a premature-close stream error rather than a
-  // synchronous spawn throw; the failing exit code (null/non-zero) is the real
-  // signal, so a broken stream read just means "no output".
-  const stdout = await readAll(child.stdout).catch(() => '');
-  const { code } = await child.exit;
-  return { code, stdout };
+  // Drained concurrently with the exit so a chatty binary cannot fill the pipe
+  // and deadlock. A missing binary surfaces as a premature-close stream error
+  // rather than a synchronous spawn throw, and the failing exit code is the
+  // authoritative signal — which is why only a read that fails while the probe
+  // itself SUCCEEDED is unexplained, and that one is not ours to absorb.
+  const [read, { code }] = await Promise.all([readAllOutcome(child.stdout), child.exit]);
+  if ('text' in read) return { code, stdout: read.text };
+  if (code === 0) {
+    throw new Error(
+      `\`claude ${args.join(' ')}\` exited 0 but its output could not be read`,
+      { cause: read.error },
+    );
+  }
+  return { code, stdout: '' };
 }
 
 async function readAll(stream: SpawnedClaude['stdout']): Promise<string> {
@@ -167,6 +176,19 @@ async function readAll(stream: SpawnedClaude['stdout']): Promise<string> {
   }
   out += decoder.decode();
   return out;
+}
+
+/** `readAll`, with a read failure carried out as a value rather than thrown:
+ *  every caller here has an exit outcome that says whether the failure is
+ *  already explained, and that decision cannot be made inside a catch. */
+async function readAllOutcome(
+  stream: SpawnedClaude['stdout'],
+): Promise<{ text: string } | { error: unknown }> {
+  try {
+    return { text: await readAll(stream) };
+  } catch (error) {
+    return { error };
+  }
 }
 
 function createClaudeCliModel(specModelId: string, spawn: ClaudeSpawn): LanguageModelV2 {
@@ -281,7 +303,13 @@ function runClaudeStream(
       let usage: ClaudeUsage | undefined;
       let finishReason: FinishReason = 'stop';
       let stderr = '';
-      const collectStderr = readAll(child.stderr).then((s) => { stderr = s; }).catch(() => {});
+      // A stderr that cannot be read becomes part of the exit message below —
+      // blanking it silently is how an exit-code error loses its only detail.
+      const collectStderr = readAllOutcome(child.stderr).then((read) => {
+        stderr = 'text' in read
+          ? read.text
+          : `<stderr unreadable: ${read.error instanceof Error ? read.error.message : String(read.error)}>`;
+      });
 
       try {
         for await (const event of parseNdjson(child.stdout)) {
@@ -364,20 +392,31 @@ async function* parseNdjson(stream: SpawnedClaude['stdout']): AsyncGenerator<Cla
     while ((nl = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, nl).trim();
       buffer = buffer.slice(nl + 1);
-      if (line) yield safeParse(line);
+      const event = line ? parseEventLine(line) : null;
+      if (event) yield event;
     }
   }
   buffer += decoder.decode();
   const tail = buffer.trim();
-  if (tail) yield safeParse(tail);
+  const tailEvent = tail ? parseEventLine(tail) : null;
+  if (tailEvent) yield tailEvent;
 }
 
-function safeParse(line: string): ClaudeEvent {
-  try {
-    return v.parse(JsonObjectSchema, JSON.parse(line));
-  } catch {
-    return {};
-  }
+/**
+ * One stream-json line → the event it carries, or null for a line that is not
+ * one at all.
+ *
+ * Only unparseable TEXT is tolerated: the binary shares stdout with anything
+ * else it decides to print, and a stray warning line must not end a turn. A
+ * line that IS json but not an event object is a change in Claude Code's output
+ * format, which propagates — silently reading every event as `{}` would stream
+ * an empty answer with a clean finish reason and no way to tell why.
+ */
+function parseEventLine(line: string): ClaudeEvent | null {
+  const event = tolerate(() => v.parse(JsonObjectSchema, JSON.parse(line)), 'malformed-input');
+  if (event !== undefined) return event;
+  console.warn(`[proteus] claude stream-json: skipped a line that is not json: ${line.slice(0, 200)}`);
+  return null;
 }
 
 /** Incremental text from a partial `stream_event` (content_block_delta →

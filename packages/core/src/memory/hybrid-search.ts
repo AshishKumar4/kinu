@@ -73,7 +73,7 @@ export function memorySnippetRehydrator(memory: Pick<Memory, 'read'>): SnippetRe
     if (!hit.path) return null;
     let content = reads.get(hit.path);
     if (!content) {
-      content = memory.read(hit.path).catch(() => null);
+      content = memory.read(hit.path);
       reads.set(hit.path, content);
     }
     const text = await content;

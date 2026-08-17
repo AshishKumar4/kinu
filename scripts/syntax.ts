@@ -203,6 +203,14 @@ export function declaredName(node: SyntaxNode): string | undefined {
 export const methodKind = (node: SyntaxNode): string | undefined =>
   node.raw.type === 'MethodDefinition' ? node.raw.kind : undefined;
 
+/** True when an interface member is declared with `?`. On a capability contract
+ *  that is the whole signal: a required field cannot differ between two
+ *  implementations because `tsc` demands it, so only an optional one can be
+ *  present on one backend and silently absent on the other. */
+export const isOptionalMember = (node: SyntaxNode): boolean =>
+  (node.raw.type === 'TSPropertySignature' || node.raw.type === 'TSMethodSignature')
+  && node.raw.optional === true;
+
 /** Shapes with their own `this` and `await` scope: an `await` inside one of these
  *  does not belong to the function that encloses it. */
 export const isFunctionLike = (node: SyntaxNode): boolean =>
@@ -408,3 +416,77 @@ export function declaredBindings(declaration: SyntaxNode, identifiersOnly: boole
   }
   return names;
 }
+
+/**
+ * Every module this file names: `import … from`, `export … from`, bare
+ * `import '…'`, and `import(…)` with a literal argument. The dynamic form is
+ * included because a lazily-imported platform module is still a dependency on
+ * that platform — leaving it out would report a file as runtime-agnostic on the
+ * strength of where its import was written.
+ */
+export function moduleSpecifiers(tree: SyntaxNode): readonly string[] {
+  const out: string[] = [];
+  walk(tree, (node) => {
+    const { raw } = node;
+    if (raw.type === 'ImportDeclaration' || raw.type === 'ExportNamedDeclaration'
+      || raw.type === 'ExportAllDeclaration') {
+      const source = raw.source === null || raw.source === undefined
+        ? undefined
+        : literalString(raw.source);
+      if (source !== undefined) out.push(source);
+      return;
+    }
+    if (raw.type !== 'ImportExpression') return;
+    const source = literalString(raw.source);
+    if (source !== undefined) out.push(source);
+  });
+  return out;
+}
+
+/**
+ * The number an expression evaluates to, when it evaluates to one without
+ * running anything: a literal, a sign, or arithmetic over those. This is what
+ * makes `5 * 60 * 1000` and `300_000` the same policy rather than two — a
+ * comparison over source text sees two unrelated constants, and the tree
+ * currently writes five minutes in both notations.
+ *
+ * Deliberately narrow. No identifiers: resolving `BASE * 3` needs a binding
+ * table, and a gate that resolves some names and not others reports a
+ * difference where the difference is its own reach. `NaN` and the infinities
+ * are dropped for the same reason a gate never compares them: they are not
+ * policy numbers.
+ */
+export function numericValue(node: SyntaxNode): number | undefined {
+  const { raw } = node;
+  if (raw.type === 'Literal') {
+    const decoded = v.safeParse(NumberValued, raw);
+    return decoded.success && Number.isFinite(decoded.output.value)
+      ? decoded.output.value
+      : undefined;
+  }
+  if (raw.type === 'TSAsExpression' || raw.type === 'TSSatisfiesExpression'
+    || raw.type === 'TSNonNullExpression') {
+    return numericValue(node.children[0]);
+  }
+  if (raw.type === 'UnaryExpression' && (raw.operator === '-' || raw.operator === '+')) {
+    const inner = numericValue(node.children[0]);
+    return inner === undefined ? undefined : (raw.operator === '-' ? -inner : inner);
+  }
+  if (raw.type !== 'BinaryExpression') return undefined;
+  const left = numericValue(node.children[0]);
+  const right = numericValue(node.children[1]);
+  if (left === undefined || right === undefined) return undefined;
+  switch (raw.operator) {
+    case '*': return finite(left * right);
+    case '/': return finite(left / right);
+    case '+': return finite(left + right);
+    case '-': return finite(left - right);
+    case '**': return finite(left ** right);
+    default: return undefined;
+  }
+}
+
+const finite = (value: number): number | undefined =>
+  Number.isFinite(value) ? value : undefined;
+
+const NumberValued = v.object({ value: v.number() });

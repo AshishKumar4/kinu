@@ -231,6 +231,21 @@ export const LADDER: readonly Gate[] = [
     blind: 'the pairing and transport it talks to.',
   },
   {
+    run: 'bun scripts/tracing-gate.ts',
+    tier: 'ci',
+    seconds: 0.3,
+    catches: 'traces declared in code but switched off in a deployable environment. '
+      + 'wrangler does NOT inherit `observability` into a named environment and `traces` '
+      + 'is a separate switch from `logs`, so `env.staging` carried a bare '
+      + '`enabled: true` and every span it opened reported isTraced false and was never '
+      + 'recorded — with the worker still answering 200. It also proves the tracer is '
+      + 'live by observing real spans under workerd with and without a tail sink, so a '
+      + 'green here cannot come from an empty result. Ran in no tier at all until now: '
+      + 'the script and its fixture existed and nothing invoked either.',
+    blind: 'whether the platform RETAINED what it ingested. It observes the producing '
+      + 'side only — the sink can still throw while the traced worker returns 200.',
+  },
+  {
     run: 'bun test ./tests/',
     tier: 'ci',
     seconds: 0.3,
@@ -262,6 +277,19 @@ export const LADDER: readonly Gate[] = [
       + 'which is what four independent instrument bugs cost us to learn.',
   },
   {
+    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts',
+    tier: 'ci',
+    seconds: 31.9,
+    catches: 'the two UI gates\' own decision logic, including the one that would have '
+      + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
+      + 'computed 0px. Both self-tests ran in NO tier until this line: the gates were '
+      + 'built, deliberately kept off the deploy path for their Chrome cost, and their '
+      + 'logic was then guarded by nothing anywhere.',
+    blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
+      + '19 frames at ~68s and stays a standalone run — a gate that fails because Chrome '
+      + 'is missing fails for a reason unrelated to the change under test.',
+  },
+  {
     run: 'bun run layergate',
     tier: 'ci',
     seconds: 25,
@@ -277,6 +305,24 @@ export const LADDER: readonly Gate[] = [
     catches: 'a layer whose probes cannot localise a fault to it — cross-talk. Without '
       + 'this a layer at 100% may be scoring another layer\'s behaviour.',
     blind: 'a layer with no probes, which scores null and localises nothing.',
+  },
+  {
+    run: 'bun run gate:capability-parity',
+    tier: 'commit',
+    seconds: 2.4,
+    catches: 'the two shapes of backend divergence. A core contract whose optional '
+      + 'capability is wired on one backend only (25 today, including '
+      + 'ShellApprovalPolicy.requestApproval, absent on cf), and a module that would '
+      + 'compile in a shared package sitting inside one adapter, so the other backend '
+      + 'has no contract to under-wire and simply does without — 62 today, 4,632 lines. '
+      + 'The clearest is components/tool-call-summary.ts: 453 lines of tool-call '
+      + 'vocabulary against which the CLI joins raw argument values and clips at 70 '
+      + 'characters. Its allowlist of importable libraries is DERIVED from what the '
+      + 'shared packages already import, so it widens when core takes a dependency and '
+      + 'never needs editing.',
+    blind: 'a platform GLOBAL reached with no import — measured at zero occurrences over '
+      + 'the 62 reported modules, and caught in one second by `tsc -p packages/core` the '
+      + 'moment anyone acts on the finding.',
   },
 ];
 

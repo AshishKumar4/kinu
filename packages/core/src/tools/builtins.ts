@@ -257,18 +257,20 @@ function buildCraftedToolSetFromExecute(
     const maxRelevant = surfacing.maxRelevant ?? 20;
     const half = Math.max(5, Math.floor(maxRelevant / 2));
     relevantNames = new Set();
+    // Neither read is guarded: `crafted_tools_fts` and `craft_scores` are both
+    // part of the one workspace schema (identity/workspace-schema.ts, asserted
+    // per root by conformance/manifest.ts), and CraftStore.search quotes the
+    // query as an FTS5 phrase so no user text can make it a syntax error. A
+    // failure here means the workspace database is broken, and swallowing it
+    // silently narrows the agent's callable set with no way to tell.
     if (surfacing.query && surfacing.query.length > 0) {
-      try {
-        for (const hit of rt.craftStore.search(surfacing.query, half)) relevantNames.add(hit.name);
-      } catch { /* FTS not initialized yet */ }
+      for (const hit of rt.craftStore.search(surfacing.query, half)) relevantNames.add(hit.name);
     }
     // Pad with most-frequently-used recent tools (recency-weighted).
-    try {
-      const top = rt.storage.sql<{ tool_name: string }>`
-        SELECT tool_name FROM craft_scores
-        ORDER BY uses DESC, last_used_at DESC LIMIT ${maxRelevant}`;
-      for (const r of top) relevantNames.add(r.tool_name);
-    } catch { /* fine */ }
+    const top = rt.storage.sql<{ tool_name: string }>`
+      SELECT tool_name FROM craft_scores
+      ORDER BY uses DESC, last_used_at DESC LIMIT ${maxRelevant}`;
+    for (const r of top) relevantNames.add(r.tool_name);
   }
 
   for (const t of list) {

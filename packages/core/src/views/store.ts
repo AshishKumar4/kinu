@@ -217,10 +217,11 @@ export async function deleteView(
   `;
   if (rows.length === 0) return { ok: false, error: `No view named "${slug}".` };
 
+  // Bytes first: a file plane that cannot remove the live view must not leave a
+  // ledger claiming the view was retired, and a retire that "succeeded" while
+  // the renderer's file is still there was the whole bug.
+  await deps.vfs.unlink(livePath(slug));
   void deps.sql`UPDATE agent_views SET status = 'deleted' WHERE slug = ${slug} AND status = 'current'`;
-  try {
-    await deps.vfs.unlink(livePath(slug));
-  } catch { /* the ledger is the source of truth for what renders */ }
   return { ok: true };
 }
 

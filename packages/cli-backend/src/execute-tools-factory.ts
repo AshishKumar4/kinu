@@ -102,13 +102,13 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           // THIS call, so a tool the model crafted a step ago is callable now.
           const craftedBindings: Record<string, CraftedExecute> = {};
           for (const [name, entry] of Object.entries(opts.craftedTools())) {
-            craftedBindings[name] = containCraftedRejection(entry.execute);
+            craftedBindings[name] = (arg) => containRejection(() => entry.execute(arg));
           }
           const providerBindings: Record<string, Record<string, CodemodeExecute>> = {};
           for (const p of providers) {
             const nsp: Record<string, CodemodeExecute> = {};
             for (const [toolName, t] of Object.entries(p.tools)) {
-              nsp[toolName] = containRejection((...toolArgs) => t.execute(...toolArgs, context));
+              nsp[toolName] = (...toolArgs) => containRejection(() => t.execute(...toolArgs, context));
             }
             providerBindings[p.name] = nsp;
           }
@@ -191,25 +191,21 @@ function adaptExecutorProvider(
  * handled at the source, which costs nothing and changes nothing for code that
  * DOES await — that await still sees the real rejection, and the tool's own
  * try/catch still turns it into a returned error.
+ *
+ * The sink RECORDS rather than discards, because the un-awaited case is the
+ * whole reason it exists: the model was told its code ran, and a write that
+ * never landed reads exactly like one that did. It goes to stderr, not to the
+ * captured `logs` — a floated call settles after the tool has already returned
+ * its payload, so there is nothing left to attach it to.
  */
-function containRejection(fn: CodemodeExecute): CodemodeExecute {
-  return (...args) => {
-    let call: ReturnType<CodemodeExecute>;
-    try { call = Promise.resolve(fn(...args)); }
-    catch (err) { call = Promise.reject(err); }
-    void call.catch(() => { /* the awaiting caller, if any, still sees it */ });
-    return call;
-  };
-}
-
-function containCraftedRejection(fn: CraftedExecute): CraftedExecute {
-  return (arg) => {
-    let call: ReturnType<CraftedExecute>;
-    try { call = Promise.resolve(fn(arg)); }
-    catch (error) { call = Promise.reject(error); }
-    void call.catch(() => { /* the awaiting caller, if any, still sees it */ });
-    return call;
-  };
+function containRejection<T>(run: () => Promise<T>): Promise<T> {
+  let call: Promise<T>;
+  try { call = run(); }
+  catch (error) { call = Promise.reject(error); }
+  void call.catch((error) => {
+    console.warn(`[proteus] execute_tools: an unawaited call rejected: ${errorMessage({ error })}`);
+  });
+  return call;
 }
 
 /** One console argument → its captured-log string, matching how console

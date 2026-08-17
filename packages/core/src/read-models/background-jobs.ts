@@ -8,8 +8,9 @@
  * reconstructs a tool invocation from the stored input and re-detaches it,
  * which is agent behaviour, not transport.
  *
- * Reads never throw: a workspace that predates `background_jobs` should show
- * an empty task list, not a failed surface.
+ * `background_jobs` is a table `initWorkspaceSchema` creates, so a read that
+ * fails is a broken workspace rather than an empty task list, and it says so
+ * instead of showing the nothing an agent with no detached work shows.
  */
 
 import type { ToolSet } from 'ai';
@@ -40,12 +41,12 @@ export type RetryOutcome = { ok: boolean; jobId?: string; error?: string };
 
 /** One job's record, or null when it is unknown. */
 export function jobResult(jobs: BackgroundJobStore, jobId: string): BackgroundJob | null {
-  try { return jobs.get(jobId); } catch { return null; }
+  return jobs.get(jobId);
 }
 
 /** Recent jobs, newest first. */
 export function listBackgroundJobs(jobs: BackgroundJobStore, limit = 20): BackgroundJob[] {
-  try { return jobs.list(limit); } catch { return []; }
+  return jobs.list(limit);
 }
 
 /** Hard-cancel a running job: abort the underlying work (its merged
@@ -114,19 +115,17 @@ export function cancelCurrentWork(deps: CancelWorkDeps): CancelWorkOutcome {
   let abortedTools = 0;
   for (const controller of deps.activeToolControllers) {
     if (!controller.signal.aborted) {
-      try { controller.abort(new Error('cancelled by operator')); } catch { /* nop */ }
+      controller.abort(new Error('cancelled by operator'));
       abortedTools++;
     }
     deps.activeToolControllers.delete(controller);
   }
   deps.onCancelled?.({ cancelledJobs, abortedTools });
-  try {
-    deps.broadcast(JSON.stringify({
-      type: 'work_cancelled',
-      cancelledJobs,
-      abortedTools,
-      timestamp: Date.now(),
-    }));
-  } catch { /* no connected clients */ }
+  deps.broadcast(JSON.stringify({
+    type: 'work_cancelled',
+    cancelledJobs,
+    abortedTools,
+    timestamp: Date.now(),
+  }));
   return { ok: true, cancelledJobs, abortedTools };
 }

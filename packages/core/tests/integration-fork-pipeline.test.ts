@@ -17,36 +17,16 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import {
-  initAllTables, readForkLineage, readSoul, writeSoul,
+  readForkLineage, readSoul, writeSoul,
   snapshotWorkspaceForFork, writeForkSnapshot, SOUL_PATH,
 } from '../src/index.js';
-import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers.js';
-import type { RawSqlExec, SqlExecutor, VFS } from '../src/types/primitives.js';
+import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers.js';
 
-/** One in-memory workspace: production schema, filesystem, and the SDK's own
- *  message store — the shape a hosted workspace actually has. */
-interface WorkspaceFixture {
-  db: Database;
-  sql: SqlExecutor;
-  execRaw: RawSqlExec;
-  vfs: VFS;
-}
-
-function fresh(): WorkspaceFixture {
-  const db = new Database(':memory:');
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
-  initAllTables(execRaw);
-  execRaw(`CREATE TABLE IF NOT EXISTS assistant_messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
-  return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs };
-}
-
-async function seedSource(src: WorkspaceFixture) {
+async function seedSource(src: TestWorkspace) {
+  // The SDK creates its store on first append, so a fixture that seeds pane rows
+  // has to seed the table too — production's own DDL, from one definition.
+  src.execRaw(SDK_SESSION_DDL);
   void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC-1'}, ${'source-agent'}, ${100})`;
   await writeSoul(src.vfs, src.sql, 'help with testing');
   // Both stores, same ids and same edges — which is what the projection
@@ -67,8 +47,6 @@ async function seedSource(src: WorkspaceFixture) {
   void src.sql`INSERT INTO crafted_tools (name, description, code, scope, created_at, updated_at) VALUES (${'helper'}, ${'utility'}, ${'async (x) => x + 1'}, ${'local'}, ${500}, ${500})`;
   await src.vfs.mkdir('memory', { recursive: true });
   await src.vfs.writeFile('memory/MEMORY.md', 'key insight');
-  // Pre-create agent_config and add non-display-name rows
-  src.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
   void src.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'@cf/moonshotai/kimi-k2.6'})`;
 }
 
@@ -76,7 +54,6 @@ describe('fork pipeline (end-to-end)', () => {
   test('payload round-trips across the RPC boundary (structured clone) and replays into the fork DB', async () => {
     const src = fresh();
     const tgt = fresh();
-    tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     // Simulate the fork DO's onStart bootstrap
     void tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'BOOT-ID'}, ${'fork-bootstrap'}, ${999})`;
     await writeSoul(tgt.vfs, tgt.sql, 'default');
@@ -138,7 +115,6 @@ describe('fork pipeline (end-to-end)', () => {
   test('a snapshot with zero crafted tools and zero memory is safe', async () => {
     const src = fresh();
     const tgt = fresh();
-    tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'S'}, ${'s'}, ${100})`;
     await writeSoul(src.vfs, src.sql, 'p');
     void src.sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
@@ -196,7 +172,6 @@ describe('fork pipeline (end-to-end)', () => {
   test('repeating a completed delivery converges on exactly one copied history', async () => {
     const src = fresh();
     const tgt = fresh();
-    tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     await seedSource(src);
     const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
 

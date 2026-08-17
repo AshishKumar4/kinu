@@ -13,6 +13,7 @@
 import { VERSION } from './display.js';
 import { loadConfigFile, updateConfigFile, type ProteusConfig } from './config.js';
 import * as v from 'valibot';
+import { classify, tolerateAsync } from '@proteus/core/obs';
 
 export const CLI_VERSION_PATH = '/downloads/proteus-version.json';
 const FETCH_TIMEOUT_MS = 1_500;
@@ -37,7 +38,8 @@ export function isSameBuild(installed: string, served: string): boolean {
   return installed.trim() === served.trim();
 }
 
-/** Fetch the served build's version, or null on any failure/timeout. */
+/** Fetch the served build's version, or null when the origin could not be asked (unreachable,
+ *  past the timeout, no such endpoint, or a payload that is not a served version). */
 export async function fetchServedVersion(
   origin: string,
   fetchImpl: FetchVersion = fetch,
@@ -46,19 +48,26 @@ export async function fetchServedVersion(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, {
-      cache: 'no-store',
-      signal: controller.signal,
-    });
+    let res: Response;
+    try {
+      res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+    } catch (error) {
+      // Could not ask: unreachable origin, or this probe's own cap firing. A malformed origin is
+      // OURS — swallowed here, the update check would silently never fire again.
+      if (classify({ cause: error }) === 'malformed-input') throw error;
+      return null;
+    }
     if (!res.ok) return null;
-    const parsed = v.safeParse(ServedVersionSchema, await res.json());
+    // The payload belongs to the server: unparseable JSON is a probe that learned nothing.
+    const parsed = v.safeParse(ServedVersionSchema, await tolerateAsync(() => res.json(), 'malformed-input'));
     if (!parsed.success) return null;
     const served: ServedVersion = { version: parsed.output.version };
     if (parsed.output.sha !== undefined) served.sha = parsed.output.sha;
     if (parsed.output.builtAt !== undefined) served.builtAt = parsed.output.builtAt;
     return served;
-  } catch {
-    return null;
   } finally {
     clearTimeout(timer);
   }
@@ -116,7 +125,10 @@ export async function runStartupUpdateCheck(opts: {
     const notice = updateNotice(VERSION, served);
     if (notice) opts.log(notice);
     return notice;
-  } catch {
+  } catch (error) {
+    // A startup notice must never break the CLI, but a check that can NEVER succeed — an
+    // unwritable config, a malformed origin — has to say so instead of skipping every run.
+    opts.log(`Update check failed: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
 }

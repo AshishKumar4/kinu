@@ -142,13 +142,14 @@ describe('OwnedModelServices', () => {
       getOwnerUserId: () => 'owner-1',
     });
 
-    try {
-      await generateText({
-        model: services.resolveModel('openrouter/anthropic/claude-sonnet-4'),
-        prompt: 'hello',
-        maxOutputTokens: 16,
-      });
-    } catch { /* Minimal mock response need not satisfy the AI SDK decoder. */ }
+    // The minimal mock response does not satisfy the AI SDK decoder. Asserted
+    // rather than swallowed: this test is about the OUTGOING request headers, so a
+    // mock that starts decoding cleanly should fail here, not pass silently.
+    await expect(generateText({
+      model: services.resolveModel('openrouter/anthropic/claude-sonnet-4'),
+      prompt: 'hello',
+      maxOutputTokens: 16,
+    })).rejects.toThrow();
 
     expect(mock.requests[0]?.headers['x-title']).toBe(appTitle);
   });

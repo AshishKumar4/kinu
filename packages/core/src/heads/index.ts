@@ -50,6 +50,7 @@ export {
   type SpawnedHead,
   type MergeLLMFn,
   type SplitPhaseEvent,
+  type HeadJournalPort,
 } from './controller.js';
 export {
   extractHeadSteps, extractFinalText, synthesizeHeadSummary, headProducedFindings,

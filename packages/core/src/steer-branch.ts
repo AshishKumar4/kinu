@@ -142,7 +142,7 @@ export interface PendingBranch {
  * The shared both-sides settle both backends run (detached) at turn end:
  * await the branch head, compare against the finished live turn, persist the
  * takes set, and broadcast the terminal branch_status. A dead live turn
- * (`turnId` null / empty answer) aborts the branch instead. Never throws.
+ * (`turnId` null / empty answer) aborts the branch instead.
  */
 export async function settlePendingBranch(
   deps: {
@@ -165,8 +165,12 @@ export async function settlePendingBranch(
     return;
   }
   if (!turnId || !liveText.trim()) {
-    await handle.abort('the live turn did not complete').catch(() => {});
+    // Broadcast before aborting, so the terminal status lands whatever the
+    // abort does, and the abort itself is then left unguarded: a head that
+    // refuses to abort is a branch still burning tokens, which is exactly the
+    // failure the discarded rejection used to hide.
     fail('the live turn did not complete, so there is nothing to compare against');
+    await handle.abort('the live turn did not complete');
     return;
   }
   const report = await handle.result;

@@ -448,9 +448,8 @@ export function decodeLongHorizonSpec(encoded: string): LongHorizonSpec {
   let raw;
   try {
     raw = parseJsonValue(encoded);
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(`long-horizon spec is not valid JSON: ${detail}`);
+  } catch (error) {
+    throw new Error('long-horizon spec is not valid JSON', { cause: error });
   }
   if (!Array.isArray(raw) || raw.length !== 6) {
     throw new Error('long-horizon spec must be [mode, seed, entries, filler, markers, parts]');

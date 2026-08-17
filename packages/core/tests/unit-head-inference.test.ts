@@ -11,7 +11,11 @@ import {
   buildHeadSystemPrompt, buildHeadMessages, type HeadInferenceDeps,
 } from '../src/heads/head-inference.js';
 import { DEFAULT_MAX_STEPS } from '../src/config.js';
-import type { Decision, Evidence, HeadInput } from '../src/heads/types.js';
+import type { Decision, Evidence, HeadInput, SerializedMessage } from '../src/heads/types.js';
+import {
+  inheritedContextFromHistory, inheritedContextFromRows, inheritedContextOmissionNote,
+} from '../src/orchestrator/heads-support.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/prompts/evidence-window.js';
 
 /** A generateText-driving stub. Returns `answer` as one text step + usage;
  *  finishReason 'stop' so the head ends in a single step (no tool calls). */
@@ -128,10 +132,12 @@ describe('head prompt + messages', () => {
     expect(sys).toContain('canonical workspace you were forked from');
     expect(sys).not.toContain('private Nimbus workspace');
     expect(sys).not.toContain('nimbus.*');
+    // A head's inheritance is STRUCTURAL: one message per inherited message,
+    // then the task. Not one flattened prose blob.
     const msgs = buildHeadMessages(input);
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]!.content).toContain('the prior user message');
-    expect(msgs[0]!.content).toContain('analyze the parser');
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]).toEqual({ role: 'user', content: 'the prior user message' });
+    expect(msgs[1]).toEqual({ role: 'user', content: 'Now focus on your assigned task: analyze the parser' });
   });
 
   test('Plan heads are read-only researchers without the top-level submit tool', () => {
@@ -141,5 +147,139 @@ describe('head prompt + messages', () => {
     expect(sys).toContain('Do not edit, write, or delete files');
     expect(sys).not.toContain('submit_plan');
     expect(sys).not.toContain('release.');
+  });
+});
+
+describe('buildHeadMessages — a fork inherits real messages, not prose', () => {
+  const multiTurn = [
+    { id: 'm1', role: 'user', content: 'is the parser sound?', createdAt: 1 },
+    { id: 'm2', role: 'assistant', content: 'the lexer looks fine so far', createdAt: 2 },
+    { id: 'm3', role: 'user', content: 'check the grammar too', createdAt: 3 },
+  ] as const satisfies readonly SerializedMessage[];
+
+  test('one message per inherited message, each carrying its OWN role, task last', () => {
+    const msgs = buildHeadMessages(headInput({ inheritedContext: [...multiTurn] }));
+
+    expect(msgs).toHaveLength(multiTurn.length + 1);
+    expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'user']);
+
+    // The assistant turn arrives AS an assistant message — not folded into a
+    // user message's prose, which is what made a fork unwatchable.
+    expect(msgs[1]).toEqual({ role: 'assistant', content: 'the lexer looks fine so far' });
+
+    // The task is the LAST message, so it is the live instruction.
+    expect(msgs.at(-1)).toEqual({
+      role: 'user',
+      content: 'Now focus on your assigned task: analyze the parser',
+    });
+
+    // Structurally, nothing is flattened: no single message carries more than
+    // its own body, so every inherited turn stays individually addressable.
+    for (const [i, inherited] of multiTurn.entries()) {
+      expect(msgs[i]!.content).toBe(inherited.content);
+    }
+  });
+
+  test('the provider sees the structured conversation, not one user blob', async () => {
+    const prompts: Array<Array<{ role: string }>> = [];
+    const model = new MockLanguageModelV3({
+      provider: 'fake', modelId: 'fake-head',
+      doGenerate: async (options) => {
+        prompts.push(options.prompt.map((m) => ({ role: m.role })));
+        return {
+          content: [{ type: 'text', text: 'done' }],
+          finishReason: { unified: 'stop', raw: undefined },
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 1, text: 1, reasoning: undefined },
+          },
+          warnings: [],
+        };
+      },
+    });
+
+    const report = await runHeadInference(headInput({ inheritedContext: [...multiTurn] }), deps(model));
+
+    expect(report.status).toBe('completed');
+    expect(prompts).toHaveLength(1);
+    // system prompt, then the inherited turns with their roles intact, then the task.
+    expect(prompts[0]!.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user', 'user']);
+  });
+
+  test("an inherited 'tool' result never reaches the SDK as role:'tool', and keeps its tool identity", () => {
+    // role:'tool' needs a matching preceding assistant tool-call part with the
+    // same toolCallId; a SerializedMessage has no id to match, so emitting one
+    // would make every head request malformed at the provider.
+    const msgs = buildHeadMessages(headInput({
+      inheritedContext: [{ id: 't1', role: 'tool', content: 'exit status 0', createdAt: 1, toolName: 'run' }],
+    }));
+
+    expect(msgs.map((m) => m.role)).toEqual(['user', 'user']);
+    expect(msgs[0]!.content).toBe('[inherited tool result from run]\nexit status 0');
+  });
+
+  test("an inherited 'system' entry does not become a second system prompt", () => {
+    const msgs = buildHeadMessages(headInput({
+      inheritedContext: [...inheritedContextOmissionNote(12, 2)],
+    }));
+
+    expect(msgs.some((m) => m.role === 'system')).toBe(false);
+    expect(msgs[0]!.role).toBe('user');
+    expect(msgs[0]!.content).toContain('10 earlier messages omitted');
+  });
+
+  test('an empty inheritance is just the task', () => {
+    expect(buildHeadMessages(headInput({ inheritedContext: [] }))).toEqual([
+      { role: 'user', content: 'Now focus on your assigned task: analyze the parser' },
+    ]);
+  });
+});
+
+describe('inherited context is windowed at READ time, exactly once (C4)', () => {
+  const cap = EVIDENCE_BUDGETS.inheritedMessage;
+  // A stored assistant body is allowed to run to storedAssistantResponse
+  // (16,000 chars); windowing it only at render time meant every spawned head
+  // held a full-size copy across the facet RPC boundary first.
+  const stored = `HEAD-MARK${'x'.repeat(EVIDENCE_BUDGETS.storedAssistantResponse)}TAIL-MARK`;
+  // evidenceWindow keeps both ends and names the gap, so the bound is the
+  // budget plus that single disclosure line — never the stored body.
+  const bound = cap + 80;
+
+  test('inheritedContextFromRows caps each stored body as it builds the digest', () => {
+    const ctx = inheritedContextFromRows([{ id: 'r1', role: 'assistant', content: stored, createdAt: 1 }], 1);
+
+    expect(ctx).toHaveLength(1);
+    expect(ctx[0]!.content.length).toBeLessThanOrEqual(bound);
+    expect(ctx[0]!.content.length).toBeLessThan(stored.length / 8);
+    // Head AND tail survive — the window is a window, not a head truncation.
+    expect(ctx[0]!.content.startsWith('HEAD-MARK')).toBe(true);
+    expect(ctx[0]!.content.endsWith('TAIL-MARK')).toBe(true);
+  });
+
+  test('a body within budget passes through byte-identical', () => {
+    const ctx = inheritedContextFromRows([{ id: 'r1', role: 'user', content: 'short body', createdAt: 1 }], 1);
+    expect(ctx[0]!.content).toBe('short body');
+  });
+
+  test('inheritedContextFromHistory caps each live-history body the same way', () => {
+    const ctx = inheritedContextFromHistory([{ role: 'assistant', content: stored }], 50);
+
+    expect(ctx).toHaveLength(1);
+    expect(ctx[0]!.content.length).toBeLessThanOrEqual(bound);
+    expect(ctx[0]!.content.startsWith('HEAD-MARK')).toBe(true);
+    expect(ctx[0]!.content.endsWith('TAIL-MARK')).toBe(true);
+  });
+
+  test('buildHeadMessages neither expands nor re-windows what the read already capped', () => {
+    const inheritedContext = inheritedContextFromRows(
+      [{ id: 'r1', role: 'assistant', content: stored, createdAt: 1 }], 1);
+    const windowed = inheritedContext[0]!.content;
+
+    // A second window IS observable on already-windowed text, so the
+    // byte-identity assertion below genuinely detects double application.
+    expect(evidenceWindow(windowed, cap)).not.toBe(windowed);
+
+    const msgs = buildHeadMessages(headInput({ inheritedContext }));
+    expect(msgs[0]).toEqual({ role: 'assistant', content: windowed });
   });
 });

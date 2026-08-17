@@ -176,7 +176,9 @@ export interface AgentConfigStore {
   /** Record the last-active executor. Ignores values that aren't a plausible
    *  executor namespace (defense against a poisoned config value). */
   setLastActiveExecutor(name: string): void;
-  /** The persisted /workspace backup handle, or null if none / malformed. */
+  /** The persisted /workspace backup handle, or null when none is stored. A
+   *  stored value that does not parse throws: a corrupt handle read as "never
+   *  backed up" is how a workspace silently stops being recoverable. */
   getWorkspaceBackup(): DirectoryBackup | null;
   /** Persist the latest /workspace backup handle and stamp the backup time. */
   setWorkspaceBackup(backup: DirectoryBackup): void;
@@ -263,11 +265,9 @@ export function initAgentConfigTable(execRaw: RawSqlExec): void {
 
 export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
   const get = (key: string): string | null => {
-    try {
-      const rows = sql<{ value: string }>`
-        SELECT value FROM agent_config WHERE key = ${key} LIMIT 1`;
-      return rows[0]?.value ?? null;
-    } catch { return null; }
+    const rows = sql<{ value: string }>`
+      SELECT value FROM agent_config WHERE key = ${key} LIMIT 1`;
+    return rows[0]?.value ?? null;
   };
   const set = (key: string, value: string): void => {
     void sql`INSERT INTO agent_config (key, value) VALUES (${key}, ${value})
@@ -290,12 +290,10 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     set,
     delete(key) { void sql`DELETE FROM agent_config WHERE key = ${key}`; },
     all() {
-      try {
-        const rows = sql<{ key: string; value: string }>`SELECT key, value FROM agent_config`;
-        const out: Record<string, string> = {};
-        for (const r of rows) out[r.key] = r.value;
-        return out;
-      } catch { return {}; }
+      const rows = sql<{ key: string; value: string }>`SELECT key, value FROM agent_config`;
+      const out: Record<string, string> = {};
+      for (const r of rows) out[r.key] = r.value;
+      return out;
     },
     getModel() { return get(AGENT_CONFIG_KEYS.model); },
     setModel(spec) { set(AGENT_CONFIG_KEYS.model, spec); },
@@ -395,11 +393,7 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     getWorkspaceBackup() {
       const stored = get(AGENT_CONFIG_KEYS.workspaceBackup);
       if (!stored) return null;
-      try {
-        const backup = v.safeParse(DirectoryBackupSchema, parseJsonValue(stored));
-        if (backup.success) return backup.output;
-      } catch { /* malformed → treat as no backup */ }
-      return null;
+      return v.parse(DirectoryBackupSchema, parseJsonValue(stored));
     },
     setWorkspaceBackup(backup) {
       set(AGENT_CONFIG_KEYS.workspaceBackup, JSON.stringify({ id: backup.id, dir: backup.dir, localBucket: backup.localBucket }));

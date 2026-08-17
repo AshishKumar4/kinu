@@ -21,7 +21,9 @@ import {
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
   type ProviderDeps, type AuthResolution,
 } from '../src/index.ts';
-import { createMockFetch } from '@proteus/test-utils';
+import {
+  createMockFetch, ANTHROPIC_MESSAGE_BODY, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY,
+} from '@proteus/test-utils';
 
 const CodexRequestBodySchema = v.object({
   instructions: v.optional(v.string()),
@@ -39,10 +41,14 @@ function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch):
   };
 }
 
-async function tryCall(model: Parameters<typeof generateText>[0]['model']): Promise<void> {
-  try {
-    await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
-  } catch { /* response shape may be invalid for our minimal mocks — that's fine */ }
+/**
+ * Drive one completion through the SDK. The mock bodies are complete, so this
+ * is awaited rather than absorbed: a provider that sends the right request and
+ * then cannot read the answer back used to pass every assertion below.
+ */
+async function call(model: Parameters<typeof generateText>[0]['model']): Promise<void> {
+  const { text } = await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
+  expect(text).toBe('ok');
 }
 
 // ── OpenAI direct ──────────────────────────────────────────────────────
@@ -50,14 +56,14 @@ async function tryCall(model: Parameters<typeof generateText>[0]['model']): Prom
 describe('OpenAI provider contract', () => {
   test('sends Authorization: Bearer <key> to api.openai.com', async () => {
     const mock = createMockFetch([
-      { match: 'api.openai.com', respond: { status: 200, body: { id: 'r', output: [] } } },
+      { match: 'api.openai.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
     const deps = makeDeps({
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test-key' } },
     }, mock.fetch);
     const provider = createOpenAIProvider();
     const model = provider.createModel('gpt-5.5', deps);
-    await tryCall(model);
+    await call(model);
 
     expect(mock.requests.length).toBeGreaterThan(0);
     expect(mock.requests[0].headers['authorization']).toBe('Bearer sk-test-key');
@@ -65,12 +71,15 @@ describe('OpenAI provider contract', () => {
 
   test('short-circuits 401 when no credential stored', async () => {
     const mock = createMockFetch([
-      { match: 'api.openai.com', respond: { status: 200, body: {} } },
+      { match: 'api.openai.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
     const deps = makeDeps({}, mock.fetch);
     const provider = createOpenAIProvider();
     const model = provider.createModel('gpt-5.5', deps);
-    await tryCall(model);
+    // The 401 is the assertion, not an inconvenience: a provider that silently
+    // returned an empty completion here would send an uncredentialed request
+    // the moment the short-circuit regressed.
+    await expect(call(model)).rejects.toThrow();
     expect(mock.requests.length).toBe(0);
   });
 
@@ -80,16 +89,14 @@ describe('OpenAI provider contract', () => {
       calls++;
       return calls === 1
         ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
-        : Response.json({ id: 'r', output: [] });
+        : Response.json(OPENAI_RESPONSES_BODY);
     });
     const deps = makeDeps({
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test-key' } },
     }, fetchImpl);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
 
-    try {
-      await generateText({ model, prompt: 'hello', maxOutputTokens: 16, maxRetries: 0 });
-    } catch { /* minimal success body may not parse; the fetch route is the assertion */ }
+    await generateText({ model, prompt: 'hello', maxOutputTokens: 16, maxRetries: 0 });
 
     expect(calls).toBe(2);
   });
@@ -100,7 +107,7 @@ describe('OpenAI provider contract', () => {
 describe('OpenRouter provider contract', () => {
   test('sends Bearer + HTTP-Referer + X-Title to openrouter.ai/api/v1', async () => {
     const mock = createMockFetch([
-      { match: 'openrouter.ai', respond: { status: 200, body: { choices: [] } } },
+      { match: 'openrouter.ai', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
     ]);
     const deps = makeDeps({
       [OPENROUTER_CRED_KEY]: { headers: { Authorization: 'Bearer sk-or-test' } },
@@ -110,7 +117,7 @@ describe('OpenRouter provider contract', () => {
       appTitle: 'Proteus-Contract-Test',
     });
     const model = provider.createModel('anthropic/claude-3.5-sonnet', deps);
-    await tryCall(model);
+    await call(model);
 
     expect(mock.requests.length).toBeGreaterThan(0);
     const req = mock.requests[0];
@@ -126,7 +133,7 @@ describe('OpenRouter provider contract', () => {
 describe('OpenAI-compat provider contract', () => {
   test('rewrites placeholder URL to credential.baseURL', async () => {
     const mock = createMockFetch([
-      { match: 'api.groq.com', respond: { status: 200, body: { choices: [] } } },
+      { match: 'api.groq.com', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
     ]);
     const deps = makeDeps({
       'openai-compat.default': {
@@ -136,7 +143,7 @@ describe('OpenAI-compat provider contract', () => {
     }, mock.fetch);
     const provider = createOpenAICompatProvider();
     const model = provider.createModel('llama-3', deps);
-    await tryCall(model);
+    await call(model);
 
     expect(mock.requests.length).toBeGreaterThan(0);
     const req = mock.requests[0];
@@ -152,7 +159,7 @@ describe('OpenAI-compat provider contract', () => {
 describe('Anthropic provider contract', () => {
   test('sends x-api-key + anthropic-version to api.anthropic.com', async () => {
     const mock = createMockFetch([
-      { match: 'api.anthropic.com', respond: { status: 200, body: { content: [] } } },
+      { match: 'api.anthropic.com', respond: { status: 200, body: ANTHROPIC_MESSAGE_BODY } },
     ]);
     const deps = makeDeps({
       [ANTHROPIC_CRED_KEY]: {
@@ -161,7 +168,7 @@ describe('Anthropic provider contract', () => {
     }, mock.fetch);
     const provider = createAnthropicProvider();
     const model = provider.createModel('claude-opus-4-7', deps);
-    await tryCall(model);
+    await call(model);
 
     expect(mock.requests.length).toBeGreaterThan(0);
     const req = mock.requests[0];
@@ -176,7 +183,7 @@ describe('Anthropic provider contract', () => {
 describe('Codex provider contract', () => {
   test('attaches every WAF-bypass header returned by getAuth', async () => {
     const mock = createMockFetch([
-      { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: { id: 'r', output: [] } } },
+      { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
     const deps = makeDeps({
       [CODEX_CRED_KEY]: {
@@ -190,7 +197,7 @@ describe('Codex provider contract', () => {
     }, mock.fetch);
     const provider = createCodexProvider();
     const model = provider.createModel('gpt-5.5', deps);
-    await tryCall(model);
+    await call(model);
 
     expect(mock.requests.length).toBeGreaterThan(0);
     const req = mock.requests[0];
@@ -202,16 +209,14 @@ describe('Codex provider contract', () => {
 
   test('sends system instructions in the shape required by the Codex backend', async () => {
     const mock = createMockFetch([
-      { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: { id: 'r', output: [] } } },
+      { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
     const deps = makeDeps({
       [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } },
     }, mock.fetch);
     const provider = createCodexProvider();
     const model = provider.createModel('gpt-5.5', deps);
-    try {
-      await generateText({ model, system: 'You are concise.', prompt: 'hello', maxOutputTokens: 16 });
-    } catch { /* minimal mock response may not satisfy the SDK parser */ }
+    await generateText({ model, system: 'You are concise.', prompt: 'hello', maxOutputTokens: 16 });
 
     expect(mock.requests.length).toBeGreaterThan(0);
     const body = v.parse(CodexRequestBodySchema, JSON.parse(String(mock.requests[0].body)));
@@ -240,14 +245,14 @@ describe('Codex provider contract', () => {
           calls++;
           return calls === 1
             ? { status: 401, body: { error: 'token expired' } }
-            : { status: 200, body: { id: 'r', output: [] } };
+            : { status: 200, body: OPENAI_RESPONSES_BODY };
         },
       },
     ]);
     deps.fetch = mock.fetch;
     const provider = createCodexProvider();
     const model = provider.createModel('gpt-5.5', deps);
-    await tryCall(model);
+    await call(model);
 
     expect(forceRefreshSeen).toBe(true);
     expect(mock.requests.length).toBeGreaterThanOrEqual(2);
@@ -256,12 +261,12 @@ describe('Codex provider contract', () => {
 
   test('returns 401 when no credential stored (no upstream call)', async () => {
     const mock = createMockFetch([
-      { match: 'chatgpt.com', respond: { status: 200, body: {} } },
+      { match: 'chatgpt.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
     const deps = makeDeps({}, mock.fetch);
     const provider = createCodexProvider();
     const model = provider.createModel('gpt-5.5', deps);
-    await tryCall(model);
+    await expect(call(model)).rejects.toThrow();
     expect(mock.requests.length).toBe(0);
   });
 });

@@ -609,7 +609,13 @@ the container's database and dies
 with the container, so the stream is the only copy: `run_events(events, …)`
 reads it, and the adapter keeps it in `trajectory.json` and the trial metadata.
 A row is written when its turn settles, so a trial killed by the agent timeout
-carries no ledger for that turn — the measurement covers completed turns.
+carries no ledger for that turn — the measurement covers completed turns. A turn
+can write **two** `turn_steering` rows and they are the two arms of the
+delegation A/B: `turn_start_no_delegation` fires at step 0 of a session's first
+ask, `long_turn_no_delegation` at step 25 of a turn that never delegated. Group
+by `trigger` and average `converted`; the second row exists only on turns where
+the first did not convert, so the two rates are not competing for the same
+denominator.
 
 ### What the `evolve` switch measures here, and what it does not
 

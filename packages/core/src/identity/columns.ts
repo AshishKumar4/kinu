@@ -5,38 +5,56 @@
  * IF NOT EXISTS is a no-op on a table that already exists, so a column added
  * to a shipped table never reaches a workspace created before it, while every
  * reader still selects that column by name. That is not a hypothetical: a live
- * workspace failed with `no such column: code_language at offset 74` because
- * `search_nodes` gained the column after the workspace was created.
+ * workspace failed with `no such column: code_language` because `search_nodes`
+ * gained the column after the workspace was created.
  *
  * So a table that has ever gained a column declares those columns here too,
- * and `reconcileColumns` adds the missing ones in place. ALTER TABLE ADD
- * COLUMN throws when the column is already present, which is the common case
- * and is not an error.
+ * and `reconcileColumns` asks which ones are missing and adds exactly those.
+ * It does NOT add them speculatively and swallow the duplicate-column error:
+ * SQLite reports `duplicate column name: x`, `no such table: t`, `attempt to
+ * write a readonly database` and `database table is locked` through the same
+ * throw, so a catch here would report success for all four.
  *
  * This is not a migration framework and must not become one: no versions, no
  * ordering, no down-steps, no data rewrites. It only makes an existing table
  * match the shape its own DDL already declares.
  */
 
-import type { RawSqlExec } from '../types/primitives.js';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 
 /**
- * Add any of `definitions` that the table is missing.
+ * Add the columns of `definitions` that `table` does not already have.
  *
- * Each entry is a column definition exactly as it appears in the table's
- * CREATE statement (`'code_language TEXT'`, `"status TEXT NOT NULL DEFAULT
- * 'current'"`). SQLite rejects ADD COLUMN for a NOT NULL column with no
- * default and for a non-constant default, so a column that has ever been
- * added post-release must carry a constant default or be nullable.
+ * `definitions` maps column name to the DDL fragment that follows it in the
+ * table's CREATE statement (`{ code_language: 'TEXT' }`, `{ status: "TEXT NOT
+ * NULL DEFAULT 'current'" }`). SQLite rejects ADD COLUMN for a NOT NULL column
+ * with no default and for a non-constant default, so a column added
+ * post-release must carry a constant default or be nullable.
+ *
+ * The caller creates the table first — every call site is the table's own
+ * `CREATE TABLE IF NOT EXISTS` a few lines above. `pragma_table_info` returns
+ * no rows for a table that does not exist rather than failing, so an absent
+ * table is reported here instead of being read as "no columns present": doing
+ * nothing would leave the caller believing the shape was reconciled, and
+ * issuing the ALTERs would blame `no such table` on the column.
  */
 export function reconcileColumns(
+  sql: SqlExecutor,
   execRaw: RawSqlExec,
   table: string,
-  definitions: readonly string[],
+  definitions: Readonly<Record<string, string>>,
 ): void {
-  for (const definition of definitions) {
-    try {
-      execRaw(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
-    } catch { /* already present — the expected outcome on a current workspace */ }
+  // Bound argument to the table-valued form: a tagged template binds its
+  // interpolations, and this is a value, not an identifier. Verified on both
+  // backends — bun:sqlite and Durable Object SQLite under workerd.
+  const present = new Set(
+    sql<{ name: string }>`SELECT name FROM pragma_table_info(${table})`.map((row) => row.name),
+  );
+  if (present.size === 0) {
+    throw new Error(`reconcileColumns: table ${table} does not exist — create it before reconciling its columns`);
+  }
+  for (const [column, definition] of Object.entries(definitions)) {
+    if (present.has(column)) continue;
+    execRaw(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }

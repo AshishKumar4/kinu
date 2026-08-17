@@ -13,27 +13,33 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { RawSqlExec } from '../types/primitives.js';
-import { computeWorkspaceDiff, parseGitDiff, type FileDiff } from '../vfs/diff.js';
+import type { RawSqlExec, VfsEntryStat } from '../types/primitives.js';
+import { PLATFORM_CATALOG } from '../platform-catalog.js';
+import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus } from '../vfs/diff.js';
 import { nanoid } from '../utils/nanoid.js';
 
 /**
  * Files bigger than this are excluded from the snapshot — a change-set is a
  * review surface, not a backup.
  *
- * Both numbers bound the RESPONSE, not peak resident bytes, and their product is
+ * Both numbers bound the RESPONSE, not peak resident bytes: their product is
  * 102.4 MiB, which sits under `worker.isolate.memory`'s published 128 MB with no
- * margin worth the name. They read like memory protection and are not: nothing
- * here bounds how much is resident at once. `do.isolate.reset_silent` is the
- * mode that would end this — a retained working set past roughly 200 MiB resets
- * the object with nothing thrown or logged — so the failure would present as an
- * unexplained disappearance rather than as a diff that came back truncated.
- * Left as-is: making the snapshot streaming or byte-budgeted is a behavioural
- * change, and this comment is so the next reader does not have to rediscover the
- * multiplication.
+ * margin worth the name, and `do.isolate.reset_silent` — a retained working set
+ * past roughly 200 MiB resetting the object with nothing thrown or logged —
+ * would present as an unexplained disappearance rather than as a truncated
+ * diff. What bounds residency is `walkWorkspaceTextFiles`, which holds one body
+ * at a time; these two only bound what a caller is answered with.
  */
 const MAX_SNAPSHOT_FILE_BYTES = 256 * 1024;
 const MAX_SNAPSHOT_FILES = 400;
+
+/** Total body characters one change-set may carry. A quarter of the facet RPC
+ *  ceiling, because the reply crosses that boundary and the isolate holds it as
+ *  UTF-16 — twice its serialized size — with a row object and JSON quoting per
+ *  line on top. A file admitted past it is still listed, with true +/- counts
+ *  and no body, rather than dropped. */
+const MAX_CHANGESET_BODY_CHARS = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
+
 const SNAPSHOT_IGNORED_DIRECTORIES = new Set([
   '.git', '.proteus', '.cache', '.mypy_cache', '.pnpm-store', '.pytest_cache', '.venv',
   '__pycache__', 'node_modules', 'venv',
@@ -64,11 +70,23 @@ export interface ExecutorDiffResult {
 }
 
 /**
- * The current workspace text files (path → content). Skips directories,
- * binary files (NUL byte) and anything oversized; caps the file count.
+ * Visit every workspace text file the change-set considers, one body at a time.
+ *
+ * The visitor shape is the whole point. A 400-file workspace of 256 KiB files
+ * is 102 MiB, and the previous code held that map, the materialized baseline
+ * and the diff output live at once — three copies, in an isolate whose
+ * silent-reset wall is `PLATFORM_CATALOG['do.isolate.reset_silent']` and whose
+ * breach throws and logs nothing. Exactly one body is live here.
+ *
+ * Skips directories, binary files (NUL byte) and anything oversized; caps the
+ * admitted file count. Binary and oversized files are skipped BEFORE the cap is
+ * counted, so a tree of blobs cannot exhaust the text budget.
  */
-export async function readWorkspaceFiles(rt: AgentRuntime): Promise<Record<string, string>> {
-  const out: Record<string, string> = {};
+export async function walkWorkspaceTextFiles(
+  rt: AgentRuntime,
+  visit: (path: string, content: string) => void | Promise<void>,
+): Promise<void> {
+  let admitted = 0;
   // Breadth-first, with direct files before child directories. A large nested
   // tree can never hide the authored files beside it at the workspace root.
   const directories = [''];
@@ -84,7 +102,7 @@ export async function readWorkspaceFiles(rt: AgentRuntime): Promise<Record<strin
     for (const name of names) {
       if (SNAPSHOT_IGNORED_DIRECTORIES.has(name)) continue;
       const full = dir === '' ? name : `${dir}/${name}`;
-      let st: Awaited<ReturnType<typeof rt.storage.vfs.stat>>;
+      let st: VfsEntryStat | null;
       try {
         st = await rt.storage.vfs.stat(full);
       } catch (error) {
@@ -104,58 +122,120 @@ export async function readWorkspaceFiles(rt: AgentRuntime): Promise<Record<strin
       }
       const fileText = content instanceof Uint8Array ? new TextDecoder().decode(content) : content;
       if (fileText.includes(String.fromCharCode(0))) continue;
-      if (Object.keys(out).length === MAX_SNAPSHOT_FILES) {
+      if (admitted === MAX_SNAPSHOT_FILES) {
         throw new Error(`Workspace snapshot exceeds the ${MAX_SNAPSHOT_FILES}-file Output limit`);
       }
-      out[full] = fileText;
+      admitted++;
+      await visit(full, fileText);
     }
     directories.push(...children);
   }
-  return out;
+}
+
+/** The generation the change-set reads. Pinned once so the per-path content
+ *  reads below cannot straddle a concurrent re-baseline. */
+function activeBaselineGeneration(rt: AgentRuntime): string | null {
+  return rt.storage.sql<{ generation: string }>`
+    SELECT generation FROM vfs_baseline WHERE active = 1 LIMIT 1`[0]?.generation ?? null;
+}
+
+/** One baseline body, by primary key. Reading these one at a time is what
+ *  keeps the whole baseline out of the isolate. */
+function baselineContent(rt: AgentRuntime, generation: string, path: string): string {
+  const row = rt.storage.sql<{ content: string }>`
+    SELECT content FROM vfs_baseline
+    WHERE generation = ${generation} AND path = ${path} LIMIT 1`[0];
+  // The generation was pinned from the active row, so a missing body means a
+  // re-baseline landed mid-read. Saying so lets the caller read again; assuming
+  // an empty baseline would report the whole file as newly added.
+  if (!row) {
+    throw new Error(
+      `Workspace baseline changed while reading the change-set (generation ${generation}, path ${JSON.stringify(path)})`,
+    );
+  }
+  return row.content;
 }
 
 /**
- * Replace the stored baseline with this snapshot without exposing a partial
- * replacement. Rows are written under an inactive generation, then one SQLite
- * statement flips the whole table to that generation. A failed insert leaves
- * the previous generation active and the error reaches the caller.
+ * The cumulative workspace change-set since the baseline.
+ *
+ * Streams: one current body and one baseline body are live at a time, and only
+ * the bounded diff accumulates. Nothing here scales with the workspace's total
+ * size.
  */
-export function captureWorkspaceBaseline(rt: AgentRuntime, files: Record<string, string>): void {
+export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffResult> {
+  const generation = activeBaselineGeneration(rt);
+  const unseenBaselinePaths = new Set(
+    generation === null
+      ? []
+      : rt.storage.sql<{ path: string }>`
+          SELECT path FROM vfs_baseline
+          WHERE generation = ${generation} AND path <> ''`.map((r) => r.path),
+  );
+
+  const files: FileDiff[] = [];
+  let bodyChars = 0;
+  const admit = (path: string, status: FileStatus, before: string, after: string): void => {
+    const d = diffLines(before, after);
+    if (bodyChars >= MAX_CHANGESET_BODY_CHARS) {
+      files.push(fileDiff(path, status, { lines: [], added: d.added, removed: d.removed, truncated: true }));
+      return;
+    }
+    for (const l of d.lines) bodyChars += l.text.length;
+    files.push(fileDiff(path, status, d));
+  };
+
+  await walkWorkspaceTextFiles(rt, (path, after) => {
+    if (generation !== null && unseenBaselinePaths.delete(path)) {
+      const before = baselineContent(rt, generation, path);
+      if (before !== after) admit(path, 'changed', before, after);
+      return;
+    }
+    admit(path, 'added', '', after);
+  });
+  // Whatever the baseline still holds was not found in the workspace.
+  if (generation !== null) {
+    for (const path of unseenBaselinePaths) admit(path, 'removed', baselineContent(rt, generation, path), '');
+  }
+
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return { files, baselineJustCaptured: false };
+}
+
+/**
+ * Mark the current workspace as the new baseline — the diff resets to empty and
+ * accrues from here.
+ *
+ * Rows are written under an inactive generation as the walk produces them, then
+ * one SQLite statement flips the whole table to that generation, so no read ever
+ * sees a partial replacement. A failed insert leaves the previous generation
+ * active and the error reaches the caller unchanged. The walk awaits between
+ * inserts, which other work can interleave with; that is safe for exactly the
+ * reason the inactive generation exists — nothing reads it until the flip.
+ */
+export async function resetWorkspaceBaseline(rt: AgentRuntime): Promise<{ ok: true; files: number }> {
   const generation = nanoid();
+  let files = 0;
   try {
-    void rt.storage.sql`DELETE FROM vfs_baseline WHERE active = 0`;
     // The marker makes an intentionally empty snapshot representable.
     void rt.storage.sql`INSERT INTO vfs_baseline (generation, path, content, active)
       VALUES (${generation}, ${''}, ${''}, ${0})`;
-    for (const [path, content] of Object.entries(files)) {
+    await walkWorkspaceTextFiles(rt, (path, content) => {
       void rt.storage.sql`INSERT INTO vfs_baseline (generation, path, content, active)
         VALUES (${generation}, ${path}, ${content}, ${0})`;
-    }
+      files++;
+    });
     void rt.storage.sql`UPDATE vfs_baseline
       SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END`;
-  } catch (error) {
-    // Cleanup is safe because the failed generation was never made active.
-    try { void rt.storage.sql`DELETE FROM vfs_baseline WHERE generation = ${generation} AND active = 0`; } catch { /* preserve the original error */ }
-    throw error;
+  } finally {
+    // One sweep for both outcomes, and the reason there is no catch here: after
+    // a successful flip the only inactive rows are the generations this one
+    // replaced, and after a failure they are this one's own partial write, which
+    // no read can see and nothing will ever finish. Deleting them cannot change
+    // what the caller is told, so the original error propagates untouched.
+    void rt.storage.sql`DELETE FROM vfs_baseline WHERE active = 0`;
   }
-}
-
-/** The cumulative workspace change-set since the baseline. */
-export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffResult> {
-  const current = await readWorkspaceFiles(rt);
-  const baselineRows = rt.storage.sql<{ path: string; content: string }>`
-    SELECT path, content FROM vfs_baseline WHERE active = 1 AND path <> ''`;
-  const baseline: Record<string, string> = {};
-  for (const r of baselineRows) baseline[r.path] = r.content;
-  return { files: computeWorkspaceDiff(baseline, current), baselineJustCaptured: false };
-}
-
-/** Mark the current workspace as the new baseline — the diff resets to empty
- *  and accrues from here. */
-export async function resetWorkspaceBaseline(rt: AgentRuntime): Promise<{ ok: true; files: number }> {
-  const current = await readWorkspaceFiles(rt);
-  captureWorkspaceBaseline(rt, current);
-  return { ok: true, files: Object.keys(current).length };
+  return { ok: true, files };
 }
 
 /** Read tracked, staged and untracked changes without writing the repository's

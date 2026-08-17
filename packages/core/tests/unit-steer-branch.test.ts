@@ -6,13 +6,11 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { makeSql, makeExecRaw, createTestWorkspace } from './helpers.js';
 import {
   initAlternateTakesTable, recordBranchTakeSet, claimAlternateTakesForTurn,
   latestAlternateTakeSet, recordTakePick, buildTakeContinuationPrompt,
 } from '../src/mcts/takes.js';
-import { initTurnOutcomeTables } from '../src/evolution/outcomes.js';
-import { initHeadsTables } from '../src/heads/schema.js';
 import { HeadJournal } from '../src/heads/journal.js';
 import type { HeadRuntime, SpawnedHead } from '../src/heads/controller.js';
 import type { HeadInput, HeadReport } from '../src/heads/types.js';
@@ -23,13 +21,13 @@ import {
 import { headPhaseRunEvent } from '../src/orchestrator/heads-support.js';
 
 function setup() {
-  const db = new Database(':memory:');
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
-  initAlternateTakesTable(execRaw);
-  initTurnOutcomeTables(execRaw, sql);
-  initHeadsTables(execRaw);
-  return { db, sql, execRaw };
+  const ws = createTestWorkspace();
+  // The production schema, minus search_nodes on purpose: a branch-sourced set
+  // has no convergence record, and only an absent table proves the pipeline
+  // never reaches for one — an UPDATE matching no row is indistinguishable
+  // from an UPDATE that was never issued.
+  ws.execRaw('DROP TABLE search_nodes');
+  return ws;
 }
 
 function completedReport(id: string, summary: string, status: HeadReport['status'] = 'completed'): HeadReport {
@@ -170,8 +168,7 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
 
 describe('recordTakePick over a branch-sourced set — the pipeline unchanged', () => {
   test('picking the branch records corrected + the branch text as the follow-up, without search_nodes', () => {
-    // No search_nodes table at all — an agent that never ran MCTS can still
-    // pick a branch take (the re-point only applies to mcts-sourced sets).
+    // The re-point only applies to mcts-sourced sets (see setup()).
     const { sql } = setup();
     const set = recordBranchTakeSet(sql, {
       task: 'use approach B instead', turnId: 'turn-9', sessionId: 'default',
@@ -217,7 +214,7 @@ describe('alternate_takes schema migration', () => {
     db.exec(`INSERT INTO alternate_takes (id, task, winner_node_id, candidates, created_at)
              VALUES ('take-old', 'old task', 'n1', '[]', 1)`);
 
-    initAlternateTakesTable(makeExecRaw(db));
+    initAlternateTakesTable(makeExecRaw(db), makeSql(db));
     expect(latestAlternateTakeSet(sql)!.source).toBe('mcts');
 
     // And the migrated table accepts branch-sourced inserts.

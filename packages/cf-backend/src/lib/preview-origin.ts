@@ -53,7 +53,8 @@ interface PreviewHostEnv {
 
 const PREVIEW_SUFFIX_META = 'proteus-preview-host-suffix';
 
-function hostOf(origin: string | undefined): string | null {
+/** The host an origin var names, lowercased, or null when it names none. */
+export function hostOf(origin: string | undefined): string | null {
   if (!origin || !URL.canParse(origin)) return null;
   return new URL(origin).hostname.toLowerCase() || null;
 }

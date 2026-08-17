@@ -131,12 +131,11 @@ const PROXY_ALLOWED_PATHS: readonly RegExp[] = [
  * the provider's own account-management routes.
  */
 export function proxyTargetAllowed(target: string, base: string): boolean {
-  let targetURL: URL;
-  let baseURL: URL;
-  try {
-    targetURL = new URL(target);
-    baseURL = new URL(base);
-  } catch { return false; }
+  // Asked, not caught: `URL.parse` reports an unparseable URL as null, so a
+  // refusal here is always a refusal this predicate decided.
+  const targetURL = URL.parse(target);
+  const baseURL = URL.parse(base);
+  if (!targetURL || !baseURL) return false;
   if (targetURL.protocol !== 'https:' || baseURL.protocol !== 'https:') return false;
   // A URL carrying credentials cannot be handed to fetch, and its authority is
   // exactly the shape used to make a target look like somewhere it is not.

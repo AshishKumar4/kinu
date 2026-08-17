@@ -139,21 +139,30 @@ export function autoTitleLocalWorkspace(
 ): void {
   initAgentConfigTable(rt.storage.execRaw);
   const config = createAgentConfigStore(rt.storage.sql);
-  void applyWorkspaceTitle({
-    slug: name,
-    displayName: config.getDisplayName(),
-    nameOrigin: config.getNameOrigin(),
-    mission,
-  }, {
-    persist: (title) => {
-      config.setDisplayName(title);
-      config.setNameOrigin('auto');
-      const configured = listConfiguredAgentRefs()
-        .find((agent) => agent.mode === 'local' && (agent.localName ?? agent.name) === name);
-      upsertAgentConfig({ ...(configured ?? { name, mode: 'local', localName: name }), displayName: title });
-    },
-    suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
-  }).catch(() => { /* best-effort: the workspace keeps the name it had */ });
+  void (async () => {
+    try {
+      await applyWorkspaceTitle({
+        slug: name,
+        displayName: config.getDisplayName(),
+        nameOrigin: config.getNameOrigin(),
+        mission,
+      }, {
+        persist: (title) => {
+          config.setDisplayName(title);
+          config.setNameOrigin('auto');
+          const configured = listConfiguredAgentRefs()
+            .find((agent) => agent.mode === 'local' && (agent.localName ?? agent.name) === name);
+          upsertAgentConfig({ ...(configured ?? { name, mode: 'local', localName: name }), displayName: title });
+        },
+        suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
+      });
+    } catch (error) {
+      // The naming model refusing, or our database/config.json refusing the write:
+      // `applyWorkspaceTitle` absorbs neither, and the deterministic title has landed
+      // by the time either can happen.
+      console.warn(`Could not save the workspace title for "${name}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+  })();
 }
 
 export interface LocalAgentClientDeps {
@@ -351,7 +360,7 @@ export class LocalAgentClient implements AgentClient {
                                     VALUES (${newId}, ${next.conversationId}, ${parent}, ${row.role}, ${row.content}, ${row.created_at})`;
     }
 
-    await this.session.end().catch(() => {});
+    await this.session.end();
     this.activeCliSession = next;
     this.session = this.createAgentSession(this.conversationIdForAgentSession());
     await this.connect();
@@ -382,18 +391,18 @@ export class LocalAgentClient implements AgentClient {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    await this.session.end().catch(() => {});
-    this.deps.db.close();
+    try {
+      await this.session.end();
+    } finally {
+      // The handle goes back even when settling failed, or the next open finds the file locked.
+      this.deps.db.close();
+    }
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
     if (this.activeCliSession.mode !== 'record') return [];
-    try {
-      const transcript = readCliSessionTranscript(this.agentName, this.activeCliSession.id, this.deps.sessionOptions);
-      return transcriptMessages(transcript.entries);
-    } catch {
-      return [];
-    }
+    const transcript = readCliSessionTranscript(this.agentName, this.activeCliSession.id, this.deps.sessionOptions);
+    return transcriptMessages(transcript.entries);
   }
 
   listSessions(): CliSessionInfo[] {
@@ -402,7 +411,7 @@ export class LocalAgentClient implements AgentClient {
 
   async resumeConversation(sessionRef: string): Promise<void> {
     const nextCliSession = createCliSession(this.agentName, { ...this.deps.sessionOptions, session: sessionRef });
-    await this.session.end().catch(() => {});
+    await this.session.end();
     this.activeCliSession = nextCliSession;
     this.session = this.createAgentSession(this.conversationIdForAgentSession());
     await this.connect();
@@ -526,7 +535,7 @@ export class LocalAgentClient implements AgentClient {
   private emit(event: AgentClientEvent): void {
     this.recorder.record(this.activeCliSession, event);
     for (const listener of this.listeners) {
-      try { listener(event); } catch { /* a render error must not kill the loop */ }
+      listener(event);
     }
   }
 }

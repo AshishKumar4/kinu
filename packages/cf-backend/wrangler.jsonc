@@ -17,7 +17,29 @@
   // is exactly the one an operator needed to see (2026-08-12 observability
   // audit). 7-day retention on the paid tier (Cloudflare's Workers Logs
   // limit, not ours) — `wrangler tail` is live-only and sees nothing older.
-  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  //
+  // TRACES ARE A SEPARATE SWITCH and the bare `enabled: true` above governs LOGS
+  // ONLY. Without the `traces` block every custom span this Worker opens is
+  // created, reports `isTraced` false, and is never recorded — measured under
+  // real workerd: no collector attached gives {"outer":false,"inner":false},
+  // one attached gives {"outer":true,"inner":true}. That is the whole tracing
+  // investment silently dead with the Worker still answering 200, so
+  // `scripts/tracing-gate.ts` fails when the tracer factory is used in src and
+  // this key is absent from ANY deployable environment. It is repeated in
+  // `env.staging` because wrangler does NOT inherit `observability` into named
+  // environments — a preview with traces off reports success while measuring a
+  // different system.
+  //
+  // There is deliberately NO `tail_consumers` here. A tail consumer is not
+  // needed for the platform to ingest traces, and a Worker that names ITSELF as
+  // its own tail consumer and touches a binding inside the handler is a load
+  // generator: measured at 51 self-invocations within 300 ms of ONE request,
+  // still climbing at 3 s, bounded only by a breaker inside the probe. Keeping
+  // the key absent makes that unreachable rather than merely discouraged.
+  "observability": {
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 1 }
+  },
   "worker_loaders": [{ "binding": "LOADER" }],
   // Main site served by the custom domain. Workspace and Sandbox previews get an
   // isolated capability hostname each under PREVIEW_HOST_SUFFIX below.
@@ -41,7 +63,6 @@
   "durable_objects": {
     "bindings": [
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
-      { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
       // Per-user DO: profile + agent registry + credentials + defaults.
       // Keyed by stable Proteus userId assigned by AUTH_DB.
       { "class_name": "UserDO", "name": "UserDO" },
@@ -230,7 +251,14 @@
       "main": "src/server.ts",
       "compatibility_date": "2025-12-01",
       "compatibility_flags": ["nodejs_compat"],
-      "observability": { "enabled": true, "head_sampling_rate": 1 },
+      // `traces` is a SEPARATE switch from `logs`, and wrangler does not inherit
+      // `observability` into a named environment — see the header. A bare
+      // `enabled: true` here governed logs only, so every span this Worker opened
+      // in staging reported isTraced false and was never recorded.
+      "observability": {
+        "logs": { "enabled": true, "head_sampling_rate": 1 },
+        "traces": { "enabled": true, "head_sampling_rate": 1 }
+      },
       "worker_loaders": [{ "binding": "LOADER" }],
       "assets": {
         "directory": "dist/client",
@@ -241,7 +269,6 @@
       "durable_objects": {
         "bindings": [
           { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
-          { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
           { "class_name": "UserDO", "name": "UserDO" },
           { "class_name": "MonitorDO", "name": "MonitorDO" },
           { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },

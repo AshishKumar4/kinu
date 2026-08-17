@@ -94,7 +94,7 @@ import {
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   SCAFFOLD_TURN_TIMEOUT_MS,
   type AlternateTakeSet, type TakePickOutcome,
-  initAlternateTakesTable, startBranchHead, settlePendingBranches, newBranchId,
+  startBranchHead, settlePendingBranches, newBranchId,
   type PendingBranch, type BranchStatusEvent,
   type AlarmScheduler, type BackgroundJob, type SqlExec,
   type TimerTrigger, type TimerTriggerOpts, type TriggerView,
@@ -116,7 +116,7 @@ import { discoverAgentsMd } from './agents-md.js';
 import { createNodeCraftedExecute } from './craft-executor.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
 import { createCLIHeadRuntime } from './head-runtime.js';
-import { detectOrphanedFibers, type OrphanedFiber } from './fiber.js';
+import { detectOrphanedFibers } from './fiber.js';
 import { connectMcpServers, type McpServerConfig } from './mcp.js';
 import type { LocalModelResolver } from './model-resolver.js';
 
@@ -132,11 +132,6 @@ export function resolveChatModel(llm: LLMProviderConfig): LanguageModel {
   return createChatModel({
     kind: 'openai-compat', name: llm.name, baseURL: llm.baseURL, headers: llm.headers, modelId: llm.model,
   });
-}
-
-function providerFamilyForSpec(spec: string): string | undefined {
-  try { return parseModelSpec(spec).provider; }
-  catch { return undefined; }
 }
 
 /**
@@ -489,7 +484,7 @@ export class LocalAgentSession implements BackendHost {
 
     const headRuntimeOptions: Parameters<typeof createCLIHeadRuntime>[0] = {
       model: this.fallbackModel,
-      providerFamily: providerFamilyForSpec(this.fallbackModelSpec),
+      providerFamily: parseModelSpec(this.fallbackModelSpec).provider,
       parentRuntime: this.rt,
       cwd: this.cwd,
       webSearch: this.getWebSearchProvider(),
@@ -519,7 +514,11 @@ export class LocalAgentSession implements BackendHost {
     });
     this.eventLog = new EventLog(hubSql);
     const alarmScheduler: AlarmScheduler = {
-      scheduleAt: (ts) => this.scheduleLocalAlarm(ts),
+      // Synchronous here: the local host's wake-up is a process timer, not a
+      // storage write, so there is nothing to await. The seam returns a promise
+      // because the cloud host's arm is a Durable Object write that must land
+      // inside its invocation (`do.wait_until.no_op`).
+      scheduleAt: async (ts) => { this.scheduleLocalAlarm(ts); },
       currentAlarm: () => this.scheduledAlarmAt,
     };
     this.triggerRegistry = new TriggerRegistry(hubSql, alarmScheduler);
@@ -768,8 +767,8 @@ export class LocalAgentSession implements BackendHost {
     return result;
   }
 
-  createTimerTrigger(opts: TimerTriggerOpts): TimerTrigger {
-    return createTimerTrigger(this.triggerRegistry, opts, Date.now());
+  async createTimerTrigger(opts: TimerTriggerOpts): Promise<TimerTrigger> {
+    return await createTimerTrigger(this.triggerRegistry, opts, Date.now());
   }
 
   /** The local clock's half of timer ingress: fire what is due, then re-arm
@@ -777,7 +776,7 @@ export class LocalAgentSession implements BackendHost {
   async fireDueTriggers(now = Date.now()): Promise<{ fired: number; nextAlarmAt: number | null }> {
     if (this.ended) return { fired: 0, nextAlarmAt: null };
     if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt <= now) this.clearLocalAlarm();
-    const { fired } = fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
+    const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
     if (fired > 0) this.orch.scheduleDrain();
     this.rearmLocalAlarm();
     return { fired, nextAlarmAt: this.scheduledAlarmAt };
@@ -790,15 +789,15 @@ export class LocalAgentSession implements BackendHost {
    * this creates is the trigger and its secret, and {@link acceptWebhookDelivery}
    * is the door a transport in front of it delivers through.
    */
-  createDurableWebhook(opts: {
+  async createDurableWebhook(opts: {
     label: string;
     auth_mode: 'hmac' | 'bearer' | 'mtls';
     secret?: string;
     accepted_content_type?: string;
     rate_limit_per_min?: number;
-  }): LocalDurableWebhook {
+  }): Promise<LocalDurableWebhook> {
     const now = Date.now();
-    const webhook = registerDurableWebhook(this.triggerRegistry, opts, now);
+    const webhook = await registerDurableWebhook(this.triggerRegistry, opts, now);
     if (opts.secret) this.webhookSecrets.put(webhook.secret_id, webhook.trigger_id, opts.secret, now);
     return {
       trigger_id: webhook.trigger_id,
@@ -1028,7 +1027,6 @@ export class LocalAgentSession implements BackendHost {
     const task = text.trim();
     if (!task) return false;
     this.ensureModelState();
-    initAlternateTakesTable(this.rt.storage.execRaw);
     const id = newBranchId();
     const handle = startBranchHead(this._headRuntime, this.headJournal, {
       id, task, inheritedContext: this.readInheritedContext(),
@@ -1124,7 +1122,7 @@ export class LocalAgentSession implements BackendHost {
     this.clearLocalAlarm();
     await this.orch.settleEvolution();
     await this.joinBackgroundFibers(this.drainDeadline());
-    try { await this.mcpClose?.(); } catch { /* best effort */ }
+    await this.mcpClose?.();
   }
 
   /** Durable fibers detached from a turn — a backgrounded tool call, or an
@@ -1143,9 +1141,20 @@ export class LocalAgentSession implements BackendHost {
   }
   private trackFiber<T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> {
     const running = this.rt.schedule.fiber(name, fn);
-    this.backgroundFibers.add(running);
-    void running.catch(() => { /* the runner owns the outcome */ })
-      .finally(() => this.backgroundFibers.delete(running));
+    // Tracked as a SETTLEMENT rather than as an outcome: joinBackgroundFibers
+    // awaits this set with allSettled, and the work's result belongs to the
+    // caller holding `running`. What reaches here instead is a fiber that could
+    // not even record its own outcome — a stash or row-delete against a
+    // database closed under it at teardown — which has no other reader, so it
+    // is stated rather than dropped as an unhandled rejection.
+    const settled = Promise.allSettled([running]);
+    this.backgroundFibers.add(settled);
+    void settled.then(([outcome]) => {
+      this.backgroundFibers.delete(settled);
+      if (outcome.status === 'rejected') {
+        console.error(`[proteus] durable fiber '${name}' failed to settle:`, outcome.reason);
+      }
+    });
     return running;
   }
 
@@ -1230,6 +1239,11 @@ export class LocalAgentSession implements BackendHost {
    * read — a resume runs in a NEW fiber row, so this never deletes it.
    *
    * Call once at startup: no fibers are live yet, so every row is an orphan.
+   *
+   * Nothing here is optional. Each step used to absorb its own failure, so a
+   * workspace whose fiber rows could not be read recovered NOTHING and then
+   * looked exactly like one that had no interrupted work — while the notice the
+   * previous exit printed promised the operator these jobs would resume.
    */
   async recoverBackgroundJobs(): Promise<void> {
     await reconcileInterruptedForks({
@@ -1237,13 +1251,10 @@ export class LocalAgentSession implements BackendHost {
       signals: this.orch.signals,
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
     });
-    let orphans: OrphanedFiber[] = [];
-    try { orphans = detectOrphanedFibers(this.rt.storage.sql); } catch { /* no fibers table yet */ }
+    const orphans = detectOrphanedFibers(this.rt.storage.sql);
     for (const o of orphans) {
-      if (o.name.startsWith('bg:')) {
-        try { await this.jobRunner.recover(o.snapshot); } catch { /* best effort */ }
-      }
-      try { void this.rt.storage.sql`DELETE FROM fibers WHERE id = ${o.id}`; } catch { /* nop */ }
+      if (o.name.startsWith('bg:')) await this.jobRunner.recover(o.snapshot);
+      void this.rt.storage.sql`DELETE FROM fibers WHERE id = ${o.id}`;
     }
     // Fiber rows are not the source of truth for job liveness. A settlement
     // whose database was closed under it at teardown writes neither its outcome
@@ -1251,7 +1262,7 @@ export class LocalAgentSession implements BackendHost {
     // `running` row no orphan fiber points at, which the loop above can never
     // reach. Nothing in this process owns a job yet, so every remaining
     // `running` row is an orphan too.
-    try { await this.jobRunner.recoverOrphans(); } catch { /* best effort */ }
+    await this.jobRunner.recoverOrphans();
   }
 
   /** Re-drive a background job interrupted by a previous process exit — the
@@ -1275,7 +1286,14 @@ export class LocalAgentSession implements BackendHost {
   // ── Internals ──────────────────────────────────────────────────────
 
   private emit(event: SessionEvent): void {
-    try { this.onEvent(event); } catch { /* a frontend render error must not kill the loop */ }
+    try {
+      this.onEvent(event);
+    } catch (error) {
+      // A frontend render error must not kill the agent loop — but it is still a
+      // defect, and the event stream that would have shown it is the thing that
+      // just failed, so stderr is the only channel left.
+      console.error(`[proteus] session event listener failed on '${event.type}':`, error);
+    }
   }
 
   private scheduleLocalAlarm(ts: number): void {
@@ -1792,15 +1810,13 @@ export class LocalAgentSession implements BackendHost {
       // captures competed for an answer that no longer exists — cannot be
       // credited, so its captures are purged (mirroring the cf backend's
       // purge-on-error) and the next turn never claims them as its own.
-      try {
-        if (this.turnWorkMode !== 'plan' && assistantMsgId && !this.orch.acc.hadError) {
-          claimAlternateTakesForTurn(this.rt.storage.sql, {
-            turnId: assistantMsgId, sessionId: this.sessionId, startedAt,
-          });
-        } else {
-          purgeUnclaimedAlternateTakes(this.rt.storage.sql);
-        }
-      } catch { /* no takes table yet — the first MCTS run creates it */ }
+      if (this.turnWorkMode !== 'plan' && assistantMsgId && !this.orch.acc.hadError) {
+        claimAlternateTakesForTurn(this.rt.storage.sql, {
+          turnId: assistantMsgId, sessionId: this.sessionId, startedAt,
+        });
+      } else {
+        purgeUnclaimedAlternateTakes(this.rt.storage.sql);
+      }
 
       // Steer-as-Branch redirects launched during this turn settle against its
       // answer — detached, so a slow branch never delays turn-end.
@@ -1866,7 +1882,7 @@ export class LocalAgentSession implements BackendHost {
     const observed = await observeCompletionState({
       exec: (command) => shell.exec(command),
       vfs: this.rt.storage.vfs,
-    }).catch(() => null);
+    });
     // Nothing observable means no evidence to show, and a gate with no evidence
     // is just "are you sure?" — the doctrine-shaped ask this replaces.
     if (observed === null) return;
@@ -2071,8 +2087,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Recent GEPA passes, newest first. */
   getGepaRuns(limit = 20): GepaRunSummary[] {
-    try { return listGepaRuns(this.rt.storage.sql, limit); }
-    catch { return []; }
+    return listGepaRuns(this.rt.storage.sql, limit);
   }
 
   /** `host.llmStream` — the scaffold's inference bridge (core scaffold-host)
@@ -2285,32 +2300,28 @@ export class LocalAgentSession implements BackendHost {
    * did not fit is STATED: the count, and where it is still readable from.
    */
   private restoreHistory(): void {
-    try {
-      const rows = this.rt.storage.sql<{ role: string; content: string }>`
-        SELECT role, content
-        FROM messages
-        WHERE session_id = ${this.sessionId} AND role IN ('user', 'assistant')
-        ORDER BY created_at DESC, rowid DESC`;
-      const budget = this.sessionContextWindow();
-      const restored: ModelMessage[] = [];
-      let tokens = 0;
-      let omitted = 0;
-      for (const row of rows) {
-        if (row.role !== 'user' && row.role !== 'assistant') continue;
-        if (omitted > 0) { omitted++; continue; }
-        const cost = estimateTokens(row.content.length);
-        // The newest message is always restored: a single message larger than
-        // the whole window is the compaction ladder's problem, not a reason to
-        // open the session with an empty transcript.
-        if (restored.length > 0 && tokens + cost > budget) { omitted++; continue; }
-        tokens += cost;
-        restored.push({ role: row.role, content: row.content });
-      }
-      if (omitted > 0) this.history.push(olderHistoryNotice(omitted, this.sessionId));
-      this.history.push(...restored.reverse());
-    } catch {
-      // Old or partial databases should still open; they just start with no restored transcript.
+    const rows = this.rt.storage.sql<{ role: string; content: string }>`
+      SELECT role, content
+      FROM messages
+      WHERE session_id = ${this.sessionId} AND role IN ('user', 'assistant')
+      ORDER BY created_at DESC, rowid DESC`;
+    const budget = this.sessionContextWindow();
+    const restored: ModelMessage[] = [];
+    let tokens = 0;
+    let omitted = 0;
+    for (const row of rows) {
+      if (row.role !== 'user' && row.role !== 'assistant') continue;
+      if (omitted > 0) { omitted++; continue; }
+      const cost = estimateTokens(row.content.length);
+      // The newest message is always restored: a single message larger than
+      // the whole window is the compaction ladder's problem, not a reason to
+      // open the session with an empty transcript.
+      if (restored.length > 0 && tokens + cost > budget) { omitted++; continue; }
+      tokens += cost;
+      restored.push({ role: row.role, content: row.content });
     }
+    if (omitted > 0) this.history.push(olderHistoryNotice(omitted, this.sessionId));
+    this.history.push(...restored.reverse());
   }
 
   private normalizeModelSpec(spec: string | null): string {
@@ -2369,7 +2380,7 @@ export class LocalAgentSession implements BackendHost {
     // The agent's VFS backs the shared findings scratch sibling heads write to.
     this._headRuntime = createCLIHeadRuntime({
       model,
-      providerFamily: providerFamilyForSpec(this.effectiveModelSpec()),
+      providerFamily: parseModelSpec(this.effectiveModelSpec()).provider,
       parentRuntime: this.rt,
       cwd: this.cwd,
       webSearch: this.getWebSearchProvider(),

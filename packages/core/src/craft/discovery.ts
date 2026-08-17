@@ -9,6 +9,7 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import { upsertCraftedTool } from './conflict.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import { EVIDENCE_BUDGETS } from '../prompts/evidence-window.js';
+import { tolerate } from '../obs/index.js';
 
 /** Head-only cut with a named omission — code must stay contiguous for a
  *  rewriter (same rationale as gepaParentSource). */
@@ -55,17 +56,19 @@ export async function maybeStoreCraftedTool(
     jsonObjectOnlyInstruction(),
   );
 
-  try {
-    const parsed = v.parse(GeneralizedToolSchema, extractJsonObject(generalized));
-    if (!parsed.name || !parsed.code) return;
+  // Only the model's own output is allowed to be unusable here. The store write
+  // below used to sit inside the same catch as this parse, so a tool that failed
+  // to persist was reported as "the LLM returned invalid JSON" and the craft
+  // loop looked like it had simply declined to generalize.
+  const extracted = tolerate(() => extractJsonObject(generalized), 'malformed-input');
+  if (extracted === undefined) return;
+  const parsed = v.parse(GeneralizedToolSchema, extracted);
+  if (!parsed.name || !parsed.code) return;
 
-    await upsertCraftedTool(rt, {
-      name: parsed.name,
-      description: parsed.description ?? '',
-      code: parsed.code,
-      score,
-    });
-  } catch {
-    // LLM returned invalid JSON — skip, don't crash
-  }
+  await upsertCraftedTool(rt, {
+    name: parsed.name,
+    description: parsed.description ?? '',
+    code: parsed.code,
+    score,
+  });
 }

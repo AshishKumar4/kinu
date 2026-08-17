@@ -18,6 +18,7 @@
  */
 
 import * as v from 'valibot';
+import { tolerate } from '../obs/index.js';
 import type { SqlExecutor } from '../types/primitives.js';
 
 /** The settle policy as the caller names it — `agents(action:'fork', settle)`. */
@@ -76,23 +77,23 @@ const ConfigSchema = v.object({
  * at its default.
  */
 function competedParams(rootId: string, configJson: string): ForkRunParams | null {
-  try {
-    const parsed = v.safeParse(ConfigSchema, JSON.parse(configJson));
-    if (!parsed.success) return null;
-    const config = parsed.output;
-    return {
-      rootId,
-      policy: 'mcts',
-      budget: config.budget,
-      branches: config.branches,
-      maxDepth: config.maxDepth ?? null,
-      explorationWeight: config.explorationWeight ?? null,
-      judgeSamples: config.judgeSamples ?? null,
-      mode: config.mode ?? null,
-    };
-  } catch {
-    return null;
-  }
+  // A checkpoint column that is not JSON is the one failure this read treats as
+  // a value; any other failure is a fault in the read itself and propagates.
+  const decoded: unknown = tolerate(() => JSON.parse(configJson), 'malformed-input');
+  if (decoded === undefined) return null;
+  const parsed = v.safeParse(ConfigSchema, decoded);
+  if (!parsed.success) return null;
+  const config = parsed.output;
+  return {
+    rootId,
+    policy: 'mcts',
+    budget: config.budget,
+    branches: config.branches,
+    maxDepth: config.maxDepth ?? null,
+    explorationWeight: config.explorationWeight ?? null,
+    judgeSamples: config.judgeSamples ?? null,
+    mode: config.mode ?? null,
+  };
 }
 
 /**

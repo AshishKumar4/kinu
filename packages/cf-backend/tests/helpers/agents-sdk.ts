@@ -45,6 +45,13 @@ export function mockAgentsSdk(): void {
       async keepAliveWhile<Result>(fn: () => Promise<Result>): Promise<Result> {
         return fn();
       }
+      /** WebSocket fan-out to connected clients. Think's own `broadcast`
+       *  override delegates here, so a stand-in without it turns every
+       *  broadcasting path — signal cards, roster updates — into a TypeError;
+       *  with no connections the real one is a no-op, which is what this is. A
+       *  test that observes broadcasts overrides it on the instance
+       *  (unit-mcts-broadcast.test.ts). */
+      broadcast(_message: string | ArrayBuffer | ArrayBufferView, _without?: string[]): void {}
     },
     /** The real decorator only attaches RPC metadata. */
     callable: () => <Method>(method: Method): Method => method,

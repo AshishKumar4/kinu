@@ -80,15 +80,28 @@ export async function handleUserRequest(
   // Bootstrap profile on every request — cheap UPDATE if exists, INSERT once.
   await stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined);
 
-  // Fire-and-forget on the first hit for this user this isolate: warm MCP, and
-  // repair workspaces that predate the capability boundary. The backfill is
-  // one-shot per user inside the UserDO — a workspace runs on an alarm, an
-  // inbound email or a peer's task without anyone opening it, so waiting for a
-  // human to visit each one would fail those turns.
+  // First hit for this user in this isolate: warm MCP, and repair workspaces that
+  // predate the capability boundary. Both are one-shot per user inside the UserDO
+  // — a workspace runs on an alarm, an inbound email or a peer's task without
+  // anyone opening it, so waiting for a human to visit each one would fail those
+  // turns.
+  //
+  // `ctx` here is the WORKER's ExecutionContext, so waitUntil is the right call:
+  // it is a no-op only inside a Durable Object (`do.wait_until.no_op`). What was
+  // wrong is what these two did with their failures. Both settlements were
+  // discarded by `.then(() => {}, () => {})`, so a capability repair that threw
+  // on every request left no trace anywhere — and the user was marked warmed
+  // regardless, which recorded a repair that had not happened.
   if (ctx && !warmedMcpUsers.has(identity.userId)) {
     warmedMcpUsers.add(identity.userId);
-    ctx.waitUntil(stub.userMcp_warmConnections(await ownerCaller(env)).then(() => {}, () => {}));
-    ctx.waitUntil(stub.backfillWorkspaceCapabilities(await ownerCaller(env)).then(() => {}, () => {}));
+    const caller = await ownerCaller(env);
+    const reportBootstrapFailure = (what: string) => (err: { message?: string }) => {
+      warmedMcpUsers.delete(identity.userId);
+      console.warn(`[proteus] user bootstrap ${what} failed for ${identity.userId}:`,
+        err instanceof Error ? err.message : String(err));
+    };
+    ctx.waitUntil(stub.userMcp_warmConnections(caller).catch(reportBootstrapFailure('MCP warm')));
+    ctx.waitUntil(stub.backfillWorkspaceCapabilities(caller).catch(reportBootstrapFailure('workspace-capability backfill')));
   }
 
   // ── Profile ────────────────────────────────────────────────────────

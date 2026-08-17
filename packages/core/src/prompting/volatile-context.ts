@@ -476,12 +476,39 @@ export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | n
 
 interface LedgerBlock {
   /** Message count of the un-woven array when the block was born — it renders
-   *  after that many messages, forever (the cache-stability contract). */
+   *  after that many messages, forever (the cache-stability contract), except
+   *  where that slot has since become a tool result ({@link insertionPoint}). */
   index: number;
   /** The rendered block text, which is also the append gate: a step whose
    *  render is byte-identical to this adds nothing. */
   text: string;
   message: ModelMessage;
+}
+
+/**
+ * The first position at or after `index` at which a message may legally be
+ * inserted — `index` itself in every case but one.
+ *
+ * A `tool` message answers the assistant message before it, and the AI SDK
+ * refuses to build a prompt with anything in between: it throws
+ * `AI_MissingToolResultsError` client-side, before a byte reaches the provider
+ * (see prompting/interrupted-tool-calls.ts). A frozen block's index is a
+ * coordinate in the array of the turn it was born in, so the slot it names can
+ * since have grown into the middle of such a pair — the CLI's turn-start steer
+ * puts the first block at index 2, and on the next turn index 2 is the tool
+ * result answering the assistant message at index 1. Every consecutive `tool`
+ * message is stepped over, not just one: a turn can answer several calls in
+ * separate messages, and landing between two of those breaks the prompt exactly
+ * as landing before the first one does.
+ *
+ * `settleUnpairedToolCalls` cannot cover this. It runs at turn assembly, the
+ * weave runs per step afterwards, and a synthetic result here would claim a
+ * call was interrupted when its real result is sitting one message away.
+ */
+function insertionPoint(history: ReadonlyArray<ModelMessage>, index: number): number {
+  let at = index;
+  while (history[at]?.role === 'tool') at += 1;
+  return at;
 }
 
 /**
@@ -561,8 +588,9 @@ export class DynamicContextLedger {
     const woven: ModelMessage[] = [];
     let cursor = 0;
     for (const block of this.blocks) {
-      woven.push(...history.slice(cursor, block.index), block.message);
-      cursor = block.index;
+      const at = insertionPoint(history, Math.max(block.index, cursor));
+      woven.push(...history.slice(cursor, at), block.message);
+      cursor = at;
     }
     woven.push(...history.slice(cursor));
     return woven;

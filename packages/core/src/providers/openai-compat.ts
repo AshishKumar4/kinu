@@ -72,30 +72,29 @@ export function createOpenAICompatProvider(providerId: string = 'openai-compat')
   };
 }
 
+/** The endpoint's own `/models` list. An empty array means the endpoint
+ *  answered and offers nothing usable; a fetch or parse failure throws, so a
+ *  wrong base URL is not reported as a provider with no models. */
 export async function discoverOpenAICompatibleModels(
   auth: AuthResolution | null,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ModelInfo[]> {
-  try {
-    if (!auth?.baseURL) return [];
-    const response = await fetchImpl(`${auth.baseURL.replace(/\/+$/, '')}/models`, {
-      headers: { ...auth.headers, accept: 'application/json' },
-    });
-    if (!response.ok) return [];
-    const body = v.safeParse(ModelListSchema, await response.json());
-    if (!body.success) return [];
-    return body.output.data.flatMap((value): ModelInfo[] => {
-      const id = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value.id);
-      if (!id.success) return [];
-      const contextWindow = positiveInteger(value.context_window);
-      const name = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value.name);
-      return [{
-        id: id.output,
-        label: name.success ? name.output : id.output,
-        contextWindow: contextWindow || undefined,
-      }];
-    });
-  } catch {
-    return [];
-  }
+  if (!auth?.baseURL) return [];
+  const response = await fetchImpl(`${auth.baseURL.replace(/\/+$/, '')}/models`, {
+    headers: { ...auth.headers, accept: 'application/json' },
+  });
+  if (!response.ok) return [];
+  const body = v.safeParse(ModelListSchema, await response.json());
+  if (!body.success) return [];
+  return body.output.data.flatMap((value): ModelInfo[] => {
+    const id = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value.id);
+    if (!id.success) return [];
+    const contextWindow = positiveInteger(value.context_window);
+    const name = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value.name);
+    return [{
+      id: id.output,
+      label: name.success ? name.output : id.output,
+      contextWindow: contextWindow || undefined,
+    }];
+  });
 }

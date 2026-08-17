@@ -30,6 +30,22 @@ bash scripts/setup-worktree.sh           # prepare a git worktree (see below)
 `bun run check` runs the strict lint gate before TypeScript. All anti-slop rules are
 errors, warnings fail the gate, and unused disable directives are errors.
 
+The anti-slop plugin is **vendored**, not a dependency: upstream
+[dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) is `private: true` and publishes no
+npm package. `tools/oxlint/anti-slop/upstream.json` pins the upstream commit and a digest per
+vendored file, and `drift.test.ts` fails naming any file that diverged. Three rules are
+deliberately stronger than upstream and are declared there with their reason; changing one fails
+the gate rather than passing as a sync. To take a newer upstream:
+
+```bash
+git clone https://github.com/dmmulroy/anti-slop /tmp/anti-slop
+# merge upstream's rules/ and src/rules/*.test.ts into tools/oxlint/anti-slop/, keeping the
+# declared local deltas, then re-pin:
+ANTI_SLOP_UPSTREAM=/tmp/anti-slop node --experimental-strip-types \
+  tools/oxlint/anti-slop/drift.test.ts --update
+bun run test:anti-slop
+```
+
 ## Working In A Git Worktree
 
 A fresh worktree has no `node_modules`. **Run `bash scripts/setup-worktree.sh` in
@@ -138,9 +154,26 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 - Vercel AI SDK v6: `tool()` + `jsonSchema()` for tool definitions
 - `ToolSet` type from `ai` package for tool collections
 - `@callable()` decorator for RPC methods exposed to the React UI
-- Functions return descriptive error strings, not thrown exceptions, in executor tools
+- Executor tools return descriptive error strings today. That string carries no cause chain and no classification, so a caller cannot tell a timeout from a denial from an OOM — a known defect, not the target shape. The replacement (`Result<T, ProteusError>` via `neverthrow`) is specified in the observability contract and **not built yet**: do not import `ProteusError`, `toProteusError` or `neverthrow`, none of them exist
 - Executor tools use positional args (`positionalArgs: true`) for codemode
 - maxSteps = 500 default, configurable via `PROTEUS_MAX_STEPS`
+
+## Errors, Logging & Traceability
+
+No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch { return [] }` are defects: a read that answers `null` for "absent" and `null` for "the query blew up" is how `workspace_capability` stayed invisible for months. Every catch does exactly one of three things:
+
+1. **Do not catch.** The default, and usually the fix — deleting the `try`/`catch` is a real change.
+2. **Wrap and rethrow** — `throw new Error('what we were doing', { cause: caught })`. Native `cause` is the language's `%w`; the chain must never be broken.
+3. **Handle, and say so.** Only when the caught condition is a *value* in the domain. Record the caught error and return something the caller can tell apart from success.
+
+- A handler is only as honest as the statements it spans. `fork.ts` wrapped a `CREATE TABLE` *and* the twenty-statement `INSERT` loop under it in one catch commented "table may be absent", so a constraint violation on message #400 reported as a missing table and the fork returned success with the owner's whole conversation gone. One catch, one condition
+- Prefer asking over catching. `tableExists(sql, name)` and `PRAGMA table_info` turn "absent" into a value; a `catch` cannot tell a missing table from a locked one. DDL by swallowed exception is prohibited — `reconcileColumns` for a column, `initWorkspaceSchema` for a table
+- A production `catch` may never accommodate a test-only condition. If a table would be missing in tests, the harness builds the production schema (`createTestWorkspace`), it does not earn a swallow in shipped code
+- Where an absence is genuinely expected, name it: `tolerate(op, 'enoent')` / `classify({ cause })` from `@proteus/core/obs`. Anything the matcher does not recognise rethrows
+- Never log a secret, and never log an object you have not looked inside: no `apiKey`, `authorization`, `body`, `content`, `credential`, `header(s)`, `password`, `prompt`, `secret`, `soul`, `systemPrompt`, `token`. A type-level ban (`ReservedLogField`) is specified and not built yet, so today this is on you
+- Every log carries a stable dotted event name (`capability.read_failed`) — that is what makes a failure greppable across Workers Logs and the CLI journal
+- Enforced mechanically by the `no-empty-catch`, `no-sentinel-catch`, `require-cause-on-rethrow` and `no-ddl-in-catch` anti-slop rules. Never add an `oxlint-disable` to pass one
+- **Not built yet** — do not code against these, see the observability contract for status: the `Observability`/`Tracer` seam and `tracer.span(...)`, `ProteusError`/`ErrorCode`/`toProteusError`, and the typed `Logger`. When tracing lands, spans are always scoped, and trace context does NOT survive `alarm()`, a hibernation wake or a cold start
 
 ## CF Backend Specifics
 
@@ -151,7 +184,9 @@ available bindings. `getProviders()` filters to available-only for `createExecut
   own workspace, skills, actions, channels and scheduled tasks unused
 - `getModel()` resolves from `agent_config` table, default: `@cf/deepseek-ai/deepseek-v4-pro-0813` (`DEFAULT_WORKERS_AI_MODEL_ID` in `@proteus/core`)
 - `getTools()` builds the 8-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`): `execute_tools`, `run`, `file`, `agents`, `memory`, `tasks`, `web`, `report`; results are cached per CraftStore version
+- **How the model reaches a capability is DECLARED, not derived**: `TOOL_REACH` in `core/src/tools/registry.ts` gives each capability `{ native, codemode }`, where `codemode` is the sandbox NAMESPACE (not a boolean — `run` and `file` reach the sandbox through the shared `workspace` primitives, so they own no namespace). `BuiltinToolName` is derived from it, every `*-codemode.ts` factory takes its provider `name` from it, `explainNativeToolReferenceError` reads it to tell the model where a capability actually is, and `getToolDescriptions` reports it instead of guessing from ToolSet keys. Reach is not permission: what an actor gets is reach ∩ its wired deps, and `getToolDescriptions` reports those two facts separately (`exposure` + `wired`). Adding a native row grows the 8-tool surface, which `core/tests/unit-tool-reach.test.ts` pins by both name set and count
 - `agents`, `web`, and `report` are dependency-gated native builtins. `report` appears only on a subordinate's assigned turn, while the `agents` action schema is derived from the actor's wired fork/team/peer capabilities. Release is codemode-only and mechanically omitted in Plan mode. See [docs/TOOLS.md](docs/TOOLS.md)
+- `execute_tools`' docstring is composed ONCE, in `registry.renderExecuteToolsDescription(typeBlock)`, and both backends use it: CF passes `@cloudflare/codemode`'s `{{types}}` placeholder and lets `createCodeTool` substitute; the CLI joins its providers' declared `types`. Do not let either backend describe this tool on its own — CF used to ship the vendor's generic `DEFAULT_DESCRIPTION` (none of the registry spec reached the model, and its worked example named a `codemode.<name>` call the dispatcher throws on) while the CLI shipped the spec and discarded every namespace declaration
 - `agents` is the ONE delegation surface (`fork | staff | ask | send | reply | list | dismiss`), and it is projected into the codemode sandbox as the `agents.*` namespace over the same dispatch — so a script can delegate with ordinary control flow. Do not reintroduce `think` / `team` / `peers` as separate tools
 - `memory` is the ONE durable-state surface (`save | search | sessions` prose, `remember | recall | forget` keyed facts — the last three gated on the FactsStore dep) and `web` the ONE live-web surface (`search | fetch`). Prose versus keyed rows is OUR storage shape, and discovery versus retrieval is one capability used as a pair: neither is a tool choice the model should have to make. Do not reintroduce `fact` / `web_search` / `web_fetch`
 - `file` is the ONE file plane (`read | edit | write`) over the same workspace filesystem `run` and `execute_tools` address — do not split it into separate `read`/`write`/`edit` tools, and do not add a second filesystem path for it. Its load-bearing property is that an `edit` whose `old_text` is absent or repeated FAILS naming the problem, and that `edit`/overwriting `write` require the file to have been read first. Both are locked by the `file-plane` layergate layer; losing either is what the `file-plane/edits-land-blind` fault models
@@ -185,7 +220,10 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 ## Common Patterns
 
 ```typescript
-// Executor tool pattern — positional args, string returns, no throws
+// Executor tool pattern — positional args, string returns, no throws.
+// The string is the CURRENT convention and a known defect (Code Style, above):
+// it carries no classification. Until the replacement lands, at least keep the
+// cause chain intact on anything that propagates rather than returning.
 tools.exec = {
   description: 'Run a command in the environment.',
   execute: async (...args: unknown[]): Promise<string> => {
@@ -195,8 +233,8 @@ tools.exec = {
     try {
       const result = await doExec(command);
       return result.stdout || '(no output)';
-    } catch (err) {
-      return `exec error: ${errorMessage({ error: err })}`;
+    } catch (caught) {
+      return `exec error: ${errorMessage({ error: caught })}`;
     }
   },
 };
@@ -206,7 +244,8 @@ tools.exec = {
   return this.sql<{ count: number }>`SELECT COUNT(*) as count FROM ...`;
 }
 
-// SQL pattern — tagged template for queries, RawSqlExec for DDL
+// SQL pattern — tagged template for queries, RawSqlExec for DDL, ask don't catch
 const rows = this.sql<{ name: string }>`SELECT name FROM tools WHERE active = 1`;
 execRaw("CREATE TABLE IF NOT EXISTS my_table (id TEXT PRIMARY KEY)");
+if (tableExists(this.sql, 'assistant_messages')) { /* … */ }
 ```

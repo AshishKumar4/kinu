@@ -281,12 +281,8 @@ export interface CraftLedger {
  * — it is not scored, and nothing about it is an evolution decision.
  */
 export function seedCraftScore(sql: SqlExecutor, name: string, now = nowMs()): void {
-  try {
-    void sql`INSERT OR IGNORE INTO craft_scores (tool_name, score, uses, last_used_at)
-        VALUES (${name}, ${CRAFT_NEUTRAL_PRIOR}, 0, ${now})`;
-  } catch {
-    /* craft_scores may not exist on a bare runtime — never fatal */
-  }
+  void sql`INSERT OR IGNORE INTO craft_scores (tool_name, score, uses, last_used_at)
+      VALUES (${name}, ${CRAFT_NEUTRAL_PRIOR}, 0, ${now})`;
 }
 
 /** Structural deps — deliberately not `AgentRuntime`: this module is a leaf
@@ -300,30 +296,20 @@ export function createCraftLedger(deps: CraftLedgerDeps): CraftLedger {
   const floor = DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection;
   return {
     names() {
-      try {
-        // The ONE injection policy, so the observer's idea of what is callable
-        // cannot drift from what the sandboxes actually bind.
-        return filterByEffectiveScore(deps.sql, deps.craftStore.list(), floor).map((t) => t.name);
-      } catch {
-        return [];
-      }
+      // The ONE injection policy, so the observer's idea of what is callable
+      // cannot drift from what the sandboxes actually bind.
+      return filterByEffectiveScore(deps.sql, deps.craftStore.list(), floor).map((t) => t.name);
     },
     observe(names, quality) {
       if (names.length === 0) return [];
-      try {
-        updateCraftScores(deps.sql, [...names], quality);
-        // The ONE injection policy, asked the question it already answers:
-        // whatever it no longer passes is what this observation just retired.
-        const surviving = new Set(
-          filterByEffectiveScore(deps.sql, names.map((name) => ({ name })), floor, nowMs())
-            .map((t) => t.name),
-        );
-        return names.filter((name) => !surviving.has(name));
-      } catch {
-        // craft_scores may not exist on a bare runtime — a lost observation
-        // must never fail the turn that produced it.
-        return [];
-      }
+      updateCraftScores(deps.sql, [...names], quality);
+      // The ONE injection policy, asked the question it already answers:
+      // whatever it no longer passes is what this observation just retired.
+      const surviving = new Set(
+        filterByEffectiveScore(deps.sql, names.map((name) => ({ name })), floor, nowMs())
+          .map((t) => t.name),
+      );
+      return names.filter((name) => !surviving.has(name));
     },
   };
 }

@@ -123,11 +123,20 @@ export function isCloudAuthConfigured(): boolean {
   return Boolean(loadConfigFile().accessToken);
 }
 
+/** config.ts's "there is nothing to run a model with" messages ('No LLM configured.', 'No LLM auth
+ *  configured.'). resolveLLMConfig reports that state by throwing, and it is the ONLY failure of it
+ *  that means "not set up yet". */
+const NOT_CONFIGURED_MESSAGE = /^No LLM\b/u;
+
 export function isLocalModelConfigured(): boolean {
   try {
     resolveLLMConfig({});
     return true;
-  } catch {
+  } catch (error) {
+    // "Nothing is configured" is resolveLLMConfig's answer. Anything else — a config.json that will
+    // not parse, a stored spec that will not resolve — is a real failure, and repainting it as
+    // "run setup" is how a broken install looks like a fresh one.
+    if (!NOT_CONFIGURED_MESSAGE.test(error instanceof Error ? error.message : '')) throw error;
     return false;
   }
 }

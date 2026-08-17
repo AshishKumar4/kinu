@@ -25,6 +25,8 @@ import * as v from "valibot";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
 import { touchWorkspace } from "@/lib/user-api";
+import { describeError } from "@/hooks/use-async-resource";
+import { tolerate } from "@proteus/core/obs";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
@@ -158,13 +160,15 @@ function parseProvisionError<Output>(output: Output):
   { runtime: string; message: string } | null {
   const text = v.safeParse(v.string(), output);
   if (!text.success || !text.output.includes('runtime_not_provisioned')) return null;
-  try {
-    const parsed = v.safeParse(ProvisionErrorSchema, JSON.parse(text.output));
-    return parsed.success
-      ? { runtime: parsed.output.runtime, message: parsed.output.message ?? 'Runtime not available.' }
-      : null;
-  } catch { /* fall through */ }
-  return null;
+  // Output that names the runtime but isn't JSON is not this error shape; any
+  // other failure here is real and must not read as "not a provision error".
+  const parsed = v.safeParse(
+    ProvisionErrorSchema,
+    tolerate<unknown>(() => JSON.parse(text.output), 'malformed-input'),
+  );
+  return parsed.success
+    ? { runtime: parsed.output.runtime, message: parsed.output.message ?? 'Runtime not available.' }
+    : null;
 }
 
 function jsonString(input: JsonObject | undefined, key: string): string | null {
@@ -897,10 +901,11 @@ function ForkModal({
 function SubordinateChatColumn({ workspace, subName }: { workspace: string; subName: string }) {
   const state = useProteus({ workspace, subordinate: subName });
 
-  // The picker is fire-and-forget; setModel rejects when the write didn't land
-  // and the hook has already surfaced that through state.error.
+  // The picker is fire-and-forget: setModel records the failure on state.error
+  // and rolls the picker back to the stored spec, so this call site has nothing
+  // to add to what the banner already shows.
   const setModel = state.setModel;
-  const onPickModel = useCallback((spec: string) => { void setModel(spec).catch(() => {}); }, [setModel]);
+  const onPickModel = useCallback((spec: string) => { void setModel(spec); }, [setModel]);
   const [input, setInput] = useState("");
   const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -999,16 +1004,38 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
 
 /* ── Main page ────────────────────────────────────────────────── */
 
+/** Background reads and writes this page owns beyond the agent socket. Each
+ *  keeps its own message so a recovery in one never hides a still-broken
+ *  other, and so a failed hydrate is never rendered as "there is nothing". */
+const SIDE_SOURCES = [
+  { source: "visit", label: "record this visit" },
+  { source: "feedback", label: "load your turn feedback" },
+  { source: "takes", label: "load alternate takes" },
+] as const;
+
+type SideSource = (typeof SIDE_SOURCES)[number]["source"];
+
 export default function WorkspacePage() {
   const { agentId, subName } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const state = useProteus(agentId);
 
-  // The picker is fire-and-forget; setModel rejects when the write didn't land
-  // and the hook has already surfaced that through state.error.
+  // The picker is fire-and-forget: setModel records the failure on state.error
+  // and rolls the picker back to the stored spec, so this call site has nothing
+  // to add to what the banner already shows.
   const setModel = state.setModel;
-  const onPickModel = useCallback((spec: string) => { void setModel(spec).catch(() => {}); }, [setModel]);
+  const onPickModel = useCallback((spec: string) => { void setModel(spec); }, [setModel]);
+  const [sideErrors, setSideErrors] = useState<Partial<Record<SideSource, string>>>({});
+  const reportSide = useCallback((source: SideSource, message: string | null) => {
+    setSideErrors((prev) => {
+      if ((prev[source] ?? null) === message) return prev;
+      const next = { ...prev };
+      if (message === null) delete next[source];
+      else next[source] = message;
+      return next;
+    });
+  }, []);
   // ?altitude=supervise deep-links straight to the Supervise altitude (the
   // /triggers/:id redirect and settings' Automations link use it).
   const [altitude, setAltitude] = useState<Altitude>(
@@ -1077,7 +1104,13 @@ export default function WorkspacePage() {
     el.style.height = `${el.scrollHeight}px`;
   }, [chatInput]);
 
-  useEffect(() => { if (agentId) touchWorkspace(agentId).catch(() => {}); }, [agentId]);
+  useEffect(() => {
+    if (!agentId) return;
+    touchWorkspace(agentId).then(
+      () => reportSide("visit", null),
+      (err) => reportSide("visit", describeError(err)),
+    );
+  }, [agentId, reportSide]);
 
   // Bridge the open workspace's live status to the sidebar roster (running dot +
   // unseen-evolution dot). Only the mounted workspace has a live socket, so the
@@ -1155,10 +1188,11 @@ export default function WorkspacePage() {
   const [feedbackByMessage, setFeedbackByMessage] = useState<Record<string, 'positive' | 'negative'>>({});
   useEffect(() => {
     if (state.connectionStatus !== "connected") return;
-    state.rpc<Record<string, 'positive' | 'negative'>>('listTurnFeedback')
-      .then(setFeedbackByMessage)
-      .catch(() => {});
-  }, [state.connectionStatus, state.rpc]);
+    state.rpc<Record<string, 'positive' | 'negative'>>('listTurnFeedback').then(
+      (loaded) => { setFeedbackByMessage(loaded); reportSide("feedback", null); },
+      (err) => reportSide("feedback", describeError(err)),
+    );
+  }, [state.connectionStatus, state.rpc, reportSide]);
 
   // Alternate Takes chips, keyed by assistant message id — hydrated on load
   // and refreshed when a turn settles (a think convergence may have produced
@@ -1188,12 +1222,13 @@ export default function WorkspacePage() {
   const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
   useEffect(() => {
     if (state.connectionStatus !== "connected" || state.isStreaming) return;
-    state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes')
-      .then(setTakesByTurn)
-      .catch(() => {});
+    state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes').then(
+      (loaded) => { setTakesByTurn(loaded); reportSide("takes", null); },
+      (err) => reportSide("takes", describeError(err)),
+    );
     // settledBranchCount: a branch settling after the turn ended persists a
     // fresh set — refetch so its chip can hydrate the comparison.
-  }, [state.connectionStatus, state.isStreaming, state.rpc, settledBranchCount]);
+  }, [state.connectionStatus, state.isStreaming, state.rpc, settledBranchCount, reportSide]);
 
   const onPickTake = useCallback(async (takeId: string, nodeId: string): Promise<TakePickOutcome> => {
     const result = await state.rpc<TakePickOutcome>('pickAlternateTake', [takeId, nodeId]);
@@ -1415,7 +1450,8 @@ export default function WorkspacePage() {
 
             {/* Input. Everything the composer needs to say goes through
                 `notices`, so a failure, a warning and a progress line all read
-                as the same kind of object instead of five improvised rows. */}
+                as the same kind of object instead of five improvised rows.
+                `Composer` owns paste, the file input and the attachment chips. */}
             <div className="border-t p-border">
               <Composer
                 textareaRef={chatInputRef}
@@ -1438,6 +1474,18 @@ export default function WorkspacePage() {
                   ...(state.error ? [{ id: "load", tone: "danger" as const, text: state.error,
                     action: { label: "Retry", icon: <ArrowsClockwiseIcon size={11} />, onClick: state.retryLoad } }] : []),
                   ...(attachError ? [{ id: "attach", tone: "warning" as const, text: attachError }] : []),
+                  // Each side read that failed, named. These are collected by
+                  // reportSide and would otherwise be recorded and never shown,
+                  // which is the "there is nothing" reading SIDE_SOURCES exists
+                  // to prevent.
+                  ...SIDE_SOURCES.flatMap(({ source, label }) => {
+                    const message = sideErrors[source];
+                    return message
+                      ? [{ id: `side-${source}`, tone: "warning" as const,
+                          text: `Couldn't ${label}: ${message}`,
+                          onDismiss: () => reportSide(source, null) }]
+                      : [];
+                  }),
                   ...(branchNotice ? [{ id: "branch", tone: "warning" as const,
                     text: `Branch unavailable: ${branchNotice}`, onDismiss: () => setBranchNotice(null) }] : []),
                   ...(planning ? [{ id: "planning", tone: "progress" as const,

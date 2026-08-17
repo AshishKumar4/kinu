@@ -38,6 +38,9 @@ mockAgentsSdk();
  *  rides the PARENT workspace's container rather than a fresh one of its own. */
 let requestedSandboxId: string | null = null;
 const lastRequestedSandboxId = (): string | null => requestedSandboxId;
+/** Restores performed through the handle the runtime built. A head rides a
+ *  container it does not own, so this must stay at zero however it is touched. */
+let restoresPerformed = 0;
 mock.module('@cloudflare/sandbox', () => ({
   getSandbox: (_ns: DurableObjectNamespace, id: string) => {
     requestedSandboxId = id;
@@ -51,7 +54,7 @@ mock.module('@cloudflare/sandbox', () => ({
       unexposePort: () => {},
       getExposedPorts: async () => [],
       createBackup: async () => null,
-      restoreBackup: async () => {},
+      restoreBackup: async () => { restoresPerformed += 1; },
     };
   },
 }));
@@ -246,6 +249,11 @@ function makeFacet(parentFiles: Record<string, string> = {}) {
   // loader, execution namespaces, preview config, and owner namespaces.
   const testEnv = partialEnv as Env;
   const concrete = new ExplorationAgent(agentContext, testEnv);
+  // The SDK runs `onStart` before it can dispatch a single @callable — the first
+  // `subAgent()` for a name awaits it — and `initFacetSchema` is the whole of
+  // what it runs. The stand-in base class does not, so the harness does: a facet
+  // reached before its own tables exist is a state no spawner can produce.
+  concrete.onStart();
   const headRuntimeMember = Object.getOwnPropertyDescriptor(
     ExplorationAgent.prototype,
     'headRuntime',
@@ -265,7 +273,7 @@ function makeFacet(parentFiles: Record<string, string> = {}) {
       return runtime as ReturnType<Facet['headRuntime']>;
     },
   };
-  return { facet, parent, nimbus };
+  return { facet, parent, nimbus, db };
 }
 
 function headInput(): HeadInput {
@@ -327,6 +335,32 @@ describe('a head forks its parent workspace', () => {
     // The container the parent agent works in — `proteus-${workspaceName}` in
     // runtime.ts — and emphatically not `proteus-head-1`.
     expect(lastRequestedSandboxId()).toBe('proteus-proteus-main');
+  });
+
+  test('a head never decides the restore of the container it only rides', async () => {
+    restoresPerformed = 0;
+    const { facet, db } = makeFacet();
+    await facet.setOwner('user-1', 'pwc_parent');
+    await facet.setSharedParent('proteus-main');
+
+    const rt = facet.headRuntime(new HeadCapture());
+    // A backup handle on the FACET's own storage — `agent_config` is created by
+    // the runtime above, and the restore is read at first touch, not at build.
+    // It is not the shared container's history: `proteus-proteus-main` belongs to
+    // the parent, so acting on it would roll that container back to whatever
+    // this head last happened to record.
+    db.prepare("INSERT INTO agent_config (key, value) VALUES ('workspace_backup', ?)")
+      .run(JSON.stringify({ id: 'bk-1', dir: '/workspace' }));
+
+    await rt.sandboxHandle!.exec('true');
+    await rt.sandboxHandle!.exec('true');
+
+    // Zero, and the second touch is what makes it a regression test: with an
+    // EMPTY key the old wrapper marked the container restored having restored
+    // nothing, one-shot and never retried, so every later call execed against
+    // whatever state it found. A facet that cannot mark the container restored
+    // cannot mark it falsely.
+    expect(restoresPerformed).toBe(0);
   });
 
   test("a head writes the canonical workspace rather than private duplicate bytes", async () => {

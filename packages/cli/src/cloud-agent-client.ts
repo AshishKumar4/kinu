@@ -9,6 +9,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import type {
   CheckpointAvailability, FileCheckpointEntry, FileCheckpointListing,
   FileRestorePlan, FileRestoreResult,
@@ -506,8 +507,16 @@ export class CloudAgentClient implements AgentClient {
       entries: result?.entries ?? [],
       unseenCount: result?.unseenCount ?? 0,
     };
-    // Viewing is the acknowledgement — best effort, the digest still renders.
-    await this.callRpc('markChangelogSeen', []).catch(() => {});
+    // Viewing is the acknowledgement. A failed ack is reported through the client's own error
+    // channel: silently dropped, the same digest returns as unseen forever with no reason given.
+    try {
+      await this.callRpc('markChangelogSeen', []);
+    } catch (error) {
+      this.emit({
+        type: 'error',
+        message: `Could not mark the changelog as seen: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
     return view;
   }
 
@@ -570,7 +579,7 @@ export class CloudAgentClient implements AgentClient {
   private emit(event: AgentClientEvent): void {
     this.recorder.record(this.activeCliSession, event);
     for (const listener of this.listeners) {
-      try { listener(event); } catch { /* a render error must not kill the stream */ }
+      listener(event);
     }
   }
 
@@ -681,9 +690,8 @@ export class CloudAgentClient implements AgentClient {
   }
 
   private applyChunk(active: ActiveTurn, body: string): void {
-    let parsed: JsonValue;
-    try { parsed = parseJsonValue(body); }
-    catch { return; }
+    const parsed = tolerate(() => parseJsonValue(body), 'malformed-input');
+    if (parsed === undefined) return;
     const result = v.safeParse(JsonObjectSchema, parsed);
     if (!result.success) return;
     const chunk = result.output;
@@ -751,24 +759,22 @@ function parseBranchStatusEvent(payload: SocketFrame): BranchStatusEvent | null 
 }
 
 function parseSocketJson(event: MessageEvent): SocketFrame | null {
-  try {
-    const data: unknown = event.data;
-    const textResult = v.safeParse(v.string(), data);
-    const bufferResult = v.safeParse(v.instance(ArrayBuffer), data);
-    const bytesResult = v.safeParse(v.instance(Uint8Array), data);
-    const text = textResult.success
-      ? textResult.output
-      : bufferResult.success
-        ? new TextDecoder().decode(bufferResult.output)
-        : bytesResult.success
-          ? new TextDecoder().decode(bytesResult.output)
-          : String(data);
-    const parsed = parseJsonValue(text);
-    const frame = v.safeParse(SocketFrameSchema, parsed);
-    return frame.success ? frame.output : null;
-  } catch {
-    return null;
-  }
+  const data: unknown = event.data;
+  const textResult = v.safeParse(v.string(), data);
+  const bufferResult = v.safeParse(v.instance(ArrayBuffer), data);
+  const bytesResult = v.safeParse(v.instance(Uint8Array), data);
+  const text = textResult.success
+    ? textResult.output
+    : bufferResult.success
+      ? new TextDecoder().decode(bufferResult.output)
+      : bytesResult.success
+        ? new TextDecoder().decode(bytesResult.output)
+        : String(data);
+  // A frame off the wire is untrusted input: unparseable text is a frame we drop, and only that.
+  const parsed = tolerate(() => parseJsonValue(text), 'malformed-input');
+  if (parsed === undefined) return null;
+  const frame = v.safeParse(SocketFrameSchema, parsed);
+  return frame.success ? frame.output : null;
 }
 
 function stringifyToolOutput(output: JsonValue): string {

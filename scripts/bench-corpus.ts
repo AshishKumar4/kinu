@@ -58,10 +58,6 @@ export interface LoadedCorpus {
   path: string;
 }
 
-function errorMessage<Failure>(error: Failure): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function benchCorpusDir(repoRoot: string): string {
   return join(repoRoot, 'tests', 'bench');
 }
@@ -80,7 +76,7 @@ export function loadBenchCorpus(repoRoot: string, opts: PartitionOptions = {}): 
     try {
       parsedJson = JSON.parse(text);
     } catch (err) {
-      throw new Error(`${path}:${i + 1}: not valid JSON — ${errorMessage(err)}`);
+      throw new Error(`${path}:${i + 1}: not valid JSON`, { cause: err });
     }
     const parsed = v.safeParse(TaskLineSchema, parsedJson);
     if (!parsed.success) {

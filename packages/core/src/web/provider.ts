@@ -26,6 +26,7 @@ import { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './url-safety.js';
 import { htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images } from './markdown.js';
 import type { AuthResolver } from '../providers/types.js';
 import { TOOL_REACH } from '../tools/registry.js';
+import { tolerate } from '../obs/index.js';
 
 /** Credential key for the optional Tavily search upgrade. */
 export const TAVILY_CRED_KEY = 'tavily';
@@ -93,8 +94,8 @@ const WebSearchOptionsSchema = v.object({ limit: v.optional(v.number()) });
 const MAX_FETCH_BYTES = 2_000_000;
 
 export class WebFetchError extends Error {
-  constructor(message: string, public readonly retriable = false) {
-    super(message);
+  constructor(message: string, public readonly retriable = false, options?: ErrorOptions) {
+    super(message, options);
     this.name = 'WebFetchError';
   }
 }
@@ -114,24 +115,20 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       return await run(ctrl.signal);
-    } catch (err) {
-      if (ctrl.signal.aborted) throw new WebFetchError(`request timed out after ${timeoutMs}ms`, true);
-      throw err;
+    } catch (error) {
+      if (ctrl.signal.aborted) {
+        throw new WebFetchError(`request timed out after ${timeoutMs}ms`, true, { cause: error });
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
     }
   };
 
-  const convert = async (html: string, url: string): Promise<string> => {
-    if (deps.htmlToMarkdown) {
-      try {
-        return stripBase64Images(await deps.htmlToMarkdown(html, { url }));
-      } catch {
-        // fall through to the local converter
-      }
-    }
-    return localHtmlToMarkdown(html);
-  };
+  const convert = async (html: string, url: string): Promise<string> =>
+    deps.htmlToMarkdown
+      ? stripBase64Images(await deps.htmlToMarkdown(html, { url }))
+      : localHtmlToMarkdown(html);
 
   async function tavilyKey(): Promise<Record<string, string> | null> {
     if (!deps.getAuth) return null;
@@ -159,7 +156,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     );
     if (res.status === 429) throw new WebFetchError('Tavily rate limit (429) — retry shortly', true);
     if (!res.ok) {
-      const body = await safeText(res);
+      const body = await res.text();
       throw new WebFetchError(`Tavily search failed (${res.status}): ${body.slice(0, 200)}`);
     }
     const json = v.parse(TavilyResponseSchema, await res.json());
@@ -210,9 +207,9 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       let parsed: URL;
       try {
         parsed = assertSafeUrl(url);
-      } catch (err) {
-        if (err instanceof UnsafeUrlError) throw new WebFetchError(err.reason);
-        throw err;
+      } catch (error) {
+        if (error instanceof UnsafeUrlError) throw new WebFetchError(error.reason, false, { cause: error });
+        throw error;
       }
       const res = await withTimeout((signal) =>
         fetchImpl(parsed.toString(), {
@@ -347,15 +344,14 @@ export function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResul
 
 /** DuckDuckGo wraps targets in `//duckduckgo.com/l/?uddg=<encoded>&...`. */
 function unwrapDuckUrl(href: string): string {
-  try {
-    const abs = href.startsWith('//') ? `https:${href}` : href;
-    const u = new URL(abs, 'https://duckduckgo.com');
-    const uddg = u.searchParams.get('uddg');
-    if (uddg) return uddg;
-    return /^https?:/.test(abs) ? abs : '';
-  } catch {
-    return '';
-  }
+  const abs = href.startsWith('//') ? `https:${href}` : href;
+  // A result row can carry anything the page put in `href`; an unparseable one
+  // is a value here. Every other URL failure is this module's own bug.
+  const parsed = tolerate(() => new URL(abs, 'https://duckduckgo.com'), 'malformed-input');
+  if (!parsed) return '';
+  const uddg = parsed.searchParams.get('uddg');
+  if (uddg) return uddg;
+  return /^https?:/.test(abs) ? abs : '';
 }
 
 function extractTitle(html: string): string {
@@ -391,10 +387,3 @@ function decodeText(s: string): string {
     .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)));
 }
 
-async function safeText(res: Response): Promise<string> {
-  try {
-    return await res.text();
-  } catch {
-    return '';
-  }
-}

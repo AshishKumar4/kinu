@@ -11,7 +11,7 @@ import { initScaffoldTables } from '../src/scaffold/schemas.js';
 describe('Scaffold modification (4-gate)', () => {
   test('rejects rationale shorter than 50 chars', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     const result = await modifyScaffold(rt, 'too short', 'async function* run(rt, task) {}');
     expect(result.ok).toBe(false);
     expect(result.stage).toBe(1);
@@ -19,7 +19,7 @@ describe('Scaffold modification (4-gate)', () => {
 
   test('rejects code with import statement', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     const result = await modifyScaffold(
       rt,
       'This is a long enough rationale to pass the 50 char minimum check.',
@@ -32,7 +32,7 @@ describe('Scaffold modification (4-gate)', () => {
 
   test('rejects code with require()', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     const result = await modifyScaffold(
       rt,
       'This is a long enough rationale to pass the 50 char minimum check.',
@@ -44,7 +44,7 @@ describe('Scaffold modification (4-gate)', () => {
 
   test('rejects code with eval()', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     const result = await modifyScaffold(
       rt,
       'This is a long enough rationale to pass the 50 char minimum check.',
@@ -56,7 +56,7 @@ describe('Scaffold modification (4-gate)', () => {
 
   test('rejects code with globalThis', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     const result = await modifyScaffold(
       rt,
       'This is a long enough rationale to pass the 50 char minimum check.',
@@ -68,7 +68,7 @@ describe('Scaffold modification (4-gate)', () => {
 
   test('rejects code without required signature', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     const result = await modifyScaffold(
       rt,
       'This is a long enough rationale to pass the 50 char minimum check.',
@@ -81,7 +81,7 @@ describe('Scaffold modification (4-gate)', () => {
 
   test('accepts valid scaffold code', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     const validCode = `async function* run(rt, task) {
       yield { type: "chunk", data: "hello" };
     }`;
@@ -101,7 +101,7 @@ describe('Scaffold modification (4-gate)', () => {
     // live file remains the current scaffold's content until applyPromotion
     // runs.
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     await rt.identity.scaffold.write('async function* run(rt, task) { yield "v0"; }');
     const before = await rt.identity.scaffold.read();
     const pendingCode = `async function* run(rt, task) {
@@ -129,7 +129,7 @@ describe('Scaffold modification (4-gate)', () => {
 describe('Scaffold rollback', () => {
   test('restores prior version', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
 
     // Write initial version
     await rt.storage.vfs.writeFile('scaffold/agent.js.v0', 'original code');
@@ -143,7 +143,7 @@ describe('Scaffold rollback', () => {
 
   test('returns error for nonexistent version', async () => {
     const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
 
     const result = await rollbackScaffold(rt, 999);
     expect(result.ok).toBe(false);

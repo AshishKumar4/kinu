@@ -74,7 +74,8 @@ describe('workspace schema is the only path', () => {
     // Losing an entry means a table quietly left the shared set.
     expect(owned).toEqual(
       expect.arrayContaining([
-        'initAgentConfigTable', 'initAllTables', 'initBackgroundJobsTable', 'initCraftScoreTables',
+        'initAgentConfigTable', 'initAllTables', 'initAlternateTakesTable',
+        'initBackgroundJobsTable', 'initCraftScoreTables',
         'initCurriculumTable', 'initEventsHubTables', 'initFactsTable', 'initGepaTables',
         'initHeadsTables', 'initImportedExperienceTable', 'initMctsSearchTable', 'initRunEventTables',
         'initScaffoldTables', 'initSearchTables', 'initShadowTables', 'initTurnOutcomeTables',
@@ -95,6 +96,20 @@ describe('workspace schema is the only path', () => {
   test('the extractor sees a real list (guards the guard)', () => {
     // A regex that matched nothing would make every assertion above vacuous.
     expect(owned.length).toBeGreaterThanOrEqual(16);
+  });
+
+  test('the schema creates memory_chunks and its FTS index', () => {
+    // These used to be created only where a MemoryStore was constructed, so a
+    // workspace opened by any other path (a fork target, an archive restore)
+    // had readers and no table — and those readers papered over it with
+    // `catch { return [] }`, making "no such table" indistinguishable from
+    // "indexed nothing". The same hole `craft_scores` had.
+    const db = new Database(':memory:');
+    initWorkspaceSchema(schemaSql(db));
+    const rows = db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE name IN ('memory_chunks', 'memory_chunks_fts') ORDER BY name`,
+    ).all();
+    expect(rows).toEqual([{ name: 'memory_chunks' }, { name: 'memory_chunks_fts' }]);
   });
 });
 

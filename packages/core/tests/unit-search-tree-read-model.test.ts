@@ -16,7 +16,7 @@ import { readLatestSearchTree } from '../src/read-models/search-tree.js';
 
 function freshDb() {
   const db = new Database(':memory:');
-  initSearchTables(makeExecRaw(db));
+  initSearchTables(makeExecRaw(db), makeSql(db));
   return { db, sql: makeSql(db) };
 }
 

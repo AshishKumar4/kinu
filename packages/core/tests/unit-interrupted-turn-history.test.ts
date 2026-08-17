@@ -27,7 +27,7 @@
 import { describe, test, expect } from 'bun:test';
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { runChat, type ChatEvent } from '../src/chat.ts';
+import { runChat, INTERRUPTED_TURN, type ChatEvent } from '../src/chat.ts';
 import { INTERRUPTED_TOOL_RESULT } from '../src/prompting/interrupted-tool-calls.ts';
 import { createChatModel } from '../src/llm.ts';
 
@@ -175,7 +175,7 @@ describe('a turn interrupted between a tool call and its result', () => {
       const abort = new AbortController();
       const persisted: ModelMessage[] = [{ role: 'user', content: 'check the repo' }];
       let calls = 0;
-      try {
+      const cutTurn = async (): Promise<void> => {
         for await (const ev of runChat({
           model: provider.model, system: 'sys', history: [...persisted], tools, maxSteps: 20,
           signal: abort.signal,
@@ -183,7 +183,8 @@ describe('a turn interrupted between a tool call and its result', () => {
           if (ev.type === 'tool-call') { calls += 1; if (calls === 2) abort.abort(); }
           if (ev.type === 'done') persisted.push(...ev.responseMessages);
         }
-      } catch { /* the interruption, asserted above */ }
+      };
+      await expect(cutTurn()).rejects.toThrow(INTERRUPTED_TURN);
 
       const resultsById = new Map(persisted.flatMap((m) => m.role === 'tool'
         ? m.content.filter((p) => p.type === 'tool-result').map((p) => [p.toolCallId, p.output] as const)

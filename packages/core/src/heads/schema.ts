@@ -14,9 +14,10 @@
  * orchestrator's view for telemetry, UI, and merge-time gathering.
  */
 
-import type { RawSqlExec } from '../types/primitives.js';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
+import { reconcileColumns } from '../identity/columns.js';
 
-export function initHeadsTables(execRaw: RawSqlExec): void {
+export function initHeadsTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   // The run identity: a split groups N heads under one root_id. Without this,
   // top-level splits (synthetic root_id, every head parent_id NULL) had no row
   // to anchor the run, so the UI saw each head as its own empty "root".
@@ -51,8 +52,7 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
 
   // Journals created before heads reported their file changes predate the
   // column, and CREATE TABLE IF NOT EXISTS will not add it to them.
-  // ADD COLUMN is idempotent-by-catch (SQLite errors on a duplicate column).
-  try { execRaw(`ALTER TABLE head_journal ADD COLUMN file_changes_json TEXT`); } catch { /* exists */ }
+  reconcileColumns(sql, execRaw, 'head_journal', { file_changes_json: 'TEXT' });
 
   execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_root ON head_journal(root_id)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_parent ON head_journal(parent_id)`);
@@ -100,7 +100,7 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
     blind_spots_json TEXT
   )`);
 
-  // Same idempotent-by-catch ADD COLUMN as head_journal above: merges cached
-  // before the blind-spot field existed predate the column.
-  try { execRaw(`ALTER TABLE head_merge_results ADD COLUMN blind_spots_json TEXT`); } catch { /* exists */ }
+  // Same post-release column as head_journal above: merges cached before the
+  // blind-spot field existed predate the column.
+  reconcileColumns(sql, execRaw, 'head_merge_results', { blind_spots_json: 'TEXT' });
 }

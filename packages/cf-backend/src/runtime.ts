@@ -35,7 +35,7 @@ import {
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   decodeJsonValue,
   effortFor,
-  createAgentConfigStore, selectFastModel,
+  createAgentConfigStore, initAgentConfigTable, selectFastModel,
   type VectorStore,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
@@ -46,7 +46,7 @@ import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores"
 import { generateText } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
-import { abortExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
+import { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
 import {
   createHubDeviceTransport,
   type DeviceHubClient,
@@ -81,7 +81,7 @@ import * as v from 'valibot';
  * legitimately needs them. A subclass (which DOES have access) passes `this`
  * cast to this view — so the access is sound, just opened to these helpers.
  */
-type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'abortSubAgent'>;
+type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'abortSubAgent' | 'deleteSubAgent'>;
 
 export interface CFRuntimeAccess {
   readonly env: Env;
@@ -264,6 +264,14 @@ export function createCFRuntime(
   const vectorStore = buildVectorStore(env, actor);
   // Owns the semantic-index completeness markers, read by the backfill and
   // cleared by the write path when a sync fails.
+  // This factory ensures the schema of every store it opens — the memory and
+  // craft stores above do — and it reads config during construction, not only
+  // on demand. An exploration facet builds its whole head runtime on its OWN
+  // storage, which no `initWorkspaceSchema` touches, so without this every head
+  // dies on `no such table: agent_config` before its first step. These are that
+  // facet's own settings, as a subordinate facet's are its own; a head's MODEL
+  // is not read here — it arrives with the HeadInput the spawner built.
+  initAgentConfigTable(execRaw);
   const memoryConfig = createAgentConfigStore(sql);
   // One-time backfill of chunks indexed before the vector store existed.
   // Fire-and-forget (same pattern as deviceTransport.refreshStatus): bounded
@@ -343,16 +351,25 @@ export function createCFRuntime(
   if (env.Sandbox) {
     try {
       const rawHandle = adaptCloudflareSandbox(getSandbox(env.Sandbox, sandboxId, { normalizeId: true }));
-      const configStore = createAgentConfigStore(sql);
-      const handle = createRestoringSandboxHandle(rawHandle, configStore);
+      // Restoring the container belongs to whoever owns its NAME. `sandboxId` is
+      // keyed to actor.workspaceName, which for a facet — a head, a subordinate —
+      // is its PARENT's: it rides a container it does not own, and its own
+      // `workspace_backup` row is not that container's history. A facet that
+      // wrapped this handle read its own empty key and marked the container
+      // restored having restored nothing, then execed against whatever state it
+      // found — permanently, because the mark is one-shot and never retried. A
+      // facet that cannot mark the container restored cannot mark it falsely.
+      const ownsContainer = agent.name === actor.workspaceName;
+      const handle = ownsContainer
+        ? createRestoringSandboxHandle(rawHandle, createAgentConfigStore(sql))
+        : rawHandle;
       sandboxHandle = handle;
-      // The executor carries its own file view over this same (restoring) raw
-      // handle, for the file manager's sandbox pane. An unset
-      // PREVIEW_HOST_SUFFIX turns off previews alone: exec, files and the
-      // release engine keep working, and port exposure refuses with the
-      // preview-specific reason.
+      // The executor carries its own file view over this same handle, for the
+      // file manager's sandbox pane. An unset PREVIEW_HOST_SUFFIX turns off
+      // previews alone: exec, files and the release engine keep working, and
+      // port exposure refuses with the preview-specific reason.
       executionRouter.register(createSandboxExecutor(handle, previewSuffix));
-      console.log(`[proteus] SandboxExecutor registered (${previewSuffix ? `previews=*.${previewSuffix}` : "previews off — PREVIEW_HOST_SUFFIX unset"} id=${sandboxId})`);
+      console.log(`[proteus] SandboxExecutor registered (${previewSuffix ? `previews=*.${previewSuffix}` : "previews off — PREVIEW_HOST_SUFFIX unset"} id=${sandboxId} restore=${ownsContainer ? 'owner' : `deferred to ${actor.workspaceName}`})`);
     } catch (err) {
       console.warn("[proteus] Failed to register SandboxExecutor:", errorMessage(err));
       executionRouter.register(createSandboxExecutor());
@@ -384,8 +401,15 @@ export function createCFRuntime(
       if (!hub) return false;
       try {
         return (await hub.getDeviceFsConsent(await userCallerFor(actor), actor.workspaceName)).fullFilesystem;
+      } catch (error) {
+        // Fail CLOSED: unverifiable consent must narrow the executor to the
+        // consented subtree, never widen it. Recorded rather than discarded —
+        // `false` alone cannot distinguish "no full-filesystem tier" from "the hub
+        // could not be reached", and only one of those is a fault.
+        console.warn('[proteus] device full-filesystem consent unverifiable, scoping to subtree:',
+          error instanceof Error ? error.message : String(error));
+        return false;
       }
-      catch { return false; } // consent unverifiable → subtree scope (fail closed)
     },
   }));
 
@@ -396,6 +420,7 @@ export function createCFRuntime(
     fastLlm: createFastLLM(agent, env, actor, sql),
     spawnBranch: createFacetSpawner(agent, env, actor),
     abortBranch: createFacetAborter(agent),
+    releaseBranch: createFacetReleaser(agent),
     executionRouter,
     shell,
     localVfs: workspaceVfs,
@@ -840,6 +865,38 @@ function createFacetSpawner(agent: AgentHost, env: Env, actor: ActorRuntimeIdent
 
 function createFacetAborter(agent: AgentHost): (branchId: string) => Promise<void> {
   return async (branchId: string) => { abortExplorationFacet(agent, branchId); };
+}
+
+/**
+ * TERMINAL release, and the reason this is a separate factory from the aborter
+ * above rather than a rename of it: `deleteSubAgent` WIPES the facet's SQLite,
+ * which is charged to the ROOT DO's shared ~10 GB quota whose overflow is an
+ * uncatchable reset. Merely aborting a branch leaves that database behind
+ * forever, because branch ids are never reused.
+ *
+ * Safe to wipe only because the MCTS engine calls this in the terminal
+ * `finally` of an iteration — strictly after that iteration's reflection has
+ * already read the branch's own `traces` table. Anything earlier is data loss,
+ * which is why mid-flight cancellation still goes through `createFacetAborter`.
+ *
+ * A branch that fell back to `createInlineBranch` has no facet at all, so
+ * releasing one must be harmless: `ctx.facets.delete` does not raise for an
+ * absent facet, and the catch below covers the remaining case anyway.
+ *
+ * Reported rather than thrown, and this is the one place in the module where
+ * that is the LOUDER choice: `mcts/engine.ts` releases through
+ * `Promise.allSettled`, which discards rejections, so throwing here would
+ * produce silence at exactly the moment a database was stranded. `error`, not
+ * `warn` — the quota this leaks into resets the whole workspace on overflow.
+ */
+function createFacetReleaser(agent: AgentHost): (branchId: string) => Promise<void> {
+  return async (branchId: string) => {
+    try {
+      await deleteExplorationFacet(agent, branchId);
+    } catch (err) {
+      console.error(`[proteus] branch facet ${branchId} storage was not reclaimed: ${errorMessage(err)}`);
+    }
+  };
 }
 
 /**

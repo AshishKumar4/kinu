@@ -39,8 +39,24 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor, VFS } from '../types/primitives.js';
+import { PLATFORM_CATALOG } from '../platform-catalog.js';
+import { uiMessageText } from '../utils/ui-message.js';
 import { SOUL_PATH, summarizeSoul } from './soul.js';
-import { CHAT_SESSION_ID, chatPaneAncestry, sessionTreeAncestry } from './session-tree.js';
+import {
+  CHAT_SESSION_ID, forkAncestry, sessionTreeAncestryBytes,
+} from './session-tree.js';
+
+/**
+ * Text bytes one snapshot may carry.
+ *
+ * Half of `do.facet.rpc_bytes`, because a snapshot crosses that boundary as ONE
+ * structured-clone argument and the row objects, ids, keys and timestamps
+ * wrapped around the text are the other half. Enforced from SQL byte sums
+ * BEFORE a single row is materialized, so an over-budget workspace never builds
+ * in the source isolate the payload it could not have sent — the failure mode
+ * that mattered was not the refusal but the live objects behind it.
+ */
+const MAX_SNAPSHOT_TEXT_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 2;
 
 /** One row of each table the copy reads. Everything is JSON-serializable, so a
  *  snapshot survives a transport that only carries structured clones. */
@@ -50,10 +66,13 @@ export interface ForkSnapshot {
   /** The message the fork is cut at, and its timestamp. */
   cut: { messageId: string; createdAtMs: number };
   /** The cut message's ancestry, root first. `session_id` is not carried: the
-   *  chain is by definition the chat session's, and the write stamps it. */
+   *  chain is by definition the chat session's, and the write stamps it.
+   *  `content` is null wherever {@link ForkSnapshot.assistantMessages} carries
+   *  the same id — see `identity/session-tree.ts`'s `forkAncestry` — and the
+   *  write rebuilds it with the projection the turn mirror applies. */
   messages: Array<{
     id: string; parent_id: string | null;
-    role: string; content: string; created_at: number;
+    role: string; content: string | null; created_at: number;
   }>;
   /** The same chain in the SDK's own store — the table the chat pane hydrates
    *  from, whose serialized UI messages `messages.content` cannot rebuild.
@@ -103,11 +122,41 @@ export interface ForkResult {
  * failure the operator hit: the id came from the chat pane, and the table this
  * resolved against was a turn-end summary that had never recorded it.
  * `reconcileSessionTree` is what closed that gap; this cut assumes it has run.
+ *
+ * Throws before reading a row if the ancestry is over
+ * {@link MAX_SNAPSHOT_TEXT_BYTES}, naming the measured size and the component
+ * responsible. The previous shape built ~35 MiB of live objects and then let the
+ * platform refuse the send with a message the owner could not act on.
  */
 export async function snapshotWorkspaceForFork(
   source: SqlExecutor, sourceVfs: VFS, untilMessageId: string,
 ): Promise<ForkSnapshot> {
-  const messages = sessionTreeAncestry(source, untilMessageId);
+  // Crafted-tool code and descriptions are unbounded — a workspace that has
+  // crafted for weeks carries them — so they are measured, not assumed small.
+  const parts = {
+    transcript: sessionTreeAncestryBytes(source, untilMessageId),
+    craftedTools: source<{ b: number }>`
+      SELECT COALESCE(SUM(LENGTH(CAST(code AS BLOB)) + LENGTH(CAST(description AS BLOB))
+                        + LENGTH(CAST(COALESCE(params, '') AS BLOB))), 0) AS b
+      FROM crafted_tools`[0]!.b,
+  };
+  const measured = parts.transcript + parts.craftedTools;
+  if (measured > MAX_SNAPSHOT_TEXT_BYTES) {
+    const worst = Object.entries(parts).sort((a, b) => b[1] - a[1])[0]!;
+    const ceiling = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value;
+    throw new Error(
+      `fork snapshot is ${measured} bytes of text, over the ${MAX_SNAPSHOT_TEXT_BYTES}-byte budget `
+      + `(half of PLATFORM_CATALOG['do.facet.rpc_bytes'], the ${ceiling}-byte serialized-argument `
+      + `ceiling one snapshot must cross). Largest component: ${worst[0]} at ${worst[1]} bytes. `
+      + `Fork from an earlier message, or compact this workspace's history first.`,
+    );
+  }
+
+  // Both halves of the chain in one walk, with the plain text elided wherever
+  // the pane rows already carry it. The chat pane hydrates from the SDK's store,
+  // so a fork without those rows shows an empty pane despite a populated
+  // `messages` table.
+  const { chain: messages, pane: assistantMessages } = forkAncestry(source, untilMessageId);
   if (messages.length === 0) {
     throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
   }
@@ -116,27 +165,32 @@ export async function snapshotWorkspaceForFork(
   const identity = source<{ id: string; name: string }>`
     SELECT id, name FROM workspace_identity LIMIT 1
   `;
-  // The chat pane hydrates from the SDK's store, so a fork without these rows
-  // shows an empty pane despite a populated `messages` table.
-  const assistantMessages = chatPaneAncestry(source, untilMessageId);
   // The scaffold is deliberately excluded so the fork re-bootstraps v0 fresh.
-  const files = await readForkFiles(sourceVfs);
-  // The FTS content table (agent-utils MemoryStore). Copying it is an
-  // optimization — the text itself is in the memory/*.md FILES above, so a
-  // missing table just means the fork reindexes on next write.
-  let memoryChunks: ForkSnapshot['memoryChunks'] = [];
-  try {
-    memoryChunks = source<ForkSnapshot['memoryChunks'][number]>`
-      SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks
-    `;
-  } catch { /* source has no memory_chunks yet — non-fatal */ }
+  const files = await readForkFiles(sourceVfs, MAX_SNAPSHOT_TEXT_BYTES - measured);
   const craftedTools = source<ForkSnapshot['craftedTools'][number]>`
     SELECT name, description, params, code, scope, created_at, updated_at FROM crafted_tools
   `;
-  let agentConfig: ForkSnapshot['agentConfig'] = [];
-  try {
-    agentConfig = source<ForkSnapshot['agentConfig'][number]>`SELECT key, value FROM agent_config`;
-  } catch { /* agent_config may not exist in source — non-fatal */ }
+  const agentConfig = source<ForkSnapshot['agentConfig'][number]>`SELECT key, value FROM agent_config`;
+
+  // The FTS content table (agent-utils MemoryStore), created for every workspace
+  // by initWorkspaceSchema. Carrying it is purely an optimization — the text is
+  // in the memory/*.md FILES above and a fork with no chunks reindexes via FTS5
+  // 'rebuild' on its next write — so it is the one component dropped rather than
+  // refused when the budget is spent. All or nothing: a PARTIAL index would
+  // answer memory searches with silently incomplete results, which is worse than
+  // reindexing.
+  const chunkBytes = source<{ b: number }>`
+    SELECT COALESCE(SUM(LENGTH(CAST(text AS BLOB))), 0) AS b FROM memory_chunks`[0]!.b;
+  // UTF-8 bytes, the unit SQLite measured the rows in: `String.length` is UTF-16
+  // code units and under-counts every file that is not pure ASCII. The encoded
+  // copy is immediately garbage.
+  const fileBytes = files.reduce((n, f) => n + new TextEncoder().encode(f.content).byteLength, 0);
+  const memoryChunks: ForkSnapshot['memoryChunks'] =
+    chunkBytes > 0 && measured + fileBytes + chunkBytes <= MAX_SNAPSHOT_TEXT_BYTES
+      ? source<ForkSnapshot['memoryChunks'][number]>`
+          SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks
+        `
+      : [];
 
   return {
     source: {
@@ -201,9 +255,9 @@ export async function writeForkSnapshot(
   //    partial attempt.
   void target`DELETE FROM messages`;
   void target`DELETE FROM crafted_tools`;
-  try { void target`DELETE FROM assistant_messages`; } catch { /* lazily created */ }
-  try { void target`DELETE FROM memory_chunks`; } catch { /* optional index */ }
-  try { void target`DELETE FROM agent_config`; } catch { /* optional configuration */ }
+  void target`DELETE FROM memory_chunks`;
+  void target`DELETE FROM agent_config`;
+  // assistant_messages is purged in step 4, after the CREATE that guarantees it.
   void target`DELETE FROM fork_lineage`;
   void target`DELETE FROM workspace_identity`;
 
@@ -220,36 +274,55 @@ export async function writeForkSnapshot(
     `;
   }
 
-  // 3. Messages, PKs and parent edges preserved — the chain IS the tree.
+  // 3. Messages, PKs and parent edges preserved — the chain IS the tree. A row
+  //    whose `content` was elided is rebuilt by flattening its rich twin — the
+  //    same projection the turn mirror applies at write time — so the plain
+  //    table lands identical without the snapshot having carried the
+  //    conversation a second time. The index holds references, not copies; each
+  //    flattened string is transient.
+  const richById = new Map(snapshot.assistantMessages.map((m) => [m.id, m]));
   for (const m of snapshot.messages) {
+    let content = m.content;
+    if (content === null) {
+      const rich = richById.get(m.id);
+      if (!rich) {
+        throw new Error(
+          `fork snapshot elided the text of message "${m.id}" but carries no assistant_messages row `
+          + `under that id, so the plain transcript cannot be reconstructed`,
+        );
+      }
+      content = uiMessageText(rich.content);
+    }
     void target`
       INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${m.id}, ${CHAT_SESSION_ID}, ${m.parent_id}, ${m.role}, ${m.content}, ${m.created_at})
+      VALUES (${m.id}, ${CHAT_SESSION_ID}, ${m.parent_id}, ${m.role}, ${content}, ${m.created_at})
     `;
   }
 
-  // 4. assistant_messages. The table is created lazily by Session.ensureTable()
-  //    on first append, so ensure it exists before inserting (idempotent).
-  try {
+  // 4. assistant_messages. The agents SDK's session provider creates this table
+  //    on its first append, so a target that has not run a turn does not have
+  //    it yet — created here with the SDK's own definition (agents,
+  //    src/experimental/memory/session/providers/agent.ts) so the copy cannot
+  //    be skipped. Purged here rather than in step 1 for that reason.
+  void target`
+    CREATE TABLE IF NOT EXISTS assistant_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL DEFAULT '',
+      parent_id TEXT,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `;
+  void target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent  ON assistant_messages(parent_id)`;
+  void target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session ON assistant_messages(session_id)`;
+  void target`DELETE FROM assistant_messages`;
+  for (const m of snapshot.assistantMessages) {
     void target`
-      CREATE TABLE IF NOT EXISTS assistant_messages (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL DEFAULT '',
-        parent_id TEXT,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
+      INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${m.id}, ${m.session_id}, ${m.parent_id}, ${m.role}, ${m.content}, ${m.created_at})
     `;
-    void target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent  ON assistant_messages(parent_id)`;
-    void target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session ON assistant_messages(session_id)`;
-    for (const m of snapshot.assistantMessages) {
-      void target`
-        INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${m.id}, ${m.session_id}, ${m.parent_id}, ${m.role}, ${m.content}, ${m.created_at})
-      `;
-    }
-  } catch { /* pure-test targets may lack the table — non-fatal */ }
+  }
 
   // 5. SOUL.md + memory/* are FILES and are written before this, outside the
   //    row transaction — see writeForkFiles at the top of this function.
@@ -257,15 +330,15 @@ export async function writeForkSnapshot(
     summarizeSoul(snapshot.files.find((f) => f.path === SOUL_PATH)?.content ?? '')
   }`;
 
-  // 6. memory_chunks — skipped silently when the target has no such table yet.
-  try {
-    for (const c of snapshot.memoryChunks) {
-      void target`
-        INSERT OR REPLACE INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
-        VALUES (${c.id}, ${c.path}, ${c.start_line}, ${c.end_line}, ${c.hash}, ${c.text}, ${c.updated_at})
-      `;
-    }
-  } catch { /* target has no memory_chunks yet — non-fatal */ }
+  // 6. memory_chunks — the table is part of every workspace's schema, so a
+  //    failure here means the fork lost the parent's memory index, not that
+  //    there was nothing to copy.
+  for (const c of snapshot.memoryChunks) {
+    void target`
+      INSERT OR REPLACE INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
+      VALUES (${c.id}, ${c.path}, ${c.start_line}, ${c.end_line}, ${c.hash}, ${c.text}, ${c.updated_at})
+    `;
+  }
 
   // 7. crafted_tools (snapshot — independent evolution from this point).
   for (const t of snapshot.craftedTools) {
@@ -277,12 +350,10 @@ export async function writeForkSnapshot(
   }
 
   // 8. agent_config, with display_name overwritten so the UI shows the fork.
-  try {
-    for (const row of snapshot.agentConfig) {
-      void target`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${row.key}, ${row.value})`;
-    }
-    void target`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${opts.workspaceName})`;
-  } catch { /* agent_config may not exist in target — non-fatal */ }
+  for (const row of snapshot.agentConfig) {
+    void target`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${row.key}, ${row.value})`;
+  }
+  void target`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${opts.workspaceName})`;
 
   // 9. Lineage — single row.
   void target`
@@ -367,28 +438,29 @@ export interface ForkLineageRow {
   forkedAt: number;
 }
 
-/** Read the single-row fork_lineage. Returns null when not a fork. */
+/** Read the single-row fork_lineage. Returns null when not a fork.
+ *
+ *  `fork_lineage` is created by initAllTables on every workspace, and an empty
+ *  result already says "not a fork" — so there was never a condition for the
+ *  catch that used to wrap this, only the ability to report a broken read as a
+ *  workspace with no parent. */
 export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
-  try {
-    const rows = sql<{
-      source_workspace_id: string; source_workspace_name: string;
-      source_message_id: string; source_message_created_at: number;
-      forked_at: number;
-    }>`SELECT source_workspace_id, source_workspace_name, source_message_id,
-              source_message_created_at, forked_at
-       FROM fork_lineage WHERE id = 1 LIMIT 1`;
-    if (rows.length === 0) return null;
-    const r = rows[0]!;
-    return {
-      sourceWorkspaceId: r.source_workspace_id,
-      sourceWorkspaceName: r.source_workspace_name,
-      sourceMessageId: r.source_message_id,
-      sourceMessageCreatedAt: r.source_message_created_at,
-      forkedAt: r.forked_at,
-    };
-  } catch {
-    return null;
-  }
+  const rows = sql<{
+    source_workspace_id: string; source_workspace_name: string;
+    source_message_id: string; source_message_created_at: number;
+    forked_at: number;
+  }>`SELECT source_workspace_id, source_workspace_name, source_message_id,
+            source_message_created_at, forked_at
+     FROM fork_lineage WHERE id = 1 LIMIT 1`;
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    sourceWorkspaceId: r.source_workspace_id,
+    sourceWorkspaceName: r.source_workspace_name,
+    sourceMessageId: r.source_message_id,
+    sourceMessageCreatedAt: r.source_message_created_at,
+    forkedAt: r.forked_at,
+  };
 }
 
 /**
@@ -397,11 +469,23 @@ export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
  * A directory walk rather than a table scan — the fork carries what the agent
  * can see, so a store that chunks or compresses differently cannot change what
  * a fork means.
+ *
+ * `remainingBytes` is what the transcript left of the snapshot budget. The walk
+ * refuses rather than truncates: a fork missing part of its memory would look
+ * like a fork whose memory was never written.
  */
-async function readForkFiles(vfs: VFS): Promise<ForkSnapshot['files']> {
+async function readForkFiles(vfs: VFS, remainingBytes: number): Promise<ForkSnapshot['files']> {
   const out: ForkSnapshot['files'] = [];
+  let carried = 0;
   const readText = async (path: string): Promise<void> => {
     const content = v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }));
+    carried += new TextEncoder().encode(content).byteLength;
+    if (carried > remainingBytes) {
+      throw new Error(
+        `fork snapshot files exceed the remaining ${remainingBytes}-byte budget at ${JSON.stringify(path)}; `
+        + `SOUL.md and memory/ total at least ${carried} bytes. Compact this workspace's memory first.`,
+      );
+    }
     out.push({ path, content });
   };
   if (await vfs.exists(SOUL_PATH)) await readText(SOUL_PATH);

@@ -218,6 +218,7 @@ const MB = 1000 * 1000;
 const GB = 1000 * 1000 * 1000;
 
 const CF_DO_LIMITS = 'https://developers.cloudflare.com/durable-objects/platform/limits/';
+const CF_DO_STATE = 'https://developers.cloudflare.com/durable-objects/api/state/';
 const CF_WORKER_LIMITS = 'https://developers.cloudflare.com/workers/platform/limits/';
 const NIMBUS_JIT_PROBE = '~/Nimbus/scratchpad/jit-limits-verification.md';
 
@@ -626,6 +627,81 @@ export const PLATFORM_CATALOG = {
     onBreach: 'the extension ends and remaining work is cancelled',
     observable: [],
     firstPartySignal: false,
+    notes:
+      'WORKER SCOPE ONLY, and reading it as general is how a Durable Object came to hold its own '
+      + 'wake-up open with waitUntil. This limit is the non-actor branch of workerd\'s '
+      + 'IncomingRequest::drain; the actor branch has no timeout and no extension at all. See '
+      + 'do.wait_until.no_op.',
+    conflictsWith: ['do.wait_until.no_op'],
+  },
+
+  'do.wait_until.no_op': {
+    subject: 'ctx.waitUntil() has no effect inside a Durable Object',
+    limit: null,
+    origin: 'platform',
+    bounds: null,
+    evidence: 'documented',
+    provenance: `${CF_DO_STATE}#waituntil`,
+    date: DOCS_READ,
+    trigger: 'any call to DurableObjectState.waitUntil()',
+    onBreach:
+      'nothing: the object\'s lifetime is not extended and the request or RPC completes exactly '
+      + 'when it would have anyway. The promise still runs, as any unawaited promise in an actor '
+      + 'does, and carries no guarantee that it finishes',
+    observable: [],
+    firstPartySignal: false,
+    notes:
+      'It exists only for API compatibility with ExecutionContext, and that compatibility IS the '
+      + 'hazard: the call reads as a durability decision and is not one. workerd shows the '
+      + 'mechanism — DurableObjectState::waitUntil forwards to IoContext::addWaitUntil, and '
+      + 'IoContext::addTask says "In Actors, we treat all tasks as wait-until tasks", so '
+      + 'ctx.waitUntil(p) and a bare floating p are the same code path in an actor. '
+      + 'worker.wait_until.grace_ms is the NON-ACTOR branch of IncomingRequest::drain and does not '
+      + 'apply here at all; what actually becomes of the promise is '
+      + 'do.background_task.cancelled_on_reset. Proteus shipped this exact mistake: scheduleTimerAt '
+      + 'held the arm of the object\'s own wake-up row with waitUntil under a docstring claiming '
+      + 'the write "lands even if the caller\'s invocation ends first", and the only failure path '
+      + 'was a console line. anti-slop/no-wait-until-in-durable-object now rejects the call '
+      + 'outright.',
+    conflictsWith: ['worker.wait_until.grace_ms'],
+  },
+
+  'do.background_task.cancelled_on_reset': {
+    subject: 'What becomes of a promise still in flight when a Durable Object invocation returns',
+    limit: null,
+    origin: 'platform',
+    bounds: null,
+    evidence: 'proven-by-probe',
+    provenance: 'local://waituntil-do-probe.md §3',
+    date: '2026-08-17',
+    trigger:
+      'a promise started inside a Durable Object that has not settled when the object is evicted, '
+      + 'reset or aborted',
+    onBreach:
+      'the promise is cancelled where it stands and its remaining effects never happen. The '
+      + 'cancellation is not delivered to JavaScript, so an attached .catch() does not run, nothing '
+      + 'is logged, and the caller has already been told the operation succeeded',
+    observable: [],
+    firstPartySignal: false,
+    measurements: [
+      { scenario: 'awaited inside the invocation: response held until the write committed', value: 3035, unit: 'ms' },
+      { scenario: 'handed to ctx.waitUntil: response returned before the write', value: 12, unit: 'ms' },
+      { scenario: 'left as a bare floating promise: response returned before the write', value: 10, unit: 'ms' },
+    ],
+    notes:
+      'The probe is the decisive half of do.wait_until.no_op, because the documentation says the '
+      + 'call has no effect and does not say what happens to the promise. Six cases on a '
+      + 'production-pinned throwaway Worker (deleted; the route now 404s): a delayed storage write '
+      + 'DOES land while the object stays alive, identically with waitUntil and without it, and is '
+      + 'identically LOST when ctx.abort() lands first. A control ran the same write with no reset '
+      + 'and it landed, so the loss is the reset and not a broken probe. abort() is the '
+      + 'deterministic stand-in for eviction because drain() cancels actor background work on '
+      + 'onShutdown(), which is the path eviction takes; do.evict.no_signal records that eviction '
+      + 'itself cannot be forced or observed. The consequence for design: the only retention a '
+      + 'Durable Object has is an await inside the invocation, where the output gate holds the '
+      + 'response until the storage write commits. Everything else is best-effort and must be '
+      + 'written as such — including the agents-SDK keepAlive heartbeat, which is alarm-backed and '
+      + 'therefore itself depends on the wake-up row landing.',
   },
 
   'date_now.frozen_between_io': {

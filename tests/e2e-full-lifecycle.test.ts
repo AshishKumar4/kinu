@@ -146,8 +146,8 @@ describe('E2E Full Lifecycle', () => {
       purpose: 'A coding assistant that helps write and test JavaScript code.',
       llm: LLM_CONFIG,
     });
-    initSearchTables(rt.storage.execRaw);
-    initScaffoldTables(rt.storage.execRaw);
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initCraftScoreTables(rt.storage.execRaw);
 
     tools = buildBuiltinTools({ rt, engine: new EvolutionEngine(rt, { enabled: false }) });
@@ -157,7 +157,7 @@ describe('E2E Full Lifecycle', () => {
   });
 
   afterAll(() => {
-    try { db.close(); } catch {}
+    db.close();
     rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
@@ -309,10 +309,8 @@ describe('E2E Full Lifecycle', () => {
     console.log(`  Tables: ${tables.join(', ')}`);
 
     for (const table of tables) {
-      try {
-        const count = db.query<{ c: number }, []>(`SELECT COUNT(*) as c FROM "${table}"`).get()?.c ?? 0;
-        if (count > 0) console.log(`  ${table}: ${count} rows`);
-      } catch {}
+      const count = db.query<{ c: number }, []>(`SELECT COUNT(*) as c FROM "${table}"`).get()?.c ?? 0;
+      if (count > 0) console.log(`  ${table}: ${count} rows`);
     }
 
     const identity = db.query<{ id: string; name: string }, []>(

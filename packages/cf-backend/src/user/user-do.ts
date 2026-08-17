@@ -75,8 +75,10 @@ import {
   JsonObjectSchema,
   decodeJsonValue,
 } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import * as v from 'valibot';
 import { initUserTables } from './schema.js';
+import { bindAgentSql } from '../runtime.js';
 import {
   mintWorkspaceCapability,
   ownerCaller,
@@ -252,12 +254,8 @@ function cleanCliTokenLabel(label?: string): string {
 }
 
 function parseCapabilityList(value: string): string[] {
-  try {
-    const parsed = v.safeParse(v.array(v.string()), JSON.parse(value));
-    return parsed.success ? parsed.output : [];
-  } catch {
-    return [];
-  }
+  const parsed = v.safeParse(v.array(v.string()), tolerate(() => JSON.parse(value), 'malformed-input'));
+  return parsed.success ? parsed.output : [];
 }
 
 export class UserDO extends Agent<Env> {
@@ -280,7 +278,7 @@ export class UserDO extends Agent<Env> {
 
   private ensureInit(): void {
     if (this._initialized) return;
-    initUserTables(this.ctx.storage.sql);
+    initUserTables(this.ctx.storage.sql, bindAgentSql(this));
     this._initialized = true;
   }
 
@@ -855,15 +853,14 @@ export class UserDO extends Agent<Env> {
       bytes.set(new Uint8Array(message.buffer, message.byteOffset, message.byteLength));
       data = new TextDecoder().decode(bytes);
     }
-    // The daemon's HELLO carries metadata; everything else is an RPC response.
-    try {
-      const hello = v.safeParse(DeviceHelloSchema, JSON.parse(data));
-      if (hello.success) {
-        this.sqlx(`UPDATE user_devices SET os = ?, hostname = ?, last_seen_at = ? WHERE id = ?`,
-          hello.output.os ?? null, hello.output.hostname ?? null, Date.now(), deviceId);
-        return;
-      }
-    } catch { /* not JSON / not HELLO — fall through to RPC */ }
+    // The daemon's HELLO carries metadata; everything else (including a frame
+    // that is not JSON at all) is an RPC response.
+    const hello = v.safeParse(DeviceHelloSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+    if (hello.success) {
+      this.sqlx(`UPDATE user_devices SET os = ?, hostname = ?, last_seen_at = ? WHERE id = ?`,
+        hello.output.os ?? null, hello.output.hostname ?? null, Date.now(), deviceId);
+      return;
+    }
     this._devices.handleMessage(deviceId, data);
   }
 
@@ -874,7 +871,7 @@ export class UserDO extends Agent<Env> {
     this._devices.handleClose(deviceId, ws);
     // A replacing socket may already be live — only then keep connected_at.
     if (!this._devices.isConnected(deviceId)) {
-      try { this.sqlx(`UPDATE user_devices SET connected_at = NULL WHERE id = ?`, deviceId); } catch { /* nop */ }
+      this.sqlx(`UPDATE user_devices SET connected_at = NULL WHERE id = ?`, deviceId);
     }
   }
 
@@ -1525,21 +1522,20 @@ export class UserDO extends Agent<Env> {
       }
     }
 
-    try {
-      const headers = credentialToHeaders(storedKey, cred);
-      if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
-        const gatewayId = this.selectedAIGatewayId();
-        if (!gatewayId) return null;
-        headers['cf-aig-gateway-id'] = gatewayId;
-      } else if (key === CLOUDFLARE_OAUTH_CRED_KEY) {
-        // Workers AI traffic routes through the user's selected gateway when
-        // they picked one (their caching/logging/limits apply), otherwise the
-        // platform's configured default.
-        headers['cf-aig-gateway-id'] = this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.env);
-      }
-      return headers;
+    // A credential whose stored shape does not match its key is a defect, not
+    // an absent credential: it must not reach the caller as "not connected".
+    const headers = credentialToHeaders(storedKey, cred);
+    if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
+      const gatewayId = this.selectedAIGatewayId();
+      if (!gatewayId) return null;
+      headers['cf-aig-gateway-id'] = gatewayId;
+    } else if (key === CLOUDFLARE_OAUTH_CRED_KEY) {
+      // Workers AI traffic routes through the user's selected gateway when
+      // they picked one (their caching/logging/limits apply), otherwise the
+      // platform's configured default.
+      headers['cf-aig-gateway-id'] = this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.env);
     }
-    catch { return null; }
+    return headers;
   }
 
   // ── Cloudflare AI Gateway (the user's own gateway) ───────────────────
@@ -1817,10 +1813,11 @@ export class UserDO extends Agent<Env> {
        FROM user_mcp_servers ORDER BY name`,
     );
     // Touch the manager so the live view of connection state is hydrated.
-    // Cheap on cold start (storage scan); idempotent.
+    // Cheap on cold start (storage scan); idempotent. A failure here is a
+    // storage failure, not a per-server connection failure — those surface as
+    // the row's `status` — so it must not report every server disconnected.
     if (rows.length > 0) {
-      try { await this.userMcp().restoreConnectionsFromStorage('proteus-user-mcp'); }
-      catch { /* connection failures don't block the list */ }
+      await this.userMcp().restoreConnectionsFromStorage('proteus-user-mcp');
     }
     const connections = this._userMcp?.mcpConnections ?? {};
     return rows.map((r): McpServerSummary => {
@@ -1914,17 +1911,22 @@ export class UserDO extends Agent<Env> {
       if (result.state === 'authenticating') {
         authUrl = result.authUrl ?? null;
       } else {
-        // Discovery is async; fire-and-forget so the response returns quickly.
-        // The next userMcp_list() poll surfaces the discovered tool count.
-        void mgr.discoverIfConnected(id).catch(() => undefined);
+        // Awaited, not detached. This ran under `ctx.waitUntil` with a comment
+        // claiming the promise was "held open"; in a Durable Object waitUntil is
+        // a no-op (`do.wait_until.no_op`) and an in-flight promise is cancelled
+        // silently when the object is reset (`do.background_task.cancelled_on_reset`),
+        // so the tool count could simply never appear and nothing would say why.
+        // `userMcp_add` already awaits registerServer and connectToServer, so one
+        // more round-trip buys a return value that is true when it returns.
+        await mgr.discoverIfConnected(id);
       }
     } catch (err) {
       // Rollback both our row AND the SDK's storage entry so the user can
       // retry with a corrected URL rather than have a stuck failed entry.
-      try { await this.userMcp().removeServer(id); } catch { /* nop */ }
       this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
       this._userMcpUpdatedAt = Date.now();
-      throw new Error(`MCP connect failed: ${errorMessage(err)}`);
+      await this.userMcp().removeServer(id);
+      throw new Error(`MCP connect failed: ${errorMessage(err)}`, { cause: err });
     }
     return { id, authUrl };
   }
@@ -2036,7 +2038,11 @@ export class UserDO extends Agent<Env> {
       callbackUrl,
       transport,
     });
-    void mgr.establishConnection(id).catch(() => undefined);
+    // Awaited: the point of a re-register is that the rotated credential is live
+    // when the caller is told the update applied. `ctx.waitUntil` cannot hold this
+    // open (`do.wait_until.no_op`), so detaching it meant the header patch could
+    // report success against a connection that never came back.
+    await mgr.establishConnection(id);
   }
 
   /** Monotonic watermark — the orchestrator caches by this value. */
@@ -2126,7 +2132,7 @@ export class UserDO extends Agent<Env> {
     if (wasCold) {
       // Cold start: hydrate the manager before dispatching.
       try { await manager.restoreConnectionsFromStorage('proteus-user-mcp'); }
-      catch (err) { throw new Error(`MCP not ready: ${errorMessage(err)}`); }
+      catch (err) { throw new Error(`MCP not ready: ${errorMessage(err)}`, { cause: err }); }
     }
     // Type-check the server membership inside our SQL so a stale orchestrator
     // closure can't dispatch to a server the user just deleted.
@@ -2155,8 +2161,14 @@ export class UserDO extends Agent<Env> {
       const result = await this.userMcp().handleCallbackRequest(req);
       this._userMcpUpdatedAt = Date.now();
       if (result.authSuccess) {
-        // Background-establish the connection now that tokens are saved.
-        void this.userMcp().establishConnection(result.serverId);
+        // Awaited, and in its own try: the tokens ARE saved by this point, so a
+        // connect failure must not be reported as an auth failure. Detaching it
+        // was the same mistake as the two `ctx.waitUntil` calls above — a Durable
+        // Object cannot retain an unawaited promise (`do.wait_until.no_op`), so
+        // the connection could silently never be established after a successful
+        // sign-in.
+        try { await this.userMcp().establishConnection(result.serverId); }
+        catch (err) { return { ok: true, serverId: result.serverId, error: `connected but not established: ${errorMessage(err)}` }; }
         return { ok: true, serverId: result.serverId, error: null };
       }
       return { ok: false, serverId: result.serverId ?? null, error: result.authError };

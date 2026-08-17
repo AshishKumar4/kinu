@@ -54,8 +54,8 @@ function countingLLM(json: string): LLM & { judgeCalls: () => number } {
 }
 
 function initTables(rt: ReturnType<typeof createTestRuntime>['rt']) {
-  initSearchTables(rt.storage.execRaw);
-  initScaffoldTables(rt.storage.execRaw);
+  initSearchTables(rt.storage.execRaw, rt.storage.sql);
+  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initCraftScoreTables(rt.storage.execRaw);
 }
 
@@ -384,10 +384,15 @@ describe('MCTS integration', () => {
 });
 
 describe('MCTS branch lifetime', () => {
-  /** Runtime whose spawn/abort calls are recorded; branches are real handles. */
+  /** Runtime whose spawn/abort/release calls are recorded; branches are real
+   *  handles. Abort and release are tracked SEPARATELY and deliberately: only
+   *  release reclaims a branch's storage, so a test that accepted an abort as
+   *  proof of teardown would pass against the leak these assertions exist to
+   *  catch. */
   function trackedBranches(rt: ReturnType<typeof createTestRuntime>['rt']) {
     const spawned: string[] = [];
     const aborted: string[] = [];
+    const released: string[] = [];
     rt.spawnBranch = async (id) => {
       spawned.push(id);
       return {
@@ -396,23 +401,24 @@ describe('MCTS branch lifetime', () => {
       };
     };
     rt.abortBranch = async (id) => { aborted.push(id); };
-    return { spawned, aborted };
+    rt.releaseBranch = async (id) => { released.push(id); };
+    return { spawned, aborted, released };
   }
 
   test('every branch an expansion spawns is released when the iteration ends', async () => {
     const { rt } = createTestRuntime();
-    const { spawned, aborted } = trackedBranches(rt);
+    const { spawned, released } = trackedBranches(rt);
 
     initTables(rt);
     await runMCTS(rt, createMockSession(), 'plan the work', { budget: 2, branches: 2 });
 
     expect(spawned.length).toBe(4);
-    expect(new Set(aborted)).toEqual(new Set(spawned));
+    expect(new Set(released)).toEqual(new Set(spawned));
   });
 
   test('a branch is released even when the iteration throws', async () => {
     const { rt } = createTestRuntime();
-    const { spawned, aborted } = trackedBranches(rt);
+    const { spawned, released } = trackedBranches(rt);
     // Reflection is written to memory; a memory failure aborts the iteration.
     rt.memory.append = async () => { throw new Error('memory offline'); };
 
@@ -422,7 +428,7 @@ describe('MCTS branch lifetime', () => {
     })).rejects.toThrow('memory offline');
 
     expect(spawned.length).toBe(2);
-    expect(new Set(aborted)).toEqual(new Set(spawned));
+    expect(new Set(released)).toEqual(new Set(spawned));
   });
 });
 

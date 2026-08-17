@@ -114,7 +114,5 @@ export function filterToolSetBySkills(tools: ToolSet, activeSkills: ActiveSkillS
  *  prompting/volatile-context.ts) — rendered fresh each turn so it never
  *  enters the cacheable prefix. Undefined when there are no facts yet. */
 export function renderFactsForTurn(facts: FactsStore): string | undefined {
-  try {
-    return renderFactsBlock(facts.recentTopK(20), { maxChars: 2000 }) || undefined;
-  } catch { return undefined; /* facts table not yet initialized */ }
+  return renderFactsBlock(facts.recentTopK(20), { maxChars: 2000 }) || undefined;
 }

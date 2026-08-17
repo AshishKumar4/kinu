@@ -2,6 +2,8 @@ import { defineRule } from "@oxlint/plugins";
 
 import type { ESTree } from "@oxlint/plugins";
 
+import { lexicalTypeParameterNames } from "../shared/lexical-type-parameters.ts";
+
 type FunctionWithReturnType =
   | ESTree.ArrowFunctionExpression
   | ESTree.Function
@@ -21,20 +23,6 @@ function referencedAliasName(type: ESTree.TSType): string | null {
     : null;
 }
 
-function lexicalTypeParameterNames(node: ESTree.Node): ReadonlySet<string> {
-  const names = new Set<string>();
-  let current: ESTree.Node | null = node;
-  while (current !== null && current.type !== "Program") {
-    if ("typeParameters" in current) {
-      for (const parameter of current.typeParameters?.params ?? []) {
-        names.add(parameter.name.name);
-      }
-    }
-    current = current.parent;
-  }
-  return names;
-}
-
 /** Ban function contracts that return unknown instead of a parsed domain type. */
 export const noUnknownReturnsRule = defineRule({
   meta: {
@@ -48,7 +36,7 @@ export const noUnknownReturnsRule = defineRule({
         "This function exposes `unknown` to its caller. Parse the value at its boundary and return a named domain type.",
     },
   },
-  create(context) {
+  createOnce(context) {
     const aliases = new Map<string, ESTree.TSTypeAliasDeclaration>();
 
     const resolvesToUnknown = (
@@ -90,12 +78,20 @@ export const noUnknownReturnsRule = defineRule({
     const checkReturnType = (node: FunctionWithReturnType) => {
       const annotation = node.returnType;
       if (annotation === null || annotation === undefined) return;
-      if (!resolvesToUnknown(annotation.typeAnnotation, lexicalTypeParameterNames(node))) return;
+      if (
+        !resolvesToUnknown(
+          annotation.typeAnnotation,
+          lexicalTypeParameterNames(node, context.sourceCode.visitorKeys),
+        )
+      ) {
+        return;
+      }
       context.report({ node: annotation.typeAnnotation, messageId: "unknownReturn" });
     };
 
     return {
       Program(node) {
+        aliases.clear();
         for (const statement of node.body) {
           const declaration =
             statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;

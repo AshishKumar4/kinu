@@ -23,7 +23,7 @@ import { SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from '
 import { JobNotResumable } from '../jobs/runner.js';
 import type { BackgroundJobRunner } from '../jobs/runner.js';
 import type { WorkMode } from '../prompting/surface.js';
-import { parseAgentsToolInput, resumableForkInput } from '../tools/agents-tool.js';
+import { resumableForkInput } from '../tools/agents-tool.js';
 import { nanoid } from '../utils/nanoid.js';
 import { decodeJsonValue, type JsonValue } from '../utils/json.js';
 
@@ -36,8 +36,7 @@ export interface BackgroundableTool {
 }
 
 function isForkInput(input: JsonValue): boolean {
-  try { return parseAgentsToolInput(input).action === 'fork'; }
-  catch { return false; }
+  return resumableForkInput('agents', input) !== null;
 }
 
 /** Tools whose work can be long enough to auto-detach to the background. */

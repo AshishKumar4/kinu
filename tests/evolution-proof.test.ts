@@ -205,8 +205,8 @@ describe('Evolution Proof', () => {
       purpose: 'A crypto and algorithm expert that solves CTF-style challenges using code execution.',
       llm: LLM_CONFIG,
     });
-    initSearchTables(rt.storage.execRaw);
-    initScaffoldTables(rt.storage.execRaw);
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initCraftScoreTables(rt.storage.execRaw);
     model = createModel();
     engine = new EvolutionEngine(rt, {
@@ -218,7 +218,7 @@ describe('Evolution Proof', () => {
   });
 
   afterAll(() => {
-    try { db.close(); } catch {}
+    db.close();
     rmSync(TEST_DIR, { recursive: true, force: true });
   });
 

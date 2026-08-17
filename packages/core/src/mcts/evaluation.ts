@@ -71,6 +71,7 @@ import type { LLM, Executor } from '../types/primitives.js';
 import type { EvaluationGrounding } from '../types/evaluation.js';
 import { readProposalCode } from '../execution/code-fence.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { tolerate } from '../obs/index.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { DEFAULT_CONFIG } from '../config.js';
 
@@ -99,29 +100,32 @@ const PROSE_CONFIDENCE = 0.75;
  * completion), and nothing aborts it, so the stall becomes a permanent hang:
  * the search freezes on its first expansion and the tree never grows again.
  *
- * A timed-out judge is DROPPED exactly like a thrown one (see sampleJudgeScore /
- * generateAssertions), so the ensemble degrades to the samples that did answer
- * instead of the search dying. Generous by design — a real judge completion on
+ * A timed-out judge is DROPPED (see sampleJudgeScore / generateAssertions), so
+ * the ensemble degrades to the samples that did answer instead of the search
+ * dying. A judge that FAILS is not the same thing and is not dropped: it
+ * propagates to the engine's allSettled, which reports branch-failed with the
+ * reason and scores the branch 0. Generous by design — a real judge completion on
  * a bounded prompt finishes well inside this even on a reasoning model; only a
  * genuinely stuck call is cut. Override per-evaluation via
  * EvaluateBranchOptions.judgeCallTimeoutMs.
  */
 export const DEFAULT_JUDGE_CALL_TIMEOUT_MS = 120_000;
 
-/** `judge.complete`, bounded. Rejects (→ the caller's existing catch → the
- *  sample is dropped) if the provider does not answer within `timeoutMs`. The
+/** `judge.complete`, bounded. Returns null when the provider does not answer
+ *  within `timeoutMs` — the timeout is the ensemble's own envelope, so it is a
+ *  value here rather than a throw nobody can tell from a broken provider. The
  *  underlying call cannot be cancelled without an abort signal the LLM seam
  *  does not carry, but losing the race unblocks the evaluator, which is the
  *  freeze this fixes. */
-async function completeWithinTimeout(judge: LLM, prompt: string, timeoutMs: number): Promise<string> {
+async function completeWithinTimeout(judge: LLM, prompt: string, timeoutMs: number): Promise<string | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`judge call exceeded ${timeoutMs}ms`)), timeoutMs);
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
   });
   try {
     return await Promise.race([judge.complete(prompt), timeout]);
   } finally {
-    if (timer) clearTimeout(timer);
+    clearTimeout(timer);
   }
 }
 
@@ -286,8 +290,10 @@ export async function evaluateWithMultiModelJudging(
 
 /**
  * Ask the judge model to write assertions that exercise the code against the
- * task. Returns null (bare run) when the judge declines or produces no code
- * block — assertion generation is best-effort, never a hard dependency.
+ * task. Returns null (bare run) when the judge declines, does not answer inside
+ * its envelope, or produces no code block — assertion generation is
+ * best-effort, never a hard dependency. A judge that FAILS is a fault and
+ * propagates: a branch must not be run bare because the provider is broken.
  *
  * Exported so the convergence tie-break (mcts/test-selection.ts, DO-NOW #3)
  * generates ONE discriminating harness reused across the near-tied candidates.
@@ -317,14 +323,10 @@ No imports, no network, no printing — just exercise and fail loudly.
 Reply with ONLY a \`\`\`${language} code block. If the code cannot be meaningfully
 verified by assertions, reply with exactly: UNVERIFIABLE`;
 
-  try {
-    const text = await completeWithinTimeout(judge, prompt, timeoutMs);
-    if (/^\s*UNVERIFIABLE\s*$/.test(text)) return null;
-    const assertion = readProposalCode(text, [language]);
-    return assertion?.kind === 'runnable' ? assertion.code : null;
-  } catch {
-    return null;
-  }
+  const text = await completeWithinTimeout(judge, prompt, timeoutMs);
+  if (text === null || /^\s*UNVERIFIABLE\s*$/.test(text)) return null;
+  const assertion = readProposalCode(text, [language]);
+  return assertion?.kind === 'runnable' ? assertion.code : null;
 }
 
 /**
@@ -392,25 +394,21 @@ JSON shape:
 ${jsonObjectOnlyInstruction()}`;
 }
 
-/** One judge sample. Unparseable or failed samples are DROPPED (null), never
- *  scored 0 — a single flaky parse must not crater the ensemble median. */
+const JudgeScoreSchema = v.object({ score: v.union([v.number(), v.string()]) });
+
+/** One judge sample. A sample the judge did not answer inside its envelope, or
+ *  whose text is not a score object, is DROPPED (null), never scored 0 — a
+ *  single flaky parse must not crater the ensemble median. Anything else is a
+ *  fault and propagates: the engine reports it as branch-failed. */
 async function sampleJudgeScore(judge: LLM, prompt: string, timeoutMs: number): Promise<number | null> {
-  let text: string;
-  try {
-    text = await completeWithinTimeout(judge, prompt, timeoutMs);
-  } catch {
-    return null;
-  }
-  try {
-    const parsed = v.parse(v.object({
-      score: v.union([v.number(), v.string()]),
-    }), extractJsonObject(text));
-    const score = Number(parsed.score);
-    if (!Number.isFinite(score)) return null;
-    return Math.min(1, Math.max(0, score));
-  } catch {
-    return null;
-  }
+  const text = await completeWithinTimeout(judge, prompt, timeoutMs);
+  if (text === null) return null;
+  const json = tolerate(() => extractJsonObject(text), 'malformed-input');
+  if (json === undefined) return null;
+  const parsed = v.safeParse(JudgeScoreSchema, json);
+  if (!parsed.success) return null;
+  const score = Number(parsed.output.score);
+  return Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : null;
 }
 
 /** Median of a non-empty list. Shared with the heads k-sample merge

@@ -12,6 +12,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTestRuntime, createTestSql, toolExecute } from '@proteus/test-utils';
+import { mockAgentsSdk } from './helpers/agents-sdk.js';
 import {
   HeadCapture,
   HeadController,
@@ -215,10 +216,11 @@ describe('MCTS branch mode stays isolated', () => {
   // a branch is a bare generateText with no ToolSet and no runtime, which is why
   // StorageIsolation holds for branches by DO identity alone.
   //
-  // This is the one assertion here that reads source instead of behaviour: the
-  // DO classes import `agents`, which needs the workers runtime, so they cannot
-  // be instantiated in this runner. Everything about the HEAD surface above is
-  // asserted against the real ToolSet.
+  // The two assertions below read source because what they check is not
+  // runtime-observable: which statements sit inside the MCTS-mode block, and
+  // that the forked runtime is constructed in exactly one place. The CLASS TREE
+  // is NOT asserted from source — see 'head containment is structural' below,
+  // which imports the real constructors and reads the real prototype chain.
   const source = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
 
   test('MCTS-mode callables acquire neither a runtime nor a ToolSet', () => {
@@ -259,17 +261,100 @@ describe('MCTS branch mode stays isolated', () => {
     // never through this facet's own storage, which is not where the journal is.
     expect(runAsHead).toContain('this.getSharedParentStub()');
   });
+});
 
-  test('heads stay bare Agents — no ActorAgent tool surface by inheritance', () => {
-    expect(source).toContain('export class ExplorationAgent extends Agent<Env>');
-    expect(source).not.toContain('class ExplorationAgent extends ActorAgent');
+/**
+ * Head containment, asserted on the REAL class tree rather than on the text of
+ * a class declaration.
+ *
+ * This replaces a pair of substring assertions that pinned the literal strings
+ * 'export class ExplorationAgent extends Agent<Env>' and
+ * NOT 'class ExplorationAgent extends ActorAgent'. Those were satisfied by how
+ * the declaration was spelled, so they were blind to a head acquiring the actor
+ * surface through a renamed base, a re-export, an intermediate class, or a
+ * mixin — and they simultaneously forbade ANY refactor of the declaration,
+ * which is why the base-class work they were guarding never landed.
+ *
+ * What follows is strictly stronger on both counts. `extends` sets the static
+ * prototype chain, so `isPrototypeOf` on the constructors is the actual
+ * inheritance relation and it cannot be spelled around. And rather than naming
+ * a base class to avoid, the second test enumerates the members that CONSTITUTE
+ * the actor surface and asserts a head cannot reach any of them — the invariant
+ * the old assertions were approximating.
+ *
+ * Runnable here because `mockAgentsSdk()` replaces the `agents` module, whose
+ * dist reaches `cloudflare:*` modules that exist only inside workerd. bun keeps
+ * one mock per specifier and the first registration wins, so it runs before the
+ * dynamic imports. The mock never participates in the assertions that matter:
+ * those compare real Proteus classes to each other.
+ */
+describe('head containment is structural', () => {
+  mockAgentsSdk();
+
+  /**
+   * The members that constitute the actor surface. `think`, `team` and `peers`
+   * open unbounded spawn trees; the head controller and inherited-context
+   * readers are the fork machinery itself; the journal RPCs are the root's
+   * control plane. A head must reach none of them.
+   */
+  const ACTOR_ONLY_MEMBERS = [
+    'getAgentsToolDeps',
+    'getRawTools',
+    'getHeadController',
+    'getCFHeadRuntime',
+    'readInheritedContext',
+    'headJournalRecordSplit',
+    'missionGuard',
+    'getModel',
+  ] as const;
+
+  async function classes() {
+    const { ActorAgent } = await import('../src/actor-agent.js');
+    const { ExplorationAgent } = await import('../src/exploration.js');
+    const { SubordinateAgent } = await import('../src/subordinate-agent.js');
+    return { ActorAgent, ExplorationAgent, SubordinateAgent };
+  }
+
+  test('the enumerated members really are the actor surface (control)', async () => {
+    // Without this control a typo in ACTOR_ONLY_MEMBERS makes every negative
+    // assertion below pass vacuously, and an emptied array disarms the gate
+    // silently — so the list must be non-empty AND every entry must resolve.
+    const { ActorAgent } = await classes();
+    expect(ACTOR_ONLY_MEMBERS.length).toBeGreaterThan(0);
+    const actorOwnMembers = Object.getOwnPropertyNames(ActorAgent.prototype);
+    for (const member of ACTOR_ONLY_MEMBERS) {
+      expect(actorOwnMembers).toContain(member);
+    }
+  });
+
+  test('a head cannot reach any actor-surface member', async () => {
+    const { ExplorationAgent } = await classes();
+    for (const member of ACTOR_ONLY_MEMBERS) {
+      // `in` walks the ENTIRE prototype chain, so this rules out reaching the
+      // member through any base, not merely on the class's own prototype.
+      expect(member in ExplorationAgent.prototype).toBe(false);
+    }
+  });
+
+  test('ExplorationAgent does not inherit from ActorAgent; SubordinateAgent does', async () => {
+    const { ActorAgent, ExplorationAgent, SubordinateAgent } = await classes();
+    // THE invariant. A head is not an actor, however the declaration is spelled.
+    expect(ActorAgent.isPrototypeOf(ExplorationAgent)).toBe(false);
+    // The positive half, so the assertion above cannot pass because
+    // isPrototypeOf silently stopped working.
+    expect(ActorAgent.isPrototypeOf(SubordinateAgent)).toBe(true);
+  });
+
+  test('a head descends directly from the bare Agent base', async () => {
+    const { ExplorationAgent } = await classes();
+    expect(Object.getPrototypeOf(ExplorationAgent).name).toBe('Agent');
   });
 });
 
 describe('recursive split budget', () => {
   test('the controller decrements maxDepth for spawned subheads', async () => {
     const { db, sql } = createTestSql();
-    initHeadsTables((ddl) => db.exec(ddl));
+    initHeadsTables((ddl) => db.exec(ddl), sql);
     const spawned: HeadInput[] = [];
     const runtime: HeadRuntime = {
       async spawnHead(input) {

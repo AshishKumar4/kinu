@@ -43,7 +43,7 @@ function nativeTasks(rt: AgentRuntime): Exec {
 
 function setup(): Exec {
   const { rt, testSql } = createTestRuntime();
-  initAllTables(testSql.execRaw);
+  initAllTables(testSql.execRaw, testSql.sql);
   initTaskListTable(testSql.execRaw);
   return nativeTasks(rt);
 }
@@ -193,7 +193,7 @@ describe('tasks tool', () => {
 describe('tasks.* codemode — the SAME dispatcher and store the native tool uses', () => {
   test('tasks.add/update/list share state with the native tool over the same TaskListStore', async () => {
     const { rt, testSql } = createTestRuntime();
-    initAllTables(testSql.execRaw);
+    initAllTables(testSql.execRaw, testSql.sql);
     initTaskListTable(testSql.execRaw);
     const taskList = new TaskListStore(rt.storage.sql);
     const provider = createTasksCodemodeProvider(taskList, createAgentConfigStore(rt.storage.sql));
@@ -218,7 +218,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
 
   test('tasks.list reads the whole list back with subtasks, closed items included', async () => {
     const { rt, testSql } = createTestRuntime();
-    initAllTables(testSql.execRaw);
+    initAllTables(testSql.execRaw, testSql.sql);
     initTaskListTable(testSql.execRaw);
     const taskList = new TaskListStore(rt.storage.sql);
     const provider = createTasksCodemodeProvider(taskList, createAgentConfigStore(rt.storage.sql));
@@ -238,7 +238,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
 describe('tasks action=mode — the agent\'s own working stance', () => {
   function stanceSetup() {
     const { rt, testSql } = createTestRuntime();
-    initAllTables(testSql.execRaw);
+    initAllTables(testSql.execRaw, rt.storage.sql);
     initTaskListTable(testSql.execRaw);
     initAgentConfigTable(testSql.execRaw);
     return { tasks: nativeTasks(rt), rt, config: createAgentConfigStore(rt.storage.sql) };
