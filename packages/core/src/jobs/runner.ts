@@ -30,6 +30,31 @@ import { parseJsonValue, type JsonValue } from '../utils/json.js';
  *  evidence available. */
 export const EVICTION_INTERRUPT_ERROR = 'interrupted by Durable Object eviction before completion';
 
+/**
+ * The identity of ONE job's settle announcement.
+ *
+ * Recovery is at-least-once by construction: `recoverOrphans` sweeps the
+ * registry on every cold activation and `recover` replays every surviving
+ * `bg:*` fiber row, so a job whose outcome was already persisted has its wake
+ * re-delivered each time an activation starts — with no state it could write
+ * back to stop itself, because the only thing left to record is that the agent
+ * was told, and an activation that dies before recording it must still tell.
+ *
+ * So the write is made unable to duplicate instead. This one string names the
+ * announcement on both rails that carry it — the durable retry breadcrumb's
+ * `trigger_id` (whose EventLog dedupe key is derived from it) and the queued
+ * turn's `idempotencyKey` (from which the backend derives the message id) — so
+ * the two identities of one fact cannot drift apart.
+ *
+ * Keyed on the job and nothing else. A job has exactly one terminal status
+ * (every settle path is guarded on `status`), so its announcement is unique
+ * without the status in the key, and leaving it out means a re-delivery that
+ * read the row a moment later still collides with the first.
+ */
+export function backgroundJobWakeTrigger(jobId: string): string {
+  return `background-job-wake:${jobId}`;
+}
+
 /** Thrown by a resumer for a kind it cannot re-drive (e.g. `run`/`execute_tools`,
  *  whose partial side effects make blind re-execution unsafe). The runner treats
  *  it as "not resumable" → the job is failed with the eviction message, exactly
@@ -297,8 +322,13 @@ export class BackgroundJobRunner {
    *  next step if it is working, as its own turn if it is idle. The
    *  `background_job` kind makes a woken turn render as a background-event
    *  card, not a user bubble. An undelivered wake leaves a durable retry
-   *  breadcrumb the standard drain picks up. Runs once per job (no self-wake
-   *  loop). */
+   *  breadcrumb the standard drain picks up.
+   *
+   *  Callable more than once for the same job and deliberately so — recovery
+   *  re-delivers a wake whose fiber died before it landed. What stops that from
+   *  multiplying the conversation is {@link backgroundJobWakeTrigger}: the
+   *  announcement's identity, from which the backend derives the queued turn's
+   *  message id, so every re-delivery lands on the row the first one wrote. */
   async wake(jobId: string): Promise<void> {
     const job = this.deps.store.get(jobId);
     if (!job) return;
@@ -317,6 +347,7 @@ export class BackgroundJobRunner {
     await this.deps.signals.deliver({
       kind: 'background_job',
       text,
+      idempotencyKey: backgroundJobWakeTrigger(jobId),
       metadata: { proteusMode: job.workMode, jobId, kind: job.kind, status: job.status },
       compensate: (reason) => {
         if (reason === 'preempted') {
@@ -334,7 +365,7 @@ export class BackgroundJobRunner {
           ingress: 'timer_alarm',
           variant: 'timer',
           payload: {
-            trigger_id: `background-job-wake:${job.id}`,
+            trigger_id: backgroundJobWakeTrigger(job.id),
             scheduled_fire_at: job.settledAt ?? job.createdAt,
             label: text,
             user_payload: {

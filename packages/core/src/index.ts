@@ -1140,6 +1140,7 @@ export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, withSpawnDetach,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
+  backgroundJobWakeTrigger,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type BackgroundRefusal, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type SessionSurface,
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim,
@@ -1337,7 +1338,9 @@ export { buildPendingActions } from './read-models/pending-actions.js';
 export { getAgentStatus, getChatHistoryPage, getToolList } from './read-models/status.js';
 export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './read-models/page.js';
 export type { Page, PageRequest, SeekCursor } from './read-models/page.js';
-export { mergeTranscript, uiMessageText } from './utils/ui-message.js';
+export {
+  mergeTranscript, uiMessageText, transcriptRole, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+} from './utils/ui-message.js';
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions.js';
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,

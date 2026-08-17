@@ -43,6 +43,22 @@ export interface AgentSignal {
   /** This signal carries a trusted turn mode and must not be spliced into a
    * differently-modeled live turn. Queue it as its own turn instead. */
   readonly requiresOwnTurn?: boolean | undefined;
+  /**
+   * Stable identity for the FACT this signal announces, when the producer has
+   * one. Forwarded to `BackendHost.enqueueTurn` as its `idempotencyKey`, which
+   * gives the queued turn a derived, stable message id — so a producer that is
+   * at-least-once by construction (a start-of-life reconciliation that runs on
+   * every cold activation) announces the same fact once however many times it
+   * re-delivers, without holding a "have I already?" flag that the next
+   * activation cannot see.
+   *
+   * Keyed on the fact, never on the attempt: two deliveries that mean the same
+   * thing must collide. A producer whose transition is already idempotent (it
+   * settles its own rows first and delivers nothing on a second pass) needs
+   * none, and omitting it keeps a genuinely new fact from colliding with an
+   * older one.
+   */
+  readonly idempotencyKey?: string;
   /** Put the work back where a later drain can pick it up — called when the
    *  queued turn was pre-empted or the enqueue threw. Never called for a
    *  signal that reached a step boundary. */

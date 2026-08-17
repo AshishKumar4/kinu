@@ -102,9 +102,16 @@ export class SignalDelivery implements SignalDeliverer {
    * running and the buffer push are synchronous (only the start-a-turn path
    * awaits), so a producer that has just bound durable rows to this signal
    * knows the answer in the same tick it bound them.
+   *
+   * A signal that names its own fact (`idempotencyKey`) gets its card from that
+   * name too. The card is the surface's record of the same announcement the
+   * durable row is, so a re-delivery the backend collapses onto the existing
+   * row must not open a second card beside it — one that would never gain a
+   * message and so would render as pending forever.
    */
   deliver(signal: AgentSignal): Promise<SignalOutcome> {
-    const delivered: DeliveredSignal = { ...signal, cardId: `sig-${nanoid()}` };
+    const cardId = signal.idempotencyKey ? `sig:${signal.idempotencyKey}` : `sig-${nanoid()}`;
+    const delivered: DeliveredSignal = { ...signal, cardId };
     const signalMode = signal.metadata?.proteusMode;
     const modeMismatch = isWorkMode(signalMode)
       && this.activeWorkMode?.() !== signalMode;
@@ -179,15 +186,21 @@ export class SignalDelivery implements SignalDeliverer {
   /** Compensation runs OUTSIDE the enqueue's catch: a producer whose
    *  compensation itself fails (the background-job wake re-publishes a durable
    *  retry event, and says so by throwing) must surface that failure, not be
-   *  re-entered as if the enqueue had thrown. */
+   *  re-entered as if the enqueue had thrown.
+   *
+   *  A producer's `idempotencyKey` rides through to the backend, which derives
+   *  the queued turn's message id from it. That is the whole idempotency
+   *  mechanism: the durable row cannot duplicate because its identity is the
+   *  fact's, so an at-least-once producer needs no flag of its own. */
   private async queue(signal: DeliveredSignal): Promise<SignalOutcome> {
     this.openCard(signal, signal.text);
     let reason: SignalUndeliveredReason;
     try {
-      const result = await this.host.enqueueTurn({
-        text: signal.text,
-        metadata: { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: signal.cardId },
-      });
+      const metadata = { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: signal.cardId };
+      const { idempotencyKey, text } = signal;
+      const result = await this.host.enqueueTurn(
+        idempotencyKey === undefined ? { text, metadata } : { text, metadata, idempotencyKey },
+      );
       if (result.status === 'queued') return 'queued';
       reason = 'preempted';
       console.warn(`[proteus] signal "${signal.kind}" pre-empted; compensating`);

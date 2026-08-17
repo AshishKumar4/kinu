@@ -16,7 +16,7 @@ import type { CraftStore } from '../types/agent-runtime.js';
 import type { VFS, SqlExecutor } from '../types/primitives.js';
 import type { CraftedTool } from '../types/craft.js';
 import type { ReasoningEffort } from '../strategy/effort.js';
-import { uiMessageText } from '../utils/ui-message.js';
+import { transcriptRole, uiMessageText } from '../utils/ui-message.js';
 import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from './page.js';
 
 /** Widest transcript page a surface may ask for. */
@@ -124,6 +124,10 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
  * writes); `messages` is the plain mirror every backend writes. Reading the
  * rich table first and falling back keeps one shape for both.
  *
+ * A row the harness enqueued is reported as `system`, not as the operator's
+ * words — see {@link transcriptRole}. Both branches apply it, because the
+ * provenance is the row id and both tables carry the same one.
+ *
  * ── Why the cursor is rowid and not created_at ───────────────────────────────
  * `assistant_messages.created_at` is `DATETIME DEFAULT CURRENT_TIMESTAMP` —
  * whole seconds — and a turn emits several messages inside one second. That is
@@ -212,7 +216,13 @@ function chronological(
   return mapPage(page, (rows) => rows.flatMap((row) => {
     const role = normalizeUiRole(row.role);
     if (!role) return [];
-    return [{ id: row.id, role, content: text(row.content), createdAt: row.created_at }];
+    // A row the harness enqueued reports as `system`, never as the operator's
+    // words. One place, because both the transcript and the mirror branch land
+    // here — the provenance is the row id, which both tables carry.
+    return [{
+      id: row.id, role: transcriptRole(row.id, role),
+      content: text(row.content), createdAt: row.created_at,
+    }];
   }).reverse());
 }
 

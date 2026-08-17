@@ -1,5 +1,6 @@
 /**
- * The plain text of a stored UIMessage.
+ * A stored conversation row, as the transcript read models see it: its plain
+ * text, and whether the harness wrote it rather than the operator.
  *
  * `assistant_messages.content` holds a serialized UI message, not text, and two
  * places need the flattened form: the transcript read model, and the fork write
@@ -8,6 +9,22 @@
  * either of them because `read-models/status.ts` already imports
  * `identity/fork.ts`, so the projection cannot be owned by either without a
  * cycle.
+ *
+ * Authorship lives here for the same reason. A turn the backend enqueues on the
+ * agent's behalf — a settled background job, the reactor draining hub events —
+ * is stored `role: 'user'` because that is what the model must read it as, and
+ * the row is the turn's input. Nothing about that makes the operator its
+ * author, and every consumer that asks "what did the owner say" was answering
+ * with these: the transcript read model rendered them as the owner's words, and
+ * the walk-back fork (`findForkPivot`, which pivots on user rows) offered them
+ * as fork points, so a workspace whose recovery re-announced one job filled its
+ * whole walk-back list with the same machine notice.
+ *
+ * The provenance is the row's ID, not a column and not a second copy of the
+ * metadata: `BackendHost.enqueueTurn` has always derived a programmatic turn's
+ * message id from {@link programmaticMessageId}, so the fact is already durable
+ * on both backends, survives the fork copy (which preserves primary keys), and
+ * needs no schema change to read.
  */
 
 import type { UIMessage } from 'ai';
@@ -22,6 +39,36 @@ const UiMessageSchema = v.object({
     text: v.optional(v.string()),
   }))),
 });
+
+/**
+ * The id prefix a programmatic turn's durable message carries, and the whole
+ * provenance record.
+ *
+ * Both backends derive the row id as this prefix plus the identity the producer
+ * gave the turn, so a producer with a stable `idempotencyKey` gets a stable row
+ * id — which is the idempotency mechanism itself: the message store's primary
+ * key refuses the second write, rather than a flag somewhere remembering that
+ * the first happened.
+ */
+export const PROGRAMMATIC_MESSAGE_ID_PREFIX = 'programmatic:';
+
+/**
+ * The role a stored row takes in the TRANSCRIPT — what a surface renders, what
+ * an operator reads back, and what the walk-back fork pivots on.
+ *
+ * A programmatic turn is reported `system`: the harness speaking in the
+ * conversation, which is exactly what `identity/fork.ts` already writes its own
+ * synthetic marker row as, and what `findForkPivot` already declines to pivot
+ * on. The STORED role is untouched — the model's history still reads it as the
+ * user turn it has to be — so this changes what we claim about a row, never
+ * what the model is sent.
+ */
+export function transcriptRole(
+  id: string,
+  role: 'user' | 'assistant' | 'system',
+): 'user' | 'assistant' | 'system' {
+  return role === 'user' && id.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX) ? 'system' : role;
+}
 
 /** Flatten a stored UIMessage-JSON content string to plain text.
  *  `assistant_messages` rows hold the serialized UI message and `messages` rows
