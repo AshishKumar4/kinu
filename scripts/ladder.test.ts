@@ -24,7 +24,7 @@ import { git } from '@proteus/test-utils';
 import * as v from 'valibot';
 import {
   CI_EXEMPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims, deployGates,
-  gatesFor, packageScripts, trackedTestFiles,
+  gatesFor, packageScripts, runnableArgv, trackedTestFiles,
 } from './ladder.ts';
 
 const root = resolve(import.meta.dir, '..');
@@ -410,5 +410,50 @@ describe('the hooks run the tiers they claim to', () => {
       const direct = body.filter((line) => /\b(bun (test|run)|tsc|oxlint)\b/.test(line));
       expect(direct).toEqual([]);
     }
+  });
+});
+
+describe('a gate the runner cannot spawn is a gate that does not exist', () => {
+  // `Bun.spawnSync(gate.run.split(' '))` runs NO shell, so `bun test
+  // scripts/bench*.test.ts` reached bun as a literal filter, matched nothing and
+  // failed — while `claims()` credited that gate with three files and the
+  // assertion above pinning the count at 3 was green throughout. deploy.sh puts
+  // the identical string through bash, which expands it, so one declaration had
+  // two semantics and the ci tier could never have passed while the deploy tier
+  // always did. The previous checks here only bounded what `claims()`
+  // OVER-claims (bunfig-excluded paths); this bounds the inverse.
+  test('every gate resolves to an argv the runner can spawn', () => {
+    const globbed = LADDER.filter((gate) => gate.run.includes('*'));
+    expect(globbed.length).toBeGreaterThan(0);
+    const unspawnable = gatesFor('deploy', deploy)
+      .filter((gate) => runnableArgv(gate.run, tracked).some((word) => word.includes('*')))
+      .map((gate) => gate.run);
+    expect(unspawnable).toEqual([]);
+  });
+
+  test('a glob gate spawns exactly the files it is credited with', () => {
+    for (const gate of LADDER.filter((entry) => entry.run.includes('*'))) {
+      const spawned = runnableArgv(gate.run, tracked).filter((word) => word.includes('/'));
+      expect(spawned).toEqual(claims(gate.run, tracked));
+      expect(spawned.length).toBeGreaterThan(0);
+    }
+  });
+
+  test('a glob that matches no tracked test file fails loudly', () => {
+    // The empty-corpus pass. A filter matching nothing was previously
+    // indistinguishable from a clean run, which is how this defect survived.
+    expect(() => runnableArgv('bun test scripts/no-such-suite*.test.ts', tracked))
+      .toThrow('glob matched no tracked test file');
+  });
+
+  test('no gate is spelled with shell syntax the runner does not implement', () => {
+    // Declaration-time, so the next gate cannot arrive in the quiet mode of the
+    // same defect: `bun test --grep 'foo bar'` splits into a silently wrong
+    // argv, runs, and reports green over the wrong set. `*` is the one
+    // metacharacter the runner resolves, from claims().
+    const shellSyntax = gatesFor('deploy', deploy)
+      .filter((gate) => /['"?$&|<>~`(){}[\]]/.test(gate.run))
+      .map((gate) => gate.run);
+    expect(shellSyntax).toEqual([]);
   });
 });

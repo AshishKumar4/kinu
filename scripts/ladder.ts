@@ -601,6 +601,27 @@ export function claims(command: string, tracked: readonly string[]): string[] {
   return [...new Set(claimed)].filter((path) => !bunWouldSkip(path));
 }
 
+/**
+ * The argv to spawn for a gate. `Bun.spawnSync` runs no shell, so a
+ * glob-spelled gate reaches `bun test` as a literal FILTER and matches nothing
+ * — deploy.sh's globs are expanded by bash and this runner's never were, so
+ * `bun test scripts/bench*.test.ts` at the ci tier could not run at all while
+ * `claims()` credited it with three files. A gate that cannot run is worse than
+ * a gate that cannot fail, because the second at least reports something.
+ *
+ * Expanded from the same `claims()` resolution the tier is MEASURED with, so
+ * the set a gate runs and the set it is credited with are one set by
+ * construction rather than two spellings that happen to agree. A glob matching
+ * no tracked test file is a fault and says so, never an empty pass.
+ */
+export function runnableArgv(run: string, tracked: readonly string[]): string[] {
+  const words = run.split(' ');
+  if (!words.some((word) => word.includes('*'))) return words;
+  const files = claims(run, tracked);
+  if (files.length === 0) throw new Error(`${run} — glob matched no tracked test file`);
+  return [...words.filter((word) => !word.includes('*')), ...files];
+}
+
 function printMatrix(deploy: readonly string[]): void {
   const all = gatesFor('deploy', deploy);
   const tracked = trackedTestFiles();
@@ -695,10 +716,11 @@ if (import.meta.main) {
   );
 
   const started = performance.now();
+  const tracked = trackedTestFiles();
   for (const [index, gate] of gates.entries()) {
     console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
     const at = performance.now();
-    const proc = Bun.spawnSync(gate.run.split(' '), { cwd: root, stdout: 'inherit', stderr: 'inherit' });
+    const proc = Bun.spawnSync(runnableArgv(gate.run, tracked), { cwd: root, stdout: 'inherit', stderr: 'inherit' });
     const seconds = (performance.now() - at) / 1000;
     if (proc.exitCode === 0) {
       console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s)`);
