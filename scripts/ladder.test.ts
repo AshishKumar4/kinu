@@ -106,7 +106,9 @@ describe('the ladder measures something', () => {
     // nothing would make both of them pass over an empty set.
     expect(claims('bun test packages/core/', tracked).length).toBeGreaterThan(100);
     expect(claims('bun test scripts/deploy.test.ts', tracked)).toEqual(['scripts/deploy.test.ts']);
-    expect(claims('bun test ./tests/', tracked).length).toBe(4);
+    // Four e2e lifecycle suites plus the two behavioural eval suites under
+    // tests/evals/ — `./tests/` recurses, which is why `test:eval` names only it.
+    expect(claims('bun test ./tests/', tracked).length).toBe(6);
     expect(claims('bun test scripts/bench*.test.ts', tracked).length).toBe(3);
     // `bun run test` fans out through package.json into three package suites.
     expect(claims('bun run test', tracked).length).toBeGreaterThan(200);

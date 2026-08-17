@@ -15,8 +15,7 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateText, stepCountIs, type ToolSet, type StepResult } from 'ai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 import * as v from 'valibot';
 
 import {
@@ -35,30 +34,20 @@ import {
   type ToolCallRecord,
 } from '../packages/core/src/index.js';
 import { createWorkspace } from '../packages/core/src/identity/index.js';
-import { liveModelAuth, announceLiveModelSkip } from '@proteus/test-utils';
+import {
+  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
+} from '@proteus/test-utils';
 
-// These suites prove behaviour against a real model. Without a token they
-// cannot run, so they skip loudly instead of failing — see liveModelAuth.
-const LIVE_MODEL = liveModelAuth();
-if (!LIVE_MODEL) announceLiveModelSkip('Evolution Proof');
-const liveTest = test.skipIf(!LIVE_MODEL);
+// Proof against a real model, so a target is required. `liveModelTarget` states
+// which target and cost basis this run used, or why it is skipping — and throws
+// on a half-configured environment rather than skipping green.
+const TARGET = liveModelTarget('Evolution Proof');
+const liveTest = test.skipIf(!TARGET);
 
-const LLM_CONFIG: LLMProviderConfig = {
-  name: 'workers-ai',
-  baseURL: process.env.PROTEUS_BASE_URL || process.env.AI_GATEWAY_URL || 'https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1',
-  headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || '' },
-  model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
-};
+const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'proteus-evolution-proof-' + Date.now());
 const DB_PATH = join(TEST_DIR, 'agent.db');
-
-function createModel() {
-  const provider = createOpenAICompatible({
-    name: LLM_CONFIG.name, baseURL: LLM_CONFIG.baseURL, headers: LLM_CONFIG.headers,
-  });
-  return provider.chatModel(LLM_CONFIG.model);
-}
 
 interface TurnResult {
   text: string;
@@ -68,7 +57,7 @@ interface TurnResult {
 }
 
 async function chatTurn(
-  model: ReturnType<typeof createModel>,
+  model: LanguageModel,
   rt: AgentRuntime,
   tools: ToolSet,
   userMessage: string,
@@ -112,6 +101,8 @@ async function chatTurn(
       }
     },
   });
+
+  recordLiveModelSpend(result.usage);
 
   const responseText = collectStepText(result);
 
@@ -194,7 +185,7 @@ describe('Evolution Proof', () => {
   let db: InstanceType<typeof Database>;
   let rt: AgentRuntime;
   let engine: EvolutionEngine;
-  let model: ReturnType<typeof createModel>;
+  let model: LanguageModel;
 
   beforeAll(async () => {
     mkdirSync(TEST_DIR, { recursive: true });
@@ -208,16 +199,13 @@ describe('Evolution Proof', () => {
     initSearchTables(rt.storage.execRaw, rt.storage.sql);
     initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initCraftScoreTables(rt.storage.execRaw);
-    model = createModel();
-    engine = new EvolutionEngine(rt, {
-      enabled: true,
-      turnCraftThreshold: 0.6,
-      sessionReflectionInterval: 3,
-    });
+    model = liveChatModel(LLM_CONFIG);
+    engine = new EvolutionEngine(rt, { enabled: true });
     engine.onEvent(e => console.log(`    [evolution] ${e.type}: ${e.message.slice(0, 80)}`));
   });
 
   afterAll(() => {
+    reportLiveModelSpend('Evolution Proof');
     db.close();
     rmSync(TEST_DIR, { recursive: true, force: true });
   });
@@ -227,7 +215,7 @@ describe('Evolution Proof', () => {
   let session1Results: TurnResult[] = [];
 
   liveTest('session 1, turn 1: RSA challenge (learn the pattern)', async () => {
-    const tools = buildBuiltinTools({ rt, engine: new EvolutionEngine(rt, { enabled: false }) });
+    const tools = buildBuiltinTools({ rt });
     const toolNames = Object.keys(tools);
     console.log(`    Tools available: ${toolNames.join(', ')}`);
     expect(toolNames).toContain('execute_tools');
@@ -243,7 +231,7 @@ describe('Evolution Proof', () => {
     expect(result.toolCalls.some(tc => tc.name === 'execute_tools')).toBe(true);
 
     // Fire evolution — should extract pattern from successful tool usage
-    await engine.onTurnComplete({
+    await engine.reviewTurn({
       userMessage: RSA_CHALLENGE_1,
       assistantResponse: result.text,
       toolCalls: result.toolCalls,
@@ -251,11 +239,11 @@ describe('Evolution Proof', () => {
       durationMs: result.durationMs,
       feedback: 'positive',
       hadError: false,
-    });
+    }, null);
   }, 600_000);
 
   liveTest('session 1, turn 2: Dijkstra challenge (learn algorithm pattern)', async () => {
-    const tools = buildBuiltinTools({ rt, engine: new EvolutionEngine(rt, { enabled: false }) });
+    const tools = buildBuiltinTools({ rt });
     const result = await chatTurn(model, rt, tools, DIJKSTRA_CHALLENGE_1, 'session-1');
     session1Results.push(result);
 
@@ -265,7 +253,7 @@ describe('Evolution Proof', () => {
 
     expect(result.text.length).toBeGreaterThan(0);
 
-    await engine.onTurnComplete({
+    await engine.reviewTurn({
       userMessage: DIJKSTRA_CHALLENGE_1,
       assistantResponse: result.text,
       toolCalls: result.toolCalls,
@@ -273,11 +261,11 @@ describe('Evolution Proof', () => {
       durationMs: result.durationMs,
       feedback: 'positive',
       hadError: false,
-    });
+    }, null);
   }, 600_000);
 
   liveTest('session 1, turn 3: cipher challenge + session reflection', async () => {
-    const tools = buildBuiltinTools({ rt, engine: new EvolutionEngine(rt, { enabled: false }) });
+    const tools = buildBuiltinTools({ rt });
     const result = await chatTurn(model, rt, tools, CIPHER_CHALLENGE, 'session-1');
     session1Results.push(result);
 
@@ -286,7 +274,7 @@ describe('Evolution Proof', () => {
 
     expect(result.text.length).toBeGreaterThan(0);
 
-    await engine.onTurnComplete({
+    await engine.reviewTurn({
       userMessage: CIPHER_CHALLENGE,
       assistantResponse: result.text,
       toolCalls: result.toolCalls,
@@ -294,7 +282,7 @@ describe('Evolution Proof', () => {
       durationMs: result.durationMs,
       feedback: 'positive',
       hadError: false,
-    });
+    }, null);
 
     // End session 1 — triggers session reflection
     const challenges = [RSA_CHALLENGE_1, DIJKSTRA_CHALLENGE_1, CIPHER_CHALLENGE];
@@ -353,7 +341,7 @@ describe('Evolution Proof', () => {
 
   liveTest('session 2, turn 1: similar RSA challenge (should benefit from pattern)', async () => {
     // Rebuild tools — should now include crafted tools from session 1
-    const tools = buildBuiltinTools({ rt, engine: new EvolutionEngine(rt, { enabled: false }) });
+    const tools = buildBuiltinTools({ rt });
     const toolNames = Object.keys(tools);
     console.log(`    Tools available: ${toolNames.join(', ')}`);
 
@@ -372,7 +360,7 @@ describe('Evolution Proof', () => {
   }, 600_000);
 
   liveTest('session 2, turn 2: similar graph challenge (should benefit from pattern)', async () => {
-    const tools = buildBuiltinTools({ rt, engine: new EvolutionEngine(rt, { enabled: false }) });
+    const tools = buildBuiltinTools({ rt });
     const result = await chatTurn(model, rt, tools, DIJKSTRA_CHALLENGE_2, 'session-2');
     session2Results.push(result);
 

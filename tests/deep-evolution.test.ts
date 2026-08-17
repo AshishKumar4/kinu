@@ -1,7 +1,7 @@
 /**
  * Deep Evolution Test — 8 algorithmic challenges with verifiable answers.
  *
- * Uses native AI SDK generateText({ tools, maxSteps }) — no hand-rolled parsing.
+ * Uses native AI SDK generateText({ tools, stopWhen }) — no hand-rolled parsing.
  * The agent must write and execute code to solve each problem.
  */
 
@@ -10,8 +10,7 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateText, type ToolSet, type StepResult } from 'ai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 import * as v from 'valibot';
 
 import {
@@ -30,20 +29,17 @@ import {
   type ToolCallRecord,
 } from '../packages/core/src/index.js';
 import { createWorkspace } from '../packages/core/src/identity/index.js';
-import { liveModelAuth, announceLiveModelSkip } from '@proteus/test-utils';
+import {
+  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
+} from '@proteus/test-utils';
 
-// These suites prove behaviour against a real model. Without a token they
-// cannot run, so they skip loudly instead of failing — see liveModelAuth.
-const LIVE_MODEL = liveModelAuth();
-if (!LIVE_MODEL) announceLiveModelSkip('Deep Evolution');
-const liveTest = test.skipIf(!LIVE_MODEL);
+// Proof against a real model, so a target is required. `liveModelTarget` states
+// which target and cost basis this run used, or why it is skipping — and throws
+// on a half-configured environment rather than skipping green.
+const TARGET = liveModelTarget('Deep Evolution');
+const liveTest = test.skipIf(!TARGET);
 
-const LLM_CONFIG: LLMProviderConfig = {
-  name: 'workers-ai',
-  baseURL: process.env.PROTEUS_BASE_URL || process.env.AI_GATEWAY_URL || 'https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1',
-  headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || '' },
-  model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
-};
+const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'proteus-deep-' + Date.now());
 const DB_PATH = join(TEST_DIR, 'agent.db');
@@ -68,7 +64,7 @@ const PROBLEMS: Problem[] = [
 
 /** Run one problem using native AI SDK tool calling */
 async function solveProblem(
-  model: ReturnType<ReturnType<typeof createOpenAICompatible>['chatModel']>,
+  model: LanguageModel,
   rt: AgentRuntime,
   tools: ToolSet,
   problem: Problem,
@@ -86,7 +82,7 @@ async function solveProblem(
     system: `${soul}\n\nKnowledge:\n${knowledge}\n\nAlways use execute_tools to compute and verify answers. Never guess.`,
     messages: [{ role: 'user' as const, content: problem.question }],
     tools,
-    maxSteps: 500,
+    stopWhen: stepCountIs(500),
     onStepFinish: (step: StepResult<ToolSet>) => {
       stepCount++;
       if (step.toolCalls) {
@@ -109,6 +105,8 @@ async function solveProblem(
       }
     },
   });
+
+  recordLiveModelSpend(result.usage);
 
   const response = result.text.trim();
 
@@ -136,7 +134,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
   let tools: ToolSet;
   let engine: EvolutionEngine;
   let events: EvolutionEvent[];
-  let model: ReturnType<ReturnType<typeof createOpenAICompatible>['chatModel']>;
+  let model: LanguageModel;
 
   const scorecard: Array<{
     id: number; difficulty: string; correct: boolean;
@@ -158,15 +156,15 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     initCraftScoreTables(rt.storage.execRaw);
 
     events = [];
-    engine = new EvolutionEngine(rt, { enabled: true, sessionReflectionInterval: 4, turnCraftThreshold: 0.7 });
-    tools = buildBuiltinTools({ rt, engine });
+    engine = new EvolutionEngine(rt, { enabled: true });
+    tools = buildBuiltinTools({ rt });
     engine.onEvent(e => events.push(e));
 
-    const provider = createOpenAICompatible({ name: LLM_CONFIG.name, baseURL: LLM_CONFIG.baseURL, headers: LLM_CONFIG.headers });
-    model = provider.chatModel(LLM_CONFIG.model);
+    model = liveChatModel(LLM_CONFIG);
   });
 
   afterAll(() => {
+    reportLiveModelSpend('Deep Evolution');
     db.close();
     rmSync(TEST_DIR, { recursive: true, force: true });
   });
@@ -177,7 +175,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
       console.log(`  Q: ${problem.question.slice(0, 80)}...`);
 
       const { response, turn, toolNames } = await solveProblem(model, rt, tools, problem);
-      await engine.onTurnComplete(turn);
+      await engine.reviewTurn(turn, null);
 
       const correct = response.includes(String(problem.answer));
       const usedExecuteCode = toolNames.includes('execute_tools');

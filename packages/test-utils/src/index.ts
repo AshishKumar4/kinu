@@ -7,6 +7,8 @@ export * from './network.js';
 export * from './runtime.js';
 export * from './provider.js';
 export * from './credentials.js';
+export * from './live-model.js';
+export * from './agent-evals.js';
 export * from './facts.js';
 export * from './source.js';
 export * from './git.js';

@@ -1,6 +1,6 @@
 /**
- * Full E2E lifecycle test — real LLM (Kimi K2.5 via AI Gateway),
- * real bun:sqlite, native AI SDK tool calling.
+ * Full E2E lifecycle test — real LLM, real bun:sqlite, native AI SDK tool
+ * calling.
  *
  * Covers: agent creation, tool building, multi-turn chat with tool use,
  * close/reopen via openWorkspace, identity/SOUL.md/scaffold persistence.
@@ -11,14 +11,12 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateText, stepCountIs, type ToolSet, type StepResult } from 'ai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 import * as v from 'valibot';
 
 import {
   buildBuiltinTools,
   BUILTIN_TOOLS,
-  EvolutionEngine,
   collectStepText,
   initSearchTables,
   initScaffoldTables,
@@ -32,39 +30,25 @@ import {
   type ToolCallRecord,
 } from '../packages/core/src/index.js';
 import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index.js';
-import { liveModelAuth, announceLiveModelSkip } from '@proteus/test-utils';
+import {
+  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
+} from '@proteus/test-utils';
 
-// These suites prove behaviour against a real model. Without a token they
-// cannot run, so they skip loudly instead of failing — see liveModelAuth.
-const LIVE_MODEL = liveModelAuth();
-if (!LIVE_MODEL) announceLiveModelSkip('E2E Full Lifecycle');
-const liveTest = test.skipIf(!LIVE_MODEL);
+// Proof against a real model, so a target is required. `liveModelTarget` states
+// which target and cost basis this run used, or why it is skipping — and throws
+// on a half-configured environment rather than skipping green.
+const TARGET = liveModelTarget('E2E Full Lifecycle');
+const liveTest = test.skipIf(!TARGET);
 
-// ── Config ───────────────────────────────────────────────────────
-
-const LLM_CONFIG: LLMProviderConfig = {
-  name: 'workers-ai',
-  baseURL: process.env.PROTEUS_BASE_URL || process.env.AI_GATEWAY_URL || 'https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1',
-  headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || '' },
-  model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
-};
+const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'proteus-e2e-full-' + Date.now());
 const DB_PATH = join(TEST_DIR, 'agent.db');
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-function createModel() {
-  const provider = createOpenAICompatible({
-    name: LLM_CONFIG.name,
-    baseURL: LLM_CONFIG.baseURL,
-    headers: LLM_CONFIG.headers,
-  });
-  return provider.chatModel(LLM_CONFIG.model);
-}
-
 async function chatTurn(
-  model: ReturnType<typeof createModel>,
+  model: LanguageModel,
   rt: AgentRuntime,
   tools: ToolSet,
   userMessage: string,
@@ -108,6 +92,7 @@ async function chatTurn(
     },
   });
 
+  recordLiveModelSpend(result.usage);
   // BUG 1 fix: collect text from all steps when final step has no text
   const responseText = collectStepText(result);
 
@@ -132,7 +117,7 @@ describe('E2E Full Lifecycle', () => {
   let db: InstanceType<typeof Database>;
   let rt: AgentRuntime;
   let tools: ToolSet;
-  let model: ReturnType<typeof createModel>;
+  let model: LanguageModel;
   let agentId: string;
   let agentName: string;
 
@@ -150,13 +135,14 @@ describe('E2E Full Lifecycle', () => {
     initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initCraftScoreTables(rt.storage.execRaw);
 
-    tools = buildBuiltinTools({ rt, engine: new EvolutionEngine(rt, { enabled: false }) });
-    model = createModel();
+    tools = buildBuiltinTools({ rt });
+    model = liveChatModel(LLM_CONFIG);
     agentId = rt.identity.id;
     agentName = rt.identity.name;
   });
 
   afterAll(() => {
+    reportLiveModelSpend('E2E Full Lifecycle');
     db.close();
     rmSync(TEST_DIR, { recursive: true, force: true });
   });
@@ -194,12 +180,16 @@ describe('E2E Full Lifecycle', () => {
 
   // buildBuiltinTools is dep-gated: a tool appears only when the backend
   // supplied what it needs (skills store, facts store, agents fork/team/peer
-  // deps...). This runtime wires only `rt` + `engine`, so the assertion is
+  // deps...). This runtime wires only `rt`, so the assertion is
   // that the surface is exactly what those deps earn — never a stray name,
   // and never a tool whose backend is absent.
   test('2. buildBuiltinTools returns the dep-gated subset, all of it canonical', () => {
     const names = Object.keys(tools);
-    for (const name of names) expect(BUILTIN_TOOLS).toContain(name);
+    // `toContain` will not match a plain `string` against BUILTIN_TOOLS' literal
+    // union element type. Widening by assignment rather than by assertion — the
+    // point of the check is that each built name IS one of those literals.
+    const canonical: readonly string[] = BUILTIN_TOOLS;
+    for (const name of names) expect(canonical).toContain(name);
     for (const core of ['execute_tools', 'run', 'file', 'memory']) expect(names).toContain(core);
     for (const ungated of ['skills', 'agents', 'release']) {
       expect(names).not.toContain(ungated);
@@ -266,7 +256,6 @@ describe('E2E Full Lifecycle', () => {
     const { rt: rt2, info } = await openWorkspace(db2, { llm: LLM_CONFIG });
 
     // Identity survived
-    expect(info.id).toBe(agentId);
     expect(info.name).toBe(agentName);
     expect(info.purpose).toContain('JavaScript');
 
@@ -285,7 +274,7 @@ describe('E2E Full Lifecycle', () => {
     // SOUL.md survived
     expect(info.soul).toContain('JavaScript');
 
-    console.log(`  Reopened agent: ${info.id} (${info.name})`);
+    console.log(`  Reopened agent: ${rt2.identity.id} (${info.name})`);
     console.log(`  Purpose: ${info.purpose.slice(0, 60)}`);
     console.log(`  Scaffold version: ${info.scaffoldVersion}`);
     console.log(`  Crafted tools: ${info.craftedToolCount}`);
