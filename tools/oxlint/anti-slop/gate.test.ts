@@ -8,6 +8,7 @@ const expectedRules = [
   "anti-slop/no-ambient-git-in-tests",
   "anti-slop/no-chained-type-assertions",
   "anti-slop/no-conditional-empty-object-spread",
+  "anti-slop/no-copy-rpc-stub",
   "anti-slop/no-ddl-in-catch",
   "anti-slop/no-empty-catch",
   "anti-slop/no-known-value-widening",

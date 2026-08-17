@@ -9,6 +9,7 @@
   "$proteusComment": "Rules authored here, not vendored: they encode Proteus policy and have no upstream counterpart. Named explicitly rather than inferred from `proteusOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list. `proteusRuleGates` partitions them across the *.gate.test.ts files that prove each one red->green through the real oxlint binary; drift.test.ts asserts the partition is exact, so adding a rule without a gate fails.",
   "proteusRules": [
     "no-ambient-git-in-tests",
+    "no-copy-rpc-stub",
     "no-ddl-in-catch",
     "no-empty-catch",
     "no-sentinel-catch",
@@ -18,6 +19,9 @@
   "proteusRuleGates": {
     "no-ambient-git.gate.test.ts": [
       "no-ambient-git-in-tests"
+    ],
+    "no-copy-rpc-stub.gate.test.ts": [
+      "no-copy-rpc-stub"
     ],
     "no-swallow.gate.test.ts": [
       "no-ddl-in-catch",
@@ -38,10 +42,13 @@
     },
     "index.ts": {
       "upstream": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f",
-      "local": "3774b777c89a46cb26b60f4dc104dc9ec3433382dc3adcd71369429c787908b5",
-      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the four no-swallow rules, no-wait-until-in-durable-object, and no-ambient-git-in-tests. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
+      "local": "8b649d5d24892dceb32017530b46d0ea0d8fa959b2924a2949a666a07a57bda3",
+      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the four no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, and no-copy-rpc-stub. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
     },
     "no-ambient-git.gate.test.ts": {
+      "proteusOnly": true
+    },
+    "no-copy-rpc-stub.gate.test.ts": {
       "proteusOnly": true
     },
     "no-swallow.gate.test.ts": {
@@ -73,6 +80,12 @@
     },
     "rules/no-conditional-empty-object-spread.ts": {
       "upstream": "33f044030d208fcc10be73bb19c8172c275c5229df4b0ca8ec10f069bbe60062"
+    },
+    "rules/no-copy-rpc-stub.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-copy-rpc-stub.ts": {
+      "proteusOnly": true
     },
     "rules/no-ddl-in-catch.test.ts": {
       "proteusOnly": true

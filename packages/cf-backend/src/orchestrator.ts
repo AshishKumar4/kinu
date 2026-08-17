@@ -2541,9 +2541,11 @@ export class OrchestratorAgent extends ActorAgent {
     if (ownerUserId !== expectedOwnerUserId) throw new Error('Agent owner mismatch; refusing to destroy.');
     if (this.env.Sandbox) {
       // Same `transport` as every other getSandbox for this id — the SDK drops
-      // in-flight requests if it changes between calls on one sandbox.
+      // in-flight requests if it changes between calls on one sandbox. The
+      // reasoning for `rpc` lives at the other call site (runtime.ts); this one
+      // exists to match it, and the pair must move together.
       const sb = getSandbox(this.env.Sandbox, `proteus-${this.name}`, {
-        normalizeId: true, transport: "websocket",
+        normalizeId: true, transport: "rpc",
       });
       // Before destroy(): the container object owns its /workspace snapshot, and
       // once its storage is gone nothing knows which R2 objects were its.

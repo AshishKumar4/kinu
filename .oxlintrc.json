@@ -10,6 +10,7 @@
   "rules": {
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
+    "anti-slop/no-copy-rpc-stub": "error",
     "anti-slop/no-ddl-in-catch": "error",
     "anti-slop/no-empty-catch": "error",
     "anti-slop/no-known-value-widening": "error",

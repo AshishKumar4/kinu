@@ -3,6 +3,7 @@ import { eslintCompatPlugin } from "@oxlint/plugins";
 import { noAmbientGitInTestsRule } from "./rules/no-ambient-git-in-tests.ts";
 import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions.ts";
 import { noConditionalEmptyObjectSpreadRule } from "./rules/no-conditional-empty-object-spread.ts";
+import { noCopyRpcStubRule } from "./rules/no-copy-rpc-stub.ts";
 import { noDdlInCatchRule } from "./rules/no-ddl-in-catch.ts";
 import { noEmptyCatchRule } from "./rules/no-empty-catch.ts";
 import { noKnownValueWideningRule } from "./rules/no-known-value-widening.ts";
@@ -24,8 +25,8 @@ import { requireSafetyCommentForTypeAssertionRule } from "./rules/require-safety
 
 /**
  * Generic Oxlint rules that reject low-evidence and low-signal implementation patterns, plus the
- * Proteus-local rules (see upstream.json's `proteusRules`): the no-swallow family, and
- * no-wait-until-in-durable-object.
+ * Proteus-local rules (see upstream.json's `proteusRules`): the no-swallow family,
+ * no-wait-until-in-durable-object, and no-copy-rpc-stub.
  */
 const antiSlopPlugin = eslintCompatPlugin({
 	meta: { name: "anti-slop" },
@@ -33,6 +34,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-ambient-git-in-tests": noAmbientGitInTestsRule,
 		"no-chained-type-assertions": noChainedTypeAssertionsRule,
 		"no-conditional-empty-object-spread": noConditionalEmptyObjectSpreadRule,
+		"no-copy-rpc-stub": noCopyRpcStubRule,
 		"no-ddl-in-catch": noDdlInCatchRule,
 		"no-empty-catch": noEmptyCatchRule,
 		"no-known-value-widening": noKnownValueWideningRule,
