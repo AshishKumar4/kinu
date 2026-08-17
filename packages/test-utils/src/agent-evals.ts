@@ -76,7 +76,7 @@ export interface ExplorationScore {
  * search read as absent.
  */
 export function scoreExploration(sql: SqlExecutor, limit = 1000): ExplorationScore {
-  const competed = listForkRuns(sql, limit).filter((run) => run.settle === 'competed');
+  const competed = listForkRuns(sql, null, limit).items.filter((run) => run.settle === 'competed');
   const runs = competed.map<CompetedRunScore>((run) => {
     const terminal = sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM search_nodes
@@ -162,7 +162,8 @@ export interface SettleVisibilityScore {
  */
 export function scoreSettleVisibility(
   sql: SqlExecutor,
-  read: (sql: SqlExecutor, limit: number) => readonly ForkRunSummary[] = listForkRuns,
+  read: (sql: SqlExecutor, limit: number) => readonly ForkRunSummary[] =
+    (readSql, limit) => listForkRuns(readSql, null, limit).items,
 ): SettleVisibilityScore {
   const notSteerBranch = `${STEER_BRANCH_RUN_ID_PREFIX}%`;
   const mergedPresent = tableExists(sql, 'head_journal');
@@ -188,7 +189,9 @@ export function scoreSettleVisibility(
 
   const rootsWritten = written.reduce((total, half) => total + half.roots.length, 0);
   // Ask for more than was written: `listForkRuns` slices AFTER merging its two
-  // halves, so the reader's own window must not be mistaken for a missing row.
+  // halves, so the reader's own page must not be mistaken for a missing row. One
+  // page rather than a walk, deliberately — this scores whether both stores are
+  // READ AT ALL, and a walk would hide a half-blind reader behind enough pages.
   // The reader queries BOTH stores, so it only runs when both exist.
   const visible = new Set(
     mergedPresent && competedPresent ? read(sql, rootsWritten + 1).map((run) => run.id) : [],

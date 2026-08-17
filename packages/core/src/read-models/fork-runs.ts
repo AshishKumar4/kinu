@@ -21,6 +21,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives.js';
+import { seekPage, StaleCursorError, type Page, type SeekCursor } from './page.js';
 import { STEER_BRANCH_RUN_ID_PREFIX } from '../steer-branch.js';
 
 /** How the fork settled: `merged` synthesised its heads, `competed` scored
@@ -48,22 +49,80 @@ export interface ForkRunSummary {
   readonly winnerScore: number | null;
 }
 
+/** A page of the fork list. Twenty is what the bare `LIMIT` was. */
+const DEFAULT_FORK_PAGE = 20;
+
 /**
- * Recent fork runs across both settle policies, newest first.
+ * A page of fork runs across both settle policies, newest first.
  *
- * `limit` bounds the merged list, not each half: asking for 20 gives the 20
- * most recent forks however they settled.
+ * Newest-first in BOTH traversal and presentation, so a walker appends.
+ *
+ * ── Why the anchor is composite ─────────────────────────────────────────────
+ * This is the one read here that MERGES two tables. `head_journal` rowids and
+ * `search_nodes` rowids are not comparable, so no single-table position can
+ * bound both halves, and the only total order the union shares is
+ * `(startedAt DESC, id DESC)`. That pair is what `after` carries — opaque to
+ * every caller, parsed only here.
+ *
+ * The bound is applied to BOTH halves before the merge, never to the merged
+ * result. Bounding after the merge tears: whichever half the last page ended in
+ * would resume correctly and the other would restart from its newest row, so a
+ * fork already delivered comes back and the ones behind it never arrive.
  */
-export function listForkRuns(sql: SqlExecutor, limit = 20): ForkRunSummary[] {
-  return [...queryMergedRuns(sql, limit, null), ...queryCompetedRuns(sql, limit, null)]
-    .sort((a, b) => b.startedAt - a.startedAt)
-    .slice(0, limit);
+export function listForkRuns(
+  sql: SqlExecutor,
+  cursor: SeekCursor | null = null,
+  limit = DEFAULT_FORK_PAGE,
+): Page<ForkRunSummary> {
+  const after = cursor === null ? null : parseForkAnchor(cursor.after);
+  const over = limit + 1;
+  const fetched = [...queryMergedRuns(sql, over, null, after), ...queryCompetedRuns(sql, over, null, after)]
+    .sort(newestFirst)
+    .slice(0, over);
+  return seekPage(fetched, limit, forkAnchor);
 }
 
-/** One exact fork, including runs older than the recent-list window. */
+/**
+ * The position of one fork in the merged order.
+ *
+ * `startedAt` alone is not a position: two forks can share a millisecond, and
+ * both halves already ordered by it with no tiebreak — so the window had no
+ * defined membership at its boundary, never mind a resumable one. The id
+ * completes it, and both halves order by it identically.
+ */
+interface ForkAnchor {
+  readonly startedAt: number;
+  readonly id: string;
+}
+
+function forkAnchor(run: ForkRunSummary): string {
+  return `${run.startedAt}:${run.id}`;
+}
+
+function parseForkAnchor(after: string): ForkAnchor {
+  const split = after.indexOf(':');
+  const startedAt = Number(after.slice(0, split));
+  const id = after.slice(split + 1);
+  // A malformed anchor is a stale one as far as a caller is concerned: the walk
+  // has to restart either way, and answering an unreadable position with an
+  // empty page would report the forks behind it as exhausted.
+  if (split < 1 || !Number.isFinite(startedAt) || id === '') {
+    throw new StaleCursorError('fork list', after);
+  }
+  return { startedAt, id };
+}
+
+/** `(startedAt DESC, id DESC)` — the one order both halves are read in and the
+ *  merged list is sorted by, so a page boundary means the same thing in all
+ *  three places. */
+function newestFirst(a: ForkRunSummary, b: ForkRunSummary): number {
+  return b.startedAt - a.startedAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+}
+
+/** One exact fork, including runs older than the current page. */
 export function readForkRun(sql: SqlExecutor, rootId: string): ForkRunSummary | null {
-  return [...queryMergedRuns(sql, 1, rootId), ...queryCompetedRuns(sql, 1, rootId)]
-    .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
+  return [...queryMergedRuns(sql, 1, rootId, null), ...queryCompetedRuns(sql, 1, rootId, null)]
+    .sort(newestFirst)[0] ?? null;
 }
 
 /* ── merged (settle=merge → branching heads) ───────────────────────── */
@@ -76,12 +135,19 @@ export function readForkRun(sql: SqlExecutor, rootId: string): ForkRunSummary | 
  * Deliberately narrower than `listRuns` — no per-head steps, no merge
  * synthesis, no evidence. A list row only has to say when it forked, into how
  * many, and whether it landed.
+ *
+ * `after` bounds this half strictly past a position in the MERGED order, so the
+ * two halves resume from the same place. `spawned_at` is an aggregate, so the
+ * bound is a HAVING; the `root_id` leg is what makes it a position at all.
  */
 function queryMergedRuns(
   sql: SqlExecutor,
   limit: number,
   rootId: string | null,
+  after: ForkAnchor | null,
 ): ForkRunSummary[] {
+  const at = after?.startedAt ?? null;
+  const from = after?.id ?? null;
   const rows = sql<{
     root_id: string; spawned_at: number; heads: number;
     running: number; errored: number; root_status: string | null;
@@ -102,7 +168,10 @@ function queryMergedRuns(
     WHERE j.root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
       AND (${rootId} IS NULL OR j.root_id = ${rootId})
     GROUP BY j.root_id
-    ORDER BY spawned_at DESC LIMIT ${limit}`;
+    HAVING (${at} IS NULL
+            OR MIN(j.spawned_at) < ${at}
+            OR (MIN(j.spawned_at) = ${at} AND j.root_id < ${from}))
+    ORDER BY spawned_at DESC, j.root_id DESC LIMIT ${limit}`;
 
   return rows.map((row) => ({
     id: row.root_id,
@@ -147,12 +216,18 @@ function mergedStatus(row: {
  *
  * Legacy pre-`root_id` rows are NULL-scoped and stay invisible, as everywhere
  * else that reads this table.
+ *
+ * `after` bounds this half exactly as the merged half is bounded, against the
+ * same merged-order position. Neither half is a position on its own.
  */
 function queryCompetedRuns(
   sql: SqlExecutor,
   limit: number,
   rootId: string | null,
+  after: ForkAnchor | null,
 ): ForkRunSummary[] {
+  const at = after?.startedAt ?? null;
+  const from = after?.id ?? null;
   const roots = sql<{
     root_id: string; started_at: number; branches: number;
     task: string | null; status: string | null;
@@ -170,7 +245,10 @@ function queryCompetedRuns(
     WHERE n.root_id IS NOT NULL
       AND (${rootId} IS NULL OR n.root_id = ${rootId})
     GROUP BY n.root_id
-    ORDER BY started_at DESC LIMIT ${limit}`;
+    HAVING (${at} IS NULL
+            OR MIN(n.created_at) < ${at}
+            OR (MIN(n.created_at) = ${at} AND n.root_id < ${from}))
+    ORDER BY started_at DESC, n.root_id DESC LIMIT ${limit}`;
 
   return roots.map((row) => ({
     id: row.root_id,

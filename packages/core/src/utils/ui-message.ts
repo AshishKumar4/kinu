@@ -10,9 +10,11 @@
  * cycle.
  */
 
+import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { tolerate } from '../obs/index.js';
 import { parseJsonValue } from './json.js';
+import type { ChatHistoryEntry } from '../read-models/status.js';
 
 const UiMessageSchema = v.object({
   parts: v.optional(v.array(v.object({
@@ -33,4 +35,38 @@ export function uiMessageText(content: string): string {
   return parsed.output.parts
     .flatMap((part) => part.type === 'text' && part.text !== undefined ? [part.text] : [])
     .join('');
+}
+
+/**
+ * One transcript out of the two places a chat message reaches a surface from.
+ *
+ * The live list is the agents SDK's: `get-messages` seeds it with
+ * `Think.messages` — a bounded newest window governed by `hydrationByteBudget`
+ * — and the socket appends every turn after that. Anything older than that
+ * window is only in storage, and is walked back one cursored page at a time by
+ * `getChatHistoryPage`.
+ *
+ * The two sources overlap by construction. The walk seeks strictly older than
+ * its anchor, but the anchor is minted from a list the socket keeps extending,
+ * and a reconnect can re-seed a wider window — so the same message can
+ * legitimately arrive both ways. The live copy wins whenever it does: it
+ * carries parts, metadata, tool calls and attachments, where the stored copy
+ * has been flattened to text by `uiMessageText` above.
+ */
+export function mergeTranscript(
+  older: readonly ChatHistoryEntry[],
+  live: readonly UIMessage[],
+): UIMessage[] {
+  const known = new Set(live.map((message) => message.id));
+  const restored: UIMessage[] = [];
+  for (const entry of older) {
+    // Also guards the older half against itself: a page boundary that
+    // re-delivered a row would render it twice under one React key, which
+    // React resolves by silently dropping one — a pagination bug would then
+    // look like a message going missing rather than like a duplicate.
+    if (known.has(entry.id)) continue;
+    known.add(entry.id);
+    restored.push({ id: entry.id, role: entry.role, parts: [{ type: 'text', text: entry.content }] });
+  }
+  return [...restored, ...live];
 }

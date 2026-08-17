@@ -199,7 +199,8 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
     callAgentRpc(auth.origin, auth.token, cloudName, method, schema, args);
   return {
     identity: () => rpc('getWorkspaceSnapshot', WorkspaceSnapshotSchema).then((snapshot) => snapshot.status),
-    messages: (limit) => rpc('getChatHistory', JsonRowsSchema, [limit]),
+    messages: (limit) => rpc('getChatHistoryPage', v.object({ items: JsonRowsSchema }), [{ limit }])
+      .then((page) => page.items),
     runs: (limit) => rpc('listRuns', v.array(DebugRunSchema), [limit]),
     runEvents: (runId, since, limit) => rpc('getRunEvents', v.array(DebugRunEventSchema), [runId, { since, limit }]),
     headRuns: (limit) => rpc('getHeadRuns', v.array(DebugHeadRunSchema), [limit]),

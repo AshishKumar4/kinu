@@ -50,10 +50,10 @@ import type { LanguageModel } from 'ai';
 import type { JsonValue } from '@vitest-evals/core';
 
 import type {
-  AgentRuntime, EvalCase, LLMProviderConfig, RunEvent, Shell,
+  AgentRuntime, EvalCase, LLMProviderConfig, RunEvent, SeekCursor, Shell,
 } from '../../packages/core/src/index.js';
 import {
-  RunEventRecorder, initWorkspaceSchema, resolveMaxSteps,
+  RunEventRecorder, initWorkspaceSchema, listRuns, resolveMaxSteps,
 } from '../../packages/core/src/index.js';
 import { createWorkspace } from '../../packages/core/src/identity/index.js';
 import { LocalAgentSession } from '../../packages/cli-backend/src/local-session.js';
@@ -174,8 +174,18 @@ interface LedgerTotals {
 
 function readLedgerTotals(db: Database): LedgerTotals {
   const recorder = new RunEventRecorder(makeSql(db));
-  const events: RunEvent[] = recorder.listRuns(10_000)
-    .flatMap((run) => recorder.read(run.runId, { limit: 100_000 }));
+  // A WALK, not a window. This is the whole ledger of a trial and a truncated
+  // one would understate the trial's own totals — the previous `listRuns(10_000)`
+  // was a guess that it would never be reached, which is the assumption the page
+  // contract exists to stop anyone having to make.
+  const events: RunEvent[] = [];
+  let cursor: SeekCursor | null = null;
+  for (;;) {
+    const page = listRuns(recorder, cursor);
+    for (const run of page.items) events.push(...recorder.read(run.runId, { limit: 100_000 }));
+    if (page.status === 'end') break;
+    cursor = page.next;
+  }
   let turns = 0, toolCalls = 0, tokensIn = 0, tokensOut = 0, steps = 0;
   const toolNames: string[] = [];
   // Why a turn produced nothing. A degenerate run that cannot say why is a dead

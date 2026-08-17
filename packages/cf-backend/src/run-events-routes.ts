@@ -60,10 +60,13 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
   if (listMatch) {
     const [, agentName] = listMatch;
     const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit') ?? '50')));
+    // The page's own `next`, echoed back verbatim. A caller that ignores it gets
+    // exactly what it got before; a caller that reads it can tell a full page
+    // from the end of the history, which `limit` alone never said.
+    const after = url.searchParams.get('after');
     try {
       const stub = await resolveAgent(env, agentName);
-      const runs = await stub.listRuns(limit);
-      return Response.json(runs);
+      return Response.json(await stub.listRuns({ limit, cursor: after ? { after } : undefined }));
     } catch (err) {
       return Response.json({ error: errorMessage(err) }, { status: 500 });
     }

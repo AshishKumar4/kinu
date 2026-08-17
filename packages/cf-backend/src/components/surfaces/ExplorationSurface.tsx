@@ -33,7 +33,9 @@ import { cleanNodeLabel, findForkNode, isCompeted, treeStats } from "@/component
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { fmtTokens } from "@/lib/format";
 import {
   DetailSection, EmptyState, EMPTY_HINTS, formatScore, MarkdownContent, Metric, scoreColor,
@@ -67,8 +69,15 @@ export function ExplorationSurface({ liveTrees, isStreaming, backgroundJobs, rpc
    *  not a row of metadata. */
   const [openBranch, setOpenBranch] = useState<{ runId: string; branchId: string } | null>(null);
 
-  const { resource, reload, runs, params, trees, hasActiveWork } =
-    useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees);
+  const {
+    resource, reload, runs, params, trees, hasActiveWork,
+    exhausted, loadingMore, pageError, loadMore,
+  } = useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees);
+  // The list is the scroll container in both layouts, so the trigger lives on it
+  // rather than on the canvas beside it.
+  const listRef = useGrowingScroll<HTMLDivElement>({
+    grows: "down", content: runs, fetched: runs, onReachEdge: loadMore,
+  });
 
   if (runs === null) {
     return resource.status === "error"
@@ -93,12 +102,15 @@ export function ExplorationSurface({ liveTrees, isStreaming, backgroundJobs, rpc
           cannot stretch into dead space above the canvas; side by side it fills
           its column. */}
       <div className="flex-1 min-h-0 grid gap-3 grid-rows-[auto_minmax(0,1fr)] @3xl:grid-rows-1 @3xl:grid-cols-[minmax(220px,280px)_minmax(0,1fr)]">
-        <div className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto rounded-lg border p-border p-surface p-1.5 space-y-0.5">
+        <div ref={listRef}
+          className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto rounded-lg border p-border p-surface p-1.5 space-y-0.5">
           {runs.map((run) => (
             <ForkRunRow key={run.id} run={run} params={params.get(run.id)}
               selected={focused.id === run.id}
               onSelect={() => { setOpenBranch(null); setFocusedRunId(run.id); }} />
           ))}
+          <ScrollBoundary what="forks" count={runs.length}
+            loading={loadingMore} exhausted={exhausted} error={pageError} onRetry={loadMore} />
         </div>
         {opened !== null && openBranch !== null
           ? <ForkBranchView

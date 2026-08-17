@@ -179,7 +179,7 @@ describe('scoreSettleVisibility — every settle mode writes where the reader re
     seedHeads(store.sql, { root: 'merge-a', heads: 2 });
 
     const mergedOnly = (sql: SqlExecutor, limit: number) =>
-      listForkRuns(sql, limit).filter((run) => run.settle === 'merged');
+      listForkRuns(sql, null, limit).items.filter((run) => run.settle === 'merged');
     const score = scoreSettleVisibility(store.sql, mergedOnly);
 
     expect(score.rootsWritten).toBe(2);
@@ -200,7 +200,7 @@ describe('scoreSettleVisibility — every settle mode writes where the reader re
     seedHeads(store.sql, { root: 'merge-a', heads: 2 });
 
     const competedOnly = (sql: SqlExecutor, limit: number) =>
-      listForkRuns(sql, limit).filter((run) => run.settle === 'competed');
+      listForkRuns(sql, null, limit).items.filter((run) => run.settle === 'competed');
     const score = scoreSettleVisibility(store.sql, competedOnly);
 
     expect(score.invisibleRoots).toEqual(['merge-a']);

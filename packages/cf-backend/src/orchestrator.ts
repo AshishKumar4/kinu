@@ -130,12 +130,12 @@ import {
   receiveSubordinateEvent,
   PeerHub, type PeerMessage, type ReceiveResult,
   // ── Read models: the folds a surface asks for, one implementation each ──
-  getAgentStatus, getChatHistory, getToolList, readLatestSearchTree, readSearchTree,
+  getAgentStatus, getChatHistoryPage, getToolList, readLatestSearchTree, readSearchTree,
   listForkRuns, readForkRun, type ForkRunSummary,
-  readExplorationCanvas, type ExplorationCanvasView,
+  readExplorationCanvas, type ExplorationCanvasRun,
   type HeadStep,
   buildPendingActions, type PendingAction,
-  type ChatHistoryEntry,
+  type ChatHistoryEntry, type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
@@ -1720,8 +1720,18 @@ export class OrchestratorAgent extends ActorAgent {
     });
   }
 
-  async getChatHistory(limit = 100): Promise<ChatHistoryEntry[]> {
-    return getChatHistory(this.boundSql, limit);
+  /**
+   * One page of the durable transcript, older-first within the page, newest
+   * page when called with no cursor.
+   *
+   * `@callable()` because the chat pane calls it over the socket. The pane is
+   * SEEDED by the SDK's own `get-messages` route — `Think.messages`, a bounded
+   * newest-window governed by `hydrationByteBudget` — and this is the only way
+   * to reach anything older than that window.
+   */
+  @callable()
+  async getChatHistoryPage(request?: PageRequest): Promise<Page<ChatHistoryEntry>> {
+    return getChatHistoryPage(this.boundSql, request ?? {});
   }
 
   async getToolList() {
@@ -1741,12 +1751,17 @@ export class OrchestratorAgent extends ActorAgent {
     return readSearchTree(this.boundSql, rootId);
   }
 
-  /** Every fork this workspace has run, newest first, whichever settle policy
-   *  it chose — the one entry point the Exploration surface lists. Detail
-   *  stays per-mechanism (`getSearchTree` for a competition, `getHeadRuns`
-   *  for a merge); this is the list they are both reached from. */
-  @callable() async listForkRuns(limit: number = 20): Promise<ForkRunSummary[]> {
-    return listForkRuns(this.boundSql, limit);
+  /**
+   * A page of every fork this workspace has run, newest first, whichever settle
+   * policy it chose — the one entry point the Exploration surface lists. Detail
+   * stays per-mechanism (`getSearchTree` for a competition, `getHeadRuns` for a
+   * merge); this is the list they are both reached from.
+   *
+   * Cursored because a bare `LIMIT 20` said "that is every fork" about the
+   * newest twenty, and the twenty-first was then reachable only by permalink.
+   */
+  @callable() async listForkRuns(request?: PageRequest): Promise<Page<ForkRunSummary>> {
+    return listForkRuns(this.boundSql, request?.cursor ?? null, request?.limit);
   }
 
   /** One named fork for a permalink, independent of the recent-list window. */
@@ -1755,14 +1770,15 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * The Exploration canvas, in one read: every recent fork, its dispatch
-   * parameters, and the rows for the trees that keep theirs in search_nodes.
+   * A page of the Exploration canvas: each fork with its dispatch parameters and
+   * its tree, newest first.
    *
    * ONE call rather than one per tree — see the read model for why that is what
-   * made a multi-tree canvas possible at all.
+   * made a multi-tree canvas possible at all, and for why it is one row per fork
+   * rather than three collections a client re-associates by id.
    */
-  @callable() async getExplorationCanvas(limit: number = 30): Promise<ExplorationCanvasView> {
-    return readExplorationCanvas(this.boundSql, limit);
+  @callable() async getExplorationCanvas(request?: PageRequest): Promise<Page<ExplorationCanvasRun>> {
+    return readExplorationCanvas(this.boundSql, request?.cursor ?? null, request?.limit);
   }
 
   /**
@@ -2595,20 +2611,33 @@ export class OrchestratorAgent extends ActorAgent {
     return JSON.stringify(await this.getRunEvents(runId, opts));
   }
 
-  /** List the agent's recent runs with their latest timestamp + event count. */
-  async listRuns(limit: number = 50): Promise<RunListEntry[]> {
-    return listRuns(this.eventRecorder, limit);
+  /**
+   * A page of the agent's recent runs with each one's latest timestamp and event
+   * count, newest first.
+   *
+   * Not `@callable()` — the web UI reads runs through `getRunSummaries`. This
+   * serves the `/runs` HTTP route, the MCP tool and the CLI, and it is cursored
+   * for the same reason they are: those callers pass a limit and had no way to
+   * learn whether it had cut anything off.
+   */
+  async listRuns(request?: PageRequest): Promise<Page<RunListEntry>> {
+    return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
   /**
-   * Recent runs enriched with PROVENANCE (what kicked each off) + COST (tokens
-   * spent) — the cross-run history + budget view for the Supervise altitude.
-   * Folds the per-run run_start (caused_by/userMessage) and the accumulated
-   * turn_end usage out of the durable event log.
+   * A page of recent runs enriched with PROVENANCE (what kicked each off) and
+   * COST (tokens spent) — the cross-run history + budget view for the Supervise
+   * altitude. Folds the per-run run_start (caused_by/userMessage) and the
+   * accumulated turn_end usage out of the durable event log.
+   *
+   * The cap here was load-bearing in the wrong direction: Supervise sums the
+   * usage of exactly the rows it received and prints the total as the
+   * workspace's spend, so a truncated window was a truncated denominator
+   * presented as a figure the owner decides on.
    */
   @callable()
-  async getRunSummaries(limit: number = 30): Promise<RunSummary[]> {
-    return getRunSummaries(this.eventRecorder, limit);
+  async getRunSummaries(request?: PageRequest): Promise<Page<RunSummary>> {
+    return getRunSummaries(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
   /**

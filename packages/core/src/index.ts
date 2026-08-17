@@ -1324,18 +1324,20 @@ export type {
   DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorWriteResult,
   EnvironmentInfo, MountInfo,
 } from './read-models/files.js';
-export { readLatestSearchTree, readSearchTree, readSearchForest } from './read-models/search-tree.js';
+export { readLatestSearchTree, readSearchTree } from './read-models/search-tree.js';
 export { readForkRunParams } from './read-models/fork-params.js';
 export { readExplorationCanvas } from './read-models/exploration-canvas.js';
-export type { ExplorationCanvasView } from './read-models/exploration-canvas.js';
+export type { ExplorationCanvasRun } from './read-models/exploration-canvas.js';
 export type {
   ForkRunParams, ForkSettlePolicy, CompetedForkParams, MergedForkParams,
 } from './read-models/fork-params.js';
 export { listForkRuns, readForkRun } from './read-models/fork-runs.js';
 export type { ForkRunSummary, ForkRunStatus, ForkSettle } from './read-models/fork-runs.js';
 export { buildPendingActions } from './read-models/pending-actions.js';
-export { getAgentStatus, getChatHistory, getToolList } from './read-models/status.js';
-export { uiMessageText } from './utils/ui-message.js';
+export { getAgentStatus, getChatHistoryPage, getToolList } from './read-models/status.js';
+export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './read-models/page.js';
+export type { Page, PageRequest, SeekCursor } from './read-models/page.js';
+export { mergeTranscript, uiMessageText } from './utils/ui-message.js';
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions.js';
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,

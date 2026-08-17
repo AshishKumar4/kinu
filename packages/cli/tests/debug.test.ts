@@ -277,7 +277,7 @@ describe('proteus debug — cloud backend', () => {
         const respond = (result: JsonValue) => Response.json({ result });
         switch (method) {
           case 'getWorkspaceSnapshot': return respond({ status: { displayName: 'skywriter', purpose: 'p', scaffoldVersion: 1, model: 'x' } });
-          case 'getChatHistory': return respond([{ id: 'm1', role: 'user', content: 'hi', createdAt: 1 }]);
+          case 'getChatHistoryPage': return respond({ status: 'end', items: [{ id: 'm1', role: 'user', content: 'hi', createdAt: 1 }] });
           case 'listRuns': return respond([{ runId: 'run-cloud', lastTs: new Date(1000).toISOString(), eventCount: 2 }]);
           case 'getRunEvents': {
             const opts = v.parse(v.object({ since: v.number() }), args[1]);

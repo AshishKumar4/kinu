@@ -52,7 +52,23 @@ function startMockAgentServer(): MockAgentServer {
         const method = v.parse(v.string(), request.method);
         const parsedArgs = v.safeParse(JsonArraySchema, request.args);
         const args = parsedArgs.success ? parsedArgs.output : [];
-        if (method === 'getChatHistory') return Response.json({ result: chatMessages });
+        // Pages of two, so the client's walk is really exercised: a fixture of
+        // four messages that came back whole would not have noticed the client
+        // reading only the first page and calling it the whole conversation.
+        if (method === 'getChatHistoryPage') {
+          const cursor = v.parse(v.optional(v.object({ cursor: v.optional(v.object({ after: v.string() })) })), args[0]);
+          const after = cursor?.cursor?.after;
+          const end = after === undefined
+            ? chatMessages.length
+            : chatMessages.findIndex((m) => m.id === after);
+          if (end < 0) return Response.json({ error: `Stale cursor: ${after}` }, { status: 409 });
+          const start = Math.max(0, end - 2);
+          return Response.json({
+            result: start === 0
+              ? { status: 'end', items: chatMessages.slice(start, end) }
+              : { status: 'more', items: chatMessages.slice(start, end), next: { after: chatMessages[start]!.id } },
+          });
+        }
         if (method === 'getReasoningEffort') return Response.json({ result: { effort: 'medium' } });
         if (method === 'setReasoningEffort') return Response.json({ result: { ok: true, effort: args[0] ?? null } });
         return Response.json({ error: `No such agent RPC method: ${method}` }, { status: 404 });

@@ -135,6 +135,14 @@ export interface RunEventQuery {
   limit?: number;
 }
 
+/** One run as the log lists it: which run, when it was last written to, and how
+ *  many events it holds. */
+export interface RunListEntry {
+  runId: string;
+  lastTs: string;
+  eventCount: number;
+}
+
 export type RunEventListener = (event: RunEvent) => void;
 
 export function initRunEventTables(execRaw: RawSqlExec): void {
@@ -279,13 +287,38 @@ export class RunEventRecorder {
     return rows[0]?.n ?? 0;
   }
 
-  /** List recent runs (distinct run_ids, ordered by latest event ts). */
-  listRuns(limit = 50): Array<{ runId: string; lastTs: string; eventCount: number }> {
-    return this.sql<{ runId: string; lastTs: string; eventCount: number }>`
+  /**
+   * One batch of runs, newest first — the run most recently written to leading.
+   *
+   * Ordered by MAX(rowid), NOT MAX(ts). `ts` is TEXT (see the DDL above) and a
+   * turn writes several rows inside one clock tick, so `ORDER BY MAX(ts) DESC`
+   * with no tiebreak had no defined MEMBERSHIP when two runs' latest events
+   * share a tick — not merely an undefined order between them, but no answer to
+   * which one the window contains. rowid is total and is the write order, so
+   * for an append-only log this is the "latest event first" that ordering was
+   * reaching for, now decidable. `lastTs` is still returned: it is what a
+   * surface shows.
+   *
+   * `before` bounds the scan strictly below a position from {@link runSeq};
+   * null starts at the newest. This is the storage half only — the page fold
+   * belongs to `read-models/runs.ts`, which owns the contract.
+   */
+  listRunsBefore(before: number | null, count: number): RunListEntry[] {
+    return this.sql<RunListEntry>`
       SELECT run_id AS runId, MAX(ts) AS lastTs, COUNT(*) AS eventCount
       FROM run_events
       GROUP BY run_id
-      ORDER BY lastTs DESC
-      LIMIT ${limit}`;
+      HAVING ${before} IS NULL OR MAX(rowid) < ${before}
+      ORDER BY MAX(rowid) DESC
+      LIMIT ${count}`;
+  }
+
+  /** Where a run sits in the log's write order, or null when the log no longer
+   *  holds it — the resolvable question a page anchor asks, so that a vanished
+   *  run raises instead of reading as an exhausted history. */
+  runSeq(runId: string): number | null {
+    const rows = this.sql<{ seq: number | null }>`
+      SELECT MAX(rowid) AS seq FROM run_events WHERE run_id = ${runId}`;
+    return rows[0]?.seq ?? null;
   }
 }

@@ -79,7 +79,7 @@ export const AGENT_RPC_ACCESS = {
   getAgentStatus: 'workspace.read',
   getAgentView: 'workspace.read',
   getAlignmentConvergence: 'workspace.read',
-  getChatHistory: 'workspace.read',
+  getChatHistoryPage: 'workspace.read',
   getExecutors: 'workspace.read',
   getGepaRun: 'workspace.read',
   getGepaRuns: 'workspace.read',

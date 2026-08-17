@@ -141,18 +141,44 @@ describe('RunEventRecorder.observe', () => {
   });
 });
 
-describe('RunEventRecorder.listRuns / count', () => {
-  test('groups distinct runs by latest ts', () => {
+describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
+  test('groups distinct runs, newest write first', () => {
     const { recorder } = setup();
     recorder.emit('run-A', { type: 'run_start', agentId: 'a' });
     recorder.emit('run-A', { type: 'run_end' });
     recorder.emit('run-B', { type: 'run_start', agentId: 'a' });
 
-    const runs = recorder.listRuns();
-    expect(runs.length).toBe(2);
-    const ids = runs.map((r) => r.runId);
-    expect(ids).toContain('run-A');
-    expect(ids).toContain('run-B');
+    const runs = recorder.listRunsBefore(null, 10);
+    expect(runs.map((r) => r.runId)).toEqual(['run-B', 'run-A']);
+    expect(runs.map((r) => r.eventCount)).toEqual([1, 2]);
+  });
+
+  test('runs whose latest events share a timestamp still have a decidable window', () => {
+    const { recorder, sql } = setup();
+    // The defect this ordering replaced: `ORDER BY MAX(ts) DESC` with no
+    // tiebreak over a TEXT column. When two runs' latest events carry the same
+    // stamp there is no answer to which one a LIMIT 1 contains, so a two-page
+    // walk could deliver one of them twice and the other never. Written
+    // directly, because the recorder cannot be made to collide on purpose.
+    const same = '2026-08-17T00:00:00.000Z';
+    for (const runId of ['run-A', 'run-B', 'run-C']) {
+      void sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
+        VALUES (${runId}, 0, 'error', '{}', ${same})`;
+    }
+
+    const first = recorder.listRunsBefore(null, 1);
+    expect(first.map((r) => r.runId)).toEqual(['run-C']);
+    const second = recorder.listRunsBefore(recorder.runSeq('run-C'), 1);
+    expect(second.map((r) => r.runId)).toEqual(['run-B']);
+    const third = recorder.listRunsBefore(recorder.runSeq('run-B'), 10);
+    expect(third.map((r) => r.runId)).toEqual(['run-A']);
+  });
+
+  test('runSeq answers null for a run the log does not hold', () => {
+    const { recorder } = setup();
+    recorder.emit('run-A', { type: 'run_start', agentId: 'a' });
+    expect(recorder.runSeq('run-A')).toBeGreaterThan(0);
+    expect(recorder.runSeq('never-existed')).toBeNull();
   });
 
   test('count returns total events per run', () => {

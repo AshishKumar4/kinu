@@ -14,16 +14,17 @@ import {
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
-  CLOUD_MAX_INLINE_ATTACHMENT_BYTES, JsonObjectSchema, JsonValueSchema,
+  CLOUD_MAX_INLINE_ATTACHMENT_BYTES, JsonObjectSchema, JsonValueSchema, mergeTranscript, pageSchema,
   isPlaceholderMission, planReviewAwaitingDecision, summarizeRestorePlan,
 } from "@proteus/core";
 import type {
-  AlternateTakeSet, FileCheckpointEntry, FileCheckpointListing, FileRestoreChange, FileRestorePlan,
-  JsonObject, JsonValue, TakePickOutcome,
+  AlternateTakeSet, ChatHistoryEntry, FileCheckpointEntry, FileCheckpointListing,
+  FileRestoreChange, FileRestorePlan, JsonObject, JsonValue, Page, TakePickOutcome,
 } from "@proteus/core";
 import * as v from "valibot";
 import { useProteus } from "@/hooks/use-proteus";
-import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
+import { useGrowingScroll } from "@/hooks/use-growing-scroll";
+import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { touchWorkspace } from "@/lib/user-api";
 import { describeError } from "@/hooks/use-async-resource";
 import { tolerate } from "@proteus/core/obs";
@@ -62,6 +63,16 @@ function getMessageText(msg: UIMessage): string {
 const MessageCreatedAtSchema = v.looseObject({
   createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),
 });
+/** Messages per older-history request. Small enough that a page renders in one
+ *  frame and the scroll stays smooth, large enough that a flick up does not
+ *  need a dozen round trips. */
+const CHAT_PAGE_SIZE = 40;
+const ChatHistoryPageSchema: v.GenericSchema<Page<ChatHistoryEntry>> = pageSchema(v.object({
+  id: v.pipe(v.string(), v.nonEmpty()),
+  role: v.picklist(["user", "assistant", "system"]),
+  content: v.string(),
+  createdAt: v.union([v.string(), v.number()]),
+}));
 const ProvisionErrorSchema = v.object({
   error: v.literal("runtime_not_provisioned"),
   runtime: v.string(),
@@ -97,6 +108,50 @@ export function EmptyConversation({ mission }: { mission: string }) {
       <p className="mt-3 text-sm p-text-3">Send the first message to start.</p>
     </div>
   );
+}
+
+/**
+ * The top of the transcript: what is above the oldest message on screen.
+ *
+ * Four distinct answers, never collapsed into silence. "Failed" in particular
+ * has to be its own state — rendering nothing there would tell the reader they
+ * had reached the beginning of a conversation the pane simply could not fetch.
+ */
+function HistoryBoundary({ loading, error, exhausted, onRetry }: {
+  loading: boolean;
+  error: string | null;
+  exhausted: boolean;
+  onRetry: () => void;
+}) {
+  if (error) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-2 text-xs">
+        <WarningCircleIcon size={13} className="p-danger shrink-0" />
+        <span className="p-text-3">Could not load earlier messages.</span>
+        <button onClick={onRetry} className="p-accent hover:underline">Retry</button>
+      </div>
+    );
+  }
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-2 text-xs p-text-3">
+        <Loader size="sm" />Loading earlier messages…
+      </div>
+    );
+  }
+  if (exhausted) {
+    return (
+      <div className="flex items-center gap-3 py-2 text-[11px] p-text-3">
+        <span className="h-px flex-1 p-border border-t" />
+        Beginning of the conversation
+        <span className="h-px flex-1 p-border border-t" />
+      </div>
+    );
+  }
+  // Not loading, not exhausted, no error: more exists and the reader has not
+  // scrolled far enough to ask for it. Reserving the row keeps the prepend
+  // from resizing this element and nudging the viewport.
+  return <div className="py-2" aria-hidden />;
 }
 
 /** Render one file part inside a message: inline preview for images, a
@@ -907,7 +962,10 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
   const setModel = state.setModel;
   const onPickModel = useCallback((spec: string) => { void setModel(spec); }, [setModel]);
   const [input, setInput] = useState("");
-  const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
+  // No older-history walk: a subordinate facet's transcript is one delegation,
+  // and the SDK's seed already carries all of it. `prepended` is therefore
+  // constant — nothing is ever inserted above the live list here.
+  const messagesRef = useGrowingScroll<HTMLDivElement>({ grows: "up", content: state.messages, fetched: null });
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useLayoutEffect(() => {
@@ -1050,7 +1108,34 @@ export default function WorkspacePage() {
   const [chatInput, setChatInput] = useState("");
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
+  // ── Older history ────────────────────────────────────────────────────────
+  // `state.messages` is the LIVE list: the SDK's `get-messages` seed (which is
+  // `Think.messages`, a bounded newest window governed by hydrationByteBudget)
+  // plus everything the socket has streamed since. Anything older than that
+  // window exists only in storage and is reached one cursored page at a time.
+  const oldest = state.messages[0]?.id;
+  const history = usePagedScroll<ChatHistoryEntry>({
+    grows: "up",
+    fetchPage: useCallback(
+      (cursor) => state.rpc<unknown>("getChatHistoryPage", [{ cursor, limit: CHAT_PAGE_SIZE }])
+        .then((page) => v.parse(ChatHistoryPageSchema, page)),
+      [state.rpc],
+    ),
+    // The first anchor is the oldest message the live list is showing: the SDK
+    // seeds without a cursor, so this is the only place the walk can start.
+    startFrom: useCallback(() => oldest ? { after: oldest } : null, [oldest]),
+  });
+
+  const transcript = useMemo(
+    () => mergeTranscript(history.fetched, state.messages),
+    [history.fetched, state.messages]);
+
+  const messagesRef = useGrowingScroll<HTMLDivElement>({
+    grows: "up",
+    content: transcript,
+    fetched: history.fetched,
+    onReachEdge: history.loadMore,
+  });
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   // Pending chat attachments — fed by the attach button, paste, and drag-drop
   // onto the chat column; rendered as removable chips above the input.
@@ -1395,14 +1480,19 @@ export default function WorkspacePage() {
                 whitescreen the chat. (STABILITY-AUDIT §D2.) */}
             <ErrorBoundary label="Chat">
             <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
-              {state.messages.length === 0 && !state.isStreaming && (
+              {transcript.length === 0 && !state.isStreaming && (
                 <EmptyConversation mission={as?.purpose ?? ""} />
               )}
-              {state.messages.map((msg, i) => (
+              {transcript.length > 0 && (
+                <HistoryBoundary
+                  loading={history.loading} error={history.error}
+                  exhausted={history.exhausted} onRetry={history.loadMore} />
+              )}
+              {transcript.map((msg, i) => (
                 <MessageView
                   key={msg.id}
                   message={msg}
-                  isLast={i === state.messages.length - 1}
+                  isLast={i === transcript.length - 1}
                   isStreaming={state.isStreaming}
                   onFork={onForkMessage}
                   onFeedback={onMessageFeedback}

@@ -30,8 +30,10 @@ import { tmpdir } from 'node:os';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 
-import type { AgentRuntime, EvalCase, LLMProviderConfig, RunEvent } from '../../packages/core/src/index.js';
-import { censusToolFailures, DefaultExecutionRouter, RunEventRecorder } from '../../packages/core/src/index.js';
+import type { AgentRuntime, EvalCase, LLMProviderConfig, RunEvent, SeekCursor } from '../../packages/core/src/index.js';
+import {
+  censusToolFailures, DefaultExecutionRouter, listRuns, RunEventRecorder,
+} from '../../packages/core/src/index.js';
 import { DIGEST_LIMIT, JsonObjectSchema } from '../../packages/core/src/utils/json.js';
 import { createWorkspace } from '../../packages/core/src/identity/index.js';
 import { makeSql } from '../../packages/cli-backend/src/runtime.js';
@@ -266,9 +268,20 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
  */
 function toolCallRows(db: Database): Extract<RunEvent, { type: 'tool_call_end' }>[] {
   const recorder = new RunEventRecorder(makeSql(db));
-  return recorder.listRuns(10_000)
-    .flatMap((run) => recorder.read(run.runId, { limit: 100_000 }))
-    .filter((e): e is Extract<RunEvent, { type: 'tool_call_end' }> => e.type === 'tool_call_end');
+  // A walk, for the same reason readLedgerTotals walks: an episode's rows are
+  // the whole assertion, and a window over them would make a missing `args`
+  // indistinguishable from a row the read never reached.
+  const events: RunEvent[] = [];
+  let cursor: SeekCursor | null = null;
+  for (;;) {
+    const page = listRuns(recorder, cursor);
+    for (const run of page.items) events.push(...recorder.read(run.runId, { limit: 100_000 }));
+    if (page.status === 'end') break;
+    cursor = page.next;
+  }
+  return events.filter(
+    (e): e is Extract<RunEvent, { type: 'tool_call_end' }> => e.type === 'tool_call_end',
+  );
 }
 
 describe('tool-failure attribution over a real turn', () => {

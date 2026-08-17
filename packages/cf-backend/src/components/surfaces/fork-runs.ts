@@ -19,10 +19,11 @@
  */
 import { useCallback, useMemo } from "react";
 import type {
-  ExplorationCanvasView, ForkRunParams, ForkRunSummary, HeadRunView,
+  ExplorationCanvasRun, ForkRunParams, ForkRunSummary, HeadRunView, Page, SeekCursor,
 } from "@proteus/core";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { buildTree, groupByRoot } from "@/lib/fork-tree-rows";
+import { usePagedScroll } from "@/hooks/use-paged-scroll";
+import { buildTree } from "@/lib/fork-tree-rows";
 import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
 
 export const FORK_RUN_LIMIT = 30;
@@ -97,13 +98,14 @@ export function useLiveForkRuns(
 }
 
 /**
- * Every tree the workspace has grown, on one canvas — one read.
+ * Every tree the workspace has grown, on one canvas — one read per page.
  *
- * The list, the dispatch parameters and the search rows arrive together, from
- * one snapshot of the storage, so the canvas cannot draw a tree for a run the
- * list does not have or label a run with another's parameters. A per-run fetch
- * would have been N requests growing with the workspace's history, which is why
- * the surface only ever drew one tree.
+ * Each fork arrives WITH its own dispatch parameters and its own tree rows, so
+ * the canvas cannot draw a tree for a fork the list does not have or label a
+ * fork with another's parameters. It used to arrive as three parallel
+ * collections re-associated here by root id, and those collections were bounded
+ * separately — which is exactly how the canvas came to draw a listed fork with
+ * no tree beside a tree for a fork it had not listed.
  *
  * `liveTrees` are the socket-fed trees, keyed by search, and they WIN over the
  * polled rows for the searches they cover: a running search pushes a tree per
@@ -117,34 +119,74 @@ export function useExplorationCanvas(
 ) {
   const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
   const load = useCallback(
-    () => rpc<ExplorationCanvasView>("getExplorationCanvas", [FORK_RUN_LIMIT]),
+    () => rpc<Page<ExplorationCanvasRun>>("getExplorationCanvas", [{ limit: FORK_RUN_LIMIT }]),
     [rpc],
   );
   const revalidate = useCallback(
-    (view: ExplorationCanvasView | null) => forkRunsRevalidateMs(view?.runs ?? null, hasActiveWork),
+    (page: Page<ExplorationCanvasRun> | null) =>
+      forkRunsRevalidateMs(page === null ? null : page.items.map((entry) => entry.run), hasActiveWork),
     [hasActiveWork],
   );
   const { resource, reload } = useAsyncResource(load, revalidate);
-  const view = lastValue(resource);
+  const first = lastValue(resource);
+
+  const fetchPage = useCallback(
+    (cursor: SeekCursor) =>
+      rpc<Page<ExplorationCanvasRun>>("getExplorationCanvas", [{ cursor, limit: FORK_RUN_LIMIT }]),
+    [rpc],
+  );
+  // The first page's own `next`. This read's anchor is composite and opaque —
+  // only the read model knows how to spell it — so it is never built here.
+  const startFrom = useCallback(
+    () => (first !== null && first.status === "more" ? first.next : null),
+    [first],
+  );
+  const tail = usePagedScroll<ExplorationCanvasRun>({ grows: "down", fetchPage, startFrom });
+
+  /**
+   * The first page keeps revalidating while work is live, so a fork that starts
+   * mid-scroll pushes the page-1 boundary down over a row the pager already
+   * holds. Deduped by fork id, first occurrence winning, so the live page stays
+   * authoritative for the rows it covers.
+   */
+  const entries = useMemo(() => {
+    if (first === null) return null;
+    const seen = new Set<string>();
+    const rows: ExplorationCanvasRun[] = [];
+    for (const entry of [...first.items, ...tail.fetched]) {
+      if (seen.has(entry.run.id)) continue;
+      seen.add(entry.run.id);
+      rows.push(entry);
+    }
+    return rows;
+  }, [first, tail.fetched]);
 
   const trees = useMemo(() => {
     const folded = new Map<string, ForkNode>();
-    for (const [rootId, rows] of groupByRoot(view?.search ?? [])) {
-      folded.set(rootId, buildTree(rows));
+    for (const entry of entries ?? []) {
+      if (entry.tree.length > 0) folded.set(entry.run.id, buildTree([...entry.tree]));
     }
     for (const [rootId, tree] of liveTrees) folded.set(rootId, tree);
     return folded;
-  }, [view?.search, liveTrees]);
+  }, [entries, liveTrees]);
 
   const params = useMemo(() => {
     const byRoot = new Map<string, ForkRunParams>();
-    for (const entry of view?.params ?? []) byRoot.set(entry.rootId, entry);
+    for (const entry of entries ?? []) {
+      if (entry.params) byRoot.set(entry.run.id, entry.params);
+    }
     return byRoot;
-  }, [view?.params]);
+  }, [entries]);
 
   return {
     resource, reload, hasActiveWork, trees, params,
-    runs: view === null ? null : [...view.runs],
+    runs: entries === null ? null : entries.map((entry) => entry.run),
+    /** A first page that already said 'end' is exhausted before the pager runs,
+     *  and the pager has no way to know that. Never set by a failure. */
+    exhausted: first !== null && (first.status === "end" || tail.exhausted),
+    loadingMore: tail.loading,
+    pageError: tail.error,
+    loadMore: tail.loadMore,
   };
 }
 

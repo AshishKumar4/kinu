@@ -109,7 +109,7 @@ import {
   setAlwaysActiveSkills, setModel, setReasoningEffort, setShellApprovalMode,
   getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   type EvolutionChangelogView,
-  getRunEvents, listRuns, type RunListEntry,
+  getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
 } from '@proteus/core';
 import { makeSqlExec } from './runtime.js';
 import { discoverAgentsMd } from './agents-md.js';
@@ -1437,9 +1437,9 @@ export class LocalAgentSession implements BackendHost {
     return getRunEvents(this.eventRecorder, runId, opts);
   }
 
-  /** Recent runs, newest first — the local peer of the DO's listRuns. */
-  listRuns(limit = 50): RunListEntry[] {
-    return listRuns(this.eventRecorder, limit);
+  /** A page of recent runs, newest first — the local peer of the DO's listRuns. */
+  listRuns(request?: PageRequest): Page<RunListEntry> {
+    return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
   /**

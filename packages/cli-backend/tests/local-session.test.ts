@@ -2566,7 +2566,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { session, events } = setup('hello there');
     await session.send('hi');
 
-    const runId = session.listRuns()[0]!.runId;
+    const runId = session.listRuns().items[0]!.runId;
     const streamed = events
       .filter((e): e is Extract<SessionEvent, { type: 'run-event' }> => e.type === 'run-event')
       .map((e) => e.event);
@@ -2593,7 +2593,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     await session.send('go');
     await session.settleBackgroundWork();
 
-    const forkRun = session.listRuns()
+    const forkRun = session.listRuns().items
       .map((r) => session.getRunEvents(r.runId))
       .find((evs) => evs.some((e) => e.type === 'head_split'));
     expect(forkRun).toBeDefined();
@@ -2647,7 +2647,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     // The durable ledger has to agree — an open run is a run nothing can read
     // back as finished.
-    const runs = session.listRuns();
+    const runs = session.listRuns().items;
     expect(runs).toHaveLength(1);
     const runEvents = session.getRunEvents(runs[0]!.runId);
     expect(runEvents.at(-1)?.type).toBe('run_end');
@@ -2666,7 +2666,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { session } = setup('hello there');
     await session.send('hi');
 
-    const runs = session.listRuns();
+    const runs = session.listRuns().items;
     expect(runs).toHaveLength(1);
     expect(runs[0]!.eventCount).toBeGreaterThan(0);
 
@@ -2703,9 +2703,9 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { session } = setup('done');
     await session.send('first');
     await session.enqueueTurn({ text: 'job finished', metadata: { proteusEvent: 'background_job' } });
-    await waitFor(() => session.listRuns().length === 2);
+    await waitFor(() => session.listRuns().items.length === 2);
 
-    const runs = session.listRuns();
+    const runs = session.listRuns().items;
     expect(new Set(runs.map((r) => r.runId)).size).toBe(2);
     const causes = runs.map((r) => {
       const start = session.getRunEvents(r.runId)[0];
@@ -2724,7 +2724,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { session } = setup('unused', exploding);
     await session.send('hi');
 
-    const run = session.listRuns()[0]!;
+    const run = session.listRuns().items[0]!;
     const end = session.getRunEvents(run.runId).at(-1);
     expect(end?.type).toBe('run_end');
     expect(end).toMatchObject({ reason: 'error', error: expect.stringContaining('upstream is on fire') });
@@ -3007,7 +3007,7 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
     await session.send('write the report');
     await session.settleBackgroundWork();
 
-    const gateRun = session.listRuns()
+    const gateRun = session.listRuns().items
       .map((r) => session.getRunEvents(r.runId))
       .find((evs) => evs.some((e) => e.type === 'completion_gate'));
     expect(gateRun).toBeDefined();
@@ -3020,7 +3020,7 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
     await session.send('write the report');
     await session.settleBackgroundWork();
 
-    const rows = session.listRuns()
+    const rows = session.listRuns().items
       .flatMap((r) => session.getRunEvents(r.runId))
       .filter((e) => e.type === 'completion_gate');
     expect(rows).toHaveLength(1);

@@ -85,12 +85,15 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
       calls.push('tools');
       return { builtIn: [{ name: 'run', description: 'Run command' }], crafted: [], executors: [] };
     },
-    async getChatHistory(limit: number) {
-      calls.push(`messages:${limit}`);
-      return [
-        { id: 'u1', role: 'user', content: 'hello', createdAt: '2026-06-08 00:00:00.000' },
-        { id: 'a1', role: 'assistant', content: 'hi', createdAt: '2026-06-08 00:00:00.001' },
-      ];
+    async getChatHistoryPage(request: { limit?: number }) {
+      calls.push(`messages:${request.limit}`);
+      return {
+        status: 'end',
+        items: [
+          { id: 'u1', role: 'user', content: 'hello', createdAt: '2026-06-08 00:00:00.000' },
+          { id: 'a1', role: 'assistant', content: 'hi', createdAt: '2026-06-08 00:00:00.001' },
+        ],
+      };
     },
     async listPendingConsents() {
       calls.push('consents:list');
@@ -219,10 +222,13 @@ describe('CLI control routes', () => {
 
     expect(await rpcResult(env, 'getAgentStatus')).toMatchObject({ name: 'jarvis', messageCount: 3 });
     expect(await rpcResult(env, 'getToolDescriptions')).toMatchObject({ builtIn: [{ name: 'run' }] });
-    expect(await rpcResult(env, 'getChatHistory', [17])).toEqual([
-      { id: 'u1', role: 'user', content: 'hello', createdAt: '2026-06-08 00:00:00.000' },
-      { id: 'a1', role: 'assistant', content: 'hi', createdAt: '2026-06-08 00:00:00.001' },
-    ]);
+    expect(await rpcResult(env, 'getChatHistoryPage', [{ limit: 17 }])).toEqual({
+      status: 'end',
+      items: [
+        { id: 'u1', role: 'user', content: 'hello', createdAt: '2026-06-08 00:00:00.000' },
+        { id: 'a1', role: 'assistant', content: 'hi', createdAt: '2026-06-08 00:00:00.001' },
+      ],
+    });
     expect(await rpcResult(env, 'listPendingConsents')).toEqual([
       { consentId: 'cons-1', deviceLabel: 'Workstation', method: 'exec', command: 'pwd', scope: 'all_local_actions', createdAt: 1 },
     ]);

@@ -17,9 +17,14 @@ import type { VFS, SqlExecutor } from '../types/primitives.js';
 import type { CraftedTool } from '../types/craft.js';
 import type { ReasoningEffort } from '../strategy/effort.js';
 import { uiMessageText } from '../utils/ui-message.js';
+import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from './page.js';
 
 /** Widest transcript page a surface may ask for. */
 const MAX_HISTORY_LIMIT = 200;
+
+/** Page size when a caller does not care — one screenful of chat and then
+ *  some, small enough that scrolling up stays responsive. */
+const DEFAULT_HISTORY_LIMIT = 100;
 
 /** One workspace identifier reaches a surface: `name`, the permanent slug it is
  *  addressed by. `workspace_identity.id` is deliberately NOT here — on the cloud
@@ -112,46 +117,103 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
 }
 
 /**
- * The newest page of the conversation, oldest-first.
+ * One page of the conversation, newest page first, each page oldest-first.
  *
  * `assistant_messages` is the richer transcript where a backend keeps one
- * (serialized UI messages); `messages` is the plain mirror every backend
- * writes. Reading the rich table first and falling back keeps one shape for
- * both.
+ * (serialized UI messages, and the table the agents SDK's own session provider
+ * writes); `messages` is the plain mirror every backend writes. Reading the
+ * rich table first and falling back keeps one shape for both.
+ *
+ * ── Why the cursor is rowid and not created_at ───────────────────────────────
+ * `assistant_messages.created_at` is `DATETIME DEFAULT CURRENT_TIMESTAMP` —
+ * whole seconds — and a turn emits several messages inside one second. That is
+ * already written down in `identity/session-tree.ts` as the reason a fork cut
+ * cannot be a timestamp comparison, and it disqualifies `created_at` as a
+ * pagination key for exactly the same reason: ties have no defined order, so
+ * `ORDER BY created_at DESC LIMIT n` does not even have a defined MEMBERSHIP
+ * when rows n and n+1 share a second. Paging on it would drop and repeat
+ * messages at every page boundary without a single concurrent write.
+ *
+ * `rowid` is total, is the insertion order, and both tables have one (a `TEXT
+ * PRIMARY KEY` does not make a table WITHOUT ROWID). `session-tree.ts` already
+ * takes `ORDER BY rowid DESC LIMIT 1` as "the latest message", so this is the
+ * order this schema was already being read in, now made explicit.
  */
-export function getChatHistory(sql: SqlExecutor, limit = 100): ChatHistoryEntry[] {
-  const bounded = Math.max(1, Math.min(MAX_HISTORY_LIMIT, Math.floor(limit)));
+export function getChatHistoryPage(
+  sql: SqlExecutor,
+  request: PageRequest = {},
+): Page<ChatHistoryEntry> {
+  const limit = Math.max(1, Math.min(MAX_HISTORY_LIMIT, Math.floor(request.limit ?? DEFAULT_HISTORY_LIMIT)));
+  const after = request.cursor?.after ?? null;
+  const over = limit + 1;
   try {
-    const rows = sql<{ id: string; role: string; content: string; created_at: string }>`
-      SELECT id, role, content, created_at
-      FROM (
-        SELECT id, role, content, created_at
-        FROM assistant_messages
+    const from = after === null ? null : anchorRowid(sql`
+      SELECT rowid AS seek FROM assistant_messages WHERE id = ${after}`, after);
+    return chronological(seekPage(from === null
+      ? sql<TranscriptRow>`
+        SELECT id, role, content, created_at FROM assistant_messages
         WHERE role IN ('user', 'assistant', 'system')
-        ORDER BY created_at DESC
-        LIMIT ${bounded}
-      ) sub
-      ORDER BY created_at ASC
-    `;
-    return rows.flatMap((row) => {
-      const role = normalizeUiRole(row.role);
-      if (!role) return [];
-      return [{ id: row.id, role, content: uiMessageText(row.content), createdAt: row.created_at }];
-    });
-  } catch {
-    const rows = sql<{ id: string; role: string; content: string; created_at: number }>`
-      SELECT id, role, content, created_at
-      FROM messages
-      WHERE session_id = ${'default'} AND role IN ('user', 'assistant', 'system')
-      ORDER BY created_at ASC
-      LIMIT ${bounded}
-    `;
-    return rows.flatMap((row) => {
-      const role = normalizeUiRole(row.role);
-      if (!role) return [];
-      return [{ id: row.id, role, content: row.content, createdAt: row.created_at }];
-    });
+        ORDER BY rowid DESC LIMIT ${over}`
+      : sql<TranscriptRow>`
+        SELECT id, role, content, created_at FROM assistant_messages
+        WHERE role IN ('user', 'assistant', 'system') AND rowid < ${from}
+        ORDER BY rowid DESC LIMIT ${over}`,
+      limit, rowId), uiMessageText);
+  } catch (err) {
+    // A stale cursor is this read failing, not the rich table being absent.
+    // Falling through would answer the mirror's rows under a cursor minted
+    // against the transcript, which is a different sequence.
+    if (err instanceof StaleCursorError) throw err;
+    const from = after === null ? null : anchorRowid(sql`
+      SELECT rowid AS seek FROM messages WHERE id = ${after} AND session_id = ${'default'}`, after);
+    return chronological(seekPage(from === null
+      ? sql<TranscriptRow>`
+        SELECT id, role, content, created_at FROM messages
+        WHERE session_id = ${'default'} AND role IN ('user', 'assistant', 'system')
+        ORDER BY rowid DESC LIMIT ${over}`
+      : sql<TranscriptRow>`
+        SELECT id, role, content, created_at FROM messages
+        WHERE session_id = ${'default'} AND role IN ('user', 'assistant', 'system') AND rowid < ${from}
+        ORDER BY rowid DESC LIMIT ${over}`,
+      limit, rowId), (content) => content);
   }
+}
+
+interface TranscriptRow {
+  id: string;
+  role: string;
+  content: string;
+  created_at: string | number;
+}
+
+const rowId = (row: TranscriptRow): string => row.id;
+
+/** The cursor's anchor as a rowid, or the refusal that keeps a vanished anchor
+ *  from reading as an exhausted conversation. */
+function anchorRowid(found: { seek: number }[], after: string): number {
+  const seek = found[0]?.seek;
+  if (seek === undefined) throw new StaleCursorError('conversation', after);
+  return seek;
+}
+
+/**
+ * A newest-first traversal page, turned into the oldest-first block the UI
+ * prepends.
+ *
+ * The page is built over the RAW rows and only then mapped, because a row this
+ * projection drops must still count against the page and must still be able to
+ * be the cursor's anchor. Anchoring on the last SURVIVING entry instead would
+ * re-deliver every dropped row on the next page.
+ */
+function chronological(
+  page: Page<TranscriptRow>,
+  text: (content: string) => string,
+): Page<ChatHistoryEntry> {
+  return mapPage(page, (rows) => rows.flatMap((row) => {
+    const role = normalizeUiRole(row.role);
+    if (!role) return [];
+    return [{ id: row.id, role, content: text(row.content), createdAt: row.created_at }];
+  }).reverse());
 }
 
 /** The agent's tool inventory: the fixed builtins plus every crafted tool with

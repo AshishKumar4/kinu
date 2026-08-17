@@ -8,11 +8,11 @@ import {
   ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
   type AgentViewSummary, type PendingAction, type PlanReview,
 } from "@proteus/core";
-import type { ExplorationCanvasView, TimelineSpan } from "@proteus/core";
+import type { ExplorationCanvasRun, Page, TimelineSpan } from "@proteus/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
-import { buildTree, groupByRoot, type MctsRow } from "../lib/fork-tree-rows";
+import { buildTree, type MctsRow } from "../lib/fork-tree-rows";
 import type {
   ToolInfo,
   MemoryEntry,
@@ -92,10 +92,10 @@ export interface WorkspaceSnapshot {
   status: AgentStatus;
   tools: ToolDescResult;
   memoryContent: string;
-  /** Every recent fork, its dispatch parameters, and the search rows for the
-   *  trees that keep theirs in search_nodes — the Exploration canvas's own
-   *  projection, so first paint draws every tree rather than only the newest. */
-  exploration: ExplorationCanvasView;
+  /** The first page of the canvas — every fork on it with its own parameters and
+   *  its own tree, so first paint draws every tree rather than only the newest.
+   *  One row per fork, so nothing here can be re-associated wrongly. */
+  exploration: Page<ExplorationCanvasRun>;
   /** Still returned by the server for `proteus inspect`; no UI reads it. */
   timeline: TimelineSpan[];
   executors: ExecutorInfo[];
@@ -878,9 +878,11 @@ export function useProteus(target?: string | ProteusActorAddress) {
     setMemoryContent(snap.memoryContent);
     if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
     // Every tree, not just the newest: a workspace can have several searches in
-    // flight, and the canvas draws all of them from first paint.
-    for (const [rootId, rows] of groupByRoot(snap.exploration.search)) {
-      setMctsTreeFromRows(rootId, rows);
+    // flight, and the canvas draws all of them from first paint. Each fork
+    // carries its own rows, so there is no grouping pass and no chance of
+    // folding one search's nodes into another's root.
+    for (const entry of snap.exploration.items) {
+      if (entry.tree.length > 0) setMctsTreeFromRows(entry.run.id, [...entry.tree]);
     }
     setExecutors(snap.executors);
     setLastActiveExecutor(snap.lastActiveExecutor);

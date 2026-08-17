@@ -54,6 +54,8 @@ import { getAgentByName } from "agents";
 import type {
   EnqueueTurnResult,
   HybridHit,
+  Page,
+  PageRequest,
   PeerSendOutcome,
   ReleaseBoard,
   ReleaseChange,
@@ -92,7 +94,7 @@ interface McpAgentClient {
     opts?: { useShadowOverride?: boolean; timeoutMs?: number },
   ): Promise<string>;
   getShadowStatus(): Promise<ShadowStatus>;
-  listRuns(limit: number): Promise<RunListEntry[]>;
+  listRuns(request: PageRequest): Promise<Page<RunListEntry>>;
   getRunEventsWire(runId: string, opts?: RunEventQuery): Promise<string>;
   runTaskFromMcp(text: string): Promise<EnqueueTurnResult>;
   sendPeerFromMcp(input: PeerMessageInput): Promise<PeerSendOutcome>;
@@ -120,7 +122,7 @@ async function resolveAgent(env: Env, agentName: string): Promise<McpAgentClient
     getToolList: () => stub.getToolList(),
     runScaffoldOnceWire: (task, opts) => stub.runScaffoldOnceWire(task, opts),
     getShadowStatus: () => stub.getShadowStatus(),
-    listRuns: (limit) => stub.listRuns(limit),
+    listRuns: (request) => stub.listRuns(request),
     getRunEventsWire: (runId, opts) => stub.getRunEventsWire(runId, opts),
     runTaskFromMcp: (text) => stub.runTaskFromMcp(text),
     sendPeerFromMcp: (input) => stub.sendPeerFromMcp(input),
@@ -264,15 +266,25 @@ function buildServer(env: Env, agentName: string): McpServer {
   server.registerTool(
     "list_runs",
     {
-      description: "List the agent's recent runs (turns) with their event counts.",
-      inputSchema: { limit: z.number().int().min(1).max(200).optional() },
+      description: "List the agent's recent runs (turns) with their event counts. "
+        + "Pass `after` from a previous call's last line to continue past the page.",
+      inputSchema: {
+        limit: z.number().int().min(1).max(200).optional(),
+        after: z.string().optional(),
+      },
     },
-    async ({ limit }) => {
+    async ({ limit, after }) => {
       try {
         const agent = await resolveAgent(env, agentName);
-        const runs = await agent.listRuns(limit ?? 20);
-        const lines = runs.map((r) => `- ${r.runId} — ${r.eventCount} events @ ${r.lastTs}`);
-        return { content: [{ type: "text", text: lines.length ? lines.join("\n") : "(no runs yet)" }] };
+        const page = await agent.listRuns({ limit: limit ?? 20, cursor: after ? { after } : undefined });
+        const lines = page.items.map((r) => `- ${r.runId} — ${r.eventCount} events @ ${r.lastTs}`);
+        if (lines.length === 0) return { content: [{ type: "text", text: "(no runs yet)" }] };
+        // A model reading a truncated list as the whole history is the same
+        // defect as a surface doing it, so the boundary is stated in words.
+        lines.push(page.status === 'more'
+          ? `(more runs before these — call again with after: ${JSON.stringify(page.next.after)})`
+          : "(that is every run)");
+        return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (err) {
         return { content: [{ type: "text", text: `list_runs error: ${errorMessage(err)}` }] };
       }
