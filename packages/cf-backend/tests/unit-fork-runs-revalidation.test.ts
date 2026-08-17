@@ -39,13 +39,13 @@ function headRun(over: Partial<HeadRunView> = {}): HeadRunView {
       {
         id: 'head-0', task: 'try X', rationale: 'r', status: 'completed',
         summary: 'X works', errorMessage: null,
-        tokenInput: 10, tokenOutput: 5, wallClockMs: 100,
+        usage: { input: 10, output: 5 }, wallClockMs: 100,
         spawnedAt: 0, lastStepAt: null, decisions: [], steps: [],
       },
       {
         id: 'head-1', task: 'try Y', rationale: 'r', status: 'errored',
         summary: null, errorMessage: 'Y blew up',
-        tokenInput: 3, tokenOutput: 0, wallClockMs: 20,
+        usage: { input: 3, output: 0 }, wallClockMs: 20,
         spawnedAt: 0, lastStepAt: null, decisions: [], steps: [],
       },
     ],
@@ -201,7 +201,7 @@ describe('a merge is a tree of depth 1', () => {
       status: 'running',
       heads: [{
         id: 'h', task: 't', rationale: 'r', status: 'running', summary: null, errorMessage: null,
-        tokenInput: 0, tokenOutput: 0, wallClockMs: 0, spawnedAt: 0, lastStepAt: null, decisions: [], steps: [],
+        usage: {}, wallClockMs: 0, spawnedAt: 0, lastStepAt: null, decisions: [], steps: [],
       }],
     }));
     expect(tree.status).toBe('running');

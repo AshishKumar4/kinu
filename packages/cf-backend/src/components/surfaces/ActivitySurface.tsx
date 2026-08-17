@@ -117,8 +117,12 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
     );
   }
 
-  const reported = latest.usage.input;
-  const windowShare = contextWindow !== null && contextWindow > 0 ? reported / contextWindow : null;
+  // Absent, not zero: `latest` is only non-null because the provider reported
+  // SOMETHING, which need not have included a prompt-token count.
+  const { input, cacheRead } = latest.usage;
+  const windowShare = input !== undefined && contextWindow !== null && contextWindow > 0
+    ? input / contextWindow
+    : null;
 
   return (
     <section>
@@ -129,9 +133,11 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
       />
 
       <div className="flex items-end gap-2 mb-1">
-        <Num className="text-[22px] leading-none p-text">{reported.toLocaleString()}</Num>
+        <Num className="text-[22px] leading-none p-text">{input === undefined ? "—" : input.toLocaleString()}</Num>
         <span className="text-[11px] p-text-2 pb-px">
-          {contextWindow !== null ? `of ${fmtTokens(contextWindow)} tokens` : "tokens"}
+          {input === undefined
+            ? "input tokens not reported"
+            : contextWindow !== null ? `of ${fmtTokens(contextWindow)} tokens` : "tokens"}
         </span>
         <span className="ml-auto pb-px"><Source kind="API" /></span>
       </div>
@@ -140,13 +146,16 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
         <>
           <Meter value={windowShare} />
           <p className="text-[10px] p-text-3 mt-1">
-            {fmtPct(windowShare, 1)} of the window · {latest.usage.cached.toLocaleString()} of those
-            input tokens were a cache read
+            {fmtPct(windowShare, 1)} of the window · {cacheRead === undefined
+              ? "the provider reported no cache-read count for this step"
+              : `${cacheRead.toLocaleString()} of those input tokens were a cache read`}
           </p>
         </>
       ) : (
         <p className="text-[10px] p-text-3 mt-1">
-          Context window unknown. The model catalog has not answered, so no share is shown.
+          {input === undefined
+            ? "This step's provider reported no input count, so no share of the window is shown."
+            : "Context window unknown. The model catalog has not answered, so no share is shown."}
         </p>
       )}
 
@@ -303,10 +312,21 @@ function CostBlock({ snap }: { snap: ActivitySnapshot }) {
         </p>
       )}
 
+      {telemetry.stepsWithoutUsage > 0 && (
+        <p className="flex items-start gap-1.5 text-[10px] p-warning mt-1.5">
+          <WarningCircleIcon size={12} className="shrink-0 mt-px" />
+          <span>
+            {telemetry.stepsWithoutUsage} step{telemetry.stepsWithoutUsage === 1 ? "" : "s"} reported no
+            usage at all, so the token totals below under-count the window — those steps were not free,
+            they were unmeasured.
+          </span>
+        </p>
+      )}
+
       {telemetry.steps > 0 && (
       <dl className="grid grid-cols-4 gap-x-3 gap-y-1 mt-3">
         <Stat label="Input" value={fmtTokens(telemetry.tokens.input)} />
-        <Stat label="Cached" value={fmtTokens(telemetry.tokens.cached)} />
+        <Stat label="Cached" value={fmtTokens(telemetry.tokens.cacheRead)} />
         <Stat label="Output" value={fmtTokens(telemetry.tokens.output)} />
         <Stat label="Reasoning" value={fmtTokens(telemetry.tokens.reasoning)} />
       </dl>
@@ -358,7 +378,11 @@ function CacheBlock({ snap }: { snap: ActivitySnapshot }) {
         note={`${cacheHit.samples} sampled step${cacheHit.samples === 1 ? "" : "s"}`}
       />
       {cacheHit.samples === 0 ? (
-        <Empty>No step in the window reported input tokens, so there is no hit rate to show.</Empty>
+        <Empty>
+          No step in the window reported BOTH an input count and a cache-read count, so there is no
+          hit rate to show. A provider that never mentions its cache has no measured hit rate — 0%
+          would claim a total miss on evidence that does not exist.
+        </Empty>
       ) : (
         <>
           <dl className="grid grid-cols-4 gap-x-3 gap-y-1">

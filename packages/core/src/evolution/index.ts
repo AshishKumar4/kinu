@@ -7,7 +7,6 @@ export {
   type CompletedTurn,
   type CompletedSession,
   type ToolCallRecord,
-  type TurnUsage,
 } from './types.js';
 export {
   delegationFeatures, renderDelegationFeatures, executionPathSignals,

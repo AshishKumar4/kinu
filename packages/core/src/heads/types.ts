@@ -27,6 +27,7 @@
 import type { ToolCallRecord } from '../evolution/types.js';
 import type { HeadFileChange } from './file-changes.js';
 import type { EvaluationGrounding } from '../types/evaluation.js';
+import type { Usage } from '../usage.js';
 
 /** What a head did to the shared filesystem — see heads/file-changes.ts. */
 export type { HeadFileChange };
@@ -184,7 +185,12 @@ export interface HeadReport {
    *  than only once this report exists. Returning the trace as well would ship
    *  the same rows twice and let a late empty report erase a live one. */
   readonly stepCount: number;
-  readonly tokenUsage: { input: number; output: number; total: number };
+  /** What this head's provider calls reported, accumulated. Absent fields mean
+   *  the provider said nothing — a head aborted before its first call carries
+   *  `{}`, not a set of zeros. Callers wanting one number call `usageTotal`,
+   *  which answers `undefined` for exactly that case; no scalar total is stored
+   *  here because it could only ever drift from its own parts. */
+  readonly usage: Usage;
   readonly wallClockMs: number;
   /** Free-form failure message if status != 'completed'. */
   readonly errorMessage?: string;
@@ -207,8 +213,10 @@ export interface HeadRunHeadView {
   readonly status: string;
   readonly summary: string | null;
   readonly errorMessage: string | null;
-  readonly tokenInput: number;
-  readonly tokenOutput: number;
+  /** This head's tokens as the journal stored them. A field is absent when its
+   *  column is NULL, which is what a head that never reported looks like —
+   *  distinct from a head that reported zero, and never rendered as 0. */
+  readonly usage: Usage;
   /** Measured wall clock, written with the report. 0 while the head runs —
    *  `spawnedAt` is what an in-flight branch is timed from. */
   readonly wallClockMs: number;
@@ -227,7 +235,12 @@ export interface HeadRunView {
   readonly status: string;
   readonly spawnedAt: number;
   readonly heads: readonly HeadRunHeadView[];
-  readonly merge: { narrative: string; headCount: number; totalTokens: number } | null;
+  /** `totalTokens` is null when no head in the run reported any — the SQL
+   *  column's own absence crossing the seam, deliberately spelled `null` here
+   *  rather than as an absent key because this whole view is a row read. Domain
+   *  types spell the same absence by omitting the field; what neither may do is
+   *  substitute 0, which is the claim that the split was free. */
+  readonly merge: { narrative: string; headCount: number; totalTokens: number | null } | null;
 }
 
 /** What the parent asks the controller to run. */
@@ -288,7 +301,11 @@ export interface MergeResult {
      *  `headCount - headsWithFindings` is how many forks came back empty — the
      *  one number that says whether a delegation was worth its tokens. */
     readonly headsWithFindings: number;
-    readonly totalTokens: number;
+    /** Every head's tokens, or undefined when NO head reported any — a split
+     *  whose heads all died before their first provider call did not cost zero
+     *  tokens, it cost an unknown number, and claiming 0 is what let a failed
+     *  delegation look free. */
+    readonly totalTokens: number | undefined;
     readonly totalWallClockMs: number;
     readonly maxDepth: number;
   };

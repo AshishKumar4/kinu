@@ -18,6 +18,7 @@ import type {
   HeadFileChange, HeadFileChangeSet, MergeResult, MergeStrategy, HeadRunView, HeadRunHeadView,
 } from './types.js';
 import { headProducedFindings } from './head-summary.js';
+import type { Usage } from '../usage.js';
 
 const EvidenceKindSchema = v.picklist(['tool_output', 'fact', 'citation', 'artifact']);
 
@@ -33,6 +34,22 @@ function parseArray<T>(json: string | null): T[] {
   return parsed;
 }
 
+/**
+ * The two stored token columns as a {@link Usage}.
+ *
+ * A NULL column becomes an ABSENT field, which is the whole point of the
+ * columns having no default: it keeps "this head's provider never reported"
+ * distinguishable from "this head reported zero" all the way out to the
+ * surface, where the difference is a head that may have cost real money versus
+ * one that demonstrably cost nothing.
+ */
+function storedUsage(row: { token_input: number | null; token_output: number | null }): Usage {
+  const usage: { -readonly [K in keyof Usage]: number } = {};
+  if (row.token_input !== null) usage.input = row.token_input;
+  if (row.token_output !== null) usage.output = row.token_output;
+  return usage;
+}
+
 export interface HeadJournalRow {
   id: HeadId;
   parent_id: HeadId | null;
@@ -43,8 +60,11 @@ export interface HeadJournalRow {
   status: HeadReport['status'] | 'running';
   spawned_at: number;
   completed_at: number | null;
-  token_input: number;
-  token_output: number;
+  /** NULL when this head's provider never reported the count — the column has
+   *  no default for exactly that reason. `undefined` in the domain {@link Usage}
+   *  is the same statement; neither is ever 0. */
+  token_input: number | null;
+  token_output: number | null;
   wall_clock_ms: number;
   summary: string | null;
   error_message: string | null;
@@ -94,8 +114,8 @@ export class HeadJournal {
     void this.sql`UPDATE head_journal SET
       status = ${report.status},
       completed_at = ${Date.now()},
-      token_input = ${report.tokenUsage.input},
-      token_output = ${report.tokenUsage.output},
+      token_input = ${report.usage.input ?? null},
+      token_output = ${report.usage.output ?? null},
       wall_clock_ms = ${report.wallClockMs},
       summary = ${report.summary},
       error_message = ${report.errorMessage ?? null},
@@ -272,7 +292,7 @@ export class HeadJournal {
               ${JSON.stringify(result.recommendations)},
               ${JSON.stringify(result.blindSpots)},
               ${result.costSummary.headCount},
-              ${result.costSummary.totalTokens},
+              ${result.costSummary.totalTokens ?? null},
               ${result.costSummary.totalWallClockMs},
               ${result.costSummary.maxDepth},
               ${Date.now()}, ${strategy})`;
@@ -329,7 +349,7 @@ export class HeadJournal {
     type HeadRow = {
       id: string; task: string; rationale: string | null; status: string;
       summary: string | null; error_message: string | null;
-      token_input: number; token_output: number; wall_clock_ms: number;
+      token_input: number | null; token_output: number | null; wall_clock_ms: number;
       spawned_at: number; last_step_at: number | null; decisions_json: string | null;
     };
     // last_step_at comes from the trace itself rather than a column on the head
@@ -349,7 +369,7 @@ export class HeadJournal {
     const heads: HeadRunHeadView[] = rows.filter((h) => h.id !== rootId).map((h) => ({
       id: h.id, task: h.task, rationale: h.rationale ?? '', status: h.status,
       summary: h.summary, errorMessage: h.error_message,
-      tokenInput: h.token_input, tokenOutput: h.token_output, wallClockMs: h.wall_clock_ms,
+      usage: storedUsage(h), wallClockMs: h.wall_clock_ms,
       spawnedAt: h.spawned_at, lastStepAt: h.last_step_at,
       decisions: parseArray<{ question?: unknown; choice?: unknown; rationale?: unknown }>(h.decisions_json)
         .map((d) => ({ question: String(d?.question ?? ''), choice: String(d?.choice ?? ''), rationale: String(d?.rationale ?? '') })),
@@ -361,7 +381,7 @@ export class HeadJournal {
     const rationale = runRow?.rationale ?? rootRow?.rationale ?? '';
     const task = rootRow?.task || rationale || heads[0]?.task || '(head run)';
 
-    const mergeRow = this.sql<{ merged_narrative: string; cost_head_count: number; cost_total_tokens: number }>`
+    const mergeRow = this.sql<{ merged_narrative: string; cost_head_count: number; cost_total_tokens: number | null }>`
       SELECT merged_narrative, cost_head_count, cost_total_tokens
       FROM head_merge_results WHERE root_id = ${rootId}`[0];
     const merge = mergeRow
@@ -398,7 +418,7 @@ export class HeadJournal {
       recommendations_json: string | null;
       blind_spots_json: string | null;
       cost_head_count: number;
-      cost_total_tokens: number;
+      cost_total_tokens: number | null;
       cost_total_wall_ms: number;
       cost_max_depth: number;
     };
@@ -431,7 +451,10 @@ export class HeadJournal {
       costSummary: {
         headCount: r.cost_head_count,
         headsWithFindings: this.countHeadsWithFindings(ids),
-        totalTokens: r.cost_total_tokens,
+        // NULL back to an absent field: the domain type spells "no head
+        // reported" by omission, the column by NULL, and a replayed merge must
+        // make the same claim the live one made.
+        totalTokens: r.cost_total_tokens ?? undefined,
         totalWallClockMs: r.cost_total_wall_ms,
         maxDepth: r.cost_max_depth,
       },

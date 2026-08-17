@@ -9,10 +9,17 @@ Proteus emits a line-delimited event stream (see ``jsonEvents`` in
     {"type":"tool_call","toolName":...,"args":{...}}
     {"type":"tool_result","toolName":...,"result":...}
     {"type":"message_end","role":"assistant","text":...}
-    {"type":"turn_end","steps":N,"durationMs":N,"hadError":false,"usage":{...}}
+    {"type":"turn_end","steps":N,"durationMs":N,"hadError":false,"usage":{"input":N}}
     {"type":"evolution","event":...,"message":...}
     {"type":"run_event","event":{"type":"turn_steering","converted":...,...}}
     {"type":"error","message":...}
+
+``usage`` is SPARSE, and missing entirely when the provider reported nothing.
+Each field is present only if the provider reported it, spelled as
+``events.USAGE_FIELDS`` spells it: ``input`` (cache-inclusive), ``output``,
+``cacheRead``, ``cacheWrite``, ``cacheWrite1h``, ``reasoning``, ``neurons``. An
+absent field means "not measured" and is never filled in with a zero, because a
+zero is a measurement and would price an unmetered turn as a free one.
 
 Reading that stream is ``bench/clbench/proteus/events.py`` — one reader for the
 CLI's event contract, shared with the CL-Bench adapter, so a change to the
@@ -58,6 +65,7 @@ parse_events = _events.parse_events
 read_grading = _events.read_grading
 run_events = _events.run_events
 turn_usage = _events.turn_usage
+usage_reported = _events.usage_reported
 split_activity = _events.split_activity
 EVOLUTION_EVENTS = _events.EVOLUTION_EVENTS
 
@@ -223,10 +231,12 @@ def build_trajectory(
     # than folded into ATIF steps, which describe what the agent said and did.
     summary.run_events = run_events(events)
 
-    # Absent rather than zero when the provider reported nothing: a turn that
-    # spent no tokens does not happen, so zeros here would mean "unmetered".
+    # Absent rather than zero when the provider reported nothing. The gate is
+    # `usage_reported`, not "are any of the values non-zero": a turn that
+    # genuinely reported zeros WAS metered, and calling that unmetered is the
+    # same fabrication in the opposite direction.
     usage = turn_usage(events)
-    summary.usage = usage if any(usage.values()) else None
+    summary.usage = usage if usage_reported(usage) else None
 
     extra = dict(agent_extra)
     if summary.activity_events:
@@ -257,9 +267,9 @@ def build_trajectory(
         final_metrics=FinalMetrics(
             total_steps=len(builder.steps),
             # Proteus prices nothing, so total_cost_usd stays unset.
-            total_prompt_tokens=summary.usage["input"] if summary.usage else None,
-            total_completion_tokens=summary.usage["output"] if summary.usage else None,
-            total_cached_tokens=summary.usage["cached"] if summary.usage else None,
+            total_prompt_tokens=summary.usage.get("input") if summary.usage else None,
+            total_completion_tokens=summary.usage.get("output") if summary.usage else None,
+            total_cached_tokens=summary.usage.get("cacheRead") if summary.usage else None,
             extra=final_extra or None,
         ),
         notes="Converted from proteus exec --json events to ATIF",

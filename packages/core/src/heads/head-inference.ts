@@ -21,7 +21,8 @@ import {
   budgetExhausted,
 } from './types.js';
 import type { ToolCallRecord } from '../evolution/types.js';
-import { missionCallUsage, type MissionBudgetRefusal, type MissionScope } from '../mission-budget.js';
+import type { MissionBudgetRefusal, MissionScope } from '../mission-budget.js';
+import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from '../usage.js';
 import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summary.js';
 import { HeadFileChanges } from './file-changes.js';
@@ -46,12 +47,16 @@ export class HeadCapture {
   readonly files = new HeadFileChanges();
   /** Gross provider spend — what the report carries and the mission budget
    *  governor debits. Nothing meters a head against a private ceiling, so this
-   *  is the only token figure there is. */
-  readonly tokenUsage = { input: 0, output: 0 };
+   *  is the only token figure there is. Starts as `{}`: a head whose provider
+   *  never reported reports nothing, rather than a run of zeros. */
+  usage: Usage = {};
 
-  recordStepUsage(inputTokens: number, outputTokens: number): void {
-    this.tokenUsage.input += inputTokens;
-    this.tokenUsage.output += outputTokens;
+  /** Accumulate one step's report. Takes a whole {@link Usage} rather than bare
+   *  counts so a field the provider omitted stays omitted here — the boundary
+   *  where absence used to be flattened into 0 before it ever reached the
+   *  report. */
+  recordStepUsage(usage: Usage): void {
+    this.usage = addUsage(this.usage, usage);
   }
 
   recordEvidence(e: Evidence): void { this.evidence.push(e); }
@@ -383,11 +388,7 @@ function exhaustedMissionReport(
     childHeadIds: [...capture.childHeadIds],
     toolCalls: [...capture.toolCalls],
     stepCount,
-    tokenUsage: {
-      input: capture.tokenUsage.input,
-      output: capture.tokenUsage.output,
-      total: capture.tokenUsage.input + capture.tokenUsage.output,
-    },
+    usage: capture.usage,
     wallClockMs,
     errorMessage: refusal.note,
   };
@@ -461,12 +462,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   const { capture, maxSteps, mission } = deps;
   const startedAt = Date.now();
 
-  const usageTotal = () => ({
-    input: capture.tokenUsage.input,
-    output: capture.tokenUsage.output,
-    total: capture.tokenUsage.input + capture.tokenUsage.output,
-  });
-
   // The mission refusal that stopped this head, if one did. Held so the report
   // says which budget ran out rather than reporting a bare stop.
   let refusal: MissionBudgetRefusal | null = null;
@@ -507,13 +502,17 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
             console.warn(`[proteus] head ${input.id} could not record step ${seq}:`, err);
           }
         }
-        const usage = missionCallUsage(step.usage);
-        if (!usage) return;
-        capture.recordStepUsage(usage.input, usage.output);
+        const usage = normalizeUsage(step.usage);
+        // A step the provider said nothing about meters nothing: neither the
+        // report nor the ledger may be moved by a guess.
+        if (!usageReported(usage)) return;
+        capture.recordStepUsage(usage);
         // Charged per step, from the provider's own report, so the ledger is
         // current when the guard below reads it — rather than one lump debit
-        // after the whole fork has already been paid for.
-        await mission?.port.debit(usage.input + usage.output, {
+        // after the whole fork has already been paid for. The `?? 0` is the
+        // running cumulative ledger's own plain-number contract, reached only
+        // because the guard above established this step was really reported.
+        await mission?.port.debit(usageTotal(usage) ?? 0, {
           labels: mission.labels, calls: 1, usage,
         });
       },
@@ -558,7 +557,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       childHeadIds: [...capture.childHeadIds],
       toolCalls: [...capture.toolCalls],
       stepCount: recorded,
-      tokenUsage: usageTotal(),
+      usage: capture.usage,
       wallClockMs: Date.now() - startedAt,
       errorMessage: status === 'completed' ? undefined : stopReason ?? undefined,
     };
@@ -573,7 +572,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       childHeadIds: [...capture.childHeadIds],
       toolCalls: [...capture.toolCalls],
       stepCount: recorded,
-      tokenUsage: usageTotal(),
+      usage: capture.usage,
       wallClockMs: Date.now() - startedAt,
       errorMessage: err instanceof Error ? err.message : String(err),
     };

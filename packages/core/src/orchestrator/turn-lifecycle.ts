@@ -18,7 +18,8 @@ import type { TurnFileLedger } from '../tools/file-ledger.js';
 import type {
   CompletionGateRecord, CraftCycleRecord, ExecutionRecoveryRecord, RunEventInput, TurnSteeringRecord,
 } from '../events/types.js';
-import type { CompletedTurn, TurnUsage } from '../evolution/types.js';
+import type { CompletedTurn } from '../evolution/types.js';
+import { usageReported, type Usage } from '../usage.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 import {
   planOverflowRecovery, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
@@ -63,7 +64,10 @@ export function openTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
  *  platform layers keep only the LAST terminal error). Never throws. */
 export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   turnIndex: number;
-  usage: TurnUsage;
+  /** What the turn spent, as the provider reported it (acc.reportedUsage()).
+   *  Absent when no step reported anything — then `turn_end` carries no usage
+   *  rather than a row of zeros nothing measured. */
+  usage?: Usage | undefined;
   reason: string;
   error?: string | undefined;
   /** The turn's bulk-ingestion budget (acc.context). A turn that neither
@@ -99,11 +103,12 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
     if (opts.completionGate) recorder.emit(runId, { type: 'completion_gate', ...opts.completionGate });
     if (opts.craft) recorder.emit(runId, { type: 'craft_cycle', ...opts.craft });
     if (opts.recoveries) recorder.emit(runId, { type: 'execution_recovery', ...opts.recoveries });
-    recorder.emit(runId, {
+    const turnEnd: Extract<RunEventInput, { type: 'turn_end' }> = {
       type: 'turn_end',
       turnIndex: opts.turnIndex,
-      tokenUsage: { input: opts.usage.input, output: opts.usage.output, cached: opts.usage.cached },
-    });
+    };
+    if (opts.usage !== undefined && usageReported(opts.usage)) turnEnd.usage = opts.usage;
+    recorder.emit(runId, turnEnd);
     const runEnd: Extract<RunEventInput, { type: 'run_end' }> = {
       type: 'run_end',
       reason: opts.reason,
@@ -153,14 +158,19 @@ export interface CompactionTriggerState {
 /** Persist the turn's final provider-priced prompt size — the NEXT turn's
  *  measured compaction trigger. Recorded even on aborted/errored turns (any
  *  step that reported was a real priced request), bound to the turn's durable
- *  history length so a later shrink voids it. No-op when nothing reported. */
+ *  history length so a later shrink voids it.
+ *
+ *  `undefined` means no step of the turn reported a prompt size, which is the
+ *  only case that writes nothing: a provider-reported 0 IS a measurement (an
+ *  empty request is a real request) and would overwrite a stale trigger, so it
+ *  is persisted like any other number. */
 export function persistMeasuredPromptTokens(
   state: CompactionTriggerState,
   sessionKey: string,
-  lastPromptTokens: number,
+  lastPromptTokens: number | undefined,
   durableLength: number,
 ): void {
-  if (lastPromptTokens > 0) state.savePromptTokens(sessionKey, lastPromptTokens, durableLength);
+  if (lastPromptTokens !== undefined) state.savePromptTokens(sessionKey, lastPromptTokens, durableLength);
 }
 
 /**
@@ -172,7 +182,9 @@ export function persistMeasuredPromptTokens(
  */
 export function applyOverflowRecovery(opts: {
   error: string;
-  lastPromptTokens: number;
+  /** The turn's last provider-reported prompt size, or undefined when no step
+   *  reported one — the size heuristic then simply does not apply. */
+  lastPromptTokens: number | undefined;
   contextWindow: number;
   turnWasOverflowRetry: boolean;
   state: CompactionTriggerState;

@@ -37,6 +37,7 @@ import { MergeOutputSchema, type MergeOutput } from './merge-schema.js';
 import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation.js';
 import type { LLM, Executor } from '../types/primitives.js';
 import type { WorkMode } from '../prompting/surface.js';
+import { addUsage, usageTotal, type Usage } from '../usage.js';
 
 /** What the merge LLM should return. Validated by MergeOutputSchema. */
 export type MergeLLMFn = (
@@ -315,7 +316,10 @@ export class HeadController {
             fileChanges: [],
             childHeadIds: [],
             toolCalls: [], stepCount: 0,
-            tokenUsage: { input: 0, output: 0, total: 0 },
+            // Nothing ran, so nothing was reported: `{}`, not a set of zeros.
+            // This head may well have burned tokens before the deadline cut it
+            // off — the honest record is that we do not know how many.
+            usage: {},
             wallClockMs: Date.now() - startedAt,
             errorMessage: err instanceof Error ? err.message : String(err),
           };
@@ -605,10 +609,16 @@ function collectFileChanges(reports: readonly HeadReport[]): MergeResult['fileCh
 }
 
 function summarizeCost(reports: readonly HeadReport[], parentBudget: HeadBudget): MergeResult['costSummary'] {
+  // `addUsage` is absence-preserving, which is the whole reason no gate is
+  // needed here: a head aborted before its first model call carries `{}` and
+  // contributes nothing, so the accumulator stays empty unless some head really
+  // reported. `usageTotal` then answers undefined for exactly that split, and it
+  // declines to name a cost rather than claiming the delegation was free.
+  const usage = reports.reduce<Usage>((acc, r) => addUsage(acc, r.usage), {});
   return {
     headCount: reports.length,
     headsWithFindings: reports.filter(headProducedFindings).length,
-    totalTokens: reports.reduce((acc, r) => acc + r.tokenUsage.total, 0),
+    totalTokens: usageTotal(usage),
     totalWallClockMs: Math.max(0, ...reports.map((r) => r.wallClockMs)),
     maxDepth: parentBudget.maxDepth,
   };
@@ -623,9 +633,15 @@ function emptySplitNarrative(reports: readonly HeadReport[], rationale: string):
     '',
   ];
   for (const r of reports) {
+    // A head the provider never reported on gets "tokens unreported", not
+    // "0 tokens" — this narrative goes into the parent's context verbatim, and
+    // "0 tokens" would tell the agent the fork was free when in fact its cost is
+    // simply unknown.
+    const total = usageTotal(r.usage);
     lines.push(
       `- Head ${r.id}: ${r.status}${r.errorMessage ? ` — ${r.errorMessage}` : ''}`
-      + ` (${r.tokenUsage.total} tokens, ${Math.round(r.wallClockMs / 100) / 10}s,`
+      + ` (${total === undefined ? 'tokens unreported' : `${total} tokens`},`
+      + ` ${Math.round(r.wallClockMs / 100) / 10}s,`
       + ` ${r.toolCalls.length} tool call(s), ${r.stepCount} step(s))`,
     );
   }

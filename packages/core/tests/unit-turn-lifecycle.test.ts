@@ -41,7 +41,7 @@ describe('openTurnRun / closeTurnRun', () => {
     openTurnRun(rec, 'run-1', { agentId: 'ws', causedBy: 'chat', userMessage: 'X'.repeat(600), turnIndex: 3 });
     closeTurnRun(rec, 'run-1', {
       turnIndex: 3,
-      usage: { input: 10, output: 5, cached: 2 },
+      usage: { input: 10, output: 5, cacheRead: 2 },
       reason: 'error',
       error: 'boom',
     });
@@ -54,7 +54,7 @@ describe('openTurnRun / closeTurnRun', () => {
     expect(start.userMessage?.length).toBe(500); // bounded at the spine, not per backend
     const turnEnd = events[2];
     if (turnEnd?.type !== 'turn_end') throw new Error('Expected turn_end as the third event');
-    expect(turnEnd.tokenUsage).toEqual({ input: 10, output: 5, cached: 2 });
+    expect(turnEnd.usage).toEqual({ input: 10, output: 5, cacheRead: 2 });
     const runEnd = events[3];
     if (runEnd?.type !== 'run_end') throw new Error('Expected run_end as the fourth event');
     expect(runEnd.reason).toBe('error');
@@ -76,7 +76,7 @@ describe('openTurnRun / closeTurnRun', () => {
 
     openTurnRun(rec, 'run-2', { agentId: 'ws', causedBy: 'chat', userMessage: 'm', turnIndex: 0 });
     closeTurnRun(rec, 'run-2', {
-      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed', context: acc.context,
+      turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed', context: acc.context,
     });
 
     const events = rec.read('run-2');
@@ -95,7 +95,7 @@ describe('openTurnRun / closeTurnRun', () => {
     const acc = new TurnAccumulator();
     acc.reset(Date.now());
     closeTurnRun(rec, 'run-3', {
-      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed', context: acc.context,
+      turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed', context: acc.context,
     });
     expect(rec.read('run-3').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
   });
@@ -111,7 +111,7 @@ describe('openTurnRun / closeTurnRun', () => {
     steering.onToolCall({ toolName: 'agents', args: { action: 'fork' } });
 
     closeTurnRun(rec, 'run-n', {
-      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
+      turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',
       steering: steering.snapshot(),
     });
     const events = rec.read('run-n');
@@ -125,7 +125,7 @@ describe('openTurnRun / closeTurnRun', () => {
     expect(row.converted).toBe(true);
 
     closeTurnRun(rec, 'run-quiet', {
-      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
+      turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',
       steering: new TurnSteering().snapshot(),
     });
     expect(rec.read('run-quiet').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
@@ -154,7 +154,7 @@ describe('openTurnRun / closeTurnRun', () => {
     });
 
     closeTurnRun(rec, 'run-c', {
-      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
+      turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',
       craft: cycle.snapshot(),
     });
     const events = rec.read('run-c');
@@ -173,7 +173,7 @@ describe('openTurnRun / closeTurnRun', () => {
     const idle = new CraftCycle({ names: () => [], observe: () => [] }, new TurnAccumulator());
     idle.reset(true);
     closeTurnRun(rec, 'run-idle', {
-      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
+      turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',
       craft: idle.snapshot(),
     });
     expect(rec.read('run-idle').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
@@ -182,7 +182,7 @@ describe('openTurnRun / closeTurnRun', () => {
   test('a recorder failure never throws into the turn', () => {
     const broken: TurnRunRecorder = { emit: () => { throw new Error('db locked'); } };
     expect(() => openTurnRun(broken, 'r', { agentId: 'a', causedBy: 'chat', userMessage: 'm', turnIndex: 0 })).not.toThrow();
-    expect(() => closeTurnRun(broken, 'r', { turnIndex: 0, usage: { input: 0, output: 0, cached: 0 }, reason: 'completed' })).not.toThrow();
+    expect(() => closeTurnRun(broken, 'r', { turnIndex: 0, reason: 'completed' })).not.toThrow();
   });
 });
 
@@ -207,24 +207,29 @@ describe('snapshotCompletedTurn', () => {
     const acc = new TurnAccumulator();
     acc.reset(Date.now());
     acc.recordToolCall({ toolName: 'run', success: false, error: 'exit 1' });
-    acc.recordStep({ usage: { inputTokens: 7, outputTokens: 3 } });
+    acc.recordStep({ usage: { input: 7, output: 3 } });
     const turn = snapshotCompletedTurn(acc, {
       userMessage: 'u', assistantResponse: 'a', sessionId: 's', origin: 'programmatic',
     });
     expect(turn.hadError).toBe(true);
     expect(turn.origin).toBe('programmatic');
-    expect(turn.usage).toEqual({ input: 7, output: 3, cached: 0 });
+    expect(turn.usage).toEqual({ input: 7, output: 3 });
     expect('turnId' in turn).toBe(false);
   });
 });
 
 describe('persistMeasuredPromptTokens', () => {
-  test('persists only a real measurement, bound to the durable length', () => {
+  test('persists a measurement and only a measurement, bound to the durable length', () => {
     const state = recordingState();
-    persistMeasuredPromptTokens(state, 'k', 0, 12);
+    // No step reported a prompt size: there is nothing to persist, and the
+    // stale trigger from an earlier turn must be left alone.
+    persistMeasuredPromptTokens(state, 'k', undefined, 12);
     expect(state.saved).toEqual([]);
+    // A provider-reported 0 IS a measurement — an empty request is a real
+    // request, and it must overwrite whatever the last turn measured.
+    persistMeasuredPromptTokens(state, 'k', 0, 12);
     persistMeasuredPromptTokens(state, 'k', 4321, 12);
-    expect(state.saved).toEqual([['k', 4321, 12]]);
+    expect(state.saved).toEqual([['k', 0, 12], ['k', 4321, 12]]);
   });
 });
 

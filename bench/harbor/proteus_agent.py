@@ -343,10 +343,16 @@ class ProteusAgent(BaseInstalledAgent):
                 f"{grading.user_graded} user-graded, {grading.abandoned} abandoned"
             )
 
+        # Only the fields the provider actually reported: the usage dict is
+        # sparse, so an absent field leaves the context's own default alone
+        # instead of raising KeyError or landing there as a measured 0.
         if summary.usage is not None:
-            context.n_input_tokens = summary.usage["input"]
-            context.n_cache_tokens = summary.usage["cached"]
-            context.n_output_tokens = summary.usage["output"]
+            if "input" in summary.usage:
+                context.n_input_tokens = summary.usage["input"]
+            if "cacheRead" in summary.usage:
+                context.n_cache_tokens = summary.usage["cacheRead"]
+            if "output" in summary.usage:
+                context.n_output_tokens = summary.usage["output"]
         # cost_usd stays unset: Proteus reports tokens, not prices, and an
         # invented number is worse than a missing one.
         context.metadata = {

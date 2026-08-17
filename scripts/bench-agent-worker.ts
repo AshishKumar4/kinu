@@ -126,10 +126,15 @@ async function main(): Promise<void> {
   process.stdout.write(`${JSON.stringify(out)}\n`);
 }
 
+// A crash here means the attempt never reached its meter, so it reports NO token
+// figures at all. The previous `tokens: 0, peakPromptTokens: 0, modelCalls: 0`
+// was a fabricated bill: a crashed attempt entered the ledger as the cheapest
+// possible run and as comfortably inside its token budget.
 main().catch((err) => {
   const out: WorkerOutput = {
-    tokens: 0, steps: 0, hadError: true, budgetBreach: null, peakPromptTokens: 0,
-    modelCalls: 0,
+    steps: 0,
+    hadError: true,
+    budgetBreach: null,
     error: err instanceof Error ? (err.stack ?? err.message) : String(err),
   };
   process.stdout.write(`${JSON.stringify(out)}\n`);

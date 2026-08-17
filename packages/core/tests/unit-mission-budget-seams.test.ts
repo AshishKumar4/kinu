@@ -305,6 +305,26 @@ describe('spawn seam — work that runs where the ledger is not reachable', () =
     await sandbox(deps).fork!({ task: 'explore' });
     expect(governor.snapshot('nightly')[0]?.spent.tokens).toBe(920);
   });
+
+  test('a fork that reported NO total is charged none of it, and the spawn still records', async () => {
+    // An unmeasured fork is not a free one. `cost.tokens` absent means the
+    // strategy could not measure what its sub-agents spent, so this seam charges
+    // nothing for it — the alternative readings are both wrong: billing a guess,
+    // or dropping the spawn row and pretending the work never happened.
+    const governor = newGovernor();
+    governor.declare('nightly', {});
+    governor.activate(['nightly']);
+
+    const deps = forkableDeps({ budget: governor });
+    await sandbox(deps).fork!({ task: 'explore' });
+
+    const [mission] = governor.snapshot('nightly');
+    // Only the (40 prompt + 40 reply) / 4 chars the governed LLM seam estimated
+    // for the one completion that really crossed it. No lump on top.
+    expect(mission?.spent.tokens).toBe(20);
+    expect(mission?.calls).toBe(1);
+    expect(mission?.spawns).toBe(1);
+  });
 });
 
 describe('model-call seam — the step pipeline declines the next request', () => {
@@ -341,7 +361,7 @@ describe('model-call seam — the step pipeline declines the next request', () =
 });
 
 describe('model-call seam — the turn accumulator is the meter', () => {
-  const step = { usage: { inputTokens: 300, outputTokens: 100, cachedInputTokens: 250 } };
+  const step = { usage: { input: 300, output: 100, cacheRead: 250 } };
 
   test("a scoped turn's provider-reported usage lands on the ledger", () => {
     const governor = newGovernor();
@@ -351,11 +371,11 @@ describe('model-call seam — the turn accumulator is the meter', () => {
     acc.recordStep(step);
     acc.recordStep(step);
 
-    // input is the cache-inclusive total, so cached is not counted twice.
+    // input is the cache-inclusive total, so the cache read is not counted twice.
     expect(governor.snapshot('nightly')[0]?.spent.tokens).toBe(800);
     expect(governor.snapshot('nightly')[0]?.calls).toBe(2);
     // The accumulator's own numbers are untouched by the governor.
-    expect(acc.reportedUsage()).toEqual({ input: 600, output: 200, cached: 500 });
+    expect(acc.reportedUsage()).toEqual({ input: 600, output: 200, cacheRead: 500 });
   });
 
   test('an unscoped turn records usage and no spend', () => {
@@ -363,7 +383,7 @@ describe('model-call seam — the turn accumulator is the meter', () => {
     const acc = new TurnAccumulator({}, governor);
     acc.recordStep(step);
     expect(governor.snapshot()).toEqual([]);
-    expect(acc.reportedUsage()).toEqual({ input: 300, output: 100, cached: 250 });
+    expect(acc.reportedUsage()).toEqual({ input: 300, output: 100, cacheRead: 250 });
   });
 
   test("the step's usage split is priced at the resolved model's catalog rates", () => {
@@ -376,7 +396,7 @@ describe('model-call seam — the turn accumulator is the meter', () => {
     governor.activate(['nightly']);
     new TurnAccumulator({}, governor).recordStep(step);
 
-    // 50 fresh input @ $3 + 250 cached @ $0.30 + 100 output @ $15, per 1M.
+    // 50 fresh input @ $3 + 250 cache-read @ $0.30 + 100 output @ $15, per 1M.
     const [row] = governor.snapshot('nightly');
     expect(row?.spent.usd).toBeCloseTo((50 * 3 + 250 * 0.3 + 100 * 15) / 1_000_000, 12);
     expect(row?.pricing).toEqual({ blendedTokens: 0, source: 'catalog' });

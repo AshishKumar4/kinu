@@ -48,6 +48,7 @@ import { BLENDED_USD_PER_1K_TOKENS, estimateTokens, estimateUsdCost } from './ll
 import { reconcileColumns } from './identity/columns.js';
 import type { ModelPricing } from './providers/types.js';
 import type { JsonValue } from './utils/json.js';
+import { usageTotal, type Usage } from './usage.js';
 
 /** A cap on a label. Either dimension may be omitted; a label with neither is a
  *  pure accounting scope (it meters, it never refuses). */
@@ -56,38 +57,6 @@ export interface MissionBudgetLimits {
    *  is known, the blended fallback otherwise). */
   usd?: number;
   tokens?: number;
-}
-
-/** One priced model call, as the provider reported it. `cached` is the subset
- *  of `input` that was served from the prompt cache (ai v6 reports the
- *  cache-INCLUSIVE input total), so it is discounted, never added. */
-export interface MissionCallUsage {
-  input: number;
-  output: number;
-  cached?: number;
-}
-
-/** The usage shape `ai` reports on a step or a result. */
-interface ProviderUsageReport {
-  inputTokens?: number;
-  outputTokens?: number;
-  cachedInputTokens?: number;
-}
-
-/**
- * A provider's usage report as the ledger charges it, or undefined when the
- * provider reported none — a caller that cannot measure a call meters nothing
- * rather than debiting a guess.
- */
-export function missionCallUsage(usage: ProviderUsageReport | undefined): MissionCallUsage | undefined {
-  if (!usage) return undefined;
-  const cached = usage.cachedInputTokens ?? 0;
-  const result: MissionCallUsage = {
-    input: usage.inputTokens ?? 0,
-    output: usage.outputTokens ?? 0,
-  };
-  if (cached > 0) result.cached = cached;
-  return result;
 }
 
 /** Where a label's USD figure came from. */
@@ -99,17 +68,34 @@ export interface MissionSpendProvenance {
   source: 'catalog' | 'blended' | 'mixed';
 }
 
-/** USD for one call at catalog rates (USD per 1M tokens). Cache reads are
- *  charged at the cache-read rate when the catalog publishes one.
+/** USD for one call at catalog rates (USD per 1M tokens), or undefined when the
+ *  provider reported no token counts at all — the same contract as the `usd`
+ *  beside a step's usage: absent means UNPRICED, never free.
  *
  *  Exported because per-step cost telemetry must price a call exactly as the
  *  ledger debits it — two implementations of this would drift, and the same
  *  step would then cost different amounts depending on which surface asked. */
-export function priceCall(usage: MissionCallUsage, pricing: ModelPricing): number {
-  const cached = Math.min(Math.max(0, usage.cached ?? 0), usage.input);
-  const fresh = usage.input - cached;
-  const cachedRate = pricing.cacheRead ?? pricing.input;
-  return (fresh * pricing.input + cached * cachedRate + usage.output * pricing.output) / 1_000_000;
+export function priceCall(usage: Usage, pricing: ModelPricing): number | undefined {
+  if (usageTotal(usage) === undefined) return undefined;
+  const prompt = usage.input ?? 0;
+  // The parts of a CACHE-INCLUSIVE prompt total, clamped so a nonsense report
+  // (parts exceeding the whole) can never drive `fresh` negative. A part the
+  // provider never reported contributes nothing and its tokens stay in `fresh`
+  // at the plain input rate — the only honest reading for the OpenAI-compatible
+  // family, whose adapter reports no cache WRITE at all.
+  const cacheRead = Math.min(Math.max(0, usage.cacheRead ?? 0), prompt);
+  const cacheWrite = Math.min(Math.max(0, usage.cacheWrite ?? 0), prompt - cacheRead);
+  const fresh = prompt - cacheRead - cacheWrite;
+  // `cacheWrite1h` is deliberately NOT in this sum: it is a subset of
+  // `cacheWrite`, so the `cacheWrite` term below has already charged it, and
+  // models.dev publishes ONE `cache_write` rate. Inventing a second rate for the
+  // 1h retention tier is exactly the policy drift `gate:policy-drift` catches.
+  return (
+    fresh * pricing.input
+    + cacheRead * (pricing.cacheRead ?? pricing.input)
+    + cacheWrite * (pricing.cacheWrite ?? pricing.input)
+    + (usage.output ?? 0) * pricing.output
+  ) / 1_000_000;
 }
 
 /** Which host seam turned the work away. */
@@ -414,18 +400,24 @@ export class MissionGovernor {
    * catalog session tracks. Everything else (a judge behind the `LLM`
    * primitive, a fork reporting one total across its sub-agents' models) passes
    * tokens alone and is priced at the blended rate, counted in `blendedTokens`.
+   *
+   * A usage report the catalog CANNOT price — nothing token-billable in it, so
+   * `priceCall` declines — is treated exactly like no report at all: the tokens
+   * are estimated at the blended rate and counted as blended, so `agent.budget()`
+   * still never presents an estimate as a measurement.
    */
   debit(tokens: number, opts?: {
-    labels?: readonly string[]; calls?: number; spawns?: number; usage?: MissionCallUsage;
+    labels?: readonly string[]; calls?: number; spawns?: number; usage?: Usage;
   }): void {
     const labels = opts?.labels ?? this.active;
     if (labels.length === 0) return;
     const total = Math.max(0, Math.round(tokens));
     const pricing = opts?.usage ? this.deps.pricing?.() ?? null : null;
+    const priced = pricing && opts?.usage ? priceCall(opts.usage, pricing) : undefined;
     const delta: MissionDebit = {
       tokens: total,
-      usd: pricing && opts?.usage ? priceCall(opts.usage, pricing) : estimateUsdCost(total),
-      blendedTokens: pricing ? 0 : total,
+      usd: priced ?? estimateUsdCost(total),
+      blendedTokens: priced === undefined ? total : 0,
       calls: opts?.calls ?? 0,
       spawns: opts?.spawns ?? 0,
     };
@@ -527,7 +519,7 @@ export class MissionGovernor {
 export interface MissionBudgetPort {
   guard(seam: MissionSeam, labels: readonly string[]): Promise<MissionBudgetRefusal | null>;
   debit(tokens: number, opts: {
-    labels: readonly string[]; calls?: number; spawns?: number; usage?: MissionCallUsage;
+    labels: readonly string[]; calls?: number; spawns?: number; usage?: Usage;
   }): Promise<void>;
 }
 

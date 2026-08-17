@@ -13,6 +13,7 @@
 
 import type { RunEventQuery, RunEventRecorder } from '../events/recorder.js';
 import type { RunEvent } from '../events/types.js';
+import { addUsage, usageReported, type Usage } from '../usage.js';
 
 export interface RunListEntry {
   runId: string;
@@ -26,9 +27,14 @@ export interface RunSummary extends Pick<RunListEntry, 'runId' | 'eventCount'> {
   causedBy: string | null;
   userMessage: string | null;
   status: string | null;
-  tokensIn: number;
-  tokensOut: number;
-  tokensCached: number;
+  /** Summed over the turns whose provider reported something. A field no turn
+   *  reported stays ABSENT here rather than summing to zero. */
+  usage: Usage;
+  /** Turns that ended with the provider reporting no usage at all. Without this
+   *  denominator a run served by a silent provider is indistinguishable from a
+   *  run that cost nothing, which is the one thing a budget view must not
+   *  confuse. */
+  turnsWithoutUsage: number;
 }
 
 /** One run's durable events — what an SSE resume replays from (`since` = last
@@ -44,11 +50,13 @@ export function listRuns(events: RunEventRecorder, limit = 50): RunListEntry[] {
 
 /**
  * Recent runs folded with the per-run `run_start` (what caused it) and the
- * summed `turn_end` token usage — the cross-run history + budget view.
+ * `turn_end` usage accumulated field by field — the cross-run history + budget
+ * view.
  */
 export function getRunSummaries(events: RunEventRecorder, limit = 30): RunSummary[] {
   return listRuns(events, limit).map((run) => {
-    let tokensIn = 0, tokensOut = 0, tokensCached = 0;
+    let usage: Usage = {};
+    let turnsWithoutUsage = 0;
     let causedBy: string | null = null, userMessage: string | null = null, status: string | null = null;
     let startedAt = Date.parse(run.lastTs) || Date.now();
     for (const e of getRunEvents(events, run.runId, { limit: 1000 })) {
@@ -56,14 +64,14 @@ export function getRunSummaries(events: RunEventRecorder, limit = 30): RunSummar
         causedBy = e.caused_by ?? 'chat';
         userMessage = e.userMessage ?? null;
         startedAt = Date.parse(e.timestamp) || startedAt;
-      } else if (e.type === 'turn_end' && e.tokenUsage) {
-        tokensIn += e.tokenUsage.input;
-        tokensOut += e.tokenUsage.output;
-        tokensCached += e.tokenUsage.cached ?? 0;
+      } else if (e.type === 'turn_end') {
+        const turn = e.usage ?? {};
+        if (usageReported(turn)) usage = addUsage(usage, turn);
+        else turnsWithoutUsage++;
       } else if (e.type === 'run_end') {
         status = e.reason ?? null;
       }
     }
-    return { runId: run.runId, startedAt, causedBy, userMessage, status, tokensIn, tokensOut, tokensCached, eventCount: run.eventCount };
+    return { runId: run.runId, startedAt, causedBy, userMessage, status, usage, turnsWithoutUsage, eventCount: run.eventCount };
   });
 }

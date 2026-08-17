@@ -86,7 +86,9 @@ import {
   // Durable run-event log
   RunEventRecorder,
   // Cumulative, label-scoped spend governor (opt-in; no label = no cap)
-  MissionGovernor, type MissionSeam, type MissionBudgetRefusal, type MissionCallUsage,
+  MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
+  // The one normalized provider usage report
+  normalizeUsage, type Usage,
   // agent_facts world model
   createFactsStore, type FactsStore,
   // Per-turn device awareness (laptop runtime presence + change notice)
@@ -779,7 +781,7 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   async missionDebit(tokens: number, opts: {
-    labels: readonly string[]; calls?: number; spawns?: number; usage?: MissionCallUsage;
+    labels: readonly string[]; calls?: number; spawns?: number; usage?: Usage;
   }): Promise<void> {
     this.budget.debit(tokens, opts);
   }
@@ -2527,7 +2529,20 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   onStepFinish(ctx: StepContext): void {
-    this.acc.recordStep(ctx);
+    // The SDK seam. Two things are read here and nowhere else: the provider's
+    // usage dialect, normalized once so everything downstream speaks `Usage`,
+    // and the getter-backed fields of the SDK's StepResult — `text`,
+    // `toolCalls` and `toolResults` live on its PROTOTYPE (ai
+    // dist/index.js:3964-3994), so handing the object on by spread would drop
+    // them and the step would log as empty.
+    this.acc.recordStep({
+      text: ctx.text,
+      finishReason: ctx.finishReason,
+      toolCalls: ctx.toolCalls,
+      toolResults: ctx.toolResults,
+      usage: normalizeUsage(ctx.usage),
+      response: ctx.response,
+    });
   }
 
   /** The shared background wrap (core background-tools): shallow clone, 30s

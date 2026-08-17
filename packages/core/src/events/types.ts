@@ -16,21 +16,22 @@ import type { ContextComposition } from '../context-meter.js';
 import type { FileEditSnapshot } from '../tools/file-ledger.js';
 import type { MissionBudgetRefusal } from '../mission-budget.js';
 import type { HeadFileChangeSet } from '../heads/types.js';
+import type { Usage } from '../usage.js';
 
 /**
- * What the provider said one request cost. Every field is reported by the API,
- * never inferred — `cached` is the cache-read subset of `input`, and `usd` is
- * present only when the model carried a models.dev catalog rate at the time of
- * the call. An absent `usd` means unpriced, never free.
+ * What one finished step cost — the provider's own report, plus what we priced
+ * it at. Derived from the durable schema rather than declared, so the payload a
+ * reader gets and the row that was stored cannot drift.
+ *
+ * `usage` is what the provider said, absent field by absent field (see
+ * `../usage.ts`). `usd` is present only when the model carried a models.dev
+ * catalog rate at the time of the call — an absent `usd` means unpriced, never
+ * free — and it is deliberately NOT inside `usage`, because a price is something
+ * we computed and the rest is something a provider measured.
  */
-export interface StepUsage {
-  readonly input: number;
-  readonly cached: number;
-  readonly output: number;
-  readonly reasoning: number;
-  readonly usd?: number;
-  readonly modelId?: string;
-}
+export type StepCost = Pick<
+  Extract<RunEvent, { type: 'step_finish' }>, 'usage' | 'usd' | 'modelId'
+>;
 
 /** Kept as an explicit list because `RunEventBase` carries `type`, so deriving
  *  it from the union below is circular. */
@@ -91,16 +92,20 @@ export type RunEvent =
    *  provider ended with nothing to say; never fabricated.
    *
    *  `usage` is the provider's own report of that request — the authority on
-   *  what it cost. `context` is what the request was locally measured to be
-   *  made of; the two do not reconcile exactly and are carried side by side so
-   *  a reader can see the gap. Both are absent when the step produced no such
-   *  report. */
+   *  what it cost, field by field, with anything the provider did not mention
+   *  absent rather than zero. `usd` is that report priced at the model's catalog
+   *  rate, absent when the model is unpriced. `context` is what the request was
+   *  locally measured to be made of; usage and context do not reconcile exactly
+   *  and are carried side by side so a reader can see the gap. All of them are
+   *  absent when the step produced no such report. */
   | (RunEventBase & {
       type: 'step_finish';
       stepIndex: number;
       reason?: string;
       messages?: ModelMessage[];
-      usage?: StepUsage;
+      usage?: Usage;
+      usd?: number;
+      modelId?: string;
       context?: ContextComposition;
     })
   | (RunEventBase & { type: 'head_split'; rootId: string; headIds: string[]; rationale: string })
@@ -108,9 +113,14 @@ export type RunEvent =
    *  back with something against how many returned empty, `totalTokens` is what
    *  the whole split cost, and `fileChanges` is what it changed — so the
    *  productivity of delegation is a query over the ledger instead of a
-   *  hand-read of trajectories. */
+   *  hand-read of trajectories.
+   *
+   *  `totalTokens` is ABSENT when no head in the split reported usage. A split
+   *  served by a silent provider did not cost zero tokens; it cost an unknown
+   *  number, and a delegation-productivity query that read those as free would
+   *  rank the unmeasured split as the cheapest. */
   | (RunEventBase & { type: 'head_merge'; rootId: string; headCount: number;
-      headsWithFindings: number; totalTokens: number; mergedNarrative: string;
+      headsWithFindings: number; totalTokens?: number; mergedNarrative: string;
       /** Which files each head created, changed or deleted, with line counts —
        *  so "what did that delegation actually do to the workspace" is a query
        *  over the ledger rather than a re-read of the narrative. Heads that
@@ -213,7 +223,10 @@ export type RunEvent =
   | (RunEventBase & { type: 'budget_exhausted' } & Omit<MissionBudgetRefusal, 'error'>)
   | (RunEventBase & { type: 'fiber_recovered'; fiberName: string; fiberId: string; snapshot?: unknown })
   | (RunEventBase & { type: 'error'; message: string; details?: unknown })
-  | (RunEventBase & { type: 'turn_end'; turnIndex: number; tokenUsage?: { input: number; output: number; cached?: number } })
+  /** `usage` is what the turn's steps reported, accumulated field by field —
+   *  absent entirely when no step reported anything, and absent per field where
+   *  no step's provider mentioned it. */
+  | (RunEventBase & { type: 'turn_end'; turnIndex: number; usage?: Usage })
   | (RunEventBase & { type: 'run_end'; reason?: string;
       /** The provider/stream error text (truncated) when the run ended in
        *  status 'error' — the durable evidence a post-hoc investigation needs

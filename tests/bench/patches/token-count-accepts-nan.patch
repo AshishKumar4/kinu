@@ -1,20 +1,21 @@
 diff --git a/packages/core/src/bench/types.ts b/packages/core/src/bench/types.ts
 --- a/packages/core/src/bench/types.ts
 +++ b/packages/core/src/bench/types.ts
-@@ -143,13 +143,13 @@
- });
-
- const TokenFieldSchema = v.union([
--  v.number(),
-+  v.custom<number>((value) => Object.is(value, Number.NaN) || v.is(v.number(), value)),
-   v.object({ total: v.optional(v.number()) }),
- ]);
-
- function finiteTokenCount(value: v.InferOutput<typeof TokenFieldSchema>): number {
--  const count = v.is(v.number(), value) ? value : value.total ?? 0;
--  return Number.isFinite(count) ? count : 0;
-+  const count = Object.is(value, Number.NaN) ? Number.NaN : v.is(v.number(), value) ? value : value.total ?? 0;
-+  return count;
- }
-
- export function usageTokens<Usage>(usage: Usage): number {
+@@ -208,12 +208,13 @@ const UsageBoundarySchema = v.object({
+  *  quantity, and arithmetic that swallows one stops being a budget at all. */
+ const TokenFigureSchema = v.pipe(
+   v.union([
+-    v.pipe(v.number(), v.finite()),
++    v.custom<number>((value) => Object.is(value, Number.NaN) || v.is(v.number(), value)),
+     v.looseObject({ total: v.optional(v.nullable(v.pipe(v.number(), v.finite()))) }),
+   ]),
+-  v.transform((figure): number | undefined => (
+-    v.is(v.number(), figure) ? figure : figure.total ?? undefined
+-  )),
++  v.transform((figure): number | undefined => {
++    if (Object.is(figure, Number.NaN)) return Number.NaN;
++    return v.is(v.number(), figure) ? figure : figure.total ?? undefined;
++  }),
+ );
+ 
+ export function usageTokens<Reported>(usage: Reported): number | undefined {

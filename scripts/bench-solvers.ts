@@ -13,13 +13,19 @@ import { parseWorkerOutput } from './bench-worker-protocol.js';
 
 export type PatchLookup = ReadonlyMap<string, string>;
 
+/** What a deterministic control costs: nothing, MEASURED. These solvers issue no
+ *  inference request at all, so their zeros are observations rather than the
+ *  absence of one — which is the distinction the cost ledger now turns on, since
+ *  an absent figure there means nobody counted. */
+const NO_MODEL_SPEND: Readonly<SolverResult> = { tokens: 0, modelCalls: 0, peakPromptTokens: 0 };
+
 /** Does nothing. The floor: whatever this scores is what the defect itself
  *  scores, and it must be zero on every task. */
 export const nullSolver: Solver = {
   id: 'null',
   description: 'no-op control — must fail every task',
   async solve(): Promise<SolverResult> {
-    return { modelCalls: 0 };
+    return NO_MODEL_SPEND;
   },
 };
 
@@ -30,7 +36,7 @@ export function createOracleSolver(patches: PatchLookup): Solver {
     description: 'reverse-applies the defect — must pass every task',
     async solve(ctx: SolverContext): Promise<SolverResult> {
       applyPatch(ctx.sandboxDir, patchFor(patches, ctx.task.id), { reverse: true });
-      return { modelCalls: 0 };
+      return NO_MODEL_SPEND;
     },
   };
 }
@@ -49,7 +55,7 @@ export function createNoisyOracleSolver(patches: PatchLookup, rate: number, labe
     async solve(ctx: SolverContext): Promise<SolverResult> {
       const draw = unitHash(`${label}:${ctx.seed}:${ctx.task.id}:${ctx.repeat}`);
       if (draw < rate) applyPatch(ctx.sandboxDir, patchFor(patches, ctx.task.id), { reverse: true });
-      return { modelCalls: 0 };
+      return NO_MODEL_SPEND;
     },
   };
 }
@@ -242,10 +248,12 @@ async function spawnWorker(opts: {
     return { error: `worker emitted invalid output: ${detail}; ${line.slice(0, 400)}` };
   }
   const error = parsed.error ?? (parsed.hadError ? 'worker reported an error without a diagnostic' : undefined);
-  const result: SolverResult = {
-    tokens: parsed.tokens,
-    peakPromptTokens: parsed.peakPromptTokens,
-  };
+  // A worker that crashed before its meter could report omits the token fields
+  // entirely, so they are copied only when the worker actually stated them —
+  // filling them in here would invent a cost for an attempt nobody measured.
+  const result: SolverResult = {};
+  if (parsed.tokens !== undefined) result.tokens = parsed.tokens;
+  if (parsed.peakPromptTokens !== undefined) result.peakPromptTokens = parsed.peakPromptTokens;
   if (parsed.modelCalls !== undefined) result.modelCalls = parsed.modelCalls;
   if (error) result.error = error;
   return result;

@@ -383,9 +383,9 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
 
   const started = Date.now();
   const budget = budgetSignal(common.budget);
-  let tokens = 0;
+  let tokens: number | undefined;
   let modelCalls: number | undefined;
-  let peakPromptTokens = 0;
+  let peakPromptTokens: number | undefined;
   let error: string | undefined;
   try {
     const result = await solver.solve({
@@ -397,9 +397,9 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
       seed: common.seed,
       repeat: req.repeat,
     });
-    tokens = result.tokens ?? 0;
+    tokens = result.tokens;
     modelCalls = result.modelCalls;
-    peakPromptTokens = result.peakPromptTokens ?? 0;
+    peakPromptTokens = result.peakPromptTokens;
     error = result.error;
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
@@ -413,7 +413,16 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
   const { checks, passed } = await scoreSandbox(task, sandbox, REPO_ROOT);
   if (!common.keepSandboxes) sandbox.dispose();
 
-  const budgetBreach = budget.timedOut() ? 'wall-clock' : (tokens > common.budget.maxTokens ? 'tokens' : null);
+  // An attempt nobody metered cannot be judged against a token cap. Reading its
+  // absent total as 0 would have declared every unmeasured attempt comfortably
+  // inside an envelope it was never measured against — the cheapest possible
+  // false negative, since a variant whose meter silently broke would look both
+  // free and compliant. So the token arm fires only on a measurement, and the
+  // absence travels on the outcome instead: report.ts folds an unmeasured
+  // attempt to a null cost rather than a zero one, the same way it already
+  // refuses to render absent model-call evidence as zero.
+  const budgetBreach = budget.timedOut() ? 'wall-clock'
+    : (tokens !== undefined && tokens > common.budget.maxTokens ? 'tokens' : null);
   const outcome: AttemptOutcome = {
     taskId: task.id,
     variantId: solver.id,
@@ -422,10 +431,10 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
     passed: passed && !budgetBreach && !error,
     checks,
     durationMs: solveMs,
-    tokens,
-    peakPromptTokens,
     budgetBreach,
   };
+  if (tokens !== undefined) outcome.tokens = tokens;
+  if (peakPromptTokens !== undefined) outcome.peakPromptTokens = peakPromptTokens;
   if (modelCalls !== undefined) outcome.modelCalls = modelCalls;
   if (error) outcome.error = error;
   req.retention.recordAttempt(outcome);
@@ -710,7 +719,10 @@ function requireStabilityPilot(
 
 function pilotEvidence(pilot: PilotReport | null): null | {
   variant: string; model: string; providerHash: string; tasks: number; repeats: number; seed: number;
-  totalModelCalls: number; meanModelCalls: number; maxObservedModelCalls: number;
+  totalModelCalls: number;
+  /** Null when no repeat in the pilot reported a model-call count — an
+   *  unmeasured pilot has no mean, and 0 would read as a free arm. */
+  meanModelCalls: number | null; maxObservedModelCalls: number | null;
 } {
   return pilot ? {
     variant: pilot.variant,

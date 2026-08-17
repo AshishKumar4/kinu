@@ -31,7 +31,8 @@ import {
   MissionGovernor, localMissionScope, type MissionScope,
 } from '../src/mission-budget.js';
 import type { LLM, SqlExecutor, RawSqlExec, SqlValue } from '../src/types/primitives.js';
-import type { AgentRuntime, BranchUsage } from '../src/types/agent-runtime.js';
+import type { AgentRuntime } from '../src/types/agent-runtime.js';
+import type { Usage } from '../src/usage.js';
 
 /** A ledger over real SQLite that records every statement issued through it. */
 function countingLedger() {
@@ -50,8 +51,11 @@ function countingLedger() {
   return { db, sql, execRaw, statements };
 }
 
-const PER_ROLLOUT: BranchUsage = { input: 800, output: 200 };
-const PER_REFLECTION: BranchUsage = { input: 300, output: 100 };
+// `satisfies` rather than an annotation: every field of `Usage` is optional, so
+// an annotated constant would make the arithmetic below reach through
+// `number | undefined` and the test would have to assert its own fixtures.
+const PER_ROLLOUT = { input: 800, output: 200 } satisfies Usage;
+const PER_REFLECTION = { input: 300, output: 100 } satisfies Usage;
 
 /** A search whose branches always propose something and always score low
  *  enough to reflect, each call reporting a fixed spend. */
@@ -262,6 +266,32 @@ describe('a declared budget reaches the search between expansions', () => {
 
     await search(rt, localMissionScope(governor, ['mission']));
 
+    const snapshot = governor.snapshot('mission')[0]!;
+    expect(snapshot.spent.tokens).toBe(0);
+    expect(snapshot.calls).toBe(0);
+    ledger.db.close();
+  });
+
+  test('a branch whose provider reported an EMPTY usage meters nothing either', async () => {
+    // What both backends actually hand back now: `normalizeUsage` of a provider
+    // that said nothing is `{}`, not undefined. A report with no field in it is
+    // no measurement, so the engine must decline to charge it rather than
+    // debiting the zero that `input + output` would have produced.
+    const ledger = countingLedger();
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    governor.declare('mission', { tokens: 10_000_000 }, {});
+
+    const { rt } = branchingRuntime();
+    let explores = 0;
+    rt.spawnBranch = async () => ({
+      explore: async () => { explores++; return { text: 'an approach', usage: {} }; },
+      generateReflection: async () => ({ text: 'no lesson', usage: {} }),
+    });
+
+    await search(rt, localMissionScope(governor, ['mission']));
+
+    // Rollouts really ran, so the zero below is a decision and not a vacuum.
+    expect(explores).toBeGreaterThan(0);
     const snapshot = governor.snapshot('mission')[0]!;
     expect(snapshot.spent.tokens).toBe(0);
     expect(snapshot.calls).toBe(0);

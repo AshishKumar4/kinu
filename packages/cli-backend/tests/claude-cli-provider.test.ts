@@ -13,13 +13,18 @@ import {
 import { createLocalModelResolver } from '../src/model-resolver.js';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
-import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
+import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2Usage } from '@ai-sdk/provider';
 
 // ─── stream-json fixtures (captured from the real `claude` binary) ───────────
 
+/** The `usage` block Anthropic's `result` event carries. Its three prompt parts
+ *  are DISJOINT — plain input, cache reads, cache writes. `null` is the run the
+ *  binary reported nothing about, which must not arrive downstream as zeros. */
+interface UsageFixture { inputTokens?: number; outputTokens?: number; cacheRead?: number }
+
 /** Native streaming output: system/init → rate_limit → stream_event deltas →
  *  assistant → result. We keep just the lines doStream consumes. */
-function streamJsonLines(text: string, opts: { inputTokens?: number; outputTokens?: number; cacheRead?: number } = {}): string {
+function streamJsonLines(text: string, usage: UsageFixture | null = {}): string {
   // The real stream emits content_block_start then incremental text_delta lines.
   const startLine = JSON.stringify({
     type: 'stream_event',
@@ -30,19 +35,24 @@ function streamJsonLines(text: string, opts: { inputTokens?: number; outputToken
       type: 'stream_event',
       event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } },
     }));
-  const resultLine = JSON.stringify({
+  const base = {
     type: 'result',
     subtype: 'success',
     is_error: false,
     api_error_status: null,
     result: text,
     stop_reason: 'end_turn',
-    usage: {
-      input_tokens: opts.inputTokens ?? 11,
-      output_tokens: opts.outputTokens ?? 7,
-      cache_read_input_tokens: opts.cacheRead ?? 2131,
-    },
-  });
+  };
+  const resultLine = JSON.stringify(usage
+    ? {
+      ...base,
+      usage: {
+        input_tokens: usage.inputTokens ?? 11,
+        output_tokens: usage.outputTokens ?? 7,
+        cache_read_input_tokens: usage.cacheRead ?? 2131,
+      },
+    }
+    : base);
   return [
     JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-sonnet-4-6', tools: [] }),
     JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } }),
@@ -120,12 +130,28 @@ function fakeSpawn(handler: (args: string[]) => FakeProc): FakeSpawn {
 
 /** Probe-aware spawn: `--version` succeeds, `auth status` reports loggedIn,
  *  the `-p` call streams `text`. */
-function availableSpawn(text = 'Hello from Claude.', usage?: { inputTokens?: number; outputTokens?: number }) {
+function availableSpawn(text = 'Hello from Claude.', usage?: UsageFixture | null) {
   return fakeSpawn((args) => {
     if (args[0] === '--version') return { stdout: '2.1.174 (Claude Code)\n', code: 0 };
     if (args[0] === 'auth' && args[1] === 'status') return { stdout: JSON.stringify({ loggedIn: true, subscriptionType: 'max' }), code: 0 };
     return { stdout: streamJsonLines(text, usage), code: 0 };
   });
+}
+
+/** The provider's own finish part, before ai's v2→v3 conversion re-derives the
+ *  total — the only place `finishPart`'s numbers are observable as it emitted
+ *  them. */
+async function finishUsage(model: LanguageModelV2): Promise<LanguageModelV2Usage> {
+  const { stream } = await model.doStream({
+    prompt: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+    includeRawChunks: false,
+  });
+  const reader = stream.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) throw new Error('stream ended without a finish part');
+    if (value.type === 'finish') return value.usage;
+  }
 }
 
 // ─── doStream parsing ────────────────────────────────────────────────────────
@@ -141,8 +167,13 @@ describe('claude-cli provider — doStream', () => {
     for await (const delta of result.textStream) text += delta;
     expect(text).toBe('PONG.');
 
+    // Anthropic's `input_tokens` EXCLUDES the cached prefix, so the
+    // cache-inclusive prompt is 3 + 2131 — the same fold @ai-sdk/anthropic
+    // performs (dist/index.js:1810). Reading `input_tokens` alone reported 3 of
+    // 2134 real prompt tokens on every cached turn, and Claude Code caches.
     const usage = await result.usage;
-    expect(usage.inputTokens).toBe(3);
+    expect(usage.inputTokens).toBe(2134);
+    expect(usage.inputTokenDetails.cacheReadTokens).toBe(2131);
     expect(usage.outputTokens).toBe(7);
     expect(await result.finishReason).toBe('stop');
 
@@ -155,6 +186,29 @@ describe('claude-cli provider — doStream', () => {
     expect(pCall[toolsIdx + 1]).toBe('');
     const modelIdx = pCall.indexOf('--model');
     expect(pCall[modelIdx + 1]).toBe('opus');
+  });
+
+  test('a result event with no usage block reports no counts and no total', async () => {
+    const provider = createClaudeCliProvider({ spawn: availableSpawn('PONG.', null).spawn });
+    const usage = await finishUsage(provider.createModel('claude-opus-4-x'));
+
+    // The binary said nothing, so the finish part says nothing. The old
+    // `(inputTokens ?? 0) + (outputTokens ?? 0)` answered that with a
+    // confident total of 0 — a turn that looked measured and free.
+    expect(usage.inputTokens).toBeUndefined();
+    expect(usage.outputTokens).toBeUndefined();
+    expect(usage.cachedInputTokens).toBeUndefined();
+    expect(usage.totalTokens).toBeUndefined();
+  });
+
+  test('the finish part totals the cache-inclusive prompt plus the completion', async () => {
+    const provider = createClaudeCliProvider({ spawn: availableSpawn('PONG.', { inputTokens: 3, outputTokens: 7 }).spawn });
+    const usage = await finishUsage(provider.createModel('claude-opus-4-x'));
+
+    expect(usage.inputTokens).toBe(2134);
+    expect(usage.cachedInputTokens).toBe(2131);
+    expect(usage.outputTokens).toBe(7);
+    expect(usage.totalTokens).toBe(2141);
   });
 
   test('doGenerate wraps doStream and returns the full text', async () => {

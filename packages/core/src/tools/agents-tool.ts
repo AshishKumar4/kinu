@@ -564,12 +564,20 @@ async function runFork(
   readSpawnStarted(toolOptions)?.();
   try {
     const result = await strat.explore(ctx);
-    // The spawn always records. The TOKENS record here only when the strategy
-    // could not charge them itself. Both parallel strategies now do: a heads
-    // fork debits every step as it makes it, and MCTS debits every rollout as
-    // it returns — which is what lets an exhausted budget stop either one
-    // mid-flight. Charging their totals again here would double-count them.
-    mission?.governor.debit(result.cost.selfMetered ? 0 : result.cost.tokens ?? 0, {
+    // The spawn always records. The TOKENS record here only when this seam is
+    // the one that has to charge them. Both parallel strategies charge their
+    // own: a heads fork debits every step as it makes it, and MCTS debits every
+    // rollout as it returns — which is what lets an exhausted budget stop
+    // either one mid-flight. Charging their totals again here would
+    // double-count them.
+    //
+    // A fork that reported NO total is charged nothing either, for the opposite
+    // reason: an unmeasured fork is not a free one, and a fabricated zero would
+    // be indistinguishable from a provider that genuinely reported zero. The
+    // spawn row is what says the work happened.
+    const CHARGE_NOTHING = 0;
+    const lump = result.cost.selfMetered ? CHARGE_NOTHING : result.cost.tokens;
+    mission?.governor.debit(lump ?? CHARGE_NOTHING, {
       labels: mission.labels,
       spawns: 1,
     });

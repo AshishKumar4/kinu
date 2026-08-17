@@ -6,7 +6,7 @@
  * Formal spec: MCTS/StorageIsolation.lean — init_isolated, transition_preserves_isolation
  */
 
-import type { AgentRuntime, BranchUsage } from '../types/agent-runtime.js';
+import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { MCTSConfig, MCTSPhase, MCTSProgressBody } from '../types/mcts.js';
 import type { MissionScope } from '../mission-budget.js';
 import type { ConvergenceResult } from '../types/evaluation.js';
@@ -29,19 +29,15 @@ import { initMctsSearchTable } from './search-store.js';
 import { nanoid } from '../utils/nanoid.js';
 import { isoDate } from '../utils/date.js';
 import * as v from 'valibot';
+import { UsageSchema, usageReported, usageTotal, type Usage } from '../usage.js';
 
-const BranchUsageSchema = v.object({
-  input: v.number(),
-  output: v.number(),
-  cached: v.optional(v.number()),
-});
 const BranchExplorationSchema = v.object({
   text: v.string(),
-  usage: v.optional(BranchUsageSchema),
+  usage: v.optional(UsageSchema),
 });
 const BranchReflectionSchema = v.object({
   text: v.string(),
-  usage: v.optional(BranchUsageSchema),
+  usage: v.optional(UsageSchema),
 });
 const MCTSPhaseSchema: v.GenericSchema<MCTSPhase> = v.object({
   iteration: v.number(),
@@ -454,7 +450,7 @@ export async function runMCTS(
  */
 interface MissionMeter {
   outOfBudget: () => Promise<boolean>;
-  charge: (usage: BranchUsage | undefined) => Promise<void>;
+  charge: (usage: Usage | undefined) => Promise<void>;
 }
 
 function missionMeter(mission: MissionScope | undefined): MissionMeter {
@@ -465,7 +461,11 @@ function missionMeter(mission: MissionScope | undefined): MissionMeter {
     outOfBudget: async () => (await mission.port.guard('model_call', mission.labels)) !== null,
     charge: async (usage) => {
       if (!usage) return;
-      await mission.port.debit(usage.input + usage.output, {
+      // A branch whose provider reported nothing is metered as the SPAWN it
+      // was, not as a free call: charging `0` here would be indistinguishable
+      // from a provider that reported zero tokens.
+      if (!usageReported(usage)) return;
+      await mission.port.debit(usageTotal(usage) ?? 0, {
         labels: mission.labels, calls: 1, usage,
       });
     },

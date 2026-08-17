@@ -231,7 +231,15 @@ afterAll(() => {
     executedTasks: [...new Set(observations.map((o) => o.taskId))],
     observations,
     admissibility: assessAdmissibility(declared, observations),
-    spend: { calls: spend.calls, tokensIn: spend.inputTokens, tokensOut: spend.outputTokens },
+    // FIELD RENAME ONLY: LiveModelSpend now carries `usage: Usage` instead of
+    // flat inputTokens/outputTokens. The `?? 0` and the tokensIn/tokensOut
+    // spelling are EvalsInfra's agreed follow-up (spend becomes
+    // { calls, callsWithoutUsage, input, output }); this keeps the build green.
+    spend: {
+      calls: spend.calls,
+      tokensIn: spend.usage.input ?? 0,
+      tokensOut: spend.usage.output ?? 0,
+    },
   };
   const out = process.env.PROTEUS_EVAL_RECORD
     ?? join(REPO_ROOT, 'tests/eval/runs', `${record.runId}.json`);

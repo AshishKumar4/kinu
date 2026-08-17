@@ -88,7 +88,7 @@ function runtime(opts: { settles: boolean; spawned: HeadInput[] }): HeadRuntime 
             fileChanges: [],
             childHeadIds: [],
             toolCalls: [],
-            tokenUsage: { input: 10, output: 10, total: 20 },
+            usage: { input: 10, output: 10 },
             wallClockMs: 5,
             stepCount: 1,
           };

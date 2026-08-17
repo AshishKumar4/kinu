@@ -16,6 +16,7 @@ import { modelMessageSchema, type ModelMessage } from 'ai';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import type { RunEvent, RunEventInput, RunEventType } from './types.js';
 import { JsonObjectSchema, JsonValueSchema } from '../utils/json.js';
+import { UsageSchema } from '../usage.js';
 
 /** A stored model message, validated by the AI SDK's OWN schema rather than a
  *  hand-written copy of its part unions — the same predicate the compaction
@@ -28,10 +29,6 @@ const BaseFields = {
   runId: v.string(),
   timestamp: v.string(),
 };
-const StepUsageSchema = v.object({
-  input: v.number(), cached: v.number(), output: v.number(), reasoning: v.number(),
-  usd: v.optional(v.number()), modelId: v.optional(v.string()),
-});
 const ContextCompositionSchema = v.object({
   segments: v.array(v.object({
     plane: v.picklist(['system', 'tools', 'messages', 'ephemeral']),
@@ -63,11 +60,12 @@ const RunEventSchema = v.variant('type', [
     durationMs: v.optional(v.number()) }),
   v.object({ ...BaseFields, type: v.literal('step_finish'), stepIndex: v.number(),
     reason: v.optional(v.string()), messages: v.optional(v.array(StoredModelMessageSchema)),
-    usage: v.optional(StepUsageSchema), context: v.optional(ContextCompositionSchema) }),
+    usage: v.optional(UsageSchema), usd: v.optional(v.number()),
+    modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema) }),
   v.object({ ...BaseFields, type: v.literal('head_split'), rootId: v.string(),
     headIds: v.array(v.string()), rationale: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_merge'), rootId: v.string(),
-    headCount: v.number(), headsWithFindings: v.number(), totalTokens: v.number(),
+    headCount: v.number(), headsWithFindings: v.number(), totalTokens: v.optional(v.number()),
     mergedNarrative: v.string(), fileChanges: v.array(HeadFileChangeSetSchema),
     blindSpots: v.array(v.string()) }),
   v.object({ ...BaseFields, type: v.literal('scaffold_promotion'), fromVersion: v.number(), toVersion: v.number() }),
@@ -105,7 +103,7 @@ const RunEventSchema = v.variant('type', [
     fiberId: v.string(), snapshot: v.optional(v.unknown()) }),
   v.object({ ...BaseFields, type: v.literal('error'), message: v.string(), details: v.optional(v.unknown()) }),
   v.object({ ...BaseFields, type: v.literal('turn_end'), turnIndex: v.number(),
-    tokenUsage: v.optional(v.object({ input: v.number(), output: v.number(), cached: v.optional(v.number()) })) }),
+    usage: v.optional(UsageSchema) }),
   v.object({ ...BaseFields, type: v.literal('run_end'), reason: v.optional(v.string()), error: v.optional(v.string()) }),
 ]);
 

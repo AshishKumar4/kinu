@@ -173,8 +173,14 @@ function readLedgerTotals(db: Database): LedgerTotals {
   for (const event of events) {
     if (event.type === 'turn_end') {
       turns += 1;
-      tokensIn += event.tokenUsage?.input ?? 0;
-      tokensOut += event.tokenUsage?.output ?? 0;
+      // FIELD RENAME ONLY (turn_end.tokenUsage -> turn_end.usage). The `?? 0`
+      // collapse is EvalsInfra's to remove: it makes "the turn reported no usage"
+      // indistinguishable from "the turn used zero tokens". The agreed
+      // replacement is addUsage/usageReported over a `Usage`, plus a count of
+      // unreported turns. Left in place because these records are theirs and
+      // mid-flight; this edit only keeps the build green.
+      tokensIn += event.usage?.input ?? 0;
+      tokensOut += event.usage?.output ?? 0;
     } else if (event.type === 'tool_call_end') {
       toolCalls += 1;
       toolNames.push(event.name);

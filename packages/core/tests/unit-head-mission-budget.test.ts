@@ -27,6 +27,7 @@ import {
   MissionGovernor, localMissionScope, type MissionBudgetPort, type MissionScope,
 } from '../src/mission-budget.js';
 import type { SqlExecutor, SqlValue, RawSqlExec } from '../src/types/primitives.js';
+import { usageTotal } from '../src/usage.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
 /** A model that keeps calling a tool so the agentic loop keeps stepping,
@@ -122,7 +123,7 @@ describe('an undeclared run is never governed', () => {
 
     const { report } = await runHead(scope, { stopAfter: 4 });
     expect(report.status).toBe('completed');
-    expect(report.tokenUsage.total).toBe(1_200 * 5);
+    expect(usageTotal(report.usage)).toBe(1_200 * 5);
     // Not one query, not one write.
     expect(ledger.statements.slice(afterConstruction)).toEqual([]);
     expect(ledger.sql`SELECT COUNT(*) AS n FROM mission_budget`).toEqual([{ n: 0 }]);
@@ -202,8 +203,12 @@ describe('a declared budget reaches the head mid-flight', () => {
     const { report } = await runHead(localMissionScope(governor, ['mission']), { stopAfter: 50 });
     expect(report.status).toBe('budget_exceeded');
     expect(report.stepCount).toBe(0);
-    // Nothing of its own was spent — the guard ran before the first call.
-    expect(report.tokenUsage.total).toBe(0);
+    // Nothing of its own was spent — the guard ran before the first call, so
+    // NOTHING was reported. `{}` rather than zeros, and no scalar total: the
+    // head may have been about to cost real money and never got the chance,
+    // which is not the same claim as a head that ran and cost nothing.
+    expect(report.usage).toEqual({});
+    expect(usageTotal(report.usage)).toBeUndefined();
     ledger.db.close();
   });
 

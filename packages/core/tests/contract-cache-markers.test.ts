@@ -6,10 +6,10 @@
 // promptCacheKey for the OpenAI-compatible family; nothing for no-op
 // providers).
 //
-// Live readback: turn-accumulator already sums usage.cachedInputTokens +
-// providerMetadata.anthropic.cacheReadInputTokens per step — the `cached=`
-// field of the step_finish activity-log line. cached/in is the cache-read
-// ratio these markers exist to raise.
+// Live readback: the provider's report normalizes to `Usage.cacheRead`, which
+// the turn accumulator sums per step — the `cacheRead=` field of the
+// step_finish activity-log line. cacheRead/input is the cache-read ratio these
+// markers exist to raise.
 import { describe, test, expect } from 'bun:test';
 import { tool, type ToolSet } from 'ai';
 import * as v from 'valibot';

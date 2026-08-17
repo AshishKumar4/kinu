@@ -15,7 +15,7 @@ import type {
   Shell,
 } from './primitives.js';
 import type { CraftedTool } from './craft.js';
-import type { MissionCallUsage } from '../mission-budget.js';
+import type { Usage } from '../usage.js';
 import type { ExecutionRouter } from '../execution/types.js';
 import type { FileCheckpoints } from '../checkpoints/types.js';
 import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate.js';
@@ -38,30 +38,29 @@ export interface CraftStore {
 }
 
 /**
- * What one branch call cost, as the provider that served it reported.
+ * One rollout: the proposal and what it cost. Code is parsed centrally.
  *
- * A branch runs where the mission ledger is not: its own facet on cf, its own
- * child process on the CLI, each resolving its own model. Nothing the fork seam
- * wrapped around `rt.llm` sees these calls, so the spend has to travel back
- * with the result — the engine debits it at the seam that already interposes
- * between every rollout (mcts/engine.ts).
+ * `usage` is what the provider that served the branch reported. A branch runs
+ * where the mission ledger is not: its own facet on cf, its own child process
+ * on the CLI, each resolving its own model. Nothing the fork seam wrapped
+ * around `rt.llm` sees these calls, so the spend has to travel back with the
+ * result — the engine debits it at the seam that already interposes between
+ * every rollout (mcts/engine.ts).
  *
- * Optional because a backend that cannot report usage meters nothing rather
- * than guessing, and because a branch is a single call either way: the engine
- * still refuses to open the next expansion once the ledger is spent.
+ * Optional, and free to report only some of its fields, because a backend that
+ * cannot measure a call meters nothing rather than guessing — and because a
+ * branch is a single call either way: the engine still refuses to open the next
+ * expansion once the ledger is spent.
  */
-export type BranchUsage = MissionCallUsage;
-
-/** One rollout: the proposal and what it cost. Code is parsed centrally. */
 export interface BranchExploration {
   text: string;
-  usage?: BranchUsage;
+  usage?: Usage;
 }
 
-/** One failure post-mortem, and what it cost. */
+/** One failure post-mortem, and what it cost — `usage` as on {@link BranchExploration}. */
 export interface BranchReflection {
   text: string;
-  usage?: BranchUsage;
+  usage?: Usage;
 }
 
 /**

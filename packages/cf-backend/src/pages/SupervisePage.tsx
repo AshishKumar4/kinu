@@ -24,7 +24,7 @@ import { btnSmCls, inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import type { Rpc } from "@/lib/protocol";
 import { fmtTokens, fmtPct } from "@/lib/format";
-import { cacheHitRate } from "@proteus/core";
+import { addUsage, cacheHitRate, UsageSchema, usageTotal, type Usage } from "@proteus/core";
 import * as v from "valibot";
 
 const ProposedTaskSchema = v.object({
@@ -37,7 +37,7 @@ type ProposedTask = v.InferOutput<typeof ProposedTaskSchema>;
 const RunSummarySchema = v.object({
   runId: v.string(), startedAt: v.number(), causedBy: v.nullable(v.string()),
   userMessage: v.nullable(v.string()), status: v.nullable(v.string()),
-  tokensIn: v.number(), tokensOut: v.number(), tokensCached: v.number(), eventCount: v.number(),
+  usage: UsageSchema, turnsWithoutUsage: v.number(), eventCount: v.number(),
 });
 
 const TriggerRowSchema = v.object({
@@ -178,11 +178,13 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   const load = useCallback(async () => v.parse(v.array(RunSummarySchema), await rpc("getRunSummaries", [30])), [rpc]);
   const { resource, reload } = useAsyncResource(load);
   const runs = lastValue(resource);
-  const totalTokens = (runs ?? []).reduce((s, r) => s + r.tokensIn + r.tokensOut, 0);
-  const totalCached = (runs ?? []).reduce((s, r) => s + (r.tokensCached ?? 0), 0);
-  const totalIn = (runs ?? []).reduce((s, r) => s + r.tokensIn, 0);
-  // One definition of a cache hit, shared with the Activity surface.
-  const hitRate = cacheHitRate({ input: totalIn, cached: totalCached });
+  const totalUsage = (runs ?? []).reduce<Usage>((acc, r) => addUsage(acc, r.usage), {});
+  const totalTokens = usageTotal(totalUsage);
+  // One definition of a cache hit, shared with the Activity surface. Null
+  // unless input AND cache-read were both reported — an absent rate is not 0%.
+  const hitRate = cacheHitRate(totalUsage);
+  // The denominator for the totals above: runs the provider went quiet on.
+  const silentRuns = (runs ?? []).filter((r) => r.turnsWithoutUsage > 0).length;
   return (
     <section className="min-w-0">
       <div className="flex flex-wrap items-center gap-2 mb-3">
@@ -190,8 +192,13 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
         <h2 className="text-sm font-semibold p-text">Run history &amp; budget</h2>
         {runs && <Badge variant="secondary">{runs.length}</Badge>}
         <span className="ml-auto flex flex-wrap items-center gap-2">
-          {totalCached > 0 && <span className="p-meta p-success" title="prompt-cache hit rate (cached input / total input)">{fmtPct(hitRate)} cached</span>}
-          {totalTokens > 0 && <span className="p-meta p-text-3">{fmtTokens(totalTokens)} tokens</span>}
+          {hitRate !== null && <span className="p-meta p-success" title="prompt-cache hit rate (cache-read input / total input)">{fmtPct(hitRate)} cached</span>}
+          {totalTokens !== undefined && <span className="p-meta p-text-3">{fmtTokens(totalTokens)} tokens</span>}
+          {silentRuns > 0 && (
+            <span className="p-meta p-text-3" title="These runs are not in the totals: their provider reported no usage, which is not the same as costing nothing.">
+              {silentRuns} unreported
+            </span>
+          )}
         </span>
       </div>
       {runs === null ? (
@@ -202,15 +209,21 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
         : runs.length === 0 ? <p className="text-xs p-text-3">No recorded runs yet.</p>
         : (
           <div className="rounded-md border p-border overflow-hidden text-xs">
-            {runs.map((r) => (
-              <div key={r.runId} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-                <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "aborted" ? "p-dot-danger" : "p-dot-neutral"}`} />
-                <span className="p-meta px-1 rounded-sm p-fill p-text-3 shrink-0">{r.causedBy ?? "chat"}</span>
-                <span className="p-text-2 truncate flex-1" title={r.userMessage ?? r.runId}>{r.userMessage ?? r.runId}</span>
-                {(r.tokensIn + r.tokensOut) > 0 && <span className="p-text-3 shrink-0 tabular-nums" title="tokens in+out">{fmtTokens(r.tokensIn + r.tokensOut)} tok</span>}
-                <span className="p-text-3 shrink-0 tabular-nums">{new Date(r.startedAt).toLocaleDateString()}</span>
-              </div>
-            ))}
+            {runs.map((r) => {
+              const tokens = usageTotal(r.usage);
+              return (
+                <div key={r.runId} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
+                  <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "aborted" ? "p-dot-danger" : "p-dot-neutral"}`} />
+                  <span className="p-meta px-1 rounded-sm p-fill p-text-3 shrink-0">{r.causedBy ?? "chat"}</span>
+                  <span className="p-text-2 truncate flex-1" title={r.userMessage ?? r.runId}>{r.userMessage ?? r.runId}</span>
+                  <span className="p-text-3 shrink-0 tabular-nums"
+                    title={tokens === undefined
+                      ? `no usage reported — ${r.turnsWithoutUsage} turn${r.turnsWithoutUsage === 1 ? "" : "s"} ended without the provider counting anything`
+                      : "tokens in+out"}>{fmtTokens(tokens)} tok</span>
+                  <span className="p-text-3 shrink-0 tabular-nums">{new Date(r.startedAt).toLocaleDateString()}</span>
+                </div>
+              );
+            })}
           </div>
         )}
     </section>

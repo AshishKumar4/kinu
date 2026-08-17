@@ -42,16 +42,21 @@ export interface BenchCaseScore {
   /** Mean per attempt, so the number stays on the same scale as the budget. */
   durationMsA: number;
   durationMsB: number;
-  tokensA: number;
-  tokensB: number;
+  /** Mean tokens per attempt. null means at least one attempt carried no token
+   *  measurement at all — an unmeasured attempt summed as zero is exactly what
+   *  made a variant whose meter broke look cheap. Same rule as `modelCallsA`:
+   *  never rendered as zero. */
+  tokensA: number | null;
+  tokensB: number | null;
   /** Mean observed inference calls per attempt. null means call evidence was
    *  absent for at least one attempt; it must never be rendered as zero. */
   modelCallsA: number | null;
   modelCallsB: number | null;
   /** Largest working set either variant reached on this task — the number the
-   *  context-discipline candidates are supposed to move. */
-  peakPromptTokensA: number;
-  peakPromptTokensB: number;
+   *  context-discipline candidates are supposed to move. null when at least one
+   *  attempt carried no measurement of it. */
+  peakPromptTokensA: number | null;
+  peakPromptTokensB: number | null;
   /** First breach seen across the repeats, or null when none breached. */
   breachA: BudgetBreach | null;
   breachB: BudgetBreach | null;
@@ -151,16 +156,24 @@ function foldRepeats(attempts: readonly AttemptOutcome[]) {
   const n = attempts.length;
   const error = attempts.find((x) => x.error)?.error;
   const calls = attempts.map((attempt) => attempt.modelCalls);
+  const tokens = attempts.map((attempt) => attempt.tokens);
+  const peaks = attempts.map((attempt) => attempt.peakPromptTokens);
   return {
     passes: attempts.filter((x) => x.passed).length,
     durationMs: Math.round(attempts.reduce((s, x) => s + x.durationMs, 0) / n),
-    tokens: Math.round(attempts.reduce((s, x) => s + x.tokens, 0) / n),
+    // One unmeasured repeat makes the row's cost unknown, not smaller — the
+    // all-or-nothing rule the model-call fold below has always used.
+    tokens: tokens.every((count) => count !== undefined)
+      ? Math.round(tokens.reduce((sum, count) => sum + count, 0) / n)
+      : null,
     modelCalls: calls.every((count) => count !== undefined)
       ? calls.reduce((sum, count) => sum + count, 0) / n
       : null,
     // A peak is a maximum, not a mean: averaging peaks across repeats would
     // report a working set no attempt ever actually reached.
-    peakPromptTokens: attempts.reduce((m, x) => Math.max(m, x.peakPromptTokens), 0),
+    peakPromptTokens: peaks.every((peak) => peak !== undefined)
+      ? peaks.reduce((m, peak) => Math.max(m, peak), 0)
+      : null,
     breach: attempts.find((x) => x.budgetBreach)?.budgetBreach ?? null,
     breachCount: attempts.filter((x) => x.budgetBreach).length,
     error,
@@ -282,24 +295,31 @@ function renderCase(c: BenchCaseScore): string {
  *  working set got — and a context-discipline change is supposed to move the
  *  second without moving the first. The peak is a maximum over tasks; averaging
  *  peaks would report a working set nothing ever reached. Both read 0 for the
- *  deterministic controls, which make no model calls. */
+ *  deterministic controls, which make no model call and report that as measured
+ *  zero; `unreported` is reserved for a task some attempt left unmeasured, since
+ *  a missing measurement averaged in as zero is how an arm comes to look cheap. */
 function renderCost(cases: readonly BenchCaseScore[]): string {
   if (cases.length === 0) return '  cost: no attempts';
-  const mean = (of: (c: BenchCaseScore) => number) =>
-    Math.round(cases.reduce((sum, c) => sum + of(c), 0) / cases.length);
-  const peak = (of: (c: BenchCaseScore) => number) =>
-    cases.reduce((max, c) => Math.max(max, of(c)), 0);
-  const meanCalls = (side: 'A' | 'B'): string => {
-    const values = cases.map((entry) => side === 'A' ? entry.modelCallsA : entry.modelCallsB);
+  const mean = (of: (c: BenchCaseScore) => number | null, digits: number): string => {
     let total = 0;
-    for (const value of values) {
+    for (const entry of cases) {
+      const value = of(entry);
       if (value === null) return 'unreported';
       total += value;
     }
-    return (total / values.length).toFixed(1);
+    return (total / cases.length).toFixed(digits);
   };
-  return `  tokens/task A=${mean((c) => c.tokensA)}  B=${mean((c) => c.tokensB)}` +
-    `   model calls/task A=${meanCalls('A')}  B=${meanCalls('B')}` +
+  const peak = (of: (c: BenchCaseScore) => number | null): string => {
+    let max = 0;
+    for (const entry of cases) {
+      const value = of(entry);
+      if (value === null) return 'unreported';
+      max = Math.max(max, value);
+    }
+    return String(max);
+  };
+  return `  tokens/task A=${mean((c) => c.tokensA, 0)}  B=${mean((c) => c.tokensB, 0)}` +
+    `   model calls/task A=${mean((c) => c.modelCallsA, 1)}  B=${mean((c) => c.modelCallsB, 1)}` +
     `   peak prompt tokens A=${peak((c) => c.peakPromptTokensA)}  B=${peak((c) => c.peakPromptTokensB)}`;
 }
 
@@ -352,12 +372,16 @@ export interface GainReport {
 
 export interface GainArmCostSummary {
   attempts: number;
-  totalTokens: number;
-  meanTokens: number;
+  /** null means at least one attempt carried no token measurement. An arm is
+   *  compared against the other arm's spend, so one unmeasured attempt summed as
+   *  zero would hand this arm a discount it never earned. */
+  totalTokens: number | null;
+  meanTokens: number | null;
   /** null means at least one attempt did not report call evidence. */
   totalModelCalls: number | null;
   meanModelCalls: number | null;
-  peakPromptTokens: number;
+  /** null when at least one attempt carried no working-set measurement. */
+  peakPromptTokens: number | null;
   budgetBreaches: number;
   errors: number;
 }
@@ -384,24 +408,27 @@ export interface BuildGainReportInput {
 }
 
 function gainArmCost(attempts: readonly AttemptOutcome[]): GainArmCostSummary {
-  const totalTokens = attempts.reduce((sum, attempt) => sum + attempt.tokens, 0);
+  const reportedTokens = attempts.map((attempt) => attempt.tokens);
+  const totalTokens = reportedTokens.every((tokens) => tokens !== undefined)
+    ? reportedTokens.reduce((sum, tokens) => sum + tokens, 0)
+    : null;
   const reportedCalls = attempts.map((attempt) => attempt.modelCalls);
   const hasCompleteCallEvidence = reportedCalls.every((calls) => calls !== undefined);
   const totalModelCalls = hasCompleteCallEvidence
     ? reportedCalls.reduce((sum, calls) => sum + calls, 0)
     : null;
+  const reportedPeaks = attempts.map((attempt) => attempt.peakPromptTokens);
   return {
     attempts: attempts.length,
     totalTokens,
-    meanTokens: attempts.length === 0 ? 0 : totalTokens / attempts.length,
+    meanTokens: totalTokens === null || attempts.length === 0 ? null : totalTokens / attempts.length,
     totalModelCalls,
     meanModelCalls: totalModelCalls === null || attempts.length === 0
       ? null
       : totalModelCalls / attempts.length,
-    peakPromptTokens: attempts.reduce(
-      (peak, attempt) => Math.max(peak, attempt.peakPromptTokens),
-      0,
-    ),
+    peakPromptTokens: reportedPeaks.every((peak) => peak !== undefined)
+      ? reportedPeaks.reduce((peak, next) => Math.max(peak, next), 0)
+      : null,
     budgetBreaches: attempts.filter((attempt) => attempt.budgetBreach !== null).length,
     errors: attempts.filter((attempt) => attempt.error !== undefined).length,
   };
@@ -466,12 +493,12 @@ export function renderGainSummary(report: GainReport): string {
   lines.push('');
   lines.push(`Tasks: ${s.tasks} (identical sequence, both arms)` +
     (report.config.repeats > 1 ? ` × ${report.config.repeats} passes; per-task reward is the mean over passes` : ''));
-  lines.push(`  tokens/attempt stateless=${report.cost.stateless.meanTokens.toFixed(0)}` +
-    `  stateful=${report.cost.stateful.meanTokens.toFixed(0)}`);
-  lines.push(`  model calls/attempt stateless=${formatCallMean(report.cost.stateless.meanModelCalls)}` +
-    `  stateful=${formatCallMean(report.cost.stateful.meanModelCalls)}`);
-  lines.push(`  peak prompt tokens stateless=${report.cost.stateless.peakPromptTokens}` +
-    `  stateful=${report.cost.stateful.peakPromptTokens}`);
+  lines.push(`  tokens/attempt stateless=${formatMeasured(report.cost.stateless.meanTokens, 0)}` +
+    `  stateful=${formatMeasured(report.cost.stateful.meanTokens, 0)}`);
+  lines.push(`  model calls/attempt stateless=${formatMeasured(report.cost.stateless.meanModelCalls, 1)}` +
+    `  stateful=${formatMeasured(report.cost.stateful.meanModelCalls, 1)}`);
+  lines.push(`  peak prompt tokens stateless=${formatMeasured(report.cost.stateless.peakPromptTokens, 0)}` +
+    `  stateful=${formatMeasured(report.cost.stateful.peakPromptTokens, 0)}`);
   lines.push(`  stateful reward  ${(s.statefulReward * 100).toFixed(1)}%`);
   lines.push(`  stateless reward ${(s.statelessReward * 100).toFixed(1)}%`);
   lines.push(`  gain ${fmtPp(s.gain)}  95% CI [${fmtPp(s.ci.lo)}, ${fmtPp(s.ci.hi)}]  p=${s.pValue.toFixed(4)}`);
@@ -487,6 +514,8 @@ export function renderGainSummary(report: GainReport): string {
   return lines.join('\n');
 }
 
-function formatCallMean(value: number | null): string {
-  return value === null ? 'unreported' : value.toFixed(1);
+/** A cost figure that may not have been measured. `unreported` rather than a
+ *  number, because the whole point of the null is that no digit is honest here. */
+function formatMeasured(value: number | null, digits: number): string {
+  return value === null ? 'unreported' : value.toFixed(digits);
 }

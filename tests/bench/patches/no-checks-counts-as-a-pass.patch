@@ -1,8 +1,7 @@
 diff --git a/packages/core/src/bench/types.ts b/packages/core/src/bench/types.ts
-index aee7dae..bdc4c11 100644
 --- a/packages/core/src/bench/types.ts
 +++ b/packages/core/src/bench/types.ts
-@@ -100,7 +100,7 @@ export interface Solver {
+@@ -172,7 +172,7 @@ export interface Solver {
  /** Passing a task is all-or-nothing: every check must exit 0. Partial credit
   *  would need a weighting someone chose, and a chosen weighting is a rubric. */
  export function attemptPassed(checks: readonly CheckOutcome[]): boolean {
@@ -10,4 +9,4 @@ index aee7dae..bdc4c11 100644
 +  return checks.every((c) => c.passed);
  }
  
- /** Tokens spent on one model call, read from the AI SDK's low-level stream
+ /** Tokens spent on one model call, or undefined when the report carried no

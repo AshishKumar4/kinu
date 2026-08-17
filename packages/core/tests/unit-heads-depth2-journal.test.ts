@@ -53,7 +53,7 @@ function report(id: string, stepCount: number): HeadReport {
     childHeadIds: [],
     toolCalls: [],
     stepCount,
-    tokenUsage: { input: 10, output: 20, total: 30 },
+    usage: { input: 10, output: 20 },
     wallClockMs: 5,
   };
 }

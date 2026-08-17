@@ -3,13 +3,13 @@ import type { Baseline } from './gate.js';
 
 export const LOCKED_BASELINE: Baseline = {
   'backend-turn-driver/failure-classification': 'ff4bd2a7b65227c5',
-  'backend-turn-driver/file-edit-row': '2b30d760ac783284',
+  'backend-turn-driver/file-edit-row': '23e246f7308fdbd3',
   'backend-turn-driver/overflow-applied': '5fb734fcf1494a57',
   'backend-turn-driver/overflow-recovery-plan': 'c12c8ada517dfde3',
   'backend-turn-driver/prompt-token-trigger': '1f11659c0558bb43',
-  'backend-turn-driver/run-bracket': '1caee029fffee764',
+  'backend-turn-driver/run-bracket': '9d79b402e3189d13',
   'backend-turn-driver/run-bracket-never-throws': 'e8218e7869269183',
-  'backend-turn-driver/turn-snapshot': '117af1f217873689',
+  'backend-turn-driver/turn-snapshot': '90ca127617a7b1cb',
   'compaction/checkpoint-roundtrip': '907dcfd6fffd6393',
   'compaction/first-pass-prompt': 'b9b3d9b8e7e82e07',
   'compaction/iterative-prompt': '520c887b8dfc267c',

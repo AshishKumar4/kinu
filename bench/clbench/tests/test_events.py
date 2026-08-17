@@ -33,9 +33,12 @@ has_answer = events.has_answer
 parse_events = events.parse_events
 run_events = events.run_events
 session_id = events.session_id
+add_usage = events.add_usage
 sum_usages = events.sum_usages
 tool_calls = events.tool_calls
 turn_usage = events.turn_usage
+usage_reported = events.usage_reported
+usage_total = events.usage_total
 
 # One real turn as `proteus exec --json` emitted it, text-deltas elided.
 REAL_TURN = "\n".join(
@@ -56,7 +59,15 @@ REAL_TURN = "\n".join(
             "steps": 1,
             "durationMs": 5129,
             "hadError": False,
-            "usage": {"input": 5642, "output": 387, "cached": 0},
+            # Two fields, because two is what the provider reported. The old
+            # capture read `"cached": 0`, but that zero was structural rather
+            # than measured: the accumulator initialised `cached` to 0 on every
+            # turn (turn-accumulator.ts reset()) and emitted the field whenever
+            # either half was non-zero, so it said nothing about whether the
+            # provider had mentioned caching. What it actually said is
+            # unrecoverable from the capture, so the fixture states only what is
+            # true; a genuinely REPORTED zero is covered by its own test below.
+            "usage": {"input": 5642, "output": 387},
         },
     ]
 )
@@ -112,43 +123,99 @@ class SessionId(unittest.TestCase):
         self.assertIsNone(session_id([{"type": "session", "id": 17}]))
 
 
-class TurnUsage(unittest.TestCase):
+class UsageReading(unittest.TestCase):
     def test_reads_the_reported_usage(self) -> None:
         self.assertEqual(
             turn_usage(parse_events(REAL_TURN)),
-            {"input": 5642, "output": 387, "cached": 0},
+            {"input": 5642, "output": 387},
         )
+
+    def test_an_unreported_field_stays_absent_rather_than_arriving_as_zero(self) -> None:
+        # The half of the contract this reader exists for: `cacheRead` is not in
+        # the payload, so it is not in the result. A zero here would claim the
+        # provider measured no cache reads, which it never said.
+        usage = turn_usage(parse_events(REAL_TURN))
+        self.assertNotIn("cacheRead", usage)
+        self.assertEqual(sorted(usage), ["input", "output"])
 
     def test_sums_across_turns_because_proteus_reports_per_turn(self) -> None:
-        events = [
-            {"type": "turn_end", "usage": {"input": 10, "output": 2, "cached": 1}},
-            {"type": "turn_end", "usage": {"input": 20, "output": 3, "cached": 4}},
+        turns = [
+            {"type": "turn_end", "usage": {"input": 10, "output": 2, "cacheRead": 1}},
+            {"type": "turn_end", "usage": {"input": 20, "output": 3, "cacheRead": 4}},
         ]
-        self.assertEqual(turn_usage(events), {"input": 30, "output": 5, "cached": 5})
+        self.assertEqual(turn_usage(turns), {"input": 30, "output": 5, "cacheRead": 5})
 
-    def test_a_turn_that_reported_no_usage_reads_as_zero(self) -> None:
+    def test_carries_every_field_the_emitter_can_report(self) -> None:
+        # Not a hardcoded three: the emitter can report cache writes, the 1h
+        # retention split, reasoning tokens and Cloudflare's neurons, and a
+        # reader that knows only in/out/cached drops the rest silently.
+        reported = {
+            "input": 1,
+            "output": 2,
+            "cacheRead": 3,
+            "cacheWrite": 4,
+            "cacheWrite1h": 5,
+            "reasoning": 6,
+            "neurons": 7,
+        }
+        self.assertEqual(turn_usage([{"type": "turn_end", "usage": reported}]), reported)
+
+    def test_a_turn_that_reported_no_usage_is_not_a_turn_that_reported_zeros(self) -> None:
+        # The inverted invariant. This used to assert three zeros, which is the
+        # defect: it made an unmetered turn indistinguishable from a free one,
+        # and CL-Bench priced the difference.
+        usage = turn_usage([{"type": "turn_end", "hadError": False}])
+        self.assertEqual(usage, {})
+        self.assertFalse(usage_reported(usage))
+        self.assertIsNone(usage_total(usage))
+
+    def test_a_turn_that_reported_zeros_still_reads_as_zeros(self) -> None:
+        # The other half of the same distinction, guarded separately so the two
+        # cannot be collapsed back into one: a provider that says "zero" DID
+        # measure the turn (Workers AI sends prompt_tokens_details.cached_tokens
+        # as an explicit 0), and that measurement must survive.
+        zeroed = turn_usage(
+            [{"type": "turn_end", "usage": {"input": 0, "output": 0, "cacheRead": 0}}]
+        )
+        self.assertEqual(zeroed, {"input": 0, "output": 0, "cacheRead": 0})
+        self.assertTrue(usage_reported(zeroed))
+        self.assertEqual(usage_total(zeroed), 0)
+
+    def test_partial_usage_keeps_the_unreported_buckets_absent(self) -> None:
+        usage = turn_usage([{"type": "turn_end", "usage": {"input": 9}}])
+        self.assertEqual(usage, {"input": 9})
+        self.assertEqual(usage_total(usage), 9)
+
+    def test_a_non_numeric_count_is_not_a_count(self) -> None:
         self.assertEqual(
-            turn_usage([{"type": "turn_end", "hadError": False}]),
-            {"input": 0, "output": 0, "cached": 0},
+            turn_usage([{"type": "turn_end", "usage": {"input": "lots", "output": 4}}]),
+            {"output": 4},
         )
 
-    def test_partial_usage_fills_the_missing_buckets(self) -> None:
+    def test_add_usage_keeps_a_field_neither_side_reported_absent(self) -> None:
         self.assertEqual(
-            turn_usage([{"type": "turn_end", "usage": {"input": 9}}]),
-            {"input": 9, "output": 0, "cached": 0},
+            add_usage({"input": 1}, {"output": 2, "cacheRead": 0}),
+            {"input": 1, "output": 2, "cacheRead": 0},
         )
+        self.assertEqual(add_usage({}, {}), {})
 
     def test_sum_usages_combines_invocations(self) -> None:
         self.assertEqual(
             sum_usages(
                 [
-                    {"input": 1, "output": 2, "cached": 3},
-                    {"input": 10, "output": 20, "cached": 30},
+                    {"input": 1, "output": 2, "cacheRead": 3},
+                    {"input": 10, "output": 20, "cacheRead": 30},
                 ]
             ),
-            {"input": 11, "output": 22, "cached": 33},
+            {"input": 11, "output": 22, "cacheRead": 33},
         )
-        self.assertEqual(sum_usages([]), {"input": 0, "output": 0, "cached": 0})
+
+    def test_a_run_where_nothing_was_metered_is_distinguishable_from_zeros(self) -> None:
+        # What `_record_usage` asks before it prices anything. Nothing to sum is
+        # nothing reported — it used to be three zeros, i.e. a free run.
+        self.assertEqual(sum_usages([]), {})
+        self.assertFalse(usage_reported(sum_usages([{}, {}])))
+        self.assertTrue(usage_reported(sum_usages([{"input": 0}])))
 
 
 class TurnSignals(unittest.TestCase):

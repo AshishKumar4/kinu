@@ -29,6 +29,7 @@ import {
   EvolutionEngine,
   readActivityLog,
   summarizeSteps,
+  usageReported,
   initWorkspaceSchema,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
@@ -2600,8 +2601,8 @@ export class OrchestratorAgent extends ActorAgent {
   /**
    * Recent runs enriched with PROVENANCE (what kicked each off) + COST (tokens
    * spent) — the cross-run history + budget view for the Supervise altitude.
-   * Folds the per-run run_start (caused_by/userMessage) and summed turn_end
-   * tokenUsage out of the durable event log.
+   * Folds the per-run run_start (caused_by/userMessage) and the accumulated
+   * turn_end usage out of the durable event log.
    */
   @callable()
   async getRunSummaries(limit: number = 30): Promise<RunSummary[]> {
@@ -2622,22 +2623,29 @@ export class OrchestratorAgent extends ActorAgent {
     const windowLimit = clampLimit(opts?.steps, ACTIVITY_STEP_WINDOW);
     const logLimit = clampLimit(opts?.logs, ACTIVITY_LOG_WINDOW);
     const events = this.eventRecorder.readRecentByType('step_finish', windowLimit);
-    const steps = events.flatMap((e) => (e.type === 'step_finish' && e.usage ? [e] : []));
-    const newest = steps[steps.length - 1];
+    const steps = events.flatMap((e) => (e.type === 'step_finish' ? [e] : []));
+    // An all-absent Usage is still a truthy object, so "the provider said
+    // something" is `usageReported` — never a presence check on the field.
+    const measured = steps.filter((e) => usageReported(e.usage ?? {}));
+    const newest = measured[measured.length - 1];
     return {
-      latest: newest?.usage
-        ? {
+      latest: newest === undefined
+        ? null
+        : {
           at: Date.parse(newest.timestamp) || Date.now(),
           runId: newest.runId,
           stepIndex: newest.stepIndex,
-          usage: newest.usage,
+          // Non-empty by construction: `measured` kept only reporting steps.
+          usage: newest.usage ?? {},
           context: newest.context ?? null,
-        }
-        : null,
+        },
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
       contextWindow: this.sessionContextWindow() || null,
-      telemetry: summarizeSteps(steps.map((e) => e.usage!), { windowLimit }),
+      // Every step in the window, reporting or not: `summarizeSteps` counts the
+      // silent ones into `stepsWithoutUsage` so the totals carry their own
+      // denominator instead of quietly under-counting.
+      telemetry: summarizeSteps(steps, { windowLimit }),
       budgets: this.budget.snapshot(),
       log: readActivityLog(this.boundSql, logLimit),
     };

@@ -17,6 +17,7 @@ import {
   composePrepareStep,
   type ProteusExtension,
   type ChatEvent,
+  type Usage,
 } from '../src/index.ts';
 
 /** A v2 language-model stub that requests the `ping` tool on step 1, then
@@ -221,7 +222,7 @@ describe('transformContext through runChat', () => {
   test('providerReportedTokens threads into the transform context, and step-finish reports the priced prompt', async () => {
     const { model } = promptCapturingModel();
     let sawTokens: number | undefined;
-    const stepTokens: Array<[number | undefined, number | undefined]> = [];
+    const stepUsage: Array<Usage | undefined> = [];
     for await (const ev of runChat({
       model,
       system: 'sys',
@@ -237,11 +238,13 @@ describe('transformContext through runChat', () => {
         },
       }),
     })) {
-      if (ev.type === 'step-finish') stepTokens.push([ev.inputTokens, ev.outputTokens]);
+      if (ev.type === 'step-finish') stepUsage.push(ev.usage);
     }
     expect(sawTokens).toBe(123_456);
-    // promptCapturingModel reports inputTokens: 1, outputTokens: 1 on finish.
-    expect(stepTokens).toEqual([[1, 1]]);
+    // promptCapturingModel reports a 1-token prompt and a 1-token completion and
+    // no cache or reasoning split, so those fields stay absent rather than 0.
+    expect(stepUsage).toEqual([{ input: 1, output: 1 }]);
+    expect(Object.keys(stepUsage[0] ?? {}).sort()).toEqual(['input', 'output']);
   });
 
   test("transformTrigger threads into the transform context ('force' on overflow recovery, 'auto' default)", async () => {

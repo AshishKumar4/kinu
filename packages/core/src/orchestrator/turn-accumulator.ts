@@ -1,34 +1,44 @@
 // TurnAccumulator — the per-turn accounting slice of the backend-agnostic agent.
 //
 // Both backends do the same bookkeeping inside the inference loop: collect the
-// turn's tool calls, count steps, accumulate token usage (incl. cached +
-// reasoning), and flag errors. This was duplicated as `_turn*` fields + hook
-// bodies on the cf-backend OrchestratorAgent and inline in the CLI chat loop.
-// Hoisted here so there is ONE tested implementation; platform side-effects
-// (activity log, durable run-event recorder) inject as optional sinks.
+// turn's tool calls, count steps, accumulate the provider's usage report, and
+// flag errors. This was duplicated as `_turn*` fields + hook bodies on the
+// cf-backend OrchestratorAgent and inline in the CLI chat loop. Hoisted here so
+// there is ONE tested implementation; platform side-effects (activity log,
+// durable run-event recorder) inject as optional sinks.
+//
+// Nothing here knows the AI SDK's usage dialect: a step arrives with its usage
+// already normalized (`normalizeUsage` at the seam that holds the SDK object),
+// so absence means the provider said nothing and a zero means it said zero all
+// the way through to the ledger.
 
 import type { ModelMessage } from 'ai';
-import type { ToolCallRecord, TurnUsage } from '../evolution/types.js';
+import type { ToolCallRecord } from '../evolution/types.js';
 import { TurnContextBudget, citesSpillAddress } from '../context-budget.js';
 import { TurnContextMeter } from '../context-meter.js';
-import type { RunEventInput, StepUsage } from '../events/types.js';
+import type { RunEventInput } from '../events/types.js';
 import { TurnFileLedger } from '../tools/file-ledger.js';
 import { priceCall, type MissionGovernor } from '../mission-budget.js';
+import { USAGE_FIELDS, addUsage, usageReported, usageTotal, type Usage } from '../usage.js';
 import * as v from 'valibot';
 import { projectJsonValue, type JsonObject, type JsonValue } from '../utils/json.js';
 
 const UndefinedSchema = v.undefined();
 const StringSchema = v.string();
 
-/** ai-SDK v6 step shape we read for accounting (loosely typed — the SDK's
- *  StepResult, minus the fields we don't use). */
+/** A finished step, as the accounting reads it: the ai-SDK v6 StepResult minus
+ *  the fields we don't use, with its usage already normalized. */
 export interface StepLike {
   text?: string;
   finishReason?: unknown;
   toolCalls?: ReadonlyArray<{ toolName?: string; name?: string }>;
   toolResults?: ReadonlyArray<unknown>;
-  usage?: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; reasoningTokens?: number };
-  providerMetadata?: { anthropic?: { cacheReadInputTokens?: number } };
+  /** The provider's report for THIS step's request, already normalized by the
+   *  caller that held the SDK object (cf-backend's onStepFinish, core's
+   *  `runChat`). A domain value, not a dialect: the two fields no SDK type can
+   *  express — Anthropic's 1h cache writes and Workers AI's neurons — reach the
+   *  ledger only because this is where they survive. */
+  usage?: Usage;
   /** `messages` is CUMULATIVE across the turn — the SDK grows one array and
    *  hands the whole thing to every step. The per-step delta is taken here so
    *  there is one implementation of it for both backends. */
@@ -56,19 +66,23 @@ export interface TurnSinks {
   /** A finished step, for the durable run-event log — the ONE per-step durable
    *  write on both backends. Derived from the durable row so the payload cannot
    *  drift from what is stored: `messages` is what the step produced, `usage`
-   *  the provider's own report, `context` the local measurement of the request.
-   *  Any of them may be absent — none is ever fabricated. */
+   *  the provider's own report, `usd` that report priced, `modelId` who served
+   *  it, `context` the local measurement of the request. Any of them may be
+   *  absent — none is ever fabricated. */
   onStepEvent?(e: Omit<Extract<RunEventInput, { type: 'step_finish' }>, 'type'>): void;
 }
 
 export class TurnAccumulator {
   toolCalls: ToolCallRecord[] = [];
   stepCount = 0;
-  usage: TurnUsage = { input: 0, output: 0, cached: 0 };
-  /** Provider-reported prompt tokens of the turn's LAST step — the final
-   *  request's priced input size (0 until a step reports). Backends persist
+  /** The turn's steps summed field by field. `{}` means no step reported
+   *  anything — never a row of zeros standing in for a silent provider. */
+  usage: Usage = {};
+  /** Provider-reported prompt tokens of the turn's LAST reporting step — the
+   *  final request's priced input size. `undefined` until a step reports one,
+   *  which is what keeps it distinguishable from a reported 0. Backends persist
    *  it at turn end as the next turn's measured compaction-trigger signal. */
-  lastPromptTokens = 0;
+  lastPromptTokens: number | undefined = undefined;
   hadError = false;
   firstChunkSeen = false;
   startedAt = 0;
@@ -114,8 +128,8 @@ export class TurnAccumulator {
   reset(now: number): void {
     this.toolCalls = [];
     this.stepCount = 0;
-    this.usage = { input: 0, output: 0, cached: 0 };
-    this.lastPromptTokens = 0;
+    this.usage = {};
+    this.lastPromptTokens = undefined;
     this.hadError = false;
     this.firstChunkSeen = false;
     this.startedAt = now;
@@ -137,12 +151,12 @@ export class TurnAccumulator {
     return [...this.craftUsed];
   }
 
-  /** What the turn spent, or undefined when no step reported usage — so a
+  /** What the turn spent, or undefined when no step reported anything — so a
    *  turn served by a provider that reports nothing carries no usage rather
-   *  than a fabricated zero. */
-  reportedUsage(): TurnUsage | undefined {
-    const { input, output, cached } = this.usage;
-    return input > 0 || output > 0 || cached > 0 ? { input, output, cached } : undefined;
+   *  than a fabricated zero. A step that reported an honest zero IS a report
+   *  and comes back as one. */
+  reportedUsage(): Usage | undefined {
+    return usageReported(this.usage) ? this.usage : undefined;
   }
 
   /** First streamed token of the turn — fired once. */
@@ -185,72 +199,38 @@ export class TurnAccumulator {
     const toolCallNames = toolCalls.map((tc) => tc?.toolName ?? tc?.name ?? '?').join(',');
     const derivedStepType = toolCalls.length > 0 ? 'tool-call' : 'text';
     const textLen = (ctx.text ?? '').length;
-    const u = ctx.usage;
-    const inTok = u?.inputTokens ?? 0;
-    const outTok = u?.outputTokens ?? 0;
-    // Cached prefix: Workers AI / OpenAI on usage; Anthropic in providerMetadata.
-    const cached = (u?.cachedInputTokens ?? 0) + (ctx.providerMetadata?.anthropic?.cacheReadInputTokens ?? 0);
-    const reasoning = u?.reasoningTokens ?? 0;
-    this.usage.input += inTok;
-    this.usage.output += outTok;
-    this.usage.cached += cached;
+    const usage: Usage = ctx.usage ?? {};
+    const reported = usageReported(usage);
+    this.usage = addUsage(this.usage, usage);
     // The model-call debit, taken from the provider's own report of the step
-    // just paid for. `cached` is a subset of `inputTokens` (ai v6 reports the
-    // cache-inclusive total), so it is not added again — but it IS handed over
-    // so the ledger can charge it at the model's cache-read rate.
-    this.budget?.debit(inTok + outTok, {
-      calls: 1,
-      usage: { input: inTok, output: outTok, cached: cached > 0 ? cached : undefined },
-    });
-    // Each step is one request, so the newest reporting step carries the
-    // whole current prompt (ai v6 usage.inputTokens is the cache-inclusive
-    // total). Keep the last non-zero report: a trailing step with absent
-    // usage must not erase a real measurement.
-    if (inTok > 0) this.lastPromptTokens = inTok;
+    // just paid for — and taken ONLY when there is a report: a step nothing was
+    // reported for meters nothing rather than debiting a zero that would read
+    // as a measurement. `cacheRead`/`cacheWrite` are subsets of `input`, so the
+    // total does not add them again, but the whole report goes over so the
+    // ledger can charge each part at its own rate.
+    if (reported) this.budget?.debit(usageTotal(usage) ?? 0, { calls: 1, usage });
+    // Each step is one request, so the newest reporting step carries the whole
+    // current prompt (`input` is the cache-inclusive total). A step that
+    // reported no prompt size leaves the last real measurement standing; a step
+    // that reported 0 overwrites it, because that is a measurement too.
+    if (usage.input !== undefined) this.lastPromptTokens = usage.input;
+    // Every field the provider actually mentioned, zeros included: a reported
+    // `cacheRead=0` is a cold prefix on a working cache plan, and hiding it
+    // makes that indistinguishable from a provider that never mentions caching.
+    // Driven off USAGE_FIELDS so a field added to the report cannot go unlogged.
     const extras: string[] = [];
-    if (cached > 0) extras.push(`cached=${cached}`);
-    if (reasoning > 0) extras.push(`reasoning=${reasoning}`);
+    for (const field of USAGE_FIELDS) {
+      const value = usage[field];
+      if (value !== undefined) extras.push(`${field}=${value}`);
+    }
     if (ctx.response?.modelId) extras.push(`model=${ctx.response.modelId}`);
     const extrasStr = extras.length > 0 ? ` ${extras.join(' ')}` : '';
     this.sinks.logActivity?.(
       'step_finish',
       `step ${this.stepCount} kind=${derivedStepType} reason=${String(ctx.finishReason)} ` +
-      `textLen=${textLen} tools=${toolCalls.length}[${toolCallNames}] results=${toolResults.length} ` +
-      `in=${inTok} out=${outTok}${extrasStr}`,
+      `textLen=${textLen} tools=${toolCalls.length}[${toolCallNames}] results=${toolResults.length}` +
+      extrasStr,
     );
-    // The provider's own report of this request, priced at the catalog rate
-    // the model carried when the call was made — the same rate and the same
-    // arithmetic the mission ledger debits with, so one step never costs two
-    // different amounts depending on who asks. No rate means no `usd`: an
-    // unpriced step is reported unpriced rather than blended into a number
-    // that looks like a measurement.
-    const pricing = this.budget?.pricing() ?? null;
-    const reported = inTok > 0 || outTok > 0;
-    let stepUsage: StepUsage | undefined;
-    if (reported) {
-      const modelId = v.safeParse(StringSchema, ctx.response?.modelId);
-      const baseUsage = {
-        input: inTok,
-        output: outTok,
-        cached,
-        reasoning,
-      };
-      const pricedUsd = pricing
-        ? priceCall({ input: inTok, output: outTok, cached }, pricing)
-        : null;
-      const reportedModel = modelId.success && modelId.output.length > 0
-        ? modelId.output
-        : null;
-      if (pricedUsd !== null && reportedModel !== null) {
-        stepUsage = { ...baseUsage, usd: pricedUsd, modelId: reportedModel };
-      } else if (pricedUsd !== null) {
-        stepUsage = { ...baseUsage, usd: pricedUsd };
-      } else if (reportedModel !== null) {
-        stepUsage = { ...baseUsage, modelId: reportedModel };
-      } else {
-        stepUsage = baseUsage;
-      }
-    }
     const composition = this.composition.take();
     // What THIS step produced: the cumulative array minus what earlier steps of
     // the same turn already made durable. An EMPTY array means the caller
@@ -266,8 +246,21 @@ export class TurnAccumulator {
     const reason = v.safeParse(StringSchema, ctx.finishReason);
     if (reason.success) stepEvent.reason = reason.output;
     if (produced.length > 0) stepEvent.messages = [...produced];
-    if (stepUsage) stepEvent.usage = stepUsage;
     if (composition) stepEvent.context = composition;
+    // The provider's own report of this request, priced at the catalog rate the
+    // model carried when the call was made — the same rate and the same
+    // arithmetic the mission ledger debits with, so one step never costs two
+    // different amounts depending on who asks. No rate means no `usd`: an
+    // unpriced step is reported unpriced rather than blended into a number that
+    // looks like a measurement.
+    if (reported) {
+      stepEvent.usage = usage;
+      const pricing = this.budget?.pricing() ?? null;
+      const usd = pricing ? priceCall(usage, pricing) : undefined;
+      if (usd !== undefined) stepEvent.usd = usd;
+      const modelId = v.safeParse(StringSchema, ctx.response?.modelId);
+      if (modelId.success && modelId.output.length > 0) stepEvent.modelId = modelId.output;
+    }
     this.sinks.onStepEvent?.(stepEvent);
   }
 }

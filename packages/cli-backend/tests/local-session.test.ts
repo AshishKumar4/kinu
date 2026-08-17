@@ -14,7 +14,6 @@ import { TestLanguageModelV2 } from './test-language-model.js';
 import type {
   LanguageModelV2CallOptions,
   LanguageModelV2Usage,
-  SharedV2ProviderMetadata,
 } from '@ai-sdk/provider';
 import type { LLMProviderConfig } from '@proteus/core';
 import {
@@ -660,10 +659,7 @@ describe('LocalAgentSession.send — a user turn', () => {
 describe('LocalAgentSession — tool success/error + cache telemetry fidelity', () => {
   /** step 1: calls the `memory` save tool (which will throw via a stubbed
    *  runtime), finishing with the caller-supplied usage; step 2: answers text. */
-  function memoryThenTextModel(
-    firstFinishUsage: LanguageModelV2Usage,
-    firstProviderMetadata?: SharedV2ProviderMetadata,
-  ): LanguageModel {
+  function memoryThenTextModel(firstFinishUsage: LanguageModelV2Usage): LanguageModel {
     let step = 0;
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     return new TestLanguageModelV2({
@@ -680,11 +676,9 @@ describe('LocalAgentSession — tool success/error + cache telemetry fidelity', 
                   type: 'tool-call', toolCallId: 'call-1', toolName: 'memory',
                   input: JSON.stringify({ action: 'save', content: 'note' }),
                 });
-                const finish = {
+                controller.enqueue({
                   type: 'finish', finishReason: 'tool-calls', usage: firstFinishUsage,
-                  providerMetadata: firstProviderMetadata,
-                } as const;
-                controller.enqueue(finish);
+                });
                 controller.close();
               },
             }),
@@ -727,22 +721,24 @@ describe('LocalAgentSession — tool success/error + cache telemetry fidelity', 
     await session.end();
   });
 
-  test('cached-prefix tokens flow from the step into the turn accumulator', async () => {
-    const model = memoryThenTextModel(
-      { inputTokens: 20, outputTokens: 5, totalTokens: 25, cachedInputTokens: 12 },
-      { anthropic: { cacheReadInputTokens: 3 } },
-    );
+  test('the cached prefix the provider reported flows from the step into the turn', async () => {
+    const model = memoryThenTextModel({ inputTokens: 20, outputTokens: 5, totalTokens: 25, cachedInputTokens: 12 });
     const { rt, session, events } = setup('unused', model);
     rt.memory.append = async () => { throw new Error('irrelevant'); };
 
     await session.send('save it');
 
-    // The accumulator is the evolution/telemetry signal — 12 (usage) + 3
-    // (Anthropic providerMetadata) combine into usage.cached (was 0 before the
-    // ChatEvent seam carried cached tokens).
+    // Both steps, summed, with one witness per field: the step's own report.
+    // Adding Anthropic's providerMetadata.cacheReadInputTokens on top of
+    // usage.cachedInputTokens counted the SAME tokens twice — @ai-sdk/anthropic
+    // sets both from cache_read_input_tokens (dist/index.js:1810).
+    //
+    // Asserted whole, because what is NOT here is the point: neither step
+    // mentioned a cache WRITE or reasoning tokens, so those fields are absent
+    // rather than sitting at 0 and claiming the provider measured them.
     const turnEnd = events.find((event) => event.type === 'turn-end');
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
-    expect(turnEnd.turn.usage?.cached).toBe(15);
+    expect(turnEnd.turn.usage).toEqual({ input: 25, output: 12, cacheRead: 12 });
     await session.end();
   });
 });

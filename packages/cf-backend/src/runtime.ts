@@ -63,7 +63,7 @@ import {
 import { resolveJudgeModelSelection } from "./providers/judge-model.js";
 import { ownerCaller, type UserCaller } from "./user/workspace-capability.js";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
-import { agentAffinityKey, explorePrompt, formatInheritedContext, missionCallUsage, reflectionPrompt } from "@proteus/core";
+import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@proteus/core";
 import type { ProteusSandbox } from "./proteus-sandbox.js";
 import {
   createNimbusWorkspaceSandbox,
@@ -994,7 +994,7 @@ function createInlineBranch(agent: AgentHost, env: Env): BranchHandle {
         ...effortFor('mcts_rollout'),
       });
       const text = result.text.trim();
-      return { text, usage: missionCallUsage(result.usage) };
+      return { text, usage: normalizeUsage(result.usage) };
     },
     // No trace table on this path — the reflection is about the task alone,
     // and the shared prompt drops the attempt heading rather than showing an
@@ -1005,7 +1005,7 @@ function createInlineBranch(agent: AgentHost, env: Env): BranchHandle {
         messages: [{ role: "user" as const, content: reflectionPrompt(task, '') }],
         ...effortFor('reflection'),
       });
-      return { text: result.text.trim(), usage: missionCallUsage(result.usage) };
+      return { text: result.text.trim(), usage: normalizeUsage(result.usage) };
     },
   };
 }

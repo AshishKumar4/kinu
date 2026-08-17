@@ -134,7 +134,7 @@ describe('the head journal makes a split\'s file changes queryable', () => {
       id, status: 'completed', summary: 's',
       evidence: [], decisions: [], artifactRefs: [], fileChanges,
       childHeadIds: [], toolCalls: [], stepCount: 0,
-      tokenUsage: { input: 1, output: 1, total: 2 }, wallClockMs: 5,
+      usage: { input: 1, output: 1 }, wallClockMs: 5,
     });
     journal.recordReport(report('h-lexer', CHANGES[0]!.changes));
     journal.recordReport(report('h-quiet', []));
@@ -164,7 +164,7 @@ describe('the head journal makes a split\'s file changes queryable', () => {
       id: 'h', status: 'completed', summary: 's',
       evidence: [], decisions: [], artifactRefs: [], fileChanges: CHANGES[1]!.changes,
       childHeadIds: [], toolCalls: [], stepCount: 0,
-      tokenUsage: { input: 1, output: 1, total: 2 }, wallClockMs: 5,
+      usage: { input: 1, output: 1 }, wallClockMs: 5,
     });
     expect(journal.readFileChanges('run-2')).toEqual([{ id: 'h', changes: CHANGES[1]!.changes }]);
   });

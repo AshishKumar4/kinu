@@ -283,6 +283,13 @@ describe('spend coverage', () => {
     ]));
     const spend = armSpend(arm);
     expect(spend.spendUnreported).toBe(1);
-    expect(spend.billableTokens).toBe(110);
+    // The arm's `usage` still carries what WAS measured...
+    expect(spend.usage.input).toBe(100);
+    expect(spend.usage.output).toBe(10);
+    // ...but `billableTokens` is null, not 110. It is the denominator of the
+    // equal-spend ratio, and a ratio against a lower bound is not a ratio: 110
+    // would make this arm look cheaper than the arm it is equalized against,
+    // which is the one direction that claim cannot afford to be wrong in.
+    expect(spend.billableTokens).toBeNull();
   });
 });

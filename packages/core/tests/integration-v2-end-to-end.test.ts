@@ -83,7 +83,7 @@ describe('v2 e2e: branching heads → merge', () => {
         evidence: [{ id: 'e1', kind: 'fact', body: 'prior art' }],
         decisions: [{ question: 'use X pattern?', choice: 'yes', rationale: 'standard' }],
         artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], stepCount: 0,
-        tokenUsage: { input: 100, output: 80, total: 180 }, wallClockMs: 120,
+        usage: { input: 100, output: 80 }, wallClockMs: 120,
       },
       'design': {
         id: 'will-be-replaced', status: 'completed',
@@ -91,7 +91,7 @@ describe('v2 e2e: branching heads → merge', () => {
         evidence: [{ id: 'e2', kind: 'fact', body: 'simple > clever' }],
         decisions: [{ question: 'add abstraction?', choice: 'no', rationale: 'YAGNI' }],
         artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], stepCount: 0,
-        tokenUsage: { input: 120, output: 90, total: 210 }, wallClockMs: 180,
+        usage: { input: 120, output: 90 }, wallClockMs: 180,
       },
       'risks': {
         id: 'will-be-replaced', status: 'completed',
@@ -99,7 +99,7 @@ describe('v2 e2e: branching heads → merge', () => {
         evidence: [{ id: 'e3', kind: 'fact', body: 'race condition' }],
         decisions: [{ question: 'add retry?', choice: 'yes', rationale: 'idempotent' }],
         artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], stepCount: 0,
-        tokenUsage: { input: 110, output: 75, total: 185 }, wallClockMs: 150,
+        usage: { input: 110, output: 75 }, wallClockMs: 150,
       },
     };
 

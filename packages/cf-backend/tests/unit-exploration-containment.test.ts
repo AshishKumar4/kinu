@@ -39,7 +39,7 @@ function report(id: string): HeadReport {
     childHeadIds: [],
     toolCalls: [],
     stepCount: 0,
-    tokenUsage: { input: 1, output: 1, total: 2 },
+    usage: { input: 1, output: 1 },
     wallClockMs: 1,
   };
 }
@@ -178,7 +178,7 @@ describe('head tool surface — containment', () => {
       split: async () => { splits++; return { narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 2 }; },
     });
     // A head an hour in that has burned 2M tokens. Neither is a reason to refuse.
-    capture.recordStepUsage(2_000_000, 500_000);
+    capture.recordStepUsage({ input: 2_000_000, output: 500_000 });
     const split = toolExecute<SplitToolInput, string>(tools.split_subheads);
     await split({
       rationale: 'go deeper',

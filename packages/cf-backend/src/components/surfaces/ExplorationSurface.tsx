@@ -24,6 +24,7 @@ import { Button, Loader } from "@cloudflare/kumo";
 import {
   GitForkIcon, TreeStructureIcon, WrenchIcon, BrainIcon, ArrowsOutIcon, ArrowLeftIcon,
 } from "@phosphor-icons/react";
+import { usageTotal } from "@proteus/core";
 import type {
   ForkRunParams, ForkRunSummary, HeadRunHeadView, HeadRunView, HeadStep,
 } from "@proteus/core";
@@ -33,6 +34,7 @@ import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { fmtTokens } from "@/lib/format";
 import {
   DetailSection, EmptyState, EMPTY_HINTS, formatScore, MarkdownContent, Metric, scoreColor,
 } from "./shared";
@@ -639,7 +641,10 @@ function MergedVerdict({ node, head }: { node: ForkNode; head: HeadRunHeadView |
     <div className="grid grid-cols-2 gap-2">
       <Metric label="Steps" value={head.steps.length} />
       <Metric label="Tools" value={toolCalls} />
-      <Metric label="Tokens" value={head.tokenInput + head.tokenOutput} />
+      {/* A head whose provider reported nothing shows a dash, not "0": this
+          panel is the user's account of what the branch cost, and a zero there
+          would say the fork was free. */}
+      <Metric label="Tokens" value={fmtTokens(usageTotal(head.usage))} />
       <Metric label="Wall" value={head.wallClockMs > 0 ? `${head.wallClockMs}ms` : "running"} />
     </div>
   );

@@ -11,7 +11,7 @@ import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
   BackgroundJobStore, MctsSearchStore, RunEventRecorder,
-  JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue,
+  JsonArraySchema, JsonObjectSchema, JsonValueSchema, UsageSchema, type JsonValue,
   initBackgroundJobsTable, initHeadsTables, initMctsSearchTable, initRunEventTables, initSearchTables,
 } from '@proteus/core';
 import { makeSql } from '@proteus/cli-backend';
@@ -72,7 +72,10 @@ function seedInvestigationWorkspace(dbPath: string): void {
   // and is polled anyway (agent.jobResult right after the detach handle). ──
   const recorder = new RunEventRecorder(sql);
   recorder.emit('run-old', { type: 'run_start', agentId: 'w', caused_by: 'chat', userMessage: 'first' });
-  recorder.emit('run-old', { type: 'turn_end', turnIndex: 0, tokenUsage: { input: 10, output: 5 } });
+  recorder.emit('run-old', { type: 'turn_end', turnIndex: 0, usage: { input: 10, output: 5 } });
+  // A second turn on the same run whose provider reported nothing at all — the
+  // shape that used to disappear into `tokensIn += 0` and read as a free turn.
+  recorder.emit('run-old', { type: 'turn_end', turnIndex: 1 });
   recorder.emit('run-old', { type: 'run_end', reason: 'completed' });
 
   recorder.emit('run-new', { type: 'run_start', agentId: 'w', caused_by: 'chat', userMessage: 'fork with mcts' });
@@ -228,11 +231,25 @@ describe('proteus debug — local backend', () => {
     const r = await result(runCli(home, ['debug', 'invest', '--out', join(out, 'b.jsonl'), '--json'], repoRoot));
     expect(r.exitCode).toBe(0);
     const summary = v.parse(v.object({
-      runs: v.array(v.object({ runId: v.string(), jobPollsAfterHandle: v.number() })),
+      runs: v.array(v.object({
+        runId: v.string(), jobPollsAfterHandle: v.number(),
+        usage: UsageSchema, turnsWithoutUsage: v.number(),
+      })),
       mctsSearches: v.array(v.object({ rootId: v.string(), nodeCount: v.number(), maxDepth: v.number() })),
     }), JSON.parse(r.stdout));
     const newRun = summary.runs.find((run) => run.runId === 'run-new');
     expect(newRun?.jobPollsAfterHandle).toBe(1);
+    // What the bundle now says a run cost. The seeded run reported input and
+    // output on one turn and nothing on the next, so the accumulated usage
+    // carries exactly those two fields — `cacheRead` absent, not 0 — and the
+    // silent turn is counted rather than folded in as free.
+    const oldRun = summary.runs.find((run) => run.runId === 'run-old');
+    expect(oldRun?.usage).toEqual({ input: 10, output: 5 });
+    expect(Object.keys(oldRun?.usage ?? {}).sort()).toEqual(['input', 'output']);
+    expect(oldRun?.turnsWithoutUsage).toBe(1);
+    // A run with no turn_end at all reports no usage: an empty object, not zeros.
+    expect(newRun?.usage).toEqual({});
+    expect(newRun?.turnsWithoutUsage).toBe(0);
     const [latest, previous] = summary.mctsSearches;
     expect(latest).toMatchObject({ rootId: 'search-new', nodeCount: 3, maxDepth: 2 });
     expect(previous).toMatchObject({ rootId: 'search-old', nodeCount: 1, maxDepth: 0 });

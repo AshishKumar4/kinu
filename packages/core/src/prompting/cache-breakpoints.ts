@@ -19,9 +19,8 @@
  * message tail on EVERY step, so each request of an agentic loop reads the
  * previous request's prefix instead of re-prefilling it.
  *
- * Reads back via usage.cachedInputTokens /
- * providerMetadata.anthropic.cacheReadInputTokens — already accumulated per
- * step by orchestrator/turn-accumulator.ts (the `cached=` figure in the
+ * Reads back as `Usage.cacheRead` — normalized at the provider seam and summed
+ * per turn by orchestrator/turn-accumulator.ts (the `cacheRead=` figure in the
  * step_finish activity line).
  *
  * How LONG a written prefix is kept is the caller's call ({@link CacheRetention}),

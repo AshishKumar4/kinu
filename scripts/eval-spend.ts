@@ -21,13 +21,19 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import * as v from 'valibot';
+import { addUsage, UsageSchema } from '../packages/core/src/index.js';
+import type { Usage } from '../packages/core/src/index.js';
 
+/** One suite process's line. `usage` is the same `Usage` the meter accumulates
+ *  (packages/test-utils/src/live-model.ts), parsed rather than trusted, so a line
+ *  whose fields are absent stays absent here — the whole point being that this
+ *  file's totals are a floor over the calls a provider actually reported, with
+ *  `callsWithoutUsage` saying how many it did not. */
 const SpendLineSchema = v.object({
   suite: v.string(),
   calls: v.number(),
   callsWithoutUsage: v.number(),
-  inputTokens: v.number(),
-  outputTokens: v.number(),
+  usage: UsageSchema,
 });
 export type SpendLine = v.InferOutput<typeof SpendLineSchema>;
 
@@ -35,8 +41,7 @@ export interface SpendTotals {
   readonly suites: number;
   readonly calls: number;
   readonly callsWithoutUsage: number;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
+  readonly usage: Usage;
 }
 
 export function parseSpend(text: string): SpendLine[] {
@@ -51,8 +56,7 @@ export function totalSpend(lines: readonly SpendLine[]): SpendTotals {
     suites: lines.length,
     calls: lines.reduce((n, l) => n + l.calls, 0),
     callsWithoutUsage: lines.reduce((n, l) => n + l.callsWithoutUsage, 0),
-    inputTokens: lines.reduce((n, l) => n + l.inputTokens, 0),
-    outputTokens: lines.reduce((n, l) => n + l.outputTokens, 0),
+    usage: lines.reduce<Usage>((total, l) => addUsage(total, l.usage), {}),
   };
 }
 
@@ -64,8 +68,8 @@ export function totalSpend(lines: readonly SpendLine[]): SpendTotals {
 export function renderSpend(lines: readonly SpendLine[]): string {
   const total = totalSpend(lines);
   const rows = lines.map((l) =>
-    `  ${l.suite}: ${String(l.calls)} call(s), ${String(l.inputTokens)} in / `
-    + `${String(l.outputTokens)} out`
+    `  ${l.suite}: ${String(l.calls)} call(s), ${l.usage.input ?? 'unreported'} in / `
+    + `${l.usage.output ?? 'unreported'} out`
     + (l.callsWithoutUsage > 0 ? `, ${String(l.callsWithoutUsage)} unreported` : ''));
 
   if (total.suites === 0) {
@@ -79,8 +83,8 @@ export function renderSpend(lines: readonly SpendLine[]): string {
   return [
     `eval-tier cost per run, measured over ${String(total.suites)} suite(s):`,
     ...rows,
-    `  TOTAL: ${String(total.calls)} model call(s), ${String(total.inputTokens)} input + `
-    + `${String(total.outputTokens)} output tokens${unreported}`,
+    `  TOTAL: ${String(total.calls)} model call(s), ${total.usage.input ?? 'unreported'} input + `
+    + `${total.usage.output ?? 'unreported'} output tokens${unreported}`,
   ].join('\n');
 }
 

@@ -1463,7 +1463,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             agentId: 'ws', causedBy: 'chat', userMessage: 'X'.repeat(600), turnIndex: 3,
           });
           s.closeTurnRun(recorder, 'run-1', {
-            turnIndex: 3, usage: { input: 10, output: 5, cached: 2 }, reason: 'error', error: 'boom',
+            turnIndex: 3, usage: { input: 10, output: 5, cacheRead: 2 }, reason: 'error', error: 'boom',
           });
           return emitted;
         },
@@ -1475,7 +1475,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const rows = (files: TurnFileLedger) => {
             const emitted: RunEventInput[] = [];
             s.closeTurnRun({ emit: (_r: string, input: RunEventInput) => { emitted.push(input); } }, 'run-1', {
-              turnIndex: 0, usage: { input: 0, output: 0, cached: 0 }, reason: 'completed', files,
+              turnIndex: 0, reason: 'completed', files,
             });
             return emitted;
           };
@@ -1495,7 +1495,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: (s) => {
           const broken = { emit: () => { throw new Error('db locked'); } };
           s.openTurnRun(broken, 'r', { agentId: 'a', causedBy: 'chat', userMessage: 'm', turnIndex: 0 });
-          s.closeTurnRun(broken, 'r', { turnIndex: 0, usage: { input: 0, output: 0, cached: 0 }, reason: 'completed' });
+          s.closeTurnRun(broken, 'r', { turnIndex: 0, reason: 'completed' });
           return 'survived';
         },
       },
@@ -1505,7 +1505,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: (s) => {
           const clean = new TurnAccumulator();
           clean.recordToolCall({ toolName: 'run', input: { command: 'ls' }, success: true, output: 'ok' });
-          clean.recordStep({ usage: { inputTokens: 7, outputTokens: 3 } });
+          clean.recordStep({ usage: { input: 7, output: 3 } });
           const failed = new TurnAccumulator();
           failed.recordToolCall({ toolName: 'run', success: false, error: 'exit 1' });
           failed.recordStep({});
@@ -1528,7 +1528,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             savePromptTokens: (key: string, tokens: number, len: number) => { saved.push([key, tokens, len]); },
             armForceCompaction: () => {},
           };
-          s.persistMeasuredPromptTokens(state, 'k', 0, 12);
+          s.persistMeasuredPromptTokens(state, 'k', undefined, 12);
           s.persistMeasuredPromptTokens(state, 'k', 4321, 12);
           return saved;
         },

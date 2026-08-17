@@ -1,13 +1,16 @@
 // TurnAccumulator — the per-turn accounting hoisted out of the cf-backend hooks
 // (re-arch P2). Verifies the logic the DO used to own inline is preserved.
 import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator.js';
-import type { StepUsage } from '../src/events/types.js';
+import { MissionGovernor } from '../src/mission-budget.js';
+import type { Usage } from '../src/usage.js';
+import { makeSql, makeExecRaw } from './helpers.js';
 
 describe('TurnAccumulator', () => {
   test('reset clears all accounting + stamps startedAt', () => {
     const a = new TurnAccumulator();
-    a.recordStep({ usage: { inputTokens: 5, outputTokens: 3 } });
+    a.recordStep({ usage: { input: 5, output: 3 } });
     a.recordToolCall({ toolName: 'run', success: true, output: 'ok' });
     // A failed call first, so the hadError assertion below is not vacuous —
     // a reset that forgot the flag would leak the previous turn's failure.
@@ -17,7 +20,7 @@ describe('TurnAccumulator', () => {
     a.reset(1000);
     expect(a.toolCalls).toEqual([]);
     expect(a.stepCount).toBe(0);
-    expect(a.usage).toEqual({ input: 0, output: 0, cached: 0 });
+    expect(a.usage).toEqual({});
     expect(a.hadError).toBe(false);
     expect(a.firstChunkSeen).toBe(false);
     expect(a.startedAt).toBe(1000);
@@ -51,13 +54,17 @@ describe('TurnAccumulator', () => {
     expect(toolEvents[0].error).toBe('Error: boom');
   });
 
-  test('recordStep accumulates usage across steps incl. anthropic cache-read', () => {
+  test('recordStep sums the turn field by field, leaving unreported fields absent', () => {
     const steps: number[] = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => steps.push(e.stepIndex) });
-    a.recordStep({ usage: { inputTokens: 100, outputTokens: 40, cachedInputTokens: 10 }, finishReason: 'tool-calls', toolCalls: [{ toolName: 'run' }] });
-    a.recordStep({ usage: { inputTokens: 50, outputTokens: 20 }, providerMetadata: { anthropic: { cacheReadInputTokens: 30 } }, finishReason: 'stop' });
+    a.recordStep({ usage: { input: 100, output: 40, cacheRead: 10 }, finishReason: 'tool-calls', toolCalls: [{ toolName: 'run' }] });
+    a.recordStep({ usage: { input: 50, output: 20, cacheWrite: 30 }, finishReason: 'stop' });
     expect(a.stepCount).toBe(2);
-    expect(a.usage).toEqual({ input: 150, output: 60, cached: 40 });
+    // A field only ONE step reported carries that step's number; a field no step
+    // reported stays absent, so "nobody mentioned reasoning" cannot be read as
+    // "the model did no reasoning".
+    expect(a.usage).toEqual({ input: 150, output: 60, cacheRead: 10, cacheWrite: 30 });
+    expect('reasoning' in a.usage).toBe(false);
     expect(steps).toEqual([1, 2]);
   });
 
@@ -67,21 +74,26 @@ describe('TurnAccumulator', () => {
     // zero — a cost consumer has to be able to tell the two apart.
     a.recordStep({ finishReason: 'stop' });
     expect(a.reportedUsage()).toBeUndefined();
-    a.recordStep({ usage: { inputTokens: 12, outputTokens: 4, cachedInputTokens: 8 } });
-    expect(a.reportedUsage()).toEqual({ input: 12, output: 4, cached: 8 });
+    a.recordStep({ usage: { input: 12, output: 4, cacheRead: 8 } });
+    expect(a.reportedUsage()).toEqual({ input: 12, output: 4, cacheRead: 8 });
     a.reset(0);
     expect(a.reportedUsage()).toBeUndefined();
   });
 
   test('lastPromptTokens tracks the newest reporting step and survives usage-less steps', () => {
     const a = new TurnAccumulator();
-    expect(a.lastPromptTokens).toBe(0);
-    a.recordStep({ usage: { inputTokens: 1_000, outputTokens: 40 } });
-    a.recordStep({ usage: { inputTokens: 1_450, outputTokens: 20 } });
+    // Never reported is not the same number as reported zero — the compaction
+    // trigger has to be able to tell them apart.
+    expect(a.lastPromptTokens).toBeUndefined();
+    a.recordStep({ usage: { input: 1_000, output: 40 } });
+    a.recordStep({ usage: { input: 1_450, output: 20 } });
     a.recordStep({}); // a step whose provider reported nothing
     expect(a.lastPromptTokens).toBe(1_450);
-    a.reset(1);
+    // A reported 0 IS a measurement of the request, so it replaces the old one.
+    a.recordStep({ usage: { input: 0, output: 4 } });
     expect(a.lastPromptTokens).toBe(0);
+    a.reset(1);
+    expect(a.lastPromptTokens).toBeUndefined();
   });
 
   test('each tool call gets its own id — the run-event log must not collapse them', () => {
@@ -127,17 +139,17 @@ describe('TurnAccumulator', () => {
     expect(reasons).toEqual(['stop', undefined, undefined]);
   });
 
-  test('the step event carries the provider\'s own usage, cache read included', () => {
-    const events: Array<{ usage?: StepUsage }> = [];
+  test("the step event carries the provider's own report, priced and attributed as siblings", () => {
+    const events: Array<{ usage?: Usage; usd?: number; modelId?: string }> = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
     a.recordStep({
-      usage: { inputTokens: 900, outputTokens: 40, cachedInputTokens: 0, reasoningTokens: 12 },
-      providerMetadata: { anthropic: { cacheReadInputTokens: 700 } },
+      usage: { input: 900, output: 40, cacheRead: 700, reasoning: 12 },
       response: { modelId: 'claude-sonnet-4.5' },
     });
-    // Anthropic reports the cache read in providerMetadata, others on usage —
-    // the step row carries one reconciled `cached` either way.
-    expect(events[0]?.usage).toEqual({ input: 900, cached: 700, output: 40, reasoning: 12, modelId: 'claude-sonnet-4.5' });
+    // `usage` is the provider's report verbatim; who served it and what it cost
+    // are siblings on the row, never members of the report.
+    expect(events[0]?.usage).toEqual({ input: 900, output: 40, cacheRead: 700, reasoning: 12 });
+    expect(events[0]?.modelId).toBe('claude-sonnet-4.5');
   });
 
   test('a step the provider reported nothing for carries no usage rather than zeros', () => {
@@ -148,11 +160,11 @@ describe('TurnAccumulator', () => {
   });
 
   test('an unpriced model yields a step with no usd, never a blended guess', () => {
-    const events: Array<{ usage?: { usd?: number } }> = [];
+    const events: Array<{ usage?: Usage; usd?: number }> = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
-    a.recordStep({ usage: { inputTokens: 100, outputTokens: 10 } });
+    a.recordStep({ usage: { input: 100, output: 10 } });
     expect(events[0]?.usage).toBeDefined();
-    expect(events[0]?.usage?.usd).toBeUndefined();
+    expect(events[0]?.usd).toBeUndefined();
   });
 
   test('the step event carries the measurement of the request that produced it', () => {
@@ -160,10 +172,10 @@ describe('TurnAccumulator', () => {
     const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
     a.composition.openTurn({ system: 'soul' });
     a.composition.measure([{ role: 'user', content: 'hello' }]);
-    a.recordStep({ usage: { inputTokens: 10, outputTokens: 1 } });
+    a.recordStep({ usage: { input: 10, output: 1 } });
     // Drained: the next step measured nothing, so it reports nothing rather
     // than re-reporting the previous request's composition.
-    a.recordStep({ usage: { inputTokens: 10, outputTokens: 1 } });
+    a.recordStep({ usage: { input: 10, output: 1 } });
     expect(events[0]?.context?.measuredChars).toBe('soul'.length + 'hello'.length);
     expect(events[1]?.context).toBeUndefined();
   });
@@ -174,7 +186,7 @@ describe('TurnAccumulator', () => {
     a.composition.openTurn({ system: 'soul' });
     a.composition.measure([{ role: 'user', content: 'hello' }]);
     a.reset(0);
-    a.recordStep({ usage: { inputTokens: 10, outputTokens: 1 } });
+    a.recordStep({ usage: { input: 10, output: 1 } });
     expect(events[0]?.context).toBeUndefined();
   });
 
@@ -182,8 +194,32 @@ describe('TurnAccumulator', () => {
     const a = new TurnAccumulator();
     a.onFirstChunk();
     a.recordToolCall({ toolName: 'x', success: true, output: 1 });
-    a.recordStep({ usage: { inputTokens: 1, outputTokens: 1 } });
+    a.recordStep({ usage: { input: 1, output: 1 } });
     expect(a.toolCalls).toHaveLength(1);
     expect(a.stepCount).toBe(1);
+  });
+
+  test('a reported zero is a report; a step with no report meters nothing', () => {
+    const db = new Database(':memory:');
+    const governor = new MissionGovernor({ storage: { sql: makeSql(db), execRaw: makeExecRaw(db) } });
+    governor.declare('nightly', {});
+    governor.activate(['nightly']);
+    const events: Array<{ usage?: Usage }> = [];
+    const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) }, governor);
+
+    // A provider that answered "zero" HAS answered: the row is a measurement of
+    // a request that cost nothing, and suppressing it would make that
+    // indistinguishable from a provider that never reports usage at all.
+    a.recordStep({ usage: { input: 0, output: 0 } });
+    expect(events[0]?.usage).toEqual({ input: 0, output: 0 });
+    expect(a.reportedUsage()).toEqual({ input: 0, output: 0 });
+    expect(governor.snapshot('nightly')[0]?.calls).toBe(1);
+
+    // A provider that said nothing: no usage row, and nothing metered at all —
+    // not even the call, because there is no measured request behind it.
+    a.recordStep({ finishReason: 'stop' });
+    expect(events[1]?.usage).toBeUndefined();
+    expect(governor.snapshot('nightly')[0]?.calls).toBe(1);
+    expect(governor.snapshot('nightly')[0]?.spent.tokens).toBe(0);
   });
 });

@@ -40,7 +40,7 @@ function headReportFor(id: string): HeadReport {
     childHeadIds: [],
     toolCalls: [],
     stepCount: 0,
-    tokenUsage: { input: 1, output: 1, total: 2 },
+    usage: { input: 1, output: 1 },
     wallClockMs: 1,
   };
 }

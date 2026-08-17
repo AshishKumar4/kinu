@@ -15,6 +15,7 @@ import type { RunEventRecorder } from '../events/recorder.js';
 import type { RunEvent } from '../events/types.js';
 import type { BackgroundJobStore } from '../jobs/store.js';
 import type { SqlExecutor } from '../types/primitives.js';
+import type { Usage } from '../usage.js';
 import { parseJsonValue, type JsonValue } from '../utils/json.js';
 
 export type TimelineKind =
@@ -68,6 +69,22 @@ export function classifyEvolutionType(type: string): TimelineKind {
   return 'other';
 }
 
+/**
+ * The token figure on a finished turn's span, printing only what the provider
+ * actually reported.
+ *
+ * A one-line span label has no room to explain a silence, so an unreported side
+ * is left out of the string entirely and a turn that reported neither gets no
+ * detail at all — the reader sees no number rather than a zero the provider
+ * never claimed.
+ */
+function turnUsageDetail(usage: Usage | undefined): string | undefined {
+  const parts: string[] = [];
+  if (usage?.input !== undefined) parts.push(`${usage.input} in`);
+  if (usage?.output !== undefined) parts.push(`${usage.output} out`);
+  return parts.length === 0 ? undefined : `${parts.join(' + ')} tok`;
+}
+
 /** Project a durable RunEvent onto a unified TimelineSpan. */
 export function runEventToSpan(e: RunEvent): TimelineSpan {
   const ts = Date.parse(e.timestamp) || Date.now();
@@ -101,7 +118,7 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
     case 'error':
       return { ...base, kind: 'error', label: 'Error', detail: e.message };
     case 'turn_end':
-      return { ...base, kind: 'llm-turn', label: `Turn ${e.turnIndex} done`, detail: e.tokenUsage ? `${e.tokenUsage.input}+${e.tokenUsage.output} tok` : undefined };
+      return { ...base, kind: 'llm-turn', label: `Turn ${e.turnIndex} done`, detail: turnUsageDetail(e.usage) };
     case 'run_end':
       return { ...base, kind: e.reason === 'aborted' ? 'abort' : 'other', label: e.reason ? `Run ended (${e.reason})` : 'Run ended', detail: e.error };
     default:

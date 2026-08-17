@@ -135,7 +135,7 @@ async function drive({ model, acc, cutAfterSteps }: {
       events.push(ev);
       if (ev.type === 'step-finish') {
         const step: StepLike = { response: { messages: ev.responseMessages } };
-        if (ev.inputTokens !== undefined) step.usage = { inputTokens: ev.inputTokens, outputTokens: ev.outputTokens };
+        if (ev.usage) step.usage = ev.usage;
         acc.recordStep(step);
         finished += 1;
         if (cutAfterSteps !== undefined && finished >= cutAfterSteps) abort.abort();
