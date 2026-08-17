@@ -104,6 +104,17 @@ export interface InlineExecutorDeps {
    *  never spends it (only file-tool.ts's own `read` does); required because
    *  the shared dispatcher's deps shape asks for one. */
   budget?: () => TurnContextBudget | undefined;
+  /**
+   * Toolchain this workspace's shell can actually reach beyond the coreutils,
+   * as the capability names for it.
+   *
+   * Declared by the host because the host is what supplies the bytes: the local
+   * CLI ships runtime packages and gets `python`, a Worker does not and must not
+   * claim one. Derived rather than written out — see
+   * `workspaceToolchainCapabilities` in vfs/workspace-runtimes.ts, which reads
+   * the same list that decides which commands get registered.
+   */
+  toolchain?: readonly ExecutorCapability[];
 }
 
 /**
@@ -440,7 +451,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     kind: 'workspace',
     files: vfs,
     homeDir: async () => WORKSPACE_ROOT,
-    capabilities: new Set<ExecutorCapability>(['javascript', 'typescript', 'shell', 'fs_shared']),
+    capabilities: new Set<ExecutorCapability>([
+      'javascript', 'typescript', 'shell', 'fs_shared', ...(deps.toolchain ?? []),
+    ]),
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},

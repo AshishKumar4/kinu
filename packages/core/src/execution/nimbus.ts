@@ -513,12 +513,16 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
     files: box ? nimbusSessionFiles(box) : undefined,
     homeDir: async () => root,
     kind: 'nimbus',
-    // JavaScript/TypeScript, the shell, npm and git are built into the session
-    // worker itself. Interpreter runtimes are not: they install from the
-    // deployment's runtime source, so `python`/`native_binary` are declared
-    // exactly when that source exists (see NimbusExecutorOpts.runtimeCatalog).
-    // This is the executor that carries Python when it is provisioned — the
-    // sandbox container image deliberately ships no interpreter.
+    // JavaScript/TypeScript, the shell, npm, npx, node, bun and git are
+    // registered by the session worker itself (@nimbus-sh/worker
+    // dist/session/init.js — git :457, npm :1927, npx :2311, node :698,
+    // bun :847), so they need no install and are declared unconditionally.
+    // Interpreter runtimes DO need one: `nimbus install` reads them out of the
+    // deployment's R2 bucket, so `python`/`native_binary` are declared exactly
+    // when that bucket is bound (NimbusExecutorOpts.runtimeCatalog). It is not
+    // bound today, which is why this set has never carried `python` in
+    // production — a session without a runtime source answers `python -c` with
+    // an install error, not a Python.
     capabilities: new Set<ExecutorCapability>([
       'javascript', 'typescript', 'shell', 'npm', 'git',
       'fs_owned', 'net_outbound',

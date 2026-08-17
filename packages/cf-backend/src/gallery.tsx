@@ -1494,11 +1494,11 @@ const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
   },
   {
     name: "sandbox", kind: "sandbox", available: true, configured: true, active: true, status: "active",
-    capabilities: ["shell", "npm", "git", "docker", "fs_owned", "net_inbound", "process_long"],
+    capabilities: ["shell", "npm", "git", "fs_owned", "net_inbound", "process_long"],
   },
   {
     name: "workspace", kind: "workspace", available: true, configured: true, active: true, status: "active",
-    capabilities: ["javascript", "typescript", "shell", "fs_shared"],
+    capabilities: ["javascript", "typescript", "python", "shell", "npm", "fs_shared"],
   },
 ];
 

@@ -127,10 +127,20 @@ executor or filesystem.
 
 | Executor   | Namespace  | Binding Required          | Capabilities                |
 |-----------|------------|---------------------------|-----------------------------|
-| Workspace | workspace  | NIMBUS_SESSION on hosted  | canonical files, POSIX shell, runtimes, processes, ports |
-| Container | sandbox    | Sandbox DO + Container    | full Linux container, long processes, live previews |
+| Workspace | workspace  | NIMBUS_SESSION on hosted  | canonical files, POSIX shell, ~95 coreutils, `node`; `npm`/`npx`; on-demand `bash`, `python3`, `pip` locally; `git` and `bun` on hosted only; processes, ports |
+| Container | sandbox    | Sandbox DO + Container    | Linux container: git, npm, node, bun, sh/bash, jq, curl; long processes, inbound ports, previews. Probed ABSENT: docker, python3, make, gcc, clang, tsc |
 | Device    | laptop     | WebSocket tunnel from user| the user's own machine, behind consent |
 | Parent    | parent     | (forks only)              | the forked-from workspace's real shell over DO RPC |
+
+Which of those a given session may claim is not a matter of taste: the
+capability set is rendered into the agent's own execution block
+(`prompting/volatile-context.ts` — `— runs: …`), so it is where the model
+decides to send work. Workspace runtimes come from R2 on hosted
+(`NIMBUS_RUNTIME_CACHE`, currently unbound — hosted `python` therefore does not
+work) and from npm runtime packages locally (`vfs/workspace-runtimes.ts`).
+`sh`, `make`, `tsc` and `jq` exist on neither workspace path. When to leave the
+workspace for the container, and why "I need Python" is not a reason:
+`docs/EXECUTION-LAYER-SPEC.md`.
 
 `DefaultExecutionRouter` manages providers. `runtime.ts` registers them based on
 available bindings. `getProviders()` filters to available-only for `createExecuteTool()`.

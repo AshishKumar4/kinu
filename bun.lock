@@ -131,6 +131,8 @@
       "dependencies": {
         "@ai-sdk/provider": "^3.0.10",
         "@modelcontextprotocol/sdk": "^1.29.0",
+        "@nimbus-sh/runtime-bash": "5.2.37",
+        "@nimbus-sh/runtime-cpython": "3.13.14",
         "@proteus/agent-utils": "workspace:*",
         "@proteus/compaction": "workspace:*",
         "@proteus/core": "workspace:*",
@@ -671,6 +673,10 @@
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.2.3", "", { "dependencies": { "@tybys/wasm-util": "^0.10.3" }, "peerDependencies": { "@emnapi/core": "^1.7.1 || ^2.0.0-alpha.4", "@emnapi/runtime": "^1.7.1 || ^2.0.0-alpha.4" } }, "sha512-UMduMbqO5s5zF2NkNacMT/yK5Y5QiKvWr2+50bzIIxFDwVJ2h49b+oyjaCGPhJxd2/gC2x39EHv/gHVuu36x2Q=="],
 
     "@nimbus-sh/core": ["@nimbus-sh/core@0.4.0", "", { "dependencies": { "@renovatebot/pep440": "^5.0.0", "acorn": "^8.15.0", "acorn-walk": "^8.3.5", "esbuild-wasm": "0.24.2", "magic-string": "^0.30.21", "pip-requirements-js": "^1.0.3", "zod": "^4.4.3" } }, "sha512-gvG1JnnmSVMe3e734zCes5boDsGxrZwE7d7gn6hG4RW7l3u5alkUELNVVROox3kOX4rAcjfp8qDgR+f1BHtq1Q=="],
+
+    "@nimbus-sh/runtime-bash": ["@nimbus-sh/runtime-bash@5.2.37", "", { "peerDependencies": { "@nimbus-sh/core": ">=0.2.0" } }, "sha512-jEYPyjN4bl/wUSwk2zIsruSES1mtBhN9+I6xggiBnqR9f08C+hdcHjeDyJdjp97vKt1lme3FYw0Pf2Z6pyi/Sg=="],
+
+    "@nimbus-sh/runtime-cpython": ["@nimbus-sh/runtime-cpython@3.13.14", "", { "peerDependencies": { "@nimbus-sh/core": ">=0.2.0" } }, "sha512-doDlSHKrFXvrEfRRsv1Cb4Ik/GPSXjjJehWFkyaNYWgPzf+QXCgiTT0jIhi+NgQIZiz8EGanSK5UbJ6yamqPLA=="],
 
     "@nimbus-sh/sdk": ["@nimbus-sh/sdk@0.2.0", "", { "dependencies": { "zod": "^4.4.3" }, "peerDependencies": { "@nimbus-sh/worker": "^0.2.0" } }, "sha512-1yLDlcGlRhjUWvegzUp6zLGHOquj8WaBMLIRPfuog3P7pZg+aR07bx//JvFxr57pqAkhJnUc7rVAyhLZLQJEaQ=="],
 

@@ -378,6 +378,19 @@ export function createSandboxExecutor(
   const types = `
 /**
  * sandbox — @cloudflare/sandbox Linux container, one per agent.
+ *
+ * NOT where the toolchain lives. The workspace executor already has a POSIX
+ * shell, ~95 coreutils, node, npm/npx, and git; python3/pip and bash install
+ * there on first use. Come here only for what the workspace cannot honour:
+ *   - RUNNING a prebuilt native Linux binary (Nimbus is wasm32-wasi and JS),
+ *   - real parallelism across cores (Nimbus threads are cooperative), 2 vCPU,
+ *   - more memory or disk than the isolate has: 6185 MiB / 7.3G here,
+ *   - work that must not share the workspace's durable fate.
+ * NOT for docker, python3, make, gcc, clang or tsc — probed ABSENT (exit 127)
+ * in this image. NOT for inbound ports or long processes: the workspace has
+ * both. A cold start costs ~2.8s; concurrency is refused, not queued, at 10
+ * instances (503) and on a start-rate burst (429).
+ * Full rule: docs/EXECUTION-LAYER-SPEC.md.
  */
 declare namespace sandbox {
   function exec(command: string): Promise<string>;
@@ -393,8 +406,19 @@ declare namespace sandbox {
 }
 `.trim();
 
+  // What the container image actually holds, probed inside the deployed one
+  // rather than read off the SDK's declaration. `docker` used to be here and is
+  // ABSENT — `docker` exits 127 in the running container — and a capability the
+  // model reads in its execution block ("— runs: …", prompting/
+  // volatile-context.ts) is a routing instruction, so an aspirational entry
+  // sends work somewhere it cannot be done.
+  //
+  // `npm` and `git` stay: the container has both. They are no longer the reason
+  // to come HERE, because the Nimbus workspace serves them too (execution/
+  // nimbus.ts, vfs/workspace-runtimes.ts) — what is still exclusive to the
+  // container is in docs/EXECUTION-LAYER-SPEC.md.
   const capabilities: ExecutorCapability[] = [
-    'shell', 'npm', 'git', 'docker', 'process_spawn', 'process_long',
+    'shell', 'npm', 'git', 'process_spawn', 'process_long',
     'net_inbound', 'net_outbound', 'fs_owned',
   ];
 

@@ -28,8 +28,12 @@ import {
 import {
   createWorkspace as createWorkspaceFilesystem,
   nextWorkspaceGeneration,
+  workspaceToolchainCapabilities,
 } from '@proteus/core/workspace';
 import { tolerate, tolerateAsync } from '@proteus/core/obs';
+import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
+import bashRuntime from '@nimbus-sh/runtime-bash';
+import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
 import { createSandboxedExecutor } from './executor.js';
@@ -133,6 +137,19 @@ export function localTransactions(db: Database): WorkspaceTransactions {
     },
   };
 }
+
+/**
+ * The runtimes a local workspace can install into itself.
+ *
+ * Named here rather than in `@proteus/core` because these are the bytes: 40 MB
+ * of wasm read through `node:fs`, which the deployed Worker can neither bundle
+ * nor open. A hosted session gets the same runtimes from R2 through
+ * `nimbus install`; this is the same publisher for a host that has a disk.
+ *
+ * Importing them costs the two manifests. The blobs stay on disk until a
+ * `python3` or a `bash` is actually run — see core/vfs/workspace-runtimes.ts.
+ */
+const WORKSPACE_RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRuntime];
 
 /** Positional-binding SQL — what the events hub, the release board and
  *  the experience library speak. A Durable Object's `ctx.storage.sql` is this
@@ -299,6 +316,7 @@ export function createCLIRuntime(
     sql: nimbusSql(db),
     transactions: localTransactions(db),
     generation: nextWorkspaceGeneration(nimbusSql(db)),
+    runtimes: WORKSPACE_RUNTIMES,
   });
   const vfs = workspace.vfs;
 
@@ -355,6 +373,7 @@ export function createCLIRuntime(
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
     vfs, memory, craftStore, shell, sql,
     ledger: () => turnFileLedgerProvider?.(),
+    toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
   };
   if (limits) inlineOptions.resourceLimits = limits;
   executionRouter.register(createInlineExecutor(inlineOptions));
@@ -410,6 +429,7 @@ export function buildCLIHeadRuntime(
     sql: nimbusSql(db),
     transactions: localTransactions(db),
     generation: nextWorkspaceGeneration(nimbusSql(db)),
+    runtimes: WORKSPACE_RUNTIMES,
   });
   const vfs = workspace.vfs;
 
@@ -422,7 +442,10 @@ export function buildCLIHeadRuntime(
 
   const shell = withApprovalGatedShell(workspace.shell);
   const executionRouter = new DefaultExecutionRouter();
-  executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell, sql }));
+  executionRouter.register(createInlineExecutor({
+    vfs, memory, craftStore, shell, sql,
+    toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
+  }));
 
   // The parent workspace, over the parent runtime in this same process — the
   // same interface the cloud head satisfies with Durable Object RPC.
