@@ -10,7 +10,7 @@
 import { JsonObjectSchema } from '@proteus/core';
 import type {
   BroadcastEvent, ChangelogEntry, ChangelogRevertResult, PromptFile, ShellApprovalMode,
-  CheckpointAvailability, FileCheckpointEntry, FileRestorePlan, FileRestoreResult,
+  FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   AlternateTakeSet, TakePickOutcome,
   ReasoningEffort, TurnUsage, RunEvent, JsonObject, JsonValue,
 } from '@proteus/core';
@@ -215,12 +215,14 @@ export interface DeviceConsentSurface {
 
 /** Capability surface: shadow-git file checkpoints (/undo). Local agents hit
  *  the host engine directly; cloud agents go through orchestrator RPCs that
- *  forward to the connected device daemon. */
+ *  forward to the connected device daemon.
+ *
+ *  `list` carries reachability with the entries so a caller cannot read an empty
+ *  list as a statement about the turn — see {@link FileCheckpointListing}. */
 export interface FileCheckpointSurface {
-  list(limit?: number): Promise<FileCheckpointEntry[]>;
+  list(limit?: number): Promise<FileCheckpointListing>;
   plan(dir: string, id: string): Promise<FileRestorePlan>;
   restore(dir: string, id: string): Promise<FileRestoreResult>;
-  status(): Promise<CheckpointAvailability>;
 }
 
 /** Capability surface: knobs that only exist on an in-process local session. */

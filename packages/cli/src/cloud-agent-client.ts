@@ -10,7 +10,8 @@ import {
   type JsonValue,
 } from '@proteus/core';
 import type {
-  CheckpointAvailability, FileCheckpointEntry, FileRestorePlan, FileRestoreResult,
+  CheckpointAvailability, FileCheckpointEntry, FileCheckpointListing,
+  FileRestorePlan, FileRestoreResult,
 } from '@proteus/core';
 import {
   callAgentRpc,
@@ -90,6 +91,10 @@ const FileRestoreResultSchema: v.GenericSchema<FileRestoreResult> = v.object({
 const CheckpointAvailabilitySchema: v.GenericSchema<CheckpointAvailability> = v.object({
   available: v.boolean(),
   reason: v.optional(v.string()),
+});
+const FileCheckpointListingSchema: v.GenericSchema<FileCheckpointListing> = v.object({
+  availability: CheckpointAvailabilitySchema,
+  entries: v.array(FileCheckpointEntrySchema),
 });
 const CloudChatMessageSchema: v.GenericSchema<CloudChatMessage> = v.object({
   id: v.string(),
@@ -264,13 +269,12 @@ export class CloudAgentClient implements AgentClient {
     // Checkpoints live on the user's device daemon; the DO forwards.
     this.checkpoints = {
       list: async (limit) => v.parse(
-        v.array(FileCheckpointEntrySchema), await this.callRpc('listFileCheckpoints', [limit ?? 50]),
+        FileCheckpointListingSchema, await this.callRpc('listFileCheckpoints', [limit ?? 50]),
       ),
       plan: async (dir, id) => v.parse(FileRestorePlanSchema, await this.callRpc('planFileRestore', [dir, id])),
       restore: async (dir, id) => v.parse(
         FileRestoreResultSchema, await this.callRpc('restoreFileCheckpoint', [dir, id]),
       ),
-      status: async () => v.parse(CheckpointAvailabilitySchema, await this.callRpc('checkpointStatus', [])),
     };
   }
 

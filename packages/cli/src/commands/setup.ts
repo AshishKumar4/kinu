@@ -1,5 +1,6 @@
 import {
   createCodexOAuthClient,
+  DEFAULT_WORKERS_AI_MODEL_SPEC,
   decodeJsonValue,
   decodeCodexAccountId,
   tokensToCredential,
@@ -98,7 +99,7 @@ export async function setupCommand(opts: {
   let cloudReady = Boolean(config.accessToken);
   if (cloudReady) {
     console.log(`${OK('✓')} Signed in${config.user?.email ? ` as ${ACCENT(config.user.email)}` : ''}`);
-    console.log(DIM('Local workspaces you create signed in get free Workers AI (no key needed).'));
+    console.log(DIM('Local workspaces you create while signed in run on your Cloudflare account via Workers AI — no API key on this machine.'));
   }
 
   if (!opts.skipCloud && !config.accessToken) {
@@ -136,12 +137,35 @@ export async function setupCommand(opts: {
     return;
   }
 
-  const provider = normalizeProvider(opts.provider ?? (opts.yes ? 'codex' : await chooseProvider()));
+  const provider = normalizeProvider(opts.provider ?? (opts.yes ? 'workers-ai' : await chooseProvider(cloudReady)));
   if (provider === 'skip') {
     console.log(`${WARN('!')} Skipped local model setup.`);
     console.log(DIM(cloudReady
       ? 'Cloud workspaces remain ready. Run proteus provider connect <provider> later for local workspaces.'
       : 'Run proteus setup later before creating workspaces.'));
+    return;
+  }
+
+  if (provider === 'workers-ai') {
+    if (!cloudReady) {
+      console.log(`${WARN('!')} Workers AI needs a signed-in Proteus account.`);
+      console.log(DIM(`Run proteus auth${opts.origin ? ` --origin ${opts.origin}` : ''}, then proteus setup again.`));
+      return;
+    }
+    if (opts.model) {
+      const spec = `workers-ai/${stripProviderPrefix(opts.model, 'workers-ai')}`;
+      setDefaultModel(spec);
+      console.log(`${OK('✓')} Using Cloudflare Workers AI`);
+      console.log(DIM(`Default model: ${spec}`));
+      return;
+    }
+    // Storing nothing is deliberate: the platform default is one constant in
+    // @proteus/core, and an unset model reads it at resolve time instead of
+    // pinning a copy that would go stale.
+    updateConfigFile((config) => { delete config.model; });
+    console.log(`${OK('✓')} Using Cloudflare Workers AI`);
+    console.log(DIM(`Default model: ${DEFAULT_WORKERS_AI_MODEL_SPEC}`));
+    console.log(DIM('No API key on this machine — requests go through your Proteus account.'));
     return;
   }
 
@@ -316,15 +340,17 @@ function withProvider(config: ProteusConfig, patch: Pick<ProteusConfig, 'model' 
   };
 }
 
-async function chooseProvider(): Promise<string> {
+async function chooseProvider(cloudReady: boolean): Promise<string> {
   console.log(DIM('Local model provider:'));
-  console.log(`  ${ACCENT('1')} ChatGPT Codex subscription`);
-  console.log(`  ${ACCENT('2')} OpenAI API key`);
-  console.log(`  ${ACCENT('3')} OpenRouter`);
-  console.log(`  ${ACCENT('4')} Anthropic`);
-  console.log(`  ${ACCENT('5')} OpenAI-compatible`);
-  console.log(`  ${ACCENT('6')} OpenCode (share your opencode auth & models)`);
-  console.log(`  ${ACCENT('7')} Skip`);
+  console.log(`  ${ACCENT('1')} Cloudflare Workers AI through your Proteus account ${DIM('(recommended)')}`);
+  console.log(`  ${ACCENT('2')} ChatGPT Codex subscription`);
+  console.log(`  ${ACCENT('3')} OpenAI API key`);
+  console.log(`  ${ACCENT('4')} OpenRouter`);
+  console.log(`  ${ACCENT('5')} Anthropic`);
+  console.log(`  ${ACCENT('6')} OpenAI-compatible`);
+  console.log(`  ${ACCENT('7')} OpenCode (share your opencode auth & models)`);
+  console.log(`  ${ACCENT('8')} Skip`);
+  if (!cloudReady) console.log(DIM('  Option 1 needs a signed-in account — run proteus auth first.'));
   // No-friction discovery: the Claude Code subscription stores no credential
   // here (the binary owns its own login), so mention it inline rather than as a
   // step — only when it is actually usable on this machine.
@@ -335,16 +361,17 @@ async function chooseProvider(): Promise<string> {
   return value;
 }
 
-function normalizeProvider(value: string): 'codex' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'opencode' | 'skip' {
+function normalizeProvider(value: string): 'workers-ai' | 'codex' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'opencode' | 'skip' {
   const v = value.trim().toLowerCase();
-  if (v === '1' || v === 'codex' || v === 'chatgpt' || v === 'chatgpt-codex') return 'codex';
-  if (v === '2' || v === 'openai') return 'openai';
-  if (v === '3' || v === 'openrouter') return 'openrouter';
-  if (v === '4' || v === 'anthropic' || v === 'claude') return 'anthropic';
-  if (v === '5' || v === 'openai-compatible' || v === 'compat' || v === 'ollama') return 'openai-compatible';
-  if (v === '6' || v === 'opencode') return 'opencode';
-  if (v === '7' || v === 'skip' || v === 'none') return 'skip';
-  throw new Error('Provider must be codex, openai, openrouter, anthropic, openai-compatible, opencode, or skip.');
+  if (v === '1' || v === 'workers-ai' || v === 'cloudflare' || v === 'workersai') return 'workers-ai';
+  if (v === '2' || v === 'codex' || v === 'chatgpt' || v === 'chatgpt-codex') return 'codex';
+  if (v === '3' || v === 'openai') return 'openai';
+  if (v === '4' || v === 'openrouter') return 'openrouter';
+  if (v === '5' || v === 'anthropic' || v === 'claude') return 'anthropic';
+  if (v === '6' || v === 'openai-compatible' || v === 'compat' || v === 'ollama') return 'openai-compatible';
+  if (v === '7' || v === 'opencode') return 'opencode';
+  if (v === '8' || v === 'skip' || v === 'none') return 'skip';
+  throw new Error('Provider must be workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, or skip.');
 }
 
 async function runCodexDeviceFlow() {

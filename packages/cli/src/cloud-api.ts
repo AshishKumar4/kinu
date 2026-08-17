@@ -50,7 +50,6 @@ export interface CloudAgentConnectTicket {
 }
 
 export interface CloudAgentStatus {
-  id: string;
   name: string;
   displayName?: string;
   purpose: string;
@@ -154,7 +153,7 @@ const CloudAgentConnectTicketSchema: v.GenericSchema<CloudAgentConnectTicket> = 
   ticket: v.string(), expiresAt: v.number(),
 });
 export const CloudAgentStatusSchema: v.GenericSchema<CloudAgentStatus> = v.object({
-  id: v.string(), name: v.string(), displayName: v.optional(v.string()), purpose: v.string(), soul: v.string(),
+  name: v.string(), displayName: v.optional(v.string()), purpose: v.string(), soul: v.string(),
   createdAt: v.number(), scaffoldVersion: v.number(), searchNodeCount: v.number(), craftedToolCount: v.number(),
   messageCount: v.number(), model: v.optional(v.nullable(v.string())), reasoningEffort: v.optional(v.nullable(ReasoningEffortSchema)),
 });

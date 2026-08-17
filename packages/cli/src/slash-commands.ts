@@ -338,14 +338,15 @@ const RESTORE_GLYPH = { modify: '~', create: '+', delete: '-' } as const;
 export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?: string): Promise<UndoResult> {
   const surface = client.checkpoints;
   if (!surface) return { text: 'File checkpoints are not available for this agent.', restored: false };
-  const status = await surface.status();
-  if (!status.available) {
-    return { text: status.reason ?? 'File checkpoints are unavailable.', restored: false };
+  const { availability, entries } = await surface.list(200);
+  if (!availability.available) {
+    return { text: availability.reason ?? 'File checkpoints are unavailable.', restored: false };
   }
-  const turns = groupCheckpointsByTurn(await surface.list(200));
+  const turns = groupCheckpointsByTurn(entries);
   if (turns.length === 0) {
     return {
-      text: 'No file checkpoints yet — one is taken automatically before the first file change of each turn.',
+      text: 'No file checkpoints yet. One is taken automatically before the first change to a file on '
+        + 'YOUR machine each turn; work the agent does in its own workspace or in a sandbox is not covered.',
       restored: false,
     };
   }

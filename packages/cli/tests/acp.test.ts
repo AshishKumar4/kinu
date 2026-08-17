@@ -356,6 +356,7 @@ describe('proteus acp — permission', () => {
         // The adapter installed the channel; drive it as the shell tool would.
         return fake.approval!({
           command: 'sudo systemctl restart nginx',
+          executor: 'laptop',
           review: { decision: 'gate', hits: [{ decision: 'gate', rule: 'sudo', explanation: 'root' }] },
         });
       },
@@ -373,6 +374,7 @@ describe('proteus acp — permission', () => {
         await newSession(ctx);
         return fake.approval!({
           command: 'rm -rf build',
+          executor: 'laptop',
           review: { decision: 'gate', hits: [] },
         });
       },
@@ -388,7 +390,9 @@ describe('proteus acp — permission', () => {
       fake,
       async (ctx) => {
         await newSession(ctx);
-        return fake.approval!({ command: 'sudo reboot', review: { decision: 'gate', hits: [] } });
+        return fake.approval!({
+          command: 'sudo reboot', executor: 'laptop', review: { decision: 'gate', hits: [] },
+        });
       },
       () => ({ outcome: { outcome: 'cancelled' } }),
     );

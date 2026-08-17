@@ -20,6 +20,7 @@ import {
   type ReasoningEffort,
 } from '@proteus/core';
 import {
+  CLOUD_PROXY_PROVIDER_IDS,
   cloudProxyBaseURL,
   createFileCodexAuthStore,
   proteusHome,
@@ -448,29 +449,27 @@ export function resolveLLMConfig(opts?: {
   }
 
   const cloud = resolveCloudSession();
-  // A signed-in account is the default inference path. Stored BYO credentials
-  // remain available when the user selects their model explicitly; merely
-  // having an unrelated key on disk must not replace the platform default.
-  if (cloud && !model) {
-    return {
-      name: 'workers-ai',
-      baseURL: cloudProxyBaseURL(cloud.origin),
-      headers: { Authorization: `Bearer ${cloud.token}` },
-      model: workersAIModelId(model),
-    };
-  }
+  // The signed-in account IS the default inference path, and it owns the native
+  // model families. Both halves matter: no selection lands on the platform
+  // default rather than on whichever BYO key happens to sit on disk, and a
+  // `workers-ai` / `my-gateway` / `@cf/` selection is answered by the account
+  // rather than by a local endpoint that would happily accept the model id and
+  // serve something else. Stored BYO credentials still win when the user picks
+  // one of their models explicitly.
+  const cloudConfig: LLMProviderConfig | null = cloud
+    ? {
+        name: 'workers-ai',
+        baseURL: cloudProxyBaseURL(cloud.origin),
+        headers: { Authorization: `Bearer ${cloud.token}` },
+        model: workersAIModelId(model),
+      }
+    : null;
+  if (cloudConfig && (!model || isNativeCloudSpec(model))) return cloudConfig;
 
   const derived = deriveLLMConfigFromProviderCredentials(file, model);
   if (derived) return derived;
 
-  if (cloud) {
-    return {
-      name: 'workers-ai',
-      baseURL: cloudProxyBaseURL(cloud.origin),
-      headers: { Authorization: `Bearer ${cloud.token}` },
-      model: workersAIModelId(model),
-    };
-  }
+  if (cloudConfig) return cloudConfig;
 
   if (!baseURL) {
     throw new Error(
@@ -560,7 +559,10 @@ function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: stri
   }
 
   const compat = file.providers?.openaiCompat?.default;
-  if (compat) {
+  // The local endpoint answers for any model id it might serve, but never for a
+  // native Cloudflare spec: an Ollama on this machine will accept
+  // `@cf/deepseek-ai/…` as a model name and serve something else entirely.
+  if (compat && !(providerModel && isNativeCloudSpec(providerModel))) {
     const headers = { ...compat.headers };
     if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
     Object.assign(headers, compat.extraHeaders);
@@ -609,6 +611,13 @@ function workersAIModelId(model: string | undefined): string {
     return model.slice('workers-ai/'.length) || DEFAULT_WORKERS_AI_MODEL_ID;
   }
   return model?.startsWith('@cf/') ? model : DEFAULT_WORKERS_AI_MODEL_ID;
+}
+
+/** Specs the signed-in account serves: the proxy's own provider ids plus the
+ *  bare Workers AI wire form. */
+function isNativeCloudSpec(model: string): boolean {
+  return model.startsWith('@cf/')
+    || CLOUD_PROXY_PROVIDER_IDS.some((id) => model.startsWith(`${id}/`));
 }
 
 function directEndpointModelId(model: string): string {

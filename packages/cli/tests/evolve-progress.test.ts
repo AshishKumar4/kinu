@@ -11,7 +11,7 @@ import { formatMctsProgress } from '../src/commands/evolve.js';
 describe('evolve progress rendering', () => {
   test('a phase becomes transient status with the iteration and branch count', () => {
     const line = formatMctsProgress(
-      { type: 'phase', phase: 'explore', iteration: 1, remainingBudget: 2, branches: 3 },
+      { rootId: 'r1', type: 'phase', phase: 'explore', iteration: 1, remainingBudget: 2, branches: 3 },
       2,
     );
 
@@ -22,9 +22,9 @@ describe('evolve progress rendering', () => {
 
   test('phases name what they are doing, and a single branch reads singular', () => {
     const phases: Array<MCTSProgressEvent & { type: 'phase' }> = [
-      { type: 'phase', phase: 'explore', iteration: 1, remainingBudget: 1, branches: 1 },
-      { type: 'phase', phase: 'evaluate', iteration: 1, remainingBudget: 1, branches: 1 },
-      { type: 'phase', phase: 'reflect', iteration: 1, remainingBudget: 1, branches: 1 },
+      { rootId: 'r1', type: 'phase', phase: 'explore', iteration: 1, remainingBudget: 1, branches: 1 },
+      { rootId: 'r1', type: 'phase', phase: 'evaluate', iteration: 1, remainingBudget: 1, branches: 1 },
+      { rootId: 'r1', type: 'phase', phase: 'reflect', iteration: 1, remainingBudget: 1, branches: 1 },
     ];
 
     expect(phases.map(p => formatMctsProgress(p, 1).text)).toEqual([
@@ -36,6 +36,7 @@ describe('evolve progress rendering', () => {
 
   test('a branch failure is a persistent line naming the branch, stage and provider error', () => {
     const line = formatMctsProgress({
+      rootId: 'r1',
       type: 'branch-failed',
       stage: 'explore',
       iteration: 2,
@@ -52,7 +53,7 @@ describe('evolve progress rendering', () => {
 
   test('a completed iteration keeps its scores in the scrollback', () => {
     const line = formatMctsProgress(
-      { type: 'iteration-complete', iteration: 1, remainingBudget: 1, scores: [0.82, 0] },
+      { rootId: 'r1', type: 'iteration-complete', iteration: 1, remainingBudget: 1, scores: [0.82, 0] },
       2,
     );
 
@@ -63,6 +64,7 @@ describe('evolve progress rendering', () => {
 
   test('an unsupported branch language is visible as unverified grounding', () => {
     const line = formatMctsProgress({
+      rootId: 'r1',
       type: 'grounding-unavailable',
       language: 'rust',
       canRun: ['javascript', 'python'],
