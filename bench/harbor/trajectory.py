@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -48,9 +49,13 @@ _SPEC = importlib.util.spec_from_file_location("proteus_events", _EVENTS_PATH)
 if _SPEC is None or _SPEC.loader is None:
     raise ImportError(f"Cannot load the Proteus event reader from {_EVENTS_PATH}")
 _events = importlib.util.module_from_spec(_SPEC)
+# Registered before execution because @dataclass resolves its own module to read
+# annotations.
+sys.modules[_SPEC.name] = _events
 _SPEC.loader.exec_module(_events)
 
 parse_events = _events.parse_events
+read_grading = _events.read_grading
 run_events = _events.run_events
 turn_usage = _events.turn_usage
 split_activity = _events.split_activity

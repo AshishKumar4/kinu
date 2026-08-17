@@ -183,11 +183,46 @@ describe('pairedBinaryComparison', () => {
     expect(stats.floorPValue).toBeCloseTo(2 / 32, 10);
     expect(stats.canReachSignificance).toBe(false);
     expect(stats.significant).toBe(false);
-    expect(stats.verdict).toContain('can never reach');
+    expect(stats.verdict).toContain('UNDECIDABLE');
     // One more pair and it becomes possible.
     const six = pairedBinaryComparison(outcomes([...spec, { a: false, b: true }]), { seed: 1, iterations: 500 });
     expect(six.canReachSignificance).toBe(true);
     expect(six.significant).toBe(true);
+  });
+
+  test('the floor counts DIFFERING pairs, so a big corpus that barely disagreed is undecidable', () => {
+    // 40 tasks, 2 of which differed. Every prior test in this file used
+    // all-discordant specs, where pairs === discordant and the two possible
+    // denominators are indistinguishable — so the case that actually matters was
+    // the one nothing covered. Reading the floor off `pairs` here reports
+    // canReachSignificance=true on a design whose smallest achievable p is 0.5,
+    // which is the exact shape of the first live CL-Bench verdict.
+    const spec = [
+      ...Array.from({ length: 2 }, () => ({ a: false, b: true })),
+      ...Array.from({ length: 38 }, () => ({ a: true, b: true })),
+    ];
+    const stats = pairedBinaryComparison(outcomes(spec), { seed: 3, iterations: 500 });
+    expect(stats.pairs).toBe(40);
+    expect(stats.discordant).toBe(2);
+    expect(stats.floorPValue).toBeCloseTo(0.5, 10);
+    expect(stats.canReachSignificance).toBe(false);
+    expect(stats.pValue).toBeCloseTo(0.5, 10);
+    expect(stats.verdict).toContain('UNDECIDABLE');
+    expect(stats.verdict).toContain('2 of 40');
+    // And the whole point: 40 tasks is not what makes a contrast decidable.
+    expect(floorPValue(stats.pairs)).toBeLessThan(0.05);
+  });
+
+  test('six differing pairs out of forty can decide, and the floor says so', () => {
+    const spec = [
+      ...Array.from({ length: 6 }, () => ({ a: false, b: true })),
+      ...Array.from({ length: 34 }, () => ({ a: true, b: true })),
+    ];
+    const stats = pairedBinaryComparison(outcomes(spec), { seed: 3, iterations: 500 });
+    expect(stats.discordant).toBe(6);
+    expect(stats.floorPValue).toBeCloseTo(2 / 64, 10);
+    expect(stats.canReachSignificance).toBe(true);
+    expect(stats.significant).toBe(true);
   });
 
   test('floorPValue / minimumPairsForSignificance agree', () => {

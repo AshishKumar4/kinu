@@ -145,6 +145,55 @@ describe('executionVerdict — the environment\'s verdict, read symmetrically', 
     expect(isPureLookupCall({ name: 'memory', args: { action: 'append' } })).toBe(false);
     expect(isPureLookupCall({ name: 'run', args: {} })).toBe(false);
   });
+
+  // The measured defect: `run` catches a non-zero exit and returns it as an
+  // ordinary successful result, so `hadError` stays false. Reading only that
+  // flag graded a command that exited 3 as `accepted` at quality 0.70 — a
+  // reward paid for a failure. Verbatim from a live flash run:
+  //   {"type":"tool_result","toolName":"run","result":"Error (exit 3)\n(no output)"}
+  //   Turn outcome: accepted | quality 0.70 | 1 tool calls | 2 steps | clean
+  test('a non-zero exit FAILED, even though the transport flag is clean', () => {
+    expect(executionVerdict(turn({
+      toolCalls: [{ name: 'run', args: { command: 'python3 -c "import sys; sys.exit(3)"' }, result: 'Error (exit 3)\n(no output)' }],
+    }))).toBe('failed');
+  });
+
+  test('a structured {error} payload FAILED, whole or head-clamped', () => {
+    expect(executionVerdict(turn({
+      toolCalls: [{ name: 'browse', args: {}, result: '{"error":"no runtime provisioned"}' }],
+    }))).toBe('failed');
+    expect(executionVerdict(turn({
+      toolCalls: [{ name: 'browse', args: {}, result: '{"error":"truncated at the seam' }],
+    }))).toBe('failed');
+  });
+
+  test('a result that merely MENTIONS an error is not a failure', () => {
+    expect(executionVerdict(turn({
+      toolCalls: [{ name: 'run', args: {}, result: '3 tests passed, 0 errors' }],
+    }))).toBe('succeeded');
+  });
+
+  // The opposite mistake, and the reason the LAST acting call decides rather
+  // than any of them: run the suite, see it red, edit, run it green. That turn
+  // is the system working and must not be graded `corrected`.
+  test('a failure the turn went on to FIX still SUCCEEDED', () => {
+    expect(executionVerdict(turn({
+      toolCalls: [
+        { name: 'run', args: { command: 'python3 test_calc.py' }, result: 'Error (exit 1)\nAssertionError: add broken' },
+        { name: 'edit', args: { path: 'calc.py' }, result: 'ok' },
+        { name: 'run', args: { command: 'python3 test_calc.py' }, result: 'ALL PASS' },
+      ],
+    }))).toBe('succeeded');
+  });
+
+  test('a lookup after a failed action cannot launder the verdict', () => {
+    expect(executionVerdict(turn({
+      toolCalls: [
+        { name: 'run', args: { command: 'make' }, result: 'Error (exit 2)' },
+        { name: 'memory', args: { action: 'search' }, result: [] },
+      ],
+    }))).toBe('failed');
+  });
 });
 
 describe('execution-sourced rows are priced and labelled as proxies', () => {

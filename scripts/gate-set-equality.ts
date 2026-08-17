@@ -125,6 +125,13 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + '`git ls-files` does not list `node_modules`, so the set it needs is exactly the set no '
     + 'enumerator here can produce.',
   ],
+  [
+    'scripts/bench-external.ts',
+    'enumerates a Harbor or CL-Bench JOB directory named on the command line — written by '
+    + "somebody else's harness, outside this repository, where every subdirectory holding a "
+    + '`result.json` is a trial. No repository enumerator can produce that set. It fails loudly '
+    + 'on a directory holding none, rather than pairing fewer arms in silence.',
+  ],
 ]);
 
 export type Kind = 'private-enumeration' | 'private-pattern' | 'unmeasured-publication'

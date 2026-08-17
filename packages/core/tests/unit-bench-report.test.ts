@@ -150,10 +150,11 @@ describe('decideBenchOutcome — rejection by default', () => {
     expect(decideBenchOutcome(null).accept).toBe(false);
   });
 
-  test('a split too small to reach significance rejects and says to grow it', () => {
+  test('a split too small to reach significance rejects and names the differing pairs', () => {
     const decision = decideBenchOutcome(scorecard(Array.from({ length: 4 }, () => ({ a: false, b: true }))));
     expect(decision.accept).toBe(false);
-    expect(decision.reason).toContain('grow the corpus');
+    expect(decision.reason).toContain('only 4 of 4 held-out tasks differed');
+    expect(decision.reason).toContain('0.1250');
   });
 
   test('a negative held-out effect rejects', () => {
@@ -162,9 +163,26 @@ describe('decideBenchOutcome — rejection by default', () => {
     expect(decision.reason).toContain('not an improvement');
   });
 
-  test('an improvement that is not significant rejects', () => {
+  test('an improvement over 3 differing pairs rejects on the floor, not on the p-value', () => {
+    // 12 tasks, 3 of which differed. The rejection this used to assert — "not
+    // significant" — implies a design that could have said otherwise; 3 differing
+    // pairs bottom out at p=0.25, so nothing here could ever have been accepted.
+    // Naming the floor is the stronger and more useful refusal.
     const decision = decideBenchOutcome(scorecard([
       { a: false, b: true }, { a: false, b: true }, { a: true, b: false },
+      ...Array.from({ length: 9 }, () => ({ a: true, b: true })),
+    ]));
+    expect(decision.accept).toBe(false);
+    expect(decision.reason).toContain('only 3 of 12 held-out tasks differed');
+    expect(decision.reason).toContain('0.2500');
+  });
+
+  test('an improvement that is not significant, over enough differing pairs, rejects for that', () => {
+    // 7 differing pairs is past the 6-pair floor, so the design could have
+    // decided and the reason has to be the p-value rather than the design.
+    const decision = decideBenchOutcome(scorecard([
+      ...Array.from({ length: 4 }, () => ({ a: false, b: true })),
+      ...Array.from({ length: 3 }, () => ({ a: true, b: false })),
       ...Array.from({ length: 9 }, () => ({ a: true, b: true })),
     ]));
     expect(decision.accept).toBe(false);

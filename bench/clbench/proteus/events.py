@@ -1,15 +1,20 @@
-"""Reading the NDJSON stream that `proteus exec --json` writes to stdout.
+"""Reading what `proteus exec --json` and `proteus alignment --json` hand back.
 
 This is the contract between two repos, so it lives on its own with no
 CL-Bench imports and is covered by `bench/clbench/tests` — a silent change to
 the CLI's event shape would otherwise show up as a mysteriously bad benchmark
-score rather than as a failing test.
+score rather than as a failing test. Both benchmark adapters read it, so the
+turn stream and the grading ledger are parsed in one place: whether a turn was
+graded is the question both of them turned out to need, and two readers would
+have drifted.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -60,6 +65,49 @@ def split_activity(events: list[Event]) -> tuple[list[Event], list[Event]]:
         if e.get("type") == "evolution"
     ]
     return activity, [e for e in activity if e["event"] in EVOLUTION_EVENTS]
+
+
+@dataclass(frozen=True)
+class TurnGrading:
+    """How many of this trial's turns reached a verdict, from the ledger that
+    owns the answer rather than from the prose the activity channel carries.
+
+    ``proteus alignment --json`` reads ``turn_outcomes``, the table
+    ``packages/core/src/evolution/outcomes.ts`` writes. A benchmark container
+    holds no person, so ``user_graded`` is 0 by construction and
+    ``execution_graded`` — rows the ENVIRONMENT graded — is the number that says
+    whether the turn was graded at all. Reading the first as the second would
+    report every headless run as ungraded.
+    """
+
+    user_graded: int
+    execution_graded: int
+    abandoned: int
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "user_graded": self.user_graded,
+            "execution_graded": self.execution_graded,
+            "abandoned": self.abandoned,
+        }
+
+
+def read_grading(path: Path) -> TurnGrading | None:
+    """The trial's grading counts, or None when the probe left no readable answer.
+
+    None means MISSING EVIDENCE and is not the same as three zeros: a probe that
+    never ran and a turn that graded nothing are different findings, and
+    collapsing them would let a broken probe read as a healthy inert arm.
+    """
+    try:
+        overall = json.loads(path.read_text(encoding="utf-8"))["alignment"]["overall"]
+        return TurnGrading(
+            user_graded=int(overall["turns"]),
+            execution_graded=int(overall["executionGraded"]),
+            abandoned=int(overall["abandoned"]),
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def parse_events(stdout: str) -> list[Event]:

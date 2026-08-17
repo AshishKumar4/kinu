@@ -113,10 +113,15 @@ export function decideBenchOutcome(sealed: SealedScorecard | null): BenchDecisio
   if (!sealed) return { accept: false, reason: 'no held-out measurement — dev-split results alone never justify keeping a variant' };
   const s = sealed.stats;
   if (s.pairs === 0) return { accept: false, reason: 'held-out split was empty' };
-  if (!s.canReachSignificance) {
-    return { accept: false, reason: `the held-out split has only ${s.pairs} tasks — no result on it can reach p ≤ ${s.alpha} (best possible ${s.floorPValue.toFixed(4)}), so it cannot accept anything; grow the corpus` };
-  }
+  // "Never disagreed" comes first because it is the more specific diagnosis of
+  // the same fact: with no differing pair the floor is 1, so the rule below
+  // fires too and says "the split has only N tasks", which names the wrong
+  // quantity. The task count is an upper bound on what can decide; the differing
+  // pairs are what decides.
   if (s.discordant === 0) return { accept: false, reason: `variants never disagreed on ${s.pairs} held-out tasks — no evidence either way` };
+  if (!s.canReachSignificance) {
+    return { accept: false, reason: `only ${s.discordant} of ${s.pairs} held-out tasks differed between the variants — the smallest p that many differing pairs can produce is ${s.floorPValue.toFixed(4)} > ${s.alpha}, so no outcome here could have accepted anything` };
+  }
   if (s.effect <= 0) return { accept: false, reason: `held-out effect ${fmtPp(s.effect)} is not an improvement` };
   if (!s.significant) return { accept: false, reason: `held-out effect ${fmtPp(s.effect)} is not significant (p=${s.pValue.toFixed(4)})` };
   return {

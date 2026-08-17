@@ -39,6 +39,12 @@
  * tool-result contract).
  */
 
+import * as v from 'valibot';
+import { tolerate } from '../obs/index.js';
+import { parseJsonValue } from '../utils/json.js';
+
+const ErrorResultSchema = v.object({ error: v.string() });
+
 /** The shape every transport settles a command into. */
 export interface ExecOutcome {
   readonly stdout?: string;
@@ -68,6 +74,36 @@ export function formatExecResult(result: ExecOutcome): string {
   if (stderr.trim()) sections.push(`${STDERR_LABEL}\n${stderr}`);
   if (sections.length === 1) sections.push(NO_OUTPUT);
   return sections.join('\n');
+}
+
+/**
+ * Whether a rendered tool result is a FAILURE — the inverse of the renderer
+ * above, and the one definition every reader shares.
+ *
+ * It lives here because this file creates the evidence: `formatExecResult`
+ * turns a non-zero exit into a leading `Error (exit N)`, and that prefix is
+ * the only surviving trace of the exit code by the time a result reaches a
+ * reader. A reader that checks the transport discriminator alone cannot see it
+ * — the `run` tool catches a non-zero exit and hands it back as an ordinary,
+ * successful result, because that text is what steers the model's next step.
+ *
+ * Two shapes, both produced by this codebase and nothing else guessed at: the
+ * `Error` prefix every built-in failure uses, and the `{"error": "…"}` payload
+ * the unprovisioned-runtime paths return. A result that merely mentions the
+ * word "error" somewhere in its output is not a failure.
+ *
+ * The JSON half is read from the head rather than parsed whole: every seam
+ * hands over a BOUNDED prefix of the result (chat.ts and the cf afterToolCall
+ * both cut at 1000 chars), so a long failure payload arrives as JSON that
+ * cannot parse while its discriminator is still legible at the front.
+ */
+export function isFailingResultText(result: string): boolean {
+  const text = result.trimStart();
+  if (/^Error\b/.test(text)) return true;
+  if (!text.startsWith('{')) return false;
+  const json = tolerate(() => parseJsonValue(text), 'malformed-input');
+  if (json === undefined) return /^\{\s*"error"\s*:\s*"/.test(text);
+  return v.safeParse(ErrorResultSchema, json).success;
 }
 
 /** Parse `<size> <mtime-seconds> <type words>` from stat(1) output — how an
