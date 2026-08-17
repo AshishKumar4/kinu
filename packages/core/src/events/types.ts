@@ -11,7 +11,7 @@
 
 import type { ModelMessage } from 'ai';
 import type { ContextBudgetSnapshot } from '../context-budget.js';
-import type { JsonObject, JsonValue } from '../utils/json.js';
+import type { JsonValue } from '../utils/json.js';
 import type { ContextComposition } from '../context-meter.js';
 import type { FileEditSnapshot } from '../tools/file-ledger.js';
 import type { EscalationSnapshot } from '../execution/escalation.js';
@@ -39,7 +39,6 @@ export type StepCost = Pick<
 export type RunEventType =
   | 'run_start'
   | 'turn_start'
-  | 'tool_call_start'
   | 'tool_call_end'
   | 'step_finish'
   | 'head_split'
@@ -79,8 +78,28 @@ export type RunEvent =
       /** The trigger that fired this run, when event-driven. */
       trigger_id?: string })
   | (RunEventBase & { type: 'turn_start'; turnIndex: number })
-  | (RunEventBase & { type: 'tool_call_start'; name: string; args: JsonObject; toolCallId: string })
-  | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string; result?: JsonValue; error?: string; durationMs?: number })
+  /** One completed tool call, and — in `args` — WHAT it was asked to do.
+   *
+   *  There is no matching `tool_call_start`. One existed, declared in this
+   *  union and read by three readers, and no producer ever wrote it: the
+   *  backends' sinks emit this row and `step_finish`, so a `tool_call_start`
+   *  reader reported zero forever and was believed. It is deleted rather than
+   *  implemented because a start row cannot answer the question a failure
+   *  ledger is asked — which call FAILED and what it was doing — without a
+   *  join, and the join key here is a per-turn ordinal, not the provider's id.
+   *
+   *  `args` is therefore on the row that carries the failure. It is a digest
+   *  (`digestJsonValue`), so a `write` of a large body is described rather than
+   *  duplicated: the durable cost of the ledger tracks what the turn DID, not
+   *  how much content it moved. Absent when the call took no arguments.
+   *
+   *  `error` is the transport discriminator — the tool threw. A command that
+   *  ran and exited non-zero is a SUCCESSFUL call whose `result` text begins
+   *  `Error (exit N)`; the two are different facts and a reader that wants
+   *  "did the work fail" must consult both. When present it is NEVER empty:
+   *  see `FAILURE_WITHOUT_ERROR`. */
+  | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string;
+      args?: JsonValue; result?: JsonValue; error?: string; durationMs?: number })
   /** One model request completed — and, in `messages`, WHAT it produced: the
    *  assistant parts and paired tool results of that step alone, appended the
    *  moment the step finished. This is the durable record of the model's own
@@ -271,3 +290,21 @@ export type ExecutionRecoveryRecord =
 export type RunEventInput = {
   [K in RunEvent['type']]: Omit<Extract<RunEvent, { type: K }>, keyof RunEventBase> & { type: K }
 }[RunEvent['type']];
+
+/**
+ * What a call that failed WITHOUT saying why records as.
+ *
+ * An empty `error` is no error to every reader — the one predicate they share
+ * is `error != null && error !== ''` — and the producer used to manufacture
+ * exactly that from a tool reporting `success: false` with a nullish error
+ * (`String(c.error ?? '')`). So the worst calls in a turn were the ones that
+ * vanished from it: a tool failing on a missing runtime method reported failure
+ * with nothing to report, and the ledger scored it as a clean call. The
+ * accumulator KNEW — it flips `hadError` on the same branch — and discarded it
+ * at the event boundary.
+ *
+ * A sentinel and not prose because both the producer and the failure census
+ * name it, and a reader that has to match prose is a reader that will drift
+ * from the writer.
+ */
+export const FAILURE_WITHOUT_ERROR = 'the tool reported failure without an error';

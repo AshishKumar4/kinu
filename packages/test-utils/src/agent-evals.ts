@@ -20,9 +20,8 @@
  *      drives each one to a known non-zero score AND to a failing score, so a
  *      green assertion in a live suite is known to be capable of being red.
  */
-import * as v from 'valibot';
 import {
-  isFailingResultText, listForkRuns, parseStoredRunEvent, STEER_BRANCH_RUN_ID_PREFIX,
+  censusToolFailures, listForkRuns, parseStoredRunEvent, STEER_BRANCH_RUN_ID_PREFIX,
   tableExists,
   type ForkRunSummary, type RunEvent, type SqlExecutor,
 } from '@proteus/core';
@@ -222,21 +221,22 @@ export type DelegationTrigger = typeof DELEGATION_TRIGGERS[number];
 /**
  * Why this scorer does NOT count `agents` tool calls.
  *
- * The obvious independent signal would be a `tool_call_start` row naming the
- * `agents` tool, narrowed to the actions that actually spawn (`fork`, `staff`)
- * — because the steer's own conversion test accepts ANY `agents` call, so
+ * The obvious independent signal would be a call naming the `agents` tool,
+ * narrowed to the actions that actually spawn (`fork`, `staff`) — because the
+ * steer's own conversion test accepts ANY `agents` call, so
  * `agents({action:'list'})` converts it without delegating anything.
  *
- * That signal does not exist. NO production code emits `tool_call_start`: the
- * type is declared in the event union, filtered by the run-events route, and
- * read by two readers, but both backends' sinks emit only `tool_call_end` and
- * `step_finish`. A scorer built on it would have returned 0 forever, on every
- * backend, and reported that as "the agent never delegated" — the precise
- * false-zero this harness exists to eliminate, shipped inside the harness.
+ * That signal was written against `tool_call_start`, a type declared in the
+ * event union that no producer ever wrote. A scorer built on it would have
+ * returned 0 forever, on every backend, and reported that as "the agent never
+ * delegated" — the precise false-zero this harness exists to eliminate,
+ * shipped inside the harness. The type is now deleted and `tool_call_end`
+ * carries the args, so the narrowing IS expressible; it stays unused here
+ * because `head_split` is the independent one.
  *
  * `head_split` is what a fork actually writes (`{ rootId, headIds, rationale }`),
  * and its producer exists because local runs "left no trace of a fork". So
- * that is the signal.
+ * that is the signal — a durable consequence of delegating, not a request to.
  */
 export const DELEGATION_EVENT_TYPE = 'head_split';
 
@@ -317,8 +317,8 @@ export function scoreDelegation(sql: SqlExecutor): DelegationScore {
   const completedTurns = sql<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE type = 'turn_end'`[0]?.n ?? 0;
 
-  // `tool_call_end` rather than `tool_call_start`: nothing in production emits
-  // the latter. See DELEGATION_EVENT_TYPE above for the same trap.
+  // `tool_call_end` is the row production writes. `tool_call_start` was declared
+  // and never emitted, and is deleted; see DELEGATION_EVENT_TYPE above.
   const toolCalls = sql<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE type = 'tool_call_end'`[0]?.n ?? 0;
 
@@ -627,23 +627,33 @@ export const spillRetrieval: BehaviourScorer = {
 // ── (k) Tool calls that worked ───────────────────────────────────
 
 /**
- * Did the agent's tool calls succeed?
- *
- * `tool_call_end` is the type production actually writes — `tool_call_start` is
- * declared in the event union and emitted by NOTHING on either backend, which is
- * the trap that made the first delegation scorer report zero forever. Verified
- * again for this scorer rather than inherited on trust.
+ * Did the agent's tool calls succeed — and where they did not, WHY?
  *
  * TWO KINDS OF FAILURE, and counting only the first is a defect this scorer
  * shipped with. `error` is the TRANSPORT discriminator: the tool itself threw. A
  * command that ran fine and exited non-zero is an ordinary SUCCESSFUL result
  * whose text begins `Error (exit N)` (`formatExecResult`, execution/
- * exec-result.ts:66), so a scorer reading only `error` counts a failed build, a
+ * exec-result.ts:72), so a scorer reading only `error` counts a failed build, a
  * failed test run and a failed `git apply` as successes. That exact confusion
  * graded a command exiting 3 as `accepted` at quality 0.70 in the evolution
  * reward, and it is the inverted-contamination shape: the worst call in the turn
- * contributing the best number. `isFailingResultText` is the one definition,
- * living beside the renderer that writes the prefix.
+ * contributing the best number.
+ *
+ * THE HISTOGRAM COUNTED THE WRONG ROWS. It was built over every call, so every
+ * published mix summed to `eligible` and described the run's tool USAGE while
+ * sitting beside a failure rate — a census of calls read as a census of
+ * failures. Run flash-a scored 103/126 and could not say which 23 failed.
+ *
+ * AND THE RATE POOLED FOUR DIFFERENT FACTS. `censusToolFailures` splits them,
+ * because which part a failure sits in is the whole finding: a tool that
+ * REFUSED correctly (an `old_text` that is not in the file, an unread file) is
+ * the FAIL-loudly contract working; a command that ran and exited non-zero is
+ * the WORK failing, which on a repair task is the agent finding the broken test
+ * it was sent to find; a command that exited 127 is a program the WORKSPACE DOES
+ * NOT HAVE, which is a platform gap and not the agent's doing at all; only the
+ * remainder is a candidate defect. The headline stays the pooled rate so it
+ * remains comparable with every run already in the ledger, and the detail names
+ * the split so the number can be read correctly.
  *
  * This is the coarsest instrument here and deliberately so: it is the one that
  * still has a non-zero denominator on a task too small to craft, spill, steer or
@@ -654,22 +664,17 @@ export const toolOutcomes: BehaviourScorer = {
   asserts: 'tool calls returned AND the command they ran did not fail',
   score(sql) {
     const rows = eventsOfType(sql, 'tool_call_end');
-    const threw = rows.filter((row) => row.error != null && row.error !== '');
-    // `result` is `JsonValue | undefined` on the validated event. Parsed to a
-    // string at this boundary rather than narrowed by representation, so a
-    // structured result simply is not a failure text.
-    const exitedNonZero = rows.filter((row) => {
-      const text = v.safeParse(v.string(), row.result);
-      return text.success && isFailingResultText(text.output);
-    });
-    const failed = threw.length + exitedNonZero.length;
-    const byTool = new Map<string, number>();
-    for (const row of rows) byTool.set(row.name, (byTool.get(row.name) ?? 0) + 1);
-    const mix = [...byTool.entries()].sort((a, b) => b[1] - a[1])
-      .map(([name, n]) => `${name}×${String(n)}`);
-    return verdict(rows.length, rows.length - failed,
-      `${String(rows.length - failed)}/${String(rows.length)} tool calls returned` +
-      (mix.length > 0 ? `; ${mix.join(', ')}` : ''));
+    const census = censusToolFailures(rows);
+    const failed = census.failures.length;
+    const detail = [
+      `${String(rows.length - failed)}/${String(rows.length)} tool calls returned`,
+      `${String(census.refused)} refused, ${String(census.workFailed)} work failed, `
+        + `${String(census.runtimeMissing)} runtime absent, ${String(census.broke)} broke`,
+    ];
+    if (census.byKey.length > 0) {
+      detail.push(`failed: ${census.byKey.map(([key, n]) => `${key}×${String(n)}`).join(', ')}`);
+    }
+    return verdict(rows.length, rows.length - failed, detail.join('; '));
   },
 };
 

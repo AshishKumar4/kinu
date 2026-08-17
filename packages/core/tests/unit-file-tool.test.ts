@@ -13,9 +13,13 @@ import { applyFileEdits, readFileSlice } from '../src/tools/file-edit.js';
 import { TurnFileLedger } from '../src/tools/file-ledger.js';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool.js';
 import { TurnContextBudget } from '../src/context-budget.js';
+import { JsonObjectSchema } from '../src/utils/json.js';
 import { makeVfsError } from '../src/vfs/errno.js';
 import type { Memory, VFS } from '../src/types/primitives.js';
 import type { JsonValue } from '../src/utils/json.js';
+import { TurnAccumulator } from '../src/orchestrator/turn-accumulator.js';
+import { classifyToolFailure } from '../src/read-models/tool-failures.js';
+import type { RunEvent, RunEventBase } from '../src/events/types.js';
 
 // ── the engine ──────────────────────────────────────────────────────────────
 
@@ -539,6 +543,7 @@ describe('file tool', () => {
     // (registry.unknownActionError).
     const { call } = toolFor(memoryVfs());
     expect(await call({ action: 'append', path: 'a' })).toEqual({
+      reason: 'bad_input',
       error: 'file requires `action` — one of read, write, edit; got "append"',
     });
   });
@@ -548,7 +553,107 @@ describe('file tool', () => {
     // non-string path threw a TypeError out of the tool instead of answering.
     const { call } = toolFor(memoryVfs());
     expect(await call({ action: 'read', path: 7 })).toEqual({
+      reason: 'bad_input',
       error: 'file requires `path`.',
     });
+  });
+});
+
+/**
+ * The attribution chain, end to end, on the row an investigation actually reads.
+ *
+ * The dispatcher has always COMPUTED why a call failed — nine distinct reasons —
+ * and returned only prose, recording the reason in per-TURN counters and nowhere
+ * per call. So a durable `tool_call_end` said `file` failed and a reader could
+ * not tell a refusal it was right to make from a broken filesystem. This drives
+ * the real dispatcher, through the real accumulator, to the real event, and
+ * classifies that event: every link is production code.
+ */
+describe('a `file` failure is attributable from the durable row alone', () => {
+  /** Run one call through the dispatcher and the accumulator, and classify the
+   *  `tool_call_end` the accumulator emitted. */
+  async function ledgerRow(
+    call: (input: FileToolTestInput) => Promise<JsonValue>, input: FileToolTestInput,
+  ) {
+    const events: Array<Omit<Extract<RunEvent, { type: 'tool_call_end' }>, keyof RunEventBase | 'type'>> = [];
+    const acc = new TurnAccumulator({ onToolCallEvent: (e) => events.push(e) });
+    const output = await call(input);
+    // `input` is an interface union, so it lacks the index signature `JsonObject`
+    // requires even though every value in it IS json — including the
+    // deliberately-bad `path: number` fixture. Parsed at the boundary rather
+    // than asserted: a fixture that ever stops being json fails here loudly.
+    acc.recordToolCall({ toolName: 'file', input: v.parse(JsonObjectSchema, input), success: true, output });
+    const emitted = events[0];
+    if (!emitted) throw new Error('the accumulator emitted no tool_call_end');
+    return {
+      output,
+      failure: classifyToolFailure({
+        type: 'tool_call_end', eventIndex: 0, runId: 'run-1',
+        timestamp: new Date().toISOString(), ...emitted,
+      }),
+    };
+  }
+
+  test('an unread edit lands as file·edit·unread, refused', async () => {
+    const { call } = toolFor(memoryVfs({ 'a.ts': 'const x = 1;\n' }));
+    const { failure } = await ledgerRow(call, {
+      action: 'edit', path: 'a.ts', edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
+    });
+    expect(failure).toEqual({
+      tool: 'file', action: 'edit', reason: 'unread', refused: true, workFailed: false, runtimeMissing: false,
+    });
+  });
+
+  test('an absent anchor lands as file·edit·not_found, refused', async () => {
+    const { call } = toolFor(memoryVfs({ 'a.ts': 'const x = 1;\n' }));
+    await call({ action: 'read', path: 'a.ts' });
+    const { failure } = await ledgerRow(call, {
+      action: 'edit', path: 'a.ts', edits: [{ old_text: 'const y = 9;', new_text: 'z' }],
+    });
+    expect(failure).toEqual({
+      tool: 'file', action: 'edit', reason: 'not_found', refused: true, workFailed: false, runtimeMissing: false,
+    });
+  });
+
+  test('a repeated anchor lands as file·edit·ambiguous, refused', async () => {
+    const { call } = toolFor(memoryVfs({ 'a.ts': 'x\nx\n' }));
+    await call({ action: 'read', path: 'a.ts' });
+    const { failure } = await ledgerRow(call, {
+      action: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }],
+    });
+    expect(failure).toMatchObject({ action: 'edit', reason: 'ambiguous', refused: true });
+  });
+
+  test('an unread overwrite lands as file·write·unread, refused', async () => {
+    const { call } = toolFor(memoryVfs({ 'a.txt': 'original' }));
+    const { failure } = await ledgerRow(call, { action: 'write', path: 'a.txt', content: 'replacement' });
+    expect(failure).toEqual({
+      tool: 'file', action: 'write', reason: 'unread', refused: true, workFailed: false, runtimeMissing: false,
+    });
+  });
+
+  test('a path that does not exist lands as missing and is NOT a refusal', async () => {
+    // The line that keeps the split honest: the tool did not decide anything
+    // here, so this stays in the candidate-defect bucket.
+    const { call } = toolFor(memoryVfs());
+    const { failure } = await ledgerRow(call, { action: 'read', path: 'gone.ts' });
+    expect(failure).toMatchObject({ tool: 'file', action: 'read', reason: 'missing', refused: false });
+  });
+
+  test('malformed edits land as bad_input, refused', async () => {
+    const { call } = toolFor(memoryVfs({ 'a.ts': 'x\n' }));
+    const { failure } = await ledgerRow(call, { action: 'edit', path: 'a.ts', edits: [] });
+    expect(failure).toEqual({
+      tool: 'file', action: 'edit', reason: 'bad_input', refused: true, workFailed: false, runtimeMissing: false,
+    });
+  });
+
+  test('a successful edit produces no failure at all', async () => {
+    const { call } = toolFor(memoryVfs({ 'a.ts': 'const x = 1;\n' }));
+    await call({ action: 'read', path: 'a.ts' });
+    const { failure } = await ledgerRow(call, {
+      action: 'edit', path: 'a.ts', edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
+    });
+    expect(failure).toBeNull();
   });
 });

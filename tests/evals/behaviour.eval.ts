@@ -45,7 +45,7 @@
  * judges here are built from the ledger scorers, which cannot score a trajectory
  * that never reached them.
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -62,6 +62,7 @@ import {
   type EvalArmState, type EvalObservation, type EvalRunRecord, type EvalTier,
 } from '@proteus/test-utils';
 import { DegenerateRunError, runBehaviourTask, type BehaviourOutput } from './harness.js';
+import { resolveArtifactRoot } from '../../scripts/bench-retention.js';
 
 /** One observation's input: the task and which repetition of it. That pair IS
  *  the pairing identity two runs are compared on. */
@@ -119,7 +120,36 @@ const CORPUS = loadCorpus();
 const CASES = CORPUS.flatMap((task) =>
   Array.from({ length: REPEATS }, (_, repetition) => ({ task, repetition })));
 
-const DIR = mkdtempSync(join(tmpdir(), 'proteus-behaviour-eval-'));
+/**
+ * Where the run's agent stores live — and SURVIVE.
+ *
+ * This was `mkdtempSync(join(tmpdir(), …))` and was `rmSync`d in `afterAll`, so
+ * every transcript the tier produced was destroyed by the tier that produced it.
+ * The consequence was concrete: run flash-a published a tool-failure count and
+ * the calls behind it were unrecoverable, so "why do the tool calls fail" could
+ * not be answered even in principle — the same defect as the 89-trial bench
+ * whose per-trial artifacts were swept, which is why `bench-retention.ts`
+ * exists. Its rules are reused rather than restated: `resolveArtifactRoot`
+ * refuses `/tmp` (which mkdtemp used), refuses an empty override, and there is
+ * no way to opt out.
+ *
+ * The stores are the whole trajectory, not a summary: `run_events` holds every
+ * `tool_call_end` with its args and its result, which is what an investigation
+ * reads. The path is recorded in the run record, so a number and its evidence
+ * are one hop apart.
+ */
+const TRANSCRIPTS = join(
+  // `runRoot: tmpdir()` states the truth about this tier rather than filling a
+  // parameter: it writes nothing under a throwaway run root, and the check that
+  // matters — the root is not under a swept directory — is the one mkdtemp
+  // failed.
+  resolveArtifactRoot({
+    flag: undefined, env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS },
+    repoRoot: REPO_ROOT, runRoot: tmpdir(),
+  }),
+  `behaviour-${TIER}-${String(Date.now())}`,
+);
+mkdirSync(TRANSCRIPTS, { recursive: true });
 const opened: Database[] = [];
 const observations: EvalObservation[] = [];
 let model: LanguageModel;
@@ -240,14 +270,17 @@ afterAll(() => {
       tokensIn: spend.usage.input ?? 0,
       tokensOut: spend.usage.output ?? 0,
     },
+    transcripts: TRANSCRIPTS,
   };
   const out = process.env.PROTEUS_EVAL_RECORD
     ?? join(REPO_ROOT, 'tests/eval/runs', `${record.runId}.json`);
   writeRunRecord(out, record);
   console.log(`\n${formatRunRecord(record)}\n\nrecord: ${out}\n`);
 
+  // Closed, not deleted. Closing is what checkpoints each store's WAL, so the
+  // retained file is readable by the next process; deleting is what made every
+  // published tool-failure count unauditable.
   for (const db of opened) db.close();
-  rmSync(DIR, { recursive: true, force: true });
 });
 
 describeEval('Agent behaviour over the run-event ledger', {
@@ -260,7 +293,7 @@ describeEval('Agent behaviour over the run-event ledger', {
       const startedAt = Date.now();
       try {
         const output = await runBehaviourTask(input.task, {
-          dir: join(DIR, `rep${String(input.repetition)}`), model, llm: LLM, arm: ARM, opened,
+          dir: join(TRANSCRIPTS, `rep${String(input.repetition)}`), model, llm: LLM, arm: ARM, opened,
         });
         observations.push({
           taskId: input.task.id, repetition: input.repetition, outcome: 'scored',

@@ -80,17 +80,14 @@ function seedInvestigationWorkspace(dbPath: string): void {
 
   recorder.emit('run-new', { type: 'run_start', agentId: 'w', caused_by: 'chat', userMessage: 'fork with mcts' });
   recorder.emit('run-new', {
-    type: 'tool_call_start', name: 'agents', args: { action: 'fork', settle: 'mcts' }, toolCallId: 'tc-1',
-  });
-  recorder.emit('run-new', {
-    type: 'tool_call_end', name: 'agents', toolCallId: 'tc-1',
+    type: 'tool_call_end', name: 'agents', args: { action: 'fork', settle: 'mcts' }, toolCallId: 'tc-1',
     result: { background: true, jobId: 'job-1', kind: 'agents', message: `contains ${SECRET_TOKEN}` },
   });
   // The model polls the very job it was just told to stop waiting on.
   recorder.emit('run-new', {
-    type: 'tool_call_start', name: 'agent', args: { jobResult: 'job-1' }, toolCallId: 'tc-2',
+    type: 'tool_call_end', name: 'agent', args: { jobResult: 'job-1' }, toolCallId: 'tc-2',
+    result: { status: 'running' },
   });
-  recorder.emit('run-new', { type: 'tool_call_end', name: 'agent', toolCallId: 'tc-2', result: { status: 'running' } });
   recorder.emit('run-new', { type: 'run_end', reason: 'completed' });
 
   // ── Head runs: older (failed) then newer (completed) — proves ordering. ──
@@ -217,7 +214,7 @@ describe('proteus debug — local backend', () => {
       return event.success ? [event.output] : [];
     });
     expect(runEvents.filter((e) => e.runId === 'run-new').map((e) => e.type)).toEqual([
-      'run_start', 'tool_call_start', 'tool_call_end', 'tool_call_start', 'tool_call_end', 'run_end',
+      'run_start', 'tool_call_end', 'tool_call_end', 'run_end',
     ]);
   });
 
@@ -232,12 +229,16 @@ describe('proteus debug — local backend', () => {
     expect(r.exitCode).toBe(0);
     const summary = v.parse(v.object({
       runs: v.array(v.object({
-        runId: v.string(), jobPollsAfterHandle: v.number(),
+        runId: v.string(), toolCalls: v.number(), jobPollsAfterHandle: v.number(),
         usage: UsageSchema, turnsWithoutUsage: v.number(),
       })),
       mctsSearches: v.array(v.object({ rootId: v.string(), nodeCount: v.number(), maxDepth: v.number() })),
     }), JSON.parse(r.stdout));
     const newRun = summary.runs.find((run) => run.runId === 'run-new');
+    // Both counters read `tool_call_end` — the row production writes. Seeded as
+    // `tool_call_start` these were 2 and 1 in this test and 0 and 0 on every
+    // real run, because nothing has ever emitted that type.
+    expect(newRun?.toolCalls).toBe(2);
     expect(newRun?.jobPollsAfterHandle).toBe(1);
     // What the bundle now says a run cost. The seeded run reported input and
     // output on one turn and nothing on the next, so the accumulated usage

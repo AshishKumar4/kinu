@@ -916,6 +916,7 @@ export type {
   CacheHitStats, StepTelemetry,
 } from './events/index.js';
 export {
+  FAILURE_WITHOUT_ERROR,
   initRunEventTables,
   parseStoredRunEvent,
   RunEventRecorder,
@@ -1302,6 +1303,10 @@ export {
 export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/timeline.js';
 export { getRunEvents, getRunSummaries, listRuns } from './read-models/runs.js';
 export type { RunListEntry, RunSummary } from './read-models/runs.js';
+export {
+  censusToolFailures, classifyToolFailure, toolFailureKey,
+} from './read-models/tool-failures.js';
+export type { ToolFailure, ToolFailureCensus } from './read-models/tool-failures.js';
 export {
   getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
   walkWorkspaceTextFiles,

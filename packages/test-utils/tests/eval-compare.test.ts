@@ -76,6 +76,7 @@ function run(
     declaredTasks, executedTasks: declaredTasks, observations,
     admissibility: assessAdmissibility(declaredTasks, observations),
     spend: { calls: observations.length, tokensIn: 0, tokensOut: 0 },
+    transcripts: `/bench-artifacts/${runId}`,
   };
 }
 

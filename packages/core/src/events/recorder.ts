@@ -15,7 +15,7 @@ import * as v from 'valibot';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import type { RunEvent, RunEventInput, RunEventType } from './types.js';
-import { JsonObjectSchema, JsonValueSchema } from '../utils/json.js';
+import { JsonValueSchema } from '../utils/json.js';
 import { UsageSchema } from '../usage.js';
 import { ESCALATION_OUTCOMES } from '../execution/escalation.js';
 
@@ -54,10 +54,9 @@ const RunEventSchema = v.variant('type', [
     userMessage: v.optional(v.string()), caused_by: v.optional(v.string()),
     ingress_kind: v.optional(v.string()), trigger_id: v.optional(v.string()) }),
   v.object({ ...BaseFields, type: v.literal('turn_start'), turnIndex: v.number() }),
-  v.object({ ...BaseFields, type: v.literal('tool_call_start'), name: v.string(),
-    args: JsonObjectSchema, toolCallId: v.string() }),
   v.object({ ...BaseFields, type: v.literal('tool_call_end'), name: v.string(),
-    toolCallId: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.string()),
+    toolCallId: v.string(), args: v.optional(JsonValueSchema),
+    result: v.optional(JsonValueSchema), error: v.optional(v.string()),
     durationMs: v.optional(v.number()) }),
   v.object({ ...BaseFields, type: v.literal('step_finish'), stepIndex: v.number(),
     reason: v.optional(v.string()), messages: v.optional(v.array(StoredModelMessageSchema)),

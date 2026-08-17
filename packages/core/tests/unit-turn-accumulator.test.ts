@@ -6,6 +6,8 @@ import { TurnAccumulator } from '../src/orchestrator/turn-accumulator.js';
 import { MissionGovernor } from '../src/mission-budget.js';
 import type { Usage } from '../src/usage.js';
 import { makeSql, makeExecRaw } from './helpers.js';
+import { FAILURE_WITHOUT_ERROR } from '../src/events/types.js';
+import { classifyToolFailure } from '../src/read-models/tool-failures.js';
 
 describe('TurnAccumulator', () => {
   test('reset clears all accounting + stamps startedAt', () => {
@@ -36,7 +38,7 @@ describe('TurnAccumulator', () => {
   });
 
   test('recordToolCall — success records the output as the core ToolCallRecord', () => {
-    const toolEvents: Array<{ name: string; toolCallId: string }> = [];
+    const toolEvents: Array<{ name: string; toolCallId: string; args?: unknown }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
     a.recordToolCall({ toolName: 'execute_tools', input: { code: '1+1' }, success: true, output: { result: 2 }, durationMs: 12 });
     expect(a.toolCalls).toEqual([{ name: 'execute_tools', args: { code: '1+1' }, result: { result: 2 } }]);
@@ -44,14 +46,67 @@ describe('TurnAccumulator', () => {
     expect(toolEvents[0]).toMatchObject({ name: 'execute_tools', toolCallId: 'tc-1' });
   });
 
+  test('recordToolCall — the durable event carries WHAT the call was asked to do', () => {
+    // Without this the row names the tool and nothing else, so a ledger of `file`
+    // failures cannot say whether the agent was reading, writing or editing —
+    // and for a dispatcher tool the action is the whole difference between a
+    // refusal it was right to make and a defect.
+    const toolEvents: Array<{ args?: unknown }> = [];
+    const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
+    a.recordToolCall({ toolName: 'file', input: { action: 'edit', path: 'src/a.ts' }, success: true, output: { ok: true } });
+    expect(toolEvents[0].args).toEqual({ action: 'edit', path: 'src/a.ts' });
+  });
+
+  test('recordToolCall — a big argument is DIGESTED, not stored whole', () => {
+    // The ledger's durable cost must track what the turn DID, not how much
+    // content it moved: a `write` body would otherwise be stored twice, once
+    // here and once in the step transcript.
+    const toolEvents: Array<{ args?: unknown }> = [];
+    const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
+    a.recordToolCall({ toolName: 'file', input: { action: 'write', content: 'x'.repeat(5000) }, success: true, output: { ok: true } });
+    const args = toolEvents[0].args;
+    expect(args).toBeTypeOf('string');
+    expect(String(args).length).toBeLessThan(1000);
+    // Visibly a digest, and the action still legible at the front of it.
+    expect(String(args).endsWith('…')).toBe(true);
+    expect(String(args)).toContain('"action":"write"');
+  });
+
   test('recordToolCall — failure records {error}, flips hadError, passes error to the sink', () => {
     const toolEvents: Array<{ error?: string }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
     a.recordToolCall({ toolName: 'run', success: false, error: new Error('boom') });
-    // recorded result uses .message; the run-event sink uses String(error) — both faithful to the DO.
+    // ONE description of the failure in both ledgers. They used to disagree —
+    // `.message` in the core record against `String(error)` at the sink — so the
+    // same call read as `boom` in the evolution signal and `Error: boom` in the
+    // run-event log.
     expect(a.toolCalls[0]).toEqual({ name: 'run', args: {}, result: { error: 'boom' } });
     expect(a.hadError).toBe(true);
-    expect(toolEvents[0].error).toBe('Error: boom');
+    expect(toolEvents[0].error).toBe('boom');
+  });
+
+  test('recordToolCall — a failure with NO error is never recorded as clean', () => {
+    // The measured invisibility path. `String(c.error ?? '')` wrote `error: ''`,
+    // and every reader's discriminator is `error != null && error !== ''` — so a
+    // tool reporting failure without saying why was scored as a successful call,
+    // while `hadError` on the same branch knew it had failed. Three nullish
+    // shapes, because `String(undefined)` and `String(null)` produce fabricated
+    // text rather than an empty string and the old code did both in two places.
+    for (const error of [undefined, null, '']) {
+      const toolEvents: Array<{ error?: string }> = [];
+      const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
+      a.recordToolCall({ toolName: 'execute_tools', success: false, error });
+      expect(a.hadError).toBe(true);
+      expect(toolEvents[0].error).toBe(FAILURE_WITHOUT_ERROR);
+      expect(a.toolCalls[0]).toEqual({
+        name: 'execute_tools', args: {}, result: { error: FAILURE_WITHOUT_ERROR },
+      });
+      // And the census reads it back as its own reason rather than as `threw`.
+      expect(classifyToolFailure({
+        type: 'tool_call_end', eventIndex: 0, runId: 'r', timestamp: new Date().toISOString(),
+        name: 'execute_tools', toolCallId: 'tc-1', error: toolEvents[0].error,
+      })).toMatchObject({ reason: 'failed_without_error' });
+    }
   });
 
   test('recordStep sums the turn field by field, leaving unreported fields absent', () => {

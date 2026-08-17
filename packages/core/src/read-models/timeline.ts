@@ -94,8 +94,6 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
       return { ...base, kind: 'trigger', label: e.caused_by ? `Run started · ${e.caused_by}` : 'Run started', detail: e.userMessage };
     case 'turn_start':
       return { ...base, kind: 'llm-turn', label: `Turn ${e.turnIndex}` };
-    case 'tool_call_start':
-      return { ...base, kind: toolKindFor(e.name), label: e.name, refId: e.toolCallId };
     case 'tool_call_end':
       return {
         ...base, kind: toolKindFor(e.name), label: e.error ? `${e.name} failed` : e.name,

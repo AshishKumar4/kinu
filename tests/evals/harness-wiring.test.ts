@@ -28,10 +28,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { LanguageModel } from 'ai';
+import * as v from 'valibot';
 
-import type { AgentRuntime, EvalCase, LLMProviderConfig } from '../../packages/core/src/index.js';
-import { DefaultExecutionRouter } from '../../packages/core/src/index.js';
+import type { AgentRuntime, EvalCase, LLMProviderConfig, RunEvent } from '../../packages/core/src/index.js';
+import { censusToolFailures, DefaultExecutionRouter, RunEventRecorder } from '../../packages/core/src/index.js';
+import { DIGEST_LIMIT, JsonObjectSchema } from '../../packages/core/src/utils/json.js';
 import { createWorkspace } from '../../packages/core/src/identity/index.js';
+import { makeSql } from '../../packages/cli-backend/src/runtime.js';
 import type { EvalArmState } from '@proteus/test-utils';
 
 import {
@@ -58,12 +61,14 @@ const ARM: EvalArmState = {
  */
 type ScriptedStep =
   | { readonly tool: 'execute_tools'; readonly input: { readonly code: string } }
+  | { readonly tool: 'run'; readonly input: { readonly command: string } }
   | {
       readonly tool: 'file';
       readonly input: {
-        readonly action: 'read' | 'write';
+        readonly action: 'read' | 'write' | 'edit';
         readonly path: string;
         readonly content?: string;
+        readonly edits?: ReadonlyArray<{ readonly old_text: string; readonly new_text: string }>;
       };
     };
 
@@ -150,8 +155,13 @@ function scoreOf(scores: readonly BehaviourScoreJson[], name: string): Behaviour
   return found;
 }
 
-async function run(id: string, steps: readonly ScriptedStep[]): Promise<readonly BehaviourScoreJson[]> {
-  const task: EvalCase = { id, task: 'do the task' };
+/** `tags` reaches `runBehaviourTask`, which seeds the source tree only for a
+ *  `workspace` case — an unseeded tree makes a `file` refusal read `missing`
+ *  (the path is not there) instead of the contract reason under test. */
+async function run(
+  id: string, steps: readonly ScriptedStep[], tags?: readonly string[],
+): Promise<readonly BehaviourScoreJson[]> {
+  const task: EvalCase = tags ? { id, task: 'do the task', tags: [...tags] } : { id, task: 'do the task' };
   const out = await runBehaviourTask(task, {
     dir, model: scripted(steps), llm: LLM, arm: ARM, opened,
   });
@@ -231,4 +241,107 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     // nothing, not that the harness was broken (behaviour.eval.ts:281).
     expect(new DegenerateRuntimeError('t', 'r')).not.toBeInstanceOf(DegenerateRunError);
   }, 30_000);
+});
+
+/**
+ * ATTRIBUTION, END TO END ON A REAL TURN.
+ *
+ * The three tests above prove the harness reaches an executor. These prove the
+ * ledger can say WHY a call failed, which is a different claim and was the one
+ * that could not be answered: run flash-a published 23 failures out of 126 calls
+ * and could not name a single tool, action or reason behind them.
+ *
+ * Deliberately read off the RETAINED STORE rather than off the scorer's string,
+ * through `RunEventRecorder` — the canonical union — so what is asserted is that
+ * `args` survived the real sink on a real turn. A unit test over hand-built rows
+ * cannot show that: `tool_call_end` carried no `args` column at all, and
+ * `tool_call_start`, the type every earlier counter read, is emitted by nothing.
+ */
+function toolCallRows(db: Database): Extract<RunEvent, { type: 'tool_call_end' }>[] {
+  const recorder = new RunEventRecorder(makeSql(db));
+  return recorder.listRuns(10_000)
+    .flatMap((run) => recorder.read(run.runId, { limit: 100_000 }))
+    .filter((e): e is Extract<RunEvent, { type: 'tool_call_end' }> => e.type === 'tool_call_end');
+}
+
+describe('tool-failure attribution over a real turn', () => {
+  test('every failure is attributed to its tool, action and reason, split three ways', async () => {
+    // One episode covering all three classes, so the split is proven by
+    // CONTRAST rather than by three runs that each show one bucket.
+    await run('attrib-mixed', [
+      // (1) A CORRECT REFUSAL: edit before read. The read-before-write contract
+      // — the caller does not know what it would discard.
+      { tool: 'file', input: {
+        action: 'edit', path: 'src/greet.ts',
+        edits: [{ old_text: 'Hello', new_text: 'Hi' }],
+      } },
+      // (2) A CORRECT REFUSAL of a different reason: read first, then an anchor
+      // that is not in the file, so a splice would be a guess at where to write.
+      { tool: 'file', input: { action: 'read', path: 'src/greet.ts' } },
+      { tool: 'file', input: {
+        action: 'edit', path: 'src/greet.ts',
+        edits: [{ old_text: 'no such anchor anywhere', new_text: 'x' }],
+      } },
+      // (3) THE WORK FAILING: a command that RAN and exited non-zero. `node` is
+      // present on this path (`which node` => /usr/local/bin/node), so this is
+      // an honest stand-in for a failing suite. `bun test …` would NOT be:
+      // `bun` is absent here and exits 127, which is class (4). That is not a
+      // transient — bun is registered only by the HOSTED Nimbus session and has
+      // no installable runtime package — and it is why `ws-fix-broken`'s
+      // failures are a platform gap rather than the agent finding a broken test.
+      { tool: 'run', input: { command: 'node -e "process.exit(1)"' } },
+      // (4) THE WORKSPACE HAS NO SUCH PROGRAM: the shell's own 127. Nothing ran
+      // the work, and nothing is broken — the program was never there.
+      { tool: 'run', input: { command: 'definitely-not-a-real-command --x' } },
+    ], ['workspace']);
+
+    const db = opened[opened.length - 1];
+    if (!db) throw new Error('the harness opened no store');
+    const rows = toolCallRows(db);
+    const census = censusToolFailures(rows);
+    // The published pairs, indexed for lookup — asserted on the shape the run
+    // record actually carries rather than on a recomputed one.
+    const keys: Record<string, number> = Object.fromEntries(census.byKey);
+
+    // ARGS SURVIVED THE SINK. Without this the rest is unreachable: an action is
+    // read from the call's own args, and a row without them attributes `file×N`
+    // with a null action. A dispatcher call is a handful of short scalars, so
+    // `digestJsonValue` keeps it a QUERYABLE OBJECT rather than a string — the
+    // action is read as a field, and the bound still holds.
+    const fileRows = rows.filter((r) => r.name === 'file');
+    expect(fileRows.length).toBeGreaterThan(0);
+    for (const row of fileRows) {
+      const args = v.parse(JsonObjectSchema, row.args);
+      expect(args.action).toBeTypeOf('string');
+      expect(JSON.stringify(args).length).toBeLessThanOrEqual(DIGEST_LIMIT + 1);
+    }
+
+    // (1) and (2): named by ACTION, not just by tool — `file·edit·…`, never
+    // `file×2`, which is what a ledger built on the tool name alone reported.
+    expect(keys['file·edit·unread']).toBe(1);
+    expect(keys['file·edit·not_found']).toBe(1);
+
+    // (3) the work failing and (4) the tool never running it are DIFFERENT rows
+    // with different reasons, both under `run`, which has no action.
+    expect(keys['run·exit_1']).toBe(1);
+    expect(keys['run·command_not_found']).toBe(1);
+
+    // THE SPLIT, four disjoint ways. Pooling these into "4 failures" is what
+    // made a working FAIL-loudly contract read as four defects — and folding the
+    // 127 into `broke` would have blamed the tool for a workspace that simply
+    // has no such program.
+    expect(census.refused).toBe(2);
+    expect(census.workFailed).toBe(1);
+    expect(census.runtimeMissing).toBe(1);
+    expect(census.broke).toBe(0);
+    // Disjoint and exhaustive by construction — the property the report relies on.
+    expect(census.refused + census.workFailed + census.runtimeMissing + census.broke)
+      .toBe(census.failures.length);
+
+    // And the successful read is NOT counted: a census of failures, not of calls.
+    // This is the exact defect in the published histogram, which summed to
+    // `eligible` because it was built over every row.
+    expect(census.failures.length).toBe(4);
+    expect(rows.length).toBeGreaterThan(census.failures.length);
+  }, 60_000);
 });

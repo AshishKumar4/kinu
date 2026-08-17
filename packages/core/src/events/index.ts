@@ -15,6 +15,8 @@ export type {
   StepCost,
 } from './types.js';
 
+export { FAILURE_WITHOUT_ERROR } from './types.js';
+
 export {
   initRunEventTables,
   parseStoredRunEvent,
