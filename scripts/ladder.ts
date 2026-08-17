@@ -119,6 +119,19 @@ export const LADDER: readonly Gate[] = [
       + 'catalog entry with no evidence label or provenance.',
     blind: 'whether the catalogued number is still true.',
   },
+  {
+    run: 'bun run gate:egress-interception',
+    tier: 'commit',
+    seconds: 0.1,
+    catches: 'a container class that lost `enableInternet = false` or '
+      + '`interceptHttps = true`, a Worker entry that stopped exporting '
+      + 'ContainerProxy, or a catch-all egress handler nobody binds — each one an '
+      + 'un-intercepted way out of a container whose secrets have been replaced '
+      + 'by placeholders.',
+    blind: 'whether interception actually engages at runtime, and DNS, which '
+      + 'leaves regardless and which the gate reports as a known residual '
+      + 'rather than closing.',
+  },
 
   {
     run: 'bun run gate:dead-code',

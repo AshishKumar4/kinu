@@ -39,6 +39,7 @@ const REQUIRED_GATES = [
   "bun run gate:do-init",
   "bun run gate:reachability",
   "bun run gate:platform",
+  "bun run gate:egress-interception",
   "bun test --cwd packages/pc-agent",
   "bun test ./tests/",
   "bun run layergate",

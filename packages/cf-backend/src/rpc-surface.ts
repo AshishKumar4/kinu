@@ -339,6 +339,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
  * fork copy to another.
  */
 const ORCHESTRATOR_METHODS = [
+  'acceptContainerEvent',
   'acceptEmailDelivery',
   'acceptWebhookDelivery',
   'awaitDeviceConsent',

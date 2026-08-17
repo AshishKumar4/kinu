@@ -160,6 +160,7 @@ run_required_gate "Cross-backend capability parity" bun run gate:capability-pari
 run_required_gate "Durable Object cold start" bun run gate:do-init
 run_required_gate "Unreachable RPC surface" bun run gate:reachability
 run_required_gate "Platform fact catalog" bun run gate:platform
+run_required_gate "Egress interception totality" bun run gate:egress-interception
 run_required_gate "Local-device daemon suite" bun test --cwd packages/pc-agent
 run_required_gate "Root end-to-end lifecycle suites" bun test ./tests/
 run_required_gate "Layergate conformance" bun run layergate

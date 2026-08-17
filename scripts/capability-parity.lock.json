@@ -75,6 +75,7 @@
   "movable packages/cf-backend/src/user/credential-envelope.ts",
   "movable packages/cf-backend/src/user/credential-headers.ts",
   "movable packages/cf-backend/src/user/device-hub.ts",
+  "movable packages/cf-backend/src/user/egress-vault.ts",
   "movable packages/cf-backend/src/user/mcp.ts",
   "movable packages/cf-backend/src/user/schema.ts",
   "movable packages/cf-backend/src/user/validate.ts",
