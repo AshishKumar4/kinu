@@ -121,10 +121,14 @@ export function seekPage<Item>(
  * read back into an exhausted one — the exact claim this whole contract is
  * here to stop a read from making by accident.
  *
- * `project` takes the whole array rather than one row, because a read whose
- * traversal order is not its presentation order has to reverse, and a filter
- * that drops rows must run after `seekPage` has already anchored the cursor on
- * the raw ones.
+ * `project` takes the whole array rather than one row, and both callers need
+ * that. The chat transcript reverses, because its traversal order is not its
+ * presentation order, and a filter that drops rows must run after `seekPage`
+ * has already anchored the cursor on the raw ones. The exploration canvas is
+ * the reason not to "simplify" this to an item-wise map: it resolves a page of
+ * forks against their dispatch parameters with ONE `readForkRunParams` call
+ * for the batch (exploration-canvas.ts:55-57), and mapping per item would turn
+ * that into one read per fork.
  */
 export function mapPage<In, Out>(
   page: Page<In>,
