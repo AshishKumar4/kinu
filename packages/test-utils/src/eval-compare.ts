@@ -47,6 +47,7 @@ import {
   type BootstrapOptions, type Interval, type PairedBinaryStats, type PairedOutcome,
 } from '@proteus/core';
 import { observationKey, type EvalObservation, type EvalRunRecord } from './eval-run.js';
+import { TASK_OUTCOME, isCovariateRow } from './eval-outcome.js';
 
 type ScoredObservation = Extract<EvalObservation, { outcome: 'scored' }>;
 
@@ -57,17 +58,35 @@ export type ComparisonOptions = BootstrapOptions & { power?: number };
 const MINIMUM_DIFFERING_PAIRS = minimumPairsForSignificance();
 
 /**
- * What counted as a successful trajectory for the binary headline.
+ * What counts as having SOLVED a task for the binary headline.
  *
- * The observation-level admissibility predicate: a turn closed AND a tool was
- * called. Declared and printed because a headline pass rate is unreadable unless
- * the reader knows what a pass was — and because this is exactly the state
- * CL-Bench's inert run failed ("0 tool calls | 1 steps", 14 turns).
+ * This replaced `turns > 0 && toolCalls > 0`, which was the ADMISSIBILITY
+ * predicate serving as a pass rate. Every admissible observation satisfied it by
+ * construction, so the headline read pass@1 1.000 → 1.000 over two full runs and
+ * the dispersion measured on one arm run twice was exactly 0.0000: the metric
+ * could not vary, and no corpus of any difficulty could have moved it. It is
+ * retired rather than kept alongside, because two "success" numbers is how the
+ * weaker one survives.
+ *
+ * The binary view is the RELIABILITY view of the same ground truth the
+ * continuous `task_outcome` row reports — fully solved, not partially. Both are
+ * functions of the verifier's verdict; neither is a fact about activity.
  */
-export const TRAJECTORY_SUCCESS_PREDICATE = 'turns > 0 && toolCalls > 0';
+export const SOLVED_PREDICATE = `${TASK_OUTCOME} rate === 1 — every subgoal reached`;
 
-function trajectorySucceeded(o: ScoredObservation): boolean {
-  return o.turns > 0 && o.toolCalls > 0;
+/**
+ * True when the attempt solved the task outright, false when it did not, and
+ * NULL when no verdict was recorded.
+ *
+ * The null is the load-bearing case. An observation with no `task_outcome` row
+ * was never checked against ground truth, and scoring that as a failure would
+ * charge the agent for a missing verifier — turning a gap in the corpus into a
+ * fact about the model. The caller drops such a pair and names it.
+ */
+function fullySolved(o: ScoredObservation): boolean | null {
+  const row = o.scores.find((s) => s.name === TASK_OUTCOME);
+  if (!row || row.eligible === 0) return null;
+  return row.passed === row.eligible;
 }
 
 /** A field whose difference makes the delta unattributable, and why. */
@@ -80,13 +99,20 @@ export type PairDropReason =
   | 'missing-in-baseline'
   | 'missing-in-candidate'
   | 'baseline-not-scored'
-  | 'candidate-not-scored';
+  | 'candidate-not-scored'
+  | 'baseline-unverified'
+  | 'candidate-unverified';
 
 const DROP_REASONS = {
   'missing-in-baseline': 'the baseline run never produced this task/repetition',
   'missing-in-candidate': 'the candidate run never produced this task/repetition',
   'baseline-not-scored': 'the baseline observation produced no scores',
   'candidate-not-scored': 'the candidate observation produced no scores',
+  // Not a failure. Nothing checked whether this attempt solved the task, so it
+  // carries no outcome to compare — charging it as a loss would turn a missing
+  // verifier into a fact about the agent.
+  'baseline-unverified': 'the baseline attempt recorded no task_outcome — it was never checked',
+  'candidate-unverified': 'the candidate attempt recorded no task_outcome — it was never checked',
 } satisfies Record<PairDropReason, string>;
 
 /** One pairing identity that could not contribute, named. */
@@ -132,6 +158,11 @@ export interface ScorerComparison {
   readonly wins: number;
   readonly losses: number;
   readonly ties: number;
+  /** psi: mean squared per-task rate difference — the dispersion `mde` was
+   *  computed from, surfaced so a stated MDE arrives with the measurement it
+   *  came from. Zero when no paired task differed, which means the arms were
+   *  never separated here — NOT that the estimate is precise. */
+  readonly dispersion: number;
   /** wins + losses. THE decidability denominator. */
   readonly differingPairs: number;
   /** Best two-sided p that many differing pairs could ever produce. */
@@ -183,7 +214,9 @@ export interface AttributableComparison {
   readonly eligiblePairs: number;
   readonly diagnostics: readonly PairDiagnostic[];
   readonly scorers: readonly ScorerComparison[];
-  /** Was the trajectory successful at all, per `TRAJECTORY_SUCCESS_PREDICATE`. */
+  /** Did the agent SOLVE the task outright, per {@link SOLVED_PREDICATE} — the
+   *  reliability view. The continuous partial-credit view of the same verdict is
+   *  the `task_outcome` entry in `scorers`. */
   readonly headline: PairedBinaryStats;
   readonly raggedTasks: readonly RaggedTask[];
   readonly cost: EvalCostComparison;
@@ -411,7 +444,7 @@ function compareScorer(
     candidateRate: pairedTasks === 0 ? null : rateSumCandidate / pairedTasks,
     effect, ci: boot === null ? null : boot.ci,
     pValue: pairedTasks === 0 ? null : pValue,
-    wins, losses, ties: pairedTasks - differingPairs,
+    wins, losses, ties: pairedTasks - differingPairs, dispersion,
     differingPairs, floorPValue: floor, canReachSignificance, significant,
     mde, resolvable, pairsNeeded, verdict,
   };
@@ -457,6 +490,14 @@ export function compareRuns(
       drop(key, 'candidate-not-scored', ` (${b.outcome}: ${b.reason})`);
       continue;
     }
+    if (fullySolved(a) === null) {
+      drop(key, 'baseline-unverified');
+      continue;
+    }
+    if (fullySolved(b) === null) {
+      drop(key, 'candidate-unverified');
+      continue;
+    }
     const pair: ObservationPair = { repetition: a.repetition, baseline: a, candidate: b };
     const existing = pairsByTask.get(a.taskId);
     if (existing === undefined) pairsByTask.set(a.taskId, [pair]);
@@ -486,10 +527,12 @@ export function compareRuns(
       });
       continue;
     }
+    // Non-null by construction: an attempt with no verdict was dropped above, so
+    // every surviving pair carries one on both sides.
     outcomes.push({
       taskId: task.taskId,
-      a: task.pairs.map((p) => trajectorySucceeded(p.baseline)),
-      b: task.pairs.map((p) => trajectorySucceeded(p.candidate)),
+      a: task.pairs.map((p) => fullySolved(p.baseline) === true),
+      b: task.pairs.map((p) => fullySolved(p.candidate) === true),
     });
   }
 
@@ -533,7 +576,7 @@ export function formatComparison(comparison: EvalComparison): string {
       + '— both sides scored',
   ];
   for (const d of comparison.diagnostics) lines.push(`    dropped ${d.key}: ${d.detail}`);
-  lines.push(`  headline — success = ${TRAJECTORY_SUCCESS_PREDICATE}:`);
+  lines.push(`  OUTCOME, solved outright — success = ${SOLVED_PREDICATE}:`);
   lines.push(`    pass@1 ${h.passAtOneA.toFixed(3)} → ${h.passAtOneB.toFixed(3)}, `
     + `effect ${fmtPp(h.effect)} [CI ${fmtPp(h.ci.lo)}..${fmtPp(h.ci.hi)}, `
     + `${String(h.discordant)} of ${String(h.pairs)} tasks differed]`);
@@ -542,8 +585,29 @@ export function formatComparison(comparison: EvalComparison): string {
     lines.push(`    excluded from the headline: ${t.taskId} paired `
       + `${String(t.pairedRepetitions)} of ${String(t.repeats)} repetitions`);
   }
-  lines.push('  scorers:');
+
+  // The continuous view of the same ground truth, and the one a search can
+  // climb. Printed as its own section rather than among the covariates, because
+  // it is the metric and they are not.
+  const outcome = comparison.scorers.find((s) => !isCovariateRow(s.name));
+  if (outcome) {
+    lines.push('  OUTCOME, partial credit — mean per-task score:');
+    const rates = outcome.baselineRate === null || outcome.candidateRate === null
+      ? 'n/a — no task was verified on both sides'
+      : `${outcome.baselineRate.toFixed(3)} → ${outcome.candidateRate.toFixed(3)}`;
+    lines.push(`    ${rates}`);
+    lines.push(`      ${outcome.verdict}`);
+    lines.push(`      psi ${outcome.dispersion.toFixed(6)} measured over `
+      + `${String(outcome.pairedTasks)} paired tasks; resolves ${fmtPp(outcome.mde)}`);
+  }
+
+  // Explanatory only. A reader who meets these before any statement of whether
+  // the work got done will reason about mechanisms, which is how a delegation
+  // rate of 15% came to be read as a fact about the agent rather than about the
+  // corpus.
+  lines.push('  covariates (mechanism telemetry — explanatory, never a score):');
   for (const s of comparison.scorers) {
+    if (!isCovariateRow(s.name)) continue;
     const rates = s.baselineRate === null || s.candidateRate === null
       ? 'n/a'
       : `${s.baselineRate.toFixed(3)} → ${s.candidateRate.toFixed(3)}`;

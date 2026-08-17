@@ -34,6 +34,7 @@ import {
 } from '@proteus/core';
 import { gitEnv } from './git.js';
 import { BEHAVIOUR_SCORERS, type BehaviourScorer } from './agent-evals.js';
+import { TASK_OUTCOME, isCovariateRow } from './eval-outcome.js';
 
 /**
  * The two DeepSeek arms, verified against the account's own model list rather
@@ -92,6 +93,16 @@ export interface EvalScoreRow {
   readonly passed: number;
   readonly rate: number | null;
   readonly detail: string;
+  /**
+   * Raw measured quantities behind the score, when it came from a measurement
+   * rather than a count — elapsed ms, an operation count, the reference baseline
+   * a ratio was divided by.
+   *
+   * Structured rather than folded into `detail` because a ratio is only
+   * reproducible if what it was divided by survives beside it. Written by
+   * `outcomeRow` (eval-outcome.ts); the mechanism scorers do not set it.
+   */
+  readonly measured?: Readonly<Record<string, number>>;
 }
 
 /** One task attempted once. `repetition` plus `taskId` is the pairing identity;
@@ -105,6 +116,22 @@ export type EvalObservation =
     /** Turns the ledger recorded closing. Zero is inert, never scored. */
     readonly turns: number;
     readonly toolCalls: number;
+    /**
+     * The tools this attempt actually called, in order.
+     *
+     * The harness has always computed this and the record dropped it, which is
+     * why "did the agent ever enter codemode" had to be re-derived from source
+     * twice instead of read off the artifact. It is the cheapest possible
+     * covariate and it explains outcomes directly: a run whose tool list contains
+     * no `execute_tools` cannot have crafted anything, and one that never touched
+     * `file` produced no gradable edit signal however well it did the task.
+     *
+     * Optional for exactly one reason: `tests/eval/runs/flash-a.json` and
+     * `flash-b.json` were written before it was recorded, and they are the only
+     * baseline this tier has. Every record written from now on sets it. Read it
+     * with `?? []` rather than assuming presence.
+     */
+    readonly toolNames?: readonly string[];
     readonly tokensIn: number;
     readonly tokensOut: number;
     readonly ms: number;
@@ -126,9 +153,18 @@ export function observationKey(o: Pick<EvalObservation, 'taskId' | 'repetition'>
  * Why a run is or is not admissible evidence.
  *
  * Each field is a fact about the trajectory corpus, not about configuration.
- * `mechanismsExercised` is the one that matters most: it counts scorers whose
- * denominator was non-zero, which is the difference between "the agent did not
- * use the mechanism" and "no task in this corpus could have used it".
+ * `outcomesScored` is the one that matters: a run that measured no task outcome
+ * says nothing about whether the agent can do the work, whatever else it
+ * recorded.
+ *
+ * `mechanismsExercised` USED TO BE that field, and its removal from the failure
+ * list is deliberate. "A scorer had a non-zero denominator" is a fact about what
+ * the corpus reached, and treating it as a precondition for evidence made
+ * mechanism coverage an end in itself — which is how a delegation rate of 15%
+ * came to be reported as a defect when the truth was that the mechanism
+ * converted 4/4 wherever the work was genuinely divisible and 0/21 where it was
+ * not. Both fields stay, in full, as TELEMETRY: they are how a moved outcome
+ * gets explained after the fact. Neither gates anything.
  */
 export interface EvalAdmissibility {
   readonly admissible: boolean;
@@ -136,15 +172,19 @@ export interface EvalAdmissibility {
   readonly scored: number;
   /** Observations that ran and recorded nothing gradable — CL-Bench's state. */
   readonly inert: number;
-  /** Turns the ledger recorded across the whole run. THE headline number: a run
-   *  with zero graded turns has measured nothing, whatever its pass rate says. */
+  /** Turns the ledger recorded across the whole run. A run with zero graded
+   *  turns has measured nothing, whatever its pass rate says. */
   readonly gradedTurns: number;
   /** Tool calls across the run. Zero means no agent behaviour occurred. */
   readonly toolCalls: number;
-  /** Scorers that had at least one eligible opportunity somewhere in the run. */
+  /** Observations carrying a `task_outcome` row — the count of attempts whose
+   *  RESULT was actually checked against ground truth. */
+  readonly outcomesScored: number;
+  /** Scorers that had at least one eligible opportunity somewhere in the run.
+   *  Covariate telemetry: reported, never gating. */
   readonly mechanismsExercised: readonly string[];
-  /** Scorers no task in this corpus gave a single opportunity to. Reported, not
-   *  fatal — but a comparison over these is a comparison of two empty sets. */
+  /** Scorers no task in this corpus gave a single opportunity to. Covariate
+   *  telemetry: reported, never gating. */
   readonly mechanismsAbsent: readonly string[];
   /** Why it is inadmissible, empty when it is. */
   readonly failures: readonly string[];
@@ -189,6 +229,12 @@ export interface EvalPreRegistration {
   readonly pairs: number;
   /** Fewest differing pairs at which significance is reachable at all. */
   readonly minimumPairs: number;
+  /** ψ the required sizes below were computed from. */
+  readonly dispersion: number;
+  /** False when `dispersion` is the neutral 0.5 assumption rather than a number
+   *  measured by running one arm twice. A required size quoted from an assumed
+   *  dispersion is a guess with a decimal point, and the note says so. */
+  readonly dispersionMeasured: boolean;
   /** Tasks needed to resolve a 10 / 20 percentage-point effect at 80% power. */
   readonly pairsFor10pp: number;
   readonly pairsFor20pp: number;
@@ -196,19 +242,34 @@ export interface EvalPreRegistration {
   readonly note: string;
 }
 
-export function preRegister(tasks: number, repeats: number): EvalPreRegistration {
+/**
+ * @param measuredDispersion ψ measured by running ONE arm twice on this very
+ *   corpus (`scripts/eval-dispersion.ts`). Omit it and the neutral 0.5 is used
+ *   AND LABELLED as assumed — a required size computed from a guessed dispersion
+ *   must not read like a measurement.
+ */
+export function preRegister(
+  tasks: number, repeats: number, measuredDispersion?: number,
+): EvalPreRegistration {
   const minimumPairs = minimumPairsForSignificance();
-  // Dispersion is the fraction of pairs expected to differ. 0.5 is the neutral
-  // assumption before any data exists; a measured run replaces it.
-  const dispersion = 0.5;
+  // 0.5 is the neutral assumption before any data exists. A measured run
+  // replaces it, and `dispersionMeasured` records which of the two this is.
+  const dispersionMeasured = measuredDispersion !== undefined && measuredDispersion > 0;
+  const dispersion = dispersionMeasured ? measuredDispersion : 0.5;
   const pairsFor10pp = requiredPairs(0.10, { dispersion });
   const pairsFor20pp = requiredPairs(0.20, { dispersion });
   const canReachSignificance = tasks >= minimumPairs;
+  const basis = dispersionMeasured
+    ? `psi ${dispersion.toFixed(6)} MEASURED on this corpus`
+    : `psi ${dispersion.toFixed(2)} ASSUMED — no same-arm pair measured yet`;
   return {
-    tasks, repeats, pairs: tasks, minimumPairs, pairsFor10pp, pairsFor20pp, canReachSignificance,
+    tasks, repeats, pairs: tasks, minimumPairs, dispersion, dispersionMeasured,
+    pairsFor10pp, pairsFor20pp, canReachSignificance,
     note: canReachSignificance
-      ? `${String(tasks)} pairs can reach significance; resolving 20pp at 80% power needs ${String(pairsFor20pp)}`
-      : `${String(tasks)} pairs CANNOT reach significance at any effect size — ${String(minimumPairs)} is the floor`,
+      ? `${String(tasks)} pairs can reach significance; resolving 20pp at 80% power needs `
+        + `${String(pairsFor20pp)} (${basis})`
+      : `${String(tasks)} pairs CANNOT reach significance at any effect size — `
+        + `${String(minimumPairs)} is the floor (${basis})`,
   };
 }
 
@@ -235,10 +296,14 @@ export function scoreTrajectory(
 /**
  * Is this run evidence?
  *
- * Deliberately strict on the two things that have already produced a
- * believed-but-meaningless number, and deliberately silent on pass rates. A run
- * where the agent behaved badly is perfectly admissible — that is a finding. A
- * run where the agent did not behave at all is not.
+ * Deliberately strict on the things that have already produced a
+ * believed-but-meaningless number, and deliberately silent on how WELL the agent
+ * did. A run where the agent solved nothing is perfectly admissible — that is a
+ * finding, and the most useful kind. A run that never checked whether it solved
+ * anything is not evidence about task performance at all.
+ *
+ * That last condition replaced "no mechanism was exercised". Mechanism coverage
+ * is not a precondition for evidence; measuring the OUTCOME is.
  */
 export function assessAdmissibility(
   declaredTasks: readonly string[],
@@ -249,8 +314,16 @@ export function assessAdmissibility(
   const gradedTurns = scored.reduce((n, o) => n + o.turns, 0);
   const toolCalls = scored.reduce((n, o) => n + o.toolCalls, 0);
 
+  const outcomesScored = scored
+    .filter((o) => o.scores.some((s) => s.name === TASK_OUTCOME)).length;
+
+  // Covariates only. The outcome row is not a mechanism, and letting it into
+  // this set would put the primary metric back inside the mechanism-coverage
+  // framing this field was just demoted out of.
   const exercised = new Set<string>();
-  for (const o of scored) for (const s of o.scores) if (s.eligible > 0) exercised.add(s.name);
+  for (const o of scored) {
+    for (const s of o.scores) if (s.eligible > 0 && isCovariateRow(s.name)) exercised.add(s.name);
+  }
   const allNames = BEHAVIOUR_SCORERS.map((s) => s.name);
 
   const executed = new Set(observations.map((o) => o.taskId));
@@ -260,7 +333,10 @@ export function assessAdmissibility(
   if (scored.length === 0) failures.push('no observation was scored — nothing to measure');
   if (gradedTurns === 0) failures.push('zero graded turns — the ledger recorded no closed turn');
   if (toolCalls === 0) failures.push('zero tool calls — no agent behaviour occurred');
-  if (exercised.size === 0) failures.push('every scorer had a zero denominator — no mechanism was exercised');
+  if (outcomesScored === 0 && scored.length > 0) {
+    failures.push('no observation carried a task_outcome row — this run measured activity, '
+      + 'not whether any task was solved, so it is not evidence about task performance');
+  }
   // The set a run measures must equal the set it declares.
   if (missing.length > 0) {
     failures.push(`declared ${String(declaredTasks.length)} tasks but never attempted ${missing.join(', ')}`);
@@ -268,7 +344,7 @@ export function assessAdmissibility(
 
   return {
     admissible: failures.length === 0,
-    scored: scored.length, inert, gradedTurns, toolCalls,
+    scored: scored.length, inert, gradedTurns, toolCalls, outcomesScored,
     mechanismsExercised: [...exercised].sort(),
     mechanismsAbsent: allNames.filter((n) => !exercised.has(n)),
     failures,
@@ -314,8 +390,15 @@ export function readRunRecord(path: string): EvalRunRecord {
   return raw as EvalRunRecord;
 }
 
-/** A run record as a reader should see it: the headline first, then the arm that
- *  produced it, then per-scorer rates with their denominators. */
+/**
+ * A run record as a reader should see it: what it ran, whether it is evidence,
+ * then THE OUTCOME, then the mechanism covariates under a heading that says so.
+ *
+ * The ordering and the heading are the point. A reader who meets eight mechanism
+ * rates before any statement of whether the work got done will reason about
+ * mechanisms, and that is how "delegation converted 15% of eligible turns" came
+ * to be read as a finding about the agent rather than about the corpus.
+ */
 export function formatRunRecord(record: EvalRunRecord): string {
   const a = record.admissibility;
   const lines = [
@@ -334,13 +417,29 @@ export function formatRunRecord(record: EvalRunRecord): string {
   }
   lines.push(`  spend: ${String(record.spend.calls)} calls, `
     + `${String(record.spend.tokensIn)} in / ${String(record.spend.tokensOut)} out tokens`);
-  for (const name of BEHAVIOUR_SCORERS.map((s) => s.name)) {
-    const rows = record.observations
-      .filter((o): o is Extract<EvalObservation, { outcome: 'scored' }> => o.outcome === 'scored')
-      .flatMap((o) => o.scores.filter((s) => s.name === name));
+  const scoredObs = record.observations
+    .filter((o): o is Extract<EvalObservation, { outcome: 'scored' }> => o.outcome === 'scored');
+  const totals = (name: string) => {
+    const rows = scoredObs.flatMap((o) => o.scores.filter((s) => s.name === name));
     const eligible = rows.reduce((n, r) => n + r.eligible, 0);
     const passed = rows.reduce((n, r) => n + r.passed, 0);
-    lines.push(`  ${name.padEnd(22)} ${eligible === 0
+    return { eligible, passed };
+  };
+
+  const outcome = totals(TASK_OUTCOME);
+  lines.push(`  OUTCOME — did the agent solve the task:`);
+  lines.push(`    ${TASK_OUTCOME.padEnd(20)} ${outcome.eligible === 0
+    ? 'NOT MEASURED — no task declared ground truth'
+    : `${String(outcome.passed)}/${String(outcome.eligible)} = `
+      + `${(outcome.passed / outcome.eligible).toFixed(3)} over `
+      + `${String(a.outcomesScored)} scored attempts`}`);
+
+  // Covariates, named as such. Every row kept: this telemetry is how a moved
+  // outcome gets explained. None of it is a score.
+  lines.push('  covariates (mechanism telemetry — explanatory, never a score):');
+  for (const name of BEHAVIOUR_SCORERS.map((s) => s.name)) {
+    const { eligible, passed } = totals(name);
+    lines.push(`    ${name.padEnd(20)} ${eligible === 0
       ? 'n/a — no eligible opportunity'
       : `${String(passed)}/${String(eligible)} = ${(passed / eligible).toFixed(3)}`}`);
   }

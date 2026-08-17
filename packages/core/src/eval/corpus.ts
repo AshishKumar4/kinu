@@ -5,13 +5,20 @@
 //    "tags": ["math", "trivial"]}
 import * as v from 'valibot';
 import type { EvalCase } from './types.js';
+import { JsonObjectSchema } from '../utils/json.js';
 
+// `v.object` STRIPS keys it does not declare rather than rejecting them, so a
+// field missing from this schema is not a loud error — it silently vanishes
+// between the JSONL and the case. Every field EvalCase carries must therefore
+// appear here.
 const CaseSchema = v.object({
   id: v.string(),
   task: v.string(),
   rubric: v.optional(v.string()),
   reference: v.optional(v.string()),
   tags: v.optional(v.array(v.string())),
+  env: v.optional(v.string()),
+  params: v.optional(JsonObjectSchema),
 });
 
 export function parseCorpus(jsonl: string): EvalCase[] {

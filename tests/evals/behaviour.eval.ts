@@ -48,16 +48,16 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, expect } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createHarness, createJudge, describeEval } from 'vitest-evals';
 import type { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 
 import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index.js';
-import { parseCorpus } from '../../packages/core/src/index.js';
+import { minimumPairsForSignificance, parseCorpus } from '../../packages/core/src/index.js';
 import {
   assessAdmissibility, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE, gitProvenance,
-  liveChatModel, liveModelTarget, preRegister, reportLiveModelSpend, UNCONFIGURED_LLM,
+  liveChatModel, liveModelTarget, preRegister, reportLiveModelSpend, TASK_OUTCOME, UNCONFIGURED_LLM,
   writeRunRecord,
   type EvalArmState, type EvalObservation, type EvalRunRecord, type EvalTier,
 } from '@proteus/test-utils';
@@ -265,6 +265,10 @@ describeEval('Agent behaviour over the run-event ledger', {
         observations.push({
           taskId: input.task.id, repetition: input.repetition, outcome: 'scored',
           scores: output.scores, turns: output.turns, toolCalls: output.toolCalls,
+          // Computed by the harness since the first run and dropped here until
+          // now, which is why "did it ever enter codemode" had to be re-derived
+          // from source rather than read off the artifact.
+          toolNames: output.toolNames,
           tokensIn: output.tokensIn, tokensOut: output.tokensOut, ms: Date.now() - startedAt,
         });
         return {
@@ -319,5 +323,69 @@ describeEval('Agent behaviour over the run-event ledger', {
     for (const judge of JUDGES) {
       await expect(result).toSatisfyJudge(judge, { threshold: null });
     }
+  });
+});
+
+/**
+ * CORPUS QUALITY — properties of the CORPUS, asserted so a future edit that
+ * saturates it fails loudly instead of quietly ranking nothing.
+ *
+ * Neither of these is a statement about the agent. A corpus can be perfectly
+ * good and the agent bad, and that is the finding we want; what neither of these
+ * tolerates is a corpus on which no finding is POSSIBLE.
+ *
+ * These deliberately do NOT assert mechanism coverage. An earlier version of this
+ * ticket asserted that every scorer must have a non-zero eligibility count, and
+ * that was wrong: it makes mechanism coverage a target, and adding tasks to move
+ * a mechanism meter is how a delegation rate that converted 4/4 wherever the work
+ * was divisible came to be reported as an 85% failure. Mechanism telemetry is
+ * recorded in full and explains a moved outcome after the fact. It is not a bar.
+ */
+describe('corpus quality — can this corpus rank anything at all', () => {
+  /**
+   * Static, so it runs without a credential and without spending anything: below
+   * `minimumPairsForSignificance()` DIFFERING pairs no exact paired test can
+   * reach p ≤ alpha at any effect size, and a corpus smaller than that floor
+   * cannot supply them however the arms behave. CL-Bench reported a gain over 5
+   * tasks of which 2 differed; the best two-sided p 2 differing pairs can produce
+   * is 0.5.
+   */
+  test('the corpus is large enough for significance to be reachable', () => {
+    const floor = minimumPairsForSignificance();
+    expect(
+      CORPUS.length,
+      `${String(CORPUS.length)} tasks cannot supply the ${String(floor)} DIFFERING pairs the `
+      + 'exact paired test needs; no outcome on this corpus could be significant at any effect size',
+    ).toBeGreaterThanOrEqual(floor);
+  });
+
+  /**
+   * HEADROOM: two arms can only disagree where the outcome has somewhere to move.
+   *
+   * A corpus the baseline sweeps ranks nothing — that is exactly the state that
+   * produced `pass@1 1.000 -> 1.000` with 0 of 6 tasks differing and a measured
+   * dispersion of 0.0000. A corpus nothing can solve ranks nothing either. So the
+   * observed outcomes must contain both a success and a shortfall.
+   *
+   * Skipped, not passed, without a live model: an empty observation list must
+   * never read as a satisfied property.
+   */
+  test.skipIf(TARGET === null)('the corpus is not saturated — arms could disagree on it', () => {
+    const rates = observations
+      .filter((o): o is Extract<EvalObservation, { outcome: 'scored' }> => o.outcome === 'scored')
+      .flatMap((o) => o.scores.filter((s) => s.name === TASK_OUTCOME))
+      .filter((s) => s.eligible > 0)
+      .map((s) => s.passed / s.eligible);
+
+    expect(rates.length, 'no attempt recorded a task_outcome — the corpus declares no ground '
+      + 'truth, so it measures activity rather than whether anything was solved').toBeGreaterThan(0);
+
+    const solvedSomething = rates.some((r) => r > 0);
+    const fellShortSomewhere = rates.some((r) => r < 1);
+    expect(solvedSomething, 'every attempt scored 0.000 — nothing in this corpus is solvable, so '
+      + 'no improvement could ever show up in it').toBe(true);
+    expect(fellShortSomewhere, 'every attempt scored 1.000 — this corpus is SATURATED and has no '
+      + 'headroom, so two arms cannot disagree on it and it ranks nothing. Add tasks you expect '
+      + 'to fail.').toBe(true);
   });
 });
