@@ -14,6 +14,7 @@ export * from './codex.js';
 export * from './codex-oauth.js';
 export * from './anthropic.js';
 export * from './fetch-shim.js';
+export * from './gateway-binding-fetch.js';
 export * from './rate-limit-retry.js';
 export * from './judge-model.js';
 export * from './fast-model.js';

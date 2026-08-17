@@ -11,6 +11,8 @@ import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
 import type { LanguageModel } from 'ai';
 import type { CredentialHeaders } from '../src/user/credential-headers.js';
 import type { UserCaller } from '../src/user/workspace-capability.js';
+import { platformGatewayEnv } from './helpers/platform-gateway.js';
+import type { ProviderEnv } from '@proteus/core';
 
 /** `LanguageModel` is `string | LanguageModelV3`; a resolver hands back the
  *  object half, and these tests read its provider/model ids. */
@@ -36,7 +38,7 @@ function fakeUserDO(credentials: Readonly<Record<string, CredentialHeaders>> = {
   };
 }
 
-function fakeEnv(stub: FakeUserDO = fakeUserDO()): Env {
+function fakeEnv(stub: FakeUserDO = fakeUserDO(), extra: Partial<ProviderEnv> = {}): Env {
   const bindings = {
     UserDO: {
       idFromName: (name: string) => name,
@@ -45,9 +47,10 @@ function fakeEnv(stub: FakeUserDO = fakeUserDO()): Env {
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
   const env: Partial<Env> = {};
-  Object.assign(env, bindings);
-  // SAFETY: OwnedModelServices only reads the constructed UserDO namespace
-  // and credential secret in these tests; every reachable stub method exists.
+  Object.assign(env, bindings, extra);
+  // SAFETY: OwnedModelServices only reads the constructed UserDO namespace, the
+  // credential secret, and whatever `extra` supplies in these tests; every
+  // reachable stub method exists.
   return env as Env;
 }
 
@@ -86,11 +89,7 @@ describe('OwnedModelServices', () => {
 
   test('optional owners retain env-only registry behavior and provider order', () => {
     const services = new OwnedModelServices({
-      env: {
-        ...fakeEnv(),
-        AI_GATEWAY_URL: 'https://gateway.example.test',
-        AI_GATEWAY_AUTH: 'Bearer gateway-token',
-      },
+      env: fakeEnv(fakeUserDO(), platformGatewayEnv()),
       agentName: () => 'head',
       appTitle: 'Proteus (exploration)',
       ownerRequired: false,

@@ -24,7 +24,7 @@ import {
 import type { LanguageModel } from 'ai';
 import { createWorkersAIProvider, type WorkersAIOptions } from './workers-ai.js';
 import { createMyGatewayProvider } from './my-gateway.js';
-import { createAIGatewayProvider } from './ai-gateway.js';
+import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from './ai-gateway.js';
 import type { CredentialSummary } from '../user/user-do.js';
 import type { UserCaller } from '../user/workspace-capability.js';
 
@@ -137,13 +137,19 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   // to the env-bound ai-gateway, which serves the same native model.
   function defaultProvider(): string {
     if (source && registry.get('workers-ai')) return 'workers-ai';
-    if (opts.env.AI_GATEWAY_URL && opts.env.AI_GATEWAY_AUTH) return 'ai-gateway';
-    throw new Error('No default provider available (need a UserDO credential stub for workers-ai, or AI_GATEWAY_URL + AI_GATEWAY_AUTH).');
+    // Same predicate the provider's own isAvailable() uses, so the default can
+    // never name a gateway the provider would refuse to build a model for.
+    const platform = resolvePlatformGateway(opts.env);
+    if (!('reason' in platform)) return AI_GATEWAY_PROVIDER_ID;
+    throw new Error(
+      'No default provider available (need a UserDO credential stub for workers-ai, '
+      + `or a usable platform gateway — ${platform.reason})`,
+    );
   }
   function defaultModelIdFor(provider: string): string {
     const native = registry.get('workers-ai')?.defaultModel ?? '';
     if (!native) throw new Error('workers-ai provider missing defaultModel.');
-    if (provider === 'ai-gateway') return `workers-ai/${native}`;
+    if (provider === AI_GATEWAY_PROVIDER_ID) return `workers-ai/${native}`;
     return registry.get(provider)?.defaultModel ?? native;
   }
 
