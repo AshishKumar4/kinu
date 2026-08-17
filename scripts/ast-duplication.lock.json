@@ -14,7 +14,6 @@
   "same-file packages/cf-backend/src/pages/WorkspacePage.tsx#SubordinateChatColumn > useLayoutEffect | packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage > useLayoutEffect",
   "same-file packages/cf-backend/src/user/mcp.ts#parseAllowedTools | packages/cf-backend/src/user/mcp.ts#parseMcpHeaders",
   "same-file packages/cli/src/agent-list.ts#local > map | packages/cli/src/agent-list.ts#listKnownAgents > map",
-  "same-file packages/cli/src/local-inspection.ts#judges > map | packages/cli/src/local-inspection.ts#judges > map",
   "same-file packages/core/src/config/store.ts#setReviewModel | packages/core/src/config/store.ts#setFastModel",
   "same-file packages/core/src/execution/device-tunnel-executor.ts#execute > map | packages/core/src/execution/device-tunnel-executor.ts#readdir > map",
   "same-file packages/core/src/prompting/step-prune.ts#content > map | packages/core/src/prompting/step-prune.ts#content > map"

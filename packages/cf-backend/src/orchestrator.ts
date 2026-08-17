@@ -2426,15 +2426,17 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async runOutcomeEnsemble(specs?: string[]): Promise<EnsembleRunResult> {
     const registry = this.providerRegistry();
-    const selection = await resolveEnsembleJudgeSelection({
-      registry,
-      specs: specs ?? null,
-      chatSpec: this.getStoredModelId(),
+    return runEnsemble(this.boundSql, {
+      specs: async () => (await resolveEnsembleJudgeSelection({
+        registry,
+        specs: specs ?? null,
+        chatSpec: this.getStoredModelId(),
+      })).specs,
+      judge: (spec) => ({
+        spec,
+        llm: createCompletionLLM({ model: registry.resolveModel(spec), spec, stage: 'judge' }),
+      }),
     });
-    return runEnsemble(this.boundSql, selection.specs.map((spec) => ({
-      spec,
-      llm: createCompletionLLM({ model: registry.resolveModel(spec), spec, stage: 'judge' }),
-    })));
   }
 
   /** One GEPA run in full: its candidates (scores/feedback per instance) +

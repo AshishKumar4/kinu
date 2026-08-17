@@ -15,7 +15,7 @@ import {
 import {
   buildEnsembleJudgePrompt, describeEnsembleGap, ensembleReport, panelStrata, panelVerdict,
   renderEnsembleReport, runEnsemble, STAND_IN_THRESHOLDS,
-  type ComparedTurn, type EnsembleJudge,
+  type ComparedTurn, type EnsembleJudge, type EnsemblePanel,
 } from '../src/evolution/ensemble.js';
 import { allocateLabelBudget, renderLabelingFile } from '../src/evolution/calibration.js';
 import {
@@ -26,6 +26,16 @@ import { seededRandom } from '../src/utils/stats.js';
 import type { LLM } from '../src/types/primitives.js';
 
 type Sql = ReturnType<typeof makeSql>;
+
+/** An already-built panel as an EnsemblePanel. Real backends resolve a judge's
+ *  model lazily — that is the point of the two stages — but a scripted judge
+ *  costs nothing, so these hand it back directly. */
+function panelOf(judges: ReadonlyArray<EnsembleJudge>): EnsemblePanel {
+  return {
+    async specs() { return judges.map((j) => j.spec); },
+    judge(spec) { return judges.find((j) => j.spec === spec)!; },
+  };
+}
 
 function setup() {
   const db = new Database(':memory:');
@@ -176,7 +186,7 @@ describe('running the panel', () => {
   test('refuses without hand labels, and names the steps that produce them', async () => {
     const { sql } = setup();
     seedLedger(sql, { accepted: 10, corrected: 4 });
-    const { run, gap } = await runEnsemble(sql, [always('a/1', 'accepted'), always('b/1', 'accepted')]);
+    const { run, gap } = await runEnsemble(sql, panelOf([always('a/1', 'accepted'), always('b/1', 'accepted')]));
     expect(run).toBeNull();
     expect(gap?.kind).toBe('no_gold_labels');
     const said = describeEnsembleGap(gap!);
@@ -186,11 +196,11 @@ describe('running the panel', () => {
 
   test('refuses on an empty ledger, and refuses to be a panel of one', async () => {
     const { sql } = setup();
-    expect((await runEnsemble(sql, [always('a/1', 'accepted'), always('b/1', 'accepted')])).gap?.kind)
+    expect((await runEnsemble(sql, panelOf([always('a/1', 'accepted'), always('b/1', 'accepted')]))).gap?.kind)
       .toBe('no_population');
     seedLedger(sql, { accepted: 4 });
     labelAll(sql, () => 'accepted');
-    const { gap } = await runEnsemble(sql, [always('a/1', 'accepted')]);
+    const { gap } = await runEnsemble(sql, panelOf([always('a/1', 'accepted')]));
     expect(gap?.kind).toBe('too_few_judges');
     expect(describeEnsembleGap(gap!)).toContain('two models from different vendors');
     expect(ensembleLabels(sql)).toHaveLength(0);
@@ -202,7 +212,7 @@ describe('running the panel', () => {
     labelAll(sql, () => 'accepted');
     const judges = [always('a/1', 'accepted'), always('b/1', 'accepted')];
 
-    const first = await runEnsemble(sql, judges);
+    const first = await runEnsemble(sql, panelOf(judges));
     expect(first.run?.turns).toBe(9);
     expect(first.run?.judged).toEqual([
       { model: 'a/1', stored: 9, failed: 0 },
@@ -211,7 +221,7 @@ describe('running the panel', () => {
     expect(ensembleLabels(sql)).toHaveLength(18);
 
     // Nothing new to say about turns already judged.
-    const again = await runEnsemble(sql, judges);
+    const again = await runEnsemble(sql, panelOf(judges));
     expect(again.run?.alreadyJudged).toBe(18);
     expect(again.run?.judged.every((j) => j.stored === 0)).toBe(true);
     expect(ensembleLabels(sql)).toHaveLength(18);
@@ -219,7 +229,7 @@ describe('running the panel', () => {
     // A fresh labeling pass brings new turns, and only those.
     seedLedger(sql, { frustrated: 2 });
     labelAll(sql, () => 'frustrated');
-    const third = await runEnsemble(sql, judges);
+    const third = await runEnsemble(sql, panelOf(judges));
     expect(third.run?.judged.every((j) => j.stored === 2)).toBe(true);
   });
 
@@ -230,7 +240,7 @@ describe('running the panel', () => {
     const flaky = judge('b/1', (prompt) => turnOfPrompt(prompt).verdict === 'corrected' ? null : 'accepted');
     // A failed CALL is not a verdict. Counting it as one would report a rate
     // limit as a panel that read every turn and could not make sense of any.
-    await expect(runEnsemble(sql, [always('a/1', 'accepted'), flaky])).rejects.toThrow('judge unavailable');
+    await expect(runEnsemble(sql, panelOf([always('a/1', 'accepted'), flaky]))).rejects.toThrow('judge unavailable');
 
     // Every call already paid for is durable, so the next run tops up from here
     // rather than re-billing the whole panel.
@@ -248,7 +258,7 @@ describe('running the panel', () => {
       spec: 'b/1',
       llm: { async *stream() { yield ''; }, async complete() { return 'it seemed fine to me'; } },
     };
-    const { run } = await runEnsemble(sql, [judge('a/1', () => 'accepted'), babbling]);
+    const { run } = await runEnsemble(sql, panelOf([judge('a/1', () => 'accepted'), babbling]));
     expect(run?.judged[1]).toEqual({ model: 'b/1', stored: 0, failed: 3 });
     expect(ensembleLabels(sql).every((row) => row.model === 'a/1')).toBe(true);
   });
@@ -264,7 +274,7 @@ describe('running the panel', () => {
       seenMidRun.push(ensembleLabels(sql).filter((row) => row.model === 'b/1').length);
       return 'accepted';
     });
-    await runEnsemble(sql, [judge('a/1', () => 'accepted'), watcher]);
+    await runEnsemble(sql, panelOf([judge('a/1', () => 'accepted'), watcher]));
     // Each of b's calls sees every verdict b gave before it.
     expect(seenMidRun).toEqual([0, 1, 2, 3, 4]);
   });
@@ -273,7 +283,7 @@ describe('running the panel', () => {
     const { sql } = setup();
     seedLedger(sql, { accepted: 2 });
     labelAll(sql, () => 'accepted');
-    await runEnsemble(sql, [judge('a/1', () => 'accepted'), judge('b/1', () => 'corrected')], { now: 5 });
+    await runEnsemble(sql, panelOf([judge('a/1', () => 'accepted'), judge('b/1', () => 'corrected')]), { now: 5 });
     expect(ensembleLabels(sql).map((r) => ({ model: r.model, label: r.label, createdAt: r.createdAt })).sort(
       (x, y) => x.model.localeCompare(y.model) || x.label.localeCompare(y.label),
     )).toEqual([
@@ -302,10 +312,10 @@ async function panelOver(spec: {
   const { sql } = setup();
   seedLedger(sql, spec.ledger);
   labelAll(sql, spec.human);
-  await runEnsemble(sql, [
+  await runEnsemble(sql, panelOf([
     judge('anthropic/one', (p) => spec.says(turnOfPrompt(p), 0)),
     judge('codex/two', (p) => spec.says(turnOfPrompt(p), 1)),
-  ]);
+  ]));
   return sql;
 }
 

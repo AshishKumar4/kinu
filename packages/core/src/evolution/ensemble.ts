@@ -235,6 +235,22 @@ function goldLabeledItems(universe: ReadonlyArray<UniverseRow>, sql: SqlExecutor
 }
 
 /**
+ * The panel, in the two stages it really has.
+ *
+ * Choosing WHICH models judge is free — a spec is a string. Turning a spec into
+ * a judge resolves a model, which reaches the signed-in session and the stored
+ * provider keys. Collapsing the two put that credential requirement ahead of
+ * both free preconditions below, so `proteus label ensemble` answered "Not
+ * authenticated" to a workspace whose real missing step was hand labels, and to
+ * a one-model panel that could never have run at all. The order is decided here,
+ * once, for every backend.
+ */
+export interface EnsemblePanel {
+  specs(): Promise<readonly string[]>;
+  judge(spec: string): EnsembleJudge;
+}
+
+/**
  * Put every hand-labeled turn to every judge, and store what comes back.
  *
  * Turns a judge has already answered are skipped, and each verdict is written
@@ -254,7 +270,7 @@ function goldLabeledItems(universe: ReadonlyArray<UniverseRow>, sql: SqlExecutor
  */
 export async function runEnsemble(
   sql: SqlExecutor,
-  judges: ReadonlyArray<EnsembleJudge>,
+  panel: EnsemblePanel,
   opts: { now?: number } = {},
 ): Promise<EnsembleRunResult> {
   // Prerequisites in the order the owner would fix them: a ledger, then labels
@@ -265,9 +281,11 @@ export async function runEnsemble(
   if (universe.length === 0) return { run: null, gap: { kind: 'no_population', judges: [] } };
   const items = goldLabeledItems(universe, sql);
   if (items.length === 0) return { run: null, gap: { kind: 'no_gold_labels', judges: [] } };
-  if (judges.length < 2) {
-    return { run: null, gap: { kind: 'too_few_judges', judges: judges.map((j) => j.spec) } };
+  const specs = await panel.specs();
+  if (specs.length < 2) {
+    return { run: null, gap: { kind: 'too_few_judges', judges: [...specs] } };
   }
+  const judges = specs.map((spec) => panel.judge(spec));
 
   const done = new Set(ensembleLabels(sql).map((row) => `${row.outcomeId}\n${row.model}`));
   const judged: EnsembleRun['judged'] = [];

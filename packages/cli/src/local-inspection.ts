@@ -38,6 +38,7 @@ import {
   type ChatHistoryEntry,
   type CorpusEvalReport,
   type CorpusTurn,
+  type EnsembleJudge,
   type EvolutionChangelogView,
   type GepaCandidate,
   type GepaRunSummary,
@@ -64,7 +65,7 @@ import {
   parseJsonValue,
   type SqlExec,
 } from '@proteus/core';
-import { makeSql, makeSqlExec, createHostShell } from '@proteus/cli-backend';
+import { makeSql, makeSqlExec, createHostShell, type LocalModelResolver } from '@proteus/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath } from './config.js';
 import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
@@ -504,6 +505,15 @@ export function getLocalEnsemble(name: string): EnsembleReport {
   return withLocalDb(name, (db) => ensembleReport(makeSql(db)));
 }
 
+/** One judge from one spec: normalize, then resolve the model behind it. The
+ *  calibration panel and the corpus eval both need exactly this, and this is the
+ *  resolution step that costs credentials — which is why the panel hands it to
+ *  `runEnsemble` as a callback rather than calling it up front. */
+function localJudge(resolver: LocalModelResolver, named: string): EnsembleJudge {
+  const spec = resolver.normalizeSpecSync(named);
+  return { spec, llm: createCompletionLLM({ model: resolver.resolveModel(spec), spec, stage: 'judge' }) };
+}
+
 /**
  * Put a local agent's hand-labeled turns to the panel — one blind pass per
  * judge. Judges are the models the owner named, else one per available vendor
@@ -519,22 +529,25 @@ export async function runLocalOutcomeEnsemble(
   specs: string[] | null,
 ): Promise<EnsembleRunResult> {
   ensureLocalAgent(name);
-  const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
-  const chatSpec = withLocalDb(name, (db) => createAgentConfigStore(makeSql(db)).getModel());
-  const selection = await selectEnsembleJudges({
-    specs,
-    chatSpec: resolver.normalizeSpecSync(chatSpec),
-    candidates: () => resolver.judgeCandidates(),
-  });
-  const judges = selection.specs.map((named) => {
-    const spec = resolver.normalizeSpecSync(named);
-    return { spec, llm: createCompletionLLM({ model: resolver.resolveModel(spec), spec, stage: 'judge' }) };
-  });
   const db = new Database(agentDbPath(name));
   try {
     const sql = makeSql(db);
     initTurnOutcomeTables((ddl) => { db.exec(ddl); }, sql);
-    return await runEnsemble(sql, judges);
+    // Two stages, because they have different costs: choosing the judges is a
+    // read over the provider catalog, while resolving one into an LLM reaches the
+    // signed-in session and the stored keys. `runEnsemble` asks for the specs
+    // only once it knows there are hand labels, and for a judge only once the
+    // panel is big enough to run — so a workspace with no labels, or a
+    // one-model panel, is told that rather than told it is unauthenticated.
+    const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
+    return await runEnsemble(sql, {
+      specs: async () => (await selectEnsembleJudges({
+        specs,
+        chatSpec: resolver.normalizeSpecSync(createAgentConfigStore(sql).getModel()),
+        candidates: () => resolver.judgeCandidates(),
+      })).specs,
+      judge: (named) => localJudge(resolver, named),
+    });
   } finally {
     db.close();
   }
@@ -564,10 +577,7 @@ export async function runLocalCorpusEval(name: string, input: {
     chatSpec,
     candidates: () => resolver.judgeCandidates(),
   });
-  const judges = selection.specs.map((named) => {
-    const spec = resolver.normalizeSpecSync(named);
-    return { spec, llm: createCompletionLLM({ model: resolver.resolveModel(spec), spec, stage: 'judge' }) };
-  });
+  const judges = selection.specs.map((named) => localJudge(resolver, named));
   return runCorpusEval({
     turns: input.turns,
     labels: input.labels,

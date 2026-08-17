@@ -274,6 +274,18 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
       cli: WIRED,
     },
+    // The plaintext HMAC/bearer secret a registered webhook was created with.
+    // Present on a local session from boot — `local-session.ts` builds the store
+    // in its constructor — and only once a webhook is actually registered on cf,
+    // where the orchestrator memoizes it (`_webhookSecrets ??=`). The split is
+    // real rather than cosmetic: `identity/archive.ts` deliberately excludes this
+    // table from a workspace archive because it is a live ingress credential, so
+    // a restore does not resurrect one.
+    webhook_secrets: {
+      'cf-orchestrator': { absent: LAZY_ON_FIRST_USE('registerDurableWebhook') },
+      'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
+      cli: WIRED,
+    },
     vfs_baseline: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('the workspace VFS baseline snapshot') },
