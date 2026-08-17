@@ -28,9 +28,8 @@ import { MY_GATEWAY_PROVIDER_ID } from '../providers/my-gateway.js';
 import { listAvailableModels } from './available-models.js';
 import { json } from '../lib/http.js';
 import { ownerCaller } from './workspace-capability.js';
+import { USER_AI_PROXY_PATH } from '@proteus/core';
 import * as v from 'valibot';
-
-export const USER_AI_PROXY_PREFIX = '/api/user/ai/v1';
 
 const PROXY_PLACEHOLDER = 'https://proteus-user-ai-proxy.invalid';
 const ChatCompletionRouteSchema = v.object({
@@ -43,7 +42,7 @@ export async function handleUserAIProxyRequest(
   cli: { userId: string; userDO: DurableObjectStub<UserDO> },
 ): Promise<Response> {
   const url = new URL(request.url);
-  const path = url.pathname.slice(USER_AI_PROXY_PREFIX.length);
+  const path = url.pathname.slice(USER_AI_PROXY_PATH.length);
 
   if (path === '/models' && request.method === 'GET') {
     const menu = await listAvailableModels(env, cli.userId, await ownerCaller(env));
