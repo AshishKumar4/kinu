@@ -84,3 +84,8 @@ CC-CORPUS-*.md
 # a /tmp directory emits no report at all. Removed in afterAll; ignored so a
 # crashed run cannot leave a tracked file.
 /.eval-artifact-contract-*/
+
+# Scratch benchmark output from corpus generation — never committed. Swept into
+# a commit once by a `git add -A` in a worktree; the real artifacts live under
+# bench-artifacts/ and tests/bench/ with their own retention.
+/*_benchmark.jsonl
