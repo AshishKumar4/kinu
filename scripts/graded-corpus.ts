@@ -31,6 +31,19 @@
 // nothing but successes cannot train anything, because there is no failure to
 // optimise toward.
 //
+// THE LIMIT THIS SCRIPT MEASURES, AND DOES NOT HIDE. `verify` is ground truth
+// about the WORK; the ledger outcome is the environment's verdict on the
+// AGENT'S LAST ACTION. They are different facts and they disagree. Measured on
+// a 5-task flash run: 3 tasks verified, 4 turns graded, and only 2 of those 4
+// grades agreed with the verifier — one task passed verification while the turn
+// graded `corrected` (a stray failing call after the work landed), and one
+// failed verification while the turn graded `accepted` (the agent never ran the
+// check at all). So both columns are reported side by side and neither is
+// allowed to overwrite the other. Making the verifier itself the recorded
+// outcome needs a new `verifier` source, a machine-verdict predicate beside
+// `isUserVerdictSource`, and a surface for an external harness to attach a
+// verdict to a turn id — named as follow-up, deliberately not smuggled in here.
+//
 // Admissibility is asserted BEFORE any number is printed, and it throws:
 //   1. the measured set equals the governed set — every declared task ran,
 //   2. it can fail loudly — a zero-task or zero-tool-call run is an error,
@@ -42,6 +55,8 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
 import { tolerate } from '../packages/core/src/obs/expected-failure.js';
+import { agentDbPath } from '../packages/cli/src/config.js';
+import { Database } from 'bun:sqlite';
 
 /** The slice of the `--json` event stream this reads. Parsed rather than cast:
  *  the stream carries every event type and a corpus report must not be built
@@ -62,9 +77,13 @@ interface CorpusTask {
   readonly seed: Readonly<Record<string, string>>;
   readonly prompt: string;
   readonly verify: string;
-  /** Tasks known to be unsatisfiable, kept on purpose so the ledger carries
-   *  negatives. A run where one of these PASSES verification is a corpus bug. */
-  readonly unsatisfiable?: true;
+  /** Tasks whose verification can NEVER pass, kept on purpose so the ledger
+   *  carries negatives. A run where one of these PASSES is a corpus bug: the
+   *  guaranteed negative is gone and the split can degenerate. Caught once
+   *  already — an `assert value() == 1` / `assert value() == 2` pair looks
+   *  contradictory and is not, because the two calls are sequential and a
+   *  counter satisfies both. */
+  readonly alwaysFails?: true;
 }
 
 const PY_SUITE = (body: string) => `import sys\n${body}\nprint("ALL PASS")\n`;
@@ -76,8 +95,9 @@ const TASKS: readonly CorpusTask[] = [
       'calc.py': 'def add(a, b):\n    return a - b\n\ndef mul(a, b):\n    return a + b\n',
       'test_calc.py': PY_SUITE('from calc import add, mul\nassert add(2, 3) == 5\nassert mul(2, 3) == 6'),
     },
-    prompt: 'calc.py has two bugs: add() subtracts and mul() adds. Fix both functions by editing '
-      + 'calc.py, then run "python3 test_calc.py" to confirm it prints ALL PASS.',
+    prompt: 'In your current working directory, calc.py has two bugs: add() subtracts and mul() '
+      + 'adds. Fix both functions by editing calc.py, then run "python3 test_calc.py" and confirm '
+      + 'it prints ALL PASS.',
     verify: 'python3 test_calc.py',
   },
   {
@@ -86,8 +106,8 @@ const TASKS: readonly CorpusTask[] = [
       'window.py': 'def last_n(items, n):\n    return items[-n - 1:]\n',
       'test_window.py': PY_SUITE('from window import last_n\nassert last_n([1,2,3,4,5], 2) == [4,5]\nassert last_n([1,2,3], 3) == [1,2,3]'),
     },
-    prompt: 'window.py has an off-by-one bug in last_n. Fix it by editing window.py, then run '
-      + '"python3 test_window.py" to confirm it prints ALL PASS.',
+    prompt: 'In your current working directory, window.py has an off-by-one bug in last_n. Fix it '
+      + 'by editing window.py, then run "python3 test_window.py" and confirm it prints ALL PASS.',
     verify: 'python3 test_window.py',
   },
   {
@@ -96,8 +116,9 @@ const TASKS: readonly CorpusTask[] = [
       'ratio.py': 'def ratio(a, b):\n    return a / b\n',
       'test_ratio.py': PY_SUITE('from ratio import ratio\nassert ratio(6, 3) == 2\nassert ratio(1, 0) is None'),
     },
-    prompt: 'ratio.py crashes on a zero denominator. Make ratio(1, 0) return None instead, by '
-      + 'editing ratio.py, then run "python3 test_ratio.py" to confirm it prints ALL PASS.',
+    prompt: 'In your current working directory, ratio.py crashes on a zero denominator. Make '
+      + 'ratio(1, 0) return None instead by editing ratio.py, then run "python3 test_ratio.py" '
+      + 'and confirm it prints ALL PASS.',
     verify: 'python3 test_ratio.py',
   },
   {
@@ -105,26 +126,40 @@ const TASKS: readonly CorpusTask[] = [
     seed: {
       'test_parse.py': PY_SUITE('from parse import parse_kv\nassert parse_kv("a=1,b=2") == {"a": "1", "b": "2"}\nassert parse_kv("") == {}'),
     },
-    prompt: 'Write a new file parse.py containing parse_kv(text), which turns "a=1,b=2" into '
-      + '{"a": "1", "b": "2"} and an empty string into {}. Then run "python3 test_parse.py" to '
-      + 'confirm it prints ALL PASS.',
+    prompt: 'In your current working directory, write a new file parse.py containing parse_kv(text), '
+      + 'which turns "a=1,b=2" into {"a": "1", "b": "2"} and an empty string into {}. Then run '
+      + '"python3 test_parse.py" and confirm it prints ALL PASS.',
     verify: 'python3 test_parse.py',
   },
+  // The deliberate negative: `preflight.py` exits 3 unconditionally, so no edit
+  // can make it pass, and the agent is told to diagnose rather than repair —
+  // a real thing an operator asks for. This is the case that proves the reward
+  // channel can go DOWN: the turn ends on `Error (exit 3)` and grades
+  // `corrected` at quality 0.30, where before the executionVerdict fix it
+  // graded `accepted` at 0.70.
+  //
+  // `alwaysFails` says only that `verify` can never pass. It does NOT guarantee
+  // a negative OUTCOME, and the first version of this task proved why: with no
+  // "current working directory" in the prompt the agent went hunting with
+  // ls/find/cat, never ran the check at all, and graded `accepted` while
+  // verification still reported FAIL. The outcome follows the agent's last
+  // action, not the task's ground truth — which is exactly the limit recorded
+  // at the head of this file.
   {
-    id: 'impossible-constant',
+    id: 'diagnose-failing-check',
     seed: {
-      'law.py': 'def value():\n    return 1\n',
-      'test_law.py': PY_SUITE('from law import value\nassert value() == 1\nassert value() == 2'),
+      'preflight.py': 'import sys\n\nprint("checking release preconditions")\nprint("signing key absent", file=sys.stderr)\nsys.exit(3)\n',
     },
-    prompt: 'test_law.py is failing. Make it pass by editing law.py, then run '
-      + '"python3 test_law.py" to confirm it prints ALL PASS.',
-    verify: 'python3 test_law.py',
-    unsatisfiable: true,
+    prompt: 'In your current working directory there is a file preflight.py. Run exactly '
+      + '"python3 preflight.py" and tell me its exit code and what it reported. Do NOT edit any '
+      + 'file and do NOT try to make it pass — I only want the diagnosis.',
+    verify: 'python3 preflight.py',
+    alwaysFails: true,
   },
 ];
 
-/** What one task's run reported. `graded` counts `turn_complete` events the
- *  engine graded; `verified` is this script's own out-of-band ground truth. */
+/** What one task's run produced. `outcomes` are the ledger rows the turn
+ *  actually wrote; `verified` is this script's own out-of-band ground truth. */
 interface TaskResult {
   readonly id: string;
   readonly graded: number;
@@ -132,6 +167,19 @@ interface TaskResult {
   readonly toolCalls: number;
   readonly outcomes: readonly string[];
   readonly verified: boolean;
+}
+
+/** The `turn_outcomes` ledger, which is what evolution actually reads.
+ *
+ *  Deliberately NOT parsed out of the `--json` event stream: the CLI's writer
+ *  emits the `Turn outcome: …` line as a human `message` and carries no `data`,
+ *  so counting grades from the stream reads 0 on a perfectly graded run. This
+ *  script measured 38 tool calls and 0 graded turns that way while the ledger
+ *  held 10 rows. The number that matters is the row evolution consumes. */
+function ledgerOutcomes(since: number): string[] {
+  return db.query<{ outcome: string }, [number]>(
+    'SELECT outcome FROM turn_outcomes WHERE rowid > ? ORDER BY rowid',
+  ).all(since).map((r) => r.outcome);
 }
 
 function arg(name: string): string | undefined {
@@ -148,44 +196,46 @@ if (declared.length === 0) throw new Error(`--only matched no task ids; known: $
 
 const root = join(process.env.GRADED_CORPUS_ROOT ?? '/tmp', `graded-corpus-${process.pid}`);
 const cliEntry = join(import.meta.dir, '../packages/cli/bin/cli.ts');
+/** Read-only: this script measures the ledger, it never writes to it. */
+const db = new Database(agentDbPath(workspace), { readonly: true });
 
-/** Run one task in its own seeded directory and read the engine's own events.
- *  The agent's prose is never consulted — only the recorded event stream and,
- *  separately, the verifier's exit code. */
+/** Run one task in its own seeded directory, then read the ledger it wrote and,
+ *  separately, the verifier's exit code. The agent's prose is never consulted. */
 function runTask(task: CorpusTask): TaskResult {
   const dir = join(root, task.id);
   mkdirSync(dir, { recursive: true });
   for (const [name, body] of Object.entries(task.seed)) writeFileSync(join(dir, name), body);
 
+  const before = db.query<{ n: number }, []>('SELECT COALESCE(MAX(rowid), 0) AS n FROM turn_outcomes').get()?.n ?? 0;
   const run = spawnSync(
     'bun',
     ['run', cliEntry, 'exec', '--workspace', workspace, '--json', task.prompt],
     { cwd: dir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   );
 
-  let graded = 0;
-  let ungraded = 0;
   let toolCalls = 0;
-  const outcomes: string[] = [];
+  let turns = 0;
   for (const line of (run.stdout ?? '').split('\n')) {
     if (!line.startsWith('{')) continue;
     const parsed = v.safeParse(EventSchema, tolerate(() => JSON.parse(line), 'malformed-input'));
     if (!parsed.success) continue;
     const event = parsed.output;
     if (event.type === 'tool_call') toolCalls++;
-    if (event.type !== 'evolution' || !event.message?.startsWith('Turn outcome:')) continue;
-    if (event.data?.graded === true && event.data.outcome) {
-      graded++;
-      outcomes.push(event.data.outcome);
-    } else {
-      ungraded++;
-    }
+    if (event.type === 'evolution' && event.message?.startsWith('Turn outcome:')) turns++;
   }
+  const outcomes = ledgerOutcomes(before);
 
   // Ground truth, out-of-band. The turn's own verdict and this are separate
   // facts and are reported separately; nothing here overwrites the ledger.
   const check = spawnSync('sh', ['-c', task.verify], { cwd: dir, encoding: 'utf8' });
-  return { id: task.id, graded, ungraded, toolCalls, outcomes, verified: check.status === 0 };
+  return {
+    id: task.id,
+    graded: outcomes.length,
+    ungraded: Math.max(0, turns - outcomes.length),
+    toolCalls,
+    outcomes,
+    verified: check.status === 0,
+  };
 }
 
 const results: TaskResult[] = [];
@@ -216,9 +266,9 @@ if (totalGraded === 0) {
     + 'executionVerdict graded nothing — the corpus is inert and must not be reported as evidence.');
 }
 const negatives = results.flatMap((r) => r.outcomes).filter((o) => o !== 'accepted').length;
-const leaked = results.filter((r, i) => declared[i]?.unsatisfiable && r.verified);
+const leaked = results.filter((r, i) => declared[i]?.alwaysFails && r.verified);
 if (leaked.length > 0) {
-  throw new Error(`task(s) marked unsatisfiable PASSED verification: ${leaked.map((r) => r.id).join(', ')} — `
+  throw new Error(`task(s) that can never pass PASSED verification: ${leaked.map((r) => r.id).join(', ')} — `
     + 'the corpus no longer contains a guaranteed negative and the split can degenerate.');
 }
 

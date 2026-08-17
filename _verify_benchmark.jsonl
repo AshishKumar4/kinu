@@ -1,0 +1,10 @@
+{"type": "predict_output", "input": [-66, 45], "expected": 45, "mutant_output": -66, "mutation_type": "flip_comparison"}
+{"type": "predict_output", "input": [95, -84], "expected": 95, "mutant_output": -84, "mutation_type": "flip_comparison"}
+{"type": "predict_output", "input": [-35, -70], "expected": -35, "mutant_output": -70, "mutation_type": "flip_comparison"}
+{"type": "predict_output", "input": [26, 94], "expected": 94, "mutant_output": 26, "mutation_type": "flip_comparison"}
+{"type": "predict_output", "input": [15, 20], "expected": 20, "mutant_output": 15, "mutation_type": "flip_comparison"}
+{"type": "predict_output", "input": [66, -3], "expected": 66, "mutant_output": -3, "mutation_type": "swap_ifexp_branches"}
+{"type": "predict_output", "input": [-47, -76], "expected": -47, "mutant_output": -76, "mutation_type": "swap_ifexp_branches"}
+{"type": "predict_output", "input": [24, -93], "expected": 24, "mutant_output": -93, "mutation_type": "swap_ifexp_branches"}
+{"type": "predict_output", "input": [-1, 10], "expected": 10, "mutant_output": -1, "mutation_type": "swap_ifexp_branches"}
+{"type": "predict_output", "input": [55, 95], "expected": 95, "mutant_output": 55, "mutation_type": "swap_ifexp_branches"}
