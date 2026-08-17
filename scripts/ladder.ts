@@ -151,6 +151,26 @@ export const LADDER: readonly Gate[] = [
       + 'compile, which is exactly the signal that was missing.',
   },
   {
+    run: 'bun run gate:set-equality',
+    tier: 'commit',
+    seconds: 0.2,
+    catches: 'a gate that measures a narrower set than the one it governs — the defect that '
+      + 'appeared fifteen times across six subsystems on 2026-08-17, four of them committed BY '
+      + 'the change written to close the previous one. Every gate program\'s corpus must come '
+      + 'from `scripts/sources.ts` and be narrowed only by a named predicate exported there, so '
+      + 'measurement cannot drift narrower than enforcement. It also refuses a `writeLock` or a '
+      + '`report` that no `assertMeasured` precedes: a ratchet published before the corpus was '
+      + 'proved non-empty states the HEALTHIEST possible number about a population nobody '
+      + 'looked at. Its own denominator is the union of LADDER and deploy.sh, because those two '
+      + 'disagree by one (`bun run verify:lean`) and reading either alone would certify 34 '
+      + 'while governing 35.',
+    blind: 'sets that are not repository files — temp-directory prefixes, sandbox copy '
+      + 'exclusions, statistical denominators — and grounding failures, where a claim was '
+      + 'relayed rather than read. Three of the fifteen were each of those and no set-equality '
+      + 'assertion reaches them. Also blind to the 2 shell gate programs, which it counts and '
+      + 'never parses.',
+  },
+  {
     run: 'bun run gate:skip-ratchet',
     tier: 'commit',
     seconds: 0.3,
@@ -236,6 +256,21 @@ export const LADDER: readonly Gate[] = [
     catches: 'a secret scanner that stopped matching. The scanner passing means nothing '
       + 'until this says it still recognises a planted credential.',
     blind: 'credential shapes nobody wrote a case for.',
+  },
+  {
+    run: 'bun test scripts/gate-set-equality.test.ts',
+    tier: 'push',
+    seconds: 0.4,
+    catches: 'the set-equality gate not being able to fail, and — the half that is harder — '
+      + 'it firing on shapes that are legitimate. 24 cases: RED on each of the five defect '
+      + 'shapes actually shipped (a private pattern, a private `git ls-files`, a private walk, '
+      + 'a glob scan, a lock published before its measurement), GREEN on their corrected form, '
+      + 'and SILENT on the four its first draft mistook for violations — a URL route, a model '
+      + 'id prefix, a `.replace()` specifier rewrite, and `matchAll` over prose. That first '
+      + 'draft reported 40 findings of which 38 were `context.report` in an oxlint rule; a gate '
+      + 'whose first run is mostly noise trains people to ignore it.',
+    blind: 'whether the predicates in sources.ts describe the right sets. It proves nothing '
+      + 'else re-spells them.',
   },
   {
     run: 'bun run test',

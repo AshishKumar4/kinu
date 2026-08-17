@@ -29,6 +29,7 @@
     "gate:dead-code": "bun scripts/dead-code.ts",
     "gate:duplication": "bun scripts/ast-duplication.ts",
     "gate:reachability": "bun scripts/reachability.ts",
+    "gate:set-equality": "bun scripts/gate-set-equality.ts",
     "gate:do-init": "bun scripts/do-init-gate.ts",
     "gate:egress-interception": "bun scripts/egress-interception.ts",
     "gate:platform": "bun scripts/platform-catalog.ts",
