@@ -414,7 +414,7 @@ export class ExplorationAgent extends Agent<Env> {
     // Ensure the journal tables exist on THIS facet's storage so recursive
     // splits can persist locally without competing with the orchestrator. Single
     // source of truth — same schema the orchestrator initializes.
-    initHeadsTables((ddl: string) => { this.ctx.storage.sql.exec(ddl); });
+    initHeadsTables((ddl: string) => { this.ctx.storage.sql.exec(ddl); }, this.boundSql);
 
     const journal = new HeadJournal(this.boundSql);
     const runtime: HeadRuntime = {

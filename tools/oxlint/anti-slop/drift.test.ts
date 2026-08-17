@@ -19,6 +19,8 @@ type Manifest = {
   readonly commitSubject: string;
   readonly upstreamSourceRoot: string;
   readonly upstreamTestRoot: string;
+  /** Rules authored here rather than vendored. Exact complement of the upstream-pinned rules. */
+  readonly proteusRules: readonly string[];
   readonly vendored: Readonly<Record<string, VendoredFile>>;
 };
 
@@ -140,19 +142,44 @@ assert.deepEqual(
 );
 
 const registeredRules = Object.keys(antiSlopPlugin.rules ?? {}).sort();
+const proteusRules = [...manifest.proteusRules].sort();
 assert.ok(registeredRules.length > 0, "the plugin registered no rules");
+
+// An exact partition of the registered rules, asserted in both directions. Accepting
+// "upstream digest OR proteusOnly" here instead would let any vendored rule be demoted to
+// {proteusOnly:true} and escape byte comparison forever — a manifest rewritten that way leaves
+// every file present and nothing compared. Naming the local rules makes adding one a visible
+// two-line act and demoting an upstream one impossible without a reviewer seeing the name.
+const unpinned = registeredRules.filter(
+  (rule) => manifest.vendored[`rules/${rule}.ts`]?.upstream === undefined,
+);
 assert.deepEqual(
-  registeredRules.filter((rule) => {
-    const declared = manifest.vendored[`rules/${rule}.ts`];
-    return declared === undefined || declared.upstream === undefined;
-  }),
+  unpinned,
+  proteusRules,
+  "every registered rule must either carry an upstream digest or be named in proteusRules",
+);
+assert.deepEqual(
+  proteusRules.filter((rule) => manifest.vendored[`rules/${rule}.ts`]?.upstream !== undefined),
   [],
-  "every registered rule must be compared against upstream",
+  "a rule named in proteusRules must not also claim an upstream digest",
+);
+assert.deepEqual(
+  proteusRules.filter((rule) => !registeredRules.includes(rule)),
+  [],
+  "proteusRules names a rule the plugin does not register",
+);
+assert.ok(
+  proteusRules.length > 0,
+  "proteusRules is empty; the Proteus-authored rules would then be unaccounted for rather than declared",
+);
+assert.ok(
+  proteusRules.length < registeredRules.length,
+  `proteusRules claims ${proteusRules.length} of ${registeredRules.length} rules; declaring the whole plugin Proteus-authored would disable drift comparison entirely`,
 );
 
 assert.ok(
-  comparedAgainstUpstream >= registeredRules.length,
-  `compared ${comparedAgainstUpstream} files against upstream for ${registeredRules.length} rules; a drift check that compares nothing reports no drift`,
+  comparedAgainstUpstream >= registeredRules.length - proteusRules.length,
+  `compared ${comparedAgainstUpstream} files against upstream for ${registeredRules.length - proteusRules.length} vendored rules; a drift check that compares nothing reports no drift`,
 );
 
 assert.deepEqual(

@@ -5,28 +5,23 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { makeSql, makeExecRaw, createTestWorkspace } from './helpers.js';
 import {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
   purgeUnclaimedAlternateTakes,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
   buildTakeContinuationPrompt,
 } from '../src/mcts/takes.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
 import {
   initTurnOutcomeTables, listTurnOutcomes, buildOutcomeEvalSplit, realOutcomeScaffoldRates,
 } from '../src/evolution/outcomes.js';
 
+/** The PRODUCTION schema plus this module's own table: the eval split the pick
+ *  feeds reconstructs process evidence from the message and run-event ledgers,
+ *  so a hand-picked subset here would test a workspace shape that never ships. */
 function setup() {
-  const db = new Database(':memory:');
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
-  initSearchTables(execRaw);
-  initAlternateTakesTable(execRaw);
-  initTurnOutcomeTables(execRaw, sql);
-  execRaw(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT, parent_id TEXT, role TEXT, content TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+  const { db, sql, execRaw } = createTestWorkspace();
+  initAlternateTakesTable(execRaw, sql);
   return { db, sql, execRaw };
 }
 

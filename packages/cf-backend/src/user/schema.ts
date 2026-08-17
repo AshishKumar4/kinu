@@ -2,7 +2,10 @@
 // keyed by the stable Proteus userId resolved by the D1 auth store.
 // Idempotent — safe to call on every DO boot.
 
-import { initExperienceLibraryTables, initReleaseTables, reconcileColumns, type SqlExec } from '@proteus/core';
+import {
+  initExperienceLibraryTables, initReleaseTables, reconcileColumns,
+  type SqlExec, type SqlExecutor,
+} from '@proteus/core';
 import { initAccessTokenTable } from '../cli/access-token-store.js';
 import { initWorkspaceCapabilityTables } from './workspace-capability.js';
 
@@ -11,7 +14,10 @@ import { initWorkspaceCapabilityTables } from './workspace-capability.js';
  *  idempotent CREATE + reconcileColumns statements below need no version. */
 const USER_SCHEMA_VERSION = 1;
 
-export function initUserTables(sql: SqlExec): void {
+/** `tagged` is the same storage as `sql`, as the tagged-template primitive:
+ *  `reconcileColumns` asks `pragma_table_info` which columns are present rather
+ *  than adding them and swallowing the duplicate-column error. */
+export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_schema_meta (
       key   TEXT PRIMARY KEY,
@@ -150,7 +156,7 @@ export function initUserTables(sql: SqlExec): void {
   // connecting is never re-linked, and one that stopped connecting stops being
   // a live credential. NULL on rows that predate the column — stamped on their
   // next verification rather than locked out.
-  reconcileColumns((ddl) => { sql.exec(ddl); }, 'user_devices', ['expires_at INTEGER']);
+  reconcileColumns(tagged, (ddl) => { sql.exec(ddl); }, 'user_devices', { expires_at: 'INTEGER' });
 
   // CLI bearer tokens minted by the browser device-code approval flow. Tokens
   // include the UserDO id as a routing hint, but only their SHA-256 hash is
@@ -188,11 +194,11 @@ export function initUserTables(sql: SqlExec): void {
       PRIMARY KEY (agent_name, device_id)
     )
   `);
-  reconcileColumns((ddl) => { sql.exec(ddl); }, 'device_consent', [
-    "scope TEXT NOT NULL DEFAULT 'all_local_actions'",
-    'last_method TEXT',
-    'last_summary TEXT',
-  ]);
+  reconcileColumns(tagged, (ddl) => { sql.exec(ddl); }, 'device_consent', {
+    scope: "TEXT NOT NULL DEFAULT 'all_local_actions'",
+    last_method: 'TEXT',
+    last_summary: 'TEXT',
+  });
 
   // Short-lived, single-use WebSocket tickets for device daemon reconnects.
   // The daemon exchanges its long-lived local device token over HTTPS, then

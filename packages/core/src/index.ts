@@ -1,7 +1,7 @@
 // @proteus/core — barrel export
 
 // Identity system
-export { initActorTables, initAllTables, migrateWorkspaceStorage } from './identity/schema.js';
+export { initActorTables, initAllTables, migrateWorkspaceStorage, tableExists } from './identity/schema.js';
 export { reconcileColumns } from './identity/columns.js';
 export { readActivityLog, type ActivityLogEntry } from './identity/activity-log.js';
 // The one answer to "which tables a workspace has" — every composition root

@@ -206,7 +206,7 @@ async function runLocalSplit(
   input: HeadInput,
   deps: CLIHeadRuntimeDeps,
 ): Promise<HeadSplitResult> {
-  initHeadsTables(makeExecRaw(db));
+  initHeadsTables(makeExecRaw(db), makeSql(db));
   const controller = new HeadController(createCLIHeadRuntime(deps), new HeadJournal(makeSql(db)));
   const controllerInput: Parameters<HeadController['run']>[0] = {
     parentHeadId: input.id,

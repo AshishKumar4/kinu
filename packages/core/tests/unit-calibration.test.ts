@@ -313,10 +313,10 @@ describe('the gold label ledger', () => {
     expect(listOutcomeLabels(sql, 10)).toHaveLength(10);
   });
 
-  test('reads as empty before the table has ever been written', () => {
-    const db = new Database(':memory:');
-    expect(listOutcomeLabels(makeSql(db))).toEqual([]);
-    expect(goldLabels(makeSql(db)).size).toBe(0);
+  test('reads as empty when nothing has been labeled yet', () => {
+    const { sql } = setup();
+    expect(listOutcomeLabels(sql)).toEqual([]);
+    expect(goldLabels(sql).size).toBe(0);
   });
 });
 

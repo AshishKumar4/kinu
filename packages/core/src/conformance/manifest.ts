@@ -182,6 +182,10 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     head_steps: EVERYWHERE,
     head_merge_results: EVERYWHERE,
     mcts_search_runs: EVERYWHERE,
+    // Created by initWorkspaceSchema on every root, not by "the first MCTS run",
+    // so a reader that finds no table is a fault rather than an empty result
+    // nobody can tell from no takes (workspace-schema.ts:184).
+    alternate_takes: EVERYWHERE,
 
     // ── events hub ──
     agent_log: EVERYWHERE,

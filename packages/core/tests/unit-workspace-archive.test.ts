@@ -38,7 +38,7 @@ function fresh() {
 /** A workspace with the production schema plus content of every awkward kind. */
 async function seeded() {
   const ws = fresh();
-  initAllTables(ws.execRaw);
+  initAllTables(ws.execRaw, ws.sql);
   void ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'w1'}, ${'scout'}, ${100})`;
   for (let i = 0; i < 5; i++) {
     void ws.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
@@ -273,7 +273,7 @@ describe('workspace archive', () => {
 
   test('an empty workspace archives and restores to an empty workspace', async () => {
     const source = fresh();
-    initAllTables(source.execRaw);
+    initAllTables(source.execRaw, source.sql);
     const lines = await writeWorkspaceArchive(source.archive, { workspace: 'blank', source: 'local' });
 
     const target = fresh();

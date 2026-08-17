@@ -156,12 +156,8 @@ export function createCompactionStateStore(sql: SqlExecutor): CompactionStateSto
           SELECT plan_json FROM compaction_state WHERE session_key = ${sessionKey} LIMIT 1`;
         const json = rows[0]?.plan_json;
         if (!json) return null;
-        try {
-          const parsed: unknown = JSON.parse(json);
-          return parsePlanSnapshot({ value: parsed });
-        } catch {
-          return null;
-        }
+        const parsed: unknown = JSON.parse(json);
+        return parsePlanSnapshot({ value: parsed });
       },
       save: (sessionKey, snapshot) => {
         const json = snapshot === null ? null : JSON.stringify(snapshot);

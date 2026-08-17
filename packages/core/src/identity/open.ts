@@ -53,7 +53,7 @@ export async function openWorkspace(db: AgentDatabase, config: WorkspaceResumeCo
   const { sql, execRaw } = wrapDatabase(db);
 
   // Ensure all tables exist (handles schema upgrades gracefully)
-  initAllTables(execRaw);
+  initAllTables(execRaw, sql);
   migrateWorkspaceStorage(sql, execRaw);
 
   // Step 1: Read identity

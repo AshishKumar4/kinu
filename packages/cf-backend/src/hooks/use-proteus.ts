@@ -26,7 +26,7 @@ import type {
 } from "../lib/protocol";
 import type { ExecutorInfo } from "../lib/executors";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "../components/background-event";
-import { touchWorkspace } from "../lib/user-api";
+import { tolerate } from "@proteus/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
@@ -214,12 +214,13 @@ const SocketMessageSchema = v.variant("type", [
 function parseSocketMessage(data: MessageEvent["data"]) {
   const text = v.safeParse(v.string(), data);
   if (!text.success) return null;
-  try {
-    const decoded = v.safeParse(SocketMessageSchema, JSON.parse(text.output));
-    return decoded.success ? decoded.output : null;
-  } catch {
-    return null;
-  }
+  // A frame that is not JSON is not one of ours. Any other failure here is a
+  // real fault and must not be read back as "no message".
+  const decoded = v.safeParse(
+    SocketMessageSchema,
+    tolerate<unknown>(() => JSON.parse(text.output), "malformed-input"),
+  );
+  return decoded.success ? decoded.output : null;
 }
 
 /** Runtime admission for plan broadcasts/RPC results. The browser treats the
@@ -586,9 +587,8 @@ export function useProteus(target?: string | ProteusActorAddress) {
     const onOpen = () => {
       // Skip the very first open — useChat's mount-time resume handles it.
       if (isFirstOpen.current) { isFirstOpen.current = false; return; }
-      try {
-        agent.send(JSON.stringify({ type: "cf_agent_stream_resume_request" }));
-      } catch { /* ignore */ }
+      if (agent.readyState !== WebSocket.OPEN) return;
+      agent.send(JSON.stringify({ type: "cf_agent_stream_resume_request" }));
     };
     agent.addEventListener("open", onOpen);
     return () => agent.removeEventListener("open", onOpen);
@@ -607,9 +607,8 @@ export function useProteus(target?: string | ProteusActorAddress) {
   useEffect(() => {
     if (connectionStatus !== "connected") return;
     const id = setInterval(() => {
-      try {
-        agent.send(JSON.stringify({ type: "ping" }));
-      } catch { /* not yet open */ }
+      if (agent.readyState !== WebSocket.OPEN) return;
+      agent.send(JSON.stringify({ type: "ping" }));
     }, 25_000);
     return () => clearInterval(id);
   }, [agent, connectionStatus]);
@@ -875,7 +874,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
     const snap = await rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", []);
     if (!isCurrent()) return;
     setAgentStatus(snap.status);
-    if (workspace) touchWorkspace(workspace).catch(() => {});
     setTools(mapToolDescriptions(snap.tools));
     setMemoryContent(snap.memoryContent);
     if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
@@ -1047,10 +1045,13 @@ export function useProteus(target?: string | ProteusActorAddress) {
     }, MEMORY_SEARCH_DEBOUNCE_MS);
   }, [rpc, memoryContent, setSourceError]);
 
-  /** Switch this agent's model. Resolves only once the write landed, and
-   *  rejects when it didn't — a caller that reports "Saved" on this promise
-   *  (Workspace settings) must not do so for a write that failed. */
-  const setModel = useCallback(async (modelId: string): Promise<void> => {
+  /** Switch this agent's model. Resolves `null` once the write landed, or the
+   *  failure reason when it didn't — the reason is recorded on `error` and the
+   *  picker is rolled back before returning, so a caller that reports "Saved"
+   *  (Workspace settings) must check the result instead of assuming success.
+   *  Reporting here and rejecting as well would force every fire-and-forget
+   *  picker to silence a rejection it has nothing to add to. */
+  const setModel = useCallback(async (modelId: string): Promise<string | null> => {
     // Optimistically reflect in the UI so the dropdown doesn't snap back
     // while the RPC is in flight.
     setAgentStatus(prev => prev ? { ...prev, model: modelId } : prev);
@@ -1059,14 +1060,21 @@ export function useProteus(target?: string | ProteusActorAddress) {
       // Server may have normalized the spec — sync the UI to authoritative value.
       if (r?.spec) setAgentStatus(prev => prev ? { ...prev, model: r.spec! } : prev);
       setSourceError("model", null);
+      return null;
     } catch (err) {
-      // Surface to the user, never swallow — and roll the picker back to the
-      // actually-stored spec so it can't keep showing an unsaved model.
-      setSourceError("model", `Couldn't switch model: ${errorMessage(err)}`);
-      await rpc<{ spec?: string | null }>("getStoredModelSpec", []).then((r) => {
-        setAgentStatus(prev => prev ? { ...prev, model: r.spec ?? '' } : prev);
-      }).catch(() => {});
-      throw err;
+      // Roll the picker back to the actually-stored spec so it can't keep
+      // showing a model that was never saved.
+      let reason = `Couldn't switch model: ${errorMessage(err)}`;
+      try {
+        const stored = await rpc<{ spec?: string | null }>("getStoredModelSpec", []);
+        setAgentStatus(prev => prev ? { ...prev, model: stored.spec ?? '' } : prev);
+      } catch (rollbackErr) {
+        // The rollback read failed too, so the picker is still showing a model
+        // that was never stored. Say so rather than leaving it looking saved.
+        reason += ` — and the stored model couldn't be re-read (${errorMessage(rollbackErr)}), so the model shown may not be what's saved`;
+      }
+      setSourceError("model", reason);
+      return reason;
     }
   }, [rpc, setSourceError]);
 

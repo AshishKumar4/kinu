@@ -1,4 +1,5 @@
 import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValue } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 const origin = (process.env.PROTEUS_SMOKE_ORIGIN ?? 'https://proteus-staging.ashishkmr472.workers.dev').replace(/\/+$/, '');
@@ -62,7 +63,7 @@ async function waitForWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      try { ws.close(1000, 'smoke done'); } catch { /* noop */ }
+      ws.close(1000, 'smoke done');
       fn();
     };
 
@@ -80,12 +81,11 @@ async function waitForWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       if (!settled) finish(() => reject(new Error(`Workspace websocket closed early: ${event.code} ${event.reason}`)));
     });
     ws.addEventListener('message', (event) => {
-      let message: v.InferOutput<typeof WorkspaceMessageSchema>;
-      try {
-        message = v.parse(WorkspaceMessageSchema, parseJsonValue(String(event.data)));
-      } catch {
-        return;
-      }
+      const raw = tolerate(() => parseJsonValue(String(event.data)), 'malformed-input');
+      if (raw === undefined) return;
+      const decoded = v.safeParse(WorkspaceMessageSchema, raw);
+      if (!decoded.success) return;
+      const message = decoded.output;
       if (message.type === 'cf_agent_identity' && !sentRpc) {
         sentRpc = true;
         ws.send(JSON.stringify({

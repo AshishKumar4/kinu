@@ -186,9 +186,14 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     generation: opts.generation,
     cwd: WORKSPACE_ROOT,
   });
-  // A boot nobody has awaited yet must not surface as an unhandled rejection;
-  // the failure is still delivered to every caller that awaits `booting`.
-  booting.catch(() => {});
+  // A boot nobody has awaited yet must not surface as an unhandled rejection.
+  // The failure still reaches every caller that awaits `booting`; this states it
+  // once, because a workspace that fails to boot before any file call is made
+  // would otherwise leave no trace at all.
+  booting.catch((error) => {
+    console.warn('[proteus] workspace boot failed:',
+      error instanceof Error ? error.message : error);
+  });
   const open = (): Promise<NimbusWorkspace> => booting;
   return {
     vfs: workspaceVfs(open),

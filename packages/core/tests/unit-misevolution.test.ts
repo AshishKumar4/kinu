@@ -33,7 +33,7 @@ const CreateToolResultSchema = v.object({
 
 function setupScaffoldRt(): AgentRuntime {
   const { rt } = createTestRuntime();
-  initScaffoldTables(rt.storage.execRaw);
+  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initShadowTables(rt.storage.execRaw);
   initCraftScoreTables(rt.storage.execRaw);
   rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS evolution_events (

@@ -39,6 +39,7 @@ import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import { nowMs } from '../utils/date.js';
+import { parseJsonValue } from '../utils/json.js';
 import { nanoid } from '../utils/nanoid.js';
 import { checkMisevolution, recordMisevolutionVeto } from './misevolution.js';
 
@@ -302,16 +303,15 @@ export function listQueuedShadowTrials(sql: SqlExecutor, pendingVersion: number)
   }));
 }
 
-/** A context row that cannot be read back is a replay we no longer have, not a
- *  trial we should refuse to run: the candidate falls back to the surface's own
- *  default loop, exactly as it does for a host that held no context. */
+/** A context row whose messages no longer satisfy the provider vocabulary is a
+ *  replay we no longer have, not a trial we should refuse to run: the candidate
+ *  falls back to the surface's own default loop, exactly as it does for a host
+ *  that held no context. JSON that will not parse at all is a different thing —
+ *  the row is `queueShadowTrial`'s own write, so an unreadable one is a corrupt
+ *  database and propagates instead of quietly becoming an empty replay. */
 function parseTrialContext(raw: string): ModelMessage[] {
-  try {
-    const parsed = modelMessageSchema.array().safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data : [];
-  } catch {
-    return [];
-  }
+  const parsed = modelMessageSchema.array().safeParse(parseJsonValue(raw));
+  return parsed.success ? parsed.data : [];
 }
 
 /** How many trials are queued but not yet run — the evidence a pending version
@@ -342,33 +342,29 @@ export function purgeQueuedShadowTrials(sql: SqlExecutor, keepVersion: number | 
  * one in flight at a time).
  */
 export function getPendingScaffold(sql: SqlExecutor): PendingScaffold | null {
-  try {
-    type Row = { version: number; written_at: number; rationale: string };
-    const rows = sql<Row>`
-      SELECT version, written_at, rationale FROM scaffold_versions
-      WHERE status = 'pending'
-      ORDER BY version DESC LIMIT 1`;
-    if (rows.length === 0) return null;
-    const r = rows[0];
-    type CountRow = { winner: string | null; n: number };
-    const counts = sql<CountRow>`
-      SELECT winner, COUNT(*) AS n FROM scaffold_evaluations
-      WHERE pending_version = ${r.version}
-      GROUP BY winner`;
-    let trials = 0, pendingWins = 0, currentWins = 0, ties = 0;
-    for (const c of counts) {
-      trials += c.n;
-      if (c.winner === 'pending') pendingWins = c.n;
-      else if (c.winner === 'current') currentWins = c.n;
-      else if (c.winner === 'tie') ties = c.n;
-    }
-    return {
-      version: r.version, writtenAt: r.written_at, rationale: r.rationale,
-      trialsSoFar: trials, pendingWins, currentWins, ties,
-    };
-  } catch {
-    return null;
+  type Row = { version: number; written_at: number; rationale: string };
+  const rows = sql<Row>`
+    SELECT version, written_at, rationale FROM scaffold_versions
+    WHERE status = 'pending'
+    ORDER BY version DESC LIMIT 1`;
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  type CountRow = { winner: string | null; n: number };
+  const counts = sql<CountRow>`
+    SELECT winner, COUNT(*) AS n FROM scaffold_evaluations
+    WHERE pending_version = ${r.version}
+    GROUP BY winner`;
+  let trials = 0, pendingWins = 0, currentWins = 0, ties = 0;
+  for (const c of counts) {
+    trials += c.n;
+    if (c.winner === 'pending') pendingWins = c.n;
+    else if (c.winner === 'current') currentWins = c.n;
+    else if (c.winner === 'tie') ties = c.n;
   }
+  return {
+    version: r.version, writtenAt: r.written_at, rationale: r.rationale,
+    trialsSoFar: trials, pendingWins, currentWins, ties,
+  };
 }
 
 /**
@@ -378,13 +374,9 @@ export function getPendingScaffold(sql: SqlExecutor): PendingScaffold | null {
  * so `pending - 1` points at a rolled_back/historical row.
  */
 export function getCurrentScaffoldVersion(sql: SqlExecutor): number | null {
-  try {
-    const rows = sql<{ version: number }>`
-      SELECT version FROM scaffold_versions WHERE status = 'current' ORDER BY version DESC LIMIT 1`;
-    return rows[0]?.version ?? null;
-  } catch {
-    return null;
-  }
+  const rows = sql<{ version: number }>`
+    SELECT version FROM scaffold_versions WHERE status = 'current' ORDER BY version DESC LIMIT 1`;
+  return rows[0]?.version ?? null;
 }
 
 export interface ShadowVerdictTrial {
@@ -455,22 +447,18 @@ export async function readScaffoldVersion(
   rt: AgentRuntime,
   version: number,
 ): Promise<string | null> {
-  try {
-    return v.parse(v.string(), await rt.storage.vfs.readFile(
-      `${rt.identity.scaffold.path}.v${version}`,
-      { encoding: 'utf8' },
-    ));
-  } catch {
-    // No versioned backup — happens for v0 (the bootstrap writes the live
-    // file but not a versioned backup). Fall back to live ONLY when the
-    // requested version matches what `rt.identity.scaffold.version()` reports.
-    try {
-      if (version === (await rt.identity.scaffold.version())) {
-        return await rt.identity.scaffold.read();
-      }
-    } catch { /* nop */ }
-    return null;
+  const versioned = `${rt.identity.scaffold.path}.v${version}`;
+  if (await rt.storage.vfs.exists(versioned)) {
+    return v.parse(v.string(), await rt.storage.vfs.readFile(versioned, { encoding: 'utf8' }));
   }
+  // No versioned backup — happens for v0 (the bootstrap writes the live file
+  // but not a versioned backup). Fall back to live ONLY when the requested
+  // version matches what `rt.identity.scaffold.version()` reports. Asked
+  // (`exists`) rather than discovered by catching, because this function picks
+  // which of its own bodies the agent is about to run: a read that fails for
+  // any other reason must not come back as "there is no such version".
+  if (version !== await rt.identity.scaffold.version()) return null;
+  return await rt.identity.scaffold.read();
 }
 
 /**

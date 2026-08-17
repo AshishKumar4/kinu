@@ -22,6 +22,7 @@
 
 import { readFileSync } from 'node:fs';
 import type { ResourceLimits } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 
 export interface CgroupSource {
   /** cgroupfs mount point. */
@@ -38,17 +39,13 @@ const DEFAULT_PROC_SELF = '/proc/self/cgroup';
 const V1_UNLIMITED_FLOOR = 2 ** 62;
 
 function read(path: string): string | null {
-  try {
-    return readFileSync(path, 'utf8').trim();
-  } catch {
-    return null;
-  }
+  return tolerate(() => readFileSync(path, 'utf8'), 'enoent')?.trim() ?? null;
 }
 
 /**
  * The process's path within one hierarchy, from `/proc/self/cgroup`:
  * `0::/some/path` for v2, `7:cpu,cpuacct:/some/path` for a v1 controller.
- * Empty string when it is the root, unreadable, or absent.
+ * Empty string when it is the root or absent; an unreadable one propagates.
  */
 function selfPath(procSelfCgroup: string, controller: string | null): string {
   const content = read(procSelfCgroup);

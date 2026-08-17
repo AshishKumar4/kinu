@@ -9,7 +9,7 @@ import type { AgentContext } from 'agents';
 import { mockAgentsSdk } from './agents-sdk.js';
 import { sha256Hex } from '../../src/lib/crypto.js';
 import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability.js';
-import type { SqlExec, SqlExecRow, SqlValue } from '@proteus/core';
+import type { SqlExec, SqlExecRow, SqlExecutor, SqlValue } from '@proteus/core';
 
 mockAgentsSdk();
 
@@ -39,6 +39,25 @@ export function sqlExec(db: Database): SqlExec {
       ));
       return { toArray: () => rows };
     },
+  };
+}
+
+/** The tagged-template `SqlExecutor` over bun:sqlite — the second of the two SQL
+ *  protocols a Durable Object exposes, alongside {@link sqlExec}'s positional one.
+ *  `reconcileColumns` needs this form: it binds the table name into
+ *  `pragma_table_info(?)`. The row generic is threaded into `prepare` so the rows
+ *  are typed at the boundary rather than asserted after the fact. */
+export function taggedSql(db: Database): SqlExecutor {
+  return function <T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] {
+    const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
+    const bound: SQLQueryBindings[] = values.map((value) =>
+      value instanceof ArrayBuffer ? new Uint8Array(value) : value);
+    const statement = db.prepare<T, SQLQueryBindings[]>(query);
+    if (statement.columnNames.length === 0) {
+      statement.run(...bound);
+      return [];
+    }
+    return statement.all(...bound);
   };
 }
 

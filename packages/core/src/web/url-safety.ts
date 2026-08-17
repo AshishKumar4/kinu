@@ -29,8 +29,8 @@ const SECRET_PREFIX_RE =
   /(sk-[A-Za-z0-9_-]{10,}|sk_[A-Za-z0-9_]{10,}|ghp_[A-Za-z0-9]{10,}|gho_[A-Za-z0-9]{10,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,})/;
 
 export class UnsafeUrlError extends Error {
-  constructor(public readonly reason: string) {
-    super(reason);
+  constructor(public readonly reason: string, options?: ErrorOptions) {
+    super(reason, options);
     this.name = 'UnsafeUrlError';
   }
 }
@@ -75,8 +75,8 @@ export function assertSafeUrl(url: string): URL {
   let parsed: URL;
   try {
     parsed = new URL(url);
-  } catch {
-    throw new UnsafeUrlError(`not a valid URL: ${url}`);
+  } catch (error) {
+    throw new UnsafeUrlError(`not a valid URL: ${url}`, { cause: error });
   }
 
   const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
@@ -111,12 +111,15 @@ export function assertSafeUrl(url: string): URL {
   return parsed;
 }
 
-/** True when the URL is safe — non-throwing form for filtering lists. */
+/** True when the URL is safe — non-throwing form for filtering lists. Only an
+ *  unsafe URL answers false: anything else `assertSafeUrl` could raise is a bug
+ *  in this module, and swallowing it would mark a broken check as a pass. */
 export function isSafeUrl(url: string): boolean {
   try {
     assertSafeUrl(url);
     return true;
-  } catch {
+  } catch (error) {
+    if (!(error instanceof UnsafeUrlError)) throw error;
     return false;
   }
 }

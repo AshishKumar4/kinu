@@ -14,7 +14,7 @@ import {
   type ProviderDeps, type AuthResolution, type ModelProvider,
 } from '../src/index.ts';
 import { describeProviderError } from '../src/providers/util.js';
-import { createMockFetch } from '@proteus/test-utils';
+import { createMockFetch, CHAT_COMPLETION_BODY } from '@proteus/test-utils';
 
 const CATALOG = {
   groq: {
@@ -90,10 +90,15 @@ function staticProvider(id: string, modelId: string, onCreate: () => void = () =
   };
 }
 
-async function tryCall(model: Parameters<typeof generateText>[0]['model']): Promise<void> {
-  try {
-    await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
-  } catch { /* minimal mock bodies may not parse — we assert on requests */ }
+/**
+ * Drive one completion through the resolved model. Awaited, not absorbed: the
+ * catalog path exists to make an uncredentialed id reachable, and a swallowed
+ * rejection made "resolved and answered" indistinguishable from "resolved and
+ * failed on the way back".
+ */
+async function call(model: Parameters<typeof generateText>[0]['model']): Promise<void> {
+  const { text } = await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
+  expect(text).toBe('ok');
 }
 
 describe('models.dev provider metadata', () => {
@@ -169,7 +174,7 @@ describe('registry with dynamic catalog source', () => {
 
   test('a non-whitelisted catalog provider with a stored key resolves through openai-compat', async () => {
     const mock = catalogMock([
-      { match: 'api.groq.com', respond: { status: 200, body: { choices: [] } } },
+      { match: 'api.groq.com', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
     ]);
     const registry = makeRegistry();
     const deps = makeDeps({
@@ -177,7 +182,7 @@ describe('registry with dynamic catalog source', () => {
     }, mock.fetch);
 
     const model = registry.resolve('groq/llama-3.3-70b-versatile', deps);
-    await tryCall(model);
+    await call(model);
 
     const upstream = mock.requests.filter((r) => r.url.includes('api.groq.com'));
     expect(upstream.length).toBeGreaterThan(0);
@@ -238,7 +243,7 @@ describe('registry with dynamic catalog source', () => {
     const registry = makeRegistry();
     const deps = makeDeps({}, mock.fetch);
     const model = registry.resolve('groq/llama-3.3-70b-versatile', deps);
-    await tryCall(model);
+    await expect(call(model)).rejects.toThrow();
     expect(mock.requests.filter((r) => r.url.includes('api.groq.com'))).toHaveLength(0);
   });
 

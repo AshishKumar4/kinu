@@ -49,9 +49,10 @@ export async function pruneLowValueBranches(
     `;
 
     if (node.branch_agent_key) {
-      // Abort the branch agent (platform-specific, via injected callback).
-      // Branch may already be gone — that's fine.
-      await rt.abortBranch(node.branch_agent_key, 'pruned').catch(() => {});
+      // Abort the branch agent (platform-specific, via injected callback). A
+      // branch that survives its abort keeps burning budget under a node UCT
+      // will never select again, so a failed abort is the search's problem.
+      await rt.abortBranch(node.branch_agent_key, 'pruned');
     }
   }
 }

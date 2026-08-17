@@ -223,17 +223,21 @@ describe('running the panel', () => {
     expect(third.run?.judged.every((j) => j.stored === 2)).toBe(true);
   });
 
-  test('a judge that errors leaves a hole, counted, not an abstention', async () => {
+  test('a judge outage propagates instead of being recorded as unusable answers', async () => {
     const { sql } = setup();
     seedLedger(sql, { accepted: 4, corrected: 2 });
     labelAll(sql, () => 'accepted');
     const flaky = judge('b/1', (prompt) => turnOfPrompt(prompt).verdict === 'corrected' ? null : 'accepted');
-    const { run } = await runEnsemble(sql, [always('a/1', 'accepted'), flaky]);
-    expect(run?.judged[1]).toEqual({ model: 'b/1', stored: 4, failed: 2 });
+    // A failed CALL is not a verdict. Counting it as one would report a rate
+    // limit as a panel that read every turn and could not make sense of any.
+    await expect(runEnsemble(sql, [always('a/1', 'accepted'), flaky])).rejects.toThrow('judge unavailable');
 
-    const report = ensembleReport(sql);
-    expect(report.gold).toBe(6);
-    expect(report.covered).toBe(4);
+    // Every call already paid for is durable, so the next run tops up from here
+    // rather than re-billing the whole panel.
+    const stored = ensembleLabels(sql);
+    expect(stored.filter((row) => row.model === 'a/1')).toHaveLength(6);
+    expect(stored.filter((row) => row.model === 'b/1').length).toBeLessThan(6);
+    expect(ensembleReport(sql).gold).toBe(6);
   });
 
   test('an unusable answer is not stored as a guess', async () => {

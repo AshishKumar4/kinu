@@ -1,5 +1,6 @@
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../packages/core/src/index.js';
+import { tolerate } from '../packages/core/src/obs/index.js';
 
 const TokenCountSchema = v.pipe(v.number(), v.finite(), v.integer(), v.minValue(0));
 const UsageSchema = v.object({
@@ -64,12 +65,9 @@ function usagesFromBody(body: string): CallUsage[] {
   const usages: CallUsage[] = [];
   const record = (raw: string): void => {
     if (!raw || raw === '[DONE]') return;
-    let value: JsonValue;
-    try {
-      value = parseJsonValue(raw);
-    } catch {
-      return;
-    }
+    // A body fragment is JSON when it carries an envelope and plain text otherwise.
+    const value = tolerate(() => parseJsonValue(raw), 'malformed-input');
+    if (value === undefined) return;
     const usage = usageOf(value);
     if (usage) usages.push(usage);
   };

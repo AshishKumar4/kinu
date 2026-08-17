@@ -504,13 +504,14 @@ function scopeClaim<Value>(value: Value): string | null {
 }
 
 async function readJsonObject(response: Response, label: string): Promise<JsonObject> {
-  let parsed: JsonObject;
   try {
-    parsed = v.parse(JsonObjectSchema, await response.json());
-  } catch {
-    throw new Error(`${label} did not return JSON.`);
+    return v.parse(JsonObjectSchema, await response.json());
+  } catch (error) {
+    throw new Error(
+      `${label} returned HTTP ${response.status} with a body that is not JSON.`,
+      { cause: error },
+    );
   }
-  return parsed;
 }
 
 interface OAuthFailureSummary { reason: string; log: string }

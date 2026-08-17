@@ -27,6 +27,7 @@ import { RunEventRecorder } from '../events/recorder.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
 import { parseJsonValue, projectJsonValue, JsonObjectSchema, type JsonValue } from '../utils/json.js';
+import { tolerate } from '../obs/index.js';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
 
 /** Every outcome kind, in the ledger's canonical order. The one list — the
@@ -232,31 +233,28 @@ export function buildOutcomeClassifierPrompt(input: {
 }
 
 /** Classify turn N's outcome from the user's follow-up — one small LLM call.
- *  Returns null when the model output is unusable (no signal recorded). */
+ *
+ *  Returns null for exactly one thing: model output with no usable JSON verdict
+ *  in it. A transport failure is NOT that and propagates — "the model answered
+ *  something we cannot read" and "we never reached the model" are different
+ *  facts, and the caller records the first as a deliberately ungraded turn. */
 export async function classifyTurnOutcome(
   llm: LLM,
   input: { userMessage: string; assistantResponse: string; followup: string },
 ): Promise<OutcomeClassification | null> {
-  let raw: string;
-  try {
-    raw = await llm.complete(buildOutcomeClassifierPrompt(input));
-  } catch {
-    return null;
-  }
-  try {
-    const parsed = v.safeParse(OutcomeClassificationSchema, extractJsonObject(raw));
-    if (!parsed.success) return null;
-    const confidence = parsed.output.confidence !== undefined && Number.isFinite(parsed.output.confidence)
-      ? Math.min(1, Math.max(0, parsed.output.confidence))
-      : 0.5;
-    return {
-      outcome: parsed.output.outcome,
-      confidence,
-      evidence: parsed.output.evidence ?? '',
-    };
-  } catch {
-    return null;
-  }
+  const raw = await llm.complete(buildOutcomeClassifierPrompt(input));
+  const json = tolerate(() => extractJsonObject(raw), 'malformed-input');
+  if (json === undefined) return null;
+  const parsed = v.safeParse(OutcomeClassificationSchema, json);
+  if (!parsed.success) return null;
+  const confidence = parsed.output.confidence !== undefined && Number.isFinite(parsed.output.confidence)
+    ? Math.min(1, Math.max(0, parsed.output.confidence))
+    : 0.5;
+  return {
+    outcome: parsed.output.outcome,
+    confidence,
+    evidence: parsed.output.evidence ?? '',
+  };
 }
 
 // ── The durable outcome ledger ───────────────────────────────────
@@ -276,17 +274,16 @@ const TURN_OUTCOMES_DDL = `(
   )`;
 
 export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
-  // Only the sqlite_master probe may fail silently (exotic executors without
-  // it skip the migration probes); a failed rebuild below throws loudly and
-  // is finished by the resume branch on the next init.
-  const tableDdl = (name: string): string | null => {
-    try {
-      return sql<{ sql: string }>`
-        SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${name}`[0]?.sql ?? null;
-    } catch {
-      return null;
-    }
-  };
+  // The probe decides whether either migration below runs at all, so it must
+  // not fail quietly. It used to `catch { return null }` for "exotic executors
+  // without sqlite_master" — every real one is SQLite, and the cost of the
+  // excuse was that a failing probe silently skipped BOTH the resume branch
+  // and the CHECK-widening rebuild: rows left stranded in turn_outcomes_legacy
+  // beside a freshly-minted empty turn_outcomes, the history no longer visible
+  // and nothing crashing.
+  const tableDdl = (name: string): string | null =>
+    sql<{ sql: string }>`
+      SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${name}`[0]?.sql ?? null;
 
   // Resume an interrupted CHECK-widening rebuild: a crash mid-sequence leaves
   // rows stranded in turn_outcomes_legacy while a bare CREATE IF NOT EXISTS
@@ -393,15 +390,11 @@ function toOutcomeLabelRow(r: RawOutcomeLabelRow): OutcomeLabelRow {
  *  gold set is the whole basis of every corrected number, and a window that
  *  silently dropped the oldest labels would drop the turns they speak for. */
 export function listOutcomeLabels(sql: SqlExecutor, limit?: number): OutcomeLabelRow[] {
-  try {
-    const rows = limit === undefined
-      ? sql<RawOutcomeLabelRow>`SELECT * FROM outcome_labels ORDER BY created_at DESC, id DESC`
-      : sql<RawOutcomeLabelRow>`
-          SELECT * FROM outcome_labels ORDER BY created_at DESC, id DESC LIMIT ${limit}`;
-    return rows.map(toOutcomeLabelRow);
-  } catch {
-    return [];
-  }
+  const rows = limit === undefined
+    ? sql<RawOutcomeLabelRow>`SELECT * FROM outcome_labels ORDER BY created_at DESC, id DESC`
+    : sql<RawOutcomeLabelRow>`
+        SELECT * FROM outcome_labels ORDER BY created_at DESC, id DESC LIMIT ${limit}`;
+  return rows.map(toOutcomeLabelRow);
 }
 
 /** The label that counts for each turn: the most recent one. Append-only
@@ -440,22 +433,18 @@ export function recordEnsembleLabels(sql: SqlExecutor, input: {
 /** The verdict that counts for each (turn, model): the most recent one. Same
  *  "append-only, newest wins" read as `goldLabels`. */
 export function ensembleLabels(sql: SqlExecutor): EnsembleLabelRow[] {
-  try {
-    const rows = sql<{
-      id: string; outcome_id: string; model: string; label: OutcomeLabel; created_at: number;
-    }>`SELECT * FROM outcome_ensemble_labels ORDER BY created_at DESC, id DESC`;
-    const latest = new Map<string, EnsembleLabelRow>();
-    for (const r of rows) {
-      const key = `${r.outcome_id}\n${r.model}`;
-      if (latest.has(key)) continue;
-      latest.set(key, {
-        id: r.id, outcomeId: r.outcome_id, model: r.model, label: r.label, createdAt: r.created_at,
-      });
-    }
-    return [...latest.values()];
-  } catch {
-    return [];
+  const rows = sql<{
+    id: string; outcome_id: string; model: string; label: OutcomeLabel; created_at: number;
+  }>`SELECT * FROM outcome_ensemble_labels ORDER BY created_at DESC, id DESC`;
+  const latest = new Map<string, EnsembleLabelRow>();
+  for (const r of rows) {
+    const key = `${r.outcome_id}\n${r.model}`;
+    if (latest.has(key)) continue;
+    latest.set(key, {
+      id: r.id, outcomeId: r.outcome_id, model: r.model, label: r.label, createdAt: r.created_at,
+    });
   }
+  return [...latest.values()];
 }
 
 export interface TurnOutcomeRow {
@@ -539,43 +528,31 @@ export function listTurnOutcomes(
   // slots bind '' — a value the CHECK constraint forbids, so it matches nothing.
   const wanted = TURN_OUTCOMES.filter((o) => !opts.outcomes || opts.outcomes.includes(o));
   const [w0, w1, w2, w3] = [wanted[0] ?? '', wanted[1] ?? '', wanted[2] ?? '', wanted[3] ?? ''];
-  try {
-    return sql<RawOutcomeRow>`
-      SELECT * FROM turn_outcomes
-      WHERE outcome IN (${w0}, ${w1}, ${w2}, ${w3})
-      ORDER BY created_at DESC, id DESC LIMIT ${limit}`.map(toOutcomeRow);
-  } catch {
-    return [];
-  }
+  return sql<RawOutcomeRow>`
+    SELECT * FROM turn_outcomes
+    WHERE outcome IN (${w0}, ${w1}, ${w2}, ${w3})
+    ORDER BY created_at DESC, id DESC LIMIT ${limit}`.map(toOutcomeRow);
 }
 
 /** The outcome an Alternate Takes pick already recorded for this turn, if
  *  any — the follow-up classifier must not overwrite that explicit signal. */
 export function takePickOutcome(sql: SqlExecutor, turnId: string | null | undefined): TurnOutcome | null {
   if (!turnId) return null;
-  try {
-    const rows = sql<{ outcome: TurnOutcome }>`
-      SELECT outcome FROM turn_outcomes
-      WHERE turn_id = ${turnId} AND source = 'take_pick' LIMIT 1`;
-    return rows[0]?.outcome ?? null;
-  } catch {
-    return null;
-  }
+  const rows = sql<{ outcome: TurnOutcome }>`
+    SELECT outcome FROM turn_outcomes
+    WHERE turn_id = ${turnId} AND source = 'take_pick' LIMIT 1`;
+  return rows[0]?.outcome ?? null;
 }
 
 /** True when any of the given turn ids has a recorded corrected/frustrated
  *  outcome — the session-reflection gate's real-signal check. */
 export function hasNegativeOutcome(sql: SqlExecutor, turnIds: ReadonlyArray<string>): boolean {
   if (turnIds.length === 0) return false;
-  try {
-    const rows = sql<{ turn_id: string | null; outcome: TurnOutcome }>`
-      SELECT turn_id, outcome FROM turn_outcomes
-      WHERE outcome IN ('corrected','frustrated') AND turn_id IS NOT NULL`;
-    const set = new Set(turnIds);
-    return rows.some((r) => r.turn_id !== null && set.has(r.turn_id));
-  } catch {
-    return false;
-  }
+  const rows = sql<{ turn_id: string | null; outcome: TurnOutcome }>`
+    SELECT turn_id, outcome FROM turn_outcomes
+    WHERE outcome IN ('corrected','frustrated') AND turn_id IS NOT NULL`;
+  const wanted = new Set(turnIds);
+  return rows.some((r) => r.turn_id !== null && wanted.has(r.turn_id));
 }
 
 // ── Real-outcome scaffold rates (route into R2's archive priors) ─
@@ -588,18 +565,14 @@ export interface RealOutcomeRate {
 /** Per-scaffold-version real-outcome record: how turns SERVED by each version
  *  actually landed with the user. The component R2's shadow win-rates lack. */
 export function realOutcomeScaffoldRates(sql: SqlExecutor): Map<number, RealOutcomeRate> {
-  try {
-    const rows = sql<{ scaffold_version: number; accepted: number; negative: number }>`
-      SELECT scaffold_version,
-             SUM(CASE WHEN outcome = 'accepted' THEN 1 ELSE 0 END) AS accepted,
-             SUM(CASE WHEN outcome IN ('corrected','frustrated') THEN 1 ELSE 0 END) AS negative
-      FROM turn_outcomes
-      WHERE scaffold_version IS NOT NULL
-      GROUP BY scaffold_version`;
-    return new Map(rows.map((r) => [r.scaffold_version, { accepted: r.accepted ?? 0, negative: r.negative ?? 0 }]));
-  } catch {
-    return new Map();
-  }
+  const rows = sql<{ scaffold_version: number; accepted: number; negative: number }>`
+    SELECT scaffold_version,
+           SUM(CASE WHEN outcome = 'accepted' THEN 1 ELSE 0 END) AS accepted,
+           SUM(CASE WHEN outcome IN ('corrected','frustrated') THEN 1 ELSE 0 END) AS negative
+    FROM turn_outcomes
+    WHERE scaffold_version IS NOT NULL
+    GROUP BY scaffold_version`;
+  return new Map(rows.map((r) => [r.scaffold_version, { accepted: r.accepted ?? 0, negative: r.negative ?? 0 }]));
 }
 
 /** Blend real user outcomes into the archive's shadow-eval win-rates for
@@ -699,13 +672,12 @@ const ChatRunStartSchema = v.object({
   userMessage: v.string(),
 });
 
+/** One stored run event, or null when the row is not an event shape this reads.
+ *  A payload that is not JSON at all is corruption of a ledger this process
+ *  wrote, so it propagates rather than being counted as "no such event". */
 function parseRunEvent(payload: string): StoredRunEvent | null {
-  try {
-    const parsed = v.safeParse(StoredRunEventSchema, parseJsonValue(payload));
-    return parsed.success ? parsed.output : null;
-  } catch {
-    return null;
-  }
+  const parsed = v.safeParse(StoredRunEventSchema, parseJsonValue(payload));
+  return parsed.success ? parsed.output : null;
 }
 
 /**
@@ -741,53 +713,48 @@ function toolCallsFromTranscript(messages: readonly ModelMessage[]): ToolCallRec
   return calls;
 }
 
-/** Reconstruct non-scoring process evidence from the existing message + run ledgers. */
+/** Reconstruct non-scoring process evidence from the existing message + run
+ *  ledgers. Both tables are created by `initWorkspaceSchema` on every backend,
+ *  so a failed read here is a real fault and is not reported as "this turn ran
+ *  no tools" — the shape a blanket catch used to give it. */
 function turnProcessEvidence(sql: SqlExecutor, turnId: string | null): string | undefined {
   if (!turnId) return undefined;
-  try {
-    const window = sql<TurnMessageWindow>`
-      SELECT u.content AS userMessage, u.created_at AS startedAt, a.created_at AS endedAt
-      FROM messages a JOIN messages u ON u.id = a.parent_id
-      WHERE a.id = ${turnId} LIMIT 1`[0];
-    if (!window) return undefined;
+  const window = sql<TurnMessageWindow>`
+    SELECT u.content AS userMessage, u.created_at AS startedAt, a.created_at AS endedAt
+    FROM messages a JOIN messages u ON u.id = a.parent_id
+    WHERE a.id = ${turnId} LIMIT 1`[0];
+  if (!window) return undefined;
 
-    const from = new Date(window.startedAt).toISOString();
-    const to = new Date(window.endedAt).toISOString();
-    const starts = sql<{ runId: string; payload: string }>`
-      SELECT run_id AS runId, payload FROM run_events
-      WHERE type = 'run_start' AND ts >= ${from} AND ts <= ${to}
-      ORDER BY ts DESC LIMIT 20`;
-    const expectedUserMessage = window.userMessage.slice(0, 500);
-    const runId = starts.find(({ payload }) => {
-      try {
-        const parsed = v.safeParse(ChatRunStartSchema, parseJsonValue(payload));
-        return parsed.success && parsed.output.userMessage === expectedUserMessage;
-      } catch {
-        return false;
-      }
-    })?.runId;
-    if (!runId) return undefined;
+  const from = new Date(window.startedAt).toISOString();
+  const to = new Date(window.endedAt).toISOString();
+  const starts = sql<{ runId: string; payload: string }>`
+    SELECT run_id AS runId, payload FROM run_events
+    WHERE type = 'run_start' AND ts >= ${from} AND ts <= ${to}
+    ORDER BY ts DESC LIMIT 20`;
+  const expectedUserMessage = window.userMessage.slice(0, 500);
+  const runId = starts.find(({ payload }) => {
+    const parsed = v.safeParse(ChatRunStartSchema, parseJsonValue(payload));
+    return parsed.success && parsed.output.userMessage === expectedUserMessage;
+  })?.runId;
+  if (!runId) return undefined;
 
-    const rows = sql<{ payload: string; ts: string }>`
-      SELECT payload, ts FROM run_events WHERE run_id = ${runId} ORDER BY event_index`;
-    const events = rows.map((row) => ({ event: parseRunEvent(row.payload), at: Date.parse(row.ts) }))
-      .filter((row): row is { event: StoredRunEvent; at: number } => row.event !== null && Number.isFinite(row.at));
-    if (events.length === 0) return undefined;
+  const rows = sql<{ payload: string; ts: string }>`
+    SELECT payload, ts FROM run_events WHERE run_id = ${runId} ORDER BY event_index`;
+  const events = rows.map((row) => ({ event: parseRunEvent(row.payload), at: Date.parse(row.ts) }))
+    .filter((row): row is { event: StoredRunEvent; at: number } => row.event !== null && Number.isFinite(row.at));
+  if (events.length === 0) return undefined;
 
-    // The turn's real trajectory, from the rows written as each step finished.
-    const toolCalls = toolCallsFromTranscript(new RunEventRecorder(sql).transcript(runId));
-    const steps = events.filter(({ event }) => event.type === 'step_finish').length;
-    const startAt = events.find(({ event }) => event.type === 'run_start')?.at ?? events[0].at;
-    const endAt = [...events].reverse().find(({ event }) => event.type === 'run_end')?.at ??
-      events[events.length - 1]?.at ?? startAt;
-    return renderDelegationFeatures(delegationFeatures({
-      toolCalls,
-      steps,
-      durationMs: Math.max(0, endAt - startAt),
-    }));
-  } catch {
-    return undefined;
-  }
+  // The turn's real trajectory, from the rows written as each step finished.
+  const toolCalls = toolCallsFromTranscript(new RunEventRecorder(sql).transcript(runId));
+  const steps = events.filter(({ event }) => event.type === 'step_finish').length;
+  const startAt = events.find(({ event }) => event.type === 'run_start')?.at ?? events[0].at;
+  const endAt = [...events].reverse().find(({ event }) => event.type === 'run_end')?.at ??
+    events[events.length - 1]?.at ?? startAt;
+  return renderDelegationFeatures(delegationFeatures({
+    toolCalls,
+    steps,
+    durationMs: Math.max(0, endAt - startAt),
+  }));
 }
 
 /** Share of the drawn failures held OUT of the reflection minibatch and
@@ -910,11 +877,11 @@ interface RawLessonRow {
 }
 
 function toLessonRow(r: RawLessonRow): LessonRow {
-  let turnIds: string[] = [];
-  try {
-    const parsed = v.safeParse(v.array(v.string()), parseJsonValue(r.turn_ids));
-    if (parsed.success) turnIds = parsed.output;
-  } catch { /* malformed row — treat as untied */ }
+  // turn_ids is written by recordLesson as JSON.stringify(string[]), so a row
+  // that does not parse is corruption — not a lesson tied to no turn. Reading
+  // it as untied left it permanently un-corroboratable, which is the one thing
+  // that keeps a lesson out of MEMORY.md forever.
+  const turnIds = v.parse(v.array(v.string()), parseJsonValue(r.turn_ids));
   return {
     id: r.id, turnIds, text: r.text, source: r.source, status: r.status,
     createdAt: r.created_at, corroboratedAt: r.corroborated_at,
@@ -927,25 +894,17 @@ export function listLessons(
 ): LessonRow[] {
   const status = opts.status ?? null;
   const source = opts.source ?? null;
-  try {
-    const rows = sql<RawLessonRow>`SELECT * FROM lessons
-      WHERE (${status} IS NULL OR status = ${status})
-        AND (${source} IS NULL OR source = ${source})
-      ORDER BY created_at DESC LIMIT ${opts.limit ?? 100}`;
-    return rows.map(toLessonRow);
-  } catch {
-    return [];
-  }
+  const rows = sql<RawLessonRow>`SELECT * FROM lessons
+    WHERE (${status} IS NULL OR status = ${status})
+      AND (${source} IS NULL OR source = ${source})
+    ORDER BY created_at DESC LIMIT ${opts.limit ?? 100}`;
+  return rows.map(toLessonRow);
 }
 
 /** One lesson by id, or null. */
 export function getLesson(sql: SqlExecutor, id: string): LessonRow | null {
-  try {
-    const rows = sql<RawLessonRow>`SELECT * FROM lessons WHERE id = ${id} LIMIT 1`;
-    return rows[0] ? toLessonRow(rows[0]) : null;
-  } catch {
-    return null;
-  }
+  const rows = sql<RawLessonRow>`SELECT * FROM lessons WHERE id = ${id} LIMIT 1`;
+  return rows[0] ? toLessonRow(rows[0]) : null;
 }
 
 /** A real negative outcome landed on `turnId`: flip every provisional lesson

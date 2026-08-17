@@ -27,7 +27,7 @@ import {
   createMemorySchedule,
 } from '../helpers.js';
 
-function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
+async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
@@ -37,9 +37,8 @@ function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
   const executor = createMockExecutor();
   const schedule = createMemorySchedule(db);
 
-  void vfs.mkdir('scaffold', { recursive: true })
-    .then(() => vfs.writeFile('scaffold/agent.js', 'initial'))
-    .catch(() => {});
+  await vfs.mkdir('scaffold', { recursive: true });
+  await vfs.writeFile('scaffold/agent.js', 'initial');
 
   function createRealBranch(branchLLM: LLM): BranchHandle {
     return {
@@ -121,10 +120,10 @@ function printTree(db: Database) {
 describe.skipIf(!isE2EConfigured())('E2E MCTS with real LLM', () => {
   test('full search cycle', async () => {
     const { primary, judge } = loadAIGatewayProviders();
-    const { rt, db } = createE2ERuntime(primary, judge);
+    const { rt, db } = await createE2ERuntime(primary, judge);
 
-    initSearchTables(rt.storage.execRaw);
-    initScaffoldTables(rt.storage.execRaw);
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initCraftScoreTables(rt.storage.execRaw);
 
     const session = createE2ESession();

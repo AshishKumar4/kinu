@@ -27,10 +27,14 @@
  * precondition teaches nobody and hides a leak that will come back.
  */
 
-import { existsSync, readdirSync, statSync, statfsSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, statfsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { assertMeasured, finding } from './gate-ratchet.ts';
+
+/** This checkout, so the merge-state probe reads THIS tree's git directory
+ *  rather than whatever directory the gate happened to be invoked from. */
+const repo = new URL('..', import.meta.url).pathname;
 
 /**
  * What one full root suite run costs the temp filesystem, measured on
@@ -105,6 +109,11 @@ export interface Environment {
   readonly unboundedWorkdirs: readonly string[];
   readonly scratchOrphans: number;
   readonly tempEntries: number;
+  /** The commit being merged in, when a merge is half-resolved. A tree in that
+   *  state holds BOTH versions of every conflicted file, so nothing downstream
+   *  is measuring either one. */
+  readonly mergeInProgress: string | null;
+  readonly conflictedPaths: number;
 }
 
 /** Ancestors of `from` up to but excluding `/`, nearest first, that a
@@ -136,6 +145,13 @@ export function observe(): Environment {
     unboundedWorkdirs: unboundedWorkdirsAbove(temp, process.env.HOME ?? '/root'),
     scratchOrphans: orphans,
     tempEntries: entries.length,
+    mergeInProgress: existsSync(join(repo, '.git/MERGE_HEAD'))
+      ? readFileSync(join(repo, '.git/MERGE_HEAD'), 'utf8').trim().slice(0, 12)
+      : null,
+    conflictedPaths: Bun.spawnSync(
+      ['git', 'diff', '--name-only', '--diff-filter=U'],
+      { cwd: repo, stdout: 'pipe' },
+    ).stdout.toString().split('\n').filter((path) => path.length > 0).length,
   };
 }
 
@@ -179,6 +195,34 @@ export function judge(env: Environment): string[] {
         + 'for one laptop.writeFile, which lands as a 5,000 ms test timeout elsewhere',
       fix: `rm ${join(dir, 'package.json')}  (or whichever marker above is stray) — and see `
         + 'packages/cli-backend/src/checkpoints.ts workdirForPath, whose walk is unbounded',
+    }));
+  }
+
+  // Repo-scale version of the same fault the checkpoint-workdir check catches:
+  // the thing the gates are about to measure is not in a state anyone should
+  // draw a conclusion from. A half-resolved merge had to be broadcast to every
+  // agent by hand today, twice, because typecheck/lint/suites all went red and
+  // each red read as somebody's change.
+  // Gate on UNRESOLVED paths, not on the merge existing. A fully resolved merge
+  // whose only remaining step is the commit is a tree every gate can measure
+  // honestly — and gating on `MERGE_HEAD` alone made this check unsatisfiable
+  // from a pre-commit hook: the hook refused the very commit that concludes the
+  // merge, so the merge could never be finished without `--no-verify`, which is
+  // banned. The hazard is a file holding both versions, and that is exactly
+  // `conflictedPaths > 0`.
+  if (env.mergeInProgress !== null && env.conflictedPaths > 0) {
+    problems.push(finding({
+      at: `${repo} (merging ${env.mergeInProgress})`,
+      invariant: 'the tree is not half-way through a merge when a gate measures it',
+      found: `.git/MERGE_HEAD is present with ${String(env.conflictedPaths)} unresolved path(s)`,
+      silently: 'a conflicted file holds BOTH versions, so typecheck, lint and every suite '
+        + 'report on a tree that is neither one. A grep matches text from a branch that has '
+        + 'not landed, and a line number points at neither version — two streams nearly '
+        + 'published citations from marker-displaced offsets in the same ten minutes. Every '
+        + 'red below this line would be attributed to whatever change was under review.',
+      fix: 'resolve the merge first (git status, git diff --diff-filter=U), then re-run. Do '
+        + 'not report the gates below as red and do not revert anything — this is not about '
+        + 'your change.',
     }));
   }
 
@@ -233,7 +277,10 @@ if (import.meta.main) {
   ]);
   const problems = judge(env);
   if (problems.length === 0) {
-    console.log(`preflight: ok — ${measured}`);
+    // The merge state is stated as text, not fed to assertMeasured: zero
+    // conflicted paths is the HEALTHY reading, and a denominator that is
+    // legitimately zero would make the throw fire on a good tree.
+    console.log(`preflight: ok — ${measured}, no merge in progress`);
     process.exit(0);
   }
   console.error(`preflight: ${String(problems.length)} environment fault(s)\n`);

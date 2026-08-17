@@ -52,10 +52,6 @@ export interface LoadedLongHorizonCorpus {
   path: string;
 }
 
-function errorMessage<Failure>(error: Failure): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function loadLongHorizonCorpus(repoRoot: string, opts: PartitionOptions = {}): LoadedLongHorizonCorpus {
   const path = join(repoRoot, 'tests', 'bench', 'longhorizon.jsonl');
   const raw = readFileSync(path, 'utf8');
@@ -69,7 +65,7 @@ export function loadLongHorizonCorpus(repoRoot: string, opts: PartitionOptions =
     try {
       parsedJson = JSON.parse(text);
     } catch (err) {
-      throw new Error(`${path}:${i + 1}: not valid JSON — ${errorMessage(err)}`);
+      throw new Error(`${path}:${i + 1}: not valid JSON`, { cause: err });
     }
     const parsed = v.safeParse(SpecLineSchema, parsedJson);
     if (!parsed.success) throw new Error(`${path}:${i + 1}: ${parsed.issues.map((x) => x.message).join('; ')}`);

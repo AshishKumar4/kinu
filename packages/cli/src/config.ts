@@ -19,11 +19,14 @@ import {
   type JsonObject,
   type ReasoningEffort,
 } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import {
   CLOUD_PROXY_PROVIDER_IDS,
   cloudProxyBaseURL,
   createFileCodexAuthStore,
+  ensureSecretDir,
   proteusHome,
+  writeSecretFile,
   type LocalCloudSession,
   type LocalCodexAuthStore,
   type LocalProviderCredentials,
@@ -184,8 +187,7 @@ const ProteusConfigSchema: v.GenericSchema<ProteusConfig> = v.object({
 });
 
 export function ensureAgentHome(): void {
-  mkdirSync(AGENT_HOME, { recursive: true });
-  try { chmodSync(AGENT_HOME, 0o700); } catch { /* nop on filesystems without chmod */ }
+  ensureSecretDir(AGENT_HOME);
 }
 
 export function ensureBinDir(): void {
@@ -216,8 +218,10 @@ export function loadConfigFile(): ProteusConfig {
   if (!existsSync(CONFIG_PATH)) return {};
   try {
     return v.parse(ProteusConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')));
-  } catch {
-    return {};
+  } catch (error) {
+    // Defaulting silently here would discard the whole file — model, aliases, agents, session —
+    // because of one bad field, and look identical to a first run.
+    throw new Error(`${CONFIG_PATH} is not a valid Proteus config; fix or remove it.`, { cause: error });
   }
 }
 
@@ -234,8 +238,7 @@ export function setDefaultReasoningEffort(effort: ReasoningEffort): ReasoningEff
 
 export function saveConfigFile(config: ProteusConfig): void {
   ensureAgentHome();
-  writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  try { chmodSync(CONFIG_PATH, 0o600); } catch { /* nop on filesystems without chmod */ }
+  writeSecretFile(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 export function updateConfigFile(mutator: (config: ProteusConfig) => ProteusConfig | void): ProteusConfig {
@@ -264,30 +267,32 @@ export function requireStoredAuthConfig(): CloudAuthConfig {
 
 function storedAuthConfig(missingTokenMessage: string): CloudAuthConfig {
   const config = loadConfigFile();
-  const origin = resolveCloudOrigin();
   const token = config.accessToken;
   if (!token) {
     throw new Error(missingTokenMessage);
   }
-  if (config.tokenExpiresAt) {
-    const expiresAt = Date.parse(config.tokenExpiresAt);
-    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-      throw new Error('Your Proteus CLI session has expired. Run: proteus auth');
-    }
+  if (sessionExpired(config)) {
+    throw new Error('Your Proteus CLI session has expired. Run: proteus auth');
   }
-  return { origin, token, user: config.user };
+  return { origin: resolveCloudOrigin(), token, user: config.user };
+}
+
+function sessionExpired(config: ProteusConfig): boolean {
+  if (!config.tokenExpiresAt) return false;
+  const expiresAt = Date.parse(config.tokenExpiresAt);
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 }
 
 /** The signed-in session as a model source, or null when signed out / expired.
- *  Non-throwing twin of requireAuthConfig for paths where being signed out
- *  just means the cloud providers are unavailable, not an error. */
+ *  `PROTEUS_TOKEN` wins here exactly as it does in requireAuthConfig. Asks rather
+ *  than catching: an unreadable config is not a signed-out user. */
 export function resolveCloudSession(): LocalCloudSession | null {
-  try {
-    const { origin, token } = requireAuthConfig();
-    return { origin, token };
-  } catch {
-    return null;
-  }
+  const envToken = process.env.PROTEUS_TOKEN?.trim();
+  if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
+  const config = loadConfigFile();
+  const token = config.accessToken;
+  if (!token || sessionExpired(config)) return null;
+  return { origin: resolveCloudOrigin(), token };
 }
 
 export function resolveAgentRef(input: string): ProteusAgentConfig | null {
@@ -390,7 +395,7 @@ exec "$bin_dir/proteus" run ${shellQuote(agentName)} "$@"
 
 export function deleteAliasShim(alias: string): void {
   validateAliasName(alias);
-  try { unlinkSync(aliasPath(alias)); } catch { /* already gone */ }
+  tolerate(() => unlinkSync(aliasPath(alias)), 'enoent');
   removeAliasConfig(alias);
 }
 

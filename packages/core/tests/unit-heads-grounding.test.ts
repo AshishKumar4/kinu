@@ -25,14 +25,13 @@ import {
   listAlternateTakeSets, recordTakePick,
 } from '../src/index.js';
 import { createJSONLLM } from '@proteus/test-utils';
-import { makeSql, makeExecRaw } from './helpers.js';
-import { initTurnOutcomeTables } from '../src/evolution/outcomes.js';
+import { makeSql, makeExecRaw, createTestWorkspace } from './helpers.js';
 
 // ── fakes ────────────────────────────────────────────────────────────
 
 function newJournal() {
   const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db));
+  initHeadsTables(makeExecRaw(db), makeSql(db));
   const sql = makeSql(db);
   return { sql, journal: new HeadJournal(sql), db };
 }
@@ -248,11 +247,11 @@ describe('evidence is not clipped into the merge', () => {
 
 describe('heads emit an Alternate-Takes set into the preference ledger', () => {
   test('recordHeadsTakeSet writes a heads-sourced set; claim + pick credits the turn', () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    const execRaw = makeExecRaw(db);
-    initAlternateTakesTable(execRaw);
-    initTurnOutcomeTables(execRaw, sql);
+    // The production schema, minus search_nodes on purpose: the synthetic node
+    // ids of a heads-sourced set have no convergence record, and only an absent
+    // table proves the pick never reaches for one.
+    const { sql, execRaw } = createTestWorkspace();
+    execRaw('DROP TABLE search_nodes');
 
     const set = recordHeadsTakeSet(sql, {
       task: 'compare approaches',
@@ -286,7 +285,7 @@ describe('heads emit an Alternate-Takes set into the preference ledger', () => {
   test('returns null when fewer than 2 distinct head answers exist', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
-    initAlternateTakesTable(makeExecRaw(db));
+    initAlternateTakesTable(makeExecRaw(db), makeSql(db));
     expect(recordHeadsTakeSet(sql, { task: 't', heads: [{ id: 'h1', text: 'same', score: 0.5 }, { id: 'h2', text: 'same', score: 0.6 }] })).toBeNull();
     expect(recordHeadsTakeSet(sql, { task: 't', heads: [{ id: 'h1', text: 'lonely', score: 0.5 }] })).toBeNull();
   });

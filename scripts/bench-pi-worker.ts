@@ -104,8 +104,15 @@ async function main(): Promise<void> {
   } catch (caught) {
     error = caught instanceof Error ? caught.message : String(caught);
   } finally {
-    await session?.abort().catch(() => {});
-    session?.dispose();
+    if (session) {
+      try {
+        await session.abort();
+      } catch (caught) {
+        const abortError = `session abort failed: ${caught instanceof Error ? caught.message : String(caught)}`;
+        error = error ? `${error}; ${abortError}` : abortError;
+      }
+      session.dispose();
+    }
     await proxy.settle();
   }
 

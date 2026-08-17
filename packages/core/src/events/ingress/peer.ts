@@ -330,11 +330,8 @@ export class PeerHub {
     if (!row) return false;
     if (row.receiver_agent_name !== msg.sender_agent_name) return false;
     if (row.receiver_user_id !== msg.sender_user_id) return false;
-    try {
-      return v.parse(OutboxPayloadSchema, parseJsonObject(row.payload)).reply_expected === true;
-    } catch {
-      return false;
-    }
+    const payload = v.safeParse(OutboxPayloadSchema, parseJsonObject(row.payload));
+    return payload.success && payload.output.reply_expected === true;
   }
 
   /** Match a transport reply envelope to a live ask waiter. */

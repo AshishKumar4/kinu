@@ -17,7 +17,7 @@ function insert(sql: TestSql['sql'], sessionId: string, role: string, content: s
 
 function setup(): Fixture {
   const { sql, execRaw } = createTestSql();
-  initAllTables(execRaw);
+  initAllTables(execRaw, sql);
   return { sql, store: new SessionSearchStore(sql) };
 }
 

@@ -77,16 +77,14 @@ function systemText(system: SystemText): string {
 
 /** Characters one message contributes. A string content is its own length;
  *  structured content is measured as the JSON it is serialised to on the way
- *  out, which is what the provider tokenizes. */
+ *  out, which is what the provider tokenizes — so a content this cannot
+ *  serialise is a content the request itself cannot carry, and measuring it as
+ *  zero would report a full context as an empty one. */
 function messageChars(message: ModelMessage): number {
   const content = message.content;
   const text = v.safeParse(v.string(), content);
   if (text.success) return text.output.length;
-  try {
-    return JSON.stringify(content)?.length ?? 0;
-  } catch {
-    return 0;
-  }
+  return JSON.stringify(content)?.length ?? 0;
 }
 
 /** True for the ephemeral live-state blocks the step pipeline weaves in. They

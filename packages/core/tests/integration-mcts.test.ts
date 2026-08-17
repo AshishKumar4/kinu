@@ -54,8 +54,8 @@ function countingLLM(json: string): LLM & { judgeCalls: () => number } {
 }
 
 function initTables(rt: ReturnType<typeof createTestRuntime>['rt']) {
-  initSearchTables(rt.storage.execRaw);
-  initScaffoldTables(rt.storage.execRaw);
+  initSearchTables(rt.storage.execRaw, rt.storage.sql);
+  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initCraftScoreTables(rt.storage.execRaw);
 }
 

@@ -8,48 +8,17 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import {
-  forkWorkspaceStorage, readForkLineage, initAllTables, readSoul, writeSoul, sessionTreeAncestry,
+  forkWorkspaceStorage, readForkLineage, readSoul, writeSoul, sessionTreeAncestry,
 } from '../src/index.js';
-import type { RawSqlExec, SqlExecutor, VFS } from '../src/types/primitives.js';
-import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers.js';
-
-/** The SDK's own DDL, verbatim from `agents`' AgentSessionProvider.ensureTable.
- *  `created_at` is a whole-second DATETIME — the reason a fork cut cannot be a
- *  timestamp comparison. */
-const SDK_SESSION_DDL = `CREATE TABLE IF NOT EXISTS assistant_messages (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL DEFAULT '',
-  parent_id TEXT,
-  role TEXT NOT NULL,
-  content TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)`;
-
-/** One in-memory workspace: the full production schema plus its filesystem. */
-interface WorkspaceFixture {
-  db: Database;
-  sql: SqlExecutor;
-  execRaw: RawSqlExec;
-  vfs: VFS;
-}
-
-function fresh(): WorkspaceFixture {
-  const db = new Database(':memory:');
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
-  initAllTables(execRaw);
-  const vfs = createWorkspaceBundle(db).vfs;
-  return { db, sql, execRaw, vfs };
-}
+import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers.js';
 
 /** Seed a source DB with identity, SOUL.md, N messages, and some crafted tools.
  *  A message with no explicit `parent_id` is linked to the previous one, which
  *  is what the SDK's session provider does (`parentId ?? latestLeaf`) — a
  *  transcript always has edges, and a seed without them is not a transcript. */
 async function seedSource(
-  { sql, execRaw, vfs }: WorkspaceFixture,
+  { sql, vfs }: TestWorkspace,
   opts: {
     identity: { id: string; name: string };
     purpose: string;
@@ -70,19 +39,15 @@ async function seedSource(
     void sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
         VALUES (${t.name}, ${t.description}, ${null}, ${t.code}, ${t.scope}, ${t.created_at}, ${t.updated_at})`;
   }
-  // Ensure agent_config table exists (the CF backend creates it at runtime, not
-  // in schema.ts). Tests need to exercise the optional-copy path without failing.
-  execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
   void sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'@cf/moonshotai/kimi-k2.6'})`;
   void sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'display_name'}, ${opts.identity.name})`;
 }
 
-async function seedTargetBootstrap({ sql, execRaw, vfs }: WorkspaceFixture) {
+async function seedTargetBootstrap({ sql, vfs }: TestWorkspace) {
   // Simulate what the fork DO's onStart path inserts: default SOUL.md + identity.
   // forkWorkspaceStorage should purge these before writing the real fork rows.
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'TARGET-BOOTSTRAP-ID'}, ${'target-bootstrap'}, ${200})`;
   await writeSoul(vfs, sql, 'default bootstrap purpose');
-  execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
 }
 
 describe('forkWorkspaceStorage', () => {
@@ -452,9 +417,10 @@ describe('forkWorkspaceStorage', () => {
     expect(carried[1]!.parent_id).toBe('m1');
   });
 
-  test('15. assistant_messages copy is no-op when source has no such table', async () => {
-    // Pure-test source DBs never call into Session so this table is missing.
-    // Helper must not throw in that case.
+  test('15. assistant_messages copy is skipped when the source has no such table', async () => {
+    // The agents SDK creates it on first append, so a source that never ran a
+    // turn has none. Asked as a question (tableExists), not discovered by
+    // catching — so this stays a no-op while a real query fault still throws.
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -496,5 +462,71 @@ describe('forkWorkspaceStorage', () => {
     expect(rows[0]!.content).toContain('forked from');
     expect(rows[0]!.content).toContain('alpha');
     expect(rows[0]!.content).toContain('m1');
+  });
+
+  test('17. a fork that cannot copy assistant_messages FAILS instead of losing them', async () => {
+    // A target carrying an older Session schema (no session_id) rejects the
+    // insert. This used to be swallowed together with the CREATE that preceded
+    // it, so the fork reported success with an empty chat pane — the owner's
+    // messages silently gone. The copy must be all-or-nothing and loud.
+    const src = fresh();
+    const tgt = fresh();
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
+      identity: { id: 'S', name: 'src' }, purpose: 'p',
+      messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
+    });
+    src.execRaw(`CREATE TABLE assistant_messages (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
+      role TEXT NOT NULL, content TEXT NOT NULL, created_at DATETIME
+    )`);
+    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES ('m1', '', NULL, 'user', ${JSON.stringify({ id: 'm1', role: 'user', parts: [] })}, '1970-01-01 00:00:01.000')`;
+    tgt.execRaw(`CREATE TABLE assistant_messages (
+      id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at DATETIME
+    )`);
+
+    await expect(forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
+      untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
+    })).rejects.toThrow(/no such column/);
+  });
+
+  test('18. a fork that cannot copy memory_chunks FAILS instead of dropping the memory index', async () => {
+    // A target holding the pre-FTS 3-column table rejects the 7-column insert.
+    // Swallowed, the fork came up with the parent's memory silently absent and
+    // reported "found nothing" rather than "I could not read it".
+    const src = fresh();
+    const tgt = fresh();
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
+      identity: { id: 'S', name: 'src' }, purpose: 'p',
+      messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
+    });
+    void src.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
+      VALUES ('c1', 'memory/MEMORY.md', 1, 4, 'h', 'key insight', 10)`;
+    tgt.execRaw('DROP TABLE memory_chunks_fts');
+    tgt.execRaw('DROP TABLE memory_chunks');
+    tgt.execRaw('CREATE TABLE memory_chunks (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, content TEXT NOT NULL)');
+
+    await expect(forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
+      untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
+    })).rejects.toThrow(/memory_chunks/);
+  });
+
+  test('19. a fork that cannot write agent_config FAILS instead of keeping the bootstrap name', async () => {
+    // display_name is written here. Swallowed, the fork kept the target's
+    // bootstrap identity and the UI showed the wrong workspace name.
+    const src = fresh();
+    const tgt = fresh();
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
+      identity: { id: 'S', name: 'src' }, purpose: 'p',
+      messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
+    });
+    tgt.execRaw('DROP TABLE agent_config');
+
+    await expect(forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
+      untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
+    })).rejects.toThrow(/agent_config/);
   });
 });

@@ -42,7 +42,7 @@ function extractBalancedJson(text: string, open: '{' | '[', close: '}' | ']'): s
   const fenced = text.match(JSON_FENCE);
   const src = fenced ? fenced[1] : text;
   const start = src.indexOf(open);
-  if (start === -1) throw new Error(`no JSON ${open === '{' ? 'object' : 'array'} in model output`);
+  if (start === -1) throw new SyntaxError(`no JSON ${open === '{' ? 'object' : 'array'} in model output`);
 
   let depth = 0;
   let inString = false;
@@ -59,7 +59,7 @@ function extractBalancedJson(text: string, open: '{' | '[', close: '}' | ']'): s
     else if (ch === open) depth++;
     else if (ch === close && --depth === 0) return src.slice(start, i + 1);
   }
-  throw new Error(`unterminated JSON ${open === '{' ? 'object' : 'array'} in model output`);
+  throw new SyntaxError(`unterminated JSON ${open === '{' ? 'object' : 'array'} in model output`);
 }
 
 /**

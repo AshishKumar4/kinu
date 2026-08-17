@@ -11,6 +11,7 @@
 import * as v from 'valibot';
 import type { OAuthCredential } from '../credentials/store.js';
 import { isJsonObject, parseJsonObject, type JsonObject } from '../utils/json.js';
+import { tolerate } from '../obs/index.js';
 
 export const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 export const CODEX_ISSUER = 'https://auth.openai.com';
@@ -165,17 +166,21 @@ export function tokensToCredential(t: DeviceCodeTokens, metadata?: JsonObject): 
   };
 }
 
-/** Decode a JWT's payload segment (base64url) — null when undecodable. */
+/** A JWT payload segment is unpadded base64url; a length of 4n+1 has no valid
+ *  base64 form at all. `atob` throws for either, so both are refused here
+ *  rather than caught — the decode below then cannot fail on the encoding. */
+const JWT_PAYLOAD_SEGMENT = /^[A-Za-z0-9_-]+$/;
+
+/** Decode a JWT's payload segment (base64url) — null when the token carries no
+ *  decodable payload segment. A segment that decodes to something other than a
+ *  JSON object propagates: that is a corrupt credential, not an absent claim,
+ *  and every request built from it would otherwise fail as an opaque 401. */
 function decodeJwtPayload(token: string): JsonObject | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length < 2) return null;
-    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
-    return parseJsonObject(globalThis.atob(padded));
-  } catch {
-    return null;
-  }
+  const segment = token.split('.')[1];
+  if (segment === undefined || segment.length % 4 === 1 || !JWT_PAYLOAD_SEGMENT.test(segment)) return null;
+  const b64 = segment.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
+  return tolerate(() => parseJsonObject(globalThis.atob(padded)), 'malformed-input') ?? null;
 }
 
 export function decodeCodexAccountId(accessToken: string): string | null {

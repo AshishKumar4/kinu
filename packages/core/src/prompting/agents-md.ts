@@ -80,7 +80,8 @@ export function renderAgentsMdSection(
  * AGENTS.md discovery for cloud workspaces: the canonical workspace provides
  * defaults, and an already-active sandbox contributes its own project rules as
  * the nearest file. Each file is read from the environment that owns its bytes;
- * discovery never provisions a sandbox. A failed read yields an absent file.
+ * discovery never provisions a sandbox. A file that is not there is skipped; a
+ * read that fails is not reported as an absence.
  */
 export async function collectWorkspaceAgentsMd(
   vfs: VFS,
@@ -88,11 +89,10 @@ export async function collectWorkspaceAgentsMd(
 ): Promise<AgentsMdFile[]> {
   const out: AgentsMdFile[] = [];
   const read = async (files: VFS, path: string, label: string): Promise<void> => {
-    try {
-      const raw = await files.readFile(path, { encoding: 'utf8' });
-      const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
-      if (text.trim()) out.push({ path: label, content: text });
-    } catch { /* absent or unavailable */ }
+    if (!await files.exists(path)) return;
+    const raw = await files.readFile(path, { encoding: 'utf8' });
+    const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
+    if (text.trim()) out.push({ path: label, content: text });
   };
   await read(vfs, 'AGENTS.md', 'AGENTS.md (workspace)');
   if (sandbox?.getStatus?.().active && sandbox.files) {

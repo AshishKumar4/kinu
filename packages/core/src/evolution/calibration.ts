@@ -98,23 +98,19 @@ export interface UniverseRow {
  * or their numbers are about different things.
  */
 export function calibrationUniverse(sql: SqlExecutor): UniverseRow[] {
-  try {
-    return sql<{
-      id: string; outcome: TurnOutcome; scaffold_version: number | null;
-      user_message: string; assistant_response: string; followup: string | null; created_at: number;
-    }>`
-      SELECT id, outcome, scaffold_version, user_message, assistant_response, followup, created_at
-      FROM turn_outcomes
-      WHERE source = 'classifier' AND outcome != 'abandoned'
-      ORDER BY created_at, id`
-      .map((r) => ({
-        id: r.id, predicted: r.outcome, scaffoldVersion: r.scaffold_version,
-        userMessage: r.user_message, assistantResponse: r.assistant_response,
-        followup: r.followup, createdAt: r.created_at,
-      }));
-  } catch {
-    return [];
-  }
+  return sql<{
+    id: string; outcome: TurnOutcome; scaffold_version: number | null;
+    user_message: string; assistant_response: string; followup: string | null; created_at: number;
+  }>`
+    SELECT id, outcome, scaffold_version, user_message, assistant_response, followup, created_at
+    FROM turn_outcomes
+    WHERE source = 'classifier' AND outcome != 'abandoned'
+    ORDER BY created_at, id`
+    .map((r) => ({
+      id: r.id, predicted: r.outcome, scaffoldVersion: r.scaffold_version,
+      userMessage: r.user_message, assistantResponse: r.assistant_response,
+      followup: r.followup, createdAt: r.created_at,
+    }));
 }
 
 // ── Drawing the sample ───────────────────────────────────────────

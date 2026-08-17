@@ -95,6 +95,35 @@ function makeFakeFetch(configJson = FAKE_CONFIG, wellKnown = FAKE_WELLKNOWN): ty
   }));
 }
 
+/**
+ * A minimal but VALID reply for each route these tests drive.
+ *
+ * The stub `{}` they used to answer with is not a provider response, so every
+ * call failed on the way back and each test had to ignore the failure — which
+ * also hid a provider that reached the right URL and then produced something
+ * unusable. Decodable replies mean the only failures left are real ones.
+ */
+const FAKE_RESPONSES_REPLY = {
+  id: 'resp_1',
+  created_at: 1_700_000_000,
+  model: 'gpt-test',
+  status: 'completed',
+  output: [{
+    type: 'message', id: 'msg_1', role: 'assistant', status: 'completed',
+    content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+  }],
+  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+};
+
+const FAKE_CHAT_REPLY = {
+  id: 'chatcmpl_1',
+  object: 'chat.completion',
+  created: 1_700_000_000,
+  model: 'gpt-test',
+  choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+  usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+};
+
 function makeProviderOpts(overrides: Partial<OpenCodeProviderOptions> = {}): OpenCodeProviderOptions {
   const authPath = makeAuthFile('https://opencode.example.com', 'test-token-123');
   return {
@@ -120,18 +149,18 @@ function makeRoutingFetch() {
     requests.push(url);
     const body = v.safeParse(v.string(), init?.body);
     if (body.success) requestBodies.push(body.output);
-    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    return Response.json(url.endsWith('/responses') ? FAKE_RESPONSES_REPLY : FAKE_CHAT_REPLY);
   }));
   return { fetchImpl, requests, requestBodies };
 }
 
+/** Drive one request through the provider. Every caller asserts the request the
+ *  provider produced — the URL, the headers, the rewritten body. */
 async function tryCall(
   model: Parameters<typeof generateText>[0]['model'],
   providerOptions?: Parameters<typeof generateText>[0]['providerOptions'],
 ): Promise<void> {
-  try {
-    await generateText({ model, prompt: 'hello', maxOutputTokens: 16, providerOptions });
-  } catch { /* minimal mock bodies may not parse — endpoint routing is the assertion */ }
+  await generateText({ model, prompt: 'hello', maxOutputTokens: 16, providerOptions });
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -282,7 +311,7 @@ describe('OpenCode provider', () => {
       modelCalls++;
       return modelCalls === 1
         ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
-        : Response.json({ id: 'r', output: [] });
+        : Response.json(FAKE_RESPONSES_REPLY);
     }));
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
@@ -290,9 +319,7 @@ describe('OpenCode provider', () => {
       env: {}, getAuth: async () => null, hasCredential: async () => false,
     });
 
-    try {
-      await generateText({ model, prompt: 'hello', maxOutputTokens: 16, maxRetries: 0 });
-    } catch { /* minimal success body may not parse; the fetch route is the assertion */ }
+    await generateText({ model, prompt: 'hello', maxOutputTokens: 16, maxRetries: 0 });
 
     expect(modelCalls).toBe(2);
   });

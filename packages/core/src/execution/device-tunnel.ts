@@ -12,6 +12,7 @@
 
 import * as v from 'valibot';
 import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json.js';
+import { tolerate } from '../obs/index.js';
 
 /** Minimal socket surface — platform WebSocket or any send()/readyState impl. */
 export interface TunnelSocket {
@@ -167,10 +168,15 @@ export class DeviceTunnel {
   }
 
   /** Feed an incoming socket message; resolves/rejects the matching pending call.
-   *  Ignores non-response frames (e.g. the daemon's HELLO). */
+   *  Ignores non-response frames (e.g. the daemon's HELLO).
+   *
+   *  A frame that is not JSON at all is the ONE failure this boundary accepts —
+   *  the socket carries whatever the device wrote, not a validated protocol.
+   *  Naming it means anything else still reaches the socket's error handler
+   *  instead of looking like a frame that simply did not correlate. */
   handleMessage(raw: string): void {
-    let decoded: JsonValue;
-    try { decoded = parseJsonValue(raw); } catch { return; }
+    const decoded = tolerate(() => parseJsonValue(raw), 'malformed-input');
+    if (decoded === undefined) return;
     const parsed = v.safeParse(RpcResponseSchema, decoded);
     if (!parsed.success) return;
     const msg = parsed.output;
@@ -228,8 +234,14 @@ export class DeviceTunnel {
     }
     this.probeSentAt = Date.now();
     // Fire-and-forget: the answer is irrelevant, its ARRIVAL is the signal,
-    // and handleMessage records that for any frame.
-    void this.rpc(LIVENESS_METHOD, []).catch(() => { /* proof of life, not a result */ });
+    // and handleMessage records that for any frame. A rejection is not itself
+    // proof of death — an error frame rejects the call and PROVES life, already
+    // recorded above — so the socket is asked directly, the same readyState
+    // question `isConnected` already owns. A probe that outlives the connection
+    // now ends the calls it was guarding here rather than a tick later.
+    void this.rpc(LIVENESS_METHOD, []).catch(() => {
+      if (!this.isConnected()) this.failOpenEnded(TUNNEL_DISCONNECTED);
+    });
   }
 
   private failOpenEnded(reason: string): void {

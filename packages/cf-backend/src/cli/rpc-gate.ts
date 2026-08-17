@@ -33,6 +33,7 @@
  * them.
  */
 import { JsonValueSchema } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import {
   ACCESS_TOKEN_SCOPES, type AccessTokenScope, normalizeAccessTokenScopes,
@@ -277,16 +278,17 @@ export function rejectOutOfScopeRpc<Message>(tags: Iterable<string>, message: Me
   const scopes = cliScopesFromTags(tags);
   if (scopes === null) return null;
 
-  let frame: v.InferOutput<typeof RpcFrameSchema>;
-  try { frame = v.parse(RpcFrameSchema, JSON.parse(message)); } catch { return null; }
+  const parsed = v.safeParse(RpcFrameSchema, tolerate(() => JSON.parse(message), 'malformed-input'));
+  if (!parsed.success) return null;
+  const { id, method } = parsed.output;
 
-  const access = requiredRpcAccess(frame.method);
+  const access = requiredRpcAccess(method);
   const required = rpcAccessScope(access);
   if (required && scopes.includes(required)) return null;
   const error = access === 'never'
-    ? `${frame.method} is not remotely invokable.`
+    ? `${method} is not remotely invokable.`
     : required
-      ? `This access token does not have the ${required} scope required by ${frame.method}.`
-      : `${frame.method} requires an interactive CLI session token. Sign in with: proteus auth`;
-  return JSON.stringify({ type: 'rpc', id: frame.id, success: false, error });
+      ? `This access token does not have the ${required} scope required by ${method}.`
+      : `${method} requires an interactive CLI session token. Sign in with: proteus auth`;
+  return JSON.stringify({ type: 'rpc', id, success: false, error });
 }

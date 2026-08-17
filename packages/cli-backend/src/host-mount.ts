@@ -16,6 +16,7 @@ import * as fs from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { FileCheckpoints, VFS, VfsErrorCode } from '@proteus/core';
 import { ERRNO, makeVfsError } from '@proteus/core';
+import { classify, tolerateAsync } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 const nodeErrorSchema = v.object({
@@ -72,7 +73,7 @@ export function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VF
         const s = await fs.stat(path);
         return { size: s.size, mtimeMs: s.mtimeMs, isDir: s.isDirectory() };
       } catch (error) {
-        if (nodeError({ error })?.code === 'ENOENT') return null;
+        if (classify({ cause: error }) === 'enoent') return null;
         throwVfsError({ error, syscall: 'stat', path });
       }
     },
@@ -86,8 +87,7 @@ export function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VF
       catch (error) { throwVfsError({ error, syscall: 'mkdir', path }); }
     },
     async exists(path) {
-      try { await fs.stat(path); return true; }
-      catch { return false; }
+      return await tolerateAsync(() => fs.stat(path), 'enoent') !== undefined;
     },
   };
 }

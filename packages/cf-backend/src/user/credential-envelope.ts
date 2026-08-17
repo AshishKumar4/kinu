@@ -120,8 +120,11 @@ export async function createCredentialCipher(env: CredentialEncryptionEnv): Prom
             unbase64url(ctPart),
           );
           return new TextDecoder().decode(plaintext);
-        } catch {
-          throw new Error(`Record "${aad}" failed to decrypt — the stored envelope does not match its key, or belongs to another store.`);
+        } catch (error) {
+          throw new Error(
+            `Record "${aad}" failed to decrypt — the stored envelope does not match its key, or belongs to another store.`,
+            { cause: error },
+          );
         }
       }
       throw new Error(

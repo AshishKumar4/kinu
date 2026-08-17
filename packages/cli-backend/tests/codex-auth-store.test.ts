@@ -63,6 +63,33 @@ describe('createFileCodexAuthStore', () => {
   test('exports the shared Codex credential key', () => {
     expect(CODEX_CRED_KEY).toBe('codex.oauth');
   });
+
+  // A config that exists but does not parse used to read as `{}`, which made
+  // `hasCredential()` say "no token stored" and made `save()` write a file
+  // holding ONLY the codex credential — silently deleting every other
+  // provider's key it was supposed to preserve.
+  test('an unparseable config is a failure, not an empty one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'proteus-codex-auth-'));
+    const configPath = join(dir, 'config.json');
+    const intact = JSON.stringify({
+      origin: 'https://proteus.example',
+      providers: { openai: { apiKey: 'sk-openai' }, codex: { refreshToken: 'refresh-old' } },
+    }, null, 2);
+    writeFileSync(configPath, intact.slice(0, -12));
+
+    const store = createFileCodexAuthStore(configPath);
+    expect(() => store.hasCredential()).toThrow();
+    expect(() => store.save({ kind: 'oauth', accessToken: 'a', refreshToken: 'r' })).toThrow();
+    expect(readFileSync(configPath, 'utf-8')).toContain('sk-openai');
+  });
+
+  test('a config that has never been written reads as empty', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'proteus-codex-auth-'));
+    const store = createFileCodexAuthStore(join(dir, 'nested', 'config.json'));
+    expect(store.hasCredential()).toBe(false);
+    store.save({ kind: 'oauth', accessToken: 'a', refreshToken: 'r' });
+    expect(store.hasCredential()).toBe(true);
+  });
 });
 
 function jwt(payload: JsonObject): string {

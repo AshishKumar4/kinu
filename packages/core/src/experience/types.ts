@@ -116,11 +116,10 @@ const ExperiencePayloadSchema: v.GenericSchema<ExperiencePayload> = v.variant('k
 
 /** Parse a stored payload back into its union. Returns null for anything that
  *  does not match the kind's shape — a malformed row is skipped, never coerced
- *  into a half-populated craft. */
+ *  into a half-populated craft. Text that is not JSON at all is storage
+ *  corruption rather than a row shape, and propagates. */
 export function parseExperiencePayload(json: string): ExperiencePayload | null {
-  try {
-    return v.parse(ExperiencePayloadSchema, JSON.parse(json));
-  } catch {
-    return null;
-  }
+  const rawPayload: unknown = JSON.parse(json);
+  const decoded = v.safeParse(ExperiencePayloadSchema, rawPayload);
+  return decoded.success ? decoded.output : null;
 }

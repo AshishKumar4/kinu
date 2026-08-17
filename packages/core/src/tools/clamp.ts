@@ -158,11 +158,14 @@ function normalizeToolOutput(input: { output: unknown }): JsonValue | undefined 
     assertJsonValue(value);
     return value.value;
   } catch {
+    // Not already a JsonValue, so re-serialize. A cycle or a BigInt makes even
+    // that impossible, and `String()` on those is "[object Object]" — the one
+    // string that carries nothing at all — so the reason takes its place.
     try {
       const serialized = JSON.stringify(input.output);
       if (serialized !== undefined) return parseJsonValue(serialized);
-    } catch {
-      // Fall through to the only representation available for non-JSON values.
+    } catch (error) {
+      return `unserializable tool output: ${error instanceof Error ? error.message : String(error)}`;
     }
     return String(input.output);
   }

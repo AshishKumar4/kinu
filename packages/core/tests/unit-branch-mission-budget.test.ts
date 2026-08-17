@@ -77,8 +77,8 @@ function branchingRuntime() {
       return { text: 'it did not work', usage: PER_REFLECTION };
     },
   });
-  initSearchTables(rt.storage.execRaw);
-  initScaffoldTables(rt.storage.execRaw);
+  initSearchTables(rt.storage.execRaw, rt.storage.sql);
+  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initCraftScoreTables(rt.storage.execRaw);
   return { rt, rollouts: () => rollouts, reflections: () => reflections };
 }

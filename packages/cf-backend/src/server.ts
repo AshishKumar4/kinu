@@ -47,7 +47,7 @@ import {
   type AuthIdentity,
 } from "./auth/session.js";
 import {
-  containPreviewResponse, isPreviewHostRequest, previewHostSuffix, previewSuffixMetaName,
+  containPreviewResponse, hostOf, isPreviewHostRequest, previewHostSuffix, previewSuffixMetaName,
 } from "./lib/preview-origin.js";
 import { withAppSecurityHeaders } from "./lib/security-headers.js";
 import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store.js";
@@ -272,8 +272,7 @@ function withD1Bookmark(response: Response, identity: AuthIdentity): Response {
  */
 function isPublishedHost(url: URL, env: Env): boolean {
   if (isPreviewHostRequest(url, env)) return true;
-  try { return url.hostname.toLowerCase() === new URL(env.CLI_PUBLIC_ORIGIN ?? '').hostname.toLowerCase(); }
-  catch { return false; }
+  return url.hostname.toLowerCase() === hostOf(env.CLI_PUBLIC_ORIGIN);
 }
 
 /**

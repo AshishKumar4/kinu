@@ -228,7 +228,7 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
       if (headersText.trim()) {
         try {
           headers = v.parse(v.record(v.string(), v.string()), JSON.parse(headersText));
-        } catch (e) { throw new Error(`Bad headers JSON: ${errorMessage(e)}`); }
+        } catch (e) { throw new Error(`Bad headers JSON: ${errorMessage(e)}`, { cause: e }); }
       }
       const tools = allowedTools.trim()
         ? allowedTools.split(',').map((s) => s.trim()).filter(Boolean)

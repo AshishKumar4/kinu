@@ -24,6 +24,8 @@ import { listReplayEvals } from './replay.js';
 import { listTurnOutcomes, TURN_OUTCOMES } from './outcomes.js';
 import { describePathology } from './pathology.js';
 import { formatScoreInterval, lossInterval } from '../utils/stats.js';
+import { parseJsonValue } from '../utils/json.js';
+import { tolerate } from '../obs/index.js';
 
 const ScaffoldRunEventSchema = v.object({
   fromVersion: v.optional(v.number()),
@@ -74,22 +76,24 @@ function scaffoldStatusChangeAt(sql: SqlExecutor): Map<number, number> {
   // alone would hide them from the unseen window. The durable run_events log
   // records both decisions with a timestamp — fold it in where present.
   const byVersion = new Map<number, number>();
-  try {
-    const rows = sql<{ type: string; payload: string; ts: string }>`
-      SELECT type, payload, ts FROM run_events
-      WHERE type IN ('scaffold_promotion', 'scaffold_rollback')`;
-    for (const r of rows) {
-      const at = Date.parse(r.ts);
-      if (!Number.isFinite(at)) continue;
-      try {
-        const p = v.parse(ScaffoldRunEventSchema, JSON.parse(r.payload));
-        const version = r.type === 'scaffold_promotion' ? p.toVersion : p.fromVersion;
-        if (version !== undefined && at > (byVersion.get(version) ?? 0)) {
-          byVersion.set(version, at);
-        }
-      } catch { /* malformed payload — written_at stands */ }
+  const rows = sql<{ type: string; payload: string; ts: string }>`
+    SELECT type, payload, ts FROM run_events
+    WHERE type IN ('scaffold_promotion', 'scaffold_rollback')`;
+  for (const r of rows) {
+    const at = Date.parse(r.ts);
+    if (!Number.isFinite(at)) continue;
+    // A payload written by an older shape is skipped and written_at stands;
+    // that is the only failure here that is a value rather than a fault.
+    const payload = tolerate(() => parseJsonValue(r.payload), 'malformed-input');
+    const parsed = v.safeParse(ScaffoldRunEventSchema, payload);
+    if (!parsed.success) continue;
+    const version = r.type === 'scaffold_promotion'
+      ? parsed.output.toVersion
+      : parsed.output.fromVersion;
+    if (version !== undefined && at > (byVersion.get(version) ?? 0)) {
+      byVersion.set(version, at);
     }
-  } catch { /* no run_events table — written_at stands */ }
+  }
   return byVersion;
 }
 
@@ -134,71 +138,57 @@ function scaffoldEntries(sql: SqlExecutor): ChangelogEntry[] {
 }
 
 function craftScoreMap(sql: SqlExecutor): Map<string, { score: number; uses: number }> {
-  // craft_scores is created lazily by the EMA path — its absence must not
-  // hide crafted tools from the digest, only their scores.
-  try {
-    const rows = sql<{ tool_name: string; score: number; uses: number }>`
-      SELECT tool_name, score, uses FROM craft_scores`;
-    return new Map(rows.map((r) => [r.tool_name, { score: r.score, uses: r.uses }]));
-  } catch {
-    return new Map();
-  }
+  const rows = sql<{ tool_name: string; score: number; uses: number }>`
+    SELECT tool_name, score, uses FROM craft_scores`;
+  return new Map(rows.map((r) => [r.tool_name, { score: r.score, uses: r.uses }]));
 }
 
 function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  try {
-    const rows = sql<{ name: string; description: string; created_at: number; updated_at: number }>`
-      SELECT name, description, created_at, updated_at
-      FROM crafted_tools ORDER BY updated_at DESC LIMIT ${limit}`;
-    const scores = craftScoreMap(sql);
-    return rows.map((r) => {
-      const at = Math.max(r.updated_at, r.created_at);
-      const verb = r.updated_at > r.created_at ? 'Updated crafted tool' : 'Crafted tool';
-      const s = scores.get(r.name);
-      const readableName = r.name.replace(/[._-]+/g, ' ');
-      const score = s ? `EMA ${s.score.toFixed(2)} over ${s.uses} uses` : 'unscored (new)';
-      return {
-        id: `tool:${r.name}:${at}`,
-        kind: 'tool' as const,
-        at,
-        summary: `${verb === 'Crafted tool' ? 'Created' : 'Updated'} a tool: ${readableName}`,
-        evidence: `${verb} ${r.name}${r.description ? ` — ${r.description}` : ''} · ${score}`,
-        revert: { type: 'craft_retire' as const, target: r.name },
-      };
-    });
-  } catch {
-    return [];
-  }
+  const rows = sql<{ name: string; description: string; created_at: number; updated_at: number }>`
+    SELECT name, description, created_at, updated_at
+    FROM crafted_tools ORDER BY updated_at DESC LIMIT ${limit}`;
+  const scores = craftScoreMap(sql);
+  return rows.map((r) => {
+    const at = Math.max(r.updated_at, r.created_at);
+    const verb = r.updated_at > r.created_at ? 'Updated crafted tool' : 'Crafted tool';
+    const s = scores.get(r.name);
+    const readableName = r.name.replace(/[._-]+/g, ' ');
+    const score = s ? `EMA ${s.score.toFixed(2)} over ${s.uses} uses` : 'unscored (new)';
+    return {
+      id: `tool:${r.name}:${at}`,
+      kind: 'tool' as const,
+      at,
+      summary: `${verb === 'Crafted tool' ? 'Created' : 'Updated'} a tool: ${readableName}`,
+      evidence: `${verb} ${r.name}${r.description ? ` — ${r.description}` : ''} · ${score}`,
+      revert: { type: 'craft_retire' as const, target: r.name },
+    };
+  });
 }
 
 /** Views the agent published. The revert restores the previous version, or
  *  removes the tab when there was no previous version — the owner-facing undo
  *  for a dashboard, kept in host chrome rather than inside the view itself. */
 function viewEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  try {
-    const rows = sql<{ slug: string; title: string; version: number; written_at: number; status: string }>`
-      SELECT slug, title, version, written_at, status
-      FROM agent_views ORDER BY written_at DESC LIMIT ${limit}`;
-    return rows.map((r) => {
-      const entry: ChangelogEntry = {
-        id: `view:${r.slug}:v${r.version}`,
-        kind: 'view',
-        at: r.written_at,
-        summary: r.version === 1
-          ? `Added a view to the workspace UI: ${r.title}`
-          : `Updated the ${r.title} view (v${r.version})`,
-        evidence: r.status === 'deleted'
-          ? `views/${r.slug}.json v${r.version} — removed`
-          : `views/${r.slug}.json v${r.version} — ${r.status}`,
-        // Only the live version is revertible: an older row is already reverted,
-        // and a deleted one has no tab to take back.
-      };
-      if (r.status === 'current') entry.revert = { type: 'view_revert', target: r.slug };
-      return entry;
-    });
-  } catch {
-    return [];
-  }
+  const rows = sql<{ slug: string; title: string; version: number; written_at: number; status: string }>`
+    SELECT slug, title, version, written_at, status
+    FROM agent_views ORDER BY written_at DESC LIMIT ${limit}`;
+  return rows.map((r) => {
+    const entry: ChangelogEntry = {
+      id: `view:${r.slug}:v${r.version}`,
+      kind: 'view',
+      at: r.written_at,
+      summary: r.version === 1
+        ? `Added a view to the workspace UI: ${r.title}`
+        : `Updated the ${r.title} view (v${r.version})`,
+      evidence: r.status === 'deleted'
+        ? `views/${r.slug}.json v${r.version} — removed`
+        : `views/${r.slug}.json v${r.version} — ${r.status}`,
+      // Only the live version is revertible: an older row is already reverted,
+      // and a deleted one has no tab to take back.
+    };
+    if (r.status === 'current') entry.revert = { type: 'view_revert', target: r.slug };
+    return entry;
+  });
 }
 
 function humanizeFact(key: string, value: string): string {
@@ -222,32 +212,29 @@ type FactChangelogEntry = ChangelogEntry & {
 };
 
 function factEntries(sql: SqlExecutor, limit: number): FactChangelogEntry[] {
-  try {
-    const rows = sql<{
-      key: string; value_json: string; confidence: number;
-      source: string | null; last_observed_at: number;
-    }>`
-      SELECT key, value_json, confidence, source, last_observed_at
-      FROM agent_facts ORDER BY last_observed_at DESC LIMIT ${limit}`;
-    return rows.map((r) => {
-      let value = r.value_json;
-      try {
-        const parsed = JSON.parse(r.value_json);
-        const text = v.safeParse(v.string(), parsed);
-        value = text.success ? text.output : JSON.stringify(parsed);
-      } catch { /* stored as raw text */ }
-      return {
-        id: `fact:${r.key}`,
-        kind: 'fact' as const,
-        at: r.last_observed_at,
-        summary: humanizeFact(r.key, value),
-        evidence: `${r.key} = ${value} · confidence ${pct(r.confidence)}${r.source ? ` · via ${r.source}` : ''}`,
-        revert: { type: 'fact_forget' as const, target: r.key },
-      };
-    });
-  } catch {
-    return [];
-  }
+  const rows = sql<{
+    key: string; value_json: string; confidence: number;
+    source: string | null; last_observed_at: number;
+  }>`
+    SELECT key, value_json, confidence, source, last_observed_at
+    FROM agent_facts ORDER BY last_observed_at DESC LIMIT ${limit}`;
+  return rows.map((r) => {
+    // Facts written before the value was JSON-encoded are stored as raw text —
+    // the one parse failure this read treats as a value.
+    const decoded = tolerate(() => parseJsonValue(r.value_json), 'malformed-input');
+    const text = v.safeParse(v.string(), decoded);
+    const value = text.success
+      ? text.output
+      : decoded === undefined ? r.value_json : JSON.stringify(decoded);
+    return {
+      id: `fact:${r.key}`,
+      kind: 'fact' as const,
+      at: r.last_observed_at,
+      summary: humanizeFact(r.key, value),
+      evidence: `${r.key} = ${value} · confidence ${pct(r.confidence)}${r.source ? ` · via ${r.source}` : ''}`,
+      revert: { type: 'fact_forget' as const, target: r.key },
+    };
+  });
 }
 
 function factAggregate(
@@ -272,22 +259,18 @@ function factAggregate(
 }
 
 function gepaEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  try {
-    return listGepaRuns(sql, limit)
-      .filter((r) => r.status === 'completed')
-      .map((r) => ({
-        id: `gepa:${r.runId}`,
-        kind: 'gepa' as const,
-        at: r.endedAt ?? r.startedAt,
-        summary: 'Tuned my own instructions',
-        evidence: `GEPA self-optimization pass over ${r.target}` +
-          (r.winnerId ? ` — found a better candidate (${r.winnerId})` : ' — kept the current') +
-          ` · ${r.iterations} iterations · ${r.metricCalls} metric calls` +
-          (r.stopReason ? ` · ${r.stopReason}` : ''),
-      }));
-  } catch {
-    return [];
-  }
+  return listGepaRuns(sql, limit)
+    .filter((r) => r.status === 'completed')
+    .map((r) => ({
+      id: `gepa:${r.runId}`,
+      kind: 'gepa' as const,
+      at: r.endedAt ?? r.startedAt,
+      summary: 'Tuned my own instructions',
+      evidence: `GEPA self-optimization pass over ${r.target}` +
+        (r.winnerId ? ` — found a better candidate (${r.winnerId})` : ' — kept the current') +
+        ` · ${r.iterations} iterations · ${r.metricCalls} metric calls` +
+        (r.stopReason ? ` · ${r.stopReason}` : ''),
+    }));
 }
 
 function replayEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
@@ -473,9 +456,7 @@ export async function executeChangelogRevert(
         return { ok: false, error: `crafted tool ${action.target} is already retired` };
       }
       ctx.rt.craftStore.delete(action.target);
-      try {
-        void ctx.rt.storage.sql`DELETE FROM craft_scores WHERE tool_name = ${action.target}`;
-      } catch { /* no scores table — the tool itself is gone, which is the revert */ }
+      void ctx.rt.storage.sql`DELETE FROM craft_scores WHERE tool_name = ${action.target}`;
       return { ok: true, detail: `retired crafted tool ${action.target}` };
     }
     case 'view_revert': {

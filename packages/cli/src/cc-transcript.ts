@@ -43,6 +43,7 @@ import {
   JsonArraySchema, JsonObjectSchema, JsonValueSchema, parseJsonValue,
   type CorpusTurn, type JsonObject, type JsonValue, type ToolCallRecord,
 } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 /** Where Claude Code keeps them. */
@@ -284,14 +285,10 @@ export function mineTranscripts(opts: MineOptions): MineResult {
 }
 
 function listProjects(root: string, wanted: ReadonlyArray<string> | undefined): string[] {
-  let entries: string[];
-  try {
-    entries = readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  } catch {
-    return [];
-  }
+  // An absent root means Claude Code was never used here. Any other failure to read it is a
+  // corpus we cannot see, and must not be reported as an empty one.
+  const dirents = tolerate(() => readdirSync(root, { withFileTypes: true }), 'enoent') ?? [];
+  const entries = dirents.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   const filters = (wanted ?? []).filter((filter) => filter !== '');
   return entries
     .filter((name) => filters.length === 0 || filters.some((filter) => name.includes(filter)))
@@ -302,14 +299,12 @@ function listProjects(root: string, wanted: ReadonlyArray<string> | undefined): 
  *  `subagents/` subdirectory and are not descended into: they are the sidechain
  *  the reader drops anyway, and reading them would double-count the work. */
 function listSessions(dir: string): string[] {
-  try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
-      .map((entry) => join(dir, entry.name))
-      .sort();
-  } catch {
-    return [];
-  }
+  // The root listed this directory a moment ago; ENOENT means a live session removed it since.
+  const dirents = tolerate(() => readdirSync(dir, { withFileTypes: true }), 'enoent') ?? [];
+  return dirents
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
+    .map((entry) => join(dir, entry.name))
+    .sort();
 }
 
 /**

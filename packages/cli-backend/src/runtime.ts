@@ -29,6 +29,7 @@ import {
   createWorkspace as createWorkspaceFilesystem,
   nextWorkspaceGeneration,
 } from '@proteus/core/workspace';
+import { tolerate, tolerateAsync } from '@proteus/core/obs';
 import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
 import { createSandboxedExecutor } from './executor.js';
@@ -173,11 +174,9 @@ function adaptMemory(store: MemoryStore, vfs: VFS): Memory {
     write: (path, content) => store.writeFile(path, content),
     append: (path, content) => store.appendToFile(path, content),
     async index(path) {
-      try {
-        const raw = await vfs.readFile(path, { encoding: 'utf8' });
-        const content = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
-        await store.indexFile(path, content);
-      } catch { /* file may not exist */ }
+      const raw = await tolerateAsync(() => vfs.readFile(path, { encoding: 'utf8' }), 'enoent');
+      if (raw === undefined) return;
+      await store.indexFile(path, raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw);
     },
     search(query, limit = 10) {
       return Promise.resolve(store.search(query, limit));
@@ -513,10 +512,10 @@ export function createHostShell(cwd: string): Shell {
         const onAbort = () => {
           const pid = child.pid;
           if (!pid) return;
-          try { process.kill(-pid, 'SIGTERM'); } catch {}
+          tolerate(() => process.kill(-pid, 'SIGTERM'), 'esrch');
           setTimeout(() => {
             if (!settled) {
-              try { process.kill(-pid, 'SIGKILL'); } catch {}
+              tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
             }
           }, 1500).unref();
         };

@@ -113,7 +113,7 @@ export function WorkTab({
   const tasks = lastValue(taskResource);
 
   const {
-    view: changelog, seenAt: changelogSeenAt,
+    view: changelog, seenAt: changelogSeenAt, seenError: changelogSeenError,
     resource: changelogResource, reload: reloadChangelog,
   } = useChangelog(rpc, onChangelogSeen);
 
@@ -212,6 +212,11 @@ export function WorkTab({
               still on screen, which would otherwise go stale in silence. */}
           {(changelog === null || changelogResource.status === "error") && (
             <ChangelogFailure resource={changelogResource} reload={reloadChangelog} />
+          )}
+          {changelogSeenError && (
+            <div className="text-xs p-warning p-card rounded-lg px-3 py-1.5">
+              Couldn't mark the changelog as seen: {changelogSeenError}
+            </div>
           )}
 
           {visible.length === 0 ? (

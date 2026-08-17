@@ -149,8 +149,6 @@ export class SubordinateAgent extends ActorAgent {
     // The one plane this root alone carries: its own identity row, seeded by
     // setSubordinateIdentity (declared per-root in core/conformance/manifest.ts).
     this.identity.ensureSchema();
-    // The shared actor plane both cf roots carry (manifest: WIRED on both).
-    this.ensureCapabilitySchema();
     this._schemaReady = true;
   }
 

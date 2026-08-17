@@ -8,6 +8,9 @@ export {
 } from './runtime.js';
 export { createHostCheckpoints, type HostCheckpointsOpts } from './checkpoints.js';
 export { proteusHome } from './home.js';
+export {
+  writeSecretFile, enforceOwnerOnly, ensureSecretDir, SECRET_FILE_MODE, SECRET_DIR_MODE,
+} from './secret-file.js';
 export { openWorkspaceCLI, type WorkspaceInfo, type CLIOpenConfig } from './open.js';
 export { createSandboxedExecutor, createNodeExecutor } from './executor.js';
 export { createLinuxFiber, detectOrphanedFibers } from './fiber.js';

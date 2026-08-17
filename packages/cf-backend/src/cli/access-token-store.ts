@@ -181,12 +181,13 @@ export function getActiveAccessTokenScopes(sql: SqlExec, tokenHash: string): Acc
   return scopes.length > 0 ? scopes : null;
 }
 
+/** Decode a `scopes` column. This module is the only writer and it writes a
+ *  JSON array of the closed vocabulary, so a column that is not one is
+ *  corruption rather than a domain value: it throws instead of degrading the
+ *  token to zero scopes, which reads identically to a revoked one. Names
+ *  outside the current vocabulary are dropped — a retired scope grants
+ *  nothing. */
 function parseScopeList(value: string): AccessTokenScope[] {
-  try {
-    const parsed = JSON.parse(value);
-    if (!Array.isArray(parsed)) return [];
-    return ACCESS_TOKEN_SCOPES.filter((scope) => parsed.includes(scope));
-  } catch {
-    return [];
-  }
+  const granted = v.parse(v.array(v.string()), JSON.parse(value));
+  return ACCESS_TOKEN_SCOPES.filter((scope) => granted.includes(scope));
 }

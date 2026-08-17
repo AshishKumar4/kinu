@@ -54,11 +54,16 @@ const HISTORY = [
   { role: 'user' as const, content: 'second question' },
 ];
 
-/** Drain runChat, swallowing the API error mock responses cause. */
-async function drive(opts: Parameters<typeof runChat>[0]): Promise<void> {
-  try {
-    for await (const _ of runChat(opts)) { /* consume */ }
-  } catch { /* invalid mock response shapes are fine — we assert on requests */ }
+/**
+ * Drain runChat. Nothing is absorbed here: the Anthropic block answers with
+ * real SSE and this resolves, while the OpenAI/OpenRouter/compat blocks answer
+ * 400 on purpose and assert the rejection at the call site. Swallowing it made
+ * "the request reached the wire and the provider refused it" indistinguishable
+ * from "the turn died before sending anything", which is the one thing every
+ * assertion in this file depends on.
+ */
+async function drain(opts: Parameters<typeof runChat>[0]): Promise<void> {
+  for await (const _ of runChat(opts)) { /* consume */ }
 }
 
 function bodyOf(handle: MockFetchHandle, i: number): JsonObject {
@@ -154,7 +159,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
       [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } },
     }, mock.fetch);
     const model = createAnthropicProvider().createModel('claude-opus-4-7', deps);
-    await drive({
+    await drain({
       model,
       system: 'You are Proteus.',
       history: [...HISTORY],
@@ -245,10 +250,10 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     ]);
     const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
-    await drive({
+    await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'proteus-agent:default' },
-    });
+    })).rejects.toThrow();
     const body = bodyOf(mock, 0);
     expect(body.prompt_cache_key).toBe('proteus-agent:default');
     expect(body.prompt_cache_retention).toBeUndefined();
@@ -261,10 +266,10 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     ]);
     const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
-    await drive({
+    await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'k', retention: 'long' },
-    });
+    })).rejects.toThrow();
     expect(bodyOf(mock, 0).prompt_cache_retention).toBe('24h');
   });
 
@@ -274,10 +279,10 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     ]);
     const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
-    await drive({
+    await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'k', retention: 'none' },
-    });
+    })).rejects.toThrow();
     const body = bodyOf(mock, 0);
     expect(body.prompt_cache_key).toBeUndefined();
     expect(body.prompt_cache_retention).toBeUndefined();
@@ -291,10 +296,10 @@ describe('OpenRouter cache addressing on the wire', () => {
     ]);
     const deps = makeDeps({ [OPENROUTER_CRED_KEY]: { headers: { Authorization: 'Bearer sk-or' } } }, mock.fetch);
     const model = createOpenRouterProvider().createModel(modelId, deps);
-    await drive({
+    await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'openrouter', modelId, sessionKey: 'proteus-or' },
-    });
+    })).rejects.toThrow();
     return bodyOf(mock, 0);
   }
 
@@ -330,10 +335,10 @@ describe('openai-compat + no-op providers', () => {
       'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://groq.example/v1' },
     }, mock.fetch);
     const model = createOpenAICompatProvider().createModel('llama-4', deps);
-    await drive({
+    await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'openai-compat', modelId: 'llama-4', sessionKey: 'proteus-compat' },
-    });
+    })).rejects.toThrow();
     const body = bodyOf(mock, 0);
     expect(body.prompt_cache_key).toBe('proteus-compat');
     expect(countCacheControl(body)).toBe(0);
@@ -348,10 +353,10 @@ describe('openai-compat + no-op providers', () => {
     }, mock.fetch);
     const model = createOpenAICompatProvider().createModel('llama-4', deps);
     // workers-ai resolves to the `none` strategy — affinity headers, not body fields.
-    await drive({
+    await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6', sessionKey: 'proteus-x' },
-    });
+    })).rejects.toThrow();
     const body = bodyOf(mock, 0);
     expect(body.prompt_cache_key).toBeUndefined();
     expect(countCacheControl(body)).toBe(0);

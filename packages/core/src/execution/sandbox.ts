@@ -490,9 +490,11 @@ declare namespace sandbox {
       if (!Number.isFinite(port) || port <= 0 || port > 65535) {
         return { supported: false, reason: `invalid port ${port}` };
       }
-      // Pre-flight: verify a server is responsive on the port. Without
-      // this the caller gets a preview URL that 502s.
-      let verified_listening = false;
+      // Pre-flight: verify a server is responsive on the port. Without this the
+      // caller gets a preview URL that 502s — so a probe that cannot RUN is
+      // reported, not stepped over: the shell swallows curl's own failure with
+      // `|| true`, leaving only "this container cannot execute a command", and
+      // exposing a port on such a container has nothing left to mean.
       try {
         const probe = await withSandboxRetry(() => touch(() => handle.exec(
           `curl -sS -o /dev/null -m 3 -w '%{http_code}|%{exitcode}' --connect-timeout 2 ` +
@@ -511,11 +513,6 @@ declare namespace sandbox {
               `or \`nohup node server.js > /tmp/srv-${port}.log 2>&1 &\` for Node), wait ~1s for it to bind, then call exposePort again.`,
           };
         }
-        verified_listening = true;
-      } catch {
-        // Probe glitch — proceed; SDK call will surface its own error.
-      }
-      try {
         const sdkOpts: SandboxExposeOptions = { hostname: previewHostSuffix };
         if (opts?.name) sdkOpts.name = opts.name;
         const exposed = await withSandboxRetry(() => touch(() => handle.exposePort(port, sdkOpts)));
@@ -524,7 +521,8 @@ declare namespace sandbox {
           url: exposed.url,
           port,
           name: opts?.name,
-          verified_listening,
+          // Reached only past the probe above, which is the verification.
+          verified_listening: true,
         };
       } catch (err) {
         return { supported: false, reason: errorMessage({ error: err }) };
@@ -533,8 +531,11 @@ declare namespace sandbox {
 
     async unexposePort(port) {
       if (!handle) return;
-      try { await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port))))); }
-      catch { /* idempotent */ }
+      // No catch: the SDK deletes the port token only if it is there, so
+      // unexposing an unexposed port already succeeds. What the old
+      // `catch { /* idempotent */ }` actually absorbed was an invalid port and
+      // a failed storage write — a port left forwardable, reported as removed.
+      await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port)))));
     },
 
     async listExposedPorts() {
@@ -594,12 +595,10 @@ export function sandboxFiles(handle: SandboxHandle): VFS {
     async stat(path) {
       if (path === '/') return { size: 0, mtimeMs: 0, isDir: true };
       const name = path.slice(path.lastIndexOf('/') + 1);
-      let files: Awaited<ReturnType<SandboxHandle['listFiles']>>['files'];
-      try {
-        files = (await handle.listFiles(vfsDirname(path), { recursive: false })).files ?? [];
-      } catch {
-        return null; // parent unreadable/missing — nothing to describe
-      }
+      // Same listing `readdir` above runs uncaught: null is reserved for "the
+      // parent has no such entry", so a parent that cannot be listed propagates
+      // rather than being reported as a file that simply is not there.
+      const files = (await handle.listFiles(vfsDirname(path), { recursive: false })).files ?? [];
       const entry = files.find((f) => nameOf(f) === name);
       if (!entry) return null;
       return { size: entry.size ?? 0, mtimeMs: 0, isDir: isDir(entry) };

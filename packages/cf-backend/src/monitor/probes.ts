@@ -115,8 +115,16 @@ async function probeHealth(deps: ProbeDeps): Promise<ProbeOutcome> {
     return fail('GET /api/health carries no build identifier — the live build cannot be identified');
   }
 
-  const shipped = await shippedBuild(deps);
-  if (shipped && shipped !== live) {
+  let shipped: string;
+  try {
+    shipped = await shippedBuild(deps);
+  } catch (err) {
+    return fail(
+      `${VERSION_MANIFEST} cannot name the build the download assets came from,`
+      + ` so the live build is unverified: ${errorText(err)}`,
+    );
+  }
+  if (shipped !== live) {
     return fail(
       `the worker reports build ${live} but ${VERSION_MANIFEST} advertises ${shipped}`
       + ' — worker and assets are from different deploys',
@@ -125,16 +133,15 @@ async function probeHealth(deps: ProbeDeps): Promise<ProbeOutcome> {
   return { probe: 'health', ok: true, detail: `build ${live}` };
 }
 
-/** The build the shipped assets advertise, or null when the manifest is not
- *  readable — that failure belongs to the downloads probe, not this one. */
-async function shippedBuild(deps: ProbeDeps): Promise<string | null> {
-  try {
-    const response = await get(deps, VERSION_MANIFEST);
-    if (response.status !== 200) return null;
-    return buildStamp(await response.json());
-  } catch {
-    return null;
-  }
+/** The build the shipped assets advertise. Throws when the manifest is absent,
+ *  is the SPA shell, or names no build: that is the half-shipped deploy this
+ *  file exists for, and no other probe reads this manifest. */
+async function shippedBuild(deps: ProbeDeps): Promise<string> {
+  const response = await get(deps, VERSION_MANIFEST);
+  if (response.status !== 200) throw new Error(`it returned HTTP ${response.status}`);
+  const stamp = buildStamp(await response.json());
+  if (!stamp) throw new Error('it carries no build identifier');
+  return stamp;
 }
 
 async function probeDownloads(deps: ProbeDeps): Promise<ProbeOutcome> {

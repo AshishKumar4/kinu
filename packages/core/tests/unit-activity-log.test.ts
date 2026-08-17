@@ -6,7 +6,7 @@ import { makeSql, makeExecRaw } from './helpers.js';
 
 function setup() {
   const db = new Database(':memory:');
-  initAllTables(makeExecRaw(db));
+  initAllTables(makeExecRaw(db), makeSql(db));
   const sql = makeSql(db);
   const write = (event: string, detail: string | null, createdAt: number): void => {
     void sql`INSERT INTO activity_log (event, detail, elapsed_ms, created_at)

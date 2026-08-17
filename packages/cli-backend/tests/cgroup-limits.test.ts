@@ -115,7 +115,7 @@ describe('cgroup v1', () => {
 });
 
 describe('no cgroup at all', () => {
-  test('an empty mount, a missing mount and an unreadable /proc all report nothing', () => {
+  test('an empty mount and a missing mount both report nothing', () => {
     expect(readCgroupLimits({ root: cgroupfs({}), procSelfCgroup: procSelf(NAMESPACED) })).toBeNull();
     expect(readCgroupLimits({
       root: '/nonexistent/cgroup', procSelfCgroup: '/nonexistent/proc/self/cgroup',

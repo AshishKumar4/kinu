@@ -56,8 +56,8 @@ const MERGE: MergeOutput = {
 function freshJournal() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
-  initHeadsTables(execRaw);
-  initSearchTables(execRaw);
+  initHeadsTables(execRaw, makeSql(db));
+  initSearchTables(execRaw, makeSql(db));
   initMctsSearchTable(execRaw);
   const sql = makeSql(db);
   return { db, sql, journal: new HeadJournal(sql) };

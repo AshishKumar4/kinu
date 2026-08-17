@@ -10,6 +10,8 @@
 
 import { readFileSync } from "fs";
 import * as v from "valibot";
+import { parseJsonValue } from "../packages/core/src/utils/json.js";
+import { tolerate } from "../packages/core/src/obs/index.js";
 
 // Load credentials from .dev.vars
 const devVars = readFileSync("packages/cf-backend/.dev.vars", "utf8");
@@ -270,14 +272,13 @@ async function measureStreaming(opts: {
         // Extract first meaningful content from SSE
         for (const line of text.split("\n")) {
           if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
-          try {
-            const decoded = JSON.parse(line.slice(6));
-            const parsed = v.safeParse(streamChunkSchema, decoded);
-            if (!parsed.success) continue;
-            const delta = parsed.output.choices[0]?.delta;
-            if (delta?.content) { firstChunk = delta.content.slice(0, 60); break; }
-            if (delta?.reasoning_content) { firstChunk = `[reasoning] ${delta.reasoning_content.slice(0, 50)}`; break; }
-          } catch {}
+          const decoded = tolerate(() => parseJsonValue(line.slice(6)), "malformed-input");
+          if (decoded === undefined) continue;
+          const parsed = v.safeParse(streamChunkSchema, decoded);
+          if (!parsed.success) continue;
+          const delta = parsed.output.choices[0]?.delta;
+          if (delta?.content) { firstChunk = delta.content.slice(0, 60); break; }
+          if (delta?.reasoning_content) { firstChunk = `[reasoning] ${delta.reasoning_content.slice(0, 50)}`; break; }
         }
       }
     }

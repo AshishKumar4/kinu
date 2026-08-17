@@ -68,7 +68,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   // session's cold-start heal is a deterministic no-op here. The
   // shadow-rollout ledger is deliberately NOT created — LocalAgentSession
   // must provision it, the way the DO does, or no trial can ever be recorded.
-  initScaffoldTables(rt.storage.execRaw);
+  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initAgentConfigTable(rt.storage.execRaw);
   if (opts.provisionScaffold !== false) {
     await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);

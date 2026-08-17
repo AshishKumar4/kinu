@@ -75,7 +75,7 @@ export function serializeJobResult<Result>(result: Result): string {
   try { return JSON.stringify(result ?? null); } catch { return String(result); }
 }
 
-export function initBackgroundJobsTable(execRaw: RawSqlExec): void {
+export function initBackgroundJobsTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
   execRaw(`CREATE TABLE IF NOT EXISTS background_jobs (
     id          TEXT PRIMARY KEY,
     kind        TEXT NOT NULL,
@@ -90,15 +90,12 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec): void {
     created_at  INTEGER NOT NULL,
     settled_at  INTEGER
   )`);
-  // Columns added after this table's first release; see identity/columns.ts.
-  // work_mode is NOT NULL in the DDL, so the added column needs a constant
-  // default: rows written before plan mode existed were all build turns.
-  reconcileColumns(execRaw, 'background_jobs', [
-    `work_mode TEXT NOT NULL DEFAULT 'build'`,
-    'input_json TEXT',
-    'epoch INTEGER NOT NULL DEFAULT 0',
-    'resume_attempts INTEGER NOT NULL DEFAULT 0',
-  ]);
+  reconcileColumns(sql, execRaw, 'background_jobs', {
+    work_mode: `TEXT NOT NULL DEFAULT 'build'`,
+    input_json: 'TEXT',
+    epoch: 'INTEGER NOT NULL DEFAULT 0',
+    resume_attempts: 'INTEGER NOT NULL DEFAULT 0',
+  });
   execRaw(`CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status)`);
 }
 

@@ -121,22 +121,16 @@ export async function snapshotWorkspaceForFork(
   const assistantMessages = chatPaneAncestry(source, untilMessageId);
   // The scaffold is deliberately excluded so the fork re-bootstraps v0 fresh.
   const files = await readForkFiles(sourceVfs);
-  // The FTS content table (agent-utils MemoryStore). Copying it is an
-  // optimization — the text itself is in the memory/*.md FILES above, so a
-  // missing table just means the fork reindexes on next write.
-  let memoryChunks: ForkSnapshot['memoryChunks'] = [];
-  try {
-    memoryChunks = source<ForkSnapshot['memoryChunks'][number]>`
-      SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks
-    `;
-  } catch { /* source has no memory_chunks yet — non-fatal */ }
+  // The FTS content table (agent-utils MemoryStore), created for every
+  // workspace by initWorkspaceSchema. A read failure here is a real fault and
+  // must not be mistaken for a workspace that has indexed nothing.
+  const memoryChunks = source<ForkSnapshot['memoryChunks'][number]>`
+    SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks
+  `;
   const craftedTools = source<ForkSnapshot['craftedTools'][number]>`
     SELECT name, description, params, code, scope, created_at, updated_at FROM crafted_tools
   `;
-  let agentConfig: ForkSnapshot['agentConfig'] = [];
-  try {
-    agentConfig = source<ForkSnapshot['agentConfig'][number]>`SELECT key, value FROM agent_config`;
-  } catch { /* agent_config may not exist in source — non-fatal */ }
+  const agentConfig = source<ForkSnapshot['agentConfig'][number]>`SELECT key, value FROM agent_config`;
 
   return {
     source: {
@@ -201,9 +195,9 @@ export async function writeForkSnapshot(
   //    partial attempt.
   void target`DELETE FROM messages`;
   void target`DELETE FROM crafted_tools`;
-  try { void target`DELETE FROM assistant_messages`; } catch { /* lazily created */ }
-  try { void target`DELETE FROM memory_chunks`; } catch { /* optional index */ }
-  try { void target`DELETE FROM agent_config`; } catch { /* optional configuration */ }
+  void target`DELETE FROM memory_chunks`;
+  void target`DELETE FROM agent_config`;
+  // assistant_messages is purged in step 4, after the CREATE that guarantees it.
   void target`DELETE FROM fork_lineage`;
   void target`DELETE FROM workspace_identity`;
 
@@ -228,28 +222,30 @@ export async function writeForkSnapshot(
     `;
   }
 
-  // 4. assistant_messages. The table is created lazily by Session.ensureTable()
-  //    on first append, so ensure it exists before inserting (idempotent).
-  try {
+  // 4. assistant_messages. The agents SDK's session provider creates this table
+  //    on its first append, so a target that has not run a turn does not have
+  //    it yet — created here with the SDK's own definition (agents,
+  //    src/experimental/memory/session/providers/agent.ts) so the copy cannot
+  //    be skipped. Purged here rather than in step 1 for that reason.
+  void target`
+    CREATE TABLE IF NOT EXISTS assistant_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL DEFAULT '',
+      parent_id TEXT,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `;
+  void target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent  ON assistant_messages(parent_id)`;
+  void target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session ON assistant_messages(session_id)`;
+  void target`DELETE FROM assistant_messages`;
+  for (const m of snapshot.assistantMessages) {
     void target`
-      CREATE TABLE IF NOT EXISTS assistant_messages (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL DEFAULT '',
-        parent_id TEXT,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
+      INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${m.id}, ${m.session_id}, ${m.parent_id}, ${m.role}, ${m.content}, ${m.created_at})
     `;
-    void target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent  ON assistant_messages(parent_id)`;
-    void target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session ON assistant_messages(session_id)`;
-    for (const m of snapshot.assistantMessages) {
-      void target`
-        INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${m.id}, ${m.session_id}, ${m.parent_id}, ${m.role}, ${m.content}, ${m.created_at})
-      `;
-    }
-  } catch { /* pure-test targets may lack the table — non-fatal */ }
+  }
 
   // 5. SOUL.md + memory/* are FILES and are written before this, outside the
   //    row transaction — see writeForkFiles at the top of this function.
@@ -257,15 +253,15 @@ export async function writeForkSnapshot(
     summarizeSoul(snapshot.files.find((f) => f.path === SOUL_PATH)?.content ?? '')
   }`;
 
-  // 6. memory_chunks — skipped silently when the target has no such table yet.
-  try {
-    for (const c of snapshot.memoryChunks) {
-      void target`
-        INSERT OR REPLACE INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
-        VALUES (${c.id}, ${c.path}, ${c.start_line}, ${c.end_line}, ${c.hash}, ${c.text}, ${c.updated_at})
-      `;
-    }
-  } catch { /* target has no memory_chunks yet — non-fatal */ }
+  // 6. memory_chunks — the table is part of every workspace's schema, so a
+  //    failure here means the fork lost the parent's memory index, not that
+  //    there was nothing to copy.
+  for (const c of snapshot.memoryChunks) {
+    void target`
+      INSERT OR REPLACE INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
+      VALUES (${c.id}, ${c.path}, ${c.start_line}, ${c.end_line}, ${c.hash}, ${c.text}, ${c.updated_at})
+    `;
+  }
 
   // 7. crafted_tools (snapshot — independent evolution from this point).
   for (const t of snapshot.craftedTools) {
@@ -277,12 +273,10 @@ export async function writeForkSnapshot(
   }
 
   // 8. agent_config, with display_name overwritten so the UI shows the fork.
-  try {
-    for (const row of snapshot.agentConfig) {
-      void target`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${row.key}, ${row.value})`;
-    }
-    void target`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${opts.workspaceName})`;
-  } catch { /* agent_config may not exist in target — non-fatal */ }
+  for (const row of snapshot.agentConfig) {
+    void target`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${row.key}, ${row.value})`;
+  }
+  void target`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${opts.workspaceName})`;
 
   // 9. Lineage — single row.
   void target`
@@ -367,28 +361,29 @@ export interface ForkLineageRow {
   forkedAt: number;
 }
 
-/** Read the single-row fork_lineage. Returns null when not a fork. */
+/** Read the single-row fork_lineage. Returns null when not a fork.
+ *
+ *  `fork_lineage` is created by initAllTables on every workspace, and an empty
+ *  result already says "not a fork" — so there was never a condition for the
+ *  catch that used to wrap this, only the ability to report a broken read as a
+ *  workspace with no parent. */
 export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
-  try {
-    const rows = sql<{
-      source_workspace_id: string; source_workspace_name: string;
-      source_message_id: string; source_message_created_at: number;
-      forked_at: number;
-    }>`SELECT source_workspace_id, source_workspace_name, source_message_id,
-              source_message_created_at, forked_at
-       FROM fork_lineage WHERE id = 1 LIMIT 1`;
-    if (rows.length === 0) return null;
-    const r = rows[0]!;
-    return {
-      sourceWorkspaceId: r.source_workspace_id,
-      sourceWorkspaceName: r.source_workspace_name,
-      sourceMessageId: r.source_message_id,
-      sourceMessageCreatedAt: r.source_message_created_at,
-      forkedAt: r.forked_at,
-    };
-  } catch {
-    return null;
-  }
+  const rows = sql<{
+    source_workspace_id: string; source_workspace_name: string;
+    source_message_id: string; source_message_created_at: number;
+    forked_at: number;
+  }>`SELECT source_workspace_id, source_workspace_name, source_message_id,
+            source_message_created_at, forked_at
+     FROM fork_lineage WHERE id = 1 LIMIT 1`;
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    sourceWorkspaceId: r.source_workspace_id,
+    sourceWorkspaceName: r.source_workspace_name,
+    sourceMessageId: r.source_message_id,
+    sourceMessageCreatedAt: r.source_message_created_at,
+    forkedAt: r.forked_at,
+  };
 }
 
 /**

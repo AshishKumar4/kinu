@@ -36,10 +36,10 @@ const RATIONALE = 'Session reflection: stream tool results incrementally for lon
 function setup() {
   const { rt } = createTestRuntime();
   const execRaw = rt.storage.execRaw;
-  initScaffoldTables(execRaw);
+  initScaffoldTables(execRaw, rt.storage.sql);
   initShadowTables(execRaw);
   initTurnOutcomeTables(execRaw, rt.storage.sql);
-  initReplayTables(execRaw);
+  initReplayTables(execRaw, rt.storage.sql);
   initCraftScoreTables(execRaw);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
@@ -223,8 +223,8 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(outcomes!.revert).toBeUndefined();
   });
 
-  test('empty ledgers produce an empty digest (missing tables tolerated)', () => {
-    const { rt } = createTestRuntime();
+  test('every ledger present and empty produces an empty digest', () => {
+    const { rt } = setup();
     expect(buildChangelog(rt.storage.sql)).toEqual([]);
   });
 

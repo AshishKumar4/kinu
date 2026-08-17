@@ -135,14 +135,15 @@ export function summarizeSoul(markdown: string | null | undefined, maxLength = 2
  * Reads the file, so it needs a filesystem — which every caller inside a turn
  * has. A read-only inspection (`proteus list`, `proteus status`) deliberately
  * does not call this: it reads {@link readMission} instead.
+ *
+ * "No soul" is asked, not caught: a workspace whose SOUL.md is unreadable for
+ * any other reason — a broken VFS, a storage failure mid-turn — must not read
+ * as an agent that simply has no purpose yet.
  */
 export async function readSoul(vfs: VFS): Promise<string | null> {
-  try {
-    const text = v.parse(v.string(), await vfs.readFile(SOUL_PATH, { encoding: 'utf8' }));
-    return text.trim() ? text : null;
-  } catch {
-    return null;
-  }
+  if (!await vfs.exists(SOUL_PATH)) return null;
+  const text = v.parse(v.string(), await vfs.readFile(SOUL_PATH, { encoding: 'utf8' }));
+  return text.trim() ? text : null;
 }
 
 /**

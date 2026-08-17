@@ -114,13 +114,12 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
           }
         }
         if (!res.ok) {
-          // Capture upstream error body for diagnostics + WAF detection.
-          let body = '';
-          try {
-            const cloned = res.clone();
-            body = await cloned.text();
-            debugCodex(`upstream ${res.status} body (first 500 chars): ${body.slice(0, 500)}`);
-          } catch { /* nop */ }
+          // Upstream error body, for diagnostics + WAF detection. Read from a
+          // clone so `res` stays intact for the SDK. No catch: a body this
+          // cannot read is a body the SDK cannot read either, and an empty
+          // string here would silently disable the WAF branch below.
+          const body = await res.clone().text();
+          debugCodex(`upstream ${res.status} body (first 500 chars): ${body.slice(0, 500)}`);
           // Cloudflare WAF "Attention Required!" challenge page comes back as
           // HTML, not the JSON shape the AI SDK expects. The stream crashes
           // with an opaque parse error. Replace the response body with a

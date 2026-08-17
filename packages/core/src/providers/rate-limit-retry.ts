@@ -69,19 +69,23 @@ function hasReplayableBody(input: RequestInfo | URL, init: RequestInit | undefin
   return !(input instanceof Request) || input.body === null;
 }
 
+/**
+ * Whether `response` is the provider saying "slow down".
+ *
+ * The 503 branch needs the body to decide, so a body it cannot read is not a
+ * decision — it propagates. Reporting "not rate-limited" there would retire the
+ * retry budget on the strength of an error nobody ever saw, and the SDK is
+ * handed the same unreadable body a moment later regardless.
+ */
 async function isRateLimited(response: Response): Promise<boolean> {
   if (response.status === 429 || response.status === 529) return true;
   if (response.status !== 503) return false;
-  try {
-    const detail = [
-      response.statusText,
-      response.headers.get('x-error-code') ?? '',
-      await response.clone().text(),
-    ].join(' ');
-    return /overload(?:ed|ing)?|\bcapacity\b|\btoo many requests\b|\brate[ _-]?limit/i.test(detail);
-  } catch {
-    return false;
-  }
+  const detail = [
+    response.statusText,
+    response.headers.get('x-error-code') ?? '',
+    await response.clone().text(),
+  ].join(' ');
+  return /overload(?:ed|ing)?|\bcapacity\b|\btoo many requests\b|\brate[ _-]?limit/i.test(detail);
 }
 
 function parseRetryAfter(value: string | null, nowMs: number): number | null {
@@ -93,12 +97,8 @@ function parseRetryAfter(value: string | null, nowMs: number): number | null {
 }
 
 function providerHost(input: RequestInfo | URL): string {
-  try {
-    const url = input instanceof Request ? input.url : input.toString();
-    return new URL(url).host || 'provider';
-  } catch {
-    return 'provider';
-  }
+  const url = URL.parse(input instanceof Request ? input.url : input.toString());
+  return url?.host || 'provider';
 }
 
 function formatSeconds(ms: number): string {

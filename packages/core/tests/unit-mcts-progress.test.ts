@@ -123,8 +123,8 @@ describe('the MCTS strategy reports progress while the search runs', () => {
       explore: async () => ({ text: 'a candidate approach' }),
       generateReflection: async () => ({ text: 'n/a' }),
     });
-    initSearchTables(rt.storage.execRaw);
-    initScaffoldTables(rt.storage.execRaw);
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initCraftScoreTables(rt.storage.execRaw);
 
     const events: MCTSProgressEvent[] = [];
@@ -171,8 +171,8 @@ describe('the MCTS strategy reports progress while the search runs', () => {
       explore: async () => ({ text: 'a candidate approach' }),
       generateReflection: async () => ({ text: 'n/a' }),
     });
-    initSearchTables(rt.storage.execRaw);
-    initScaffoldTables(rt.storage.execRaw);
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initCraftScoreTables(rt.storage.execRaw);
 
     const result = await strategyWithoutSink(rt);

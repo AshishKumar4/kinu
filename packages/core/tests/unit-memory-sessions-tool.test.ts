@@ -12,7 +12,7 @@ import {
 
 function setup() {
   const { rt, testSql } = createTestRuntime();
-  initAllTables(testSql.execRaw);
+  initAllTables(testSql.execRaw, testSql.sql);
   const tools = buildBuiltinTools({ rt });
   const memoryExec = toolExecute<MemoryToolInput, JsonValue>(tools.memory);
   let row = 0;

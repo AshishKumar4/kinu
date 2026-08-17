@@ -51,14 +51,20 @@ async function freePort(from: number): Promise<number> {
 
 async function waitForServer(url: string, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+  // vite is spawned with `stdio: 'ignore'`, so the probe's own last refusal is
+  // the only surviving evidence of WHY nothing answered — a config error that
+  // killed the server looks exactly like a slow start without it.
+  let lastFailure: unknown;
   while (Date.now() < deadline) {
     try {
       const res = await fetch(url);
       if (res.ok) return;
-    } catch { /* not up yet */ }
+    } catch (cause) {
+      lastFailure = cause;
+    }
     await Bun.sleep(250);
   }
-  throw new Error(`gallery server never came up at ${url}`);
+  throw new Error(`gallery server never came up at ${url}`, { cause: lastFailure });
 }
 
 function chromePath(): string | undefined {

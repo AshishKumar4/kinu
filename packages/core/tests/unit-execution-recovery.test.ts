@@ -99,9 +99,9 @@ describe('the ledger', () => {
     expect(listLessons(sql, { source: 'execution_recovery' })[0]!.status).toBe('provisional');
   });
 
-  test('a missing ledger reads as empty, never as a throw', () => {
-    const db = new Database(':memory:');
-    expect(listRecoveryFindings(makeSql(db))).toEqual([]);
+  test('an empty ledger reads as empty, never as a throw', () => {
+    const { sql } = ledgerDb();
+    expect(listRecoveryFindings(sql)).toEqual([]);
   });
 });
 

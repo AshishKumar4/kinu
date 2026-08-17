@@ -22,9 +22,9 @@ import { newBranchId } from '../src/steer-branch.js';
 function freshDb() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
-  initSearchTables(execRaw);
+  initSearchTables(execRaw, makeSql(db));
   initMctsSearchTable(execRaw);
-  initHeadsTables(execRaw);
+  initHeadsTables(execRaw, makeSql(db));
   return { db, sql: makeSql(db) };
 }
 

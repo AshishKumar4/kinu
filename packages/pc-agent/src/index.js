@@ -25,7 +25,12 @@ function rpc(ws, id, result, error) {
 function runCommand(cmd, args) {
   try {
     return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  } catch {
+  } catch (err) {
+    // Probing for an optional tool accepts two outcomes: the binary is not
+    // installed (ENOENT), or it ran and exited non-zero (a numeric status).
+    // Anything else — EACCES, ETIMEDOUT, EMFILE — is this daemon's own
+    // breakage and must surface instead of reading as "no such tool".
+    if (!err || (err.code !== 'ENOENT' && !Number.isInteger(err.status))) throw err;
     return null;
   }
 }
@@ -102,17 +107,24 @@ function createCheckpoints(opts = {}) {
     } catch (err) {
       if (err && err.code === 'ENOENT') {
         gitAvailable = false;
-        throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
+        throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT, { cause: err });
       }
       gitAvailable = true;
-      throw new Error((err.stderr ? String(err.stderr).trim() : '') || err.message);
+      throw new Error((err.stderr ? String(err.stderr).trim() : '') || err.message, { cause: err });
     }
   };
 
   const probe = () => {
     if (gitAvailable !== null) return gitAvailable;
-    try { git(['--version'], os.homedir(), isolatedEnv()); } catch { /* sets gitAvailable */ }
-    if (gitAvailable === null) gitAvailable = false;
+    try {
+      git(['--version'], os.homedir(), isolatedEnv());
+    } catch (err) {
+      // git() records availability from the spawn outcome, so a git that ran
+      // and failed is still a git that exists. Only a failure that never
+      // reached the binary leaves availability unknown, and that must not be
+      // reported as "git not found".
+      if (gitAvailable === null) throw err;
+    }
     return gitAvailable;
   };
 
@@ -182,9 +194,7 @@ function createCheckpoints(opts = {}) {
     const refs = storeRefs(gitDir, abs);
     const latest = refs[0];
     if (latest) {
-      try {
-        if (git(['rev-parse', `${latest.id}^{tree}`], abs, env).trim() === tree) return latest.id;
-      } catch { /* unreadable ref — take a fresh snapshot */ }
+      if (git(['rev-parse', `${latest.id}^{tree}`], abs, env).trim() === tree) return latest.id;
     }
 
     const sha = git(['commit-tree', tree, '-m', subjectFor(turn, reason)], abs, env).trim();
@@ -195,7 +205,7 @@ function createCheckpoints(opts = {}) {
       for (const stale of storeRefs(gitDir, abs).slice(keep)) {
         git(['update-ref', '-d', stale.ref], abs, env);
       }
-      try { git(['prune', '--expire=now'], abs, env); } catch { /* reclamation is best-effort */ }
+      git(['prune', '--expire=now'], abs, env);
     }
     return sha;
   };
@@ -209,7 +219,7 @@ function createCheckpoints(opts = {}) {
     try { git(['rev-parse', '--verify', `${id}^{commit}`], workdirOrBase(abs), env); }
     catch (err) {
       if (err.message === CHECKPOINTS_UNAVAILABLE_NO_GIT) throw err;
-      throw new Error(`checkpoint not found: ${id}`);
+      throw new Error(`checkpoint not found: ${id}`, { cause: err });
     }
     return { gitDir, abs, env };
   };
@@ -261,7 +271,13 @@ function createCheckpoints(opts = {}) {
       if (!probe()) return [];
       const agentBase = path.join(base, sanitizeAgent(agent));
       let stores;
-      try { stores = fs.readdirSync(agentBase); } catch { return []; }
+      try { stores = fs.readdirSync(agentBase); }
+      catch (err) {
+        // No store directory means this agent has taken no checkpoints; any
+        // other readdir failure is a real fault and must not read as "none".
+        if (!err || err.code !== 'ENOENT') throw err;
+        return [];
+      }
       const entries = [];
       for (const name of stores) {
         const gitDir = path.join(agentBase, name);
@@ -298,7 +314,8 @@ function createCheckpoints(opts = {}) {
         if (change.kind !== 'delete') continue;
         const target = path.resolve(abs, change.path);
         if (!target.startsWith(abs)) continue;
-        try { fs.unlinkSync(target); } catch { /* already gone */ }
+        try { fs.unlinkSync(target); }
+        catch (err) { if (!err || err.code !== 'ENOENT') throw err; }
       }
       git(['read-tree', id], abs, env);
       git(['checkout-index', '-a', '-f'], abs, env);
@@ -462,7 +479,10 @@ function main() {
   const ctx = { checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }) };
 
   let WS;
-  try { WS = require('ws'); } catch { /* Node 22+ has global WebSocket */ }
+  // `ws` is optional — Node 22+ has a global WebSocket. A `ws` that is present
+  // but fails to load is not that case and must not pass as absent.
+  try { WS = require('ws'); }
+  catch (err) { if (!err || err.code !== 'MODULE_NOT_FOUND') throw err; }
   const mkWs = (url) => WS ? new WS(url) : new WebSocket(url);
 
   let backoff = 1000;
@@ -473,7 +493,12 @@ function main() {
       body: JSON.stringify({ user: USER, token: TOKEN }),
     });
     let body = {};
-    try { body = await res.json(); } catch { /* nop */ }
+    try { body = await res.json(); }
+    catch (err) {
+      // A gateway's non-JSON error page is diagnosed by the status check
+      // below; an unreadable body behind HTTP 200 is a real protocol failure.
+      if (res.ok) throw new Error(`ticket exchange returned an unreadable body: HTTP ${res.status}`, { cause: err });
+    }
     if (!res.ok || !body.ticket) throw new Error(body.error || ('ticket exchange failed: HTTP ' + res.status));
     return body.ticket;
   }

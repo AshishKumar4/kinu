@@ -19,6 +19,7 @@ import {
 } from '../packages/core/src/index.js';
 import { createWorkspace } from '../packages/core/src/identity/index.js';
 import { openWorkspaceCLI, resolveChatModel, LocalAgentSession } from '../packages/cli-backend/src/index.js';
+import { makeSql } from '../packages/cli-backend/src/runtime.js';
 import type { SessionEvent } from '../packages/cli-backend/src/index.js';
 import { createBenchInferenceProxy } from './bench-inference-proxy.js';
 import { parseAgentWorkerInput, type WorkerOutput } from './bench-worker-protocol.js';
@@ -45,9 +46,14 @@ async function main(): Promise<void> {
     // A v0 workspace: bootstrap scaffold, empty memory, empty CraftStore, no
     // lessons. This is the "stateless" arm's starting point, and it is one call.
     await createWorkspace(backendDb, { name: input.workspaceName, purpose: input.purpose, llm: meteredLLM });
-    initSearchTables((ddl: string) => db.exec(ddl));
-    initScaffoldTables((ddl: string) => db.exec(ddl));
-    initCraftScoreTables((ddl: string) => db.exec(ddl));
+    // `initSearchTables` and `initScaffoldTables` read `pragma_table_info` to decide which columns
+    // are missing rather than adding them speculatively and swallowing the duplicate-column error,
+    // so they need a reader as well as a writer.
+    const sql = makeSql(db);
+    const execRaw = (ddl: string): void => { db.exec(ddl); };
+    initSearchTables(execRaw, sql);
+    initScaffoldTables(execRaw, sql);
+    initCraftScoreTables(execRaw);
   }
 
   const { rt } = await openWorkspaceCLI(backendDb, input.dbPath, { llm: meteredLLM });
@@ -89,7 +95,13 @@ async function main(): Promise<void> {
     error = err instanceof Error ? err.message : String(err);
     hadError = true;
   } finally {
-    await session.end().catch(() => {});
+    try {
+      await session.end();
+    } catch (caught) {
+      const endError = `session end failed: ${caught instanceof Error ? caught.message : String(caught)}`;
+      error = error ? `${error}; ${endError}` : endError;
+      hadError = true;
+    }
     await proxy.settle();
     db.close();
     proxy.stop(true);

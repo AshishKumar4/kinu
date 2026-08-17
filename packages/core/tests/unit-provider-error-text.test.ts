@@ -51,7 +51,7 @@ async function rejectionOf(action: () => Promise<void>): Promise<Error> {
     await action();
   } catch (error) {
     if (error instanceof Error) return error;
-    throw new Error(`expected Error rejection, received ${String(error)}`);
+    throw new Error(`expected Error rejection, received ${String(error)}`, { cause: error });
   }
   throw new Error('expected action to reject');
 }
@@ -131,7 +131,7 @@ describe('runChat provider failures', () => {
   test('does not dump the raw payload to the console', async () => {
     const consoleError = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      await runToCompletion(inBandErrorModel({ message: 'nope', code: 'billing_not_active' })).catch(() => {});
+      await rejectionOf(() => runToCompletion(inBandErrorModel({ message: 'nope', code: 'billing_not_active' })));
       expect(consoleError).not.toHaveBeenCalled();
     } finally {
       consoleError.mockRestore();

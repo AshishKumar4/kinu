@@ -191,7 +191,7 @@ export class BackgroundJobRunner {
   ): DetachOutcome {
     const running = this.deps.store.countRunning();
     if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
-      try { controller.abort(new Error('background-job concurrency cap reached')); } catch { /* nop */ }
+      controller.abort(new Error('background-job concurrency cap reached'));
       this.deps.logActivity?.('bg_job_refused', `${kind} — ${running} jobs already running`);
       return { detached: false, reason: refusalMessage(kind, this.deps.store.listRunning(MAX_CONCURRENT_DETACHED_JOBS)) };
     }
@@ -217,25 +217,30 @@ export class BackgroundJobRunner {
   private runToSettlement<T>(jobId: string, kind: string, exec: () => Promise<T>): void {
     void this.deps.fiber(`bg:${kind}`, async (ctx) => {
       ctx.stash({ phase: 'running', jobId, kind });
+      let settled: boolean;
       try {
         await this.settleAndWake(jobId, exec);
+        // A fenced executor's terminal write is a no-op (§5.3), so the store —
+        // not this fiber's own success — decides whether the job settled.
+        settled = this.deps.store.get(jobId)?.status !== 'running';
       } catch (err) {
-        // The settlement path itself threw — a store write, or the undeliverable
-        // wake's durable retry breadcrumb. Letting the fiber reject here would
-        // lose the force-fail below: both fiber implementations DELETE their
-        // recovery row in a `finally`, so a rejected body is never handed to
-        // onFiberRecovered. When the store is gone entirely (teardown closed it
-        // under us) neither write lands and the row stays `running` — which is
-        // recoverable, but only because recoverOrphans() sweeps the registry at
-        // the next start rather than trusting a fiber row to survive.
+        // The settlement path itself threw — a store write, the post-settle
+        // status read, or the undeliverable wake's durable retry breadcrumb.
+        // Letting the fiber reject here would lose the force-fail below: both
+        // fiber implementations DELETE their recovery row in a `finally`, so a
+        // rejected body is never handed to onFiberRecovered. When the store is
+        // gone entirely (teardown closed it under us) neither write lands and
+        // the row stays `running` — which is recoverable, but only because
+        // recoverOrphans() sweeps the registry at the next start rather than
+        // trusting a fiber row to survive.
         console.warn('[proteus] background-job settlement failed:',
           err instanceof Error ? err.message : err);
-        this.failUnsettled(jobId, err);
+        settled = this.failUnsettled(jobId, err);
       }
       // Only a job that actually reached a terminal status is 'settled'; if even
       // the force-fail could not write, the snapshot stays 'running' so an
       // eviction in this window still hands the job to recover().
-      ctx.stash({ phase: this.isSettled(jobId) ? 'settled' : 'running', jobId, kind });
+      ctx.stash({ phase: settled ? 'settled' : 'running', jobId, kind });
     });
   }
 
@@ -268,35 +273,32 @@ export class BackgroundJobRunner {
     await this.wake(jobId);
   }
 
-  /** Last-resort terminal write for a job the settlement path left running. A
-   *  job whose outcome was already recorded keeps it — only the wake was lost,
-   *  and its result stays readable via agent.jobResult. No wake is attempted:
-   *  the wake is what usually failed, and the settle notification (which never
-   *  throws) already surfaces the job in the Tasks view. */
-  private failUnsettled<T>(jobId: string, err: T): void {
+  /** Last-resort terminal write for a job the settlement path left running, and
+   *  whether the job carries a terminal status once it returns. A job whose
+   *  outcome was already recorded keeps it — only the wake was lost, and its
+   *  result stays readable via agent.jobResult. No wake is attempted: the wake
+   *  is what usually failed, and the settle notification (which never throws)
+   *  already surfaces the job in the Tasks view. */
+  private failUnsettled<T>(jobId: string, err: T): boolean {
     try {
       const job = this.deps.store.get(jobId);
-      if (!job || job.status !== 'running') return;
+      if (!job || job.status !== 'running') return true;
       this.deps.store.fail(jobId, job.epoch, err instanceof Error ? err.message : String(err), Date.now());
       this.notifySettled(jobId);
+      return true;
     } catch (failErr) {
       console.warn('[proteus] background-job force-fail failed:',
         failErr instanceof Error ? failErr.message : failErr);
+      return false;
     }
   }
 
-  /** True once the job carries a terminal status. A store that cannot even be
-   *  read is reported as not settled — the recoverable answer. */
-  private isSettled(jobId: string): boolean {
-    try { return this.deps.store.get(jobId)?.status !== 'running'; }
-    catch { return false; }
-  }
-
-  /** Wake the agent with a signal carrying the settled job — at its next step
-   *  if it is working, as its own turn if it is idle. The `background_job`
-   *  kind makes a woken turn render as a background-event card, not a user
-   *  bubble. An undelivered wake leaves a durable retry breadcrumb the
-   *  standard drain picks up. Runs once per job (no self-wake loop). */
+  /** Wake the agent with a synthesis signal carrying the settled job — at its
+   *  next step if it is working, as its own turn if it is idle. The
+   *  `background_job` kind makes a woken turn render as a background-event
+   *  card, not a user bubble. An undelivered wake leaves a durable retry
+   *  breadcrumb the standard drain picks up. Runs once per job (no self-wake
+   *  loop). */
   async wake(jobId: string): Promise<void> {
     const job = this.deps.store.get(jobId);
     if (!job) return;
@@ -403,7 +405,7 @@ export class BackgroundJobRunner {
     if (!job || job.status !== 'running') return false;
     this.deps.store.cancel(jobId, job.epoch, Date.now());
     const controller = this.controllers.get(jobId);
-    if (controller) { try { controller.abort(new Error('cancelled by operator')); } catch { /* nop */ } }
+    if (controller) controller.abort(new Error('cancelled by operator'));
     this.controllers.delete(jobId);
     this.deps.logActivity?.('bg_job_cancelled', jobId);
     return true;

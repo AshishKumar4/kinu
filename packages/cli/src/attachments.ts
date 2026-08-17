@@ -14,6 +14,7 @@ import { stat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
 import type { PromptFile } from '@proteus/core';
+import { tolerateAsync } from '@proteus/core/obs';
 import { formatBytes } from './display.js';
 
 /** File types worth inlining as model-visible parts. Everything else is
@@ -93,10 +94,11 @@ async function statCandidate(token: string, cwd: string): Promise<{ path: string
   for (const candidate of candidates) {
     const expanded = candidate.startsWith('~/') ? homedir() + candidate.slice(1) : candidate;
     const absolute = resolve(cwd, expanded);
-    try {
-      const s = await stat(absolute);
-      if (s.isFile()) return { path: absolute, size: s.size };
-    } catch { /* not a file — try the next candidate */ }
+    // A token naming nothing is the normal case — most words are not paths. Any OTHER stat failure
+    // (an unreadable parent, a path component that is not a directory) would silently drop a
+    // mention the user typed, so it is theirs to see.
+    const stats = await tolerateAsync(() => stat(absolute), 'enoent');
+    if (stats?.isFile()) return { path: absolute, size: stats.size };
   }
   return null;
 }

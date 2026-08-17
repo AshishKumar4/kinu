@@ -61,12 +61,12 @@ describe('AgentConfigStore — workspace backup handle', () => {
     expect(c.getWorkspaceBackupAt()).toBeGreaterThan(0);
   });
 
-  test('returns null on malformed / partial handle', () => {
+  test('a stored handle that does not parse throws rather than reading as no backup', () => {
     const c = setup();
     c.set('workspace_backup', 'not json');
-    expect(c.getWorkspaceBackup()).toBeNull();
+    expect(() => c.getWorkspaceBackup()).toThrow();
     c.set('workspace_backup', JSON.stringify({ id: 'x' })); // missing dir
-    expect(c.getWorkspaceBackup()).toBeNull();
+    expect(() => c.getWorkspaceBackup()).toThrow();
   });
 });
 

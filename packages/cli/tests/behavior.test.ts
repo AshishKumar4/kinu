@@ -7,6 +7,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "@proteus/core";
+import { tolerate } from "@proteus/core/obs";
 import * as v from "valibot";
 
 const tempDirs: string[] = [];
@@ -58,12 +59,10 @@ afterEach(() => {
 /** Local one-shot commands auto-start the scheduler daemon inside
  *  PROTEUS_HOME; kill it before the temp home disappears under it. */
 function stopLocalDaemon(home: string): void {
-  try {
-    const pid = parseInt(readFileSync(join(home, "daemon.pid"), "utf-8").trim(), 10);
-    if (Number.isInteger(pid) && pid > 1) process.kill(pid, "SIGTERM");
-  } catch {
-    // no daemon ran for this home
-  }
+  const pidfile = tolerate(() => readFileSync(join(home, "daemon.pid"), "utf-8"), "enoent");
+  if (pidfile === undefined) return;
+  const pid = parseInt(pidfile.trim(), 10);
+  if (Number.isInteger(pid) && pid > 1) tolerate(() => process.kill(pid, "SIGTERM"), "esrch");
 }
 
 function runCli(args: string[], opts: { home?: string; stdin?: string; env?: Record<string, string> } = {}) {
@@ -493,7 +492,7 @@ function startMockLlm(answer: string) {
       if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
         return new Response("not found", { status: 404 });
       }
-      const body = v.parse(RequestBodySchema, await request.json().catch(() => ({})));
+      const body = v.parse(RequestBodySchema, await request.json());
       const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
       if (!body.stream) {
         return Response.json({
@@ -539,7 +538,7 @@ function startToolLoopMockLlm(
       if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
         return new Response("not found", { status: 404 });
       }
-      const body = v.parse(RequestBodySchema, await request.json().catch(() => ({})));
+      const body = v.parse(RequestBodySchema, await request.json());
       const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
       if (!body.stream) {
         return Response.json({
@@ -600,7 +599,7 @@ function startInBandErrorLlm(payload: JsonValue) {
     port: 0,
     hostname: "127.0.0.1",
     async fetch(request) {
-      const body = v.parse(RequestBodySchema, await request.json().catch(() => ({})));
+      const body = v.parse(RequestBodySchema, await request.json());
       if (!body.stream) return Response.json(payload, { status: 400 });
       return new Response(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`, {
         headers: { "content-type": "text/event-stream" },

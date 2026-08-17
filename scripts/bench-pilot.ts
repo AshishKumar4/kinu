@@ -169,8 +169,7 @@ export function loadAndValidatePilotReport(path: string, expected: ExpectedPilot
   try {
     decoded = parseJsonValue(readFileSync(path, 'utf8'));
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`cannot read stability pilot report ${path}: ${detail}`);
+    throw new Error(`cannot read stability pilot report ${path}`, { cause: error });
   }
   return validatePilotReport(decoded, expected);
 }

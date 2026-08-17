@@ -47,6 +47,7 @@ import type {
 import { DEFAULT_EVOLUTION_CONFIG } from './types.js';
 import { isoDate } from '../utils/date.js';
 import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../prompts/structured.js';
+import { tolerate } from '../obs/index.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { upsertCraftedTool } from '../craft/conflict.js';
 import { periodicCraftConsolidation } from '../craft/consolidation.js';
@@ -63,7 +64,7 @@ import {
   recordTurnOutcome, hasNegativeOutcome, takePickOutcome,
   listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
-  recordLesson, corroborateLessonsForTurn, type LessonRow,
+  recordLesson, corroborateLessonsForTurn,
 } from './outcomes.js';
 import {
   bindPendingImports, settleImportsForTurn, type ImportedExperienceRow,
@@ -93,6 +94,7 @@ import {
   type EvolutionBaseSelection, type ScaffoldArchiveEntry,
 } from '../scaffold/archive.js';
 import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow.js';
+import { tableExists } from '../identity/schema.js';
 
 const GeneralizedToolSchema = v.object({
   name: v.optional(v.string()),
@@ -227,7 +229,7 @@ export class EvolutionEngine {
     // silently scored nothing at all.
     initCraftScoreTables(rt.storage.execRaw);
     initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
-    initReplayTables(rt.storage.execRaw);
+    initReplayTables(rt.storage.execRaw, rt.storage.sql);
     initSessionWindowTable(rt.storage.execRaw);
     initAgentConfigTable(rt.storage.execRaw);
     this.agentConfig = createAgentConfigStore(rt.storage.sql);
@@ -264,13 +266,14 @@ export class EvolutionEngine {
   }
 
   private emit(event: EvolutionEvent): void {
-    // Persist to SQL so UI can query it
-    try {
-      void this.rt.storage.sql`INSERT INTO evolution_events (type, message, data, created_at)
-        VALUES (${event.type}, ${event.message}, ${event.data ? JSON.stringify(event.data) : null}, ${Date.now()})`;
-    } catch {
-      // Table may not exist yet in test environments — that's fine
-    }
+    // evolution_events is created by initWorkspaceSchema on every backend
+    // (conformance/manifest.ts lists it EVERYWHERE), so a failed INSERT is a
+    // real fault. This used to be swallowed as "may not exist yet in test
+    // environments": a production catch accommodating a test-only condition,
+    // which is exactly how an unwritable evolution stream stayed invisible
+    // while the listeners below kept reporting the event as delivered.
+    void this.rt.storage.sql`INSERT INTO evolution_events (type, message, data, created_at)
+      VALUES (${event.type}, ${event.message}, ${event.data ? JSON.stringify(event.data) : null}, ${Date.now()})`;
     for (const listener of this.listeners) {
       listener(event);
     }
@@ -291,18 +294,14 @@ export class EvolutionEngine {
    */
   recordRecovery(finding: RecoveryFinding): void {
     if (!this.config.enabled) return;
-    let recorded = false;
-    try {
-      recorded = recordRecoveryFinding(this.rt.storage.sql, finding);
-    } catch {
-      return; // lessons ledger unavailable on a bare runtime — never fail the turn
-    }
-    if (recorded) {
-      this.emit({
-        type: 'reflection',
-        message: `[execution recovery] ${recoveryFindingText(finding)}`,
-      });
-    }
+    // The lessons ledger is part of the shared workspace schema; there is no
+    // "bare runtime" without it, and returning early on a failed write made a
+    // recovery the step clock genuinely observed indistinguishable from none.
+    if (!recordRecoveryFinding(this.rt.storage.sql, finding)) return;
+    this.emit({
+      type: 'reflection',
+      message: `[execution recovery] ${recoveryFindingText(finding)}`,
+    });
   }
 
   // ── Timescale 1: Turn-level (outcome-driven forked review) ──────
@@ -393,7 +392,7 @@ export class EvolutionEngine {
           userMessage: turn.userMessage,
           assistantResponse: turn.assistantResponse,
           followup,
-          scaffoldVersion: this.currentScaffoldVersion(),
+          scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql),
         });
       }
       turn.feedback = outcomeToFeedback(outcome);
@@ -432,12 +431,10 @@ export class EvolutionEngine {
     // are codemode-only — so the EMA was written against MCP and extension
     // tools and nothing else.
     const craftedToolNames = turn.craftedToolsUsed ?? [];
+    // A failed EMA write is not "non-fatal": it is the crafted-tool score
+    // silently not moving, which is the retirement signal going quiet.
     if (craftedToolNames.length > 0) {
-      try {
-        updateCraftScores(this.rt.storage.sql, craftedToolNames, quality);
-      } catch {
-        // Score update failure is non-fatal
-      }
+      updateCraftScores(this.rt.storage.sql, craftedToolNames, quality);
     }
 
     const negative = isNegativeOutcome(outcome);
@@ -497,30 +494,24 @@ export class EvolutionEngine {
    * verdict corroborate provisional lessons tied to that turn.
    */
   async applyExplicitFeedback(messageId: string, feedback: 'positive' | 'negative'): Promise<void> {
-    let userMessage = '';
-    let assistantResponse = '';
-    let sessionId = 'default';
-    try {
-      const row = this.rt.storage.sql<{ response: string; request: string | null; session_id: string }>`
-        SELECT m.content AS response, u.content AS request, m.session_id
-        FROM messages m LEFT JOIN messages u ON u.id = m.parent_id
-        WHERE m.id = ${messageId} LIMIT 1`[0];
-      if (row) {
-        assistantResponse = row.response;
-        userMessage = row.request ?? '';
-        sessionId = row.session_id;
-      }
-    } catch { /* messages mirror unavailable — record the verdict anyway */ }
+    // `messages` belongs to the shared workspace schema, so a failed read is a
+    // fault. The old catch recorded the verdict anyway with empty texts — a
+    // ledger row that reads as a graded turn whose request and response were
+    // blank, which is what every downstream eval then trained against.
+    const row = this.rt.storage.sql<{ response: string; request: string | null; session_id: string }>`
+      SELECT m.content AS response, u.content AS request, m.session_id
+      FROM messages m LEFT JOIN messages u ON u.id = m.parent_id
+      WHERE m.id = ${messageId} LIMIT 1`[0];
     recordTurnOutcome(this.rt.storage.sql, {
       turnId: messageId,
-      sessionId,
+      sessionId: row?.session_id ?? 'default',
       outcome: feedback === 'positive' ? 'accepted' : 'corrected',
       confidence: 1,
       source: 'explicit',
-      userMessage,
-      assistantResponse,
+      userMessage: row?.request ?? '',
+      assistantResponse: row?.response ?? '',
       followup: null,
-      scaffoldVersion: this.currentScaffoldVersion(),
+      scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql),
     });
     if (feedback === 'negative') await this.corroborateLessons(messageId);
   }
@@ -532,36 +523,23 @@ export class EvolutionEngine {
     if (outcome === 'corrected' && turnId) await this.corroborateLessons(turnId);
   }
 
-  /** Explicit thumbs recorded for this turn's message, if any. The
-   *  turn_feedback table is cf-backend-owned; absent table = no feedback. */
+  /** Explicit thumbs recorded for this turn's message, if any.
+   *
+   *  turn_feedback is cf-backend-owned and genuinely absent on the CLI, where
+   *  operator feedback arrives through the web surface only
+   *  (conformance/manifest.ts). So the absence is ASKED about rather than
+   *  discovered by exception: a catch here could not tell "this backend has no
+   *  feedback table" from "the query failed", and reported both as no thumbs. */
   private readExplicitFeedback(turnId?: string): 'positive' | 'negative' | null {
-    if (!turnId) return null;
-    try {
-      const rows = this.rt.storage.sql<{ feedback: 'positive' | 'negative' }>`
-        SELECT feedback FROM turn_feedback WHERE message_id = ${turnId} LIMIT 1`;
-      return rows[0]?.feedback ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  private currentScaffoldVersion(): number | null {
-    try {
-      return getCurrentScaffoldVersion(this.rt.storage.sql);
-    } catch {
-      return null;
-    }
+    if (!turnId || !tableExists(this.rt.storage.sql, 'turn_feedback')) return null;
+    return this.rt.storage.sql<{ feedback: 'positive' | 'negative' }>`
+      SELECT feedback FROM turn_feedback WHERE message_id = ${turnId} LIMIT 1`[0]?.feedback ?? null;
   }
 
   /** Append newly corroborated lessons to durable memory. */
   private async corroborateLessons(turnId?: string): Promise<void> {
     if (!turnId) return;
-    let upgraded: LessonRow[] = [];
-    try {
-      upgraded = corroborateLessonsForTurn(this.rt.storage.sql, turnId);
-    } catch {
-      return;
-    }
+    const upgraded = corroborateLessonsForTurn(this.rt.storage.sql, turnId);
     for (const lesson of upgraded) {
       const header = lesson.source === 'session_reflection'
         ? `## Session reflection (corroborated ${isoDate()})`
@@ -583,29 +561,28 @@ export class EvolutionEngine {
    */
   private async settleImports(turnId: string | undefined, outcome: TurnOutcome | null): Promise<void> {
     if (!turnId || outcome === null || outcome === 'abandoned') return;
-    try {
-      bindPendingImports(this.rt.storage.sql, turnId);
-      const settled = await settleImportsForTurn(
-        this.rt, turnId, outcome === 'accepted' ? 'accepted' : 'rejected',
-      );
-      if (settled.corroborated.length === 0 && settled.discarded.length === 0) return;
-      const describe = (rows: ImportedExperienceRow[]) =>
-        rows.map((r) => `${r.kind} "${r.key}" from ${r.sourceWorkspace}`).join(', ');
-      this.emit({
-        type: 'experience_import',
-        message: settled.corroborated.length > 0
-          ? `Adopted imported experience after an accepted turn: ${describe(settled.corroborated)}`
-          : `Discarded imported experience after a ${outcome} turn: ${describe(settled.discarded)}`,
-        data: {
-          outcome,
-          corroborated: settled.corroborated.map((r) => r.libraryId),
-          discarded: settled.discarded.map((r) => r.libraryId),
-        },
-      });
-    } catch {
-      // The imports ledger may not exist in minimal runtimes — settling is not
-      // allowed to fail the turn review that produced the verdict.
-    }
+    // imported_experience is created by initWorkspaceSchema on every root, so
+    // "the ledger may not exist in minimal runtimes" is no longer true — and
+    // while it was, the catch also absorbed a failed ADOPTION, leaving the
+    // import staged forever with the turn recorded as having settled it.
+    bindPendingImports(this.rt.storage.sql, turnId);
+    const settled = await settleImportsForTurn(
+      this.rt, turnId, outcome === 'accepted' ? 'accepted' : 'rejected',
+    );
+    if (settled.corroborated.length === 0 && settled.discarded.length === 0) return;
+    const describe = (rows: ImportedExperienceRow[]) =>
+      rows.map((r) => `${r.kind} "${r.key}" from ${r.sourceWorkspace}`).join(', ');
+    this.emit({
+      type: 'experience_import',
+      message: settled.corroborated.length > 0
+        ? `Adopted imported experience after an accepted turn: ${describe(settled.corroborated)}`
+        : `Discarded imported experience after a ${outcome} turn: ${describe(settled.discarded)}`,
+      data: {
+        outcome,
+        corroborated: settled.corroborated.map((r) => r.libraryId),
+        discarded: settled.discarded.map((r) => r.libraryId),
+      },
+    });
   }
 
   // ── Timescale 2: Session-level (end of conversation or every N turns) ──
@@ -684,12 +661,7 @@ export class EvolutionEngine {
 
   /** Emit one "what I changed about myself" line for the closed window. */
   private emitChangelogDigest(since: number): void {
-    let entries;
-    try {
-      entries = buildChangelog(this.rt.storage.sql, { since, limit: 20 });
-    } catch {
-      return; // the digest is best-effort
-    }
+    const entries = buildChangelog(this.rt.storage.sql, { since, limit: 20 });
     if (entries.length === 0) return;
     const counts = new Map<string, number>();
     for (const e of entries) counts.set(e.kind, (counts.get(e.kind) ?? 0) + 1);
@@ -752,93 +724,95 @@ export class EvolutionEngine {
     }
   }
 
-  /** Propose a scaffold improvement based on session patterns */
+  /** Propose a scaffold improvement based on session patterns.
+   *
+   *  A rejected proposal is already a RETURNED value (`result.ok === false`),
+   *  not an exception — so the blanket catch this used to carry never caught a
+   *  failed validation. What it did catch was every real fault on the path: the
+   *  archive read, the versioned-backup read, both model calls and the scaffold
+   *  write. An evolution that never proposed anything reported the same silence
+   *  as one that proposed nothing worth taking. */
   private async maybeEvolveScaffold(reflection: string): Promise<void> {
-    try {
-      const scaffoldExists = await this.rt.identity.scaffold.exists();
-      if (!scaffoldExists) return;
+    const scaffoldExists = await this.rt.identity.scaffold.exists();
+    if (!scaffoldExists) return;
 
-      // Skip if a pending scaffold is already in flight — consecutive sessions
-      // would otherwise orphan earlier pending versions. The current pending
-      // must be resolved (promoted or rolled back) before a new proposal.
-      const pending = this.rt.storage.sql<{ version: number }>`
-        SELECT version FROM scaffold_versions WHERE status = 'pending' LIMIT 1
-      `;
-      if (pending.length > 0) {
-        this.emit({
-          type: 'scaffold_proposed',
-          message: `Skipped — scaffold v${pending[0].version} is still pending shadow evaluation`,
-        });
-        return;
-      }
-
-      const currentScaffold = await this.rt.identity.scaffold.read();
-      if (!currentScaffold || currentScaffold.length < 50) return;
-
-      // DGM archive branching: mostly evolve the live current, with a
-      // configurable exploration share drawn from archived stepping stones
-      // (policy + justification in scaffold/archive.ts selectEvolutionBase).
-      // Selection weights blend the shadow record with how each version's
-      // turns ACTUALLY landed with the user (turn_outcomes) — the real-outcome
-      // prior the shadow judge alone can't supply — and are then aggregated
-      // over each candidate's descendant lineage (clade-metaproductivity).
-      const archive = listScaffoldArchive(this.rt.storage.sql, 12);
-      const realRates = realOutcomeScaffoldRates(this.rt.storage.sql);
-      const base = selectEvolutionBase(blendRealOutcomeRates(archive, realRates), {
-        exploreShare: this.agentConfig.getScaffoldExploreShare(),
+    // Skip if a pending scaffold is already in flight — consecutive sessions
+    // would otherwise orphan earlier pending versions. The current pending
+    // must be resolved (promoted or rolled back) before a new proposal.
+    const pending = this.rt.storage.sql<{ version: number }>`
+      SELECT version FROM scaffold_versions WHERE status = 'pending' LIMIT 1
+    `;
+    if (pending.length > 0) {
+      this.emit({
+        type: 'scaffold_proposed',
+        message: `Skipped — scaffold v${pending[0].version} is still pending shadow evaluation`,
       });
-      // The live file IS the current version's content; only an archived
-      // stepping stone needs the versioned-backup read (v0 has no backup).
-      const baseCode = base
-        ? (base.mode === 'current' ? currentScaffold : await readScaffoldVersion(this.rt, base.version))
-        : null;
-
-      // What keeps going wrong, as named cells the proposal can target. The
-      // cells are deterministic (evolution/pathology.ts); the model only gets
-      // to phrase their titles, and only after they exist.
-      const pathologies = await labelPathologyClusters(this.fastLlm, clusterPathologies(
-        listTurnOutcomes(this.rt.storage.sql, { limit: 60, outcomes: NEGATIVE_TURN_OUTCOMES }),
-      ));
-      const rejections = new Map(
-        listRejectedProposals(this.rt.storage.sql, 12)
-          .flatMap((r) => (r.version === null ? [] : [[r.version, r.reason] as const])),
-      );
-
-      const proposed = await this.rt.llm.complete(
-        buildScaffoldProposalPrompt(
-          baseCode ?? currentScaffold,
-          reflection,
-          base && baseCode ? { base, entries: archive, realRates, rejections } : undefined,
-          pathologies,
-        ),
-      );
-
-      // Only attempt mutation if the LLM produced something that looks like a scaffold
-      if (!proposed.includes('async function* run')) return;
-
-      const code = stripMarkdownFences(proposed);
-
-      const branchNote = base && baseCode
-        ? `branched from v${base.version}${base.mode === 'explore' ? ' (archive stepping stone)' : ''}`
-        : 'branched from the live scaffold';
-      const rationale = `Session reflection, ${branchNote}: ${reflection.slice(0, 100)}`;
-      const result = await modifyScaffold(
-        this.rt, rationale, code,
-        base && baseCode ? { baseVersion: base.version } : undefined,
-      );
-      if (result.ok) {
-        // The same parse modifyScaffold stamped the row with, over the same
-        // code — the event and the row cannot disagree about what was targeted.
-        const targeted = parsePathologyTag(code);
-        this.emit({
-          type: 'scaffold_proposed',
-          message: `Scaffold evolved to v${result.version} (${branchNote}): ${reflection.slice(0, 60)}` +
-            (targeted ? ` — targets ${describePathology(targeted)}` : ''),
-        });
-      }
-    } catch {
-      // Scaffold mutation failed validation — that's fine, skip silently
+      return;
     }
+
+    const currentScaffold = await this.rt.identity.scaffold.read();
+    if (!currentScaffold || currentScaffold.length < 50) return;
+
+    // DGM archive branching: mostly evolve the live current, with a
+    // configurable exploration share drawn from archived stepping stones
+    // (policy + justification in scaffold/archive.ts selectEvolutionBase).
+    // Selection weights blend the shadow record with how each version's
+    // turns ACTUALLY landed with the user (turn_outcomes) — the real-outcome
+    // prior the shadow judge alone can't supply — and are then aggregated
+    // over each candidate's descendant lineage (clade-metaproductivity).
+    const archive = listScaffoldArchive(this.rt.storage.sql, 12);
+    const realRates = realOutcomeScaffoldRates(this.rt.storage.sql);
+    const base = selectEvolutionBase(blendRealOutcomeRates(archive, realRates), {
+      exploreShare: this.agentConfig.getScaffoldExploreShare(),
+    });
+    // The live file IS the current version's content; only an archived
+    // stepping stone needs the versioned-backup read (v0 has no backup).
+    const baseCode = base
+      ? (base.mode === 'current' ? currentScaffold : await readScaffoldVersion(this.rt, base.version))
+      : null;
+
+    // What keeps going wrong, as named cells the proposal can target. The
+    // cells are deterministic (evolution/pathology.ts); the model only gets
+    // to phrase their titles, and only after they exist.
+    const pathologies = await labelPathologyClusters(this.fastLlm, clusterPathologies(
+      listTurnOutcomes(this.rt.storage.sql, { limit: 60, outcomes: NEGATIVE_TURN_OUTCOMES }),
+    ));
+    const rejections = new Map(
+      listRejectedProposals(this.rt.storage.sql, 12)
+        .flatMap((r) => (r.version === null ? [] : [[r.version, r.reason] as const])),
+    );
+
+    const proposed = await this.rt.llm.complete(
+      buildScaffoldProposalPrompt(
+        baseCode ?? currentScaffold,
+        reflection,
+        base && baseCode ? { base, entries: archive, realRates, rejections } : undefined,
+        pathologies,
+      ),
+    );
+
+    // Only attempt mutation if the LLM produced something that looks like a scaffold
+    if (!proposed.includes('async function* run')) return;
+
+    const code = stripMarkdownFences(proposed);
+
+    const branchNote = base && baseCode
+      ? `branched from v${base.version}${base.mode === 'explore' ? ' (archive stepping stone)' : ''}`
+      : 'branched from the live scaffold';
+    const rationale = `Session reflection, ${branchNote}: ${reflection.slice(0, 100)}`;
+    const result = await modifyScaffold(
+      this.rt, rationale, code,
+      base && baseCode ? { baseVersion: base.version } : undefined,
+    );
+    if (!result.ok) return;
+    // The same parse modifyScaffold stamped the row with, over the same
+    // code — the event and the row cannot disagree about what was targeted.
+    const targeted = parsePathologyTag(code);
+    this.emit({
+      type: 'scaffold_proposed',
+      message: `Scaffold evolved to v${result.version} (${branchNote}): ${reflection.slice(0, 60)}` +
+        (targeted ? ` — targets ${describePathology(targeted)}` : ''),
+    });
   }
 
   // ── Timescale 3: Lifetime-level (periodic background evolution) ──
@@ -923,7 +897,7 @@ export class EvolutionEngine {
         judge: this.rt.judgeModel ?? this.rt.llm,
         runTask,
         sampleSize,
-        scaffoldVersion: this.currentScaffoldVersion(),
+        scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql),
       });
       if (summary) {
         this.emit({
@@ -1010,26 +984,27 @@ export class EvolutionEngine {
       jsonObjectOnlyInstruction(),
     );
 
-    try {
-      const parsed = v.parse(GeneralizedToolSchema, extractJsonObject(generalized));
-      // Shape only — whether the code is usable is decided by upsertCraftedTool,
-      // which compiles it the way the runtime will before storing anything.
-      if (!parsed.name || !parsed.code) return;
+    // Unusable model output is the one thing skipped here. The old catch also
+    // absorbed every upsertCraftedTool failure — a compile or storage fault on
+    // an accepted pattern read exactly like the model having produced nothing.
+    const json = tolerate(() => extractJsonObject(generalized), 'malformed-input');
+    if (json === undefined) return;
+    const parsed = v.safeParse(GeneralizedToolSchema, json);
+    // Shape only — whether the code is usable is decided by upsertCraftedTool,
+    // which compiles it the way the runtime will before storing anything.
+    if (!parsed.success || !parsed.output.name || !parsed.output.code) return;
 
-      const acceptance = await upsertCraftedTool(this.rt, {
-        name: parsed.name,
-        description: parsed.description ?? '',
-        code: parsed.code,
-        score: quality,
-      });
-      if (!acceptance.accepted) return; // misevolution veto — reason already recorded
+    const acceptance = await upsertCraftedTool(this.rt, {
+      name: parsed.output.name,
+      description: parsed.output.description ?? '',
+      code: parsed.output.code,
+      score: quality,
+    });
+    if (!acceptance.accepted) return; // misevolution veto — reason already recorded
 
-      this.emit({
-        type: 'craft_discovered',
-        message: `Discovered pattern: ${(parsed.description ?? parsed.name).slice(0, 60)}`,
-      });
-    } catch {
-      // LLM returned invalid JSON or conflict — skip
-    }
+    this.emit({
+      type: 'craft_discovered',
+      message: `Discovered pattern: ${(parsed.output.description ?? parsed.output.name).slice(0, 60)}`,
+    });
   }
 }

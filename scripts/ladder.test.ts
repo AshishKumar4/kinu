@@ -20,6 +20,8 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import * as v from 'valibot';
 import {
   CI_EXEMPT, HOOKS_DIR, LADDER, TIERS, claims, deployGates, gatesFor, packageScripts,
   trackedTestFiles,
@@ -273,9 +275,25 @@ describe('the hooks run the tiers they claim to', () => {
     expect(HOOKS_DIR.startsWith('/')).toBe(false);
     expect(readFileSync(resolve(root, 'scripts/ladder.ts'), 'utf8'))
       .toContain("'git', 'config', 'core.hooksPath', HOOKS_DIR");
-    // And something has to run it on a tree nobody has prepared.
+    // And something has to run it on a tree nobody has prepared: a fresh
+    // worktree, and a fresh CLONE — which setup-worktree.sh never sees.
     expect(readFileSync(resolve(root, 'scripts/setup-worktree.sh'), 'utf8'))
       .toContain('ladder.ts --install-hooks');
+    const pkg: unknown = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+    const scripts = v.parse(v.object({ scripts: v.record(v.string(), v.string()) }), pkg).scripts;
+    expect(scripts.prepare).toContain('ladder.ts --install-hooks');
+  });
+
+  test('core.hooksPath IS configured in this checkout', () => {
+    // The report inside `ladder --tier=…` states this; nothing failed on it, so
+    // the ladder could run all four tiers green in a checkout whose two cheapest
+    // tiers never executed. `prepare` now installs the hooks on every `bun
+    // install`, in developer checkouts and CI alike, so a wrong value here is
+    // unambiguously a fault rather than an artefact of where the gate is running.
+    const configured = execFileSync('git', ['config', '--get', 'core.hooksPath'], {
+      cwd: root, encoding: 'utf8',
+    }).trim();
+    expect(configured).toBe(HOOKS_DIR);
   });
 
   test('no hook invokes a gate directly', () => {

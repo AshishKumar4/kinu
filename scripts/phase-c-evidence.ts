@@ -87,6 +87,35 @@ async function connect(): Promise<WebSocket> {
   });
 }
 
+/**
+ * Registers a message listener that only sees frames matching `schema`, and returns its remover.
+ *
+ * The socket multiplexes several frame shapes, so a frame of another shape is routine and is
+ * skipped. A frame that is not JSON at all is a server defect rather than a routine non-match, so
+ * it settles the pending promise instead of disappearing into an RPC or chat timeout.
+ */
+function onFrame<Output>(
+  ws: WebSocket,
+  schema: v.GenericSchema<Output>,
+  reject: (error: Error) => void,
+  handle: (frame: Output) => void,
+): () => void {
+  const listener = (ev: MessageEvent) => {
+    const raw = String(ev.data);
+    let decoded: JsonValue;
+    try {
+      decoded = parseJsonValue(raw);
+    } catch (error) {
+      reject(new Error(`server sent a non-JSON frame: ${raw.slice(0, 200)}`, { cause: error }));
+      return;
+    }
+    const parsed = v.safeParse(schema, decoded);
+    if (parsed.success) handle(parsed.output);
+  };
+  ws.addEventListener('message', listener);
+  return () => { ws.removeEventListener('message', listener); };
+}
+
 async function rpc<Output>(
   ws: WebSocket,
   method: string,
@@ -96,18 +125,18 @@ async function rpc<Output>(
   return new Promise((resolve, reject) => {
     const id = uid();
     const t = setTimeout(() => reject(new Error(`RPC ${method} timeout`)), 15_000);
-    const handler = (ev: MessageEvent) => {
-      try {
-        const msg = v.parse(rpcFrameSchema, parseJsonValue(String(ev.data)));
-        if (msg.type === 'rpc' && msg.id === id) {
-          clearTimeout(t);
-          ws.removeEventListener('message', handler);
-          if (msg.success) resolve(v.parse(outputSchema, msg.result));
-          else reject(new Error(String(msg.error ?? 'rpc failed')));
-        }
-      } catch {}
-    };
-    ws.addEventListener('message', handler);
+    const stop = onFrame(ws, rpcFrameSchema, reject, (msg) => {
+      if (msg.type !== 'rpc' || msg.id !== id) return;
+      clearTimeout(t);
+      stop();
+      if (!msg.success) {
+        reject(new Error(String(msg.error ?? 'rpc failed')));
+        return;
+      }
+      const result = v.safeParse(outputSchema, msg.result);
+      if (result.success) resolve(result.output);
+      else reject(new Error(`rpc ${method} returned an unexpected result shape: ${result.issues.map((issue) => issue.message).join('; ')}`));
+    });
     ws.send(JSON.stringify({ type: 'rpc', id, method, args }));
   });
 }
@@ -122,25 +151,21 @@ async function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promis
 
     const finish = () => {
       clearTimeout(timer);
-      ws.removeEventListener('message', handler);
+      stop();
       resolve({ bodies, final });
     };
 
-    const handler = (ev: MessageEvent) => {
-      try {
-        const msg = v.parse(chatFrameSchema, parseJsonValue(String(ev.data)));
-        if (msg.type === 'cf_agent_use_chat_response' && msg.id === reqId) {
-          if (msg.body) bodies.push(msg.body);
-          if (msg.done && !msg.error) { done = true; setTimeout(() => { if (done) finish(); }, 2000); }
-          if (msg.error) { clearTimeout(timer); ws.removeEventListener('message', handler); reject(new Error('chat error: ' + msg.body)); }
-        }
-        if (msg.type === 'cf_agent_chat_messages' && bodies.length > 0) {
-          final = msg.messages ?? [];
-          if (done) finish();
-        }
-      } catch {}
-    };
-    ws.addEventListener('message', handler);
+    const stop = onFrame(ws, chatFrameSchema, reject, (msg) => {
+      if (msg.type === 'cf_agent_use_chat_response' && msg.id === reqId) {
+        if (msg.body) bodies.push(msg.body);
+        if (msg.done && !msg.error) { done = true; setTimeout(() => { if (done) finish(); }, 2000); }
+        if (msg.error) { clearTimeout(timer); stop(); reject(new Error('chat error: ' + msg.body)); }
+      }
+      if (msg.type === 'cf_agent_chat_messages' && bodies.length > 0) {
+        final = msg.messages ?? [];
+        if (done) finish();
+      }
+    });
 
     ws.send(JSON.stringify({
       type: 'cf_agent_use_chat_request',

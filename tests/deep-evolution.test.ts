@@ -153,8 +153,8 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
       purpose: 'An algorithmic problem solver. Always use execute_tools to compute answers. Never guess.',
       llm: LLM_CONFIG,
     });
-    initSearchTables(rt.storage.execRaw);
-    initScaffoldTables(rt.storage.execRaw);
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initCraftScoreTables(rt.storage.execRaw);
 
     events = [];
@@ -167,7 +167,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
   });
 
   afterAll(() => {
-    try { db.close(); } catch {}
+    db.close();
     rmSync(TEST_DIR, { recursive: true, force: true });
   });
 

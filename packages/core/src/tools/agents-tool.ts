@@ -777,13 +777,13 @@ export async function dispatchAgentsAction(
   const mode = deps.mode;
   const team = deps.team;
   const peers = deps.peers;
+  // No catch: a roster this cannot read is not a roster without this name. The
+  // dispatch below already turns a throw into an inspectable `{ error }`, so the
+  // failure reaches the caller instead of silently routing an assignment meant
+  // for a subordinate down the peer path.
   const isSubordinate = async (name: string): Promise<boolean> => {
     if (!team) return false;
-    try {
-      return (await team.list()).some((entry) => entry.name === name);
-    } catch {
-      return false;
-    }
+    return (await team.list()).some((entry) => entry.name === name);
   };
 
   if (!actions.includes(input.action)) {

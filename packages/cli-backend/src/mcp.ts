@@ -97,8 +97,17 @@ export async function connectMcpServers(
       diagnostics.push({ server: serverName, status: 'connected', toolCount: mcpTools.length });
       onLog?.(`mcp: ${serverName} → ${mcpTools.length} tool(s)`);
     } catch (err) {
-      await client.close().catch(() => undefined);
-      const reason = formatMcpError({ error: err });
+      // The connect failure is this server's diagnostic. A close that ALSO fails
+      // on the half-open transport is a second, different fact — a child process
+      // still running — so it is appended to the reason instead of dropped,
+      // which is what made a leaked server read as a clean skip.
+      const reasons = [formatMcpError({ error: err })];
+      try {
+        await client.close();
+      } catch (closeError) {
+        reasons.push(`closing it also failed: ${formatMcpError({ error: closeError })}`);
+      }
+      const reason = reasons.join('; ');
       const stderrText = stderr.trim();
       diagnostics.push({
         server: serverName,
@@ -115,7 +124,23 @@ export async function connectMcpServers(
     tools,
     diagnostics,
     async close() {
-      for (const c of clients) { try { await c.close(); } catch { /* best effort */ } }
+      // Every client is closed before anything is thrown — one server that will
+      // not shut down must not leave the other children running — but a close
+      // that failed is a surviving child process, not a completed teardown.
+      const failures: unknown[] = [];
+      for (const c of clients) {
+        try {
+          await c.close();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          `${failures.length} of ${clients.length} MCP server(s) failed to disconnect`,
+        );
+      }
     },
   };
 }

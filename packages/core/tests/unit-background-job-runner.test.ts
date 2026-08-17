@@ -56,7 +56,7 @@ function fakeHost() {
  *  place orphan recovery can happen. */
 function setup(opts: { resume?: JobResumer; policy?: BackgroundPolicy; db?: Database } = {}) {
   const db = opts.db ?? new Database(':memory:');
-  initBackgroundJobsTable(makeExecRaw(db));
+  initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
   // The registry behind a switchable fault, so a test can reproduce the one
   // failure the in-process settlement path cannot survive: teardown closing the
   // database out from under a fiber that is still running ("Cannot use a closed

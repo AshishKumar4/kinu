@@ -2198,8 +2198,8 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
 
 describe('LocalAgentSession — Alternate Takes parity', () => {
   function seedTakes(rt: ReturnType<typeof createCLIRuntime>) {
-    initSearchTables(rt.storage.execRaw);
-    initAlternateTakesTable(rt.storage.execRaw);
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
                         VALUES ('win', 'win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
     void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)

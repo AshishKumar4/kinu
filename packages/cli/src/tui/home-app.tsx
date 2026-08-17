@@ -53,6 +53,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   const [catalogHint, setCatalogHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [focusArea, setFocusArea] = useState<HomeFocus>('mission');
   const [selectedAgentIndex, setSelectedAgentIndex] = useState(0);
@@ -79,8 +80,16 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
     if (!cloudReady) return;
     let cancelled = false;
     void syncCloudAgentRefs()
-      .then((next) => { if (!cancelled) setAgents(next); })
-      .catch(() => {});
+      .then((next) => {
+        if (cancelled) return;
+        setAgents(next);
+        setCloudSyncError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        // A list that could not be refreshed must not read as the list itself.
+        setCloudSyncError(`Cloud workspaces could not be refreshed: ${err instanceof Error ? err.message : String(err)}`);
+      });
     return () => { cancelled = true; };
   }, [cloudReady]);
 
@@ -460,6 +469,9 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
             <span fg={tuiColors.muted}>  </span>
             <span fg={localReady ? tuiColors.green : tuiColors.muted}>{localReady ? '●' : '○'} Local provider</span>
           </text>
+          {cloudSyncError && (
+            <text><span fg={tuiColors.amberDeep}>{clipText(cloudSyncError, Math.max(8, panelWidth - 2))}</span></text>
+          )}
         </box>
 
         {error && (

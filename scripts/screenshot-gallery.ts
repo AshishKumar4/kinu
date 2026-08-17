@@ -35,6 +35,7 @@ const WIDTHS = args.includes('--desktop')
   ? ([{ name: 'desktop', width: 1280, height: 1100 }] as const)
   : ([{ name: 'desktop', width: 1280, height: 1100 }, { name: 'mobile', width: 390, height: 844 }] as const);
 
+
 async function shoot(
   browser: Browser,
   origin: string,

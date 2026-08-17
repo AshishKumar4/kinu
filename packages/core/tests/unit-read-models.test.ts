@@ -53,7 +53,7 @@ function workspace() {
 function jobPlane() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initBackgroundJobsTable(makeExecRaw(db));
+  initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
   const jobs = new BackgroundJobStore(sql);
   const detached: Array<{ jobId: string; kind: string }> = [];
   let created = 0;
@@ -101,12 +101,13 @@ describe('run reads', () => {
     expect(getRunEvents(events, 'r2')).toHaveLength(1);
   });
 
-  test('reads over storage with no run_events answer empty, not thrown', () => {
+  test('a workspace with no run_events fails the read instead of reporting no history', () => {
     const db = new Database(':memory:');
     const events = new RunEventRecorder(makeSql(db));
-    expect(listRuns(events)).toEqual([]);
-    expect(getRunEvents(events, 'nope')).toEqual([]);
-    expect(getRunSummaries(events)).toEqual([]);
+    expect(() => listRuns(events)).toThrow(/no such table: run_events/);
+    expect(() => getRunEvents(events, 'nope')).toThrow(/no such table: run_events/);
+    expect(() => getRunSummaries(events)).toThrow(/no such table: run_events/);
+    db.close();
   });
 });
 
@@ -151,13 +152,20 @@ describe('run timeline', () => {
     expect(spans.map((s) => s.label)).toEqual(['m3', 'm4']);
   });
 
-  test('a workspace missing every optional table still answers', () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    const spans = getRunTimeline({
+  test('an idle workspace answers empty; one missing the tables fails the read', () => {
+    const { db, sql } = workspace();
+    expect(getRunTimeline({
       sql, events: new RunEventRecorder(sql), jobs: new BackgroundJobStore(sql), currentRunId: 'r1',
-    });
-    expect(spans).toEqual([]);
+    })).toEqual([]);
+    db.close();
+
+    const bare = new Database(':memory:');
+    const bareSql = makeSql(bare);
+    expect(() => getRunTimeline({
+      sql: bareSql, events: new RunEventRecorder(bareSql),
+      jobs: new BackgroundJobStore(bareSql), currentRunId: 'r1',
+    })).toThrow(/no such table/);
+    bare.close();
   });
 });
 
@@ -178,18 +186,14 @@ describe('agent status', () => {
     db.close();
   });
 
-  test('storage with no tables answers with what the caller already knows', async () => {
+  test('a workspace with no tables fails the read instead of inventing an identity', async () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
-    const status = await getAgentStatus({
+    await expect(getAgentStatus({
       sql, vfs: createWorkspaceBundle(db).vfs,
       config: createAgentConfigStore(sql), name: 'agent-7',
-      displayName: 'ignored on the degraded path', fallbackMessageCount: 3,
-    });
-    // One identifier reaches a surface. `workspace_identity.id` is not on it:
-    // on the cloud backend it is idFromName(name), so it said nothing new.
-    expect(status).not.toHaveProperty('id');
-    expect(status).toMatchObject({ name: 'agent-7', displayName: 'agent-7', messageCount: 0 });
+      displayName: 'ignored', fallbackMessageCount: 3,
+    })).rejects.toThrow(/no such table/);
   });
 
   test('chat history flattens UI-message parts and bounds the page', () => {
@@ -222,11 +226,14 @@ describe('agent status', () => {
   test('the tool list carries each crafted tool with its live score', async () => {
     const { rt, db } = createTestRuntime();
     const sql = makeSql(db);
-    db.exec(`CREATE TABLE IF NOT EXISTS craft_scores (tool_name TEXT PRIMARY KEY, score REAL, uses INTEGER)`);
+    // craft_scores is created by the runtime's own schema. A local
+    // `CREATE TABLE IF NOT EXISTS` naming a 3-column subset was a silent no-op
+    // against the real 5-column table, and the positional INSERT below then
+    // bound three values into five columns.
     await rt.craftStore.create({
       name: 'summarize', description: 'sum', params: null, code: 'x', scope: 'local',
     });
-    void sql`INSERT INTO craft_scores VALUES ('summarize', 0.9, 7)`;
+    void sql`INSERT INTO craft_scores (tool_name, score, uses) VALUES ('summarize', 0.9, 7)`;
 
     const list = getToolList(sql, rt.craftStore);
     expect(list.builtIn.length).toBeGreaterThan(0);
@@ -427,11 +434,11 @@ describe('background-job control plane', () => {
     db.close();
   });
 
-  test('reads and dismissals over absent storage answer instead of throwing', () => {
+  test('a workspace with no background_jobs fails the read instead of reporting no work', () => {
     const db = new Database(':memory:');
     const jobs = new BackgroundJobStore(makeSql(db));
-    expect(listBackgroundJobs(jobs)).toEqual([]);
-    expect(jobResult(jobs, 'j1')).toBeNull();
+    expect(() => listBackgroundJobs(jobs)).toThrow(/no such table: background_jobs/);
+    expect(() => jobResult(jobs, 'j1')).toThrow(/no such table: background_jobs/);
     expect(dismissBackgroundJob(jobs, 'j1')).toEqual({ ok: false });
     expect(clearBackgroundJobs(jobs)).toEqual({ ok: false });
     db.close();
@@ -455,7 +462,13 @@ describe('config plane', () => {
     expect(config.getModel()).toBe('openai/gpt-5.1');
     expect(invalidations).toBe(1);
 
-    expect(() => setModel(deps, 'nonsense')).toThrow('setModel(nonsense) failed: unknown provider: nonsense');
+    // The provider's own message is the CAUSE, not spliced into the wrapper.
+    expect(() => setModel(deps, 'nonsense')).toThrow('setModel(nonsense) failed');
+    const failure = (() => {
+      try { setModel(deps, 'nonsense'); return null; } catch (error) { return error; }
+    })();
+    expect(failure instanceof Error && failure.cause instanceof Error ? failure.cause.message : null)
+      .toBe('unknown provider: nonsense');
     // A rejected spec neither stores nor invalidates.
     expect(config.getModel()).toBe('openai/gpt-5.1');
     expect(invalidations).toBe(1);

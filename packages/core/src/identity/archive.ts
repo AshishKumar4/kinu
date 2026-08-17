@@ -553,8 +553,8 @@ export async function restoreWorkspaceArchive(
     let record: ArchiveRecord;
     try {
       record = v.parse(ArchiveRecordSchema, JSON.parse(trimmed));
-    } catch {
-      throw new Error('This file is not a Proteus workspace archive (unparsable line).');
+    } catch (error) {
+      throw new Error('This file is not a Proteus workspace archive (unparsable line).', { cause: error });
     }
     if (!header) {
       if (record.t !== 'header' || record.proteus_workspace_archive !== WORKSPACE_ARCHIVE_VERSION) {

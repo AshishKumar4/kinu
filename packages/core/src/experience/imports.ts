@@ -88,12 +88,8 @@ interface RawImportRow {
 function toImportRow(r: RawImportRow): ImportedExperienceRow | null {
   const payload = parseExperiencePayload(r.payload_json);
   if (!payload || payload.kind !== r.kind) return null;
-  let turnIds: string[] = [];
-  try {
-    const parsed: unknown = JSON.parse(r.turn_ids);
-    const decoded = v.safeParse(v.array(v.string()), parsed);
-    if (decoded.success) turnIds = decoded.output;
-  } catch { /* malformed row — treat as unbound */ }
+  const rawTurnIds: unknown = JSON.parse(r.turn_ids);
+  const turnIds = v.parse(v.array(v.string()), rawTurnIds);
   return {
     id: r.id, libraryId: r.library_id, kind: r.kind, key: r.key, title: r.title,
     payload, evidence: r.evidence, sourceWorkspace: r.source_workspace,
@@ -106,15 +102,11 @@ export function listImportedExperience(
   options: { status?: ImportStatus; limit?: number } = {},
 ): ImportedExperienceRow[] {
   const limit = options.limit ?? 100;
-  try {
-    const rows = options.status
-      ? sql<RawImportRow>`SELECT * FROM imported_experience WHERE status = ${options.status}
-          ORDER BY imported_at DESC LIMIT ${limit}`
-      : sql<RawImportRow>`SELECT * FROM imported_experience ORDER BY imported_at DESC LIMIT ${limit}`;
-    return rows.map(toImportRow).filter((r): r is ImportedExperienceRow => r !== null);
-  } catch {
-    return [];
-  }
+  const rows = options.status
+    ? sql<RawImportRow>`SELECT * FROM imported_experience WHERE status = ${options.status}
+        ORDER BY imported_at DESC LIMIT ${limit}`
+    : sql<RawImportRow>`SELECT * FROM imported_experience ORDER BY imported_at DESC LIMIT ${limit}`;
+  return rows.map(toImportRow).filter((r): r is ImportedExperienceRow => r !== null);
 }
 
 export type ImportOutcome =
@@ -196,8 +188,8 @@ export interface ImportSettlement {
  * `accepted` promotes them into this workspace's durable stores; anything else
  * discards them — an import that did not survive the turn it was used in has no
  * standing here, and the library entry stays available to import again later.
- * A promotion that fails is discarded too, so no provisional row survives its
- * verdict.
+ * A craft the conflict gate declines is discarded too, so no provisional row
+ * survives its verdict.
  */
 export async function settleImportsForTurn(
   rt: AgentRuntime,
@@ -227,39 +219,35 @@ export async function settleImportsForTurn(
  * public write path this workspace's own experience takes, so an imported
  * artifact is indistinguishable from a home-grown one once adopted (and, for a
  * craft, passes the misevolution gate a second time inside upsertCraftedTool).
- * Returns false when the write could not be made.
+ * Returns false only when the craft conflict gate declined the write.
  */
 async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow): Promise<boolean> {
   const from = `imported from workspace "${row.sourceWorkspace}" (${row.evidence})`;
-  try {
-    switch (row.payload.kind) {
-      case 'craft': {
-        const accepted = await upsertCraftedTool(rt, {
-          name: row.payload.name,
-          description: row.payload.description,
-          params: row.payload.params,
-          code: row.payload.code,
-          score: row.payload.score,
-        });
-        return accepted.accepted;
-      }
-      case 'lesson': {
-        await rt.memory.append(
-          'memory/MEMORY.md',
-          `\n### Lesson (${isoDate()}, ${from})\n${row.payload.text}\n`,
-        );
-        await rt.memory.index('memory/MEMORY.md');
-        return true;
-      }
-      case 'fact': {
-        createFactsStore(rt.storage.sql).upsert(row.payload.key, row.payload.value, {
-          confidence: row.payload.confidence,
-          source: `experience:${row.sourceWorkspace}`,
-        });
-        return true;
-      }
+  switch (row.payload.kind) {
+    case 'craft': {
+      const accepted = await upsertCraftedTool(rt, {
+        name: row.payload.name,
+        description: row.payload.description,
+        params: row.payload.params,
+        code: row.payload.code,
+        score: row.payload.score,
+      });
+      return accepted.accepted;
     }
-  } catch {
-    return false;
+    case 'lesson': {
+      await rt.memory.append(
+        'memory/MEMORY.md',
+        `\n### Lesson (${isoDate()}, ${from})\n${row.payload.text}\n`,
+      );
+      await rt.memory.index('memory/MEMORY.md');
+      return true;
+    }
+    case 'fact': {
+      createFactsStore(rt.storage.sql).upsert(row.payload.key, row.payload.value, {
+        confidence: row.payload.confidence,
+        source: `experience:${row.sourceWorkspace}`,
+      });
+      return true;
+    }
   }
 }

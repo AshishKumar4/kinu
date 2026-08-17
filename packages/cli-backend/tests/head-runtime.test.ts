@@ -56,7 +56,7 @@ function makeGovernor(): MissionGovernor {
  *  directly — the cf backend's has to cross a facet boundary to reach one. */
 function makeJournal(): HeadJournal {
   const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db));
+  initHeadsTables(makeExecRaw(db), makeSql(db));
   return new HeadJournal(makeSql(db));
 }
 
@@ -131,7 +131,7 @@ function fakeHeadsModel(capture?: (options: {
 
 function controllerWithCLIRuntime(model: LanguageModel, providerFamily?: string) {
   const db = new Database(':memory:');
-  initHeadsTables(makeExecRaw(db));
+  initHeadsTables(makeExecRaw(db), makeSql(db));
   const journal = new HeadJournal(makeSql(db));
   const overrides: Partial<CLIHeadRuntimeDeps> = { journal: () => journal };
   if (providerFamily) overrides.providerFamily = providerFamily;

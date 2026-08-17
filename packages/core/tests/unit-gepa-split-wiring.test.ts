@@ -6,8 +6,8 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildOutcomeEvalSplit, initTurnOutcomeTables, recordTurnOutcome } from '../src/index.js';
-import { createTestSql } from '@proteus/test-utils';
+import { buildOutcomeEvalSplit, recordTurnOutcome } from '../src/index.js';
+import { createTestWorkspace } from './helpers.js';
 
 const control = readFileSync(join(import.meta.dir, '..', 'src', 'evolution', 'control.ts'), 'utf8');
 const gepaCall = (() => {
@@ -30,8 +30,7 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
   });
 
   test('the split it consumes really is disjoint on the ledger it reads', () => {
-    const { sql, execRaw } = createTestSql();
-    initTurnOutcomeTables(execRaw, sql);
+    const { sql } = createTestWorkspace();
     for (let i = 0; i < 6; i++) {
       recordTurnOutcome(sql, {
         turnId: `n${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',

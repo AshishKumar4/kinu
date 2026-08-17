@@ -101,6 +101,7 @@
 import * as v from 'valibot';
 import type { LLM, SqlExecutor } from '../types/primitives.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { tolerate } from '../obs/index.js';
 import { formatScoreInterval } from '../utils/stats.js';
 import {
   calibrationUniverse, labelingItem, renderLabelingEvidence, OUTCOME_LABEL_HELP,
@@ -164,12 +165,14 @@ export function buildEnsembleJudgePrompt(item: LabelingItem): string {
   );
 }
 
+const VerdictSchema = v.object({ verdict: v.picklist(OUTCOME_LABELS) });
+
+/** The panel verdict a model gave, or null when it answered without one — a
+ *  hole in the measurement the caller counts, never an abstention. */
 function parseVerdict(raw: string): OutcomeLabel | null {
-  try {
-    return v.parse(v.object({ verdict: v.picklist(OUTCOME_LABELS) }), extractJsonObject(raw)).verdict;
-  } catch {
-    return null;
-  }
+  const answer = tolerate(() => extractJsonObject(raw), 'malformed-input');
+  const parsed = v.safeParse(VerdictSchema, answer);
+  return parsed.success ? parsed.output.verdict : null;
 }
 
 // ── Running the panel ────────────────────────────────────────────
@@ -242,10 +245,12 @@ function goldLabeledItems(universe: ReadonlyArray<UniverseRow>, sql: SqlExecutor
  * them to a retry is the difference between an affordable command and one
  * nobody runs twice.
  *
- * A judge that errors or answers unusably on a turn simply has no row for it;
- * that turn then has no unanimous panel verdict and drops out of the report,
- * counted rather than quietly treated as an abstention — an outage is not the
- * same finding as a disagreement.
+ * A judge that answers unusably on a turn simply has no row for it; that turn
+ * then has no unanimous panel verdict and drops out of the report, counted
+ * rather than quietly treated as an abstention — an unreadable answer is not
+ * the same finding as a disagreement. A failed CALL is neither: it propagates,
+ * so a rate limit stops the run instead of being recorded as a hundred
+ * unusable answers, and the next run resumes from the rows already stored.
  */
 export async function runEnsemble(
   sql: SqlExecutor,
@@ -290,20 +295,15 @@ export async function runEnsemble(
   return { run: { judged, turns: items.length, alreadyJudged }, gap: null };
 }
 
-/** One judge's blind verdict on one turn, or null when it errored or answered
- *  unusably. Exported because the behavioural corpus (behavior-labels.ts)
- *  scores the same panel over different turns, and a second copy of "ask,
- *  parse, swallow" would be a second place for the prompt and the parse to
- *  drift apart. */
+/** One judge's blind verdict on one turn, or null when it answered unusably.
+ *  Exported because the behavioural corpus (behavior-labels.ts) scores the same
+ *  panel over different turns, and a second copy of "ask, parse" would be a
+ *  second place for the prompt and the parse to drift apart. */
 export async function askEnsembleJudge(
   judge: EnsembleJudge,
   item: LabelingItem,
 ): Promise<OutcomeLabel | null> {
-  try {
-    return parseVerdict(await judge.llm.complete(buildEnsembleJudgePrompt(item)));
-  } catch {
-    return null;
-  }
+  return parseVerdict(await judge.llm.complete(buildEnsembleJudgePrompt(item)));
 }
 
 /** The panel's verdict for one turn: what every judge said, or `unclear` when

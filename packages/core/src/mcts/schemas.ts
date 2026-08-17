@@ -17,10 +17,28 @@
  * were missing it while every reader selected it by name.
  */
 
+import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import { reconcileColumns } from '../identity/columns.js';
-import type { RawSqlExec } from '../types/primitives.js';
 
-export function initSearchTables(execRaw: RawSqlExec): void {
+/**
+ * Columns `search_nodes` gained after its first release, and the one place they are listed.
+ *
+ * `CREATE TABLE IF NOT EXISTS` is a no-op on a workspace whose table predates one of them, while
+ * every reader still selects it by name — which is how a live workspace failed with
+ * `no such column: code_language at offset 74`.
+ *
+ * Exported because two initialisation orders both need it and neither may hold its own copy:
+ * `initSearchTables` below reconciles them for the standalone MCTS path, and
+ * `identity/workspace-schema.ts`'s legacy repair reconciles them BEFORE the unified CREATE pass,
+ * because that pass builds `idx_sn_root_status` over `root_id` and fails on a table that lacks it.
+ */
+export const SEARCH_NODES_POST_RELEASE_COLUMNS = {
+  code_used: 'TEXT',
+  code_language: 'TEXT',
+  root_id: 'TEXT',
+} satisfies Readonly<Record<string, string>>;
+
+export function initSearchTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   execRaw(`
     CREATE TABLE IF NOT EXISTS search_nodes (
       id               TEXT PRIMARY KEY,
@@ -41,13 +59,7 @@ export function initSearchTables(execRaw: RawSqlExec): void {
       created_at       INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
-  // Columns added after this table's first release; see identity/columns.ts.
-  reconcileColumns(execRaw, 'search_nodes', [
-    'code_used TEXT',
-    'code_language TEXT',
-    'root_id TEXT',
-  ]);
-
+  reconcileColumns(sql, execRaw, 'search_nodes', SEARCH_NODES_POST_RELEASE_COLUMNS);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_parent ON search_nodes(parent_id)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_status_value ON search_nodes(status, value DESC)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_root_status ON search_nodes(root_id, status)`);

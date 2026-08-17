@@ -18,6 +18,7 @@
 import { appendFileSync, writeFileSync } from 'node:fs';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../packages/core/src/index.js';
+import { tolerate } from '../packages/core/src/obs/index.js';
 
 const BASE_URL = process.env.PROTEUS_BASE_URL ?? 'http://localhost:5173';
 const AGENT_NAME = 'phaseabc-' + Date.now();
@@ -67,15 +68,23 @@ async function chat(ws: WebSocket, text: string): Promise<void> {
     let done = false;
     const finish = () => { clearTimeout(timer); ws.removeEventListener('message', handler); resolve(); };
     const handler = (ev: MessageEvent) => {
+      const raw = String(ev.data);
+      let decoded: JsonValue;
       try {
-        const parsed = v.safeParse(chatResponseSchema, parseJsonValue(String(ev.data)));
-        if (!parsed.success) return;
-        const msg = parsed.output;
-        if (msg.type === 'cf_agent_use_chat_response' && msg.id === reqId) {
-          if (msg.done && !msg.error) { done = true; setTimeout(() => { if (done) finish(); }, 2500); }
-          if (msg.error) { clearTimeout(timer); ws.removeEventListener('message', handler); reject(new Error('chat error: ' + msg.body)); }
-        }
-      } catch {}
+        decoded = parseJsonValue(raw);
+      } catch (error) {
+        clearTimeout(timer);
+        ws.removeEventListener('message', handler);
+        reject(new Error(`server sent a non-JSON frame: ${raw.slice(0, 200)}`, { cause: error }));
+        return;
+      }
+      const parsed = v.safeParse(chatResponseSchema, decoded);
+      if (!parsed.success) return;
+      const msg = parsed.output;
+      if (msg.type === 'cf_agent_use_chat_response' && msg.id === reqId) {
+        if (msg.done && !msg.error) { done = true; setTimeout(() => { if (done) finish(); }, 2500); }
+        if (msg.error) { clearTimeout(timer); ws.removeEventListener('message', handler); reject(new Error('chat error: ' + msg.body)); }
+      }
     };
     ws.addEventListener('message', handler);
     ws.send(JSON.stringify({
@@ -119,24 +128,26 @@ async function main() {
   for (const frame of allFrames) {
     const outerFrame = v.safeParse(chatResponseSchema, frame);
     if (!outerFrame.success || outerFrame.output.body === undefined) continue;
-    try {
-      const innerFrame = v.safeParse(toolEventSchema, parseJsonValue(outerFrame.output.body));
-      if (!innerFrame.success) continue;
-      const inner = innerFrame.output;
-      if (inner.type === 'tool-input-available') {
-        toolInputs.push({ input: inner.input?.code, toolCallId: inner.toolCallId });
-      } else if (inner.type === 'tool-output-available') {
-        const output = inner.output;
-        toolOutputs.push({
-          toolCallId: inner.toolCallId,
-          code: output?.code,
-          result: output?.result,
-          error: output?.error,
-        });
-      } else if (inner.type === 'tool-output-error') {
-        toolErrors.push({ toolCallId: inner.toolCallId, errorText: inner.errorText });
-      }
-    } catch {}
+    // A streamed body is usually plain assistant text rather than a serialized tool event.
+    const bodyText = outerFrame.output.body;
+    const body = tolerate(() => parseJsonValue(bodyText), 'malformed-input');
+    if (body === undefined) continue;
+    const innerFrame = v.safeParse(toolEventSchema, body);
+    if (!innerFrame.success) continue;
+    const inner = innerFrame.output;
+    if (inner.type === 'tool-input-available') {
+      toolInputs.push({ input: inner.input?.code, toolCallId: inner.toolCallId });
+    } else if (inner.type === 'tool-output-available') {
+      const output = inner.output;
+      toolOutputs.push({
+        toolCallId: inner.toolCallId,
+        code: output?.code,
+        result: output?.result,
+        error: output?.error,
+      });
+    } else if (inner.type === 'tool-output-error') {
+      toolErrors.push({ toolCallId: inner.toolCallId, errorText: inner.errorText });
+    }
   }
 
   log(`\nextracted ${toolInputs.length} tool-input(s):`);

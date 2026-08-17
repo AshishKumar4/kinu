@@ -109,8 +109,9 @@ export function recordRecoveryFinding(sql: SqlExecutor, finding: RecoveryFinding
 }
 
 /** The injectable findings, newest first — what the dynamic-context snapshot
- *  reads per step. Empty on a runtime without the ledger (listLessons already
- *  absorbs the missing table). */
+ *  reads per step. Empty when nothing has been recorded; `lessons` belongs to
+ *  the one workspace schema, so a read that cannot reach it is a fault rather
+ *  than a runtime that has learned nothing. */
 export function listRecoveryFindings(sql: SqlExecutor, limit = MAX_RECOVERY_FINDINGS): string[] {
   return listLessons(sql, { source: 'execution_recovery', limit }).map((lesson) => lesson.text);
 }

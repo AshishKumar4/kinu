@@ -21,10 +21,16 @@ import { headProducedFindings } from './head-summary.js';
 
 const EvidenceKindSchema = v.picklist(['tool_output', 'fact', 'citation', 'artifact']);
 
-/** Defensive JSON parse → array (head_journal/head_steps JSON columns). */
+/** JSON array column → array (head_journal/head_steps). This module is what
+ *  writes those columns, so a malformed or non-array blob is corruption: it
+ *  propagates rather than reading back as "this head recorded nothing". */
 function parseArray<T>(json: string | null): T[] {
   if (!json) return [];
-  try { const v = JSON.parse(json); return Array.isArray(v) ? v : []; } catch { return []; }
+  const parsed = JSON.parse(json);
+  if (!Array.isArray(parsed)) {
+    throw new Error(`head journal JSON column is not an array: ${json.slice(0, 120)}`);
+  }
+  return parsed;
 }
 
 export interface HeadJournalRow {

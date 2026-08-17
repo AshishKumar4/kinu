@@ -91,7 +91,7 @@ import {
   claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, listAlternateTakeSets, latestAlternateTakeSet,
   type AlternateTakeSet, type TakePickOutcome,
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
-  initAlternateTakesTable, startBranchHead, settlePendingBranches, newBranchId,
+  startBranchHead, settlePendingBranches, newBranchId,
   type PendingBranch, type BranchStatusEvent,
   type ReleaseStatus, type ReleaseToolDeps,
   runExperienceAction,
@@ -125,7 +125,7 @@ import {
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers,
   EmailInbox, planOwnerNotification, readEmailAllowlist, setEmailAllowlist,
-  type EmailAdmission, type IncomingEmail, type OwnerNotification,
+  type EmailAdmission, type IncomingEmail,
   receiveSubordinateEvent,
   PeerHub, type PeerMessage, type ReceiveResult,
   // ── Read models: the folds a surface asks for, one implementation each ──
@@ -371,29 +371,25 @@ export class OrchestratorAgent extends ActorAgent {
 
 
   private broadcastSubordinatesChanged(event?: SubordinatesChangedEvent): void {
-    try {
-      this.broadcast(JSON.stringify(event ?? {
-        type: 'subordinates_changed',
-        subordinates: this.subordinateRoster.list(),
-      }));
-    } catch { /* no connected clients */ }
+    this.broadcast(JSON.stringify(event ?? {
+      type: 'subordinates_changed',
+      subordinates: this.subordinateRoster.list(),
+    }));
   }
 
   private broadcastSubordinateEvent(
     event: Omit<SubordinateActivityEvent, 'type' | 'id'> & { id?: string },
   ): void {
-    try {
-      this.broadcast(JSON.stringify({
-        type: 'subordinate_event',
-        id: event.id ?? nanoid(),
-        kind: event.kind,
-        subordinate: event.subordinate,
-        status: event.status,
-        content: event.content,
-        task: event.task,
-        timestamp: event.timestamp,
-      } satisfies SubordinateActivityEvent));
-    } catch { /* no connected clients */ }
+    this.broadcast(JSON.stringify({
+      type: 'subordinate_event',
+      id: event.id ?? nanoid(),
+      kind: event.kind,
+      subordinate: event.subordinate,
+      status: event.status,
+      content: event.content,
+      task: event.task,
+      timestamp: event.timestamp,
+    } satisfies SubordinateActivityEvent));
   }
   /** /workspace backups are debounced via the persisted last-backup time +
    *  this optimistic gate. Restore happens lazily in the sandbox handle on
@@ -632,11 +628,9 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Read the owner userId from workspace_identity; '' (empty) means unclaimed. */
   protected getOwnerUserId(): string | null {
-    try {
-      const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity LIMIT 1`;
-      const v = rows[0]?.owner_user_id;
-      return v && v !== '' ? v : null;
-    } catch { return null; }
+    const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity LIMIT 1`;
+    const owner = rows[0]?.owner_user_id;
+    return owner && owner !== '' ? owner : null;
   }
 
   /** The agents tool's peer deps over the cross-workspace transport. Owner
@@ -723,7 +717,20 @@ export class OrchestratorAgent extends ActorAgent {
             };
             await stub.setSubordinateIdentity(identity);
           } catch (error) {
-            await this.deleteSubAgent(SubordinateAgent, input.name).catch(() => {});
+            // Roll the half-created subordinate back. A failed rollback leaves a
+            // Durable Object holding its own SQLite with nothing pointing at it,
+            // so it has to surface rather than be dropped in favour of the error
+            // that triggered it.
+            try {
+              await this.deleteSubAgent(SubordinateAgent, input.name);
+            } catch (rollbackError) {
+              throw new Error(
+                `subordinate ${input.name} could not be given its identity `
+                + `(${error instanceof Error ? error.message : String(error)}) `
+                + `and rolling it back failed too — its storage is orphaned`,
+                { cause: rollbackError },
+              );
+            }
             throw error;
           }
         },
@@ -970,7 +977,7 @@ export class OrchestratorAgent extends ActorAgent {
       // An aborted/errored live turn leaves nothing to compare a branch
       // against — and any takes its think-mcts runs captured competed for an
       // answer that no longer exists, so the next turn must not claim them.
-      try { purgeUnclaimedAlternateTakes(this.boundSql); } catch { /* no takes table yet */ }
+      purgeUnclaimedAlternateTakes(this.boundSql);
       this.settlePendingBranches(null, '');
       return;
     }
@@ -1005,16 +1012,14 @@ export class OrchestratorAgent extends ActorAgent {
     if (!msgId) {
       // Completed but unattributable — without a message id the takes cannot
       // credit this turn, and they must not leak into the next one's claim.
-      try { purgeUnclaimedAlternateTakes(this.boundSql); } catch { /* no takes table yet */ }
+      purgeUnclaimedAlternateTakes(this.boundSql);
     }
     if (msgId) {
       // Alternate Takes captured during this turn's think-mcts runs get the
       // turn id they competed for, so a pick can credit the right turn.
-      try {
-        claimAlternateTakesForTurn(this.boundSql, {
-          turnId: msgId, sessionId: 'default', startedAt: this.acc.startedAt,
-        });
-      } catch { /* no takes table yet — the first MCTS run creates it */ }
+      claimAlternateTakesForTurn(this.boundSql, {
+        turnId: msgId, sessionId: 'default', startedAt: this.acc.startedAt,
+      });
       // The crafted tools this turn called, as the in-episode craft clock saw
       // them. Not "every tool name that is not built in": a crafted tool is
       // codemode-only and never appears as a tool-call name, so that filter
@@ -1181,7 +1186,7 @@ export class OrchestratorAgent extends ActorAgent {
         console.warn('[proteus] propagateDisplayName roster sync failed:', err instanceof Error ? err.message : err);
       }
     }
-    try { this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName })); } catch { /* nop */ }
+    this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
   }
 
   // ── Background jobs (#173) — auto-detach >30s tool calls, wake on completion ──
@@ -1260,22 +1265,18 @@ export class OrchestratorAgent extends ActorAgent {
       if (notice.kind === 'raised') {
         const { consent } = notice;
         this.logActivity('device_consent_requested', `${consent.deviceLabel}: ${consent.command.slice(0, 80)}`);
-        try {
-          this.broadcast(JSON.stringify({
-            type: 'device_consent',
-            consentId: consent.consentId,
-            deviceId: consent.deviceId,
-            deviceLabel: consent.deviceLabel,
-            method: consent.method,
-            command: consent.command,
-            scope: consent.scope,
-          }));
-        } catch { /* no connected clients */ }
+        this.broadcast(JSON.stringify({
+          type: 'device_consent',
+          consentId: consent.consentId,
+          deviceId: consent.deviceId,
+          deviceLabel: consent.deviceLabel,
+          method: consent.method,
+          command: consent.command,
+          scope: consent.scope,
+        }));
         return;
       }
-      try {
-        this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId: notice.consentId }));
-      } catch { /* no connected clients */ }
+      this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId: notice.consentId }));
     },
   });
 
@@ -1338,8 +1339,7 @@ export class OrchestratorAgent extends ActorAgent {
     }
     // The needs-you queue is polled, not pushed; one frame tells a connected
     // client to re-read it rather than duplicating the rows onto the wire.
-    try { this.broadcast(JSON.stringify({ type: 'pending_actions_changed' })); }
-    catch { /* no connected clients */ }
+    this.broadcast(JSON.stringify({ type: 'pending_actions_changed' }));
   }
 
   /** Everything the agent has parked on the owner. Read by the needs-you
@@ -1500,8 +1500,6 @@ export class OrchestratorAgent extends ActorAgent {
     //    core/conformance/manifest.ts, observed against sqlite_master) ──
     initWebhookRateLimitTables(this.ctx.storage.sql);
     this.subordinateRoster.ensureSchema();
-    // The shared actor plane both cf roots carry (manifest: WIRED on both).
-    this.ensureCapabilitySchema();
 
     // Workspace-diff baseline (path → content snapshot) for the Output surface's
 
@@ -1720,8 +1718,11 @@ export class OrchestratorAgent extends ActorAgent {
   async decideReleaseApproval(approvalId: string, decision: 'approved' | 'rejected', note?: string | null) {
     const { stub, caller } = await this.userHub();
     const decided = await stub.decideReleaseApproval(caller, approvalId, decision, this.getOwnerUserId() ?? this.name, note);
-    if (decision === 'rejected') {
-      try { await stub.transitionReleaseChange(caller, decided.changeId, 'rejected'); } catch { /* already terminal or stale */ }
+    // Refusing a ROLLBACK leaves the deployed change deployed, which is also
+    // why `deployed -> rejected` is not a legal transition. Every other
+    // approval is the gate on shipping the change, so refusing it rejects it.
+    if (decision === 'rejected' && decided.approvalType !== 'rollback') {
+      await stub.transitionReleaseChange(caller, decided.changeId, 'rejected');
     }
     return decided;
   }
@@ -1793,17 +1794,17 @@ export class OrchestratorAgent extends ActorAgent {
    * `listPendingConsents` off that list, on the surface an owner reads right
    * before authorising something.
    *
-   * A read that fails degrades to "nothing pending of that kind" rather than
-   * failing the whole queue: a broken release hub must not hide a failed job.
+   * An unclaimed workspace has no release hub to ask, so it contributes no
+   * approvals and no changes. Anything else that fails is a real failure and
+   * reaches the caller: "nothing is pending" is the one answer an owner acts
+   * on by doing nothing, so it must never be what a broken read looks like.
    */
   @callable() async listPendingActions(): Promise<PendingAction[]> {
-    const board = await this.getReleaseBoard(20).catch(() => null);
+    const board = this.getOwnerUserId() ? await this.getReleaseBoard(20) : null;
     // The unseen window itself, not the whole digest: the queue row needs the
     // count, the newest entry's time, and how many of those entries actually
     // offer keep/revert rather than being measurements to read.
-    let unseen: ChangelogEntry[] = [];
-    try { unseen = getUnseenChangelog(this.config, this.boundSql); }
-    catch { /* a digest that will not assemble must not hide a failed job */ }
+    const unseen = getUnseenChangelog(this.config, this.boundSql);
     return buildPendingActions({
       approvals: board?.approvals ?? [],
       changes: board?.changes ?? [],
@@ -1913,10 +1914,8 @@ export class OrchestratorAgent extends ActorAgent {
       // like the consolidation path.
       this._cachedTools = null;
       this._cachedToolsKey = '';
-      try {
-        void this.sql`INSERT INTO evolution_events (type, message, created_at)
-          VALUES ('reflection', ${`Operator reverted changelog entry ${id}: ${result.detail ?? 'done'}`}, ${Date.now()})`;
-      } catch { /* event log is best-effort */ }
+      void this.sql`INSERT INTO evolution_events (type, message, created_at)
+        VALUES ('reflection', ${`Operator reverted changelog entry ${id}: ${result.detail ?? 'done'}`}, ${Date.now()})`;
     }
     return result;
   }
@@ -1962,7 +1961,6 @@ export class OrchestratorAgent extends ActorAgent {
     if (!runtime) {
       return { accepted: false, reason: 'Branching needs an agent owner (heads require UserDO access).' };
     }
-    initAlternateTakesTable(this.rt.storage.execRaw);
     const id = newBranchId();
     this._pendingBranches.push({
       id, task,
@@ -1976,7 +1974,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   private broadcastBranchStatus(event: BranchStatusEvent): void {
-    try { this.broadcast(JSON.stringify(event)); } catch { /* nop */ }
+    this.broadcast(JSON.stringify(event));
     if (event.status !== 'running') {
       this.logActivity('branch_settle', event.status === 'settled'
         ? `takes ${event.takeSetId}`
@@ -2327,13 +2325,9 @@ export class OrchestratorAgent extends ActorAgent {
    *  hydrates its thumbs marks on load instead of forgetting them. */
   @callable()
   async listTurnFeedback(): Promise<Record<string, 'positive' | 'negative'>> {
-    try {
-      const rows = this.sql<{ message_id: string; feedback: 'positive' | 'negative' }>`
-        SELECT message_id, feedback FROM turn_feedback`;
-      return Object.fromEntries(rows.map((r) => [r.message_id, r.feedback]));
-    } catch {
-      return {};
-    }
+    const rows = this.sql<{ message_id: string; feedback: 'positive' | 'negative' }>`
+      SELECT message_id, feedback FROM turn_feedback`;
+    return Object.fromEntries(rows.map((r) => [r.message_id, r.feedback]));
   }
 
   /** The scaffold variant archive: recent versions with status, DGM lineage
@@ -2365,8 +2359,7 @@ export class OrchestratorAgent extends ActorAgent {
   /** List recent GEPA optimisation runs for the UI. */
   @callable()
   async getGepaRuns(limit: number = 20): Promise<GepaRunSummary[]> {
-    try { return listGepaRuns(this.boundSql, limit); }
-    catch { return []; }
+    return listGepaRuns(this.boundSql, limit);
   }
 
   // ── Replay-eval loss curve ──────────────────────────────────────
@@ -2584,11 +2577,9 @@ export class OrchestratorAgent extends ActorAgent {
   async getFacts(limit: number = 100): Promise<Array<{
     key: string; value: unknown; confidence: number; source: string; lastObservedAt: number;
   }>> {
-    try {
-      return this.facts.recentTopK(limit).map((f) => ({
-        key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
-      }));
-    } catch { return []; }
+    return this.facts.recentTopK(limit).map((f) => ({
+      key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
+    }));
   }
 
   /** Run a scaffold against a task and return the concatenated text it
@@ -2733,8 +2724,9 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   @callable() async getMemoryContent() {
-    try { return await this.rt.memory.read("memory/MEMORY.md") ?? ""; }
-    catch { return ""; }
+    // `read` returns null only for an absent file; every other VFS failure
+    // throws, and must — "" is indistinguishable from an empty MEMORY.md.
+    return await this.rt.memory.read("memory/MEMORY.md") ?? "";
   }
 
   // ── Agent-authored views ───────────────────────────────────────
@@ -2744,8 +2736,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** The tabs to draw. Titles are agent-authored, so the UI marks them. */
   @callable() async listAgentViews(): Promise<AgentViewSummary[]> {
-    try { return listViews(this.boundSql); }
-    catch { return []; }
+    return listViews(this.boundSql);
   }
 
   /** The spec for one tab. Re-validated in core against the live file, so a
@@ -2896,27 +2887,25 @@ export class OrchestratorAgent extends ActorAgent {
    * One-round-trip initial load. Composes the per-surface read RPCs (status,
    * tools, memory, the exploration canvas, timeline, executors + their recent
    * output) into a single payload, so the workspace first-paint is one WS call
-   * instead of 6 + N. Each field is independently guarded so one failing read
-   * can't blank the rest. Live updates still arrive via the granular refresh +
-   * events.
+   * instead of 6 + N. A read that fails fails the snapshot: an empty Timeline or
+   * an empty tool list is a claim about the workspace, and a per-field fallback
+   * makes a broken read indistinguishable from a quiet one. Live updates still
+   * arrive via the granular refresh + events.
    */
   @callable()
   async getWorkspaceSnapshot() {
-    const safe = async <T>(p: Promise<T>, fallback: T): Promise<T> => {
-      try { return await p; } catch { return fallback; }
-    };
     const [status, tools, memoryContent, exploration, timeline, executors] = await Promise.all([
       this.getAgentStatus(),
-      safe(this.getToolDescriptions(), { builtIn: [], crafted: [], executors: [] }),
+      this.getToolDescriptions(),
       this.getMemoryContent(),
-      safe(this.getExplorationCanvas(), { runs: [], params: [], search: [] }),
-      safe(this.getRunTimeline({ limit: 250 }), []),
-      safe(this.getExecutors(), []),
+      this.getExplorationCanvas(),
+      this.getRunTimeline({ limit: 250 }),
+      this.getExecutors(),
     ]);
     const executorOutputs = await Promise.all(
       executors.map(async (e) => ({
         name: e.name,
-        outputs: await safe(this.getExecutorOutput(e.name, 50), []),
+        outputs: await this.getExecutorOutput(e.name, 50),
       })),
     );
     const lastActiveExecutor = this.config.getLastActiveExecutor();
@@ -3282,14 +3271,12 @@ export class OrchestratorAgent extends ActorAgent {
     // so the override is documented, never silent.
     if (this.config.get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns) == null) {
       this.config.setAutoGepaEveryNTurns(everyN);
-      try {
-        void this.sql`INSERT INTO evolution_events (type, message, created_at)
-          VALUES ('reflection', ${
-            `Auto-GEPA enabled by the autonomous default (every ${everyN} turns of new traces). ` +
-            `A disable set before autonomy defaults flipped on was stored as "unset" and is ` +
-            `superseded by this default — run setAutoGepa(0) to disable again.`
-          }, ${Date.now()})`;
-      } catch { /* event log is best-effort */ }
+      void this.sql`INSERT INTO evolution_events (type, message, created_at)
+        VALUES ('reflection', ${
+          `Auto-GEPA enabled by the autonomous default (every ${everyN} turns of new traces). ` +
+          `A disable set before autonomy defaults flipped on was stored as "unset" and is ` +
+          `superseded by this default — run setAutoGepa(0) to disable again.`
+        }, ${Date.now()})`;
     }
     this._turnsSinceGepa += 1;
     if (this._turnsSinceGepa < everyN) return;
@@ -3381,12 +3368,14 @@ export class OrchestratorAgent extends ActorAgent {
 
   // ── Mission Inbox: email ingress + owner notifications ─────────
 
-  /** Owner's verified login email (UserDO profile), or null when unknown. */
+  /** Owner's verified login email (UserDO profile). Null covers the two things
+   *  the email gate treats alike: the workspace is unclaimed, or the owner's
+   *  profile carries no email. Failing to ASK is not one of them — it must not
+   *  read as "owner email unknown" and silently refuse the owner's own mail. */
   private async getOwnerEmail(): Promise<string | null> {
-    try {
-      const { stub, caller } = await this.userHub();
-      return (await stub.getProfile(caller))?.email ?? null;
-    } catch { return null; }
+    if (!this.getOwnerUserId()) return null;
+    const { stub, caller } = await this.userHub();
+    return (await stub.getProfile(caller))?.email ?? null;
   }
 
   private _emailInbox: EmailInbox | null = null;
@@ -3445,15 +3434,12 @@ export class OrchestratorAgent extends ActorAgent {
    *  Also skipped while an operator socket is live — the owner sees the
    *  card in-app; email is the away channel, not a duplicate feed. */
   private emailOwnerNotification(subject: string, text: string): void {
-    let notification: OwnerNotification | null;
-    try {
-      notification = planOwnerNotification({
-        enabled: this.config.getEmailNotificationsEnabled(),
-        operatorConnected: this.ctx.getWebSockets().length > 0,
-        subject,
-        text,
-      });
-    } catch { return; }
+    const notification = planOwnerNotification({
+      enabled: this.config.getEmailNotificationsEnabled(),
+      operatorConnected: this.ctx.getWebSockets().length > 0,
+      subject,
+      text,
+    });
     if (!notification) return;
     void (async () => {
       await sendOwnerEmail({

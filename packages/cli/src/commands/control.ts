@@ -63,8 +63,8 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     if (spec) {
-      const models = await loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token));
-      validateModelSelection(models, catalogSpec(models, spec), spec, name);
+      const catalog = await loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token));
+      validateModelSelection(catalog, catalogSpec(catalog, spec), spec, name);
     }
     const result = spec
       ? await callAgentRpc(auth.origin, auth.token, target.cloudName, 'setModel', ModelSetResultSchema, [spec])
@@ -83,8 +83,8 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
       agentName: target.localName,
     });
     resolvedSpec = configured.resolver.normalizeSpecSync(spec);
-    const models = await loadModelCatalog(() => configured.resolver.listModels());
-    validateModelSelection(models, resolvedSpec, spec, name);
+    const catalog = await loadModelCatalog(() => configured.resolver.listModels());
+    validateModelSelection(catalog, resolvedSpec, spec, name);
   }
   const result = resolvedSpec ? setLocalStoredModel(target.localName, resolvedSpec) : getLocalStoredModel(target.localName);
   console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
@@ -113,30 +113,36 @@ export async function effortCommand(name: string, level: string | undefined): Pr
     : `${DIM('reasoning effort')} ${result.effort ?? 'medium (chat default)'}`);
 }
 
-/** The catalog for spec validation. A menu that could not be read at all is
- *  null (validation is skipped); a menu missing a failed provider's models is
- *  still a usable catalog. */
-async function loadModelCatalog(load: () => Promise<ModelMenu | CloudModelMenu>): Promise<AgentModelEntry[] | null> {
+/** The catalog for spec validation, or the reason it could not be read. Validation
+ *  is advisory, so an unreachable catalog must say why instead of reading as an
+ *  empty menu; a menu missing a failed provider's models is still a usable catalog. */
+type ModelCatalog = { readonly models: readonly AgentModelEntry[] } | { readonly unreadable: string };
+
+async function loadModelCatalog(load: () => Promise<ModelMenu | CloudModelMenu>): Promise<ModelCatalog> {
   try {
-    return normalizeModelMenu({ payload: await load() }).models;
-  } catch {
-    return null;
+    return { models: normalizeModelMenu({ payload: await load() }).models };
+  } catch (error) {
+    return { unreadable: error instanceof Error ? error.message : String(error) };
   }
 }
 
 function validateModelSelection(
-  models: readonly AgentModelEntry[] | null,
+  catalog: ModelCatalog,
   resolvedSpec: string,
   rawSpec: string,
   workspace: string,
 ): void {
-  if (!models || models.length === 0) {
-    console.log(`${WARN('!')} The model catalog is unavailable; setting ${resolvedSpec} without catalog validation.`);
+  if ('unreadable' in catalog) {
+    console.log(`${WARN('!')} Could not read the model catalog (${catalog.unreadable}); setting ${resolvedSpec} without catalog validation.`);
+    return;
+  }
+  if (catalog.models.length === 0) {
+    console.log(`${WARN('!')} The model catalog is empty; setting ${resolvedSpec} without catalog validation.`);
     return;
   }
 
   const explicitProvider = providerPrefix(rawSpec);
-  const validation = validateModelSpec(models, explicitProvider ? rawSpec.trim() : resolvedSpec);
+  const validation = validateModelSpec(catalog.models, explicitProvider ? rawSpec.trim() : resolvedSpec);
   if (validation.status === 'known') return;
   if (validation.status === 'unknown-provider') {
     if (!explicitProvider) {
@@ -164,11 +170,11 @@ function providerPrefix(spec: string): string | null {
   return slash > 0 ? normalized.slice(0, slash) : null;
 }
 
-function catalogSpec(models: readonly AgentModelEntry[] | null, spec: string): string {
+function catalogSpec(catalog: ModelCatalog, spec: string): string {
   const normalized = spec.trim();
   if (normalized.startsWith('@cf/')) return `workers-ai/${normalized}`;
-  if (!models || normalized.includes('/')) return normalized;
-  const suffixMatches = models.filter((model) => model.spec.endsWith(`/${normalized}`));
+  if (!('models' in catalog) || normalized.includes('/')) return normalized;
+  const suffixMatches = catalog.models.filter((model) => model.spec.endsWith(`/${normalized}`));
   return suffixMatches.length === 1 ? suffixMatches[0]!.spec : normalized;
 }
 

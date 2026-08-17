@@ -107,8 +107,10 @@ export function createMyGatewayProvider(): ModelProvider {
 
 /** Which provider slugs THIS gateway can actually serve: its stored BYOK
  *  provider keys, plus the Unified-Billing set when the account has credits.
- *  Both reads are best-effort — a denied management call (e.g. a credential
- *  predating the aig.write scope) just narrows the menu, never throws. */
+ *  A denied management call (e.g. a credential predating the aig.write scope)
+ *  answers non-ok and just narrows the menu; a call that cannot be made at all
+ *  propagates, so the registry reports the gateway as failed instead of
+ *  serving an empty menu that looks like "no providers configured". */
 async function servableProviderSlugs(
   baseURL: string,
   authHeaders: Record<string, string>,
@@ -121,28 +123,24 @@ async function servableProviderSlugs(
   const headers = { ...authHeaders, accept: 'application/json' };
   const slugs = new Set<string>();
 
-  try {
-    const res = await fetchImpl(
-      `${account}/ai-gateway/gateways/${encodeURIComponent(gatewayId)}/provider_configs?per_page=100`,
-      { headers },
-    );
-    if (res.ok) {
-      const body = v.parse(ProviderConfigsSchema, await res.json());
-      for (const row of body.result ?? []) {
-        if (row.provider_slug !== undefined) slugs.add(row.provider_slug);
-      }
+  const configs = await fetchImpl(
+    `${account}/ai-gateway/gateways/${encodeURIComponent(gatewayId)}/provider_configs?per_page=100`,
+    { headers },
+  );
+  if (configs.ok) {
+    const body = v.parse(ProviderConfigsSchema, await configs.json());
+    for (const row of body.result ?? []) {
+      if (row.provider_slug !== undefined) slugs.add(row.provider_slug);
     }
-  } catch { /* BYOK listing unavailable — fall through to unified billing */ }
+  }
 
-  try {
-    const res = await fetchImpl(`${account}/ai-gateway/billing/credit-balance`, { headers });
-    if (res.ok) {
-      const body = v.parse(CreditBalanceSchema, await res.json());
-      if (body.result?.balance !== undefined && body.result.balance > 0) {
-        for (const slug of UNIFIED_BILLING_SLUGS) slugs.add(slug);
-      }
+  const credit = await fetchImpl(`${account}/ai-gateway/billing/credit-balance`, { headers });
+  if (credit.ok) {
+    const body = v.parse(CreditBalanceSchema, await credit.json());
+    if (body.result?.balance !== undefined && body.result.balance > 0) {
+      for (const slug of UNIFIED_BILLING_SLUGS) slugs.add(slug);
     }
-  } catch { /* no credit visibility — BYOK-only menu */ }
+  }
 
   return [...slugs].sort();
 }

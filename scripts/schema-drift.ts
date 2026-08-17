@@ -64,23 +64,108 @@ function columnsOf(source: string, table: string): string[] | null {
   return columns;
 }
 
-/** Every column named in a backfill call anywhere in the tracked sources. */
+/**
+ * A `reconcileColumns(sql, execRaw, 'table', columns)` call site. `columns` is
+ * captured raw: it is an inline object literal at most sites and a named,
+ * exported constant where the same list also feeds a second init path.
+ */
+const RECONCILE_RE =
+  /reconcileColumns\([^,]+,\s*[^,]+,\s*'(\w+)',\s*(\{[\s\S]*?\}|\w+)\s*\)/g;
+
+/** `export const NAME = { col: 'TYPE', … }` — the named form's definition. */
+const COLUMN_CONST_RE =
+  /const\s+(\w+)\s*(?::[^=]+)?=\s*(\{[^}]*\})/g;
+
+/** Column names out of an object literal's keys. */
+function objectKeys(literal: string): string[] {
+  return [...literal.matchAll(/(\w+)\s*:/g)].flatMap((m) => m[1] === undefined ? [] : [m[1]]);
+}
+
+/**
+ * Every column named in a backfill call anywhere in the tracked sources.
+ *
+ * `reconcileColumns` changed shape once already — from
+ * `(execRaw, table, ['col TYPE'])` to `(sql, execRaw, table, { col: 'TYPE' })` —
+ * and the pattern here went on matching nothing, so this gate reported no drift
+ * because it was reading no call sites rather than because there were none.
+ * Hence `assertEveryCallSiteParsed`: the denominator is checked, not assumed.
+ */
 function backfilledColumns(sources: Map<string, string>): Set<string> {
+  // Column lists named once and used by more than one init path, resolved
+  // across files because the constant is exported from the module that owns
+  // the table and imported by the unified initializer.
+  const byConstName = new Map<string, string[]>();
+  for (const source of sources.values()) {
+    for (const m of source.matchAll(COLUMN_CONST_RE)) {
+      if (m[1] !== undefined && m[2] !== undefined) byConstName.set(m[1], objectKeys(m[2]));
+    }
+  }
+
   const named = new Set<string>();
   for (const source of sources.values()) {
     for (const m of source.matchAll(/ALTER TABLE\s+(?:\$\{table\}|(\w+))\s+ADD COLUMN\s+(\w+)/g)) {
       if (m[1] !== undefined && m[2] !== undefined) named.add(`${m[1]}.${m[2]}`);
     }
-    // reconcileColumns(execRaw, 'table', ['col TYPE', …]) and ensureColumn(sql, 'table', 'col', …)
-    for (const m of source.matchAll(/reconcileColumns\([^,]+,\s*'(\w+)',\s*\[([\s\S]*?)\]\)/g)) {
+    for (const m of source.matchAll(RECONCILE_RE)) {
       const table = m[1];
-      for (const c of (m[2] ?? '').matchAll(/['"`](\w+)\s/g)) named.add(`${table}.${c[1]}`);
+      const argument = m[2] ?? '';
+      const columns = argument.startsWith('{')
+        ? objectKeys(argument)
+        : byConstName.get(argument) ?? [];
+      for (const column of columns) named.add(`${table}.${column}`);
     }
     for (const m of source.matchAll(/ensureColumn\([^,]+,\s*'(\w+)',\s*'(\w+)'/g)) {
       named.add(`${m[1]}.${m[2]}`);
     }
   }
   return named;
+}
+
+/**
+ * Every `reconcileColumns(` CALL in the tree must be one this gate could read,
+ * and each must resolve to at least one column. A call it cannot parse — or one
+ * whose named column list it cannot resolve — is a table whose backfill it
+ * cannot see, which it would otherwise report as drift-free.
+ *
+ * The declaration in `identity/columns.ts` is excluded by name: it is the
+ * definition, not a call.
+ */
+function assertEveryCallSiteParsed(sources: Map<string, string>): void {
+  const byConstName = new Map<string, string[]>();
+  for (const source of sources.values()) {
+    for (const m of source.matchAll(COLUMN_CONST_RE)) {
+      if (m[1] !== undefined && m[2] !== undefined) byConstName.set(m[1], objectKeys(m[2]));
+    }
+  }
+
+  const faults: string[] = [];
+  let callsSeen = 0;
+  for (const [file, source] of sources) {
+    const calls = (source.match(/(?<!function\s)\breconcileColumns\(/g) ?? []).length;
+    if (calls === 0) continue;
+    callsSeen += calls;
+    const matches = [...source.matchAll(RECONCILE_RE)];
+    if (matches.length !== calls) {
+      faults.push(`${file}: ${calls} call(s), ${matches.length} parsed — update RECONCILE_RE`);
+      continue;
+    }
+    for (const m of matches) {
+      const argument = m[2] ?? '';
+      const columns = argument.startsWith('{') ? objectKeys(argument) : byConstName.get(argument);
+      if (columns === undefined || columns.length === 0) {
+        faults.push(`${file}: reconcileColumns(… '${m[1]}', ${argument}) resolved to no columns`);
+      }
+    }
+  }
+  if (callsSeen === 0) {
+    faults.push('no reconcileColumns call sites found at all — the gate examined nothing');
+  }
+  if (faults.length > 0) {
+    throw new Error(
+      'schema-drift cannot read every reconcileColumns call, so it would report ' +
+      `drift-free on tables it never examined.\n  ${faults.join('\n  ')}`,
+    );
+  }
 }
 
 export function findSchemaDrift(): Violation[] {
@@ -90,6 +175,7 @@ export function findSchemaDrift(): Violation[] {
   // on the change already committed.
   for (const file of files) sources.set(file, readFileSync(join(root, file), 'utf8'));
 
+  assertEveryCallSiteParsed(sources);
   const backfilled = backfilledColumns(sources);
   const violations: Violation[] = [];
 
@@ -121,7 +207,7 @@ export function formatViolations(violations: Violation[]): string {
   return violations
     .map(({ table, file, columns }) =>
       `${table} (${file}) added [${columns.join(', ')}] after release with no backfill.\n` +
-      `  Add them to a reconcileColumns(execRaw, '${table}', [...]) call beside the DDL.`)
+      `  Add them to a reconcileColumns(sql, execRaw, '${table}', { … }) call beside the DDL.`)
     .join('\n');
 }
 

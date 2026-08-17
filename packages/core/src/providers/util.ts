@@ -5,7 +5,6 @@ import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './t
 import { asFetchFunction } from './fetch-shim.js';
 import { withRateLimitRetry } from './rate-limit-retry.js';
 import * as v from 'valibot';
-import { JsonObjectSchema, type JsonObject } from '../utils/json.js';
 
 export interface AuthedFetchOptions {
   /** Credential key passed to the AuthResolver on every request. */
@@ -75,9 +74,15 @@ export function cloneModelInfos(models: readonly ModelInfo[] | undefined): Model
 }
 
 /** One model's catalog entry from a provider's listModels, or null when the
- *  provider/model is unknown or the catalog is unreachable. The catalog is
+ *  provider is unknown or its catalog holds no such model. The catalog is
  *  the source of truth for per-model metadata — context window AND input
  *  modalities — so callers prefer it over static fallbacks when it resolves.
+ *
+ *  A catalog that cannot be READ throws rather than resolving null: null
+ *  shared between "no such model" and "models.dev is down" is how every model
+ *  silently gets a static context window. `ModelCatalogSession`'s lookup seam
+ *  is documented to accept a throwing lookup and keep the static fallbacks
+ *  authoritative, so the degraded path survives — it is now visible.
  *  Shared by the cf orchestrator's per-spec lookup and the CLI resolver. */
 export async function catalogModelInfo(
   provider: Pick<ModelProvider, 'listModels'> | undefined,
@@ -85,12 +90,8 @@ export async function catalogModelInfo(
   modelId: string,
 ): Promise<ModelInfo | null> {
   if (!provider) return null;
-  try {
-    const models = await provider.listModels(deps);
-    return models.find((m) => m.id === modelId) ?? null;
-  } catch {
-    return null;
-  }
+  const models = await provider.listModels(deps);
+  return models.find((m) => m.id === modelId) ?? null;
 }
 
 export function nonEmptyString<T>(value: T): string | undefined {
@@ -101,14 +102,6 @@ export function nonEmptyString<T>(value: T): string | undefined {
 export function positiveInteger<T>(value: T): number | undefined {
   const parsed = v.safeParse(v.pipe(v.number(), v.finite(), v.gtValue(0)), value);
   return parsed.success ? Math.floor(parsed.output) : undefined;
-}
-
-export function isRecord<T>(value: T): value is T & JsonObject {
-  try {
-    return v.safeParse(JsonObjectSchema, value).success;
-  } catch {
-    return false;
-  }
 }
 
 /** How deep to follow nested `{ error: … }` envelopes. OpenAI-shaped bodies
@@ -138,29 +131,46 @@ export function describeProviderError<T>(error: T, depth = 0): string {
   }
   const text = v.safeParse(v.string(), error);
   if (text.success) return text.output.trim() || 'unknown provider error';
-  if (isRecord(error)) {
-    const message = nonEmptyString(error.message)
-      ?? nonEmptyString(error.error_description)
-      ?? nonEmptyString(error.detail);
+  // Shallow on purpose. This used to go through a `JsonObject` guard, and
+  // `JsonObjectSchema` is RECURSIVE: a provider error object that references
+  // itself — the shape a gateway produces the moment it attaches the request it
+  // failed on — overflowed valibot's stack instead of failing to match, and the
+  // guard's `catch { return false }` reported that overflow as "not an object".
+  // Nothing here needs deep JSON validity: each field below re-validates.
+  const record = v.safeParse(v.record(v.string(), v.unknown()), error);
+  if (record.success) {
+    const fields = record.output;
+    const message = nonEmptyString(fields.message)
+      ?? nonEmptyString(fields.error_description)
+      ?? nonEmptyString(fields.detail);
     if (message) {
-      const code = nonEmptyString(error.code) ?? nonEmptyString(error.type);
+      const code = nonEmptyString(fields.code) ?? nonEmptyString(fields.type);
       return code && !message.toLowerCase().includes(code.toLowerCase()) ? `${message} (${code})` : message;
     }
-    if (error.error !== undefined && depth < PROVIDER_ERROR_MAX_DEPTH) {
-      return describeProviderError(error.error, depth + 1);
+    if (fields.error !== undefined && depth < PROVIDER_ERROR_MAX_DEPTH) {
+      return describeProviderError(fields.error, depth + 1);
     }
   }
   return jsonOrString(error).slice(0, PROVIDER_ERROR_MAX_CHARS);
 }
 
 function jsonOrString<T>(value: T): string {
+  // Two different reasons to fall through, so the thrown one is carried into
+  // the text: `JSON.stringify` returns undefined for a value with no JSON form
+  // at all, and throws for a cycle or a BigInt.
+  let thrownReason = '';
   try {
     const json = JSON.stringify(value);
     if (json !== undefined) return json;
-  } catch { /* circular — fall through */ }
+  } catch (error) {
+    thrownReason = error instanceof Error ? error.message : String(error);
+  }
   const record = v.safeParse(v.record(v.string(), v.unknown()), value);
   if (record.success) {
-    return `unserializable provider error (${Object.keys(record.output).join(', ') || 'no fields'})`;
+    const fields = Object.keys(record.output).join(', ') || 'no fields';
+    return thrownReason
+      ? `unserializable provider error (${fields}): ${thrownReason}`
+      : `unserializable provider error (${fields})`;
   }
   return String(value);
 }

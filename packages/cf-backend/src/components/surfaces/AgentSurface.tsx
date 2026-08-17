@@ -16,7 +16,7 @@
  * The changelog left for Work: a self-change is an EVENT, and "what happened
  * while I was away" is not a question anyone opens a CV to answer.
  */
-import { useState, useEffect } from "react";
+import { useCallback, useState } from "react";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
   FingerprintIcon, PackageIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon,
@@ -28,6 +28,8 @@ import type { ToolInfo, MemoryEntry, Rpc } from "@/lib/protocol";
 import { MarkdownContent, EmptyState, EMPTY_HINTS, Section } from "./shared";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { GepaView, QualityView } from "./evolution-panels";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import * as v from "valibot";
 
 interface Fact { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }
@@ -138,8 +140,11 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
 
 export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory, rpc }: AgentSurfaceProps) {
   const [memorySearch, setMemorySearch] = useState("");
-  const [facts, setFacts] = useState<Fact[]>([]);
-  useEffect(() => { rpc<Fact[]>("getFacts", [100]).then(setFacts).catch(() => {}); }, [rpc]);
+  // "No world model" is a claim about what this agent has learned, so it may
+  // only be made about a listing that actually came back.
+  const loadFacts = useCallback(() => rpc<Fact[]>("getFacts", [100]), [rpc]);
+  const { resource: factsResource, reload: reloadFacts } = useAsyncResource(loadFacts);
+  const facts = lastValue(factsResource) ?? [];
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -214,7 +219,12 @@ export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, on
       </Section>
 
       {/* World model — keyed agent_facts the agent remembers across turns. */}
-      {facts.length > 0 && (
+      {factsResource.status === "error" ? (
+        <Section id="world-model" title="World model" defaultOpen={false}
+          icon={<BrainIcon size={14} className="p-text-2" />}>
+          <LoadFailure what="the world model" message={factsResource.message} onRetry={reloadFacts} />
+        </Section>
+      ) : facts.length > 0 && (
         <Section id="world-model" title="World model" defaultOpen={false}
           icon={<BrainIcon size={14} className="p-text-2" />}
           badge={<Badge variant="secondary">{facts.length}</Badge>}>

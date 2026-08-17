@@ -23,7 +23,7 @@ const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, mod
 function freshWorkspace() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initAllTables(makeExecRaw(db));
+  initAllTables(makeExecRaw(db), makeSql(db));
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'W'}, ${'atlas'}, ${100})`;
   return { db, sql, vfs: createWorkspaceBundle(db).vfs };
 }

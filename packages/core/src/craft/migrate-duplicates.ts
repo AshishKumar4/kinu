@@ -79,31 +79,33 @@ export function migrateCraftedToolDuplicates(
 
     // Merge craft_scores: aggregate across ALL names (kept + dropped), then
     // replace the kept row. Other names are deleted from craft_scores too.
-    try {
-      const merged = sql<{
-        score: number | null;
-        uses: number | null;
-        last_used_at: number | null;
-        created_at: number | null;
-      }>`
-        SELECT MAX(score) AS score, COALESCE(SUM(uses), 0) AS uses,
-               MAX(last_used_at) AS last_used_at, MIN(created_at) AS created_at
-        FROM craft_scores WHERE LOWER(tool_name) = ${g.lower_name}`;
-      const m = merged[0];
-      if (m && m.score !== null) {
-        const scoreRowsBefore = sql<{ c: number }>`
-          SELECT COUNT(*) AS c FROM craft_scores WHERE LOWER(tool_name) = ${g.lower_name}`;
-        const before = scoreRowsBefore[0]?.c ?? 0;
-        void sql`DELETE FROM craft_scores WHERE LOWER(tool_name) = ${g.lower_name}`;
-        void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at, created_at)
-          VALUES (${keep.name}, ${m.score}, ${m.uses ?? 0},
-                  ${m.last_used_at ?? Date.now()}, ${m.created_at ?? Date.now()})`;
-        // Kept row replaced (1 delete+1 insert); the rest of deletes are the
-        // duplicates we retired.
-        report.rowsDeletedCraftScores += Math.max(0, before - 1);
-      }
-    } catch {
-      // craft_scores may not exist yet — fine.
+    //
+    // Uncaught: this block reads, deletes AND inserts, so the old
+    // `catch { /* craft_scores may not exist yet */ }` reported a failed DELETE
+    // or INSERT as an absent table — and line 117 then marks the migration done,
+    // permanently, for a merge that half-happened. The table is part of the one
+    // workspace schema, so it exists wherever this runs.
+    const merged = sql<{
+      score: number | null;
+      uses: number | null;
+      last_used_at: number | null;
+      created_at: number | null;
+    }>`
+      SELECT MAX(score) AS score, COALESCE(SUM(uses), 0) AS uses,
+             MAX(last_used_at) AS last_used_at, MIN(created_at) AS created_at
+      FROM craft_scores WHERE LOWER(tool_name) = ${g.lower_name}`;
+    const m = merged[0];
+    if (m && m.score !== null) {
+      const scoreRowsBefore = sql<{ c: number }>`
+        SELECT COUNT(*) AS c FROM craft_scores WHERE LOWER(tool_name) = ${g.lower_name}`;
+      const before = scoreRowsBefore[0]?.c ?? 0;
+      void sql`DELETE FROM craft_scores WHERE LOWER(tool_name) = ${g.lower_name}`;
+      void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at, created_at)
+        VALUES (${keep.name}, ${m.score}, ${m.uses ?? 0},
+                ${m.last_used_at ?? Date.now()}, ${m.created_at ?? Date.now()})`;
+      // Kept row replaced (1 delete+1 insert); the rest of deletes are the
+      // duplicates we retired.
+      report.rowsDeletedCraftScores += Math.max(0, before - 1);
     }
 
     report.mergedGroups++;

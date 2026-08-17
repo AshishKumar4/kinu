@@ -127,33 +127,29 @@ export async function listModelsDevProviderModels(
   }
 }
 
-/** Provider-level metadata for one models.dev provider, or null when the id
- *  is unknown or the catalog is unreachable. */
+/** Provider-level metadata for one models.dev provider, or null when the id is
+ *  not in the catalog. A catalog that cannot be READ throws: "this provider
+ *  does not exist" and "models.dev is unreachable" are the same null otherwise,
+ *  and the second one silently empties the caller's provider list. */
 export async function getModelsDevProvider(
   providerId: string,
   deps: Pick<ProviderDeps, 'fetch'>,
   ttlMs: number = DEFAULT_TTL_MS,
 ): Promise<ModelsDevProviderInfo | null> {
-  try {
-    const data = await getModelsDevCatalog(deps.fetch, ttlMs);
-    const provider = data[providerId];
-    return provider ? providerInfoFromModelsDev(providerId, provider) : null;
-  } catch {
-    return null;
-  }
+  const data = await getModelsDevCatalog(deps.fetch, ttlMs);
+  const provider = data[providerId];
+  return provider ? providerInfoFromModelsDev(providerId, provider) : null;
 }
 
-/** Provider-level metadata for every models.dev provider (empty on fetch failure). */
+/** Provider-level metadata for every models.dev provider. Throws when the
+ *  catalog cannot be read — an empty list is what "you have no providers to
+ *  connect" looks like, which is not what a fetch failure means. */
 export async function listModelsDevProviders(
   deps: Pick<ProviderDeps, 'fetch'>,
   ttlMs: number = DEFAULT_TTL_MS,
 ): Promise<ModelsDevProviderInfo[]> {
-  try {
-    const data = await getModelsDevCatalog(deps.fetch, ttlMs);
-    return Object.entries(data).map(([id, provider]) => providerInfoFromModelsDev(id, provider));
-  } catch {
-    return [];
-  }
+  const data = await getModelsDevCatalog(deps.fetch, ttlMs);
+  return Object.entries(data).map(([id, provider]) => providerInfoFromModelsDev(id, provider));
 }
 
 /**

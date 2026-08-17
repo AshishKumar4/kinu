@@ -57,8 +57,8 @@ export async function runMCTS(
   task: string,
   config: MCTSConfig,
 ): Promise<ConvergenceResult> {
-  initSearchTables(rt.storage.execRaw);
-  initAlternateTakesTable(rt.storage.execRaw);
+  initSearchTables(rt.storage.execRaw, rt.storage.sql);
+  initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
 
   const search = config.search;
   if (search) initMctsSearchTable(rt.storage.execRaw);

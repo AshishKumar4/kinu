@@ -118,26 +118,22 @@ export async function readWorkspaceFiles(rt: AgentRuntime): Promise<Record<strin
  * Replace the stored baseline with this snapshot without exposing a partial
  * replacement. Rows are written under an inactive generation, then one SQLite
  * statement flips the whole table to that generation. A failed insert leaves
- * the previous generation active and the error reaches the caller.
+ * the previous generation active and the error reaches the caller; the rows the
+ * failed generation did write stay inactive, are invisible to every read, and
+ * are swept by the next capture's opening DELETE.
  */
 export function captureWorkspaceBaseline(rt: AgentRuntime, files: Record<string, string>): void {
   const generation = nanoid();
-  try {
-    void rt.storage.sql`DELETE FROM vfs_baseline WHERE active = 0`;
-    // The marker makes an intentionally empty snapshot representable.
+  void rt.storage.sql`DELETE FROM vfs_baseline WHERE active = 0`;
+  // The marker makes an intentionally empty snapshot representable.
+  void rt.storage.sql`INSERT INTO vfs_baseline (generation, path, content, active)
+    VALUES (${generation}, ${''}, ${''}, ${0})`;
+  for (const [path, content] of Object.entries(files)) {
     void rt.storage.sql`INSERT INTO vfs_baseline (generation, path, content, active)
-      VALUES (${generation}, ${''}, ${''}, ${0})`;
-    for (const [path, content] of Object.entries(files)) {
-      void rt.storage.sql`INSERT INTO vfs_baseline (generation, path, content, active)
-        VALUES (${generation}, ${path}, ${content}, ${0})`;
-    }
-    void rt.storage.sql`UPDATE vfs_baseline
-      SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END`;
-  } catch (error) {
-    // Cleanup is safe because the failed generation was never made active.
-    try { void rt.storage.sql`DELETE FROM vfs_baseline WHERE generation = ${generation} AND active = 0`; } catch { /* preserve the original error */ }
-    throw error;
+      VALUES (${generation}, ${path}, ${content}, ${0})`;
   }
+  void rt.storage.sql`UPDATE vfs_baseline
+    SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END`;
 }
 
 /** The cumulative workspace change-set since the baseline. */

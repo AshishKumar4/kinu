@@ -83,21 +83,29 @@ describe('buildSystemPromptSync — agentsMd option', () => {
 
 interface FakeVfs {
   vfs: VFS;
+  /** Paths the plane was asked to exist-check — the discovery probe itself. */
+  probes: string[];
   reads: string[];
 }
 
 function fakeVfs(files: Readonly<Record<string, string>>): FakeVfs {
   const memory = createMemoryVfs();
   for (const [path, content] of Object.entries(files)) memory.files.set(path, content);
+  const probes: string[] = [];
   const reads: string[] = [];
   return {
     vfs: {
       ...memory.vfs,
+      exists: async (path) => {
+        probes.push(path);
+        return memory.vfs.exists(path);
+      },
       readFile: async (path, opts) => {
         reads.push(path);
         return memory.vfs.readFile(path, opts);
       },
     },
+    probes,
     reads,
   };
 }
@@ -148,7 +156,11 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
       fakeSandbox({ active: false, files: sandbox.vfs }),
     );
     expect(files).toEqual([]);
-    expect(workspace.reads).toEqual(['AGENTS.md']);
+    // The canonical plane is still consulted; the idle sandbox is not asked
+    // anything at all, so discovery can never be what provisions a container.
+    expect(workspace.probes).toEqual(['AGENTS.md']);
+    expect(workspace.reads).toEqual([]);
+    expect(sandbox.probes).toEqual([]);
     expect(sandbox.reads).toEqual([]);
   });
 

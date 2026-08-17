@@ -334,7 +334,12 @@ async function runRpc(
       output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: true } });
     }
   } finally {
-    await client.close().catch(() => {});
+    try {
+      await client.close();
+    } catch (error) {
+      // stdout carries the JSON-lines protocol, so this belongs on stderr.
+      process.stderr.write(`note: closing the workspace client failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
   }
 }
 
@@ -625,7 +630,10 @@ async function readOptionalStdin(): Promise<string> {
     new Promise<'idle'>((resolve) => setTimeout(() => resolve('idle'), OPTIONAL_STDIN_GRACE_MS)),
   ]);
   if (first === 'idle') {
-    void reader.cancel().catch(() => {});
+    // Not awaited: the idle path exists precisely to stop waiting on this pipe.
+    void reader.cancel().catch((error) => {
+      process.stderr.write(`note: releasing idle stdin failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    });
     process.stderr.write(
       `note: stdin was open but idle for ${OPTIONAL_STDIN_GRACE_MS}ms and was ignored; ` +
       'pipe data promptly or close it (< /dev/null)\n',

@@ -111,7 +111,7 @@ describe('CLI smoke test', () => {
 
   test('bootstrap creates scaffold on cold start', async () => {
     const { rt } = createFullCLIRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
 
     // Ensure no scaffold exists (simulate cold start)
     if (await rt.storage.vfs.exists('scaffold/agent.js')) {
@@ -129,8 +129,8 @@ describe('CLI smoke test', () => {
 
   test('full MCTS cycle creates correct DB tables and rows', async () => {
     const { rt, db } = createFullCLIRuntime();
-    initSearchTables(rt.storage.execRaw);
-    initScaffoldTables(rt.storage.execRaw);
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initCraftScoreTables(rt.storage.execRaw);
 
     const session = createMockSession();

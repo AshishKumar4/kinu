@@ -154,9 +154,26 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 - Vercel AI SDK v6: `tool()` + `jsonSchema()` for tool definitions
 - `ToolSet` type from `ai` package for tool collections
 - `@callable()` decorator for RPC methods exposed to the React UI
-- Functions return descriptive error strings, not thrown exceptions, in executor tools
+- Executor tools return descriptive error strings today. That string carries no cause chain and no classification, so a caller cannot tell a timeout from a denial from an OOM — a known defect, not the target shape. The replacement (`Result<T, ProteusError>` via `neverthrow`) is specified in the observability contract and **not built yet**: do not import `ProteusError`, `toProteusError` or `neverthrow`, none of them exist
 - Executor tools use positional args (`positionalArgs: true`) for codemode
 - maxSteps = 500 default, configurable via `PROTEUS_MAX_STEPS`
+
+## Errors, Logging & Traceability
+
+No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch { return [] }` are defects: a read that answers `null` for "absent" and `null` for "the query blew up" is how `workspace_capability` stayed invisible for months. Every catch does exactly one of three things:
+
+1. **Do not catch.** The default, and usually the fix — deleting the `try`/`catch` is a real change.
+2. **Wrap and rethrow** — `throw new Error('what we were doing', { cause: caught })`. Native `cause` is the language's `%w`; the chain must never be broken.
+3. **Handle, and say so.** Only when the caught condition is a *value* in the domain. Record the caught error and return something the caller can tell apart from success.
+
+- A handler is only as honest as the statements it spans. `fork.ts` wrapped a `CREATE TABLE` *and* the twenty-statement `INSERT` loop under it in one catch commented "table may be absent", so a constraint violation on message #400 reported as a missing table and the fork returned success with the owner's whole conversation gone. One catch, one condition
+- Prefer asking over catching. `tableExists(sql, name)` and `PRAGMA table_info` turn "absent" into a value; a `catch` cannot tell a missing table from a locked one. DDL by swallowed exception is prohibited — `reconcileColumns` for a column, `initWorkspaceSchema` for a table
+- A production `catch` may never accommodate a test-only condition. If a table would be missing in tests, the harness builds the production schema (`createTestWorkspace`), it does not earn a swallow in shipped code
+- Where an absence is genuinely expected, name it: `tolerate(op, 'enoent')` / `classify({ cause })` from `@proteus/core/obs`. Anything the matcher does not recognise rethrows
+- Never log a secret, and never log an object you have not looked inside: no `apiKey`, `authorization`, `body`, `content`, `credential`, `header(s)`, `password`, `prompt`, `secret`, `soul`, `systemPrompt`, `token`. A type-level ban (`ReservedLogField`) is specified and not built yet, so today this is on you
+- Every log carries a stable dotted event name (`capability.read_failed`) — that is what makes a failure greppable across Workers Logs and the CLI journal
+- Enforced mechanically by the `no-empty-catch`, `no-sentinel-catch`, `require-cause-on-rethrow` and `no-ddl-in-catch` anti-slop rules. Never add an `oxlint-disable` to pass one
+- **Not built yet** — do not code against these, see the observability contract for status: the `Observability`/`Tracer` seam and `tracer.span(...)`, `ProteusError`/`ErrorCode`/`toProteusError`, and the typed `Logger`. When tracing lands, spans are always scoped, and trace context does NOT survive `alarm()`, a hibernation wake or a cold start
 
 ## CF Backend Specifics
 
@@ -203,7 +220,10 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 ## Common Patterns
 
 ```typescript
-// Executor tool pattern — positional args, string returns, no throws
+// Executor tool pattern — positional args, string returns, no throws.
+// The string is the CURRENT convention and a known defect (Code Style, above):
+// it carries no classification. Until the replacement lands, at least keep the
+// cause chain intact on anything that propagates rather than returning.
 tools.exec = {
   description: 'Run a command in the environment.',
   execute: async (...args: unknown[]): Promise<string> => {
@@ -213,8 +233,8 @@ tools.exec = {
     try {
       const result = await doExec(command);
       return result.stdout || '(no output)';
-    } catch (err) {
-      return `exec error: ${errorMessage({ error: err })}`;
+    } catch (caught) {
+      return `exec error: ${errorMessage({ error: caught })}`;
     }
   },
 };
@@ -224,7 +244,8 @@ tools.exec = {
   return this.sql<{ count: number }>`SELECT COUNT(*) as count FROM ...`;
 }
 
-// SQL pattern — tagged template for queries, RawSqlExec for DDL
+// SQL pattern — tagged template for queries, RawSqlExec for DDL, ask don't catch
 const rows = this.sql<{ name: string }>`SELECT name FROM tools WHERE active = 1`;
 execRaw("CREATE TABLE IF NOT EXISTS my_table (id TEXT PRIMARY KEY)");
+if (tableExists(this.sql, 'assistant_messages')) { /* … */ }
 ```

@@ -8,18 +8,22 @@ import antiSlopPlugin from "./index.ts";
 const expectedRules = [
   "anti-slop/no-chained-type-assertions",
   "anti-slop/no-conditional-empty-object-spread",
+  "anti-slop/no-ddl-in-catch",
+  "anti-slop/no-empty-catch",
   "anti-slop/no-known-value-widening",
   "anti-slop/no-module-mocking",
   "anti-slop/no-object-parameters",
   "anti-slop/no-reflect-apply",
   "anti-slop/no-reflect-get",
   "anti-slop/no-runtime-typeof",
+  "anti-slop/no-sentinel-catch",
   "anti-slop/no-shape-in-symbol-names",
   "anti-slop/no-unknown-parameters",
   "anti-slop/no-unknown-returns",
   "anti-slop/no-unknown-type-aliases",
   "anti-slop/no-unsafe-dictionary-type",
   "anti-slop/no-widen-then-assert",
+  "anti-slop/require-cause-on-rethrow",
   "anti-slop/require-safety-comment-for-type-assertion",
 ];
 

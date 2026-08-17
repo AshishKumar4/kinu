@@ -14,6 +14,7 @@ import { homedir } from 'node:os';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { attemptPassed } from '../packages/core/src/index.js';
 import type { AttemptBudget, BenchCheck, BenchTask, CheckOutcome } from '../packages/core/src/index.js';
+import { tolerate } from '../packages/core/src/obs/index.js';
 
 /** Paths never copied into a sandbox. `tests/bench` is the seal's outermost
  *  ring: an agent that cannot read the corpus cannot read the held-out tasks,
@@ -186,12 +187,10 @@ function walkMatching(root: string, pattern: string): string[] {
   const suffix = pattern.slice(1);
   const out: string[] = [];
   const visit = (abs: string): void => {
-    let entries;
-    try {
-      entries = readdirSync(abs, { withFileTypes: true });
-    } catch {
-      return;
-    }
+    // A directory removed between the parent listing and this read is fine; a permissions failure
+    // is not, because it would silently shrink the set of files the guard claims to have scanned.
+    const entries = tolerate(() => readdirSync(abs, { withFileTypes: true }), 'enoent');
+    if (entries === undefined) return;
     for (const e of entries) {
       const child = join(abs, e.name);
       if (e.isDirectory()) visit(child);

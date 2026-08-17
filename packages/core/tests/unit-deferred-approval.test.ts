@@ -36,7 +36,7 @@ function setup(opts: {
   noQueue?: boolean;
 } = {}) {
   const db = new Database(':memory:');
-  initDeferredApprovalsTable(makeExecRaw(db));
+  initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
   const store = new DeferredApprovalStore(makeSql(db));
 
   const delivered: AgentSignal[] = [];
@@ -397,7 +397,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
     // A Durable Object is evicted many times between the ask and the answer;
     // a parked action that lived in a promise map would be lost with it.
     const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db));
+    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
     const first = new DeferredApprovalStore(makeSql(db));
     first.create({ id: 'defer-9', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
 
@@ -412,7 +412,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
     // An undeliverable wake must not lose the owner's answer: the row is the
     // record, the signal is only the notification.
     const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db));
+    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
     const store = new DeferredApprovalStore(makeSql(db));
     store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
     const queue = new DeferredApprovalQueue({

@@ -231,6 +231,21 @@ export const LADDER: readonly Gate[] = [
     blind: 'the pairing and transport it talks to.',
   },
   {
+    run: 'bun scripts/tracing-gate.ts',
+    tier: 'ci',
+    seconds: 0.3,
+    catches: 'traces declared in code but switched off in a deployable environment. '
+      + 'wrangler does NOT inherit `observability` into a named environment and `traces` '
+      + 'is a separate switch from `logs`, so `env.staging` carried a bare '
+      + '`enabled: true` and every span it opened reported isTraced false and was never '
+      + 'recorded — with the worker still answering 200. It also proves the tracer is '
+      + 'live by observing real spans under workerd with and without a tail sink, so a '
+      + 'green here cannot come from an empty result. Ran in no tier at all until now: '
+      + 'the script and its fixture existed and nothing invoked either.',
+    blind: 'whether the platform RETAINED what it ingested. It observes the producing '
+      + 'side only — the sink can still throw while the traced worker returns 200.',
+  },
+  {
     run: 'bun test ./tests/',
     tier: 'ci',
     seconds: 0.3,

@@ -148,7 +148,7 @@ describe('judge ensemble — median, parse-failure-robust', () => {
     expect(result.score).toBeCloseTo(0.75 * 0.8, 10);
   });
 
-  test('a throwing judge call is a dropped sample', async () => {
+  test('a throwing judge call is a fault, not a thinner ensemble', async () => {
     let calls = 0;
     const judge: LLM = {
       async *stream() { yield ''; },
@@ -158,11 +158,13 @@ describe('judge ensemble — median, parse-failure-robust', () => {
         return '{"score": 0.4}';
       },
     };
-    const result = await evaluateWithMultiModelJudging({
+    // A sample the provider REFUSED is not a sample it declined to parse: the
+    // engine's allSettled reports branch-failed with this reason and scores the
+    // branch 0 (mcts/engine.ts). Dropped, the 500 is gone and the median is
+    // reported as if the ensemble had answered.
+    await expect(evaluateWithMultiModelJudging({
       task: 'analyze', trajectory: 'analysis', executor: exec(), judge, explorer: judge,
-    });
-    expect(result.judgeSamplesUsed).toBe(2);
-    expect(result.score).toBeCloseTo(0.75 * 0.4, 10);
+    })).rejects.toThrow('provider 500');
   });
 
   test('ALL samples failing → prose branch scores 0 (infrastructure failure is not neutral)', async () => {

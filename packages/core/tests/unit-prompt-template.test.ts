@@ -80,7 +80,8 @@ describe('definePromptSection — a missing slot fails loudly', () => {
   test('and does not silently drop the section — no partial output escapes', () => {
     const section = definePromptSection('t/store2', fromStore);
     let rendered: string | null = null;
-    try { rendered = section.render({ present: 'x' }); } catch { /* asserted below */ }
+    expect(() => { rendered = section.render({ present: 'x' }); })
+      .toThrow(/prompt template "t\/store2": slot \{\{absent\}\} has no value/);
     expect(rendered).toBeNull();
   });
 

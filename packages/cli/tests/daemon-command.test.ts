@@ -8,6 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { tolerate } from '@proteus/core/obs';
 
 const repoRoot = resolve(__dirname, '../../..');
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
@@ -16,7 +17,7 @@ const homes: string[] = [];
 afterEach(() => {
   for (const home of homes.splice(0)) {
     const pid = readPid(home);
-    if (pid !== null) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+    if (pid !== null) tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
     rmSync(home, { recursive: true, force: true });
   }
 });
@@ -43,16 +44,16 @@ function runDaemon(home: string, action: string) {
 }
 
 function readPid(home: string): number | null {
-  try {
-    const pid = Number(readFileSync(join(home, 'daemon.pid'), 'utf-8').trim());
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
-  } catch {
-    return null;
-  }
+  const pidfile = tolerate(() => readFileSync(join(home, 'daemon.pid'), 'utf-8'), 'enoent');
+  if (pidfile === undefined) return null;
+  const pid = Number(pidfile.trim());
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
+/** `kill(pid, 0)` throws EPERM for a process that is alive but not ours, so
+ *  only ESRCH may be read as absent. */
 function isAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  return tolerate(() => { process.kill(pid, 0); return true; }, 'esrch') ?? false;
 }
 
 /** `daemon start` returns as soon as the child is spawned, so anything the

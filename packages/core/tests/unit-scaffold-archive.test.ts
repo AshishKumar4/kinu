@@ -26,7 +26,7 @@ const RATIONALE = 'A rationale comfortably longer than the fifty-character gate-
 
 function setupRt(): AgentRuntime {
   const { rt } = createTestRuntime();
-  initScaffoldTables(rt.storage.execRaw);
+  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initShadowTables(rt.storage.execRaw);
   return rt;
 }

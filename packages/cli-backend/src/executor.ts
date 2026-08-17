@@ -114,7 +114,7 @@ async function executeWithInterpreter(
       ? { result: stdout || null }
       : { result: undefined, error: stderr || `Process exited with code ${exitCode}` };
   } finally {
-    try { unlinkSync(tmpFile); } catch { /* cleanup best-effort */ }
+    unlinkSync(tmpFile);
   }
 }
 
@@ -168,7 +168,7 @@ async function executeInSubprocess(code: string, timeoutMs: number): Promise<Exe
       return { result: stdout.trim() || undefined };
     }
   } finally {
-    try { unlinkSync(tmpFile); } catch { /* cleanup best-effort */ }
+    unlinkSync(tmpFile);
   }
 }
 

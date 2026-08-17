@@ -384,8 +384,15 @@ export function createCFRuntime(
       if (!hub) return false;
       try {
         return (await hub.getDeviceFsConsent(await userCallerFor(actor), actor.workspaceName)).fullFilesystem;
+      } catch (error) {
+        // Fail CLOSED: unverifiable consent must narrow the executor to the
+        // consented subtree, never widen it. Recorded rather than discarded —
+        // `false` alone cannot distinguish "no full-filesystem tier" from "the hub
+        // could not be reached", and only one of those is a fault.
+        console.warn('[proteus] device full-filesystem consent unverifiable, scoping to subtree:',
+          error instanceof Error ? error.message : String(error));
+        return false;
       }
-      catch { return false; } // consent unverifiable → subtree scope (fail closed)
     },
   }));
 

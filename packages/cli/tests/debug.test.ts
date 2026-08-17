@@ -62,10 +62,10 @@ function seedInvestigationWorkspace(dbPath: string): void {
   const db = new Database(dbPath, { create: true });
   const execRaw = (sql: string) => { db.exec(sql); };
   initRunEventTables(execRaw);
-  initHeadsTables(execRaw);
-  initSearchTables(execRaw);
+  initHeadsTables(execRaw, makeSql(db));
+  initSearchTables(execRaw, makeSql(db));
   initMctsSearchTable(execRaw);
-  initBackgroundJobsTable(execRaw);
+  initBackgroundJobsTable(execRaw, makeSql(db));
   const sql = makeSql(db);
 
   // ── Runs: an older plain run, then the latest — which backgrounds a call

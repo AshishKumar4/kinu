@@ -17,6 +17,7 @@ import type { CraftStore } from '../types/agent-runtime.js';
 import type { VFS, SqlExecutor } from '../types/primitives.js';
 import type { CraftedTool } from '../types/craft.js';
 import type { ReasoningEffort } from '../strategy/effort.js';
+import { tolerate } from '../obs/index.js';
 import { parseJsonValue } from '../utils/json.js';
 
 const UiMessageSchema = v.object({
@@ -78,67 +79,58 @@ export interface AgentStatusDeps {
   readonly fallbackMessageCount: number;
 }
 
-/** Flatten a stored UIMessage-JSON content string to plain text
- *  (`assistant_messages` rows hold the serialized UI message, not text). */
+/** Flatten a stored UIMessage-JSON content string to plain text.
+ *  `assistant_messages` rows hold the serialized UI message and `messages` rows
+ *  hold plain text; both reach this, so text that is not JSON is a value here
+ *  and nothing else is. */
 export function uiMessageText(content: string): string {
-  try {
-    const parsed = v.safeParse(UiMessageSchema, parseJsonValue(content));
-    if (parsed.success && parsed.output.parts) {
-      return parsed.output.parts
-        .flatMap((part) => part.type === 'text' && part.text !== undefined ? [part.text] : [])
-        .join('');
-    }
-  } catch { /* plain text fallback */ }
-  return content;
+  const decoded = tolerate(() => parseJsonValue(content), 'malformed-input');
+  if (decoded === undefined) return content;
+  const parsed = v.safeParse(UiMessageSchema, decoded);
+  if (!parsed.success || !parsed.output.parts) return content;
+  return parsed.output.parts
+    .flatMap((part) => part.type === 'text' && part.text !== undefined ? [part.text] : [])
+    .join('');
 }
 
 function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
   return role === 'user' || role === 'assistant' || role === 'system' ? role : null;
 }
 
-/** Identity, size and configuration in one round trip. Storage this young can
- *  legitimately be missing every table, so an unreadable workspace answers
- *  with what the caller already knows rather than failing the surface. */
+/** Identity, size and configuration in one round trip. Every table read here is
+ *  one `initWorkspaceSchema` creates, so a read that fails means a broken
+ *  workspace and says so — answering with a fabricated identity and zeroed
+ *  counts would make it indistinguishable from a brand-new agent. */
 export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus> {
   const { sql, config, vfs } = deps;
-  try {
-    const soul = (await readSoul(vfs)) ?? '';
-    const purpose = summarizeSoul(soul);
-    const identity = sql<{ name: string; created_at: number }>`
-      SELECT name, created_at FROM workspace_identity LIMIT 1`;
-    const scaffoldVersion = sql<{ v: number }>`
-      SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`;
-    const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
-    const craftedTools = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
-    // Message count reflects the persisted `messages` table, which is the
-    // authoritative turn history used for fork cut-points. For non-fork agents
-    // it is populated by the turn-settle mirror; for forks by
-    // forkWorkspaceStorage's copy.
-    const tableCount = sql<{ c: number }>`
-      SELECT COUNT(*) as c FROM messages WHERE session_id = 'default'`;
-    return {
-      name: identity[0]?.name ?? deps.name,
-      displayName: deps.displayName,
-      purpose,
-      soul,
-      createdAt: identity[0]?.created_at ?? 0,
-      scaffoldVersion: scaffoldVersion[0]?.v ?? 0,
-      searchNodeCount: searchNodes[0]?.c ?? 0,
-      craftedToolCount: craftedTools[0]?.c ?? 0,
-      messageCount: tableCount[0]?.c ?? deps.fallbackMessageCount,
-      model: config.getModel(),
-      reasoningEffort: config.getReasoningEffort(),
-      forkLineage: readForkLineage(sql),
-    };
-  } catch {
-    return {
-      name: deps.name, displayName: deps.name, purpose: '', soul: '', createdAt: 0,
-      scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0,
-      model: config.getModel(),
-      reasoningEffort: config.getReasoningEffort(),
-      forkLineage: null,
-    };
-  }
+  const soul = (await readSoul(vfs)) ?? '';
+  const purpose = summarizeSoul(soul);
+  const identity = sql<{ name: string; created_at: number }>`
+    SELECT name, created_at FROM workspace_identity LIMIT 1`;
+  const scaffoldVersion = sql<{ v: number }>`
+    SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`;
+  const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
+  const craftedTools = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
+  // Message count reflects the persisted `messages` table, which is the
+  // authoritative turn history used for fork cut-points. For non-fork agents
+  // it is populated by the turn-settle mirror; for forks by
+  // forkWorkspaceStorage's copy.
+  const tableCount = sql<{ c: number }>`
+    SELECT COUNT(*) as c FROM messages WHERE session_id = 'default'`;
+  return {
+    name: identity[0]?.name ?? deps.name,
+    displayName: deps.displayName,
+    purpose,
+    soul,
+    createdAt: identity[0]?.created_at ?? 0,
+    scaffoldVersion: scaffoldVersion[0]?.v ?? 0,
+    searchNodeCount: searchNodes[0]?.c ?? 0,
+    craftedToolCount: craftedTools[0]?.c ?? 0,
+    messageCount: tableCount[0]?.c ?? deps.fallbackMessageCount,
+    model: config.getModel(),
+    reasoningEffort: config.getReasoningEffort(),
+    forkLineage: readForkLineage(sql),
+  };
 }
 
 /**

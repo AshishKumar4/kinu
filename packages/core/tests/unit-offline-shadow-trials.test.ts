@@ -63,7 +63,7 @@ const PENDING_SOURCE = 'async function* run(rt, task) { yield { type: "chunk", d
 
 async function setup(): Promise<AgentRuntime> {
   const { rt } = createTestRuntime();
-  initScaffoldTables(rt.storage.execRaw);
+  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initShadowTables(rt.storage.execRaw);
   rt.executor = evalExecutor();
   void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)

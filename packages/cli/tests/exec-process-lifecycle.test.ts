@@ -29,6 +29,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { JsonObjectSchema, decodeJsonValue, parseJsonObject, type JsonObject, type JsonValue } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 const repoRoot = resolve(import.meta.dir, "../../..");
@@ -37,10 +38,11 @@ const homes: string[] = [];
 
 afterEach(() => {
   for (const home of homes.splice(0)) {
-    try {
-      const pid = parseInt(readFileSync(join(home, "daemon.pid"), "utf-8").trim(), 10);
-      if (Number.isInteger(pid) && pid > 1) process.kill(pid, "SIGTERM");
-    } catch { /* no daemon ran for this home */ }
+    const pidfile = tolerate(() => readFileSync(join(home, "daemon.pid"), "utf-8"), 'enoent');
+    if (pidfile !== undefined) {
+      const pid = parseInt(pidfile.trim(), 10);
+      if (Number.isInteger(pid) && pid > 1) tolerate(() => process.kill(pid, "SIGTERM"), 'esrch');
+    }
     rmSync(home, { recursive: true, force: true });
   }
 });
@@ -65,7 +67,7 @@ function modelThatRuns(command: string) {
       if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
         return new Response("not found", { status: 404 });
       }
-      const body = v.parse(JsonObjectSchema, await request.json().catch(() => ({})));
+      const body = v.parse(JsonObjectSchema, await request.json());
       const first = calls++ === 0;
       const delta = first
         ? { role: "assistant", tool_calls: [{ index: 0, ...toolCall }] }
@@ -200,8 +202,7 @@ describe("proteus exec — a one-shot run terminates", () => {
       );
       expect(run.timedOut).toBe(false);
 
-      const events: JsonObject[] = run.stdout.trim().split("\n")
-        .flatMap((line) => { try { return [parseJsonObject(line)]; } catch { return []; } });
+      const events: JsonObject[] = run.stdout.trim().split("\n").map(parseJsonObject);
 
       expect(events.some((e) => e.type === "tool_call" || e.type === "tool_result")).toBe(true);
       expect(JSON.stringify(events)).toContain("server-started");

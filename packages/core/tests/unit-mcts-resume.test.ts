@@ -20,8 +20,8 @@ import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store.j
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
 
 function initTables(rt: AgentRuntime): void {
-  initSearchTables(rt.storage.execRaw);
-  initScaffoldTables(rt.storage.execRaw);
+  initSearchTables(rt.storage.execRaw, rt.storage.sql);
+  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initCraftScoreTables(rt.storage.execRaw);
   initMctsSearchTable(rt.storage.execRaw);
 }
@@ -160,8 +160,8 @@ describe('MCTS per-iteration checkpoint logging', () => {
 
   test('the fiber-snapshot-only path (no search store) stays silent', async () => {
     const { rt } = createTestRuntime();
-    initSearchTables(rt.storage.execRaw);
-    initScaffoldTables(rt.storage.execRaw);
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initCraftScoreTables(rt.storage.execRaw);
     const { stdout, stderr } = await captureConsole(() =>
       runMCTS(rt, createMockSession(), TASK, { budget: 2, branches: 1 }),

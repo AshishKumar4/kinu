@@ -14,9 +14,10 @@
     "packages/*"
   ],
   "scripts": {
+    "prepare": "bun scripts/ladder.ts --install-hooks",
     "test": "bun test --cwd packages/agent-utils && bun test --cwd packages/core && bun test --cwd packages/compaction",
     "check": "bun run lint && tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/test-utils && tsc --noEmit -p scripts/tsconfig.scripts.json && node --check packages/pc-agent/src/index.js",
-    "test:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/rules.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts",
+    "test:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/rules.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-swallow.gate.test.ts",
     "lint": "bun run test:anti-slop && oxlint",
     "deploy": "bash scripts/deploy.sh",
     "dev": "bun run --cwd packages/cf-backend start",

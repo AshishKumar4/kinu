@@ -137,8 +137,8 @@ describe('E2E Lifecycle', () => {
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
     rt = await createWorkspace(db, { name: 'e2e-test', purpose: 'A coding assistant that helps write TypeScript.', llm: LLM_CONFIG });
-    initSearchTables(rt.storage.execRaw);
-    initScaffoldTables(rt.storage.execRaw);
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initCraftScoreTables(rt.storage.execRaw);
     events = [];
     engine = new EvolutionEngine(rt, { enabled: true, sessionReflectionInterval: 4 });
@@ -150,7 +150,7 @@ describe('E2E Lifecycle', () => {
     model = provider.chatModel(LLM_CONFIG.model);
   });
 
-  afterAll(() => { try { db.close(); } catch {} rmSync(TEST_DIR, { recursive: true, force: true }); });
+  afterAll(() => { db.close(); rmSync(TEST_DIR, { recursive: true, force: true }); });
 
   test('agent created with correct tables', async () => {
     const tables = db.query<{ name: string }, []>(

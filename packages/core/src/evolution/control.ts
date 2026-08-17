@@ -331,12 +331,10 @@ export async function proposeScaffold(
     baseVersion !== undefined ? { baseVersion } : undefined,
   );
   if (result.ok) {
-    try {
-      void control.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
-        VALUES (${nanoid()}, 'scaffold_proposed',
-                ${`Agent proposed scaffold v${result.version}: ${rationale.slice(0, 80)}`},
-                ${null}, ${Date.now()})`;
-    } catch { /* the ledger may not exist on a workspace this old */ }
+    void control.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
+      VALUES (${nanoid()}, 'scaffold_proposed',
+              ${`Agent proposed scaffold v${result.version}: ${rationale.slice(0, 80)}`},
+              ${null}, ${Date.now()})`;
   }
   return result;
 }

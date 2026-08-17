@@ -19,28 +19,25 @@ export interface WebhookSecretStore extends SecretStore {
 const SecretRowSchema = v.object({ secret: v.string() });
 
 export function createWebhookSecretStore(sql: SqlExec): WebhookSecretStore {
+  // Created here rather than lazily in put(): a read against an absent table
+  // throws, and swallowing that throw made "no webhook was ever registered"
+  // indistinguishable from a revoked secret on the delivery path.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS webhook_secrets (
+      secret_id TEXT PRIMARY KEY,
+      trigger_id TEXT NOT NULL,
+      secret TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )`);
   return {
     async get(secretId) {
-      try {
-        const row = sql.exec(
-          `SELECT secret FROM webhook_secrets WHERE secret_id = ?`, secretId,
-        ).toArray()[0];
-        const parsed = v.safeParse(SecretRowSchema, row);
-        return parsed.success ? parsed.output.secret : null;
-      } catch {
-        // No webhook has ever been registered here, so the table does not
-        // exist — indistinguishable, to a delivery, from a revoked secret.
-        return null;
-      }
+      const row = sql.exec(
+        `SELECT secret FROM webhook_secrets WHERE secret_id = ?`, secretId,
+      ).toArray()[0];
+      const parsed = v.safeParse(SecretRowSchema, row);
+      return parsed.success ? parsed.output.secret : null;
     },
     put(secretId, triggerId, secret, now) {
-      sql.exec(`
-        CREATE TABLE IF NOT EXISTS webhook_secrets (
-          secret_id TEXT PRIMARY KEY,
-          trigger_id TEXT NOT NULL,
-          secret TEXT NOT NULL,
-          created_at INTEGER NOT NULL
-        )`);
       sql.exec(
         `INSERT INTO webhook_secrets (secret_id, trigger_id, secret, created_at) VALUES (?, ?, ?, ?)`,
         secretId, triggerId, secret, now,

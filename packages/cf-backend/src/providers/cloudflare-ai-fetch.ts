@@ -6,6 +6,7 @@
 // between the three consumers.
 import type { AuthResolution, AuthResolver } from '@proteus/core';
 import { asFetchFunction, withRateLimitRetry } from '@proteus/core';
+import { tolerate } from '@proteus/core/obs';
 import { repairSseCachedUsage } from './stream-usage-repair.js';
 import * as v from 'valibot';
 
@@ -110,26 +111,28 @@ export async function mapGatewayError(res: Response, modelId: string, gatewayId:
 }
 
 function extractGatewayError(body: string): GatewayErrorDetail {
-  try {
-    const decoded = JSON.parse(body);
-    // Cloudflare v4 envelope: { success, errors: [{ code, message }] }
-    const v4 = v.safeParse(V4ErrorSchema, decoded);
-    const first = v4.success ? v4.output.errors[0] : undefined;
-    if (first) {
-      return {
-        code: first.code ?? null,
-        message: first.message ?? null,
-      };
-    }
-    // Gateway / OpenAI-style: { error: { code?, message } } or { error: "..." }
-    const openAI = v.safeParse(OpenAIErrorSchema, decoded);
-    if (!openAI.success) throw new Error('unrecognized gateway error envelope');
-    const error = openAI.output.error;
-    return v.is(v.string(), error)
-      ? { code: null, message: error }
-      : { code: error.code ?? null, message: error.message ?? null };
-  } catch { /* not JSON */ }
-  return { code: null, message: body.trim() ? body.trim().slice(0, 200) : null };
+  // A gateway error body is not required to be JSON; plain text is a real
+  // response shape, so the raw text is the answer rather than a fallback for
+  // one we failed to read.
+  const rawText: GatewayErrorDetail = {
+    code: null,
+    message: body.trim() ? body.trim().slice(0, 200) : null,
+  };
+  const decoded = tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
+  if (decoded === undefined) return rawText;
+
+  // Cloudflare v4 envelope: { success, errors: [{ code, message }] }
+  const v4 = v.safeParse(V4ErrorSchema, decoded);
+  const first = v4.success ? v4.output.errors[0] : undefined;
+  if (first) return { code: first.code ?? null, message: first.message ?? null };
+
+  // Gateway / OpenAI-style: { error: { code?, message } } or { error: "..." }
+  const openAI = v.safeParse(OpenAIErrorSchema, decoded);
+  if (!openAI.success) return rawText;
+  const error = openAI.output.error;
+  return v.is(v.string(), error)
+    ? { code: null, message: error }
+    : { code: error.code ?? null, message: error.message ?? null };
 }
 
 export function errorResponse(status: number, message: string): Response {

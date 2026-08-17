@@ -8,6 +8,7 @@
 
 import { createWorkspace as createWorkspaceFilesystem, nextWorkspaceGeneration } from '../vfs/nimbus-workspace.js';
 import type { WorkspaceBundle } from '../vfs/nimbus-workspace.js';
+import { chunkMarkdown, initMemoryChunkTables } from '@proteus/agent-utils/memory';
 import type { CraftStore } from '../types/agent-runtime.js';
 import type {
   Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExecutor, VFS,
@@ -72,45 +73,64 @@ export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
   });
 }
 
-/** LIKE-based memory over a simplified memory_chunks table. The production
- *  MemoryStore (agent-utils) replaces this with FTS5 + markdown chunking. */
+/**
+ * LIKE-based memory over the workspace's `memory_chunks` table. Only the QUERY
+ * is simplified — the production MemoryStore (agent-utils) answers the same
+ * table through FTS5.
+ *
+ * The rows are written in the production shape, through the production chunker
+ * and the DDL's real owner, because this used to declare a THIRD schema:
+ * `(id, path, content)`. Whichever of the two ran first won, so
+ * `repairLegacyTables` classified this shape as pre-release and dropped it,
+ * every insert afterwards failed on `no column named content`, and the catch
+ * that wrapped it reported an indexed file. A fork copies `memory_chunks`, so
+ * the same divergence also handed a fork an empty memory index.
+ */
 export function createInlineMemory(db: AgentDatabase, vfs: VFS): Memory {
-  db.exec(`CREATE TABLE IF NOT EXISTS memory_chunks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, content TEXT NOT NULL
-  )`);
+  const { sql } = wrapDatabase(db);
+  initMemoryChunkTables(sql);
   return {
     async write(path, content) { await vfs.writeFile(path, content); },
     async append(path, content) {
-      try {
-        // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
-        const existing = await vfs.readFile(path, { encoding: 'utf8' }) as string;
-        await vfs.writeFile(path, existing + content);
-      } catch {
-        await vfs.writeFile(path, content);
-      }
+      // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
+      const existing = await vfs.exists(path)
+        ? await vfs.readFile(path, { encoding: 'utf8' }) as string
+        : '';
+      await vfs.writeFile(path, existing + content);
     },
     async index(path) {
-      try {
-        // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
-        const content = await vfs.readFile(path, { encoding: 'utf8' }) as string;
-        db.run('INSERT INTO memory_chunks (path, content) VALUES (?, ?)', [path, content]);
-      } catch { /* file may not exist */ }
+      // Asked rather than caught: an unreadable file must not index as an
+      // absent one, or the chunk table silently diverges from the filesystem.
+      if (!await vfs.exists(path)) return;
+      // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
+      const content = await vfs.readFile(path, { encoding: 'utf8' }) as string;
+      const now = Date.now();
+      // Replace the file's chunk set rather than appending to it, and keep the
+      // FTS shadow in step: a row this path adds must be findable by the FTS5
+      // reader as well, or a workspace opened with the real MemoryStore
+      // searches an index that is missing exactly what the inline path wrote.
+      void sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE path = ${path})`;
+      void sql`DELETE FROM memory_chunks WHERE path = ${path}`;
+      for (const chunk of await chunkMarkdown(content)) {
+        const id = `${path}:${chunk.startLine}-${chunk.endLine}`;
+        void sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
+          VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash}, ${chunk.text}, ${now})`;
+        void sql`INSERT INTO memory_chunks_fts (rowid, text) SELECT rowid, text FROM memory_chunks WHERE id = ${id}`;
+      }
     },
     async search(query, limit = 10) {
-      const rows = db.prepare<{ path: string; content: string }>(
-        'SELECT path, content FROM memory_chunks WHERE content LIKE ? LIMIT ?',
-      ).all(`%${query}%`, limit);
+      const rows = sql<{ path: string; start_line: number; end_line: number; text: string }>`
+        SELECT path, start_line, end_line, text FROM memory_chunks
+        WHERE text LIKE ${`%${query}%`} LIMIT ${limit}`;
       return rows.map((r, i) => ({
-        path: r.path, startLine: 0, endLine: 0,
-        snippet: r.content.slice(0, 200), score: 1 - i * 0.1,
+        path: r.path, startLine: r.start_line, endLine: r.end_line,
+        snippet: r.text.slice(0, 200), score: 1 - i * 0.1,
       }));
     },
     async read(path) {
-      try {
-        // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
-        return await vfs.readFile(path, { encoding: 'utf8' }) as string;
-      }
-      catch { return null; }
+      if (!await vfs.exists(path)) return null;
+      // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
+      return await vfs.readFile(path, { encoding: 'utf8' }) as string;
     },
   };
 }

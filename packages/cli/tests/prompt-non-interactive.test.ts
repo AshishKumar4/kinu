@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
+import { tolerate } from "@proteus/core/obs";
 
 const repoRoot = resolve(__dirname, "../../..");
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
@@ -49,7 +50,7 @@ function runDetachedCli(args: string[], home: string, timeoutMs = 20_000): Promi
     child.stdin.end();
 
     const timer = setTimeout(() => {
-      try { process.kill(-child.pid!, "SIGKILL"); } catch { /* already gone */ }
+      tolerate(() => process.kill(-child.pid!, "SIGKILL"), "esrch");
       resolvePromise({ exitCode: null, stdout, stderr, timedOut: true });
     }, timeoutMs);
 

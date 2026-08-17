@@ -21,6 +21,7 @@
  */
 
 import * as v from 'valibot';
+import { tolerate } from '@proteus/core/obs';
 
 const UsageChunkSchema = v.looseObject({
   usage: v.looseObject({
@@ -53,7 +54,11 @@ function cachedUsageRepairTransform(): TransformStream<Uint8Array, Uint8Array> {
     const crlf = line.endsWith('\r');
     const payload = line.slice(5, crlf ? -1 : undefined).trim();
     if (!payload.startsWith('{')) return line; // e.g. "data: [DONE]"
-    const parsed = v.safeParse(UsageChunkSchema, parseJsonObject(payload));
+    // A `data:` line that is not JSON is not a usage chunk, so it passes
+    // through untouched like every other non-usage line. Any other failure is
+    // real and must not become a silent skip of the repair.
+    const decoded = tolerate<unknown>(() => JSON.parse(payload), 'malformed-input');
+    const parsed = v.safeParse(UsageChunkSchema, decoded);
     if (!parsed.success) return line;
     const chunk = parsed.output;
     const details = chunk.usage.prompt_tokens_details;
@@ -78,8 +83,4 @@ function cachedUsageRepairTransform(): TransformStream<Uint8Array, Uint8Array> {
       if (buffer.length > 0) controller.enqueue(encoder.encode(repairLine(buffer)));
     },
   });
-}
-
-function parseJsonObject(value: string): object | null {
-  try { return v.parse(v.looseObject({}), JSON.parse(value)); } catch { return null; }
 }

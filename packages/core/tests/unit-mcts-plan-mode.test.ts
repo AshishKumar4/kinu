@@ -8,8 +8,8 @@ import { initMctsSearchTable, MctsSearchStore } from '../src/mcts/search-store.j
 import type { WorkMode } from '../src/prompting/surface.js';
 
 function initTables(runtime: ReturnType<typeof createTestRuntime>['rt']): void {
-  initSearchTables(runtime.storage.execRaw);
-  initScaffoldTables(runtime.storage.execRaw);
+  initSearchTables(runtime.storage.execRaw, runtime.storage.sql);
+  initScaffoldTables(runtime.storage.execRaw, runtime.storage.sql);
   initCraftScoreTables(runtime.storage.execRaw);
   initMctsSearchTable(runtime.storage.execRaw);
 }

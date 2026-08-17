@@ -16,6 +16,7 @@
  */
 
 import { appendFileSync, copyFileSync, readFileSync, statSync, truncateSync } from 'node:fs';
+import { tolerate } from '@proteus/core/obs';
 
 /** Rotate at 1 MiB, keeping exactly one predecessor: ~2 MiB of history is
  *  plenty to explain a misfiring trigger and costs nothing to keep. */
@@ -24,22 +25,14 @@ export const DAEMON_LOG_MAX_BYTES = 1024 * 1024;
 const PREVIOUS_SUFFIX = '.1';
 
 /** Roll the log over when it has outgrown the cap. Returns whether it rolled.
- *  Failure is not fatal — losing a log line must never take the daemon down. */
+ *  A log that does not exist yet has nothing to roll; a rotation that fails for
+ *  any other reason has silently broken the cap and must be heard. */
 export function rotateDaemonLogIfNeeded(path: string, maxBytes: number = DAEMON_LOG_MAX_BYTES): boolean {
-  let size: number;
-  try {
-    size = statSync(path).size;
-  } catch {
-    return false; // no log yet
-  }
-  if (size < maxBytes) return false;
-  try {
-    copyFileSync(path, `${path}${PREVIOUS_SUFFIX}`);
-    truncateSync(path, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  const size = tolerate(() => statSync(path).size, 'enoent');
+  if (size === undefined || size < maxBytes) return false;
+  copyFileSync(path, `${path}${PREVIOUS_SUFFIX}`);
+  truncateSync(path, 0);
+  return true;
 }
 
 /** Append one already-terminated line, rotating first when due. */
@@ -61,12 +54,8 @@ export function readDaemonLogTail(path: string, maxLines: number): string | null
 }
 
 function readLines(path: string): string[] | null {
-  let content: string;
-  try {
-    content = readFileSync(path, 'utf-8');
-  } catch {
-    return null;
-  }
+  const content = tolerate(() => readFileSync(path, 'utf-8'), 'enoent');
+  if (content === undefined) return null;
   const lines = content.split('\n');
   // A trailing newline yields a final empty element that is not a line.
   if (lines[lines.length - 1] === '') lines.pop();

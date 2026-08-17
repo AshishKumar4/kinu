@@ -25,7 +25,7 @@ import type { ChangelogEntry, ChangelogEntryKind, DiffLine } from "@proteus/core
 import type { Rpc } from "@/lib/protocol";
 import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-proteus";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
+import { type AsyncResource, describeError, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines, timeAgo } from "./shared";
 
 export interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
@@ -78,12 +78,18 @@ export function useChangelog(rpc: Rpc, onSeen?: () => void) {
   const openedSeenAt = useRef<number | null>(null);
   if (openedSeenAt.current === null && view !== null) openedSeenAt.current = view.seenAt;
 
+  const [seenError, setSeenError] = useState<string | null>(null);
   useEffect(() => {
     if (!view || view.unseenCount === 0) return;
-    rpc("markChangelogSeen", []).then(() => onSeen?.()).catch(() => {});
+    // A failed acknowledgement leaves the badge up, which is honest on its own
+    // — but the reason has to reach the reader too, or the badge looks stuck.
+    rpc("markChangelogSeen", []).then(
+      () => { setSeenError(null); onSeen?.(); },
+      (err) => setSeenError(describeError(err)),
+    );
   }, [view, rpc, onSeen]);
 
-  return { view, seenAt: openedSeenAt.current ?? 0, resource, reload };
+  return { view, seenAt: openedSeenAt.current ?? 0, resource, reload, seenError };
 }
 
 /** The failure state, so a broken read is never indistinguishable from a build

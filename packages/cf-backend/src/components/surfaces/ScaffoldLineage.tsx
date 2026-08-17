@@ -82,7 +82,7 @@ export interface ScaffoldLineageProps {
 
 export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const [selected, setSelected] = useState<number | null>(null);
-  const [detail, setDetail] = useState<AsyncResource<{ diff: ScaffoldDiff; verdict: ShadowVerdict | null }>>({ status: "loading" });
+  const [detail, setDetail] = useState<AsyncResource<{ diff: ScaffoldDiff; verdict: ShadowVerdict }>>({ status: "loading" });
   const [busy, setBusy] = useState<string | null>(null);
   const [decideErr, setDecideErr] = useState<string | null>(null);
   const [previewTask, setPreviewTask] = useState("");
@@ -96,11 +96,11 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
 
   const loadDetail = useCallback((version: number) => {
     setDetail({ status: "loading" });
-    // The verdict is absent for a version that never shadow-evalled, so its
-    // failure must not withhold the diff; the diff's failure is the surface's.
+    // An absent verdict is an ordinary empty result, not a failure, so either
+    // read failing here is the surface's failure rather than a blank grid.
     Promise.all([
       rpc<ScaffoldDiff>("getScaffoldDiff", [version]),
-      rpc<ShadowVerdict>("getShadowVerdict", [version]).catch(() => null),
+      rpc<ShadowVerdict>("getShadowVerdict", [version]),
     ]).then(
       ([diff, verdict]) => setDetail(loadSucceeded({ diff, verdict })),
       (err) => setDetail((prev) => loadFailed(prev, err)),
@@ -165,7 +165,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
           {/* Selected version detail */}
           {selected != null && (
             <div className="space-y-3 pt-1">
-              {detail.status === "ready" && detail.value.verdict && detail.value.verdict.trials.length > 0 && (
+              {detail.status === "ready" && detail.value.verdict.trials.length > 0 && (
                 <VerdictGrid verdict={detail.value.verdict} />
               )}
               {detail.status === "ready" ? (

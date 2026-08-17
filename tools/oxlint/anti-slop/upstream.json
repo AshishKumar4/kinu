@@ -6,6 +6,13 @@
   "commitSubject": "Ignore agent tooling when installing anti-slop",
   "upstreamSourceRoot": "skills/install-anti-slop/assets/anti-slop",
   "upstreamTestRoot": "src/rules",
+  "$proteusComment": "Rules authored here, not vendored: they encode Proteus's no-swallow policy and have no upstream counterpart. Named explicitly rather than inferred from `proteusOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list.",
+  "proteusRules": [
+    "no-ddl-in-catch",
+    "no-empty-catch",
+    "no-sentinel-catch",
+    "require-cause-on-rethrow"
+  ],
   "vendored": {
     "drift.test.ts": {
       "proteusOnly": true
@@ -14,7 +21,12 @@
       "proteusOnly": true
     },
     "index.ts": {
-      "upstream": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f"
+      "upstream": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f",
+      "local": "3b47a06216c540f68b8c7c0ead802ecb2a820c662257a7d73250ad282db5aa9a",
+      "reason": "Registers the four Proteus-authored no-swallow rules (see proteusRules) alongside the vendored ones. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
+    },
+    "no-swallow.gate.test.ts": {
+      "proteusOnly": true
     },
     "package.json": {
       "proteusOnly": true
@@ -33,6 +45,18 @@
     },
     "rules/no-conditional-empty-object-spread.ts": {
       "upstream": "33f044030d208fcc10be73bb19c8172c275c5229df4b0ca8ec10f069bbe60062"
+    },
+    "rules/no-ddl-in-catch.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-ddl-in-catch.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-empty-catch.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-empty-catch.ts": {
+      "proteusOnly": true
     },
     "rules/no-known-value-widening.test.ts": {
       "upstream": "76a329551293d02f53b7390c8bf9cf35c32d6860ffc154c539a3ebd972da78da"
@@ -75,6 +99,12 @@
       "local": "dfb2d5b1d37f9467c505d99e04973ca845cdae258b52e34bf08d177553aab6b1",
       "reason": "Adds the objectInstanceof check with scope-aware resolution of the global Object binding. `x instanceof Object` is the same evasion as typeof and upstream has never rejected it at any commit. Upstream's allowInTypeGuards option is vendored as-is and .oxlintrc.json does not set it, so no typeof exception is active."
     },
+    "rules/no-sentinel-catch.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-sentinel-catch.ts": {
+      "proteusOnly": true
+    },
     "rules/no-shape-in-symbol-names.test.ts": {
       "proteusOnly": true
     },
@@ -115,6 +145,12 @@
     },
     "rules/no-widen-then-assert.ts": {
       "upstream": "63f2c07cc42b8ad60a7e868efbd7b29e462b9ba960fbd07bbc8f590ef9e3f879"
+    },
+    "rules/require-cause-on-rethrow.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/require-cause-on-rethrow.ts": {
+      "proteusOnly": true
     },
     "rules/require-safety-comment-for-type-assertion.local.test.ts": {
       "proteusOnly": true

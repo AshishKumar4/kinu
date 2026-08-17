@@ -197,7 +197,10 @@ export default function SettingsPage() {
     };
     write(displayName, (v) => rpc("setDisplayName", [v]));
     write(soul, (v) => rpc("setSoul", [v]));
-    write(spec, (v) => setModel(v));
+    write(spec, async (value) => {
+      const failure = await setModel(value);
+      if (failure) throw new Error(failure);
+    });
     write(approval, (v) => rpc("setShellApprovalMode", [v]));
     write(mcts, (v) => rpc("setMctsConfig", [v]));
     if (writes.length === 0) return;
@@ -589,31 +592,22 @@ function WorkspaceBackupCard({
 
 // ── GEPA offline optimisation ────────────────────────────────────
 
-interface GepaRunRow {
-  runId: string;
-  status: 'running' | 'completed' | 'aborted';
-  stopReason: string | null;
-  iterations: number;
-  metricCalls: number;
-  startedAt: number;
-}
-
 function GepaOptimizationCard({
   rpc,
 }: {
   rpc: Rpc;
 }) {
-  const [runs, setRuns] = useState<GepaRunRow[]>([]);
   const [running, setRunning] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      setRuns(v.parse(v.array(GepaRunSchema), await rpc('getGepaRuns', [10])));
-    } catch { /* table may be empty */ }
-  }, [rpc]);
-
-  useEffect(() => { void refresh(); }, [refresh]);
+  // "No optimisation runs yet" is a claim about the agent's own tuning
+  // history, so it may only be made about a listing that actually came back.
+  const load = useCallback(
+    async () => v.parse(v.array(GepaRunSchema), await rpc('getGepaRuns', [10])),
+    [rpc],
+  );
+  const { resource, reload } = useAsyncResource(load);
+  const runs = lastValue(resource) ?? [];
 
   const run = useCallback(async () => {
     setRunning(true);
@@ -636,13 +630,13 @@ function GepaOptimizationCard({
       } else {
         setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; ${scores}).${scoredOn}${caveat}`);
       }
-      await refresh();
+      reload();
     } catch (e) {
       setMsg(`Error: ${errorMessage(e)}`);
     } finally {
       setRunning(false);
     }
-  }, [rpc, refresh]);
+  }, [rpc, reload]);
 
   return (
     <Card title="Scaffold self-tuning" icon={SparkleIcon}>
@@ -658,6 +652,9 @@ function GepaOptimizationCard({
         className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50"
       >{running ? 'Optimising…' : 'Run optimisation'}</button>
       {msg && <div className="p-meta p-text-2 mt-1">{msg}</div>}
+      {resource.status === "error" && (
+        <LoadFailure what="the optimisation history" message={resource.message} onRetry={reload} className="mt-2" />
+      )}
       {runs.length > 0 && (
         <div className="mt-2 space-y-1">
           {runs.slice(0, 5).map(r => (

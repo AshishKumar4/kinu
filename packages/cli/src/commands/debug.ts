@@ -32,7 +32,8 @@
  * produced the source.
  */
 
-import { appendFileSync, chmodSync, writeFileSync } from 'node:fs';
+import { appendFileSync } from 'node:fs';
+import { writeSecretFile } from '@proteus/cli-backend';
 import {
   decodeJsonValue, JsonObjectSchema, JsonValueSchema,
   type JsonObject, type JsonValue,
@@ -294,8 +295,7 @@ interface BundleWriter {
  *  guaranteed secret-free (see redactSecrets) — it should not default to
  *  the umask's usual group/world-readable file. */
 function fileWriter(path: string): BundleWriter {
-  writeFileSync(path, '');
-  try { chmodSync(path, 0o600); } catch { /* non-POSIX fs (e.g. some CI runners) */ }
+  writeSecretFile(path, '');
   let buffered: string[] = [];
   const flush = () => {
     if (buffered.length === 0) return;

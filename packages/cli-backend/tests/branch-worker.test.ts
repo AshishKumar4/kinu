@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Database } from 'bun:sqlite';
 import { JsonValueSchema, type JsonValue } from '@proteus/core';
 import * as v from 'valibot';
 
@@ -15,9 +16,20 @@ const dir = mkdtempSync(join(tmpdir(), 'proteus-branch-test-'));
 const workerPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'branch-worker.ts');
 let child: ChildProcess | null = null;
 
+// The spawner reads `${basePath}.db` — in production the runtime's OWN
+// database, already carrying every table createCLIRuntime provisions. A worker
+// that cannot open it is a broken workspace, so the fixture provisions the two
+// tables it reads rather than leaving the path absent.
+const parentDbPath = `${dir}.db`;
+const parentDb = new Database(parentDbPath, { create: true });
+parentDb.exec('CREATE TABLE crafted_tools (name TEXT PRIMARY KEY, description TEXT NOT NULL)');
+parentDb.exec('CREATE TABLE agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+parentDb.close();
+
 afterAll(() => {
   child?.kill('SIGTERM');
   rmSync(dir, { recursive: true, force: true });
+  rmSync(parentDbPath, { force: true });
 });
 
 async function spawnWorker(): Promise<ChildProcess> {

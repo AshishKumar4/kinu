@@ -135,7 +135,7 @@ function toAction(r: Row): DeferredApproval {
   };
 }
 
-export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
+export function initDeferredApprovalsTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
   execRaw(`CREATE TABLE IF NOT EXISTS deferred_approvals (
     id           TEXT PRIMARY KEY,
     command      TEXT NOT NULL,
@@ -147,7 +147,7 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
   )`);
   // A workspace that parked an action before the gate knew about executors has
   // rows without one; they read back as '' and fail closed everywhere.
-  reconcileColumns(execRaw, 'deferred_approvals', [`executor TEXT NOT NULL DEFAULT ''`]);
+  reconcileColumns(sql, execRaw, 'deferred_approvals', { executor: `TEXT NOT NULL DEFAULT ''` });
   execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_status ON deferred_approvals(status)`);
 }
 

@@ -5,7 +5,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw, createMockLLM } from './helpers.js';
+import { makeSql, makeExecRaw, createMockLLM, createTestWorkspace } from './helpers.js';
 import {
   isTrivialTurn, classifyTurnOutcome, outcomeToFeedback, outcomeQuality, feedbackToQuality,
   executionVerdict, executionVerdictOutcome, isUserVerdictSource, isPureLookupCall,
@@ -15,15 +15,15 @@ import {
   recordLesson, listLessons, corroborateLessonsForTurn,
 } from '../src/evolution/outcomes.js';
 import type { ScaffoldArchiveEntry } from '../src/scaffold/archive.js';
-import { initRunEventTables, RunEventRecorder } from '../src/events/recorder.js';
+import { RunEventRecorder } from '../src/events/recorder.js';
 import type { ToolCallRecord } from '../src/evolution/types.js';
 
-function setup() {
-  const db = new Database(':memory:');
-  const sql = makeSql(db);
-  initTurnOutcomeTables(makeExecRaw(db), sql);
-  return { db, sql };
-}
+/** The PRODUCTION schema, not this module's own tables alone: the eval split
+ *  reconstructs process evidence from the message and run-event ledgers, and a
+ *  harness that omits them would force that reader to tolerate an absence no
+ *  real workspace has. The migration tests below still build their own legacy
+ *  databases by hand — that IS the shape under test there. */
+const setup = createTestWorkspace;
 
 describe('isTrivialTurn — the LLM-call pre-filter', () => {
   const turn = (userMessage: string, toolCalls: ToolCallRecord[] = []) =>
@@ -394,21 +394,36 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
   });
 
   test('instances carry process evidence reconstructed from the existing run ledger', () => {
-    const { db, sql } = setup();
-    initRunEventTables(makeExecRaw(db));
-    db.exec(`CREATE TABLE messages (
-      id TEXT PRIMARY KEY, parent_id TEXT, content TEXT NOT NULL, created_at INTEGER NOT NULL
-    )`);
+    const { sql } = setup();
     const now = Date.now();
-    void sql`INSERT INTO messages (id, parent_id, content, created_at)
-        VALUES (${'u0'}, ${null}, ${'fix task 0'}, ${now - 1_000})`;
-    void sql`INSERT INTO messages (id, parent_id, content, created_at)
-        VALUES (${'n0'}, ${'u0'}, ${'bad answer 0'}, ${now + 1_000})`;
+    void sql`INSERT INTO messages (id, parent_id, role, content, created_at)
+        VALUES (${'u0'}, ${null}, ${'user'}, ${'fix task 0'}, ${now - 1_000})`;
+    void sql`INSERT INTO messages (id, parent_id, role, content, created_at)
+        VALUES (${'n0'}, ${'u0'}, ${'assistant'}, ${'bad answer 0'}, ${now + 1_000})`;
     const recorder = new RunEventRecorder(sql);
     recorder.emit('run-1', { type: 'run_start', agentId: 'agent', caused_by: 'chat', userMessage: 'fix task 0' });
-    recorder.emit('run-1', { type: 'step_finish', stepIndex: 1 });
+    // The step transcript, which is what the evidence reader reads. Rebuilding
+    // the calls from `tool_call_end` instead gives every one an empty `args`,
+    // and delegationFeatures' fingerprint is null for an argument-less call —
+    // so redundancy and loop counts could only ever be zero. Seeding the real
+    // messages is what makes those counts mean anything.
+    recorder.emit('run-1', {
+      type: 'step_finish',
+      stepIndex: 1,
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'tc-1', toolName: 'team', input: { role: 'reviewer' } }] },
+        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'tc-1', toolName: 'team', output: { type: 'text', value: 'spawned' } }] },
+      ],
+    });
     recorder.emit('run-1', { type: 'tool_call_end', name: 'team', toolCallId: 'tc-1', result: 'spawned' });
-    recorder.emit('run-1', { type: 'step_finish', stepIndex: 2 });
+    recorder.emit('run-1', {
+      type: 'step_finish',
+      stepIndex: 2,
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'tc-2', toolName: 'execute_tools', input: { code: 'ls' } }] },
+        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'tc-2', toolName: 'execute_tools', output: { type: 'text', value: 'done' } }] },
+      ],
+    });
     recorder.emit('run-1', { type: 'tool_call_end', name: 'execute_tools', toolCallId: 'tc-2', result: 'done' });
     recorder.emit('run-1', { type: 'run_end', reason: 'completed' });
     seed(sql, 1, 0);

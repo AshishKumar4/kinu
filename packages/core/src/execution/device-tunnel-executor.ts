@@ -230,7 +230,7 @@ export function createDeviceTunnelExecutor(
       try {
         await rpc('exec', ['echo connected']);
       } catch (err) {
-        if (isDeviceNotConnectedError(err)) throw new Error(NOT_CONNECTED);
+        if (isDeviceNotConnectedError(err)) throw new Error(NOT_CONNECTED, { cause: err });
         throw err;
       }
     },
@@ -334,10 +334,18 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   };
 
   /** Bytes that survive a utf-8 decode→encode round-trip byte-exactly may ride
-   *  the text protocol; anything else must go base64 or it corrupts. */
+   *  the text protocol; anything else must go base64 or it corrupts.
+   *
+   *  The round trip IS the test, run rather than inferred from a thrown decode:
+   *  a non-fatal decode substitutes U+FFFD for every invalid sequence, and
+   *  U+FFFD re-encodes to three bytes that cannot match what produced it —
+   *  while a genuinely encoded U+FFFD round-trips and is correctly kept. */
   const asLosslessText = (bytes: Uint8Array): string | null => {
-    try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); }
-    catch { return null; }
+    const text = new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes);
+    const encoded = new TextEncoder().encode(text);
+    if (encoded.length !== bytes.length) return null;
+    for (let i = 0; i < encoded.length; i++) if (encoded[i] !== bytes[i]) return null;
+    return text;
   };
 
   return {

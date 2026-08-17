@@ -20,6 +20,7 @@ import * as v from 'valibot';
 import type { LLM } from '../types/primitives.js';
 import type { FactsStore } from './facts.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { tolerate } from '../obs/index.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { JsonValueSchema, type JsonValue } from '../utils/json.js';
 
@@ -90,12 +91,14 @@ export async function runSleepTimeCompute(
   judge: LLM,
   input: SleepTimeInput,
 ): Promise<SleepTimeUpdate | null> {
-  try {
-    const text = await judge.complete(PROMPT(input));
-    return v.parse(SleepTimeUpdateSchema, extractJsonObject(text));
-  } catch {
-    return null;
-  }
+  // The judge call's own failure belongs to the caller: laundering a failed LLM
+  // request into "the model said nothing useful" is how a broken fast model
+  // reads as a quiet turn. Only the model's ANSWER may be unusable, and null is
+  // what that means.
+  const text = await judge.complete(PROMPT(input));
+  const object = tolerate(() => extractJsonObject(text), 'malformed-input');
+  const update = v.safeParse(SleepTimeUpdateSchema, object);
+  return update.success ? update.output : null;
 }
 
 /** Apply a SleepTimeUpdate to the facts store. */

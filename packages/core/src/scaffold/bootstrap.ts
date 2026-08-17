@@ -30,7 +30,7 @@ async function* run(rt, task) {
 `;
 
 export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
-  initScaffoldTables(rt.storage.execRaw);
+  initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
 
   if (await rt.identity.scaffold.exists()) return;
 

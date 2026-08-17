@@ -312,46 +312,60 @@ function clearDefaultModelPrefixes(prefixes: readonly string[]): void {
 
 /** `normalizeProvider`, but undefined instead of throwing. */
 function maybeProvider(value: string): ProviderName | undefined {
-  try { return normalizeProvider(value); } catch { return undefined; }
+  const parsed = v.safeParse(ProviderNameSchema, canonicalProviderName(value));
+  return parsed.success ? parsed.output : undefined;
 }
 
 function normalizeProvider(value: string): ProviderName {
-  const token = normalizeToken(value);
-  const provider =
-    token === 'cf' || token === 'workers-ai' || token === 'account'
-      ? 'cloudflare'
-      : token === 'claude-code' || token === 'subscription' || token === 'claude-subscription'
-        ? 'claude'
-        : token === 'chatgpt' || token === 'chatgpt-codex'
-          ? 'codex'
-          : token === 'compat' || token === 'ollama'
-            ? 'openai-compatible'
-            : token === 'opencode' ? 'opencode'
-            : token;
+  const provider = maybeProvider(value);
+  if (!provider) {
+    throw new Error('Provider must be cloudflare, claude, codex, openai, openrouter, anthropic, openai-compatible, or opencode.');
+  }
+  return provider;
+}
 
-  const parsed = v.safeParse(ProviderNameSchema, provider);
-  if (parsed.success) return parsed.output;
-  throw new Error('Provider must be cloudflare, claude, codex, openai, openrouter, anthropic, openai-compatible, or opencode.');
+/** The aliases users actually type, folded onto canonical provider names. */
+function canonicalProviderName(value: string): string {
+  const token = normalizeToken(value);
+  return token === 'cf' || token === 'workers-ai' || token === 'account'
+    ? 'cloudflare'
+    : token === 'claude-code' || token === 'subscription' || token === 'claude-subscription'
+      ? 'claude'
+      : token === 'chatgpt' || token === 'chatgpt-codex'
+        ? 'codex'
+        : token === 'compat' || token === 'ollama'
+          ? 'openai-compatible'
+          : token === 'opencode' ? 'opencode'
+          : token;
 }
 
 function normalizeToken(value: string): string {
   return value.trim().toLowerCase();
 }
 
-/** What the account holds, or null when there is no account to ask (or it
- *  cannot be reached — an unreachable account is not evidence of an empty one,
- *  so the listing says nothing rather than something false). */
-async function accountCredentials(): Promise<CloudCredentialSummary[] | null> {
+/** What the account holds, or why it could not be asked. An unreachable account
+ *  is not evidence of an empty one, so they are separate answers and the listing
+ *  says which. */
+type AccountCredentials =
+  | { readonly credentials: readonly CloudCredentialSummary[] }
+  | { readonly signedOut: true }
+  | { readonly unreachable: string };
+
+async function accountCredentials(): Promise<AccountCredentials> {
   const cloud = resolveCloudSession();
-  if (!cloud) return null;
-  try { return await listCloudCredentials(cloud.origin, cloud.token); }
-  catch { return null; }
+  if (!cloud) return { signedOut: true };
+  try {
+    return { credentials: await listCloudCredentials(cloud.origin, cloud.token) };
+  } catch (error) {
+    return { unreachable: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 async function printProviders(): Promise<void> {
   const config = loadConfigFile();
   const account = await accountCredentials();
-  const inAccount = (credKey: string): boolean => (account ?? []).some((c) => c.key === credKey);
+  const held = 'credentials' in account ? account.credentials : [];
+  const inAccount = (credKey: string): boolean => held.some((c) => c.key === credKey);
   const connected = (label: string, detail?: string) => {
     console.log(`  ${OK('✓')} ${ACCENT(label)}${detail ? ` ${DIM(detail)}` : ''}`);
   };
@@ -376,6 +390,10 @@ async function printProviders(): Promise<void> {
     console.log(`    ${DIM('Signed-in local workspaces reach the same Workers AI through the proxy, with no key on this machine.')}`);
   } else {
     missing('Proteus account', 'proteus provider connect cloudflare');
+  }
+  if ('unreachable' in account) {
+    console.log(`    ${WARN('!')} Could not read the keys stored in your account (${account.unreachable}).`);
+    console.log(`    ${DIM('The lines below therefore show only what is on this machine.')}`);
   }
 
   const claude = await checkClaudeAvailability();
@@ -407,7 +425,7 @@ async function printProviders(): Promise<void> {
   // Everything else the account holds — the models.dev tail connected in the
   // web UI, which this machine can use without ever holding the key.
   const named = new Set(['openai.bearer', 'openrouter.bearer', 'anthropic.bearer', 'openai-compat.default', 'cloudflare.oauth', 'cloudflare.ai-gateway', 'codex.oauth']);
-  for (const cred of (account ?? []).filter((c) => !named.has(c.key))) {
+  for (const cred of held.filter((c) => !named.has(c.key))) {
     connected(cred.key.replace(/\.bearer$/, ''), 'your account');
   }
 

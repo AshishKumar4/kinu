@@ -636,6 +636,7 @@ function rollback<T>(error: T, action: () => void, operation: string): never {
     throw new AggregateError(
       [error, rollbackError],
       `${operation} failed and its roster rollback also failed`,
+      { cause: error },
     );
   }
   throw error;
@@ -654,6 +655,7 @@ async function rollbackSpawn<T>(
     throw new AggregateError(
       [error, cleanupError],
       'subordinate spawn failed and its facet cleanup also failed',
+      { cause: error },
     );
   }
 
@@ -664,6 +666,7 @@ async function rollbackSpawn<T>(
       throw new AggregateError(
         [error, cleanupError],
         'subordinate spawn failed and its roster cleanup also failed',
+        { cause: error },
       );
     }
   }

@@ -103,16 +103,16 @@ db.exec(`CREATE TABLE IF NOT EXISTS traces (
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 )`);
 
-// Load crafted tools from the parent DB if available
+// Crafted tools from the parent workspace DB. Both tables it reads are
+// provisioned by the parent runtime before it forks (initWorkspaceSchema /
+// initAgentConfigTable), so a failure here is a broken parent, not an old one.
 let craftedTools: ExploreToolHint[] = [];
 let parentDb: Database | null = null;
-try {
-  const parentDbPath = process.env.PROTEUS_PARENT_DB;
-  if (parentDbPath) {
-    parentDb = new Database(parentDbPath, { readonly: true });
-    craftedTools = parentDb.query<ExploreToolHint, []>('SELECT name, description FROM crafted_tools').all();
-  }
-} catch {}
+const parentDbPath = process.env.PROTEUS_PARENT_DB;
+if (parentDbPath) {
+  parentDb = new Database(parentDbPath, { readonly: true });
+  craftedTools = parentDb.query<ExploreToolHint, []>('SELECT name, description FROM crafted_tools').all();
+}
 
 process.on('message', async (rawMessage: JsonValue) => {
   let method = 'unknown';
@@ -180,17 +180,13 @@ process.on('message', async (rawMessage: JsonValue) => {
 process.send?.({ method: 'ready' });
 
 process.once('exit', () => {
-  try { parentDb?.close(); } catch {}
-  try { db.close(); } catch {}
+  parentDb?.close();
+  db.close();
 });
 
 function readStoredModelSpec(): string | null {
-  try {
-    const row = parentDb?.query<{ value: string }, []>("SELECT value FROM agent_config WHERE key = 'model' LIMIT 1").get();
-    return row?.value ?? null;
-  } catch {
-    return null;
-  }
+  const row = parentDb?.query<{ value: string }, []>("SELECT value FROM agent_config WHERE key = 'model' LIMIT 1").get();
+  return row?.value ?? null;
 }
 
 function resolveLowEffortModel() {
@@ -202,7 +198,5 @@ function resolveLowEffortModel() {
 }
 
 function readJson<T>(schema: v.GenericSchema<T>, raw: string | undefined): T | null {
-  if (!raw) return null;
-  try { return v.parse(schema, JSON.parse(raw)); }
-  catch { return null; }
+  return raw ? v.parse(schema, JSON.parse(raw)) : null;
 }

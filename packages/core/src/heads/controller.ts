@@ -476,7 +476,11 @@ export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number | undefi
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<never>((_resolve, reject) => {
     timeoutHandle = setTimeout(() => {
-      h.abort('wall-clock budget exhausted').catch(() => undefined);
+      // The deadline rejects immediately; the abort is what stops the head from
+      // burning budget past it. A head that survives its abort is a live facet
+      // nobody is waiting for, so that failure surfaces rather than being
+      // absorbed — the zero-budget path above throws it for the same reason.
+      void h.abort('wall-clock budget exhausted');
       reject(new Error(`wall-clock budget exceeded after ${timeoutMs}ms`));
     }, timeoutMs);
   });
@@ -544,7 +548,9 @@ function headTrajectory(r: HeadReport): string {
 
 /** Score ONE merge synthesis narrative for how well it answers the split — the
  *  k-sample-median selector over merge candidates. Mirrors a judge sample in
- *  evaluation.ts: unparseable/failed → null (dropped, never 0). */
+ *  evaluation.ts: text that carries no score → null (dropped, never 0). A judge
+ *  that FAILS is not a low score and is not dropped — it propagates, so a
+ *  broken judge cannot look like every candidate being unscoreable. */
 async function scoreMergeNarrative(judge: LLM, rationale: string, narrative: string): Promise<number | null> {
   const prompt = `You are scoring how well a synthesized answer resolves a task that was explored by several parallel reasoning heads.
 
@@ -558,12 +564,7 @@ Score from 0.0 to 1.0 for how completely and correctly the answer resolves the t
 JSON shape:
 {"score": <float 0.0-1.0>, "rationale": "<15 words max>"}
 ${jsonObjectOnlyInstruction()}`;
-  let text: string;
-  try {
-    text = await judge.complete(prompt);
-  } catch {
-    return null;
-  }
+  const text = await judge.complete(prompt);
   const match = text.match(/"score"\s*:\s*(-?\d+(?:\.\d+)?)/);
   if (!match) return null;
   const score = Number(match[1]);

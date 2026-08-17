@@ -147,11 +147,11 @@ export async function getExecutorFiles(
     const names = await vfs.readdir(dir);
     const entries: DirEntry[] = [];
     for (const name of names) {
-      let type: DirEntry['type'] = 'file';
-      let size: number | undefined;
-      try { const s = await vfs.stat(joinDir(dir, name)); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } }
-      catch { /* unstattable — keep the default */ }
-      entries.push({ name, type, size });
+      // `stat` answers null for a path that is gone; anything it throws is the
+      // file plane itself failing, and a listing that reported every entry as a
+      // sizeless file would hide that behind a plausible directory.
+      const s = await vfs.stat(joinDir(dir, name));
+      entries.push({ name, type: s?.isDir ? 'dir' : 'file', size: s?.size });
     }
     return { path: dir, entries: sortDirEntries(entries) };
   } catch (err) {

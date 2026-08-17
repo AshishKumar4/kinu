@@ -158,9 +158,16 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
   };
 
   const notify = (client: AgentContext, sessionId: SessionId, update: SessionNotification['update']): void => {
-    // Notifications are fire-and-forget; a client that has gone away must not
-    // take down the turn that is still running.
-    void client.notify(CLIENT_METHODS.session_update, { sessionId, update }).catch(() => {});
+    void (async () => {
+      try {
+        await client.notify(CLIENT_METHODS.session_update, { sessionId, update });
+      } catch (error) {
+        // Notifications are fire-and-forget; a client that has gone away must not take down the
+        // turn that is still running. Reported on stderr because stdout carries the protocol — an
+        // undelivered update silently truncates what the editor shows of the turn.
+        console.error(`proteus acp: session/update was not delivered: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    })();
   };
 
   /** Translate one AgentClient event into its ACP session/update, or null when

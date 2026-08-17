@@ -49,11 +49,12 @@ function errorMessage<Failure>(error: Failure): string {
 }
 
 function cleanup() {
-  // Remove the test agents we created
-  try { rmSync(join(AGENT_HOME, AGENT_NAME), { recursive: true, force: true }); } catch {}
-  try { rmSync(join(AGENT_HOME, IMPORT_NAME), { recursive: true, force: true }); } catch {}
-  try { rmSync(TEST_ROOT, { recursive: true, force: true }); } catch {}
-  try { rmSync(EXPORT_DIR, { recursive: true, force: true }); } catch {}
+  // `force` already absorbs a missing path, so anything thrown here is a real cleanup failure
+  // (permissions, a busy handle) that would otherwise strand temp state across runs.
+  rmSync(join(AGENT_HOME, AGENT_NAME), { recursive: true, force: true });
+  rmSync(join(AGENT_HOME, IMPORT_NAME), { recursive: true, force: true });
+  rmSync(TEST_ROOT, { recursive: true, force: true });
+  rmSync(EXPORT_DIR, { recursive: true, force: true });
 }
 
 // ── §1. Create ───────────────────────────────────────────────────
@@ -65,7 +66,10 @@ async function testCreate() {
 
   try {
     await createCommand(AGENT_NAME, { mode: "local", purpose: "E2E test agent for automated testing" });
-  } catch {}
+  } catch (error) {
+    fail("proteus create", errorMessage(error));
+    return;
+  }
 
   if (existsSync(dbPath)) {
     pass("proteus create", `agent.db created`);
@@ -158,7 +162,10 @@ async function testExportImport() {
   // Export
   try {
     await exportCommand(AGENT_NAME, { output: exportPath });
-  } catch {}
+  } catch (error) {
+    fail("proteus export", errorMessage(error));
+    return;
+  }
 
   if (existsSync(exportPath)) {
     const size = statSync(exportPath).size;
@@ -174,7 +181,10 @@ async function testExportImport() {
   // Import
   try {
     await importCommand(exportPath, { name: IMPORT_NAME });
-  } catch {}
+  } catch (error) {
+    fail("proteus import", errorMessage(error));
+    return;
+  }
 
   const importedDb = join(AGENT_HOME, IMPORT_NAME, "agent.db");
   if (existsSync(importedDb)) {

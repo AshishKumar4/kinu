@@ -195,13 +195,11 @@ export async function acceptInboundEmail(
 
 /** Union of active email_route allowlists (normally zero or one trigger). */
 export function readEmailAllowlist(registry: TriggerRegistry): string[] {
-  try {
-    return registry.list({ kind: 'email_route', state: 'active' })
-      .flatMap((t) => {
-        const spec = v.safeParse(EmailAllowlistSchema, t.spec);
-        return spec.success ? (spec.output.allow ?? []) : [];
-      });
-  } catch { return []; }
+  return registry.list({ kind: 'email_route', state: 'active' })
+    .flatMap((t) => {
+      const spec = v.safeParse(EmailAllowlistSchema, t.spec);
+      return spec.success ? (spec.output.allow ?? []) : [];
+    });
 }
 
 /**

@@ -52,22 +52,21 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
         return catalogCache.models;
       }
       const fetchFn = deps.fetch ?? fetch;
-      try {
-        const res = await fetchFn(`${OPENROUTER_BASE_URL}/models`, { headers: auth.headers });
-        if (!res.ok) return [];
-        const body = v.safeParse(OpenRouterCatalogSchema, await res.json());
-        if (!body.success) return [];
-        const models: ModelInfo[] = (body.output.data ?? []).map(m => ({
-          id: m.id,
-          label: m.name ?? m.id,
-          contextWindow: m.context_length,
-          capabilities: m.architecture?.modality?.includes('image')
-            ? ['tools', 'streaming', 'vision']
-            : ['tools', 'streaming'],
-        }));
-        catalogCache = { at: Date.now(), authKey, models };
-        return models;
-      } catch { return []; }
+      // No catch: an unreachable OpenRouter is not an OpenRouter with no models.
+      const res = await fetchFn(`${OPENROUTER_BASE_URL}/models`, { headers: auth.headers });
+      if (!res.ok) return [];
+      const body = v.safeParse(OpenRouterCatalogSchema, await res.json());
+      if (!body.success) return [];
+      const models: ModelInfo[] = (body.output.data ?? []).map(m => ({
+        id: m.id,
+        label: m.name ?? m.id,
+        contextWindow: m.context_length,
+        capabilities: m.architecture?.modality?.includes('image')
+          ? ['tools', 'streaming', 'vision']
+          : ['tools', 'streaming'],
+      }));
+      catalogCache = { at: Date.now(), authKey, models };
+      return models;
     },
 
     createModel(modelId, deps): LanguageModel {

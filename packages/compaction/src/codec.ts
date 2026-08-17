@@ -36,7 +36,7 @@ import {
   toolModelMessageSchema,
   userModelMessageSchema,
 } from 'ai';
-import { fnv1a64, parseJsonObject } from '@proteus/core';
+import { fnv1a64 } from '@proteus/core';
 import * as v from 'valibot';
 import {
   assistantRunsStage,
@@ -490,15 +490,7 @@ function pairOf(item: ToolItem): ToolPairHandle {
  *  see the isSkillItem comment above for why this is intentionally NOT kept
  *  in step with the current action set (the tool itself is gone). */
 function isSkillBodyLoad(call: ToolCallPart): boolean {
-  if (call.toolName !== 'skills') return false;
-  try {
-    const serialized = JSON.stringify(call.input);
-    if (!isString(serialized)) return false;
-    const action = parseJsonObject(serialized).action;
-    return action === 'read' || action === 'invoke';
-  } catch {
-    return false;
-  }
+  return call.toolName === 'skills' && v.is(SkillBodyLoadSchema, call.input);
 }
 
 function toolError(pair: ToolPairHandle): string | undefined {
@@ -614,6 +606,7 @@ function binaryReplacer<Value>(_key: string, value: Value): Value | string {
 }
 
 const StringSchema = v.string();
+const SkillBodyLoadSchema = v.object({ action: v.picklist(['read', 'invoke']) });
 interface ToolPairMarker {
   [TOOL_PAIR_HANDLE]: unknown;
 }

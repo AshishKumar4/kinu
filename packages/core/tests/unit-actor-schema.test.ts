@@ -20,7 +20,7 @@ describe('actor schema', () => {
   test('initializes actor-local state without workspace identity or fork lineage', () => {
     const db = new Database(':memory:');
 
-    initActorTables((ddl) => db.exec(ddl));
+    initActorTables((ddl) => db.exec(ddl), makeSql(db));
 
     const tables = tableNames(db);
 
@@ -32,7 +32,7 @@ describe('actor schema', () => {
   test('keeps the unified workspace initializer behavior intact', () => {
     const db = new Database(':memory:');
 
-    initAllTables((ddl) => db.exec(ddl));
+    initAllTables((ddl) => db.exec(ddl), makeSql(db));
 
     const tables = tableNames(db);
     expect(tables).toContain('workspace_identity');
@@ -46,7 +46,7 @@ describe('actor schema', () => {
     // shadow rollout and the DGM lineage archive read columns that did not exist.
     for (const init of [initAllTables, initActorTables, initScaffoldTables]) {
       const db = new Database(':memory:');
-      init((ddl) => db.exec(ddl));
+      init((ddl) => db.exec(ddl), makeSql(db));
       expect(columnNames(db, 'scaffold_versions')).toEqual(
         ['version', 'written_at', 'rationale', 'canary_score', 'baseline_score', 'status', 'parent_version', 'pathology'],
       );
@@ -61,7 +61,7 @@ describe('actor schema', () => {
       canary_score REAL, baseline_score REAL)`);
     db.exec(`INSERT INTO scaffold_versions (version, written_at, rationale) VALUES (1, 10, 'seed')`);
 
-    initAllTables((ddl) => db.exec(ddl));
+    initAllTables((ddl) => db.exec(ddl), makeSql(db));
 
     expect(columnNames(db, 'scaffold_versions')).toContain('status');
     expect(columnNames(db, 'scaffold_versions')).toContain('parent_version');
@@ -77,7 +77,7 @@ describe('actor schema', () => {
     // from workspaces created through the other.
     for (const init of [initAllTables, initActorTables, initSearchTables]) {
       const db = new Database(':memory:');
-      init((ddl) => db.exec(ddl));
+      init((ddl) => db.exec(ddl), makeSql(db));
       const columns = columnNames(db, 'search_nodes');
       for (const column of ['code_used', 'code_language', 'root_id']) {
         expect(columns).toContain(column);
@@ -102,7 +102,7 @@ describe('actor schema', () => {
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
     db.exec(`INSERT INTO search_nodes (id, task, depth, created_at) VALUES ('n1', 'audit', 0, 10)`);
 
-    initAllTables((ddl) => db.exec(ddl));
+    initAllTables((ddl) => db.exec(ddl), makeSql(db));
 
     expect(columnNames(db, 'search_nodes')).toContain('code_language');
     const sql = makeSql(db);
@@ -126,7 +126,7 @@ describe('actor schema', () => {
       created_at INTEGER NOT NULL, settled_at INTEGER)`);
     db.exec(`INSERT INTO background_jobs (id, kind, created_at) VALUES ('j1', 'fork', 10)`);
 
-    initBackgroundJobsTable((ddl) => db.exec(ddl));
+    initBackgroundJobsTable((ddl) => db.exec(ddl), makeSql(db));
 
     for (const column of ['work_mode', 'input_json', 'epoch', 'resume_attempts']) {
       expect(columnNames(db, 'background_jobs')).toContain(column);
@@ -144,7 +144,7 @@ describe('actor schema', () => {
       created_at INTEGER NOT NULL DEFAULT 0)`);
     db.exec(`INSERT INTO workspace_identity (id, name, created_at) VALUES ('w1', 'jarvis', 10)`);
 
-    initAllTables((ddl) => db.exec(ddl));
+    initAllTables((ddl) => db.exec(ddl), makeSql(db));
 
     expect(db.query<{ name: string; mission: string }, []>(
       `SELECT name, mission FROM workspace_identity`).all(),
@@ -164,7 +164,7 @@ describe('actor schema', () => {
       (source_agent_id, source_agent_name, source_message_id, source_message_created_at, forked_at)
       VALUES ('SRC', 'atlas', 'm1', 20, 30)`);
 
-    initAllTables(execRaw);
+    initAllTables(execRaw, makeSql(db));
     migrateWorkspaceStorage(sql, execRaw);
 
     expect(columnNames(db, 'fork_lineage')).toContain('source_workspace_id');
@@ -176,10 +176,10 @@ describe('actor schema', () => {
   test('reconciliation is idempotent on a current workspace', () => {
     const db = new Database(':memory:');
     const execRaw = makeExecRaw(db);
-    initAllTables(execRaw);
+    initAllTables(execRaw, makeSql(db));
     const before = columnNames(db, 'search_nodes');
 
-    initAllTables(execRaw);
+    initAllTables(execRaw, makeSql(db));
     migrateWorkspaceStorage(makeSql(db), execRaw);
 
     expect(columnNames(db, 'search_nodes')).toEqual(before);

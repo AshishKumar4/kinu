@@ -269,7 +269,7 @@ describe('MCTS branch mode stays isolated', () => {
 describe('recursive split budget', () => {
   test('the controller decrements maxDepth for spawned subheads', async () => {
     const { db, sql } = createTestSql();
-    initHeadsTables((ddl) => db.exec(ddl));
+    initHeadsTables((ddl) => db.exec(ddl), sql);
     const spawned: HeadInput[] = [];
     const runtime: HeadRuntime = {
       async spawnHead(input) {

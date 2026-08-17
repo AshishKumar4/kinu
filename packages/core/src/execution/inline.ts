@@ -249,15 +249,16 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         // Return a real array so LLM code like `const tools = await workspace.listTools(); tools.filter(...)` works.
         // Previous implementation returned a joined markdown string and broke .filter/.map.
         const crafted = craftStore.list();
-        // Pull EMA scores if available; default to 0.7 when unscored.
+        // Pull EMA scores; default to 0.7 when unscored. `craft_scores` is part
+        // of the one workspace schema (identity/workspace-schema.ts) and the
+        // evolution engine's constructor re-ensures it, so a read that fails is
+        // a broken database, not a workspace that has not scored anything yet.
         const scoreByName = new Map<string, number>();
         if (sql) {
-          try {
-            const rows = sql<{ tool_name: string; score: number }>`
-              SELECT tool_name, score FROM craft_scores
-            `;
-            for (const r of rows) scoreByName.set(r.tool_name, r.score);
-          } catch { /* craft_scores may not exist yet */ }
+          const rows = sql<{ tool_name: string; score: number }>`
+            SELECT tool_name, score FROM craft_scores
+          `;
+          for (const r of rows) scoreByName.set(r.tool_name, r.score);
         }
         return crafted.map(t => ({
           name: t.name,
