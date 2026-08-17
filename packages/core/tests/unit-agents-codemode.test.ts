@@ -80,6 +80,12 @@ function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
   return { registry, rt, model: new MockLanguageModelV3(), ...overrides };
 }
 
+/** The minimum a merge fork takes — settle=merge refuses a call with no briefs. */
+const twoForks = [
+  { task: 'survey prior art', rationale: 'establish baseline' },
+  { task: 'sketch a design', rationale: 'exercise constraints' },
+];
+
 const rosterEntry: SubordinateRosterEntry = {
   name: 'researcher', displayName: 'Researcher', role: 'competitive research',
   createdBy: 'orchestrator', status: 'idle', currentTask: null,
@@ -206,18 +212,28 @@ describe('agents.* codemode namespace — dispatch', () => {
     const provider = createAgentsCodemodeProvider(() => ({ mode: 'plan', fork: forkDeps() }));
     expect(await member(provider.tools, 'fork').execute({ task: 'research', settle: 'mcts' }))
       .toMatchObject({ strategy: 'mcts', text: 'searched' });
-    expect(await member(provider.tools, 'fork').execute({ task: 'research' }))
+    expect(await member(provider.tools, 'fork').execute({ task: 'research', forks: twoForks }))
       .toMatchObject({ strategy: FORK_STRATEGY_ID, text: 'forked' });
   });
 
   test('fork routes through the strategy registry and returns the settled answer', async () => {
     const ns = namespaceOf(() => ({ fork: forkDeps() }));
-    expect(await member(ns, 'fork').execute({ task: 'map the options' })).toMatchObject({
+    expect(await member(ns, 'fork').execute({ task: 'map the options', forks: twoForks })).toMatchObject({
       strategy: FORK_STRATEGY_ID, text: 'forked',
     });
     expect(await member(ns, 'fork').execute({ task: 'map the options', settle: 'mcts' })).toMatchObject({
       strategy: 'mcts', text: 'searched',
     });
+  });
+
+  test('the forks/settle contract is the tool\'s, not re-implemented here', async () => {
+    // The projection funnels into the same dispatch, so the sandbox gets the
+    // same classified refusal — briefs handed to mcts are refused, and a merge
+    // fork with no briefs is refused, in a script exactly as in a tool call.
+    const ns = namespaceOf(() => ({ fork: forkDeps() }));
+    expect(await member(ns, 'fork').execute({ task: 't', settle: 'mcts', forks: twoForks }))
+      .toMatchObject({ reason: 'bad_input' });
+    expect(await member(ns, 'fork').execute({ task: 't' })).toMatchObject({ reason: 'bad_input' });
   });
 
   test('typed fork fields reach the strategy context exactly as the tool sends them', async () => {
@@ -235,15 +251,11 @@ describe('agents.* codemode namespace — dispatch', () => {
     const ns = namespaceOf(() => ({
       fork: { registry, rt, model: new MockLanguageModelV3(), defaultOptions: () => ({ heads: { controller } }) },
     }));
-    const specs = [
-      { task: 'survey prior art', rationale: 'establish baseline' },
-      { task: 'sketch a design', rationale: 'exercise constraints' },
-    ];
-    await member(ns, 'fork').execute({ task: 'ship it', forks: specs, merge_strategy: 'consensus', budget: 9, wall_clock_ms: 4321 });
+    await member(ns, 'fork').execute({ task: 'ship it', forks: twoForks, merge_strategy: 'consensus', budget: 9, wall_clock_ms: 4321 });
     expect(observed?.task).toBe('ship it');
     expect(observed?.budget).toEqual({ maxIterations: 9, wallClockMs: 4321 });
     // Host-injected infra survives the caller's fields, same deep merge as the tool.
-    expect(strategyOption(observed?.options, 'heads')).toEqual({ controller, heads: specs, mergeStrategy: 'consensus' });
+    expect(strategyOption(observed?.options, 'heads')).toEqual({ controller, heads: twoForks, mergeStrategy: 'consensus' });
   });
 
   test('staff / ask / send / reply / list / dismiss reach the same transports', async () => {
@@ -284,8 +296,8 @@ describe('agents.* codemode namespace — dispatch', () => {
       const { rt } = createTestRuntime();
       return { fork: { registry, rt, model: new MockLanguageModelV3() } };
     });
-    expect(await member(ns, 'fork').execute({ task: 'a' })).toMatchObject({ text: 'generation 2' });
-    expect(await member(ns, 'fork').execute({ task: 'b' })).toMatchObject({ text: 'generation 3' });
+    expect(await member(ns, 'fork').execute({ task: 'a', forks: twoForks })).toMatchObject({ text: 'generation 2' });
+    expect(await member(ns, 'fork').execute({ task: 'b', forks: twoForks })).toMatchObject({ text: 'generation 3' });
   });
 
   test('deps failures come back as inspectable values, never thrown into the script', async () => {
@@ -293,7 +305,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     registry.register(createTestStrategy({ id: FORK_STRATEGY_ID, throwError: 'kaboom' }));
     const { rt } = createTestRuntime();
     const ns = namespaceOf(() => ({ fork: { registry, rt, model: new MockLanguageModelV3() } }));
-    const result = v.parse(ErrorResultSchema, await member(ns, 'fork').execute({ task: 't' }));
+    const result = v.parse(ErrorResultSchema, await member(ns, 'fork').execute({ task: 't', forks: twoForks }));
     expect(result.error).toMatch(/Fork \(settle=merge\) failed.*kaboom/);
   });
 });
@@ -343,7 +355,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     const { rt } = createTestRuntime();
     const ns = namespaceOf(() => ({ fork: { registry, rt, model: new MockLanguageModelV3() } }));
     const controller = new AbortController();
-    await member(ns, 'fork').execute({ task: 't' }, { signal: controller.signal });
+    await member(ns, 'fork').execute({ task: 't', forks: twoForks }, { signal: controller.signal });
     expect(observed).toBe(controller.signal);
   });
 
@@ -358,7 +370,8 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
   test('missing required fields stay the tool\'s own sharp errors', async () => {
     const ns = namespaceOf(() => fullDeps());
     expect(await member(ns, 'ask').execute({ agent: 'researcher' })).toEqual({ error: 'ask requires agent and message' });
-    expect(await member(ns, 'fork').execute({})).toEqual({ error: 'fork requires task' });
+    // The refusal carries its classification, exactly as the declared type promises.
+    expect(await member(ns, 'fork').execute({})).toEqual({ reason: 'bad_input', error: 'fork requires task' });
   });
 });
 
@@ -380,6 +393,23 @@ describe('agents.* codemode namespace — declared types', () => {
     expect(types).toContain('NOT resumable from here');
     expect(types).toContain('execute_tools declines background resume');
     expect(types).toContain('top-level `agents` tool');
+  });
+
+  test('the fork docstring says which settle gets a tool loop, and that briefs are refused by the other', () => {
+    // It used to read "each runs its own multi-step tool loop, then they settle
+    // into one answer: merged by default, or scored ... with settle:mcts",
+    // which attaches the tool loop to both settles, and "Omit `forks` to let
+    // the strategy pick the angles", which nothing implements. Measured truth:
+    // a merge fork holds HEAD_BUILTIN_TOOLS (heads/head-tools.ts) filtered by
+    // allowedTools; an mcts branch is one generateText call with no ToolSet.
+    const types = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
+    expect(types).toContain('merge (default) runs the briefs in `forks` — required —');
+    expect(types).toContain('execute_tools/run/file/web');
+    expect(types).toContain('no tool loop of its');
+    expect(types).toContain('REFUSED rather than ignored');
+    expect(types).not.toContain('Omit `forks`');
+    // The refusal's classification is declared, like the file dispatcher's.
+    expect(types).toContain('reason?: "bad_input"');
   });
 
   test('the same action set renders byte-identically whatever built the deps', () => {

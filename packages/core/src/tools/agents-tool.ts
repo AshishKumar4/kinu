@@ -442,6 +442,83 @@ function readAbortSignal(options: AgentsToolCallOptions | undefined): AbortSigna
 // ── Fork dispatch (the former think tool, verbatim semantics) ───────────────
 
 /**
+ * A fork refusal, reason FIRST — the shape and the vocabulary the `file` tool's
+ * refusals already carry (tools/file-tool.ts). `bad_input` is that vocabulary's
+ * "the arguments do not describe an operation", which is exactly what a fork
+ * with the wrong argument shape is, and it is what makes the refusal land in
+ * `refused` rather than indicting the tool in `broke` when the ledger is read
+ * back (read-models/tool-failures.ts). A bare `{error}` envelope classified as
+ * `returned_error`: a correct refusal counted as a defect.
+ */
+interface ForkRefusal {
+  reason: 'bad_input';
+  error: string;
+}
+
+function forkRefusal(error: string): ForkRefusal {
+  return { reason: 'bad_input', error };
+}
+
+/**
+ * The forks/settle relationship, enforced in both directions before anything
+ * spawns. `forks` is read by exactly ONE settle — merge, whose strategy reads
+ * them off options.heads (strategy/heads.ts) — and every other settle runs on
+ * `ctx.task` alone. Both halves used to be prose and neither was enforced:
+ *
+ *   settle=mcts DISCARDED the briefs. The fold below ran unconditionally and
+ *   the MCTS strategy never reads that option (strategy/mcts.ts), so briefs
+ *   carrying per-fork `model` and `allowedTools` produced toolless codegen on
+ *   the task string, returned as an ordinary success.
+ *
+ *   settle=merge WITHOUT briefs got past the spawn announcement below, so the
+ *   call detached into a background job and the strategy's throw arrived as a
+ *   wake about spawned work failing — naming `heads`, an option the model has
+ *   no field for — for a fork that never spawned.
+ *
+ * REFUSING rather than seeding the search from the briefs is the deliberate
+ * choice: a brief is `task` + `rationale` + `model` + `allowedTools`, and an
+ * mcts branch is a single generateText call with no ToolSet and no runtime
+ * (cf-backend exploration.ts) under one model the engine resolves for the whole
+ * search. Seeding could honour the first two fields and would have to discard
+ * the other two — this same defect one level down. What the caller wanted
+ * (briefs that run tools and get compared) is settle=merge, and the refusal
+ * names it.
+ */
+function forkSettleRefusal(
+  deps: AgentsForkDeps,
+  input: AgentsToolInput,
+  settle: string,
+  strategyId: string,
+): ForkRefusal | null {
+  const briefs = input.forks?.length ?? 0;
+  if (strategyId !== FORK_STRATEGY_ID) {
+    const orphaned: string[] = [];
+    if (briefs > 0) orphaned.push('`forks`');
+    if (input.merge_strategy) orphaned.push('`merge_strategy`');
+    if (orphaned.length === 0) return null;
+    const named = orphaned.join(' and ');
+    const alsoLost = briefs > 0
+      ? ', and every per-fork `model` and `allowedTools` goes with the briefs'
+      : '';
+    return forkRefusal(
+      `settle=${settle} reads \`task\` alone — it writes its own competing approaches — so ` +
+      `${named} would be discarded here: only settle=merge reads ${orphaned.length > 1 ? 'them' : 'it'}` +
+      `${alsoLost}. Either drop ${named} and put everything the search needs in \`task\`, or use ` +
+      'settle=merge, where each brief runs as a real fork with its own multi-step tool loop.',
+    );
+  }
+  if (briefs > 0) return null;
+  // Never names a settle this registry does not have.
+  const alternative = deps.registry.get('mcts')
+    ? ' Or use settle=mcts, which takes no `forks` and writes its own competing approaches from `task`.'
+    : '';
+  return forkRefusal(
+    'settle=merge runs the forks you supply and this call supplied none. Pass `forks`: 2-6 briefs, ' +
+    'each with its own `task` and `rationale`. Nothing infers the angles for you.' + alternative,
+  );
+}
+
+/**
  * The mission scope this fork runs under: the caller's, narrowed to a fresh
  * child label when the call declared its own cap. Returns null when there is no
  * governor or no scope at all — the uncapped default, where nothing below this
@@ -468,14 +545,16 @@ async function runFork(
   toolOptions: AgentsToolCallOptions | undefined,
   budget?: MissionGovernor,
 ): Promise<object> {
-  if (!input.task) return { error: 'fork requires task' };
+  if (!input.task) return forkRefusal('fork requires task');
   const settle = input.settle ?? 'merge';
   const strategyId = settle === 'merge' ? FORK_STRATEGY_ID : settle;
   const strat = deps.registry.get(strategyId);
   if (!strat) {
     const settles = ['merge', ...deps.registry.list().filter((s) => s.advertised !== false && s.id !== FORK_STRATEGY_ID).map((s) => s.id)];
-    return { error: `Unknown settle "${settle}". Available: ${settles.join(', ')}` };
+    return forkRefusal(`Unknown settle "${settle}". Available: ${settles.join(', ')}`);
   }
+  const mismatch = forkSettleRefusal(deps, input, settle, strategyId);
+  if (mismatch) return mismatch;
 
   // One-level deep merge: caller tuning sits alongside injected infra
   // (session / controller / onPhase) instead of replacing the whole
@@ -498,8 +577,9 @@ async function runFork(
   }
 
   // Ergonomic fork input: fold the typed top-level fields into options.heads,
-  // preserving the injected controller/context/onPhase.
-  if (input.forks) {
+  // preserving the injected controller/context/onPhase. Reached only under the
+  // settle that reads them — forkSettleRefusal above is what guarantees it.
+  if (input.forks?.length) {
     const headsOptions: HeadsOptionOverlay = {};
     const existingHeads = options.get('heads');
     const existingHeadsObject = mergeableOption(existingHeads);
@@ -636,7 +716,11 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
       type: 'array',
       minItems: 2,
       maxItems: 6,
-      description: 'For action=fork: the parallel forks to spawn. Required when settling by merge.',
+      // Both halves of the relationship, on the field the model fills, because
+      // both are now enforced: a brief is only ever RUN by settle=merge, and
+      // handing briefs to any other settle is refused instead of silently
+      // discarded (forkSettleRefusal).
+      description: 'For action=fork: the parallel forks to spawn. Required for settle=merge, the settle that runs them — each brief becomes a real agent with its own multi-step tool loop over this workspace. Refused under settle=mcts, which reads `task` alone and writes its own branches, so briefs handed to it would be discarded rather than run.',
       items: {
         type: 'object',
         required: ['task', 'rationale'],
@@ -701,7 +785,14 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
     properties.settle = {
       type: 'string',
       enum: ['merge', 'mcts'],
-      description: 'For action=fork: how forks are settled. Default merge — the forks\' findings merge back into this turn. mcts scores competing approaches against each other by execution instead.',
+      // Settle decides the ARGUMENTS and the mechanism, not just the ending,
+      // and the mechanism is measurably different: a merge fork is a real agent
+      // holding HEAD_BUILTIN_TOOLS (heads/head-tools.ts) narrowed by its own
+      // allowedTools, an mcts branch is one generateText call with no ToolSet
+      // that is handed tools as DATA for codegen and scored by execution
+      // (cf-backend exploration.ts). "They settle into one answer" implied the
+      // tool loop belonged to both.
+      description: 'For action=fork: how forks are settled — which decides what the call takes. Default merge — every brief in `forks` (required there) runs as a real agent with its own multi-step tool loop on this workspace, and their findings merge back into this turn. mcts takes no `forks`: it reads `task` alone and writes its own competing approaches, each a single proposal with no tool loop of its own, scored against the others by execution.',
     };
   }
   return properties;

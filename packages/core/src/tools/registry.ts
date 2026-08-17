@@ -169,7 +169,12 @@ export const DELEGATION_RUNGS = {
     // a judge ensemble places the branch inside it. The prompt now carries the
     // full mechanism; this field keeps the trigger and the one ranking fact
     // that follows from the band.
-    'Leave settle unset to merge the forks back into this turn; set settle=mcts to have them compete instead — how you pick between competing approaches, and the right settle for rival scripts that must produce a specific artifact, since a branch whose proposed code runs and passes outranks every branch whose code failed. mcts branches propose text/code rather than running your own tool loop.',
+    // "set settle=mcts to have THEM compete" read as the briefs competing, and
+    // they never do: the two settles take different arguments, and the fork
+    // seam now refuses the mismatch instead of discarding it (agents-tool.ts
+    // forkSettleRefusal), so the difference is a fact about the call and not a
+    // nicety.
+    'Leave settle unset to run the briefs in `forks` and merge them back into this turn; set settle=mcts to have the search write its own rivals and compete them instead — how you pick between competing approaches, and the right settle for rival scripts that must produce a specific artifact, since a branch whose proposed code runs and passes outranks every branch whose code failed. mcts branches propose text/code rather than running your own tool loop, and it takes no `forks`: briefs handed to it are refused, because merge is the settle that runs them.',
   staff:
     'Staff a subordinate (action=staff) whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
     'A subordinate keeps its own context across turns and stays in your roster: hand it work with ask, steer it with send, read the roster with list. ' +
@@ -510,7 +515,7 @@ export const BUILTIN_TOOL_SPECS = {
     whenNotToUse:
       'A single short coherent change is yours to make directly. Forks that would write the same mutable resource belong in one fork that owns it. Every subordinate or peer message wakes that agent for a full turn, so each one carries real work.',
     result:
-      'fork produces the merged (or mcts-scored) answer with per-fork outputs — on a live session the call hands back a background job at spawn and that answer arrives as the wake when it settles; staff/dismiss return roster state. '
+      'fork produces the merged answer with per-fork outputs, or under settle=mcts the winning proposal and its score — on a live session the call hands back a background job at spawn and that answer arrives as the wake when it settles; staff/dismiss return roster state. '
       + 'ask/send return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id.',
     // The fork call, because it is the one shape here a model gets wrong: the

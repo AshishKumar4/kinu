@@ -2828,7 +2828,10 @@ describe('agents.* codemode namespace — node sandbox', () => {
     const db = new Database(':memory:');
     const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
     const result = await sandboxWith({ mode: 'build', fork: { registry, rt, model: fakeModel('unused') } })(`
-      const settled = await agents.fork({ task: 't' });
+      const settled = await agents.fork({ task: 't', forks: [
+        { task: 'read it', rationale: 'ground it' },
+        { task: 'test it', rationale: 'check it' },
+      ] });
       return settled.error ? 'recovered: ' + settled.error.includes('heads unavailable') : 'no error';
     `);
     expect(result).toEqual({ result: 'recovered: true' });
@@ -2837,7 +2840,8 @@ describe('agents.* codemode namespace — node sandbox', () => {
   test('the turn abort signal reaches a fork started inside the sandbox', async () => {
     const { deps, seen } = scriptedFork();
     const controller = new AbortController();
-    await sandboxWith(deps)('return await agents.fork({ task: "t" });', {
+    const brief = '{ task: "read it", rationale: "ground it" }';
+    await sandboxWith(deps)(`return await agents.fork({ task: "t", forks: [${brief}, ${brief}] });`, {
       abortSignal: controller.signal,
       toolCallId: 'fork-abort-test',
       messages: [],

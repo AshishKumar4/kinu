@@ -393,13 +393,15 @@ function renderAgentStateSection(surface: PromptSurface): string {
         // "work that splits into parts you want all of" was the rung's own
         // 2+-angles trigger said twice, once the settle line below gained a
         // real contrast to carry ("keeps every piece" against "keeps one").
-        "Merging (the default) keeps every fork's piece. A fork can take its own `model` — how you put a different vendor on a genuinely open question.",
+        "Merging (the default) keeps every fork's piece: each brief in `forks` (required there) is a real agent with its own tool loop. A fork can take its own `model` — how you put a different vendor on a genuinely open question.",
         // The MECHANISM of mcts, because a trigger alone did not move it: 1
         // use in 89 trials. Each clause is a decision, checked against the
         // engine rather than against how tree search usually works —
         //   "you give it the task": mcts/engine.ts runs on ctx.task and never
         //     reads `forks` (strategy/mcts.ts), so the call shape differs from
-        //     merge and a model that hand-authors rivals is writing dead args.
+        //     merge — and hand-authored briefs are now REFUSED there rather
+        //     than folded into an option nothing reads (agents-tool.ts
+        //     forkSettleRefusal), which is why the shape is stated as a fact.
         //   "a different angle": mcts/diversity.ts assigns a fixed angle per
         //     branch and tells each what its siblings drew, so proposals
         //     diverge by construction rather than by temperature.
@@ -410,7 +412,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
         //     a sibling produced code); the judge ensemble only places within
         //     it. Saying "scored by execution" flat is the overstatement this
         //     replaces.
-        'settle=mcts keeps one instead, for rival attempts at a single thing: you give it the task and it writes the competing approaches itself, each on a different angle so they do not converge, over several rounds that drop the weak ones and expand what scored well. Execution sets that ranking — a proposal whose code runs and passes places above every proposal whose code failed, and prose that produced no code places below both once a rival produced some; the judge only orders proposals inside the band execution already fixed. Branches propose code rather than running their own tool loops, so mcts fits rivals you can express as code.',
+        'settle=mcts keeps one instead, for rival attempts at a single thing: you give it the task and it writes the competing approaches itself, each on a different angle so they do not converge, over several rounds that drop the weak ones and expand what scored well. Execution sets that ranking — a proposal whose code runs and passes places above every proposal whose code failed, and prose that produced no code places below both once a rival produced some; the judge only orders proposals inside the band execution already fixed. Branches propose code rather than running their own tool loops, so mcts fits rivals you can express as code, and it takes no `forks`.',
         // Heads are spawned concurrently with the same inherited context and
         // no channel between them (heads/controller.ts) — so a plan where one
         // fork consumes another's finding silently gets nothing.

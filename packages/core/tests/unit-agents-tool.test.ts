@@ -19,7 +19,8 @@ import {
   agentsActionsFor, buildBuiltinTools, createAgentsTool, createStrategyRegistry,
   createSingleShotStrategy, renderAgentsToolDescription, strategyOption,
   AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS, DELEGATION_RUNGS,
-  FORK_STRATEGY_ID, PEER_REPLY_TOPIC,
+  FORK_STRATEGY_ID, PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
+  classifyToolFailure, JsonObjectSchema,
   type AgentsToolInput,
   type AgentsForkDeps, type AgentsToolDeps, type PeersToolDeps,
   type StrategyContext, type SubordinateRosterEntry, type TeamToolDeps,
@@ -44,6 +45,12 @@ function agentsTool(deps: TestAgentsToolDeps) {
 const testModel = new MockLanguageModelV3();
 const StrategyResultSchema = v.object({ strategy: v.string(), text: v.string() });
 const ErrorResultSchema = v.object({ error: v.string() });
+/** The minimum a merge fork takes. settle=merge refuses a call that supplies no
+ *  briefs, so every merge-path test states them. */
+const twoForks = [
+  { task: 'survey prior art', rationale: 'establish baseline' },
+  { task: 'sketch design', rationale: 'exercise constraints' },
+];
 const DeliveryNoteSchema = v.object({ delivery: v.string(), note: v.string() });
 const WorkingResultSchema = v.object({ status: v.string(), agent: v.string(), note: v.string() });
 const HandoffResultSchema = v.object({
@@ -189,7 +196,7 @@ describe('agents tool — registration and dep-gating', () => {
 describe('agents tool — fork dispatch', () => {
   test('fork with settle unset routes to the heads (fork) strategy', async () => {
     const t = agentsTool({ fork: forkDeps() });
-    const result = v.parse(StrategyResultSchema, await t.execute({ action: 'fork', task: 'x' }));
+    const result = v.parse(StrategyResultSchema, await t.execute({ action: 'fork', task: 'x', forks: twoForks }));
     expect(result.strategy).toBe(FORK_STRATEGY_ID);
     expect(result.text).toBe('forked');
   });
@@ -301,7 +308,7 @@ describe('agents tool — fork dispatch', () => {
     reg.register(createTestStrategy({ id: FORK_STRATEGY_ID, throwError: 'kaboom' }));
     const { rt } = createTestRuntime();
     const t = agentsTool({ fork: { registry: reg, rt, model: testModel } });
-    const result = v.parse(ErrorResultSchema, await t.execute({ action: 'fork', task: 't' }));
+    const result = v.parse(ErrorResultSchema, await t.execute({ action: 'fork', task: 't', forks: twoForks }));
     expect(result.error).toMatch(/Fork \(settle=merge\) failed/);
     expect(result.error).toMatch(/kaboom/);
   });
@@ -324,12 +331,12 @@ describe('agents tool — fork dispatch', () => {
         defaultOptions: () => ({ mcts: { iterations: 7 }, heads: { controller, count: 3 } }),
       },
     });
-    await t.execute({ action: 'fork', task: 't', options: { heads: { count: 5 } } });
+    await t.execute({ action: 'fork', task: 't', forks: twoForks, options: { heads: { count: 5 } } });
     // Untouched strategy bag passes through verbatim.
     expect(strategyOption(observedOpts, 'mcts')).toEqual({ iterations: 7 });
     // One-level deep merge: caller's `count` overrides, but the host-injected
     // `controller` is NOT clobbered. This is the bug the shallow spread had.
-    expect(strategyOption(observedOpts, 'heads')).toEqual({ controller, count: 5 });
+    expect(strategyOption(observedOpts, 'heads')).toEqual({ controller, count: 5, heads: twoForks });
   });
 
   test('an array option replaces a strategy bag instead of becoming numeric object keys', async () => {
@@ -346,13 +353,15 @@ describe('agents tool — fork dispatch', () => {
     const t = agentsTool({
       fork: {
         registry: reg, rt, model: testModel,
-        defaultOptions: () => ({ heads: { controller: { __infra: true } } }),
+        defaultOptions: () => ({ mcts: { session: { __infra: true } } }),
       },
     });
 
-    await t.execute({ action: 'fork', task: 't', options: { heads: ['one', 'two'] } });
+    // Any strategy bag: the merge path's own `heads` bag is written by the
+    // forks fold, so the array-replacement rule is pinned on another key.
+    await t.execute({ action: 'fork', task: 't', forks: twoForks, options: { mcts: ['one', 'two'] } });
 
-    expect(strategyOption(observedOpts, 'heads')).toEqual(['one', 'two']);
+    expect(strategyOption(observedOpts, 'mcts')).toEqual(['one', 'two']);
   });
 
   test('folds typed forks / merge_strategy input into options.heads', async () => {
@@ -370,13 +379,9 @@ describe('agents tool — fork dispatch', () => {
     const t = agentsTool({
       fork: { registry: reg, rt, model: testModel, defaultOptions: () => ({ heads: { controller } }) },
     });
-    const specs = [
-      { task: 'survey prior art', rationale: 'establish baseline' },
-      { task: 'sketch design', rationale: 'exercise constraints' },
-    ];
-    await t.execute({ action: 'fork', task: 't', forks: specs, merge_strategy: 'consensus' });
+    await t.execute({ action: 'fork', task: 't', forks: twoForks, merge_strategy: 'consensus' });
     // Injected controller + LLM-supplied specs coexist under options.heads.
-    expect(strategyOption(observedOpts, 'heads')).toEqual({ controller, heads: specs, mergeStrategy: 'consensus' });
+    expect(strategyOption(observedOpts, 'heads')).toEqual({ controller, heads: twoForks, mergeStrategy: 'consensus' });
   });
 
   test('passes through budget to strategy context', async () => {
@@ -391,7 +396,7 @@ describe('agents tool — fork dispatch', () => {
     });
     const { rt } = createTestRuntime();
     const t = agentsTool({ fork: { registry: reg, rt, model: testModel } });
-    await t.execute({ action: 'fork', task: 't', budget: 42, wall_clock_ms: 999 });
+    await t.execute({ action: 'fork', task: 't', forks: twoForks, budget: 42, wall_clock_ms: 999 });
     expect(observedBudget?.maxIterations).toBe(42);
     expect(observedBudget?.wallClockMs).toBe(999);
   });
@@ -407,6 +412,162 @@ describe('agents tool — fork dispatch', () => {
     }) }) }), t.inputSchema);
     expect(schema.jsonSchema.properties.settle).toBeUndefined();
     expect(t.description).not.toContain('single-shot');
+  });
+});
+
+// ── fork — the forks/settle contract ────────────────────────────────────────
+
+/**
+ * `forks` and `settle` are one contract in two directions, and both halves used
+ * to be documentation alone:
+ *
+ *   settle=mcts DISCARDED the briefs. The fold into `options.heads` ran
+ *   unconditionally, and the MCTS strategy runs on `ctx.task` and never reads
+ *   that option (strategy/mcts.ts:80) — so three careful briefs with their own
+ *   `model` and `allowedTools` produced toolless codegen on the task string,
+ *   reported as an ordinary success.
+ *
+ *   settle=merge WITHOUT briefs degraded past the spawn announcement. The
+ *   schema said "Required when settling by merge" and nothing enforced it, so
+ *   the call announced its spawn (agents-tool.ts, readSpawnStarted), detached
+ *   into a background job, and the heads strategy's throw came back as a wake
+ *   claiming the spawned work failed — for a fork that never spawned.
+ *
+ * Both are now refusals at the seam, classified `bad_input` like every other
+ * arguments-do-not-describe-an-operation refusal in this codebase.
+ */
+describe('agents tool — the forks/settle contract', () => {
+  const RefusalSchema = v.object({ reason: v.string(), error: v.string() });
+
+  const briefs = [
+    { task: 'read the gateway logs', rationale: 'where the failure shows', model: 'codex/gpt-5.5', allowedTools: ['file'] },
+    { task: 'diff the last deploy', rationale: 'timing points at the release' },
+  ];
+
+  /** A fork surface whose strategies RECORD their dispatch, so a refusal is
+   *  distinguishable from a call that ran and threw the briefs away. */
+  function recordingFork() {
+    const dispatched: string[] = [];
+    const reg = createStrategyRegistry();
+    for (const id of [FORK_STRATEGY_ID, 'mcts']) {
+      reg.register({
+        id,
+        async explore() {
+          dispatched.push(id);
+          return { strategy: id, best: { text: 'ran', score: 1, source: id }, all: [], cost: { durationMs: 0 } };
+        },
+      });
+    }
+    const { rt } = createTestRuntime();
+    return { dispatched, tool: agentsTool({ fork: { registry: reg, rt, model: testModel } }) };
+  }
+
+  /** The options bag the background wrapper arms on a spawn-shaped call. Built
+   *  here rather than inline so the extra key is not an excess property on a
+   *  fresh `ToolExecutionOptions` literal. */
+  function spawnAnnouncing(announce: () => void) {
+    return { toolCallId: 'tc-merge', messages: [], [SPAWN_STARTED_OPTION]: announce };
+  }
+
+  test('settle=mcts with hand-authored forks is REFUSED, not run on the task alone', async () => {
+    const { dispatched, tool } = recordingFork();
+    const result = v.parse(RefusalSchema, await tool.execute({
+      action: 'fork', task: 'why staging 502s under load', settle: 'mcts', forks: briefs,
+    }));
+    // Nothing ran, so nothing was discarded.
+    expect(dispatched).toEqual([]);
+    expect(result.reason).toBe('bad_input');
+    // The refusal names the conflict and BOTH remedies — drop the briefs, or
+    // settle by merge and have them run as real forks.
+    expect(result.error).toContain('settle=mcts');
+    expect(result.error).toContain('settle=merge');
+    expect(result.error).toMatch(/\bforks\b/);
+  });
+
+  test('merge_strategy is refused under a settle that never merges', async () => {
+    // The same silent discard in the same field family: `merge_strategy` is
+    // read by the merge only (strategy/heads.ts), and nothing else looks at it.
+    const { dispatched, tool } = recordingFork();
+    const result = v.parse(RefusalSchema, await tool.execute({
+      action: 'fork', task: 't', settle: 'mcts', merge_strategy: 'consensus',
+    }));
+    expect(dispatched).toEqual([]);
+    expect(result.reason).toBe('bad_input');
+    expect(result.error).toContain('`merge_strategy`');
+  });
+
+  test('settle=merge with no forks is refused at the seam — before the spawn is announced', async () => {
+    const { dispatched, tool } = recordingFork();
+    let announced = 0;
+    const result = v.parse(RefusalSchema, await tool.execute(
+      { action: 'fork', task: 'split the work' },
+      spawnAnnouncing(() => { announced += 1; }),
+    ));
+    expect(dispatched).toEqual([]);
+    // The whole point of enforcing here: an unspawnable fork must not detach
+    // and come back as a wake about work that never started.
+    expect(announced).toBe(0);
+    expect(result.reason).toBe('bad_input');
+    expect(result.error).toMatch(/\bforks\b/);
+  });
+
+  test('an empty forks array is the same refusal as none at all', async () => {
+    const { dispatched, tool } = recordingFork();
+    const result = v.parse(RefusalSchema, await tool.execute({ action: 'fork', task: 't', forks: [] }));
+    expect(dispatched).toEqual([]);
+    expect(result.reason).toBe('bad_input');
+  });
+
+  test('the refusal only offers mcts as a remedy where mcts is registered', async () => {
+    const reg = createStrategyRegistry();
+    reg.register(createTestStrategy({ id: FORK_STRATEGY_ID, answer: 'forked' }));
+    const { rt } = createTestRuntime();
+    const tool = agentsTool({ fork: { registry: reg, rt, model: testModel } });
+    const result = v.parse(RefusalSchema, await tool.execute({ action: 'fork', task: 't' }));
+    expect(result.error).not.toContain('mcts');
+  });
+
+  test('settle=merge WITH forks still folds them into options.heads and runs', async () => {
+    const { dispatched, tool } = recordingFork();
+    const result = v.parse(StrategyResultSchema, await tool.execute({
+      action: 'fork', task: 'why staging 502s under load', forks: briefs,
+    }));
+    expect(dispatched).toEqual([FORK_STRATEGY_ID]);
+    expect(result.strategy).toBe(FORK_STRATEGY_ID);
+  });
+
+  test('a fork refusal counts as the tool DECLINING, not as the tool breaking', async () => {
+    // The refusal reason is the vocabulary read-models/tool-failures.ts
+    // classifies, so a correct refusal lands in `refused` instead of indicting
+    // the tool in `broke` — which is where the old bare `{error}` envelopes went.
+    const { tool } = recordingFork();
+    const args: AgentsToolInput = { action: 'fork', task: 't', settle: 'mcts', forks: briefs };
+    const result = await tool.execute(args);
+    const failure = classifyToolFailure({
+      type: 'tool_call_end', eventIndex: 0, runId: 'run-1',
+      timestamp: new Date().toISOString(), name: 'agents', toolCallId: 'tc-1',
+      args: v.parse(JsonObjectSchema, args), result: v.parse(JsonObjectSchema, result),
+    });
+    expect(failure).toEqual({
+      tool: 'agents', action: 'fork', reason: 'bad_input',
+      refused: true, workFailed: false, runtimeMissing: false,
+    });
+  });
+
+  test('the schema says which settle takes briefs and which one gets a tool loop', () => {
+    const schema = v.parse(v.object({ jsonSchema: v.object({ properties: v.object({
+      forks: v.object({ description: v.string() }),
+      settle: v.object({ description: v.string() }),
+    }) }) }), agentsTool({ fork: forkDeps() }).inputSchema);
+    const { forks, settle } = schema.jsonSchema.properties;
+    // Required for merge, refused for anything else — stated on the field the
+    // model fills, in both directions.
+    expect(forks.description).toMatch(/[Rr]equired.*settle=merge/);
+    expect(forks.description).toMatch(/[Rr]efused under settle=mcts/);
+    // The tool-loop distinction: a merge fork is an agent, an mcts branch is a
+    // single scored proposal.
+    expect(settle.description).toMatch(/tool loop/);
+    expect(settle.description).toMatch(/\bforks\b/);
   });
 });
 

@@ -42,6 +42,14 @@ function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   });
 }
 
+/** Every fork here settles by merge, and merge refuses a call that supplies no
+ *  briefs — so each call carries the two-brief minimum. Nothing in this file is
+ *  about the fork's shape: a refusal observed below has to be the budget's. */
+const TWO_FORKS = [
+  { task: 'survey prior art', rationale: 'establish baseline' },
+  { task: 'sketch design', rationale: 'exercise constraints' },
+];
+
 /** A fork strategy that spends: one completion through the runtime's LLM (the
  *  governed seam) plus a reported sub-agent token cost (what the heads runtime
  *  hands back). */
@@ -147,7 +155,7 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
     governor.activate(['nightly']);
 
     const deps = forkableDeps({ budget: governor, reportedTokens: 900 });
-    const result = v.parse(ForkTextSchema, await sandbox(deps).fork!({ task: 'explore' }));
+    const result = v.parse(ForkTextSchema, await sandbox(deps).fork!({ task: 'explore', forks: TWO_FORKS }));
     expect(result.text).toBe('a'.repeat(40));
 
     const [mission] = governor.snapshot('nightly');
@@ -164,7 +172,7 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
     governor.activate(['nightly']);
 
     const deps = forkableDeps({ budget: governor, reportedTokens: 100 });
-    await sandbox(deps).fork!({ task: 'explore', budget_tokens: 5_000, budget_label: 'sweep' });
+    await sandbox(deps).fork!({ task: 'explore', forks: TWO_FORKS, budget_tokens: 5_000, budget_label: 'sweep' });
 
     expect(governor.snapshot('sweep')[0]?.spent.tokens).toBe(120);
     expect(governor.snapshot('sweep')[0]?.parent).toBe('nightly');
@@ -178,7 +186,7 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
     const deps = forkableDeps({ budget: governor, reportedTokens: 10 });
     const out = v.parse(
       ForkBudgetSchema,
-      await sandbox(deps).fork!({ task: 'x', budget_tokens: 1_000, budget_label: 'sweep' }),
+      await sandbox(deps).fork!({ task: 'x', forks: TWO_FORKS, budget_tokens: 1_000, budget_label: 'sweep' }),
     );
     expect(out.mission_budget?.label).toBe('sweep');
     expect(out.mission_budget?.remaining.tokens).toBe(970);
@@ -194,7 +202,7 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
     const ns = sandbox(forkableDeps({ budget: governor, spawns }));
 
     for (const [member, input] of [
-      ['fork', { task: 'x' }],
+      ['fork', { task: 'x', forks: TWO_FORKS }],
       ['staff', { role: 'r', mission: 'm' }],
       ['ask', { agent: 'helper', message: 'm' }],
       ['send', { agent: 'helper', message: 'm' }],
@@ -220,8 +228,8 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
 
   test('no governor and no scope leave the fork path byte-for-byte unbudgeted', async () => {
     const governor = newGovernor();
-    const withGovernorNoScope = await sandbox(forkableDeps({ budget: governor, reportedTokens: 7 })).fork!({ task: 'x' });
-    const withoutGovernor = await sandbox(forkableDeps({ reportedTokens: 7 })).fork!({ task: 'x' });
+    const withGovernorNoScope = await sandbox(forkableDeps({ budget: governor, reportedTokens: 7 })).fork!({ task: 'x', forks: TWO_FORKS });
+    const withoutGovernor = await sandbox(forkableDeps({ reportedTokens: 7 })).fork!({ task: 'x', forks: TWO_FORKS });
     expect(withGovernorNoScope).toEqual(withoutGovernor);
     expect(withoutGovernor).not.toHaveProperty('mission_budget');
   });
@@ -251,7 +259,7 @@ describe('spawn seam — work that runs where the ledger is not reachable', () =
       mode: 'build',
       fork: { registry, rt, model: new MockLanguageModelV3() },
       budget: governor,
-    }).fork!({ task: 't' });
+    }).fork!({ task: 't', forks: TWO_FORKS });
     expect(handed).toEqual({ labels: ['nightly'] });
   });
 
@@ -273,7 +281,7 @@ describe('spawn seam — work that runs where the ledger is not reachable', () =
     await sandbox({
       mode: 'build',
       fork: { registry, rt, model: new MockLanguageModelV3() },
-    }).fork!({ task: 't' });
+    }).fork!({ task: 't', forks: TWO_FORKS });
     expect(handed).toBe('unset');
   });
 
@@ -286,7 +294,7 @@ describe('spawn seam — work that runs where the ledger is not reachable', () =
     governor.activate(['nightly']);
 
     const deps = forkableDeps({ budget: governor, selfMetering: 900 });
-    await sandbox(deps).fork!({ task: 'explore' });
+    await sandbox(deps).fork!({ task: 'explore', forks: TWO_FORKS });
 
     const [mission] = governor.snapshot('nightly');
     expect(mission?.spent.tokens).toBe(900);
@@ -302,7 +310,7 @@ describe('spawn seam — work that runs where the ledger is not reachable', () =
     governor.activate(['nightly']);
 
     const deps = forkableDeps({ budget: governor, reportedTokens: 900 });
-    await sandbox(deps).fork!({ task: 'explore' });
+    await sandbox(deps).fork!({ task: 'explore', forks: TWO_FORKS });
     expect(governor.snapshot('nightly')[0]?.spent.tokens).toBe(920);
   });
 
@@ -316,7 +324,7 @@ describe('spawn seam — work that runs where the ledger is not reachable', () =
     governor.activate(['nightly']);
 
     const deps = forkableDeps({ budget: governor });
-    await sandbox(deps).fork!({ task: 'explore' });
+    await sandbox(deps).fork!({ task: 'explore', forks: TWO_FORKS });
 
     const [mission] = governor.snapshot('nightly');
     // Only the (40 prompt + 40 reply) / 4 chars the governed LLM seam estimated

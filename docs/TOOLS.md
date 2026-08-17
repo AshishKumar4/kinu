@@ -197,14 +197,15 @@ The rungs themselves:
 3. **Persistent subordinate** (`staff`) — long-lived, keeps its own context
    across turns, stays in the roster.
 
-`mcts` is **not** a rung. It is a scoring policy over the same fork primitive:
-`fork`'s `settle` defaults to `merge`, and `settle=mcts` switches how branches
-are settled — scored against each other by execution instead of merged.
-Everything about the search (UCT selection, backprop, pruning, convergence,
-search-store resume, sibling diversity, execution-grounded rewards) is
-unchanged and fully reachable; it is simply no longer advertised as a co-equal
-first choice, which is what kept the model from ever reaching for a fork at
-all.
+`mcts` is **not** a rung. It is a settle policy over the same fork primitive:
+`fork`'s `settle` defaults to `merge`, and `settle=mcts` switches what the call
+takes and how the result is chosen — the search writes its own competing
+approaches from `task` and scores them against each other by execution, instead
+of running the briefs in `forks` and merging them. Everything about the search
+(UCT selection, backprop, pruning, convergence, search-store resume, sibling
+diversity, execution-grounded rewards) is unchanged and fully reachable; it is
+simply no longer advertised as a co-equal first choice, which is what kept the
+model from ever reaching for a fork at all.
 
 Talking to what already exists is not a rung either — `ask`, `send`, `reply`
 and `list` address agents by name, and the name decides the transport:
@@ -487,11 +488,22 @@ runtimes are installed. Do not infer capability from older backend labels.
 
 `agents` with `action: fork` dispatches through the strategy registry
 (`core/src/strategy/`). With `settle` omitted (or `settle: merge`) it runs
-`FORK_STRATEGY_ID` (`heads`): independent forks of the agent, each running its
-own multi-step tool loop over a fork of the parent workspace, merged back into
-the turn. `settle: mcts` keeps the same fork primitive but settles branches by
-scoring them against each other by execution. See [MCTS.md](./MCTS.md) for the
-search algorithm.
+`FORK_STRATEGY_ID` (`heads`): the briefs in `forks` — **required** for this
+settle — each become an independent fork of the agent running its own
+multi-step tool loop (`HEAD_BUILTIN_TOOLS`, narrowed by the brief's own
+`allowedTools`) over a fork of the parent workspace, merged back into the turn.
+
+`settle: mcts` is a different call shape, not just a different ending: it reads
+`task` alone and writes its own competing approaches, each a single
+`generateText` proposal with **no** tool loop of its own, scored against its
+rivals by execution. See [MCTS.md](./MCTS.md) for the search algorithm.
+
+Both directions of that relationship are enforced at the seam
+(`forkSettleRefusal` in `core/src/tools/agents-tool.ts`) rather than documented:
+briefs handed to `settle: mcts` are refused with `reason: 'bad_input'` naming
+the conflict, and so is a `settle: merge` call that supplies no briefs — which
+previously announced its spawn, detached, and reported the strategy's throw as
+a wake about spawned work failing.
 
 ## experience — cross-workspace transfer
 

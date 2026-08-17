@@ -18,7 +18,9 @@
  *
  * Nothing here guesses. Every reason is one the producing code computed and
  * wrote: `file` puts its `FileToolFailureReason` on the result (tools/
- * file-tool.ts), and an exec-shaped result carries its exit code in the
+ * file-tool.ts), the `agents` fork puts `bad_input` on a call whose arguments
+ * do not describe a fork (tools/agents-tool.ts), and an exec-shaped result
+ * carries its exit code in the
  * `Error (exit N)` prefix this codebase's own renderer produced (execution/
  * exec-result.ts:72). A row that fits neither is reported as `unclassified`
  * rather than filed under a guess — an instrument that cannot explain a failure
@@ -32,8 +34,13 @@ import { FAILURE_WITHOUT_ERROR, type RunEvent } from '../events/types.js';
 import { JsonObjectSchema, parseJsonValue, type JsonValue } from '../utils/json.js';
 import { tolerate } from '../obs/index.js';
 
-/** The `file` tool's own reason vocabulary, as it appears on a result. */
-const FileReasonSchema = v.picklist([
+/**
+ * The reason vocabulary a tool writes onto its own result. `file` owns most of
+ * it (tools/file-tool.ts), and it is read off ANY tool's payload: the `agents`
+ * fork writes `bad_input` for a call whose arguments do not describe a fork
+ * (tools/agents-tool.ts), so this is not one tool's private list.
+ */
+const ToolReasonSchema = v.picklist([
   'empty_anchor', 'not_found', 'ambiguous', 'overlap', 'no_change',
   'unread', 'stale', 'missing', 'io', 'bad_input',
 ]);
@@ -172,7 +179,7 @@ export function classifyToolFailure(
   const text = resultText.success ? resultText.output : null;
   const failingResult = text !== null && isFailingResultText(text);
   const object = resultObject(row.result);
-  const objectReason = object ? v.safeParse(FileReasonSchema, object.reason) : null;
+  const objectReason = object ? v.safeParse(ToolReasonSchema, object.reason) : null;
   // A structured `{error, …}` payload is a failure however it is carried: the
   // cf sink keeps it an object, where `isFailingResultText` never sees it.
   const failingObject = object !== null && object.error !== undefined;

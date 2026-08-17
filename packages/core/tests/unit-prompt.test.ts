@@ -1064,7 +1064,13 @@ describe('buildSystemPromptSync', () => {
       // that states delegation as the default and the three exemptions last, as
       // things to DO. This is the only increase in the section and it buys the
       // one property the 506 tokens above it never had: a direction.
-      'Delegation': 2450,
+      // 2026-08-17: RAISED 2450 → 2530 (+79 chars measured, ~19 o200k tokens).
+      // The two settles take DIFFERENT arguments and the fork seam now refuses
+      // the mismatch (agents-tool.ts forkSettleRefusal), so a model that hands
+      // hand-authored briefs to settle=mcts, or asks for merge with none, loses
+      // the call outright. Both facts are one clause each: `forks` is what merge
+      // runs and is required there, and mcts takes none.
+      'Delegation': 2530,
       // 2026-08-12: RAISED 260 → 680. Defect-B fix (background polling): the
       // section used to say only "stop the turn; the backend will wake you" —
       // one clause the owner's bench evidence shows the model reads as
