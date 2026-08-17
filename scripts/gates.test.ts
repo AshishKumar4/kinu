@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { findDuplicateGroups } from './ast-duplication.ts';
+import { findMovable } from './capability-parity.ts';
 import { classify, exportedDeclarations, inScope, keyOf } from './dead-code.ts';
 import { assertMeasured, reconcile, writeLock } from './gate-ratchet.ts';
 
@@ -192,6 +193,93 @@ describe('dead code gate', () => {
     expect(inScope('packages/test-utils/src/workspace-resolution.ts')).toBe(false);
     expect(inScope('packages/core/tests/helpers.ts')).toBe(false);
     expect(inScope('scripts/eval.ts')).toBe(false);
+  });
+});
+
+describe('capability parity gate', () => {
+  /* `findMovable` reads each package's real tsconfig for its path aliases, so
+     these synthetic files sit at real package paths. That is deliberate: the
+     alias table is the part most likely to rot, and a fixture that stubbed it
+     would keep passing after `@/*` was renamed while the gate stopped seeing
+     two thirds of cf-backend. */
+  const shared = new Map([
+    ['packages/core/src/index.ts', "import * as v from 'valibot';\nexport const x = v.string();\n"],
+  ]);
+  const withShared = (files: Record<string, string>): Map<string, string> =>
+    new Map([...shared, ...Object.entries(files)]);
+
+  test('a backend module importing only what core imports is reported movable', () => {
+    const { movable } = findMovable(withShared({
+      'packages/cf-backend/src/components/summary.ts':
+        "import * as v from 'valibot';\nexport const s = v.string();\n",
+    }));
+    expect(movable.map((m) => m.file)).toEqual(['packages/cf-backend/src/components/summary.ts']);
+    expect(movable[0].closure).toBe('cf');
+  });
+
+  test('the same module is silent once it lives in a shared package', () => {
+    const { movable } = findMovable(withShared({
+      'packages/core/src/summary.ts': "import * as v from 'valibot';\nexport const s = v.string();\n",
+    }));
+    expect(movable).toEqual([]);
+  });
+
+  test('a platform import pins the module where it is', () => {
+    const { movable } = findMovable(withShared({
+      'packages/cf-backend/src/do.ts': "import { Agent } from 'agents';\nexport const a = Agent;\n",
+    }));
+    expect(movable).toEqual([]);
+  });
+
+  test('the block is transitive: a pure module importing a platform one stays put', () => {
+    const { movable } = findMovable(withShared({
+      'packages/cf-backend/src/do.ts': "import { Agent } from 'agents';\nexport const a = Agent;\n",
+      'packages/cf-backend/src/pure.ts': "import { a } from './do.ts';\nexport const b = a;\n",
+    }));
+    expect(movable).toEqual([]);
+  });
+
+  test("the allowlist is derived: a library core does not use is a blocker", () => {
+    const files = {
+      'packages/cf-backend/src/pure.ts': "import { z } from 'zod';\nexport const s = z.string();\n",
+    };
+    expect(findMovable(withShared(files)).movable).toEqual([]);
+    // core takes the same dependency, and the same file becomes movable — with
+    // nothing about the gate edited.
+    const widened = new Map(withShared(files));
+    widened.set('packages/core/src/index.ts', "import { z } from 'zod';\nexport const q = z.number();\n");
+    expect(findMovable(widened).movable.map((m) => m.file)).toEqual(['packages/cf-backend/src/pure.ts']);
+  });
+
+  test('a stylesheet is a real dependency a shared package cannot take', () => {
+    const { movable } = findMovable(withShared({
+      'packages/cf-backend/src/styled.ts': "import './theme.css';\nexport const s = 1;\n",
+    }));
+    expect(movable).toEqual([]);
+  });
+
+  test('an intra-package import resolving to nothing is fatal, never a pass', () => {
+    // The silent version of this reports the importer as dependency-free, which
+    // is the shape that turns a resolver bug into a wider finding set.
+    expect(() => findMovable(withShared({
+      'packages/cf-backend/src/broken.ts': "import { y } from './gone.ts';\nexport const z = y;\n",
+    }))).toThrow(/resolves to no tracked source file/);
+  });
+
+  test("the `@/` alias resolves, so an aliased platform import still blocks", () => {
+    const { movable } = findMovable(withShared({
+      'packages/cf-backend/src/do.ts': "import { Agent } from 'agents';\nexport const a = Agent;\n",
+      'packages/cf-backend/src/uses.ts': "import { a } from '@/do';\nexport const b = a;\n",
+    }));
+    expect(movable).toEqual([]);
+  });
+
+  test('the resolver reports how many edges it resolved, so a broken one is visible', () => {
+    const { edges } = findMovable(withShared({
+      'packages/cf-backend/src/a.ts': "export const a = 1;\n",
+      'packages/cf-backend/src/b.ts': "import { a } from './a.ts';\nexport const b = a;\n",
+    }));
+    expect(edges).toBeGreaterThan(0);
   });
 });
 

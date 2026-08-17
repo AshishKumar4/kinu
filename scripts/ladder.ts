@@ -306,6 +306,24 @@ export const LADDER: readonly Gate[] = [
       + 'this a layer at 100% may be scoring another layer\'s behaviour.',
     blind: 'a layer with no probes, which scores null and localises nothing.',
   },
+  {
+    run: 'bun run gate:capability-parity',
+    tier: 'commit',
+    seconds: 2.4,
+    catches: 'the two shapes of backend divergence. A core contract whose optional '
+      + 'capability is wired on one backend only (25 today, including '
+      + 'ShellApprovalPolicy.requestApproval, absent on cf), and a module that would '
+      + 'compile in a shared package sitting inside one adapter, so the other backend '
+      + 'has no contract to under-wire and simply does without — 62 today, 4,632 lines. '
+      + 'The clearest is components/tool-call-summary.ts: 453 lines of tool-call '
+      + 'vocabulary against which the CLI joins raw argument values and clips at 70 '
+      + 'characters. Its allowlist of importable libraries is DERIVED from what the '
+      + 'shared packages already import, so it widens when core takes a dependency and '
+      + 'never needs editing.',
+    blind: 'a platform GLOBAL reached with no import — measured at zero occurrences over '
+      + 'the 62 reported modules, and caught in one second by `tsc -p packages/core` the '
+      + 'moment anyone acts on the finding.',
+  },
 ];
 
 /**
