@@ -88,7 +88,7 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
   // container without ever entering it. Same DO, same cipher, same key as
   // `user_credentials` — a different row shape, because a binding carries a
   // host and a placeholder that the `Credential` union has no room for.
-  initEgressVaultTables(sql, tagged);
+  initEgressVaultTables(sql);
 
   // User-level config (key/value). Defaults that new agents inherit:
   // default_model, default_strategy, default_inference_loop, default_approval_mode.

@@ -12,7 +12,7 @@ import {
 } from '../src/user/egress-vault.js';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface.js';
 import {
-  TEST_CREDENTIAL_ENCRYPTION_KEY, TEST_USER_ENV, sqlExec, taggedSql,
+  TEST_CREDENTIAL_ENCRYPTION_KEY, TEST_USER_ENV, sqlExec,
 } from './helpers/user-do.js';
 
 const SECRET = 'sk_live_0123456789abcdefghij';
@@ -20,7 +20,7 @@ const SECRET = 'sk_live_0123456789abcdefghij';
 async function vault(): Promise<EgressVaultDeps & { db: Database }> {
   const db = new Database(':memory:');
   const sql = sqlExec(db);
-  initEgressVaultTables(sql, taggedSql(db));
+  initEgressVaultTables(sql);
   const cipher = await createCredentialCipher(TEST_USER_ENV);
   return { db, sql, cipher, aad: (id) => `test-user-do:egress:${id}` };
 }

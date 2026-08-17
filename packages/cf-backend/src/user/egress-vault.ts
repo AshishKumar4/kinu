@@ -39,7 +39,7 @@
  */
 
 import * as v from 'valibot';
-import { reconcileColumns, type SqlExec, type SqlExecutor } from '@proteus/core';
+import type { SqlExec } from '@proteus/core';
 import {
   EGRESS_PLACEHOLDER_BYTES,
   isEgressPlaceholder,
@@ -93,7 +93,7 @@ export interface EgressVaultDeps {
 
 /** DDL owner for the vault. Called from `initUserTables`, which is the UserDO's
  *  only boot hook. */
-export function initEgressVaultTables(sql: SqlExec, tagged: SqlExecutor): void {
+export function initEgressVaultTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_egress_secrets (
       id          TEXT PRIMARY KEY,
@@ -111,10 +111,10 @@ export function initEgressVaultTables(sql: SqlExec, tagged: SqlExecutor): void {
   // placeholder would let one secret be spent where the other was approved.
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_egress_secrets_placeholder
             ON user_egress_secrets (placeholder)`);
-  // Declared for the post-release column discipline: every column a shipped
-  // table gains must stay listed here forever, or a DO created before it
-  // breaks with `no such column`.
-  reconcileColumns(tagged, (ddl) => { sql.exec(ddl); }, 'user_egress_secrets', {});
+  // No `reconcileColumns` call: every column above is in the CREATE, so there is
+  // nothing to reconcile. The FIRST column this table gains after release needs
+  // one added here, listing that column and every later one forever — a DO
+  // created before it would otherwise break with `no such column`.
 }
 
 /** A fresh placeholder. Independent of the secret by construction — this
