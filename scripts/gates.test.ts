@@ -7,6 +7,10 @@ import { findDuplicateGroups } from './ast-duplication.ts';
 import { findMovable, withoutComments } from './capability-parity.ts';
 import { classify, exportedDeclarations, inScope, keyOf } from './dead-code.ts';
 import { assertMeasured, reconcile, writeLock } from './gate-ratchet.ts';
+import { configuredScanner, judgeAdvisories } from './dependency-advisory-gate.ts';
+import {
+  advisoriesFor, queryAdvisories, type Exposure, type ReviewedPackage,
+} from './security-scanner.ts';
 
 /** A body large enough to clear a real threshold, written twice with every
  *  identifier renamed. A text- or token-similarity tool matches on the names;
@@ -343,5 +347,157 @@ describe('gate ratchet', () => {
     const path = lockPath([]);
     writeFileSync(path, '{"a":1}');
     expect(() => reconcile([], path)).toThrow();
+  });
+});
+
+describe('dependency advisory gate', () => {
+  const exposure = (over: Partial<Exposure> = {}): Exposure => ({
+    pkg: 'valibot',
+    version: '1.4.1',
+    id: 1124298,
+    severity: 'moderate',
+    title: 'record() issue paths can make flatten() throw',
+    url: 'https://github.com/advisories/GHSA-5qjj-4xww-7phc',
+    range: '<=1.4.1',
+    ...over,
+  });
+  const reviewed = {
+    valibot: { reason: 'flatten() is called nowhere in tracked source', ids: [1124298] },
+  } satisfies Record<string, ReviewedPackage>;
+
+  test('an exposure the reviewed set accounts for is accepted, not reported', () => {
+    expect(judgeAdvisories([exposure()], reviewed))
+      .toEqual({ findings: [], accepted: 1 });
+  });
+
+  test('an advisory against a package nobody reviewed fails the gate', () => {
+    const { findings, accepted } = judgeAdvisories(
+      [exposure(), exposure({ pkg: 'left-pad' })],
+      reviewed,
+    );
+    expect(accepted).toBe(1);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.at).toBe('left-pad@1.4.1 — advisory 1124298');
+    expect(findings[0]?.rendered).toContain('never reviewed');
+  });
+
+  // The case a per-package acceptance would swallow: the package is known, the
+  // vulnerability is not.
+  test('a NEW advisory against an already-reviewed package fails the gate', () => {
+    const { findings, accepted } = judgeAdvisories(
+      [exposure(), exposure({ id: 9999999 })],
+      reviewed,
+    );
+    expect(accepted).toBe(1);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.rendered).toContain('gained a new one');
+  });
+
+  test('a recorded advisory that stopped reproducing fails the gate too', () => {
+    const { findings } = judgeAdvisories([], reviewed);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.at).toBe('valibot — advisory 1124298');
+    expect(findings[0]?.rendered).toContain('no matching advisory at all');
+  });
+
+
+  test('only a scanner under [install.security] counts as wired', () => {
+    expect(configuredScanner('[install.security]\nscanner = "./scripts/security-scanner.ts"\n'))
+      .toBe('./scripts/security-scanner.ts');
+    // A `scanner` key in the wrong table configures nothing, and reading it as
+    // wired would certify a scan bun never performs.
+    expect(configuredScanner('[install]\nscanner = "./scripts/security-scanner.ts"\n'))
+      .toBeUndefined();
+    expect(configuredScanner('[install]\nlinker = "hoisted"\n')).toBeUndefined();
+  });
+
+  const onePackage = [{
+    name: 'valibot',
+    version: '1.4.1',
+    requestedRange: '^1.4.1',
+    tarball: 'https://registry.npmjs.org/valibot/-/valibot-1.4.1.tgz',
+  }];
+
+  // The whole offline contract. 127.0.0.1:1 refuses instantly, so this is
+  // deterministic and needs no network.
+  test('a feed that does not answer is unreachable, never a clean scan', async () => {
+    const scan = await queryAdvisories(onePackage, 'http://127.0.0.1:1/bulk');
+    expect(scan.status).toBe('unreachable');
+    if (scan.status !== 'unreachable') throw new Error('unreachable expected');
+    expect(scan.reason).toBe('io');
+    expect(scan.error.length).toBeGreaterThan(0);
+    expect(scan.scanned).toBe(1);
+  });
+
+  test('an unreachable feed yields a warn advisory, never an empty list', () => {
+    const advisories = advisoriesFor({
+      status: 'unreachable', scanned: 1288, reason: 'io', error: 'ConnectionRefused',
+    });
+    expect(advisories).toHaveLength(1);
+    expect(advisories[0]?.level).toBe('warn');
+    expect(advisories[0]?.description).toContain('were NOT checked');
+  });
+
+  test('a feed answering an unreadable shape is unreachable, not empty', async () => {
+    const server = Bun.serve({ port: 0, fetch: () => Response.json({ valibot: 'nope' }) });
+    try {
+      const scan = await queryAdvisories(onePackage, server.url.href);
+      expect(scan.status).toBe('unreachable');
+      if (scan.status !== 'unreachable') throw new Error('unreachable expected');
+      expect(scan.reason).toBe('unreadable');
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test('a feed answering HTTP 500 is unreachable, not empty', async () => {
+    const server = Bun.serve({ port: 0, fetch: () => new Response('nope', { status: 500 }) });
+    try {
+      const scan = await queryAdvisories(onePackage, server.url.href);
+      expect(scan.status).toBe('unreachable');
+      if (scan.status !== 'unreachable') throw new Error('unreachable expected');
+      expect(scan.error).toContain('500');
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // The feed answers per NAME once any submitted version matches, so attributing
+  // an advisory to the version that actually matches is the scanner's job. Both
+  // hono copies are asked about; only 4.12.23 is vulnerable.
+  test('an advisory is attributed only to the versions its range matches', async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({
+        hono: [{
+          id: 1123999,
+          url: 'https://github.com/advisories/x',
+          title: 'CORS middleware reflects any Origin',
+          severity: 'high',
+          vulnerable_versions: '<4.12.25',
+        }],
+      }),
+    });
+    try {
+      const scan = await queryAdvisories([
+        { name: 'hono', version: '4.12.23', requestedRange: '^4.11.4', tarball: 'a' },
+        { name: 'hono', version: '4.13.2', requestedRange: '^4.13.0', tarball: 'b' },
+      ], server.url.href);
+      expect(scan.status).toBe('reported');
+      if (scan.status !== 'reported') throw new Error('reported expected');
+      expect(scan.exposures.map((each) => each.version)).toEqual(['4.12.23']);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test('a feed that matches nothing is a clean scan, distinguishable from an outage', async () => {
+    const server = Bun.serve({ port: 0, fetch: () => Response.json({}) });
+    try {
+      const scan = await queryAdvisories(onePackage, server.url.href);
+      expect(scan).toEqual({ status: 'reported', scanned: 1, exposures: [] });
+    } finally {
+      await server.stop(true);
+    }
   });
 });

@@ -169,6 +169,7 @@ run_required_gate "Typecheck coverage" bun run gate:typecheck-coverage
 run_required_gate "Declared skip ratchet" bun run gate:skip-ratchet
 run_required_gate "Measured set equals governed set" bun run gate:set-equality
 run_required_gate "Dependency install-script policy" bun run gate:install-scripts
+run_required_gate "Dependency advisory policy" bun run gate:dependency-advisories
 run_required_gate "Local-device daemon suite" bun test packages/pc-agent/
 run_required_gate "Root end-to-end lifecycle suites" bun test ./tests/
 run_required_gate "Behavioural evals" bun run test:eval

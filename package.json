@@ -43,7 +43,8 @@
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",
     "verify:lean": "bash scripts/verify-lean.sh",
     "bench": "bun scripts/bench.ts",
-    "gate:install-scripts": "bun scripts/install-scripts-gate.ts"
+    "gate:install-scripts": "bun scripts/install-scripts-gate.ts",
+    "gate:dependency-advisories": "bun scripts/dependency-advisory-gate.ts"
   },
   "knip": {
     "ignoreExportsUsedInFile": true,

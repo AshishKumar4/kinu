@@ -186,8 +186,8 @@ export const LADDER: readonly Gate[] = [
       + 'with a stated reason rather than a default drifting underneath us.',
     blind: 'whether an allowed script is SAFE. It cannot judge that and does not pretend to; it '
       + 'only forces the set to be a decision. Also blind to what a script does at runtime, to '
-      + 'transitive `bun.lock` integrity, and to CVEs — `bun pm scan` is the tool for the last '
-      + 'and is not yet wired anywhere.',
+      + 'transitive `bun.lock` integrity, and to CVEs — `bun run gate:dependency-advisories` '
+      + 'is the gate for the last, and shares the reviewed-set shape with this one.',
   },
   {
     run: 'bun run gate:skip-ratchet',
@@ -327,6 +327,27 @@ export const LADDER: readonly Gate[] = [
       + 'bun, which is why `bun run test:workerd` exists below.',
   },
 
+  {
+    run: 'bun run gate:dependency-advisories',
+    tier: 'ci',
+    seconds: 0.3,
+    catches: 'a dependency arriving with a known vulnerability nobody reviewed. `bun pm scan` '
+      + 'was named as the tool for this in the note above and was invoked NOWHERE — and could '
+      + 'not have helped if it had been, because bun ships no scanner and answers `error: no '
+      + 'security scanner configured`. `bunfig.toml` now points at `scripts/security-scanner.ts`, '
+      + 'so every `bun install` checks all 1288 lockfile entries against npm\'s advisory feed '
+      + 'before unpacking a tarball, and this gate asserts the exposures are EXACTLY the 54 ids '
+      + 'over 19 packages reviewed in REVIEWED_ADVISORIES — failing both when a new one appears '
+      + 'and when a recorded one stops reproducing, so a fixed advisory cannot keep its '
+      + 'acceptance and pre-approve the next one. It is at `ci` and not at commit or push '
+      + 'because it needs the network: a pre-push hook that did would fail every offline push, '
+      + 'and `--no-verify` is not an option here.',
+    blind: 'whether an accepted advisory is exploitable in this repository — it cannot judge '
+      + 'that and does not pretend to, it only forces the set to be a decision. Also blind to a '
+      + 'malicious package with no advisory filed, to anything the npm feed does not carry, and '
+      + 'to what an install script DOES once bun runs it, which is `gate:install-scripts` above. '
+      + 'An unreachable feed is reported as `unknown` via `blocked()`, never as a clean tree.',
+  },
   {
     run: 'bun test packages/cli-backend/',
     tier: 'ci',
