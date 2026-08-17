@@ -7,9 +7,10 @@
 // Hoisted here so there is ONE tested implementation; platform side-effects
 // (activity log, durable run-event recorder) inject as optional sinks.
 
+import type { ModelMessage } from 'ai';
 import type { ToolCallRecord, TurnUsage } from '../evolution/types.js';
 import { TurnContextBudget, citesSpillAddress } from '../context-budget.js';
-import { TurnContextMeter, type ContextComposition } from '../context-meter.js';
+import { TurnContextMeter } from '../context-meter.js';
 import type { RunEventInput, StepUsage } from '../events/types.js';
 import { TurnFileLedger } from '../tools/file-ledger.js';
 import { priceCall, type MissionGovernor } from '../mission-budget.js';
@@ -28,7 +29,10 @@ export interface StepLike {
   toolResults?: ReadonlyArray<unknown>;
   usage?: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; reasoningTokens?: number };
   providerMetadata?: { anthropic?: { cacheReadInputTokens?: number } };
-  response?: { modelId?: string };
+  /** `messages` is CUMULATIVE across the turn — the SDK grows one array and
+   *  hands the whole thing to every step. The per-step delta is taken here so
+   *  there is one implementation of it for both backends. */
+  response?: { modelId?: string; messages?: readonly ModelMessage[] };
 }
 
 /** ai-SDK v6 tool-result hook shape (Think 0.4 renamed args→input, result→output
@@ -49,15 +53,12 @@ export interface TurnSinks {
   logActivity?(event: string, detail?: string): void;
   /** A completed tool call, for a durable run-event log (cf RunEventRecorder). */
   onToolCallEvent?(e: Omit<Extract<RunEventInput, { type: 'tool_call_end' }>, 'type'>): void;
-  /** A finished step, for the durable run-event log. `usage` is the provider's
-   *  own report; `context` is the local measurement of the request that
-   *  produced it. Either may be absent — neither is ever fabricated. */
-  onStepEvent?(e: {
-    stepIndex: number;
-    reason?: string;
-    usage?: StepUsage;
-    context?: ContextComposition;
-  }): void;
+  /** A finished step, for the durable run-event log — the ONE per-step durable
+   *  write on both backends. Derived from the durable row so the payload cannot
+   *  drift from what is stored: `messages` is what the step produced, `usage`
+   *  the provider's own report, `context` the local measurement of the request.
+   *  Any of them may be absent — none is ever fabricated. */
+  onStepEvent?(e: Omit<Extract<RunEventInput, { type: 'step_finish' }>, 'type'>): void;
 }
 
 export class TurnAccumulator {
@@ -90,6 +91,16 @@ export class TurnAccumulator {
    *  never a `toolCalls` name. Read at turn end for the craft EMA and the
    *  durable turn↔craft usage row. Reset with the rest of the turn. */
   private readonly craftUsed = new Set<string>();
+  /** How many of the turn's cumulative response messages have already been
+   *  written durably. The SDK hands every step the whole array so far; the
+   *  delta is what this step produced, and it is what the step's durable row
+   *  carries. Reset with the rest of the turn.
+   *
+   *  A shorter array than we have already written means the SDK restarted the
+   *  turn (a recovery re-drive) rather than extended it: the counter resyncs
+   *  downward and that step records nothing, because under-recording is safe
+   *  and re-recording a step would duplicate it in the log. */
+  private durableMessages = 0;
 
   constructor(
     private readonly sinks: TurnSinks = {},
@@ -112,6 +123,7 @@ export class TurnAccumulator {
     this.files.reset();
     this.composition.reset();
     this.craftUsed.clear();
+    this.durableMessages = 0;
   }
 
   /** Record crafted tools the turn invoked — the craft clock's call-site scan
@@ -240,11 +252,20 @@ export class TurnAccumulator {
       }
     }
     const composition = this.composition.take();
+    // What THIS step produced: the cumulative array minus what earlier steps of
+    // the same turn already made durable. An EMPTY array means the caller
+    // reported no response for this step (a scaffold-authored step boundary),
+    // not that the turn has produced nothing — rewinding the cursor on it would
+    // make the next real step re-record everything before it.
+    const cumulative = ctx.response?.messages ?? [];
+    const produced = cumulative.length > 0 ? cumulative.slice(this.durableMessages) : [];
+    if (cumulative.length > 0) this.durableMessages = cumulative.length;
     const stepEvent: Parameters<NonNullable<TurnSinks['onStepEvent']>>[0] = {
       stepIndex: this.stepCount,
     };
     const reason = v.safeParse(StringSchema, ctx.finishReason);
     if (reason.success) stepEvent.reason = reason.output;
+    if (produced.length > 0) stepEvent.messages = [...produced];
     if (stepUsage) stepEvent.usage = stepUsage;
     if (composition) stepEvent.context = composition;
     this.sinks.onStepEvent?.(stepEvent);

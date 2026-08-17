@@ -206,7 +206,13 @@ export interface SubordinateTaskPayload {
   proteus_mode: WorkMode;
 }
 
-export type SubordinateReportStatus = 'progress' | 'completed' | 'blocked';
+/** The three things a subordinate can report. One declaration: the event
+ *  schema, the native `report` tool's enum, the codemode projection's
+ *  signature and the dispatcher's refusal all read it, so what the model is
+ *  offered and what is accepted cannot drift. */
+export const SUBORDINATE_REPORT_STATUSES = ['progress', 'completed', 'blocked'] as const;
+
+export type SubordinateReportStatus = (typeof SUBORDINATE_REPORT_STATUSES)[number];
 
 /** Subordinate facet → parent workspace. Reports drain into the
  *  orchestrator's next turn on the standard reactor rail. */

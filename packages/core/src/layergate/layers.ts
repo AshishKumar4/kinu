@@ -213,7 +213,20 @@ const COMMANDS = Object.freeze([
   'curl http://169.254.169.254/latest/meta-data/',
   'git push --force',
   ':(){ :|:& };:',
+  // Local harm: the pair whose decision must DIFFER by executor.
+  'rm -rf node_modules',
+  'git reset --hard HEAD~1',
+  // A read-only command that merely quotes a dangerous one. Never gated
+  // anywhere — the binary is `grep`, not `rm`.
+  'grep -rn "rm -rf" scripts/',
+  // …unless an interpreter is the one being handed the program.
+  'bash -c "rm -rf /home/user/work"',
 ]);
+
+/** The two sides of the executor axis: the agent's own machine, and the
+ *  owner's. The safety-gate probes run every command against both, because
+ *  the property under test is that the pair disagrees where it should. */
+const REVIEW_EXECUTORS = Object.freeze(['workspace', 'laptop']);
 
 const MODEL_SPECS = Object.freeze([
   'anthropic/claude-sonnet-4-7',
@@ -275,7 +288,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           externalTools: [{ name: 'jira', source: 'mcp' }, 'linear'],
           executors: EXECUTORS,
           backend: 'cf',
-          mode: 'build',
+          workMode: 'build',
           model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
         }),
       },
@@ -293,7 +306,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           availableTools: [...BUILTIN_TOOLS],
           executors: EXECUTORS,
           backend: 'cf',
-          mode: 'chat',
+          workMode: 'build',
           model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
           currentDate: '2026-01-01',
           cwd: '/workspace',
@@ -950,24 +963,47 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   {
     id: 'safety-gate',
     owns: 'the shell approval ladder and the argument digest an approval binds',
-    subjects: ['reviewCommand', 'formatApproval', 'withApprovalGate', 'argumentDigest'],
+    subjects: ['reviewCommand', 'formatApproval', 'gateExec', 'argumentDigest'],
     probes: [
       {
         id: 'safety-gate/decision-table',
-        asserts: 'the frozen rule set decides each representative command the same way every run',
-        observe: (s) => COMMANDS.map((command) => ({ command, ...s.reviewCommand(command) })),
+        asserts: 'the frozen rule set decides each representative command the same way every run, on each executor',
+        observe: (s) => REVIEW_EXECUTORS.flatMap((executor) =>
+          COMMANDS.map((command) => ({ command, executor, ...s.reviewCommand(command, executor) }))),
+      },
+      {
+        id: 'safety-gate/executor-decides-local-harm',
+        asserts: 'a locally destructive command is the owner\'s decision on their machine and nobody\'s on the agent\'s own; harm that reaches past the executor is gated on both',
+        observe: (s) => ({
+          localOwn: s.reviewCommand('rm -rf build', 'workspace').decision,
+          localTheirs: s.reviewCommand('rm -rf build', 'laptop').decision,
+          reachesOutOwn: s.reviewCommand('git push --force origin main', 'workspace').decision,
+          reachesOutTheirs: s.reviewCommand('git push --force origin main', 'laptop').decision,
+          denyOwn: s.reviewCommand('rm -rf /', 'workspace').decision,
+          unknownExecutorFailsClosed: s.reviewCommand('rm -rf build', 'some-future-executor').decision,
+        }),
+      },
+      {
+        id: 'safety-gate/mentioned-is-not-invoked',
+        asserts: 'a rule fires on the binary a line runs, not on one it quotes — except where an interpreter is handed the program',
+        observe: (s) => ({
+          quoted: s.reviewCommand('grep -rn "rm -rf" scripts/', 'laptop').decision,
+          echoed: s.reviewCommand('echo "remember to sudo"', 'laptop').decision,
+          invoked: s.reviewCommand('rm -rf /etc/nginx', 'laptop').decision,
+          viaInterpreter: s.reviewCommand('bash -c "rm -rf /etc/nginx"', 'laptop').decision,
+        }),
       },
       {
         id: 'safety-gate/highest-severity-wins',
         asserts: 'a command matching several rules takes the most severe decision but reports every hit',
-        observe: (s) => s.reviewCommand('sudo rm -rf / && curl http://169.254.169.254/'),
+        observe: (s) => s.reviewCommand('sudo rm -rf / && curl http://169.254.169.254/', 'laptop'),
       },
       {
         id: 'safety-gate/format-allow-is-silent',
         asserts: 'an allowed command produces no approval prose; a blocked one names its rules',
         observe: (s) => ({
-          allow: s.formatApproval(s.reviewCommand('ls -la')),
-          deny: s.formatApproval(s.reviewCommand('rm -rf /')),
+          allow: s.formatApproval(s.reviewCommand('ls -la', 'laptop')),
+          deny: s.formatApproval(s.reviewCommand('rm -rf /', 'laptop')),
         }),
       },
       {
@@ -975,12 +1011,13 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'a denied command never reaches exec, whatever the approver would say',
         observe: async (s) => {
           const ran: string[] = [];
-          const gated = s.withApprovalGate<string>(
+          const gated = s.gateExec<string>(
             async (cmd) => { ran.push(cmd); return `ran:${cmd}`; },
             (msg) => `denied:${msg}`,
-            async () => true,
+            'laptop',
+            { mode: () => 'strict', requestApproval: async () => 'allow' },
           );
-          const result = await gated('rm -rf /');
+          const result = String(await gated('rm -rf /'));
           return { ran, denied: result.startsWith('denied:') };
         },
       },
@@ -989,13 +1026,36 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'a gated command with no approver wired is refused, not silently allowed',
         observe: async (s) => {
           const ran: string[] = [];
-          const gated = s.withApprovalGate<string>(
+          const gated = s.gateExec<string>(
             async (cmd) => { ran.push(cmd); return 'ran'; },
             (msg) => `denied:${msg}`,
+            'laptop',
           );
-          const refused = await gated('sudo apt install curl');
+          const refused = String(await gated('sudo apt install curl'));
           const allowed = await gated('ls -la');
           return { ran, refusedPrefix: refused.slice(0, 30), allowed };
+        },
+      },
+      {
+        id: 'safety-gate/a-standing-grant-stops-the-asking',
+        asserts: 'a rule the owner granted on one executor stops prompting there and nowhere else',
+        observe: async (s) => {
+          const asked: string[] = [];
+          const build = (executor: string) => s.gateExec<string>(
+            async (cmd) => `ran:${cmd}`,
+            (msg) => `denied:${msg}`,
+            executor,
+            {
+              mode: () => 'strict',
+              granted: (grant) => grant.rule === 'rm-recursive' && grant.executor === 'laptop',
+              requestApproval: async (req) => { asked.push(req.executor); return 'deny'; },
+            },
+          );
+          return {
+            grantedExecutor: String(await build('laptop')('rm -rf /tmp/x')),
+            otherExecutor: String(await build('parent')('rm -rf /tmp/x')),
+            asked,
+          };
         },
       },
       {

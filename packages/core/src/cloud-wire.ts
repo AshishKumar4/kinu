@@ -15,10 +15,13 @@ export const DEVICE_CONNECT_PATH = '/pc/connect';
 // Per-message AGGREGATE cap on raw attachment bytes inlined into a chat
 // message as data-URL file parts, for agents hosted on THIS backend — the web
 // composer and a CLI in cloud mode. The number is a Cloudflare fact, not an
-// agent one: a chat message persists as ONE Durable Object SQLite row (2 MB
-// platform limit) behind the agents SDK's 1.8 MB row guard, which can shrink
-// only TEXT parts — file parts must fit as-is. 1 MiB raw ≈ 1.4 MB base64,
-// leaving headroom for the message text and JSON envelope under the guard.
+// agent one: a chat message persists as ONE Durable Object SQLite row, bounded
+// by `do.sqlite.row_bytes` in the platform catalog, behind the agents SDK's
+// 1.8 MB row guard, which can shrink only TEXT parts — file parts must fit
+// as-is. 1 MiB raw is roughly 1.4 MB base64, leaving headroom for the message
+// text and JSON envelope under the guard. The 1 MiB below is OURS: the platform
+// number lives in the catalog and `unit-files.test.ts` asserts this value
+// against it, so the derivation fails loudly if either side moves.
 //
 // The name carries the backend because the cap does: a local session stores
 // messages in bun:sqlite with no row limit, and is bounded by its own

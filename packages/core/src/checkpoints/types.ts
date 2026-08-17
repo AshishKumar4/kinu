@@ -13,9 +13,28 @@
  *     `checkpointPlan` / `checkpointRestore` RPCs, plus a per-frame
  *     `checkpoint` hint that triggers the pre-mutation snapshot).
  *
- * The workspace filesystem is out of scope: it stores current state
- * only (no history/content-addressing), so VFS rollback has no cheap existing
- * structure to expose here.
+ * ## What this covers, and what it does not
+ *
+ * Exactly one plane: the **user's own device**. The snapshot hint is attached
+ * only to `exec` and `writeFile` frames on the device transport
+ * (`cf-backend/src/device-transport.ts`), so a turn that ran on the `workspace`
+ * plane — the authoritative filesystem — or on `@sandbox` has no checkpoint and
+ * can never have one. That is a real gap and callers must be able to tell it
+ * apart from "this turn changed nothing", which is what
+ * {@link FileCheckpointListing} exists for: an empty list is ambiguous and was
+ * being read to the operator as a statement about his turn.
+ *
+ * The gap is not a property of the workspace filesystem. This file used to say
+ * the workspace plane "stores current state only (no history/content-
+ * addressing)", which was true of the hand-rolled `SqliteFS` that was deleted on
+ * 2026-08-12 and is false of what replaced it: Nimbus's VFS is content-addressed
+ * (`inodes(path, content_id)` over `file_chunks(content_id, chunk_id, data)`,
+ * with a `content_lifecycle` GC table), so a snapshot of that plane is a copy of
+ * the small inode index and no blob copies at all. What it needs is content
+ * pinning — Nimbus reclaims content no *inode* references, so checkpoint rows
+ * alone would not keep blobs alive — and that is a Nimbus-side change, not an
+ * absence of structure. Sandbox files are a third machine's and need the sandbox
+ * to snapshot.
  */
 
 /** Bounded retention: checkpoints kept per working directory. One knob. */
@@ -39,6 +58,24 @@ export interface FileCheckpointEntry {
   turnId: string | null;
   sessionId: string | null;
   reason: string;
+}
+
+/**
+ * What the operator's client needs in one round trip: whether the checkpoint
+ * store is reachable at all, and what it holds.
+ *
+ * The two are separate because collapsing them is what produced
+ * `No file checkpoint for this turn. It changed no device files.` on a turn that
+ * had plainly written files. The list was empty because no device was linked, and
+ * an empty list was read as a claim about the turn. A caller that has
+ * `availability.available === false` can say the true thing — and `reason`
+ * already carries it, e.g. `no device connected — connect one with
+ * `proteus connect``.
+ */
+export interface FileCheckpointListing {
+  availability: CheckpointAvailability;
+  /** Newest first. Empty AND available means this turn changed no device files. */
+  entries: FileCheckpointEntry[];
 }
 
 export type FileRestoreKind = 'modify' | 'create' | 'delete';

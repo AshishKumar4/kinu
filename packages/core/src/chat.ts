@@ -7,7 +7,16 @@
  * on subsequent turns.
  */
 
-import { streamText, stepCountIs, type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
+import {
+  streamText,
+  stepCountIs,
+  type ModelMessage,
+  type ToolSet,
+  type LanguageModel,
+  type TextPart,
+  type ToolCallPart,
+  type StepResult,
+} from 'ai';
 import { combineAbortSignals } from '@proteus/agent-utils';
 import { DEFAULT_MAX_STEPS } from './config.js';
 import {
@@ -20,6 +29,7 @@ import { composePrepareStep, type StepDynamicContext } from './prompting/prepare
 import type { MissionGovernor } from './mission-budget.js';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer.js';
 import { assembleTurnMessages } from './orchestrator/turn-context.js';
+import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls.js';
 import { contextWindowForModel } from './context-window.js';
 import type { ExtensionHost } from './extension.js';
 import { mergeProviderOptions } from './strategy/effort.js';
@@ -43,8 +53,17 @@ export type ChatEvent =
   /** `inputTokens`/`outputTokens`/`cachedInputTokens` = the step request's
    *  provider-reported totals, when reported — inputTokens doubles as the
    *  caller's measured compaction signal, cachedInputTokens feeds cache
-   *  telemetry. */
-  | { type: 'step-finish'; stepIndex: number; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number }
+   *  telemetry.
+   *
+   *  `responseMessages` is the SDK's CUMULATIVE response array as of this step:
+   *  every assistant message and paired tool message the turn has produced so
+   *  far. It is how a completed step becomes durable at the moment it completes
+   *  — the caller hands it to the shared accumulator, which takes the per-step
+   *  delta and appends it to the run's durable log. Carried by reference and
+   *  never copied: a 40-step turn must not re-serialize its transcript 40
+   *  times. */
+  | { type: 'step-finish'; stepIndex: number; responseMessages: readonly ModelMessage[];
+      inputTokens?: number; outputTokens?: number; cachedInputTokens?: number }
   /** A failure the turn survived. `runChat` itself never yields this — it
    *  throws, and the caller owns the turn-failure policy. The scaffold seam
    *  (scaffold/chat-transform.ts) does: an evolved scaffold reports a failed
@@ -120,6 +139,11 @@ export interface ChatOptions {
  *  under five minutes. */
 export const STALL_TIMEOUT_MS = 300_000;
 
+/** What the caller records for a turn its own abort signal ended. Thrown after
+ *  the turn's `done` event, so the interrupted turn's history is kept and the
+ *  turn is still recorded as unfinished. */
+export const INTERRUPTED_TURN = 'The turn was interrupted before it finished.';
+
 /**
  * Run one chat turn. Yields streaming events and finishes with a 'done'
  * event containing the full text and the SDK's response messages.
@@ -127,6 +151,15 @@ export const STALL_TIMEOUT_MS = 300_000;
  * The response messages include assistant messages (with tool_call parts)
  * and tool messages (with tool_result parts). Callers MUST append these
  * to the conversation history — not just the flat text.
+ *
+ * A CUT turn — the caller's abort, or the stall watchdog firing — yields `done`
+ * and THEN throws ({@link INTERRUPTED_TURN}, or the named stall). The history it
+ * produced is the record of what the turn did: every completed step, plus the
+ * step the cut landed in, with a terminal result for the call that never
+ * returned. The throw is how the caller records that the turn did not finish.
+ * Both are true, and a caller that persists on `done` and flags the turn on a
+ * throw already does the right thing with both. A dead provider stream is the
+ * one terminal that still throws WITHOUT a `done` — see its site for why.
  */
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const maxSteps = opts.maxSteps ?? DEFAULT_MAX_STEPS;
@@ -141,12 +174,19 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // We use a simple array that the generator checks after each stream chunk.
   interface PendingStepEvent {
     stepIndex: number;
+    responseMessages: readonly ModelMessage[];
     inputTokens?: number;
     outputTokens?: number;
     cachedInputTokens?: number;
   }
   const pendingStepEvents: PendingStepEvent[] = [];
   let stepCount = 0;
+  /** The SDK's cumulative response array as of the last step that FINISHED —
+   *  the one source for the turn's produced messages, on both the natural and
+   *  the cut path. `result.response` says the same thing but only settles on a
+   *  natural finish, and every step's array is cumulative, so reading it here
+   *  costs one assignment and removes the branch. */
+  let responseSoFar: readonly ModelMessage[] = [];
 
   // The shared turn-context assembly (orchestrator/turn-context.ts): attachment
   // sanitize → extension onTurnStart → awaited transformContext (compaction) →
@@ -216,6 +256,15 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // schema payload that rides it every step.
   opts.meter?.openTurn({ system: cache.system, tools });
 
+  // The turn was cancelled from outside (the owner pressing stop, a supervisor)
+  // rather than failing. An aborted run NEVER settles `result.response` or
+  // `result.steps` — they resolve only on a natural finish — so this callback is
+  // the only place the SDK hands over the STEPS it did record (the tail's text
+  // fallbacks read them). The messages those steps produced are already held by
+  // `responseSoFar`, captured per step as each one finished.
+  let interrupted = false;
+  let recordedSteps: readonly StepResult<ToolSet>[] = [];
+
   const result = streamText({
     model: opts.model,
     system: cache.system,
@@ -228,6 +277,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // Capture instead: the error still reaches callers through the rethrow
     // below, so there is exactly one place that decides how a failure reads.
     onError: ({ error }) => { streamError = error; },
+    onAbort: ({ steps }) => { interrupted = true; recordedSteps = steps; },
     providerOptions,
     // The shared step pipeline (prompting/prepare-step.ts): extension rewrites
     // first, then step-boundary tool-output pruning against the window budget,
@@ -255,7 +305,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       const anthropicCacheRead = parsedCacheRead.success ? parsedCacheRead.output : 0;
       const cachedInputTokens = (step.usage?.cachedInputTokens ?? 0)
         + anthropicCacheRead;
-      const event: PendingStepEvent = { stepIndex: stepCount };
+      responseSoFar = step.response.messages;
+      const event: PendingStepEvent = { stepIndex: stepCount, responseMessages: responseSoFar };
       if (inputTokens !== undefined && inputTokens > 0) event.inputTokens = inputTokens;
       if (outputTokens !== undefined && outputTokens > 0) event.outputTokens = outputTokens;
       if (cachedInputTokens > 0) event.cachedInputTokens = cachedInputTokens;
@@ -273,11 +324,27 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   let stepHadOutput = false;
   let deadFinalStep = false;
 
+  // The in-flight step's assistant content, as it streams.
+  //
+  // An abort ends the SDK's loop mid-step, and the SDK records only steps that
+  // FINISHED — so everything the model produced in the step the interrupt
+  // landed in is absent from `result.response`, including the tool call the
+  // caller has already been handed (and rendered, and recorded). Kept here so
+  // an interrupted turn's history says what the turn actually did. Cleared at
+  // every step boundary: from there the step is the SDK's to report.
+  let stepContent: Array<TextPart | ToolCallPart> = [];
+
   armStallTimer();
   try {
+    // Drained to the SDK's own `abort` part rather than broken out of on
+    // `opts.signal.aborted`. Costs nothing — the abort check would sit AFTER
+    // this `await`, so both shapes wait for exactly one more chunk — and buys
+    // two things: `onAbort` is guaranteed to have run by the time the tail
+    // below reads `recordedSteps`, and a tool result that lands after the
+    // abort still reaches the surfaces and the turn's tool ledger instead of
+    // leaving the call rendered as never having returned.
     for await (const chunk of result.fullStream) {
       armStallTimer();
-      if (opts.signal?.aborted) break;
 
       switch (chunk.type) {
         case 'text-delta': {
@@ -285,6 +352,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           if (delta) {
             stepHadOutput = true;
             allText += delta;
+            stepContent.push({ type: 'text', text: delta });
             yield { type: 'text-delta', delta };
           }
           break;
@@ -292,6 +360,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         case 'tool-call': {
           stepHadOutput = true;
           const args = parseToolArgs(chunk.input);
+          stepContent.push({
+            type: 'tool-call', toolCallId: chunk.toolCallId, toolName: chunk.toolName, input: chunk.input,
+          });
           await extensions?.emitToolCall({ toolName: chunk.toolName, args });
           yield { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args };
           break;
@@ -328,6 +399,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           const reason = chunk.finishReason;
           deadFinalStep = !stepHadOutput && reason === 'other';
           stepHadOutput = false;
+          stepContent = [];
           break;
         }
         case 'error': {
@@ -343,29 +415,56 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }
     }
   } catch (err) {
-    // The watchdog abort usually surfaces as an opaque AbortError from the
-    // stream — name the stall instead of leaking the mechanism.
-    if (stalled) throw stallError();
-    throw err;
+    // A cut turn falls through to the tail so the steps it DID finish are still
+    // recorded, and its throw moves to after `done`. Only when `onAbort` made
+    // the handover: without recorded steps there is nothing to carry, and the
+    // watchdog abort's opaque AbortError still has to be named as a stall
+    // rather than leaking the mechanism.
+    if (!interrupted) {
+      if (stalled) throw stallError();
+      throw err;
+    }
   } finally {
     clearStallTimer();
   }
 
-  if (stalled) throw stallError();
   if (streamError !== undefined) {
     throw streamError instanceof Error ? streamError : new Error(describeProviderError(streamError));
   }
-  if (deadFinalStep && !opts.signal?.aborted) {
+  if (deadFinalStep && !interrupted) {
+    // Deliberately still a bare throw, unlike the stall and the interrupt: this
+    // turn was never cut. It ran to a natural end and what is being rejected is
+    // the RESULT, so there is no "work the cancellation discarded" to rescue —
+    // and the empty dead step would ride into the durable history with nothing
+    // established about what an empty assistant message does on replay.
     throw new Error(
       'Model stream ended without output: the provider stream terminated prematurely ' +
       '(no finish reason, no content). The turn did not complete.',
     );
   }
 
-  // Await the full result to get response messages
-  const response = await result.response;
-  const steps = await result.steps;
-  const responseMessages = response.messages;
+  // The turn's steps, and the messages they produced. A CUT run — the caller's
+  // abort or the stall watchdog, both of which reach the SDK through the same
+  // combined signal — leaves `result.response`/`result.steps` unsettled; they
+  // resolve only on a natural finish, and a cut before the first step even
+  // rejects them. So a cut turn reads what `onAbort` handed over for its steps.
+  //
+  // The MESSAGES need no such branch: `responseSoFar` is the cumulative array
+  // of the last step that finished, captured as it finished, and that is the
+  // whole turn on either path. It is also, message for message, what the per-step
+  // durable rows hold — the history the caller persists and the durable record
+  // are one construction, so neither can say something the other does not.
+  const steps = interrupted ? recordedSteps : await result.steps;
+  const finished = [...responseSoFar];
+  // Then what the cut interrupted: the step the SDK will never report, and the
+  // pairing invariant over the whole turn, so the caller persists a history a
+  // follow-up turn can be built from. Without it a tool call the caller has
+  // already recorded has no result anywhere, and `streamText` refuses to
+  // assemble EVERY later request from that history.
+  const produced = interrupted && stepContent.length > 0
+    ? [...finished, { role: 'assistant' as const, content: stepContent }]
+    : finished;
+  const responseMessages = settleUnpairedToolCalls(produced) ?? produced;
 
   // If the model produced no text (ended on a tool call), gather from steps
   if (!allText.trim()) {
@@ -388,6 +487,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   await extensions?.emitTurnEnd({ text: allText, responseMessages });
   yield { type: 'done', text: allText, responseMessages };
+
+  // The turn did not finish, and the caller's turn record must say so — but only
+  // AFTER `done`, so the history above is durably kept. Being cut is not a
+  // failure of the turn's work; losing that work would be. The stall is checked
+  // first because a watchdog abort sets both flags, and "the provider went
+  // silent" is the more specific truth.
+  if (stalled) throw stallError();
+  if (interrupted) throw new Error(INTERRUPTED_TURN);
 }
 
 /** Render a tool result for the observability event stream and the no-text

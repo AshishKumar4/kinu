@@ -194,6 +194,14 @@ export interface ShellExecOptions {
   signal?: AbortSignal;
 }
 
+/** What a command leaves behind. Named because gating and checkpointing
+ *  wrappers have to construct one without running anything. */
+export interface ShellExecResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
 export interface Shell {
-  exec(command: string, stdinOrOptions?: string | ShellExecOptions): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  exec(command: string, stdinOrOptions?: string | ShellExecOptions): Promise<ShellExecResult>;
 }

@@ -22,7 +22,12 @@ import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json.js';
 
 /** The terminal error a non-recoverable job records when it is interrupted by a
- *  DO eviction (no durable checkpoint / not safe to re-run). */
+ *  DO eviction (no durable checkpoint / not safe to re-run).
+ *
+ *  Proteus stamps this itself because `do.evict.no_signal` says the platform
+ *  delivers nothing: a `running` row with nothing in this isolate owning it IS
+ *  an orphan, whatever became of the fiber, and that inference is the only
+ *  evidence available. */
 export const EVICTION_INTERRUPT_ERROR = 'interrupted by Durable Object eviction before completion';
 
 /** Thrown by a resumer for a kind it cannot re-drive (e.g. `run`/`execute_tools`,
@@ -287,20 +292,26 @@ export class BackgroundJobRunner {
     catch { return false; }
   }
 
-  /** Wake the agent with a synthesis signal carrying the settled job — at its
-   *  next step if it is working, as its own turn if it is idle. The
-   *  `background_job` kind makes a woken turn render as a background-event
-   *  card, not a user bubble. An undelivered wake leaves a durable retry
-   *  breadcrumb the standard drain picks up. Runs once per job (no self-wake
-   *  loop). */
+  /** Wake the agent with a signal carrying the settled job — at its next step
+   *  if it is working, as its own turn if it is idle. The `background_job`
+   *  kind makes a woken turn render as a background-event card, not a user
+   *  bubble. An undelivered wake leaves a durable retry breadcrumb the
+   *  standard drain picks up. Runs once per job (no self-wake loop). */
   async wake(jobId: string): Promise<void> {
     const job = this.deps.store.get(jobId);
     if (!job) return;
     const text = job.status === 'completed'
       ? `Background ${job.kind} job ${jobId} completed. Read the full result with ` +
         `agent.jobResult('${jobId}'), then synthesize it / continue the work you backgrounded.`
-      : `Background ${job.kind} job ${jobId} failed${job.error ? ` (${job.error})` : ''}. ` +
-        `Decide whether to retry or report the failure.`;
+      // A cancel is neither a success nor a crash: the work is GONE, no result
+      // will arrive, and the agent had been told to wait for one. Saying so is
+      // the only thing that stops it reasoning from its own transcript.
+      : job.status === 'cancelled'
+        ? `Background ${job.kind} job ${jobId} was CANCELLED by the operator and is no longer ` +
+          `running. There is no result to collect. Re-run that work if you still need it, or ` +
+          `continue without it and say what is missing.`
+        : `Background ${job.kind} job ${jobId} failed${job.error ? ` (${job.error})` : ''}. ` +
+          `Decide whether to retry or report the failure.`;
     await this.deps.signals.deliver({
       kind: 'background_job',
       text,
@@ -344,10 +355,50 @@ export class BackgroundJobRunner {
     }
   }
 
-  /** Hard-cancel a running job: abort the underlying work (its AbortSignal) +
-   *  mark it cancelled. The detach fiber sees 'cancelled' and won't relabel the
-   *  abort rejection or wake the agent. */
-  cancel(jobId: string): boolean {
+  /**
+   * Hard-cancel one running job: abort the underlying work (its AbortSignal),
+   * mark it cancelled, and TELL the agent.
+   *
+   * The wake is the point. This is an operator cancelling one detached job
+   * while the agent goes on working — the agent was told to wait for that
+   * job's result, so a cancel that only writes a row leaves it waiting on
+   * something that no longer exists, with nothing in the request to correct
+   * it. It rides the same `background_job` signal a completion does, because
+   * it is the same fact (this job will never hand you a result) with a
+   * different cause.
+   *
+   * The detach fiber still sees 'cancelled' and won't relabel the abort
+   * rejection or wake a second time.
+   */
+  async cancel(jobId: string): Promise<boolean> {
+    if (!this.settleCancelled(jobId)) return false;
+    await this.wake(jobId);
+    return true;
+  }
+
+  /**
+   * Cancel every currently-running job, newest first — the visible Stop
+   * control.
+   *
+   * Deliberately no wake, and that is the whole difference from
+   * {@link cancel}: Stop stops the AGENT as well as its detached work, so
+   * there is no next step to inform, and a wake here would queue a turn that
+   * restarts the work the operator just stopped. The next turn reads the truth
+   * from the dynamic-context roster instead, which no longer carries a
+   * cancelled job.
+   */
+  cancelRunning(): string[] {
+    const cancelled: string[] = [];
+    for (const job of this.deps.store.list(100)) {
+      if (job.status !== 'running') continue;
+      if (this.settleCancelled(job.id)) cancelled.push(job.id);
+    }
+    return cancelled;
+  }
+
+  /** The cancel write itself: registry row + abort handle. Shared by the two
+   *  public verbs above, which differ only in whether the agent is woken. */
+  private settleCancelled(jobId: string): boolean {
     const job = this.deps.store.get(jobId);
     if (!job || job.status !== 'running') return false;
     this.deps.store.cancel(jobId, job.epoch, Date.now());
@@ -356,18 +407,6 @@ export class BackgroundJobRunner {
     this.controllers.delete(jobId);
     this.deps.logActivity?.('bg_job_cancelled', jobId);
     return true;
-  }
-
-  /** Cancel all currently-running jobs, newest first. Used by visible Stop
-   *  controls that should cancel detached work instead of only stopping the
-   *  browser stream. */
-  cancelRunning(): string[] {
-    const cancelled: string[] = [];
-    for (const job of this.deps.store.list(100)) {
-      if (job.status !== 'running') continue;
-      if (this.cancel(job.id)) cancelled.push(job.id);
-    }
-    return cancelled;
   }
 
   /** Recover an orphaned job after its fiber was evicted mid-flight (called from

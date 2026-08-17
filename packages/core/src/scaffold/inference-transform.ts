@@ -43,14 +43,6 @@ export interface InferenceStreamResult {
   output?: PromiseLike<unknown>;
 }
 
-async function cancelStream(stream: AsyncIterable<unknown>): Promise<void> {
-  try {
-    await stream[Symbol.asyncIterator]().return?.();
-  } catch {
-    /* already closed / locked — nothing left to stop */
-  }
-}
-
 /**
  * Route a prepared default-inference result through the agent's evolved
  * scaffold. `run` carries everything `runScaffold` needs except `emit` and
@@ -77,8 +69,12 @@ export function scaffoldInferenceTransform(opts: {
             delegated = true;
             return wrapDefaultStream(result.toUIMessageStream());
           },
-        }).finally(() => {
-          if (!delegated) void cancelStream(result.toUIMessageStream());
+        }).finally(async () => {
+          // Returning the iterator cancels the orphaned default stream.
+          // Awaited and unguarded: a cancellation that fails means the model
+          // request is still running and still being billed, which is the one
+          // outcome this seam exists to prevent.
+          if (!delegated) await result.toUIMessageStream()[Symbol.asyncIterator]().return?.();
         }),
       ),
     // Structured output (workflow turns) resolves only if the scaffold

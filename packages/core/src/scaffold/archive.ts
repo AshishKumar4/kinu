@@ -45,41 +45,37 @@ const VetoDataSchema = v.object({
  * newest first. The one queryable view of the variant archive.
  */
 export function listScaffoldArchive(sql: SqlExecutor, limit = 50): ScaffoldArchiveEntry[] {
-  try {
-    type Row = {
-      version: number; parent_version: number | null; status: ScaffoldStatus;
-      rationale: string; pathology: string | null; written_at: number;
-      trials: number | null; wins: number | null; losses: number | null; ties: number | null;
+  type Row = {
+    version: number; parent_version: number | null; status: ScaffoldStatus;
+    rationale: string; pathology: string | null; written_at: number;
+    trials: number | null; wins: number | null; losses: number | null; ties: number | null;
+  };
+  const rows = sql<Row>`
+    SELECT v.version, v.parent_version, v.status, v.rationale, v.pathology, v.written_at,
+           COUNT(e.id) AS trials,
+           SUM(CASE WHEN e.winner = 'pending' THEN 1 ELSE 0 END) AS wins,
+           SUM(CASE WHEN e.winner = 'current' THEN 1 ELSE 0 END) AS losses,
+           SUM(CASE WHEN e.winner = 'tie' THEN 1 ELSE 0 END) AS ties
+    FROM scaffold_versions v
+    LEFT JOIN scaffold_evaluations e ON e.pending_version = v.version
+    GROUP BY v.version
+    ORDER BY v.version DESC LIMIT ${limit}`;
+  return rows.map((r) => {
+    const wins = r.wins ?? 0, losses = r.losses ?? 0;
+    const decisive = wins + losses;
+    return {
+      version: r.version,
+      parentVersion: r.parent_version,
+      status: r.status,
+      rationale: r.rationale,
+      pathology: r.pathology,
+      writtenAt: r.written_at,
+      trials: r.trials ?? 0,
+      wins, losses,
+      ties: r.ties ?? 0,
+      winRate: decisive === 0 ? null : wins / decisive,
     };
-    const rows = sql<Row>`
-      SELECT v.version, v.parent_version, v.status, v.rationale, v.pathology, v.written_at,
-             COUNT(e.id) AS trials,
-             SUM(CASE WHEN e.winner = 'pending' THEN 1 ELSE 0 END) AS wins,
-             SUM(CASE WHEN e.winner = 'current' THEN 1 ELSE 0 END) AS losses,
-             SUM(CASE WHEN e.winner = 'tie' THEN 1 ELSE 0 END) AS ties
-      FROM scaffold_versions v
-      LEFT JOIN scaffold_evaluations e ON e.pending_version = v.version
-      GROUP BY v.version
-      ORDER BY v.version DESC LIMIT ${limit}`;
-    return rows.map((r) => {
-      const wins = r.wins ?? 0, losses = r.losses ?? 0;
-      const decisive = wins + losses;
-      return {
-        version: r.version,
-        parentVersion: r.parent_version,
-        status: r.status,
-        rationale: r.rationale,
-        pathology: r.pathology,
-        writtenAt: r.written_at,
-        trials: r.trials ?? 0,
-        wins, losses,
-        ties: r.ties ?? 0,
-        winRate: decisive === 0 ? null : wins / decisive,
-      };
-    });
-  } catch {
-    return [];
-  }
+  });
 }
 
 /** Why a proposal never became the live scaffold. Both kinds are states the

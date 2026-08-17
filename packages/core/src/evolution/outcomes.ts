@@ -16,15 +16,17 @@
  */
 
 import * as v from 'valibot';
+import type { ModelMessage } from 'ai';
 import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives.js';
 import type { CompletedTurn, ToolCallRecord } from './types.js';
 import type { EvalInstance } from './gepa/types.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive.js';
+import { RunEventRecorder } from '../events/recorder.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
-import { parseJsonValue } from '../utils/json.js';
+import { parseJsonValue, projectJsonValue, JsonObjectSchema, type JsonValue } from '../utils/json.js';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
 
 /** Every outcome kind, in the ledger's canonical order. The one list — the
@@ -681,14 +683,14 @@ interface TurnMessageWindow {
   endedAt: number;
 }
 
+/** Only the discriminant and the timestamp are read here: what a turn DID now
+ *  comes from the step transcript, not from event names. */
 interface StoredRunEvent {
   type: string;
-  name?: string;
 }
 
 const StoredRunEventSchema = v.object({
   type: v.string(),
-  name: v.optional(v.string()),
 });
 
 const ChatRunStartSchema = v.object({
@@ -704,6 +706,39 @@ function parseRunEvent(payload: string): StoredRunEvent | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The tool calls a turn's durable step transcript records — name, real
+ * arguments, and the tool's own output, paired on the provider's call id.
+ *
+ * Reconstructing them from `tool_call_end` rows instead gave every call an
+ * empty `args`, and `delegationFeatures`' fingerprint is null for an
+ * argument-less call — so the redundancy and loop counts in a corpus row could
+ * never be anything but zero, whatever the turn actually did.
+ */
+function toolCallsFromTranscript(messages: readonly ModelMessage[]): ToolCallRecord[] {
+  const results = new Map<string, JsonValue>();
+  for (const message of messages) {
+    if (message.role !== 'tool') continue;
+    for (const part of message.content) {
+      if (part.type === 'tool-result') results.set(part.toolCallId, projectJsonValue({ value: part.output }));
+    }
+  }
+  const calls: ToolCallRecord[] = [];
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part.type !== 'tool-call') continue;
+      const args = v.safeParse(JsonObjectSchema, part.input);
+      calls.push({
+        name: part.toolName,
+        args: args.success ? args.output : {},
+        result: results.get(part.toolCallId) ?? null,
+      });
+    }
+  }
+  return calls;
 }
 
 /** Reconstruct non-scoring process evidence from the existing message + run ledgers. */
@@ -739,10 +774,8 @@ function turnProcessEvidence(sql: SqlExecutor, turnId: string | null): string | 
       .filter((row): row is { event: StoredRunEvent; at: number } => row.event !== null && Number.isFinite(row.at));
     if (events.length === 0) return undefined;
 
-    const toolCalls = events.flatMap(({ event }) =>
-      event.type === 'tool_call_end' && event.name
-        ? [{ name: event.name, args: {}, result: null }]
-        : []);
+    // The turn's real trajectory, from the rows written as each step finished.
+    const toolCalls = toolCallsFromTranscript(new RunEventRecorder(sql).transcript(runId));
     const steps = events.filter(({ event }) => event.type === 'step_finish').length;
     const startAt = events.find(({ event }) => event.type === 'run_start')?.at ?? events[0].at;
     const endAt = [...events].reverse().find(({ event }) => event.type === 'run_end')?.at ??

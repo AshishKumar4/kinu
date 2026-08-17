@@ -9,6 +9,7 @@
  * Consumers may filter by `type` and slice by index.
  */
 
+import type { ModelMessage } from 'ai';
 import type { ContextBudgetSnapshot } from '../context-budget.js';
 import type { JsonObject, JsonValue } from '../utils/json.js';
 import type { ContextComposition } from '../context-meter.js';
@@ -31,10 +32,11 @@ export interface StepUsage {
   readonly modelId?: string;
 }
 
+/** Kept as an explicit list because `RunEventBase` carries `type`, so deriving
+ *  it from the union below is circular. */
 export type RunEventType =
   | 'run_start'
   | 'turn_start'
-  | 'text_delta'
   | 'tool_call_start'
   | 'tool_call_end'
   | 'step_finish'
@@ -74,18 +76,30 @@ export type RunEvent =
       /** The trigger that fired this run, when event-driven. */
       trigger_id?: string })
   | (RunEventBase & { type: 'turn_start'; turnIndex: number })
-  | (RunEventBase & { type: 'text_delta'; text: string })
   | (RunEventBase & { type: 'tool_call_start'; name: string; args: JsonObject; toolCallId: string })
   | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string; result?: JsonValue; error?: string; durationMs?: number })
-  /** One model request completed. `usage` is the provider's own report of that
-   *  request — the authority on what it cost. `context` is what the request
-   *  was locally measured to be made of; the two do not reconcile exactly and
-   *  are carried side by side so a reader can see the gap. Both are absent
-   *  when the step produced no such report. */
+  /** One model request completed — and, in `messages`, WHAT it produced: the
+   *  assistant parts and paired tool results of that step alone, appended the
+   *  moment the step finished. This is the durable record of the model's own
+   *  output. Nothing else writes it: a backend's message store is written once
+   *  per turn, so before this row existed a turn killed at step 12 left twelve
+   *  steps of work nowhere on disk.
+   *
+   *  Pairing holds WITHIN a row by construction — the SDK reports a step's
+   *  assistant tool-call parts and their tool results together — so a run's
+   *  rows concatenate into a valid request without repair. Absent on a step the
+   *  provider ended with nothing to say; never fabricated.
+   *
+   *  `usage` is the provider's own report of that request — the authority on
+   *  what it cost. `context` is what the request was locally measured to be
+   *  made of; the two do not reconcile exactly and are carried side by side so
+   *  a reader can see the gap. Both are absent when the step produced no such
+   *  report. */
   | (RunEventBase & {
       type: 'step_finish';
       stepIndex: number;
       reason?: string;
+      messages?: ModelMessage[];
       usage?: StepUsage;
       context?: ContextComposition;
     })
@@ -125,15 +139,18 @@ export type RunEvent =
    *  success a gradable signal. */
   | (RunEventBase & { type: 'file_edit' } & FileEditSnapshot)
   /** The harness mechanically steered the turn, and whether the model then did
-   *  what the steer asked. At most one per turn, written by the settle spine
-   *  like `context_budget`; `turn_end` is the denominator, `converted` the
-   *  conversion numerator. Declared here rather than imported from the producer
+   *  what the steer asked. At most two per turn — the turn-start hint and the
+   *  one reactive steer — written by the settle spine like `context_budget`;
+   *  `turn_end` is the denominator, `converted` the conversion numerator, and
+   *  `trigger` is what separates the turn-start arm from the step-25 one.
+   *  Declared here rather than imported from the producer
    *  (orchestrator/turn-steering.ts): this union is reachable from most of the
    *  turn pipeline, and the producer holds mid-turn injection machinery no
    *  other layer may reach. */
   | (RunEventBase & { type: 'turn_steering';
       /** Which mechanical trigger fired. */
-      trigger: 'repeated_call' | 'repeated_failure' | 'no_progress' | 'long_turn_no_delegation';
+      trigger: 'repeated_call' | 'repeated_failure' | 'no_progress'
+        | 'long_turn_no_delegation' | 'turn_start_no_delegation';
       /** Step boundary the steer was spliced into. */
       step: number;
       /** The tool that kept repeating or failing (not the long-turn trigger). */
