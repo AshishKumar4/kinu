@@ -97,10 +97,16 @@ export const PATTERNS: readonly SecretPattern[] = [
     // see is still a gate; mirroring its shapes is what makes a local pass
     // predictive. Prefixes only — high-precision and delimited, never a bare
     // `sk-`, which would fire on ordinary prose.
+    //
+    // The remedy it names is deliberately NOT ".secretscanignore". Declaring a
+    // fixture satisfies THIS scan and changes nothing about GitHub's, which
+    // reads the source text and cannot be given an in-repo exception. So a
+    // negative control that must carry a real-looking shape has to assemble it
+    // at runtime; the function under test still receives the identical string.
     id: 'provider-secret',
     regex: /\b(?:[sr]k_live_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|sk-ant-[A-Za-z0-9-]{20,}|sk-proj-[A-Za-z0-9_-]{20,})/g,
     benign: /<your-|example|placeholder/,
-    message: 'third-party provider credential — GitHub push protection blocks this shape, so a deliberate fixture must be declared in .secretscanignore',
+    message: "third-party provider credential — if this is a deliberate test fixture, ASSEMBLE it at runtime ('sk' + '_live_' + …) rather than declaring it in .secretscanignore: a declaration satisfies THIS scan, but GitHub push protection reads the source text and will block the push anyway",
   },
   {
     id: 'credentialed-url',
