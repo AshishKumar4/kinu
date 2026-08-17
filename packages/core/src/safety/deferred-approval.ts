@@ -14,9 +14,10 @@
  * the owner and the agent is TOLD it is parked:
  *
  *   • the tool result says queued, names the id, and states plainly that
- *     nothing ran;
- *   • the agent is told it may carry on with independent work or end its turn,
- *     and that it is woken either way;
+ *     nothing ran — in one line, because the doctrine around it (that a
+ *     decision wakes you, that you may carry on or stop, that re-issuing
+ *     returns the same answer) is a standing fact about the tool surface and
+ *     belongs in the system prompt ONCE, not in every parked result;
  *   • the owner decides later, in bulk, from the needs-you queue;
  *   • the decision wakes the agent through the ONE signal seam every other
  *     asynchronous producer uses (orchestrator/signals.ts) — the same
@@ -49,9 +50,10 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import type { SignalDeliverer } from '../types/signals.js';
 import * as v from 'valibot';
 import {
-  formatApproval,
-  type DeferredApprovalChannel, type ShellApprovalRequest,
+  formatApproval, gatedGrants, reviewCommand,
+  type ApprovalGrant, type DeferredApprovalChannel, type ShellApprovalRequest,
 } from './approval-gate.js';
+import { reconcileColumns } from '../identity/columns.js';
 import { nanoid } from '../utils/nanoid.js';
 
 /** The `proteusEvent` kind a decision wakes the agent under — its own name,
@@ -80,15 +82,21 @@ export type DeferredApprovalStatus =
    *  grant is spent — a second run needs a second approval. */
   | 'used';
 
-/** The owner's two answers. `queued` and `used` are states the queue reaches
- *  on its own, not things a human can pick. */
-export type DeferredApprovalAnswer = Extract<DeferredApprovalStatus, 'approved' | 'denied'>;
+/** What the owner can pick. `queued` and `used` are states the queue reaches
+ *  on its own. `always` is `approved` plus a standing grant for the rules this
+ *  command tripped on the executor it was bound for — the same
+ *  ask-once-then-remember shape device consent uses for a device. */
+export type DeferredApprovalAnswer = Extract<DeferredApprovalStatus, 'approved' | 'denied'> | 'always';
 
 /** One action parked on the owner. */
 export interface DeferredApproval {
   readonly id: string;
   /** The exact command the agent asked to run. */
   readonly command: string;
+  /** The machine it was bound for. Half the question: the same string on the
+   *  owner's laptop and in the agent's own workspace are different asks, and a
+   *  grant given for one must not answer for the other. */
+  readonly executor: string;
   /** Why the gate stopped it — `formatApproval` of the review that fired. */
   readonly reason: string;
   readonly status: DeferredApprovalStatus;
@@ -110,7 +118,7 @@ export type DeferredApprovalVerdict =
   | { readonly outcome: 'queued'; readonly action: DeferredApproval };
 
 interface Row {
-  id: string; command: string; reason: string; status: string;
+  id: string; command: string; executor: string; reason: string; status: string;
   requested_at: number; decided_at: number | null;
 }
 
@@ -119,6 +127,7 @@ function toAction(r: Row): DeferredApproval {
   return {
     id: r.id,
     command: r.command,
+    executor: r.executor,
     reason: r.reason,
     status: status.success ? status.output : 'queued',
     requestedAt: r.requested_at,
@@ -130,11 +139,15 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS deferred_approvals (
     id           TEXT PRIMARY KEY,
     command      TEXT NOT NULL,
+    executor     TEXT NOT NULL DEFAULT '',
     reason       TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'queued',
     requested_at INTEGER NOT NULL,
     decided_at   INTEGER
   )`);
+  // A workspace that parked an action before the gate knew about executors has
+  // rows without one; they read back as '' and fail closed everywhere.
+  reconcileColumns(execRaw, 'deferred_approvals', [`executor TEXT NOT NULL DEFAULT ''`]);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_status ON deferred_approvals(status)`);
 }
 
@@ -145,22 +158,28 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
 export class DeferredApprovalStore {
   constructor(private readonly sql: SqlExecutor) {}
 
-  /** The live row for this exact command, if there is one. 'queued' (waiting)
-   *  and 'approved' (grant unspent) are the two live states; 'denied' is the
-   *  owner's standing answer and is also read back here, so a refusal is
-   *  reported rather than re-asked. A spent grant ('used') is history. */
-  standing(command: string): DeferredApproval | null {
+  /** The live row for this exact command ON THIS EXECUTOR, if there is one.
+   *  'queued' (waiting) and 'approved' (grant unspent) are the two live
+   *  states; 'denied' is the owner's standing answer and is also read back
+   *  here, so a refusal is reported rather than re-asked. A spent grant
+   *  ('used') is history. The executor is part of the key because an approval
+   *  for the agent's own workspace is not an approval for the owner's laptop.
+   */
+  standing(command: string, executor: string): DeferredApproval | null {
     const rows = this.sql<Row>`
-      SELECT id, command, reason, status, requested_at, decided_at
+      SELECT id, command, executor, reason, status, requested_at, decided_at
       FROM deferred_approvals
-      WHERE command = ${command} AND status IN ('queued','approved','denied')
+      WHERE command = ${command} AND executor = ${executor}
+        AND status IN ('queued','approved','denied')
       ORDER BY requested_at DESC LIMIT 1`;
     return rows[0] ? toAction(rows[0]) : null;
   }
 
   create(action: Omit<DeferredApproval, 'status' | 'decidedAt'>): DeferredApproval {
-    void this.sql`INSERT INTO deferred_approvals (id, command, reason, status, requested_at, decided_at)
-      VALUES (${action.id}, ${action.command}, ${action.reason}, 'queued', ${action.requestedAt}, NULL)`;
+    void this.sql`INSERT INTO deferred_approvals
+        (id, command, executor, reason, status, requested_at, decided_at)
+      VALUES (${action.id}, ${action.command}, ${action.executor}, ${action.reason},
+        'queued', ${action.requestedAt}, NULL)`;
     return { ...action, status: 'queued', decidedAt: null };
   }
 
@@ -175,7 +194,10 @@ export class DeferredApprovalStore {
    */
   decide(id: string, answer: DeferredApprovalAnswer, now: number): DeferredApproval | null {
     if (this.get(id)?.status !== 'queued') return null;
-    void this.sql`UPDATE deferred_approvals SET status=${answer}, decided_at=${now}
+    // 'always' is 'approved' plus a grant the QUEUE records; the row only ever
+    // holds a status this module can honestly write about this one command.
+    const status = answer === 'always' ? 'approved' : answer;
+    void this.sql`UPDATE deferred_approvals SET status=${status}, decided_at=${now}
       WHERE id=${id} AND status='queued'`;
     return this.get(id);
   }
@@ -190,7 +212,7 @@ export class DeferredApprovalStore {
 
   get(id: string): DeferredApproval | null {
     const rows = this.sql<Row>`
-      SELECT id, command, reason, status, requested_at, decided_at
+      SELECT id, command, executor, reason, status, requested_at, decided_at
       FROM deferred_approvals WHERE id = ${id} LIMIT 1`;
     return rows[0] ? toAction(rows[0]) : null;
   }
@@ -199,7 +221,7 @@ export class DeferredApprovalStore {
    *  been blocked longest matters most. */
   listQueued(limit = 100): DeferredApproval[] {
     return this.sql<Row>`
-      SELECT id, command, reason, status, requested_at, decided_at
+      SELECT id, command, executor, reason, status, requested_at, decided_at
       FROM deferred_approvals WHERE status='queued'
       ORDER BY requested_at ASC LIMIT ${limit}`.map(toAction);
   }
@@ -216,76 +238,55 @@ function clip(text: string): string {
 }
 
 /**
- * The exact words the agent reads when its action is parked.
+ * The words the agent reads when its action is parked.
  *
- * Written to be impossible to mistake for a result: it says what did NOT
- * happen before it says anything else, it names both of the agent's real
- * options, and it promises the wake that the signal seam actually delivers.
+ * One line. It carries only what this call site knows and the prompt cannot:
+ * that nothing ran, which rule stopped it, on which machine, and the id the
+ * decision will arrive under. Everything else the agent needs to know about
+ * parked actions — that a decision wakes it, that it may carry on or stop,
+ * that re-issuing returns the same answer — is true of every parked action on
+ * every turn, so it is stated once in the system prompt instead of ~280
+ * tokens per call. The honesty invariant is unchanged: this still returns
+ * through `denyResult`, so the success shape stays unreachable.
  */
 export function queuedActionMessage(action: DeferredApproval): string {
-  return [
-    `Queued for the owner's approval — NOT RUN. Request id: ${action.id}.`,
-    '',
-    `  ${action.command}`,
-    '',
-    action.reason,
-    '',
-    'Nothing was executed, nothing changed, and there is no result for this action. Do not carry on as '
-    + 'if it had run: if a later step needs its effect, that effect does not exist yet.',
-    '',
-    'The owner is not available to decide right now, so this is waiting in their queue. You will be woken '
-    + 'with their decision either way — mid-step while you are still working, or as a turn of its own '
-    + 'once this one is over. So you may either:',
-    '  (a) carry on with work that does not depend on this action, or',
-    '  (b) end your turn now and pick this up when the decision arrives.',
-    'Both are fine. What is not fine is re-issuing the same command to see if it goes through — it will '
-    + 'return this same queued answer until the owner decides.',
-  ].join('\n');
+  return `NOT RUN — queued for owner approval (${action.id}): ${ruleNames(action)} on ${action.executor}. `
+    + 'A decision will wake you.';
 }
 
 /** The words on a re-issue of a command the owner has already refused. Mirrors
  *  device consent's doctrine (safety/device-consent.ts): a denial is an answer,
  *  and asking again immediately is noise. */
 export function deniedActionMessage(action: DeferredApproval): string {
-  return [
-    `The owner refused this command when they reviewed the approval queue (request ${action.id}) — NOT RUN.`,
-    '',
-    `  ${action.command}`,
-    '',
-    'This is a decision, not a timeout, so re-issuing it will keep returning this. Find another way to do '
-    + 'the job, or explain to the owner why this specific command is needed and let them approve it or '
-    + 'change the shell approval mode themselves.',
-  ].join('\n');
+  return `NOT RUN — the owner refused this (${action.id}). Not a timeout; find another way.`;
+}
+
+/** The rules the review named, for a one-line result. The full prose is in
+ *  `action.reason`, which is what the owner's queue renders — the model does
+ *  not need the explanations, it needs to know which of its own habits tripped
+ *  the gate. */
+function ruleNames(action: DeferredApproval): string {
+  const names = [...action.reason.matchAll(/^• ([\w-]+) \(/gm)].map((m) => m[1]);
+  return names.length > 0 ? names.join(', ') : 'needs approval';
 }
 
 /** The words on the turn a decision wakes. One message for the whole batch,
  *  because the owner decides a night's worth in one sitting and N wakes for
  *  one sitting is N turns' worth of noise for one piece of news. */
 export function decisionWakeMessage(decided: readonly DeferredApproval[]): string {
+  const lines: string[] = [];
   const approved = decided.filter((a) => a.status === 'approved');
   const denied = decided.filter((a) => a.status === 'denied');
-  const lines: string[] = [
-    `The owner has decided ${decided.length} of the action${decided.length === 1 ? '' : 's'} you queued for approval.`,
-  ];
+  // "Still not run" is the one thing worth repeating here: it is the exact
+  // mistake an agent makes on waking, and the prompt cannot say it per-id.
   if (approved.length > 0) {
-    lines.push(
-      '',
-      'APPROVED — these have still NOT RUN. Approval is permission, not an effect: re-issue the command '
-      + 'exactly as written and it will go through once.',
-      ...approved.map((a) => `  • ${a.id} — ${clip(a.command)}`),
-    );
+    lines.push('APPROVED, still not run — re-issue once:',
+      ...approved.map((a) => `  ${a.id} — ${clip(a.command)}`));
   }
   if (denied.length > 0) {
-    lines.push(
-      '',
-      'DENIED — the owner refused these. Do not re-issue them; find another way, or ask the owner directly.',
-      ...denied.map((a) => `  • ${a.id} — ${clip(a.command)}`),
-    );
+    lines.push('DENIED — do not re-issue:',
+      ...denied.map((a) => `  ${a.id} — ${clip(a.command)}`));
   }
-  lines.push(
-    '',
-    'Pick up whatever you parked on these decisions. If nothing was waiting on them, say so and stop.',
-  );
   return lines.join('\n');
 }
 
@@ -295,6 +296,11 @@ export interface DeferredApprovalQueueDeps {
    *  delivered exactly as a settled background job is: spliced into the live
    *  turn's next step, or started as its own turn when the agent is idle. */
   readonly signals: SignalDeliverer;
+  /** Record a standing grant the owner just gave by answering 'always'. The
+   *  host owns where that lives (agent_config, alongside the approval mode),
+   *  so the queue only says WHAT was granted. Required, not optional: an
+   *  'always' button whose grant went nowhere is the worst of both. */
+  remember(grants: readonly ApprovalGrant[]): void;
   /** Mint a request id. Injected so a host keeps its own id vocabulary and
    *  tests stay deterministic. */
   newId?(): string;
@@ -349,7 +355,7 @@ export class DeferredApprovalQueue {
    * (orchestrator/turn-steering.ts) instead of a queue filling with duplicates.
    */
   park(req: ShellApprovalRequest): DeferredApprovalVerdict {
-    const standing = this.deps.store.standing(req.command);
+    const standing = this.deps.store.standing(req.command, req.executor);
     if (standing?.status === 'denied') return { outcome: 'denied', action: standing };
     if (standing?.status === 'approved') {
       // The grant is spent HERE, before the command runs, so a crash between
@@ -364,6 +370,7 @@ export class DeferredApprovalQueue {
     const action = this.deps.store.create({
       id: this.newId(),
       command: req.command,
+      executor: req.executor,
       reason: formatApproval(req.review),
       requestedAt: this.now(),
     });
@@ -373,6 +380,11 @@ export class DeferredApprovalQueue {
 
   /**
    * The owner decided — one action or a night's worth in one click.
+   *
+   * `always` additionally remembers the rules this command tripped, on the
+   * executor it was bound for, so the next command of that kind in that place
+   * does not come back here. It is not a wider permission than `approved` —
+   * same gate, same rules, same executor; only the asking stops.
    *
    * Rows are written before the wake, so the decision is durable even if the
    * agent cannot be reached, and ONE signal carries the whole batch.
@@ -387,6 +399,13 @@ export class DeferredApprovalQueue {
       if (action) decided.push(action);
     }
     if (decided.length === 0) return decided;
+    if (answer === 'always') {
+      // Recomputed from the command and its executor rather than stored: the
+      // rule table is the one source of truth for what a command trips, and
+      // reading it now is what keeps a grant honest about today's rules.
+      this.deps.remember(decided.flatMap(
+        (a) => gatedGrants(reviewCommand(a.command, a.executor), a.executor)));
+    }
     this.notify({ kind: 'decided', actions: decided });
     await this.deps.signals.deliver({
       kind: DEFERRED_APPROVAL_SIGNAL,

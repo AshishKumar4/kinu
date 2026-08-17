@@ -16,6 +16,7 @@
  */
 
 import * as v from 'valibot';
+import type { AgentSignal } from '../types/signals.js';
 import type { SqlExecutor, VFS } from '../types/primitives.js';
 
 export const SOUL_PATH = 'SOUL.md';
@@ -50,6 +51,38 @@ export function isPlaceholderMission(mission: string | null | undefined): boolea
 
 function missionKey(mission: string): string {
   return mission.replace(/\s+/g, ' ').trim().slice(0, 40);
+}
+
+/** The `proteusEvent` a workspace's own first turn carries. */
+export const WORKSPACE_CREATED_EVENT = 'workspace_created';
+
+/**
+ * The workspace's first turn — the agent answering its own soul, with nobody
+ * having typed anything yet.
+ *
+ * The mission is NOT repeated in the text. It is a standing identity and it is
+ * already the opening bytes of the system prompt (SOUL.md → `soulOverride`), so
+ * quoting it back would both duplicate it and stage it as something the owner
+ * said. What the turn adds is the one fact the prompt cannot carry: that the
+ * workspace has just opened and the next move is the agent's.
+ *
+ * `requiresOwnTurn` because a genesis turn is a turn, not an aside spliced into
+ * whatever raced it (a peer's task, an inbound email).
+ *
+ * Null for a placeholder mission — there is nothing to act on, and a first turn
+ * on one can only produce a greeting nobody asked for.
+ */
+export function workspaceGenesisSignal(mission: string | null | undefined): AgentSignal | null {
+  if (isPlaceholderMission(mission)) return null;
+  return {
+    kind: WORKSPACE_CREATED_EVENT,
+    requiresOwnTurn: true,
+    text: [
+      'This workspace has just been created. This is its first turn and nobody has typed anything yet.',
+      '',
+      'Act on the mission in your soul. If it names work to do, start it now and report what you found. If it is a standing brief, say how you read it and ask the one question that most changes what you do first.',
+    ].join('\n'),
+  };
 }
 
 function normalizeName(name: string): string {

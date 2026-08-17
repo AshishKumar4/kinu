@@ -4,13 +4,19 @@
  * Forks a source workspace's SQLite state into a target workspace's (a fork is
  * a NEW workspace by a new name). The semantics are "clean-slate messages-only":
  *
- *   Copy:   SOUL.md, messages+conversation_history (≤ forkPointMs),
+ *   Copy:   SOUL.md, the cut message's ancestry in the session tree,
  *           memory/* VFS rows + memory_chunks, crafted_tools, agent_config
  *   Reset:  search_nodes, scaffold_versions, task_history, craft_scores,
  *           fibers, evolution_events, executor_output, activity_log,
  *           agent_tasks, scaffold/* VFS rows
  *   Rewrite: workspace_identity (new id/name/created_at)
  *   Insert: fork_lineage (single row)
+ *
+ * "Ancestry" and not "everything older than the cut" is the whole difference
+ * between forking a tree and forking a list. A prefix cut cannot express a
+ * second child of the same message, and on the Cloudflare backend it could not
+ * even find the boundary: the SDK's store stamps whole seconds, and a turn
+ * emits several messages inside one. See `identity/session-tree.ts`.
  *
  * The read and the write are separable on purpose. A fork often crosses a
  * process boundary — on Cloudflare the source and the target are two different
@@ -34,6 +40,7 @@
 import * as v from 'valibot';
 import type { SqlExecutor, VFS } from '../types/primitives.js';
 import { SOUL_PATH, summarizeSoul } from './soul.js';
+import { CHAT_SESSION_ID, chatPaneAncestry, sessionTreeAncestry } from './session-tree.js';
 
 /** One row of each table the copy reads. Everything is JSON-serializable, so a
  *  snapshot survives a transport that only carries structured clones. */
@@ -42,16 +49,15 @@ export interface ForkSnapshot {
   source: { workspaceId: string; workspaceName: string };
   /** The message the fork is cut at, and its timestamp. */
   cut: { messageId: string; createdAtMs: number };
+  /** The cut message's ancestry, root first. `session_id` is not carried: the
+   *  chain is by definition the chat session's, and the write stamps it. */
   messages: Array<{
-    id: string; session_id: string; parent_id: string | null;
+    id: string; parent_id: string | null;
     role: string; content: string; created_at: number;
   }>;
-  conversationHistory: Array<{
-    session_id: string; role: string; message: string; created_at: number;
-  }>;
-  /** Think/Session-owned rows — the table the chat UI actually hydrates from.
-   *  `created_at` is a datetime string, carried verbatim. Already time-filtered
-   *  by the snapshot, so the write inserts them all. */
+  /** The same chain in the SDK's own store — the table the chat pane hydrates
+   *  from, whose serialized UI messages `messages.content` cannot rebuild.
+   *  `created_at` is a datetime string, carried verbatim. */
   assistantMessages: Array<{
     id: string; session_id: string; parent_id: string | null;
     role: string; content: string; created_at: string;
@@ -92,49 +98,27 @@ export interface ForkResult {
 /**
  * Materialize everything the fork write will need from the source workspace.
  *
- * Throws if `untilMessageId` does not exist in the source's `messages` table —
- * the one failure worth surfacing before a target workspace is created.
+ * Throws if `untilMessageId` is not a node of the source's session tree — the
+ * one failure worth surfacing before a target workspace is created, and the
+ * failure the operator hit: the id came from the chat pane, and the table this
+ * resolved against was a turn-end summary that had never recorded it.
+ * `reconcileSessionTree` is what closed that gap; this cut assumes it has run.
  */
 export async function snapshotWorkspaceForFork(
   source: SqlExecutor, sourceVfs: VFS, untilMessageId: string,
 ): Promise<ForkSnapshot> {
-  const hit = source<{ created_at: number }>`
-    SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
-  `;
-  if (hit.length === 0) {
+  const messages = sessionTreeAncestry(source, untilMessageId);
+  if (messages.length === 0) {
     throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
   }
-  const forkPointMs = hit[0]!.created_at;
+  const forkPointMs = messages[messages.length - 1]!.created_at;
 
   const identity = source<{ id: string; name: string }>`
     SELECT id, name FROM workspace_identity LIMIT 1
   `;
-  const messages = source<ForkSnapshot['messages'][number]>`
-    SELECT id, session_id, parent_id, role, content, created_at
-    FROM messages
-    WHERE created_at <= ${forkPointMs} AND session_id = 'default'
-    ORDER BY created_at ASC
-  `;
-  const conversationHistory = source<ForkSnapshot['conversationHistory'][number]>`
-    SELECT session_id, role, message, created_at
-    FROM conversation_history
-    WHERE created_at <= ${forkPointMs} AND session_id = 'default'
-    ORDER BY id ASC
-  `;
-  // Think's Session persists UIMessages here (via appendMessage) and the chat
-  // UI hydrates from it, so a fork without these rows shows an empty pane
-  // despite a populated `messages` table. Created lazily on first append, so a
-  // source that never ran a turn has no such table. `parent_id` edges are
-  // carried so getHistory()'s recursive CTE walks correctly.
-  let assistantMessages: ForkSnapshot['assistantMessages'] = [];
-  try {
-    assistantMessages = source<ForkSnapshot['assistantMessages'][number]>`
-      SELECT id, session_id, parent_id, role, content, created_at
-      FROM assistant_messages
-      WHERE strftime('%s', created_at) * 1000 <= ${forkPointMs}
-      ORDER BY created_at ASC
-    `;
-  } catch { /* Session may never have appended — non-fatal */ }
+  // The chat pane hydrates from the SDK's store, so a fork without these rows
+  // shows an empty pane despite a populated `messages` table.
+  const assistantMessages = chatPaneAncestry(source, untilMessageId);
   // The scaffold is deliberately excluded so the fork re-bootstraps v0 fresh.
   const files = await readForkFiles(sourceVfs);
   // The FTS content table (agent-utils MemoryStore). Copying it is an
@@ -161,7 +145,6 @@ export async function snapshotWorkspaceForFork(
     },
     cut: { messageId: untilMessageId, createdAtMs: forkPointMs },
     messages,
-    conversationHistory,
     assistantMessages,
     files,
     memoryChunks,
@@ -217,7 +200,6 @@ export async function writeForkSnapshot(
   //    the same snapshot rather than duplicate conversation rows or retain a
   //    partial attempt.
   void target`DELETE FROM messages`;
-  void target`DELETE FROM conversation_history`;
   void target`DELETE FROM crafted_tools`;
   try { void target`DELETE FROM assistant_messages`; } catch { /* lazily created */ }
   try { void target`DELETE FROM memory_chunks`; } catch { /* optional index */ }
@@ -238,23 +220,15 @@ export async function writeForkSnapshot(
     `;
   }
 
-  // 3. Messages, PKs preserved.
+  // 3. Messages, PKs and parent edges preserved — the chain IS the tree.
   for (const m of snapshot.messages) {
     void target`
       INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${m.id}, ${m.session_id}, ${m.parent_id}, ${m.role}, ${m.content}, ${m.created_at})
+      VALUES (${m.id}, ${CHAT_SESSION_ID}, ${m.parent_id}, ${m.role}, ${m.content}, ${m.created_at})
     `;
   }
 
-  // 4. conversation_history. `id` is auto-increment so fresh rowids are fine.
-  for (const c of snapshot.conversationHistory) {
-    void target`
-      INSERT INTO conversation_history (session_id, role, message, created_at)
-      VALUES (${c.session_id}, ${c.role}, ${c.message}, ${c.created_at})
-    `;
-  }
-
-  // 5. assistant_messages. The table is created lazily by Session.ensureTable()
+  // 4. assistant_messages. The table is created lazily by Session.ensureTable()
   //    on first append, so ensure it exists before inserting (idempotent).
   try {
     void target`
@@ -277,13 +251,13 @@ export async function writeForkSnapshot(
     }
   } catch { /* pure-test targets may lack the table — non-fatal */ }
 
-  // 6. SOUL.md + memory/* are FILES and are written before this, outside the
+  // 5. SOUL.md + memory/* are FILES and are written before this, outside the
   //    row transaction — see writeForkFiles at the top of this function.
   void target`UPDATE workspace_identity SET mission = ${
     summarizeSoul(snapshot.files.find((f) => f.path === SOUL_PATH)?.content ?? '')
   }`;
 
-  // 7. memory_chunks — skipped silently when the target has no such table yet.
+  // 6. memory_chunks — skipped silently when the target has no such table yet.
   try {
     for (const c of snapshot.memoryChunks) {
       void target`
@@ -293,7 +267,7 @@ export async function writeForkSnapshot(
     }
   } catch { /* target has no memory_chunks yet — non-fatal */ }
 
-  // 8. crafted_tools (snapshot — independent evolution from this point).
+  // 7. crafted_tools (snapshot — independent evolution from this point).
   for (const t of snapshot.craftedTools) {
     void target`
       INSERT OR REPLACE INTO crafted_tools
@@ -302,7 +276,7 @@ export async function writeForkSnapshot(
     `;
   }
 
-  // 9. agent_config, with display_name overwritten so the UI shows the fork.
+  // 8. agent_config, with display_name overwritten so the UI shows the fork.
   try {
     for (const row of snapshot.agentConfig) {
       void target`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${row.key}, ${row.value})`;
@@ -310,7 +284,7 @@ export async function writeForkSnapshot(
     void target`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${opts.workspaceName})`;
   } catch { /* agent_config may not exist in target — non-fatal */ }
 
-  // 10. Lineage — single row.
+  // 9. Lineage — single row.
   void target`
     INSERT INTO fork_lineage
     (id, source_workspace_id, source_workspace_name, source_message_id, source_message_created_at, forked_at)
@@ -319,41 +293,42 @@ export async function writeForkSnapshot(
      ${snapshot.cut.messageId}, ${forkPointMs}, ${now})
   `;
 
-  // 11. Synthetic system-role message at the fork point. Two purposes:
-  //     (a) LLM coherence — written to conversation_history so the next model
-  //         turn sees the fork context and knows to ignore tools/state that
-  //         existed before the fork and no longer exist.
-  //     (b) UI surface — also written to assistant_messages so the chat pane
-  //         shows a visible "Forked from …" marker between the copied history
-  //         and the fork's own future turns.
+  // 10. The fork marker: one system-role message parented on the cut point, so
+  //     the chat pane shows a visible boundary between inherited history and the
+  //     fork's own future turns, and the next model turn reads it as part of the
+  //     transcript it already reads. It is a node of the session tree and
+  //     nothing else — there is no second copy anywhere, because a copy the
+  //     model never reads is not context, it is a row.
   const syntheticText =
     `You were forked from workspace "${snapshot.source.workspaceName}" at message ${snapshot.cut.messageId} on `
     + `${new Date(now).toISOString()}. The conversation above happened before the fork. `
     + `Your current tool set and memory are authoritative; ignore any tools or context `
     + `referenced before the fork that you don't see in your active tool list.`;
-
+  const markerId = `fork-marker-${opts.workspaceId.slice(0, 8)}-${now}`;
+  // Parented on the cut point, so an ancestry walk from the marker reaches the
+  // whole inherited chain and the marker is the fork's latest leaf.
   void target`
-    INSERT INTO conversation_history (session_id, role, message, created_at)
-    VALUES ('default', 'system', ${JSON.stringify({ role: 'system', content: syntheticText })}, ${forkPointMs + 1})
+    INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
+    VALUES (${markerId}, ${CHAT_SESSION_ID}, ${snapshot.cut.messageId}, ${'system'},
+            ${syntheticText}, ${forkPointMs + 1})
   `;
-
-  // Mirrored as a system-role UIMessage, parented on the cut-point message so
-  // getHistory()'s recursive CTE walks marker → copied history → root.
-  try {
-    const syntheticId = `fork-marker-${opts.workspaceId.slice(0, 8)}-${now}`;
-    const syntheticContent = JSON.stringify({
-      id: syntheticId,
+  // Mirrored into the SDK's store only when the fork actually carried pane rows.
+  // Seeding a lone marker into an otherwise-empty pane store would make that
+  // store claim a tree it does not have, and an ancestry walk would stop at the
+  // marker instead of falling through to the chain in `messages`.
+  if (snapshot.assistantMessages.length > 0) {
+    const markerContent = JSON.stringify({
+      id: markerId,
       role: 'system',
       parts: [{ type: 'text', text: syntheticText }],
     });
-    // ISO8601 with ms, one ms after the cut point — guaranteed to be the latest
-    // leaf in the fork's session tree.
-    const syntheticCreatedAt = new Date(forkPointMs + 1).toISOString().replace('T', ' ').replace('Z', '');
+    // The SDK's store stamps `YYYY-MM-DD HH:MM:SS`; write the same shape.
+    const markerCreatedAt = new Date(forkPointMs + 1).toISOString().replace('T', ' ').slice(0, 19);
     void target`
       INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${syntheticId}, ${''}, ${snapshot.cut.messageId}, ${'system'}, ${syntheticContent}, ${syntheticCreatedAt})
+      VALUES (${markerId}, ${''}, ${snapshot.cut.messageId}, ${'system'}, ${markerContent}, ${markerCreatedAt})
     `;
-  } catch { /* assistant_messages was already guarded above — non-fatal */ }
+  }
   };
 
   if (opts.transaction) opts.transaction(rows);

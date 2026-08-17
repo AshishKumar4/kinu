@@ -123,18 +123,33 @@ export function resolveWorkspaceTitle(opts: {
     || opts.slug;
 }
 
+/** How much of the mission the permanent address carries, before its id
+ *  suffix. Whole words only: an address people share must not end mid-word. */
+const SLUG_STEM_MAX_CHARS = 24;
+
 /**
  * The workspace's permanent address — its URL segment and, on the cloud
  * backend, the Durable Object name. Nothing can ever change it.
  *
- * So it is derived from the id and NOTHING else. A slug cut from the creating
- * prompt is a name chosen before anyone knows the good one: the title the
- * workspace settles on arrives a model call later, leaving `my-personal-jarvis-830c2d`
- * addressing a workspace called "Jarvis" forever — and pinning whatever the
- * operator happened to type into a URL they may go on to share.
+ * It is the mission's own words plus an id suffix. The words are the same
+ * deterministic title {@link workspaceTitleFromMission} yields, available
+ * synchronously at creation, so the address says what the workspace is FOR
+ * from its first millisecond; the suffix is what keeps it unique and keeps it
+ * valid after the title is regenerated or the owner renames the workspace.
+ * The adjective-noun pair is what a mission with no usable words gets, and
+ * nothing else — reaching it means there was nothing to name the workspace
+ * after.
+ *
+ * The suffix reads id digits the adjective and noun do not. Sharing them made
+ * the ENTIRE slug a function of the first four hex digits: 65,536 possible
+ * addresses platform-wide, on a globally-named Durable Object namespace, where
+ * a collision makes the second owner's create fail in `claimOwner` with
+ * "owned by a different user".
  */
-export function workspaceSlug(id: string): string {
-  return memorableFallbackIdentity(id).name;
+export function workspaceSlug(mission: string, id: string): string {
+  const hex = id.replace(/-/g, '').toLowerCase();
+  const { adjective, noun } = memorableWords(hex);
+  return `${missionSlugStem(mission) || `${adjective}-${noun}`}-${hex.slice(4, 12)}`;
 }
 
 /** Deterministic title for a mission: a stated persona name wins, then the
@@ -144,15 +159,15 @@ export function workspaceTitleFromMission(mission: string): string {
   return (persona && cleanTitle(persona)) || cleanTitle(deriveWorkspaceTitle(mission));
 }
 
-/** Deterministic identity for a new workspace: a neutral permanent slug, and
- *  the best title the mission alone yields — which the generated title then
- *  upgrades. The adjective-noun display name is the last resort for an
- *  empty/unusable mission. */
+/** Deterministic identity for a new workspace: a mission-derived permanent
+ *  slug, and the best title the mission alone yields — which the generated
+ *  title then upgrades. The adjective-noun pair is the last resort for both,
+ *  and only an empty or unwordable mission reaches it. */
 export function fallbackWorkspaceIdentity(mission: string, id: string): SuggestedWorkspaceIdentity {
-  const memorable = memorableFallbackIdentity(id);
+  const { adjective, noun } = memorableWords(id.replace(/-/g, '').toLowerCase());
   return {
-    name: memorable.name,
-    displayName: workspaceTitleFromMission(mission) || memorable.displayName,
+    name: workspaceSlug(mission, id),
+    displayName: workspaceTitleFromMission(mission) || `${capitalize(adjective)} ${capitalize(noun)}`,
     nameOrigin: 'auto',
   };
 }
@@ -265,14 +280,32 @@ function extractPersonaName(mission: string): string | null {
   return match?.[1] ?? null;
 }
 
-function memorableFallbackIdentity(id: string) {
-  const hex = id.replace(/-/g, '').toLowerCase();
-  const adjective = FALLBACK_ADJECTIVES[Number.parseInt(hex.slice(0, 2), 16) % FALLBACK_ADJECTIVES.length];
-  const noun = FALLBACK_NOUNS[Number.parseInt(hex.slice(2, 4), 16) % FALLBACK_NOUNS.length];
-  const suffix = hex.slice(0, 4);
+/** The mission's words for the permanent address, cut to whole words within
+ *  {@link SLUG_STEM_MAX_CHARS}. Not {@link slugifyName}: its hard character cap
+ *  can end a slug mid-word, which is fine for a transient id and wrong for an
+ *  address the owner shares. The first word is the one exception — a mission
+ *  that is a single 400-character token has no whole-word answer, and the
+ *  address still has to fit a workspace name. Empty when the mission has no
+ *  [a-z0-9] words at all. */
+function missionSlugStem(mission: string): string {
+  let stem = '';
+  for (const word of workspaceTitleFromMission(mission).toLowerCase().split(/[^a-z0-9]+/)) {
+    if (!word) continue;
+    if (!stem) {
+      stem = word.slice(0, SLUG_STEM_MAX_CHARS);
+      continue;
+    }
+    if (stem.length + 1 + word.length > SLUG_STEM_MAX_CHARS) break;
+    stem += `-${word}`;
+  }
+  return stem;
+}
+
+/** The memorable pair a workspace with nothing to be named after gets. */
+function memorableWords(hex: string) {
   return {
-    name: `${adjective}-${noun}-${suffix}`,
-    displayName: `${capitalize(adjective)} ${capitalize(noun)}`,
+    adjective: FALLBACK_ADJECTIVES[Number.parseInt(hex.slice(0, 2), 16) % FALLBACK_ADJECTIVES.length],
+    noun: FALLBACK_NOUNS[Number.parseInt(hex.slice(2, 4), 16) % FALLBACK_NOUNS.length],
   };
 }
 

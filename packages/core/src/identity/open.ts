@@ -28,8 +28,11 @@ export interface WorkspaceResumeConfig {
   judge?: LLMProviderConfig;
 }
 
+/** What `proteus status` and the local chat header read about an open
+ *  workspace. One identifier: `name`, the permanent slug. `workspace_identity.id`
+ *  stays internal — it is the runtime's `agentId` and fork provenance, and
+ *  showing it beside the name showed the workspace's address twice. */
 export interface WorkspaceInfo {
-  id: string;
   name: string;
   purpose: string;
   soul: string;
@@ -51,7 +54,7 @@ export async function openWorkspace(db: AgentDatabase, config: WorkspaceResumeCo
 
   // Ensure all tables exist (handles schema upgrades gracefully)
   initAllTables(execRaw);
-  migrateWorkspaceStorage(sql);
+  migrateWorkspaceStorage(sql, execRaw);
 
   // Step 1: Read identity
   const identity = sql<{ id: string; name: string; created_at: number }>`
@@ -117,7 +120,6 @@ export async function openWorkspace(db: AgentDatabase, config: WorkspaceResumeCo
   return {
     rt,
     info: {
-      id: identity.id,
       name: identity.name,
       purpose: summarizeSoul(soul),
       soul,

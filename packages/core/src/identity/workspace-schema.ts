@@ -165,7 +165,7 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   initAllTables(execRaw);
   // Pre-current-schema storage (legacy identity table, agent_soul, TEXT-bound
   // SOUL.md rows) — repaired here so every read path stays a pure read.
-  migrateWorkspaceStorage(sql);
+  migrateWorkspaceStorage(sql, execRaw);
 
   initSearchTables(execRaw);
   initScaffoldTables(execRaw);
