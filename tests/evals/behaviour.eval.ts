@@ -57,6 +57,7 @@ import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index.
 import { minimumPairsForSignificance, parseCorpus } from '../../packages/core/src/index.js';
 import {
   assessAdmissibility, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE, gitProvenance,
+  hardTaskCases,
   liveChatModel, liveModelTarget, preRegister, reportLiveModelSpend, TASK_OUTCOME, UNCONFIGURED_LLM,
   writeRunRecord,
   type EvalArmState, type EvalObservation, type EvalRunRecord, type EvalTier,
@@ -70,17 +71,35 @@ interface EvalInput { task: EvalCase; repetition: number }
 
 const REPO_ROOT = join(import.meta.dirname, '../..');
 const TARGET = liveModelTarget('Behaviour Evals');
-const LLM: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 /**
- * Which arm this process is. Flash is the volume arm that produces the stats,
- * pro the small arm that establishes the bound — the owner's split, declared as
- * a property of the run rather than left in a comment, because a 18-observation
+ * Which arm this process is. Flash is the volume arm that produces the stats, pro
+ * the small arm that establishes the bound — the owner's split, declared as a
+ * property of the run rather than left in a comment, because an 18-observation
  * flash number and a 9-observation pro number invite different readings.
  */
 const TIER: EvalTier = process.env.PROTEUS_EVAL_TIER === 'pro' ? 'pro' : 'flash';
 const REPEATS = Number(process.env.PROTEUS_EVAL_REPEATS ?? (TIER === 'pro' ? '1' : '2'));
 const SEED = Number(process.env.PROTEUS_EVAL_SEED ?? '1');
+
+/**
+ * The model this run DRIVES, and it is the tier's — not the resolver's default.
+ *
+ * `resolveLiveModel` falls back to `DEFAULT_WORKERS_AI_MODEL_ID`, which is the PRO
+ * id, while the run record wrote `EVAL_MODELS[TIER]`. Measured: with only
+ * PROTEUS_ORIGIN + PROTEUS_TOKEN set, the resolver describes itself as `model
+ * @cf/deepseek-ai/deepseek-v4-pro-0813` and the record would have claimed flash —
+ * a record naming a model 3.0x cheaper than the one that was billed. Two sources
+ * of truth for "which model", and the wrong one was the one a reader saw.
+ *
+ * The tier IS the arm, so the tier owns the model, and `modelId` in the record is
+ * read from here rather than re-derived. A `PROTEUS_MODEL` in the environment is
+ * deliberately not honoured for this suite: an arm chosen by two knobs is an arm
+ * that can be half-changed.
+ */
+const LLM: LLMProviderConfig = TARGET === null
+  ? UNCONFIGURED_LLM
+  : { ...TARGET.llm, model: EVAL_MODELS[TIER] };
 
 /**
  * The arm state, recorded because a measurement whose mechanism was switched off
@@ -95,15 +114,22 @@ const ARM: EvalArmState = {
 };
 
 /**
- * The corpus: `behaviour.jsonl` first, because those are the cases that hand
- * over an environment.
+ * The corpus: `behaviour.jsonl` first, because those are the cases that hand over
+ * an environment; then the HARD TASKS, which are the only cases that declare
+ * ground truth and therefore the only ones the headline can be computed over.
  *
  * seed.jsonl is kept whole rather than replaced, but its no-tool cases are
  * filtered out BY TAG rather than deleted. "What is 17 * 23?" cannot exercise a
- * single mechanism here, and including it would guarantee a degenerate
- * observation the harness would correctly refuse — 500 steps available and one
- * used is a property of the task format, not of the agent. seed.jsonl remains
- * the corpus for the judged A/B in `scripts/eval.ts`, which is what it is for.
+ * single mechanism here, and including it would guarantee a degenerate observation
+ * the harness would correctly refuse — 500 steps available and one used is a
+ * property of the task format, not of the agent. seed.jsonl remains the corpus for
+ * the judged A/B in `scripts/eval.ts`, which is what it is for.
+ *
+ * The behavioural cases stay even though they carry no verifier. They are what the
+ * mechanism covariates are measured over, and the comparator already drops an
+ * unverified pair BY NAME (`baseline-unverified`) rather than charging it as a
+ * loss — so a case with no ground truth costs the headline nothing and still
+ * explains a moved one after the fact.
  */
 function loadCorpus(): EvalCase[] {
   const read = (name: string) =>
@@ -111,7 +137,7 @@ function loadCorpus(): EvalCase[] {
   const behaviour = read('behaviour.jsonl');
   const toolUsing = read('seed.jsonl').filter((c) =>
     c.tags?.some((t) => t === 'tool-use' || t === 'multi-step') === true);
-  return [...behaviour, ...toolUsing];
+  return [...behaviour, ...toolUsing, ...hardTaskCases()];
 }
 
 const CORPUS = loadCorpus();
@@ -233,7 +259,7 @@ beforeAll(() => {
   model = liveChatModel(LLM);
   const pre = preRegister(CORPUS.length, REPEATS);
   console.log('\n── behaviour eval tier ────────────────────────────────');
-  console.log(`arm:     ${TIER} (${EVAL_MODELS[TIER]})`);
+  console.log(`arm:     ${TIER} (${LLM.model})`);
   console.log(`         evolution ${ARM.evolution ? 'ON' : 'OFF'}, `
     + `${String(ARM.tools.length)} tools, seed ${String(SEED)}`);
   console.log(`corpus:  ${String(CORPUS.length)} tasks x ${String(REPEATS)} repeats `
@@ -253,7 +279,10 @@ afterAll(() => {
     createdAt: new Date().toISOString(),
     ...gitProvenance(REPO_ROOT),
     tier: TIER,
-    modelId: EVAL_MODELS[TIER],
+    // The model DRIVEN, read from the config the session was built with rather
+    // than re-derived from the tier. A record's model id has to be a fact about
+    // the run, not a second computation that can disagree with it.
+    modelId: LLM.model,
     repeats: REPEATS,
     seed: SEED,
     arm: ARM,

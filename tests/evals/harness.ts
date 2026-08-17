@@ -50,14 +50,19 @@ import type { LanguageModel } from 'ai';
 import type { JsonValue } from '@vitest-evals/core';
 
 import type {
-  AgentRuntime, EvalCase, LLMProviderConfig, RunEvent,
+  AgentRuntime, EvalCase, LLMProviderConfig, RunEvent, Shell,
 } from '../../packages/core/src/index.js';
-import { RunEventRecorder, initWorkspaceSchema } from '../../packages/core/src/index.js';
+import {
+  RunEventRecorder, initWorkspaceSchema, resolveMaxSteps,
+} from '../../packages/core/src/index.js';
 import { createWorkspace } from '../../packages/core/src/identity/index.js';
 import { LocalAgentSession } from '../../packages/cli-backend/src/local-session.js';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
 import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
-import { scoreTrajectory, type EvalArmState, type EvalScoreRow } from '@proteus/test-utils';
+import {
+  hardTaskFor, scoreTrajectory, seedHardTask, verifyHardTask,
+  type EvalArmState, type EvalScoreRow, type HardTask,
+} from '@proteus/test-utils';
 
 /**
  * What one task run produced, as the WIRE shape a judge receives.
@@ -156,6 +161,11 @@ interface LedgerTotals {
   toolNames: string[];
   tokensIn: number;
   tokensOut: number;
+  /** Model steps the episode closed, counted from `step_finish`. Compared against
+   *  the pre-registered step cap to decide whether the episode was TRUNCATED —
+   *  which is the one number that keeps a cap from silently changing what a run
+   *  measured. */
+  steps: number;
   /** Why a turn produced nothing. A degenerate run that cannot say why is a dead
    *  end for whoever reads the record: "0 tool calls" is equally consistent with
    *  a model that declined to act and a provider that rejected every request. */
@@ -166,7 +176,7 @@ function readLedgerTotals(db: Database): LedgerTotals {
   const recorder = new RunEventRecorder(makeSql(db));
   const events: RunEvent[] = recorder.listRuns(10_000)
     .flatMap((run) => recorder.read(run.runId, { limit: 100_000 }));
-  let turns = 0, toolCalls = 0, tokensIn = 0, tokensOut = 0;
+  let turns = 0, toolCalls = 0, tokensIn = 0, tokensOut = 0, steps = 0;
   const toolNames: string[] = [];
   // Why a turn produced nothing. A degenerate run that cannot say why is a dead
   // end for whoever reads the record: "0 tool calls" is equally consistent with
@@ -187,13 +197,50 @@ function readLedgerTotals(db: Database): LedgerTotals {
       toolCalls += 1;
       toolNames.push(event.name);
       if (event.error != null && event.error !== '') failures.push(`${event.name}: ${event.error}`);
+    } else if (event.type === 'step_finish') {
+      steps += 1;
     } else if (event.type === 'error') {
       failures.push(event.message);
     } else if (event.type === 'run_end' && event.error != null && event.error !== '') {
       failures.push(`run_end: ${event.error}`);
     }
   }
-  return { turns, toolCalls, toolNames, tokensIn, tokensOut, failures };
+  return { turns, toolCalls, toolNames, tokensIn, tokensOut, steps, failures };
+}
+
+/**
+ * The pre-registered step cap, recorded as a COVARIATE.
+ *
+ * WHY A CAP AT ALL. A prior paired run had arm B billing 7.1x arm A, because the
+ * mechanism under test is itself a token consumer. Dividing the effect by tokens
+ * would have changed the estimand; the successor design is a cap applied
+ * IDENTICALLY to both arms, with the rate at which it bites reported as data. A
+ * cap whose bite is unmeasured is a silent change to what the run measured.
+ *
+ * WHY IT IS A SCORE ROW AND NOT A NEW FIELD. `EvalScoreRow` already flows through
+ * persistence, the comparator and admissibility, and `isCovariateRow` is a total
+ * rule — anything not named `task_outcome` is a covariate — so putting the cap
+ * here makes it MECHANICALLY unable to reach a headline, rather than merely
+ * conventionally. A new observation field would have needed a schema bump and
+ * would still have been eligible for a headline somebody assembled by hand.
+ *
+ * The cap is read from the same `resolveMaxSteps` the session drives its own
+ * `stopWhen` from (local-session.ts:1658), so the number compared against here
+ * cannot drift from the number enforced.
+ */
+function stepCapRow(steps: number): EvalScoreRow {
+  const cap = resolveMaxSteps(process.env.PROTEUS_MAX_STEPS);
+  const reached = steps >= cap;
+  return {
+    name: 'step_cap_reached',
+    asserts: 'the episode consumed its entire pre-registered step budget, so its work was '
+      + 'truncated rather than finished',
+    eligible: 1,
+    passed: reached ? 1 : 0,
+    rate: reached ? 1 : 0,
+    detail: `${String(steps)} of ${String(cap)} steps closed`
+      + (reached ? ' — TRUNCATED by the cap' : ''),
+  };
 }
 
 export interface BehaviourHarnessOptions {
@@ -272,6 +319,27 @@ export function requireExecutorSurface(taskId: string, rt: AgentRuntime): void {
 }
 
 /**
+ * Refuse a runtime that cannot run a command, for a task whose ground truth IS a
+ * command.
+ *
+ * Separate from {@link requireExecutorSurface} because it is a different fact:
+ * `executionRouter` is what the agent's tools reach, and `rt.shell` is what the
+ * VERIFIER reaches. A hard task on a shell-less runtime would score every attempt
+ * zero for a reason that has nothing to do with the agent, and a corpus of
+ * unearned zeros is as useless as one of unearned ones. Checked before the model
+ * is driven, so the misconfiguration costs nothing.
+ */
+function requireVerifierShell(taskId: string, rt: AgentRuntime): Shell {
+  const shell = rt.shell;
+  if (!shell) {
+    throw new DegenerateRuntimeError(taskId,
+      'rt.shell is absent, so this task\'s verifier could not run its measurement harness '
+      + 'and every attempt would score zero for a reason that is not about the agent');
+  }
+  return shell;
+}
+
+/**
  * Run `task`, score the ledger, and refuse to return an inert trajectory.
  *
  * WHY IT OPENS THE WORKSPACE INSTEAD OF RUNNING THE ONE `createWorkspace`
@@ -327,6 +395,9 @@ export async function runBehaviourTask(
 
   // Seeded through the OPENED runtime's filesystem: the workspace the agent
   // reads is the one this runtime owns, not the inline VFS birth returned.
+  const hard: HardTask | undefined = hardTaskFor(task);
+  const shell = hard === undefined ? undefined : requireVerifierShell(task.id, rt);
+  if (hard !== undefined) await seedHardTask(hard, rt.storage.vfs);
   if (task.tags?.includes('workspace')) await seedWorkspaceTree(rt);
 
   const session = new LocalAgentSession({
@@ -347,12 +418,28 @@ export async function runBehaviourTask(
     throw new DegenerateRunError(task.id, totals.turns, totals.toolCalls, totals.failures);
   }
 
+  // The OUTCOME, measured over the workspace the agent left behind and nothing
+  // else — no trajectory, no model, no judge. It goes in the same `scores` array
+  // as the mechanism covariates because `task_outcome` is a row NAME rather than a
+  // parallel mechanism, which is what lets it inherit persistence, the paired
+  // comparator and admissibility without a second statistics path.
+  //
+  // Measured AFTER `readLedgerTotals` on purpose: the verifier runs commands
+  // through `rt.shell`, and reading the ledger first keeps the turn and tool-call
+  // counts a property of the agent's episode rather than of its grading.
+  const outcome: EvalScoreRow[] = hard === undefined || shell === undefined
+    ? []
+    : [await verifyHardTask(hard, {
+      vfs: rt.storage.vfs,
+      exec: (command) => shell.exec(command),
+    })];
+
   return {
     taskId: task.id,
     turns: totals.turns,
     toolCalls: totals.toolCalls,
     toolNames: totals.toolNames,
-    scores: toScoreJson(scoreTrajectory(makeSql(db))),
+    scores: toScoreJson([...outcome, stepCapRow(totals.steps), ...scoreTrajectory(makeSql(db))]),
     tokensIn: totals.tokensIn,
     tokensOut: totals.tokensOut,
   };

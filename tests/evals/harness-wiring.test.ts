@@ -35,7 +35,9 @@ import { censusToolFailures, DefaultExecutionRouter, RunEventRecorder } from '..
 import { DIGEST_LIMIT, JsonObjectSchema } from '../../packages/core/src/utils/json.js';
 import { createWorkspace } from '../../packages/core/src/identity/index.js';
 import { makeSql } from '../../packages/cli-backend/src/runtime.js';
-import type { EvalArmState } from '@proteus/test-utils';
+import {
+  HARD_TASKS, REFERENCE_FILE, SOLUTION_FILE, hardTaskCases, type EvalArmState,
+} from '@proteus/test-utils';
 
 import {
   DegenerateRunError, DegenerateRuntimeError, requireExecutorSurface,
@@ -155,17 +157,22 @@ function scoreOf(scores: readonly BehaviourScoreJson[], name: string): Behaviour
   return found;
 }
 
+async function runCase(
+  task: EvalCase, steps: readonly ScriptedStep[],
+): Promise<readonly BehaviourScoreJson[]> {
+  const out = await runBehaviourTask(task, {
+    dir, model: scripted(steps), llm: LLM, arm: ARM, opened,
+  });
+  return out.scores;
+}
+
 /** `tags` reaches `runBehaviourTask`, which seeds the source tree only for a
  *  `workspace` case — an unseeded tree makes a `file` refusal read `missing`
  *  (the path is not there) instead of the contract reason under test. */
 async function run(
   id: string, steps: readonly ScriptedStep[], tags?: readonly string[],
 ): Promise<readonly BehaviourScoreJson[]> {
-  const task: EvalCase = tags ? { id, task: 'do the task', tags: [...tags] } : { id, task: 'do the task' };
-  const out = await runBehaviourTask(task, {
-    dir, model: scripted(steps), llm: LLM, arm: ARM, opened,
-  });
-  return out.scores;
+  return runCase(tags ? { id, task: 'do the task', tags: [...tags] } : { id, task: 'do the task' }, steps);
 }
 
 const CREATE_DOUBLE =
@@ -344,4 +351,84 @@ describe('tool-failure attribution over a real turn', () => {
     expect(census.failures.length).toBe(4);
     expect(rows.length).toBeGreaterThan(census.failures.length);
   }, 60_000);
+});
+
+/**
+ * The hard-task seam, end to end through the real harness, with a scripted model.
+ *
+ * `hard-tasks.test.ts` proves the VERIFIER: what a solution scores, and that five
+ * distinct failures score zero. This proves the WIRING around it — that
+ * `EvalCase.env` resolves to a task, that the task's files land in the workspace
+ * the agent actually reads, and that the verdict comes back as the primary-metric
+ * row — and it proves it before a single paid episode, because the cost of
+ * discovering this from a live run is a live run.
+ *
+ * The cheapest task by reference cost is used: the seam is the same for all seven,
+ * and 79,998 oracle calls is the fastest way to exercise it.
+ */
+describe('hard-task wiring — env resolves to a seeded task and a scored outcome', () => {
+  const task = HARD_TASKS.find((t) => t.id === 'hard-minmax-pair');
+  if (!task) throw new Error('hard-minmax-pair is missing from the corpus');
+  const evalCase = hardTaskCases().find((c) => c.id === task.id);
+  if (!evalCase) throw new Error('hard-minmax-pair produced no eval case');
+  const reference = task.seed.find((f) => f.path === REFERENCE_FILE);
+  if (!reference) throw new Error('hard-minmax-pair seeds no reference');
+
+  test('the reference is readable, the stub is replaceable, and the result is measured', async () => {
+    // Content taken from the task, never retyped: if the seeded reference and the
+    // one the harness measures against could differ, this test would be the place
+    // the difference hid. The read of SOLUTION_FILE is not decoration — the file
+    // tool's read-before-write gate refuses a blind overwrite, which is exactly
+    // what a real agent has to do too, and what the prompt now says.
+    const scores = await runCase(evalCase, [
+      { tool: 'file', input: { action: 'read', path: REFERENCE_FILE } },
+      { tool: 'file', input: { action: 'read', path: SOLUTION_FILE } },
+      { tool: 'file', input: { action: 'write', path: SOLUTION_FILE, content: reference.content } },
+    ]);
+
+    const outcome = scoreOf(scores, 'task_outcome');
+    // Zero is the CORRECT score for matching the reference. What proves the seam
+    // is that the candidate was measured at all: a broken seam reports "no usable
+    // solution" with candOps 0, and this reports the reference's own cost.
+    expect(outcome.rate).toBe(0);
+    expect(outcome.detail).toContain('79998 oracle calls vs reference 79998');
+    expect(outcome.detail).toContain('(1.00x)');
+  }, 60_000);
+
+  test('leaving the seeded stub in place scores 0 with the reason, not a missing row', async () => {
+    const scores = await runCase(evalCase, [
+      { tool: 'file', input: { action: 'write', path: 'notes.txt', content: 'thinking about it' } },
+    ]);
+
+    const outcome = scoreOf(scores, 'task_outcome');
+    expect(outcome.rate).toBe(0);
+    // The stub the task seeds throws, so the zero names the agent's omission
+    // rather than the harness's.
+    expect(outcome.detail).toContain('not implemented');
+  }, 60_000);
+
+  test('a case with no env carries NO task_outcome — an unverified pair, not a loss', async () => {
+    const scores = await run('wiring-unverified', [
+      { tool: 'file', input: { action: 'write', path: 'notes.txt', content: 'x' } },
+    ]);
+    // The comparator drops such a pair BY NAME (`baseline-unverified`). Charging
+    // it as a zero would turn a missing verifier into a fact about the agent.
+    expect(scores.find((s) => s.name === 'task_outcome')).toBeUndefined();
+  }, 30_000);
+
+  test('step_cap_reached counts real steps, so the pre-registered cap is measurable', async () => {
+    const scores = await run('wiring-stepcap', [
+      { tool: 'file', input: { action: 'write', path: 'a.txt', content: '1' } },
+      { tool: 'file', input: { action: 'write', path: 'b.txt', content: '2' } },
+    ]);
+
+    const cap = scoreOf(scores, 'step_cap_reached');
+    expect(cap.eligible).toBe(1);
+    // `step_finish` is emitted at local-session.ts:560. A covariate that reports 0
+    // of N steps forever is the "declared and emitted by nothing" failure, and
+    // this is the assertion that would catch it.
+    expect(cap.detail).toMatch(/^[1-9]\d* of \d+ steps closed/);
+    // Nowhere near the default 500-step budget, so this episode was not truncated.
+    expect(cap.passed).toBe(0);
+  }, 30_000);
 });

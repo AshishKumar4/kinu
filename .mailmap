@@ -1,0 +1,23 @@
+# Canonical authorship.
+#
+# This repository has one living contributor. Commits landed under agent-run
+# identities (`Proteus Test`, `Proteus`), under a malformed noreply address git
+# never validated, and under a second personal address. None of them is a
+# separate person.
+#
+# `.mailmap` corrects every git tool's view — `log`, `shortlog`, `blame`, `-an`,
+# and forge UIs that honour it — with NO history rewrite, so no hash changes and
+# no push protection is involved. GitHub's own contributor sidebar is computed
+# from raw commit headers and does NOT read this file; only a rebase and a
+# force-push would change that, which is a separate, deliberate decision.
+
+Ashish Kumar Singh <ashishkmr472@gmail.com>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <Ashish Kumar Singh@users.noreply.seal.dev>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <mrmoraculus@gmail.com>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <ashishsingh@cloudflare.com>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <proteus@example.invalid>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <agent@proteus>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <proteus@local>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <proteus@localhost>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <claude@anthropic.com>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <u@x>

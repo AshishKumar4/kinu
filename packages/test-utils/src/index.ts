@@ -15,3 +15,4 @@ export * from './git.js';
 export * from './eval-compare.js';
 export * from './eval-run.js';
 export * from './eval-outcome.js';
+export * from './hard-tasks/index.js';
