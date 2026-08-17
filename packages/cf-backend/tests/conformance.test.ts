@@ -32,24 +32,30 @@ function observe(root: ConformanceRoot, harness: ActorHarness<RawToolsAgent>): O
 }
 
 describe('cf backend conformance', () => {
-  for (const [root, make] of [
+  const ROOTS = [
     ['cf-orchestrator', orchestratorHarness],
     ['cf-subordinate', subordinateHarness],
-  ] as const) {
+  ] as const;
+
+  for (const [root, make] of ROOTS) {
     test(`${root}: the observed surface matches the manifest`, () => {
       const report = compareSurface(observe(root, make()));
       expect(renderConformanceFindings(report)).toBe('');
       expect(report.unmeasured).toEqual([]);
     });
-  }
 
-  test('the observation sees a real surface at all (guards the guard)', () => {
-    // If getRawTools were stubbed away or the harness drifted to a fake, the
-    // conformance tests above would compare an empty world and pass whatever
-    // the manifest says about nothing.
-    const observed = observe('cf-orchestrator', orchestratorHarness());
-    expect(observed.planes.tool!.size).toBeGreaterThanOrEqual(6);
-    expect(observed.planes.table!.size).toBeGreaterThanOrEqual(30);
-    expect(observed.planes.tool!.has('execute_tools')).toBe(true);
-  });
+    // Guards the guard, once per root rather than once in total. The floor used
+    // to be asserted for the orchestrator alone, so the SUBORDINATE's
+    // magnitudes were unverified: a harness that drifted to a thin fake there
+    // would still fail on capabilities the manifest declares `wired`, but
+    // everything it declares `absent` would look conformant against a world
+    // that was never built. Same list as above, so a third root added later is
+    // covered without a second place to remember.
+    test(`${root}: the observation sees a real surface at all`, () => {
+      const observed = observe(root, make());
+      expect(observed.planes.tool!.size).toBeGreaterThanOrEqual(6);
+      expect(observed.planes.table!.size).toBeGreaterThanOrEqual(30);
+      expect(observed.planes.tool!.has('execute_tools')).toBe(true);
+    });
+  }
 });

@@ -120,7 +120,6 @@ export interface LocalExecResult {
 }
 
 export interface LocalAgentInfoSnapshot {
-  id: string;
   name: string;
   purpose: string;
   soul: string;
@@ -136,7 +135,6 @@ export interface LocalAgentInfoSnapshot {
 }
 
 interface LocalStatus {
-  id: string | null;
   name: string | null;
   purpose: string;
   soul: string;
@@ -181,7 +179,6 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
   return withLocalDb(name, (db) => {
     const status = getLocalStatus(db);
     return {
-      id: status.id ?? name,
       name: status.name ?? name,
       purpose: status.purpose,
       soul: status.soul,
@@ -842,8 +839,8 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
     : tableExists(db, 'agent_identity') ? 'agent_identity'
       : null;
   const identity = identityTable
-    ? get<{ id: string; name: string; created_at: number }>(
-      db, `SELECT id, name, created_at FROM ${safeIdentifier(identityTable)} LIMIT 1`)
+    ? get<{ name: string; created_at: number }>(
+      db, `SELECT name, created_at FROM ${safeIdentifier(identityTable)} LIMIT 1`)
     : null;
   // The MISSION, off the identity row — not SOUL.md itself.
   //
@@ -856,7 +853,6 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
     ? get<{ mission: string | null }>(db, `SELECT mission FROM ${safeIdentifier(identityTable)} LIMIT 1`)?.mission?.trim() || null
     : null;
   return {
-    id: identity?.id ?? null,
     name: identity?.name ?? null,
     purpose: mission ?? '',
     soul: '',

@@ -373,7 +373,7 @@ async function printProviders(): Promise<void> {
   if (config.accessToken) {
     connected('Proteus account', config.user?.email);
     console.log(`    ${DIM('Cloud workspaces use your Cloudflare Workers AI quota when Cloudflare sign-in granted AI permissions.')}`);
-    console.log(`    ${DIM('Signed-in local workspaces also get free Workers AI (no key) through the proxy.')}`);
+    console.log(`    ${DIM('Signed-in local workspaces reach the same Workers AI through the proxy, with no key on this machine.')}`);
   } else {
     missing('Proteus account', 'proteus provider connect cloudflare');
   }

@@ -178,17 +178,28 @@ export interface HeadReport {
   readonly childHeadIds: readonly HeadId[];
   /** Tool calls the head made — for telemetry. */
   readonly toolCalls: readonly ToolCallRecord[];
-  /** Ordered per-step trace (text + reasoning + tool calls) — drives the live
-   *  expandable head timeline in the Exploration surface. */
-  readonly steps: readonly HeadStep[];
+  /** How many steps the head took. The trace itself is NOT carried here: a
+   *  head writes each step to its journal as it finishes it (HeadInferenceDeps
+   *  .reportStep), so the branch is readable while it is still running rather
+   *  than only once this report exists. Returning the trace as well would ship
+   *  the same rows twice and let a late empty report erase a live one. */
+  readonly stepCount: number;
   readonly tokenUsage: { input: number; output: number; total: number };
   readonly wallClockMs: number;
   /** Free-form failure message if status != 'completed'. */
   readonly errorMessage?: string;
 }
 
-/** One head as the Exploration surface renders it — lifecycle + the ordered
- *  trace. Assembled by HeadJournal.listRuns; returned verbatim by getHeadRuns. */
+/**
+ * One head as the Exploration surface renders it — lifecycle, liveness, and
+ * the ordered trace. Assembled by HeadJournal.assembleRun.
+ *
+ * `spawnedAt` and `lastStepAt` are what make a RUNNING branch legible. Without
+ * them the surface could only say "no steps", which reads as lost data; with
+ * them it can say "started 3s ago, nothing yet" or "4 steps, last one 6 minutes
+ * ago" — the difference between a head that is working and a head that is
+ * wedged on a call that never answers.
+ */
 export interface HeadRunHeadView {
   readonly id: HeadId;
   readonly task: string;
@@ -198,8 +209,12 @@ export interface HeadRunHeadView {
   readonly errorMessage: string | null;
   readonly tokenInput: number;
   readonly tokenOutput: number;
+  /** Measured wall clock, written with the report. 0 while the head runs —
+   *  `spawnedAt` is what an in-flight branch is timed from. */
   readonly wallClockMs: number;
-  readonly toolCalls: ReadonlyArray<{ name: string; status: string }>;
+  readonly spawnedAt: number;
+  /** When the head last recorded a step, or null when it has recorded none. */
+  readonly lastStepAt: number | null;
   readonly decisions: ReadonlyArray<{ question: string; choice: string; rationale: string }>;
   readonly steps: readonly HeadStep[];
 }

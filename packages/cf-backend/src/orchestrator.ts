@@ -29,11 +29,13 @@ import {
   EvolutionEngine,
   readActivityLog,
   summarizeSteps,
-  bootstrapScaffold,
   initWorkspaceSchema,
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
+  // The declared reach axis — getToolDescriptions reports it rather than
+  // guessing native-vs-codemode from the assembled ToolSet's keys.
+  TOOL_REACH,
   updateCraftScores,
   feedbackToQuality,
   migrateCraftedToolDuplicates,
@@ -102,15 +104,18 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
   slugifyName,
-  readSoul, readMission, summarizeSoul, writeSoul,
+  readSoul, readMission, summarizeSoul, writeSoul, workspaceGenesisSignal,
   // Automatic workspace titling (first turn + legacy slug heal)
   applyWorkspaceTitle, isPlaceholderMission, isPlaceholderWorkspaceTitle, parseWorkspaceTitle,
   WORKSPACE_TITLE_SYSTEM_PROMPT, workspaceTitlePrompt,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
-  type CheckpointAvailability, type FileCheckpointEntry, type FileRestorePlan, type FileRestoreResult,
+  type CheckpointAvailability, type FileCheckpointListing,
+  type FileRestorePlan, type FileRestoreResult,
   // Shared turn lifecycle
   snapshotCompletedTurn,
+  // The session tree — `messages` as a projection of the SDK's message DAG
+  reconcileSessionTree,
   type DynamicContext,
   type DynamicDelegate,
   // Ingress — core owns the gates; this actor owns the transports in front
@@ -126,6 +131,8 @@ import {
   // ── Read models: the folds a surface asks for, one implementation each ──
   getAgentStatus, getChatHistory, getToolList, readLatestSearchTree, readSearchTree,
   listForkRuns, readForkRun, type ForkRunSummary,
+  readExplorationCanvas, type ExplorationCanvasView,
+  type HeadStep,
   buildPendingActions, type PendingAction,
   type ChatHistoryEntry,
   getRunTimeline, type TimelineSpan,
@@ -136,10 +143,11 @@ import {
   getExecutorFiles, readExecutorFile, writeExecutorFileOp, listEnvironments,
   type DirEntry, type ExecutorWriteResult,
   cancelBackgroundJob, cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
-  jobResult, listBackgroundJobs, retryBackgroundJob,
+  jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
   type CancelWorkOutcome, type RetryOutcome,
   getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
-  getShellApprovalMode, getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
+  getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
+  getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
   setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView, type MctsConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
@@ -148,7 +156,7 @@ import {
   JsonValueSchema, type JsonValue,
   admitPlanReviewAnnotations,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
-  type PlanReviewResult, type PromptMode, type WorkMode,
+  type PlanReviewResult, type WorkMode,
 } from "@proteus/core";
 import * as v from 'valibot';
 import { ActorAgent, type ActorToolDeps } from "./actor-agent.js";
@@ -166,7 +174,7 @@ import {
   type DeviceConsentRequest, type PendingDeviceConsent,
   DeferredApprovalQueue, DeferredApprovalStore,
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
-  type DeferredApprovalNotice,
+  type DeferredApprovalNotice, type ApprovalGrant,
 } from "@proteus/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@proteus/core";
 import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
@@ -260,8 +268,8 @@ export class OrchestratorAgent extends ActorAgent {
     return this._planReviews;
   }
 
-  protected override turnPromptMode(): PromptMode {
-    const requested = super.turnPromptMode();
+  protected override turnWorkMode(): WorkMode {
+    const requested = super.turnWorkMode();
     const approvedHandoff = this._activeProgrammaticUserMessage !== null
       && this.turnUserMessageEvent(this._activeProgrammaticUserMessage) === 'plan_approved';
     return requested === 'build'
@@ -631,16 +639,6 @@ export class OrchestratorAgent extends ActorAgent {
     } catch { return null; }
   }
 
-  /** The hosted file plane is owner-namespaced. Never touch it while the
-   * workspace is unclaimed; the creation claim and owned activations converge
-   * here so scaffold bootstrap cannot lose an onStart/RPC race. */
-  private async ensureOwnedScaffold(): Promise<void> {
-    if (!this.getOwnerUserId()) return;
-    if (await this.rt.identity.scaffold.exists()) return;
-    await bootstrapScaffold(this.rt);
-    console.log('[proteus] Bootstrapped initial scaffold');
-  }
-
   /** The agents tool's peer deps over the cross-workspace transport. Owner
    *  resolution is lazy inside each action (the toolset is cached across
    *  turns — including a pre-claim build — so deps must not capture owner
@@ -952,12 +950,22 @@ export class OrchestratorAgent extends ActorAgent {
   // immediately via `this.orch.drainPendingEvents()`.
 
   async onChatResponse(result: ChatResponseResult) {
-    const turnMode = this.turnPromptMode();
+    const turnMode = this.turnWorkMode();
     // The actor-generic settle spine lives on ActorAgent; everything after it
     // here is orchestrator sequencing (takes, branches, evolution, naming).
     const { drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals } =
       this.settleTurnEvents(result);
     this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
+    // The session tree is the transcript; `messages` is its projection, and it
+    // is refreshed here rather than at the end of a happy path. The block this
+    // replaced wrote two rows per turn — the last user message and the final
+    // assistant message — and only for turns that reached "completed", so an
+    // interrupted turn and every steer spliced into a running one were visible
+    // in the chat pane and absent from the table that fork, memory search, the
+    // status read model and the evolution outcome window all read. Projecting
+    // before the early return is the point: an interrupted turn is exactly the
+    // one whose messages were being lost.
+    reconcileSessionTree(this.boundSql);
     if (result.status !== "completed") {
       // An aborted/errored live turn leaves nothing to compare a branch
       // against — and any takes its think-mcts runs captured competed for an
@@ -986,34 +994,6 @@ export class OrchestratorAgent extends ActorAgent {
       text: assistantText,
       responseMessages: await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true }),
     });
-
-    // Persist the completed turn into the `messages` table (session_id='default')
-    // so the fork feature has a durable row to cut against. AIChatAgent's
-    // in-memory this.messages is the chat UI's source of truth, but only
-    // session_id='default' rows are copied on fork. This mirror is cheap
-    // (two rows per turn) and idempotent (INSERT OR IGNORE on id).
-    try {
-      if (lastUserMsg?.id) {
-        const userCreatedAt = (() => {
-          const parsed = v.safeParse(v.looseObject({
-            createdAt: v.optional(v.union([v.number(), v.string(), v.instance(Date)])),
-          }), lastUserMsg);
-          const ts = parsed.success ? parsed.output.createdAt : undefined;
-          if (v.is(v.number(), ts)) return ts;
-          if (v.is(v.string(), ts)) { const p = Date.parse(ts); if (!Number.isNaN(p)) return p; }
-          if (ts instanceof Date) return ts.getTime();
-          return this.acc.startedAt || Date.now();
-        })();
-        void this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
-                 VALUES (${lastUserMsg.id}, ${'default'}, ${null}, ${'user'}, ${userText}, ${userCreatedAt})`;
-      }
-      if (result.message.id) {
-        void this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
-                 VALUES (${result.message.id}, ${'default'}, ${lastUserMsg?.id ?? null}, ${'assistant'}, ${assistantText}, ${Date.now()})`;
-      }
-    } catch (err) {
-      console.warn("[proteus] mirror-to-messages failed:", err);
-    }
 
     // Record which crafted tools this turn used, keyed by the assistant
     // message id, so async thumbs feedback (setTurnFeedback) can re-score
@@ -1335,6 +1315,9 @@ export class OrchestratorAgent extends ActorAgent {
         // Read through `this.orch` at DELIVERY time, never captured: this
         // getter is reachable from the runtime's own construction path.
         signals: { deliver: (signal) => this.orch.signals.deliver(signal) },
+        // Where an 'always' answer lands: the same agent_config the approval
+        // MODE lives in, read live by the gate on the very next command.
+        remember: (grants) => { this.config.grantShellApproval(grants); },
         announce: (notice) => this.announceDeferral(notice),
       });
     }
@@ -1505,7 +1488,7 @@ export class OrchestratorAgent extends ActorAgent {
    * tracked: a cold activation always re-runs, so newly-added tables in code
    * are created without migration bookkeeping.
    */
-  private ensureSchema(): void {
+  protected ensureSchema(): void {
     if (this._schemaReady) return;
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
@@ -1517,6 +1500,8 @@ export class OrchestratorAgent extends ActorAgent {
     //    core/conformance/manifest.ts, observed against sqlite_master) ──
     initWebhookRateLimitTables(this.ctx.storage.sql);
     this.subordinateRoster.ensureSchema();
+    // The shared actor plane both cf roots carry (manifest: WIRED on both).
+    this.ensureCapabilitySchema();
 
     // Workspace-diff baseline (path → content snapshot) for the Output surface's
 
@@ -1541,7 +1526,25 @@ export class OrchestratorAgent extends ActorAgent {
     this._schemaReady = true;
   }
 
-  async onStart() {
+  /** Activation init, synchronous by contract: partyserver runs `onStart()`
+   *  inside `ctx.blockConcurrencyWhile()` (its `#ensureInitialized`), and
+   *  `fetch`, `webSocketMessage`, `webSocketClose` and `alarm` all await that
+   *  same gate. So anything awaited here stalls EVERY request on this object,
+   *  pure `@callable` reads included, and at 30s the Workers runtime cancels the
+   *  block and RESETS the object — `do.block_concurrency.cancel_ms` in the
+   *  platform catalog, which owns these measurements: a bare `SELECT` behind an
+   *  `onStart` awaiting a second Durable Object took 2303ms / 10215ms / 25212ms
+   *  for a 2s / 10s / 25s answer, and reset the object at 31s. Preconditions
+   *  that need I/O belong on the turn path (`ActorAgent.beforeTurn`); recovery
+   *  work that must reach the model is detached, as below.
+   *
+   *  The explicit `: void` is load-bearing but is NOT self-enforcing: the base
+   *  declares `onStart(props?): void | Promise<void>` (partyserver's .d.ts), so
+   *  `async onStart(): Promise<void>` still typechecks. What the annotation buys
+   *  is that an `await` added here is a compile error (TS1308) and that widening
+   *  it is visible in the diff; `scripts/do-init-gate.ts` is what refuses the
+   *  widening. */
+  onStart(): void {
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
     this.ensureSchema();
     // Runs inside `Agent.alarm()`'s initialization, i.e. before the SDK reads
@@ -1582,10 +1585,30 @@ export class OrchestratorAgent extends ActorAgent {
       if (identity.length === 0) {
         void this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
       }
-      await this.ensureOwnedScaffold();
     } catch (err) {
       console.error("[proteus] onStart init failed:", err);
     }
+    // A cold activation is the moment the fork journal's `running` heads become
+    // provably stale: nothing in this isolate is executing one, and
+    // `head_journal.status` had no writer for that — so `listLive()` kept
+    // feeding "N of M heads running" into every model step's dynamic-context
+    // block for the life of the workspace. Settle them and tell the agent, on
+    // the one signal seam. Sibling of the schedule sweep above by design: both
+    // are start-of-life reconciliations of state a dead activation left behind.
+    //
+    // Detached, not awaited: settling the journal is a synchronous SQL write
+    // that lands in this method's own frame (it is `reconcileInterruptedForks`'s
+    // first statement), so it still precedes anything that could resume a fork —
+    // but TELLING the agent goes through the signal seam, which queues a turn
+    // via `Think.saveMessages`, and that resolves only when the turn ENDS.
+    // Awaiting a whole agent turn inside the init gate is the 30s object reset.
+    void reconcileInterruptedForks({
+      journal: this.headJournal,
+      signals: this.orch.signals,
+      logActivity: (event, detail) => this.logActivity(event, detail),
+    }).catch((err) => {
+      console.warn('[proteus] fork journal reconciliation failed:', err instanceof Error ? err.message : String(err));
+    });
     if (reconciledEventIds.length > 0) {
       console.warn(`[proteus] startup event reconciliation re-pended ${reconciledEventIds.length} event(s)`);
       this.orch.scheduleDrain();
@@ -1708,7 +1731,6 @@ export class OrchestratorAgent extends ActorAgent {
       sql: this.boundSql,
       vfs: this.rt.storage.vfs,
       config: this.config,
-      fallbackId: this.ctx.id.toString(),
       name: this.name,
       displayName: this.getDisplayName(),
       // Before the first turn has been mirrored into `messages`, the in-memory
@@ -1749,6 +1771,17 @@ export class OrchestratorAgent extends ActorAgent {
   /** One named fork for a permalink, independent of the recent-list window. */
   @callable() async getForkRun(rootId: string): Promise<ForkRunSummary | null> {
     return readForkRun(this.boundSql, rootId);
+  }
+
+  /**
+   * The Exploration canvas, in one read: every recent fork, its dispatch
+   * parameters, and the rows for the trees that keep theirs in search_nodes.
+   *
+   * ONE call rather than one per tree — see the read model for why that is what
+   * made a multi-tree canvas possible at all.
+   */
+  @callable() async getExplorationCanvas(limit: number = 30): Promise<ExplorationCanvasView> {
+    return readExplorationCanvas(this.boundSql, limit);
   }
 
   /**
@@ -1922,7 +1955,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this._inFlight) {
       return { accepted: false, reason: 'No turn is running — send it as a normal message instead.' };
     }
-    if (this.turnPromptMode() === 'plan') {
+    if (this.turnWorkMode() === 'plan') {
       return { accepted: false, reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.' };
     }
     const runtime = this.getCFHeadRuntime();
@@ -2139,6 +2172,19 @@ export class OrchestratorAgent extends ActorAgent {
     return getShellApprovalMode(this.config);
   }
 
+  /** Every rule the owner has said "always" to, and where. The revoke list. */
+  @callable()
+  async getShellApprovalGrants(): Promise<{ grants: ApprovalGrant[] }> {
+    return getShellApprovalGrants(this.config);
+  }
+
+  /** Take a standing grant back. The gate reads grants live, so the next
+   *  command of that kind asks again — no toolset rebuild, no restart. */
+  @callable()
+  async revokeShellApprovalGrants(grants: ApprovalGrant[]): Promise<{ grants: ApprovalGrant[] }> {
+    return revokeShellApprovalGrants(this.config, grants);
+  }
+
   /**
    * Pin a set of skills as always-active for this agent. Empty array clears
    * the pin. Operators use this from the Settings page; without an RPC the
@@ -2176,22 +2222,33 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
+  /**
+   * The checkpoint store's reachability and what it holds, in one round trip.
+   *
+   * Reachability is not optional here. This used to return a bare array and
+   * answer `[]` for "no owner", "no device connected" and "the store is empty"
+   * alike, and the web client turned that into
+   * `No file checkpoint for this turn. It changed no device files.` — a claim
+   * about the operator's turn built from the absence of a device. Checkpoints
+   * cover the device plane only, so a turn that ran on the workspace plane or on
+   * `@sandbox` legitimately has none; the client has to be able to say which of
+   * those it is looking at.
+   */
   @callable()
-  async listFileCheckpoints(limit = 50): Promise<FileCheckpointEntry[]> {
-    if (!this.getOwnerUserDO()) return [];
-    try {
-      const { stub, caller } = await this.userHub();
-      const result = await stub.deviceRpc(
-        caller, 'checkpointList', [this.name, Math.max(1, Math.min(500, limit))],
-      );
-      return v.parse(
+  async listFileCheckpoints(limit = 50): Promise<FileCheckpointListing> {
+    const availability = await this.checkpointStatus();
+    if (!availability.available) return { availability, entries: [] };
+    const { stub, caller } = await this.userHub();
+    const result = await stub.deviceRpc(
+      caller, 'checkpointList', [this.name, Math.max(1, Math.min(500, limit))],
+    );
+    return {
+      availability,
+      entries: v.parse(
         v.array(FileCheckpointEntrySchema),
         result === undefined ? undefined : JSON.parse(result),
-      );
-    } catch (err) {
-      if (isDeviceNotConnectedError(err)) return [];
-      throw err;
-    }
+      ),
+    };
   }
 
   @callable()
@@ -2450,6 +2507,25 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
+   * One finished step of a head, written into the journal as it lands.
+   *
+   * A head runs in a FACET with its own storage, and the journal lives here — so
+   * the write has to come back over RPC, exactly as the mission ledger's
+   * per-step guard/debit does (`missionGuard`/`missionDebit`). Without this the
+   * whole trace path was declared and connected nowhere: `head_steps` existed,
+   * `HeadJournal.appendStep` existed with no callers, and
+   * `HeadInferenceDeps.reportStep` was an optional seam with no provider, so
+   * `await deps.reportStep?.(…)` silently no-opped on every step of every head.
+   * The visible consequence was every branch reading `STEPS 0 · TOOLS 0` with
+   * "no step trace" for its whole life, running or finished.
+   */
+  @callable()
+  async recordHeadStep(headId: string, seq: number, step: HeadStep): Promise<{ ok: true }> {
+    this.headJournal.appendStep(headId, seq, step);
+    return { ok: true };
+  }
+
+  /**
    * One page of this workspace's portable archive — the owner's own copy of
    * everything the workspace durably holds, in the same format the local
    * backend writes and `proteus import` reads.
@@ -2680,18 +2756,17 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   @callable() async getToolDescriptions() {
-    // Descriptions sourced from @proteus/core/tools/registry — single truth.
-    // Fixes F1 (tools.* → codemode.*) by virtue of the canonical source.
-
-    // How a capability is REACHED, derived rather than declared: a tool is
-    // native exactly when it is a key of the ToolSet the turn hands the model.
-    // Anything else is reachable only from inside an execute_tools program.
-    // Crafted tools are never ToolSet entries — buildCraftedToolSetFromExecute
-    // routes them through createExecuteTool's providers — so they come out
-    // codemode without a literal saying so, and a builtin that moves behind
-    // codemode flips here on its own.
-    const nativeNames = new Set(Object.keys(this.getRawTools()));
-    const exposureOf = (name: string): 'native' | 'codemode' => nativeNames.has(name) ? 'native' : 'codemode';
+    // Descriptions AND reach sourced from @proteus/core/tools/registry — one
+    // truth for both. Reach used to be guessed here as
+    // `nativeNames.has(name) ? 'native' : 'codemode'`, a binary that cannot
+    // express "this actor has it on neither surface": `report` is the one
+    // deps-gated builtin, so on an orchestrator it fell out of the else-branch
+    // and the Tools panel read "code mode" — false twice over, because `report`
+    // is native wherever it exists and its `report.*` namespace is wired only
+    // on a subordinate. The two facts are now reported separately, because they
+    // are two facts: what the capability IS (declared) and what this actor
+    // WIRES (observed from the ToolSet the turn actually built).
+    const wiredNames = new Set(Object.keys(this.getRawTools()));
     const builtIn = BUILTIN_TOOLS.map(name => ({
       name,
       // Both registers, from the one spec: the headline a list row shows and
@@ -2699,7 +2774,11 @@ export class OrchestratorAgent extends ActorAgent {
       // the other by splitting text.
       summary: BUILTIN_TOOL_SPECS[name].summary,
       description: BUILTIN_TOOL_DESCRIPTIONS[name],
-      exposure: exposureOf(name),
+      // Every name in BUILTIN_TOOLS is native by type (BuiltinToolName is
+      // derived from the declaration), so owning a codemode namespace is what
+      // makes it both.
+      exposure: TOOL_REACH[name].codemode ? 'both' as const : 'native' as const,
+      wired: wiredNames.has(name),
     }));
     const craftedRaw = this.rt.craftStore.list();
     const crafted = craftedRaw.map(t => {
@@ -2709,7 +2788,11 @@ export class OrchestratorAgent extends ActorAgent {
         name: t.name,
         description: t.description || "Crafted tool",
         isLearned: true,
-        exposure: exposureOf(t.name),
+        // A crafted tool is never a ToolSet entry — buildCraftedToolSetFromExecute
+        // routes it through createExecuteTool's providers — so codemode is its
+        // reach by construction, and it is wired exactly when the store holds it.
+        exposure: 'codemode' as const,
+        wired: true,
         qualityScore: scoreRow[0]?.score ?? 0.5,
         usageCount: scoreRow[0]?.uses ?? 0,
       };
@@ -2735,6 +2818,28 @@ export class OrchestratorAgent extends ActorAgent {
   async setProvisionalDisplayName(displayName: string) {
     this.config.setDisplayName(displayName);
     return { displayName };
+  }
+
+  /**
+   * The workspace's first turn, taken by the agent instead of waited for.
+   *
+   * Deliberately NOT `@callable`: a client cannot fabricate a genesis turn.
+   * Creation calls it once, last, so the mission, model and reasoning effort the
+   * turn runs under are already durable.
+   *
+   * Returns as soon as the turn is queued. Think's `saveMessages` — which
+   * `BackendHost.enqueueTurn` awaits — resolves only when the turn ENDS, so
+   * awaiting it here would hold the create request open for the whole turn and
+   * the New workspace dialog would sit there. The agents-SDK heartbeat holds
+   * the DO instead, exactly as the drain timer does.
+   */
+  async beginGenesisTurn(): Promise<{ started: boolean }> {
+    const signal = workspaceGenesisSignal(readMission(this.boundSql));
+    if (!signal) return { started: false };
+    void this.keepAliveWhile(() => this.orch.signals.deliver(signal)).catch((err) => {
+      console.warn('[proteus] genesis turn failed:', err instanceof Error ? err.message : err);
+    });
+    return { started: true };
   }
 
   @callable() async getExecutors() {
@@ -2789,21 +2894,22 @@ export class OrchestratorAgent extends ActorAgent {
 
   /**
    * One-round-trip initial load. Composes the per-surface read RPCs (status,
-   * tools, memory, MCTS, timeline, executors + their recent output) into a
-   * single payload, so the workspace first-paint is one WS call instead of
-   * 6 + N. Each field is independently guarded so one failing read can't blank
-   * the rest. Live updates still arrive via the granular refresh + events.
+   * tools, memory, the exploration canvas, timeline, executors + their recent
+   * output) into a single payload, so the workspace first-paint is one WS call
+   * instead of 6 + N. Each field is independently guarded so one failing read
+   * can't blank the rest. Live updates still arrive via the granular refresh +
+   * events.
    */
   @callable()
   async getWorkspaceSnapshot() {
     const safe = async <T>(p: Promise<T>, fallback: T): Promise<T> => {
       try { return await p; } catch { return fallback; }
     };
-    const [status, tools, memoryContent, mcts, timeline, executors] = await Promise.all([
+    const [status, tools, memoryContent, exploration, timeline, executors] = await Promise.all([
       this.getAgentStatus(),
       safe(this.getToolDescriptions(), { builtIn: [], crafted: [], executors: [] }),
       this.getMemoryContent(),
-      safe(this.getMctsTree(), []),
+      safe(this.getExplorationCanvas(), { runs: [], params: [], search: [] }),
       safe(this.getRunTimeline({ limit: 250 }), []),
       safe(this.getExecutors(), []),
     ]);
@@ -2814,7 +2920,7 @@ export class OrchestratorAgent extends ActorAgent {
       })),
     );
     const lastActiveExecutor = this.config.getLastActiveExecutor();
-    return { status, tools, memoryContent, mcts, timeline, executors, executorOutputs, lastActiveExecutor };
+    return { status, tools, memoryContent, exploration, timeline, executors, executorOutputs, lastActiveExecutor };
   }
 
   @callable() async executeInExecutor(executorId: string, command: string) {
@@ -2856,7 +2962,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Typed directory listing for the file manager — read off each executor's
    *  own raw handle, in that environment's own paths. */
-  @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ entries?: DirEntry[]; error?: string }> {
+  @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ path?: string; entries?: DirEntry[]; error?: string }> {
     if (!this.rt.executionRouter) return { error: 'no execution router' };
     return getExecutorFiles(this.rt.executionRouter, executorId, path);
   }

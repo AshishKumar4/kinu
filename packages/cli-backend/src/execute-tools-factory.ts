@@ -26,7 +26,7 @@ import type {
   ExecutorProvider,
   JsonValue,
 } from '@proteus/core';
-import { BUILTIN_TOOL_DESCRIPTIONS, decodeJsonValue, explainNativeToolReferenceError } from '@proteus/core';
+import { decodeJsonValue, explainNativeToolReferenceError, renderExecuteToolsDescription } from '@proteus/core';
 import { tool, jsonSchema } from 'ai';
 import { addImplicitReturn } from './executor.js';
 import * as v from 'valibot';
@@ -66,9 +66,17 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
     ];
 
     return tool({
-      // The one description, shared with the CF codemode sandbox: this factory
-      // is that tool on a different runtime, not a different tool.
-      description: BUILTIN_TOOL_DESCRIPTIONS.execute_tools,
+      // The one description, composed in core (registry.
+      // renderExecuteToolsDescription) so this factory really is the CF
+      // codemode tool on a different runtime rather than a different tool. The
+      // namespace declarations are the point: each provider carries its own
+      // `types`, and this path used to collect them in adaptExecutorProvider
+      // and never read one, so the model was told nothing about `memory.*`,
+      // `tasks.*`, `agents.*`, `web.*` or `llm.*` while being handed all of
+      // them as callables.
+      description: renderExecuteToolsDescription(
+        providers.map((provider) => provider.types).filter((types) => !!types).join('\n\n'),
+      ),
       inputSchema: jsonSchema<{ code: string }>({
         type: 'object',
         properties: { code: { type: 'string', description: 'JavaScript code to execute' } },

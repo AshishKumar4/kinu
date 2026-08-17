@@ -62,6 +62,18 @@ export const PATTERNS: readonly SecretPattern[] = [
     message: 'hardcoded secret assignment',
   },
   {
+    // Proteus is a public repository. Cloudflare-internal research reached this
+    // ecosystem once already: ~/Nimbus kept dossiers under a gitignored
+    // `docs/research/`, compiled from Cloudflare's internal repository and wiki,
+    // and their SECTION CITATIONS still shipped inside a public production
+    // constant. A citation is not a secret, but it names internal material and
+    // invites reconstruction, so the names are blocked at the same seam as a
+    // credential rather than left to reviewer memory.
+    id: 'cf-internal-reference',
+    regex: /wiki\.cfdata\.org|cloudflare\/ew\b|edgeworker\b|metrics\.c\+\+|cf-(?:primitives|internal)-dossier/g,
+    message: 'Cloudflare-internal source reference (public repo — cite the measurement instead)',
+  },
+  {
     id: 'credentialed-url',
     regex: /(?:mongodb|postgres|mysql|redis|amqp):\/\/[^:\s]+:[^@\s]{8,}@/g,
     benign: /<your-|localhost/,
@@ -143,8 +155,19 @@ export function applyIgnores(findings: readonly Finding[], entries: readonly Ign
   return { findings: kept, unused: entries.filter((e) => !used.has(e)) };
 }
 
-function trackedFiles(): string[] {
-  const proc = Bun.spawnSync(['git', 'ls-files', '-z'], { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' });
+/** Tracked files PLUS new files not covered by `.gitignore`.
+ *
+ *  `git ls-files -z` alone is tracked-only, so a brand-new file carrying a
+ *  credential passed this gate until the commit that introduced it — after
+ *  which the secret is already in history and the gate fires too late to
+ *  matter. `--others --exclude-standard` closes that window while still
+ *  honouring `.gitignore`, which is what keeps the `external/` reference
+ *  clones (they contain Cloudflare-internal source) out of the scan. */
+function scannableFiles(): string[] {
+  const proc = Bun.spawnSync(
+    ['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+    { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' },
+  );
   if (proc.exitCode !== 0) throw new Error(`git ls-files failed: ${proc.stderr.toString()}`);
   return selectScanCandidates(proc.stdout.toString().split('\0'), (file) =>
     existsSync(join(REPO_ROOT, file))
@@ -162,7 +185,7 @@ function main(): void {
   const ignorePath = join(REPO_ROOT, IGNORE_FILE);
   const entries = existsSync(ignorePath) ? parseIgnoreFile(readFileSync(ignorePath, 'utf8')) : [];
 
-  const files = trackedFiles().filter((f) => f !== IGNORE_FILE && f !== relative(REPO_ROOT, import.meta.path));
+  const files = scannableFiles().filter((f) => f !== IGNORE_FILE && f !== relative(REPO_ROOT, import.meta.path));
   const raw: Finding[] = [];
   for (const file of files) raw.push(...scanText(file, readFileSync(join(REPO_ROOT, file), 'utf8')));
   const { findings, unused } = applyIgnores(raw, entries);

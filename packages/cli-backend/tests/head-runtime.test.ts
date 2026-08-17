@@ -52,12 +52,22 @@ function makeGovernor(): MissionGovernor {
   return new MissionGovernor({ storage: { sql: makeSql(db), execRaw: makeExecRaw(db) } });
 }
 
+/** A journal over its own scratch storage. A local head writes its steps here
+ *  directly — the cf backend's has to cross a facet boundary to reach one. */
+function makeJournal(): HeadJournal {
+  const db = new Database(':memory:');
+  initHeadsTables(makeExecRaw(db));
+  return new HeadJournal(makeSql(db));
+}
+
 /** Head-runtime deps around a fresh parent, with test overrides. */
 function headDeps(model: LanguageModel, over?: Partial<CLIHeadRuntimeDeps>): CLIHeadRuntimeDeps {
   const governor = makeGovernor();
+  const journal = makeJournal();
   return {
     model, parentRuntime: makeParent(), cwd: process.cwd(),
-    webSearch: stubWeb, codemodeExtras: () => [], governor: () => governor, ...over,
+    webSearch: stubWeb, codemodeExtras: () => [],
+    governor: () => governor, journal: () => journal, ...over,
   };
 }
 
@@ -123,12 +133,17 @@ function controllerWithCLIRuntime(model: LanguageModel, providerFamily?: string)
   const db = new Database(':memory:');
   initHeadsTables(makeExecRaw(db));
   const journal = new HeadJournal(makeSql(db));
-  return new HeadController(createCLIHeadRuntime(headDeps(model, providerFamily ? { providerFamily } : {})), journal);
+  const overrides: Partial<CLIHeadRuntimeDeps> = { journal: () => journal };
+  if (providerFamily) overrides.providerFamily = providerFamily;
+  return {
+    journal,
+    controller: new HeadController(createCLIHeadRuntime(headDeps(model, overrides)), journal),
+  };
 }
 
 describe('createCLIHeadRuntime — full split → run → merge', () => {
   test('two heads run in-process and the merge synthesizes their findings', async () => {
-    const controller = controllerWithCLIRuntime(fakeHeadsModel());
+    const { controller } = controllerWithCLIRuntime(fakeHeadsModel());
     const result = await controller.run({
       mode: 'build',
       parentHeadId: null,
@@ -154,7 +169,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
       maxOutputTokens?: number;
       providerOptions?: LanguageModelV2CallOptions['providerOptions'];
     } | undefined;
-    const controller = controllerWithCLIRuntime(
+    const { controller } = controllerWithCLIRuntime(
       fakeHeadsModel((options, isMerge) => { if (isMerge) mergeOptions = options; }),
       'openai',
     );
@@ -213,7 +228,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   });
 
   test('phase events fire on split and merge', async () => {
-    const controller = controllerWithCLIRuntime(fakeHeadsModel());
+    const { controller } = controllerWithCLIRuntime(fakeHeadsModel());
     const phases: string[] = [];
     await controller.run({
       mode: 'build',
@@ -224,6 +239,37 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
       onPhase: (e) => phases.push(e.kind),
     });
     expect(phases).toEqual(['split', 'merge']);
+  });
+
+  /**
+   * The trace has to REACH the journal, not merely exist as a shape.
+   *
+   * This is the one property the Exploration surface's live branch view rests
+   * on, and the whole path was declared and connected nowhere: `head_steps`
+   * existed, `HeadJournal.appendStep` had no callers, and
+   * `HeadInferenceDeps.reportStep` was an optional seam with no provider — so
+   * `await deps.reportStep?.(…)` no-opped on every step of every head and every
+   * branch read "no step trace captured" for its whole life. Nothing failed;
+   * the pane was simply always empty. Asserting through `readRun`, the exact
+   * projection the surface reads, is what makes cutting that wire visible.
+   */
+  test('every head step reaches the journal, so a branch trace is readable', async () => {
+    const { controller, journal } = controllerWithCLIRuntime(fakeHeadsModel());
+    const result = await controller.run({
+      mode: 'build',
+      parentHeadId: null,
+      inheritedContext: [],
+      request: { rationale: 'trace me', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+      parentBudget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+    });
+
+    const run = journal.readRun(result.headIds[0]!.split('-d')[0]!);
+    const heads = run?.heads ?? [];
+    expect(heads).toHaveLength(2);
+    for (const head of heads) {
+      expect(head.steps.length).toBeGreaterThan(0);
+      expect(head.lastStepAt).not.toBeNull();
+    }
   });
 });
 
@@ -328,9 +374,16 @@ function scratchProbeModel(arrive: () => Promise<void>): LanguageModel {
   });
 }
 
-/** What a head's `file` read returned, from its own step trace. */
-function readBack(report: { steps: ReadonlyArray<{ toolCalls: ReadonlyArray<{ name: string; output?: unknown }> }> }): string {
-  return report.steps
+/**
+ * What a head's `file` read returned, from its own step trace.
+ *
+ * Read out of the journal, which is where a head's steps live now — the report
+ * carries the outcome, not the trace. Passing the journal in also means this
+ * asserts the trace ARRIVED, which is the property the surface depends on.
+ */
+function readBack(journal: HeadJournal, rootId: string, headId: string): string {
+  const head = journal.readRun(rootId)?.heads.find((h) => h.id === headId);
+  return (head?.steps ?? [])
     .flatMap((s) => s.toolCalls)
     .filter((c) => c.name === 'file')
     .map((c) => JSON.stringify(c.output ?? ''))
@@ -341,22 +394,30 @@ describe("a local head's scratch is a real store, private to it, and swept when 
   test('two concurrent heads each get their own durable scratch, and neither sees the other', async () => {
     const before = scratchStores();
     let midRun: string[] = [];
-    const runtime = createCLIHeadRuntime(headDeps(scratchProbeModel(barrier(2, () => { midRun = scratchStores(); }))));
+    const journal = makeJournal();
+    const runtime = createCLIHeadRuntime(headDeps(
+      scratchProbeModel(barrier(2, () => { midRun = scratchStores(); })),
+      { journal: () => journal },
+    ));
 
-    const [alpha, beta] = await Promise.all([
-      (await runtime.spawnHead(aHeadInput({ id: 'alpha', task: 'alpha' }))).run(),
-      (await runtime.spawnHead(aHeadInput({ id: 'beta', task: 'beta' }))).run(),
-    ]);
+    const inputs = [
+      aHeadInput({ id: 'alpha', task: 'alpha' }),
+      aHeadInput({ id: 'beta', task: 'beta' }),
+    ];
+    for (const input of inputs) journal.insertSpawn(input);
+    await Promise.all(inputs.map(async (input) => (await runtime.spawnHead(input)).run()));
 
     // Durable: while both heads were running, each had a real store on disk —
     // not a `new Database(':memory:')` living in this process's heap.
     expect(midRun.sort()).toEqual(['alpha.db', 'beta.db']);
 
     // Private: each head read back its OWN marker, and the sibling's is absent.
-    expect(readBack(alpha)).toContain('scratch-of-alpha');
-    expect(readBack(alpha)).not.toContain('scratch-of-beta');
-    expect(readBack(beta)).toContain('scratch-of-beta');
-    expect(readBack(beta)).not.toContain('scratch-of-alpha');
+    // Read through the journal, so this also proves the trace arrived there.
+    const root = inputs[0]!.rootId;
+    expect(readBack(journal, root, 'alpha')).toContain('scratch-of-alpha');
+    expect(readBack(journal, root, 'alpha')).not.toContain('scratch-of-beta');
+    expect(readBack(journal, root, 'beta')).toContain('scratch-of-beta');
+    expect(readBack(journal, root, 'beta')).not.toContain('scratch-of-alpha');
 
     // Swept: a finished head leaves nothing behind, so scratch never accumulates.
     expect(scratchStores()).toEqual(before);

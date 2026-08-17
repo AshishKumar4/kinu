@@ -17,9 +17,12 @@
  *     detached job, a drain or an autonomous turn, none of which stream
  *     through this tab's chat socket.
  */
-import { useCallback } from "react";
-import type { ForkRunSummary, HeadRunView } from "@proteus/core";
+import { useCallback, useMemo } from "react";
+import type {
+  ExplorationCanvasView, ForkRunParams, ForkRunSummary, HeadRunView,
+} from "@proteus/core";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { buildTree, groupByRoot } from "@/lib/fork-tree-rows";
 import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
 
 export const FORK_RUN_LIMIT = 30;
@@ -72,7 +75,9 @@ export function forkRunsRevalidateMs(
   return hasActiveWork || hasLiveForkRun(runs) ? FORK_REVALIDATE_MS : FORK_IDLE_REVALIDATE_MS;
 }
 
-/** The single live fork-list resource used by both Exploration renderings. */
+/** The single live fork-list resource. `MCTSExplorer` drills into ONE run, so
+ *  the list is all it needs; the embedded canvas uses
+ *  {@link useExplorationCanvas}, which also brings every tree and its params. */
 export function useLiveForkRuns(
   rpc: Rpc,
   isStreaming: boolean,
@@ -89,6 +94,58 @@ export function useLiveForkRuns(
   );
   const { resource, reload } = useAsyncResource(load, revalidate);
   return { resource, reload, runs: lastValue(resource), hasActiveWork };
+}
+
+/**
+ * Every tree the workspace has grown, on one canvas — one read.
+ *
+ * The list, the dispatch parameters and the search rows arrive together, from
+ * one snapshot of the storage, so the canvas cannot draw a tree for a run the
+ * list does not have or label a run with another's parameters. A per-run fetch
+ * would have been N requests growing with the workspace's history, which is why
+ * the surface only ever drew one tree.
+ *
+ * `liveTrees` are the socket-fed trees, keyed by search, and they WIN over the
+ * polled rows for the searches they cover: a running search pushes a tree per
+ * iteration, which no poll can match.
+ */
+export function useExplorationCanvas(
+  rpc: Rpc,
+  isStreaming: boolean,
+  backgroundJobs: readonly BackgroundJob[],
+  liveTrees: ReadonlyMap<string, ForkNode>,
+) {
+  const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
+  const load = useCallback(
+    () => rpc<ExplorationCanvasView>("getExplorationCanvas", [FORK_RUN_LIMIT]),
+    [rpc],
+  );
+  const revalidate = useCallback(
+    (view: ExplorationCanvasView | null) => forkRunsRevalidateMs(view?.runs ?? null, hasActiveWork),
+    [hasActiveWork],
+  );
+  const { resource, reload } = useAsyncResource(load, revalidate);
+  const view = lastValue(resource);
+
+  const trees = useMemo(() => {
+    const folded = new Map<string, ForkNode>();
+    for (const [rootId, rows] of groupByRoot(view?.search ?? [])) {
+      folded.set(rootId, buildTree(rows));
+    }
+    for (const [rootId, tree] of liveTrees) folded.set(rootId, tree);
+    return folded;
+  }, [view?.search, liveTrees]);
+
+  const params = useMemo(() => {
+    const byRoot = new Map<string, ForkRunParams>();
+    for (const entry of view?.params ?? []) byRoot.set(entry.rootId, entry);
+    return byRoot;
+  }, [view?.params]);
+
+  return {
+    resource, reload, hasActiveWork, trees, params,
+    runs: view === null ? null : [...view.runs],
+  };
 }
 
 /** One permalink target, independent of the bounded recent-fork list. */
@@ -165,4 +222,61 @@ export function headRunToTree(run: HeadRunView): ForkNode {
 /** The head behind a node of a merged fork's tree, or null for its root. */
 export function findHead(run: HeadRunView, nodeId: string): HeadRunView["heads"][number] | null {
   return run.heads.find((head) => head.id === nodeId) ?? null;
+}
+
+/* ── what the run was dispatched with ──────────────────────────── */
+
+/**
+ * The settle policy by the name the caller writes: `settle:"mcts"` or
+ * `settle:"merge"`.
+ *
+ * `ForkRunSummary.settle` is `competed`/`merged`, which is the OUTCOME — what
+ * happened to the branches. The surface showed only that, so a reader could not
+ * tell which policy had been asked for, and the two are not interchangeable: one
+ * ranks its branches by execution and keeps a winner, the other synthesises all
+ * of them and ranks nothing. Recovered parameters carry the policy verbatim;
+ * without them the outcome still determines it, because only mcts competes.
+ */
+export function settlePolicyOf(run: ForkRunSummary, params: ForkRunParams | undefined): string {
+  return params?.policy ?? (run.settle === "competed" ? "mcts" : "merge");
+}
+
+/** One parameter as a label and a value. Empty when the run's parameters are no
+ *  longer recorded — the caller says so rather than showing plausible defaults. */
+export interface ForkParamRow {
+  readonly label: string;
+  readonly value: string;
+}
+
+/**
+ * The parameters the run was dispatched with, in the order they matter.
+ *
+ * Per policy, because these are genuinely different objects. A search has an
+ * iteration budget, a branching factor, a depth cap and the exploration constant
+ * it selected with; a merge has a merge strategy and a head count and no budget
+ * at all. Nulls are dropped rather than rendered as "—": an unrecorded knob and
+ * a knob left at its default are different facts, and only the first is knowable
+ * here.
+ */
+export function forkParamRows(params: ForkRunParams | undefined): ForkParamRow[] {
+  if (!params) return [];
+  if (params.policy === "merge") {
+    return [
+      { label: "merge", value: params.mergeStrategy },
+      { label: "forks", value: String(params.branches) },
+    ];
+  }
+  const rows: ForkParamRow[] = [
+    { label: "budget", value: `${params.budget} iterations` },
+    { label: "branches", value: String(params.branches) },
+  ];
+  if (params.maxDepth !== null) rows.push({ label: "max depth", value: String(params.maxDepth) });
+  if (params.explorationWeight !== null) {
+    rows.push({ label: "exploration c", value: params.explorationWeight.toFixed(2) });
+  }
+  if (params.judgeSamples !== null) {
+    rows.push({ label: "judges", value: `${params.judgeSamples} per branch` });
+  }
+  if (params.mode !== null) rows.push({ label: "mode", value: params.mode });
+  return rows;
 }

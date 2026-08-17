@@ -213,8 +213,8 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     models: 'deny decisions decay into gate, the approval prose stops naming its rules, and the digest is truncated below collision resistance',
     inject: (s) => ({
       ...s,
-      reviewCommand: (command) => {
-        const result = s.reviewCommand(command);
+      reviewCommand: (command, executor) => {
+        const result = s.reviewCommand(command, executor);
         return result.decision === 'deny' ? { ...result, decision: 'gate' } : result;
       },
       formatApproval: (result) => (result.decision === 'allow' ? '' : `Approval review: ${result.decision}`),

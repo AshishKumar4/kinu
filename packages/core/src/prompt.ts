@@ -6,6 +6,7 @@
 
 import type { AgentRuntime } from './types/agent-runtime.js';
 import {
+  AGENT_STANCE_SPECS,
   BUILTIN_TOOL_SPECS,
   type BuiltinToolName,
 } from './tools/registry.js';
@@ -22,13 +23,17 @@ import {
 } from './prompting/surface.js';
 import { DEFAULT_SOUL_MD } from './identity/soul.js';
 import { renderAgentsMdSection, type AgentsMdFile } from './prompting/agents-md.js';
+import { BUILTIN_TOOL_LINE } from './prompting/section-templates.js';
 import { WORKSPACE_ROOT } from './vfs/workspace-path.js';
+import { PLATFORM_CATALOG } from './platform-catalog.js';
 
+export type { AgentStance } from './tools/registry.js';
 export type {
   PromptBackend,
   PromptExecutorInfo,
   PromptExternalToolInfo,
-  PromptMode,
+  TurnProvenance,
+  WorkMode,
 } from './prompting/surface.js';
 export type {
   PromptModelCapability,
@@ -65,18 +70,32 @@ export function currentDateForPrompt(now: Date = new Date()): string {
 
 export const FALLBACK_PURPOSE = DEFAULT_SOUL_MD;
 
+// No `- Turn mode:` line. It announced a mode the guidance below already names
+// wherever it constrains anything, and for the default (`build`, shown to the
+// user as Auto) it announced a mode with no branch at all — a 19-byte
+// insertion ~350 bytes into the CACHEABLE prefix that split the prompt cache
+// between a chat turn and an identical Auto turn for no behavioural gain.
 function renderRuntimeContext(opts: SystemPromptOptions): string {
   const lines: string[] = [];
   if (opts.backend) lines.push(`- Backend: ${opts.backend}`);
-  if (opts.mode && opts.mode !== 'chat') lines.push(`- Turn mode: ${opts.mode}`);
   if (opts.model?.id) lines.push(`- Model: ${opts.model.provider ? `${opts.model.provider}/` : ''}${opts.model.id}`);
   if (opts.cwd) lines.push(`- Working directory: ${opts.cwd}`);
   if (opts.currentDate) lines.push(`- Current date: ${opts.currentDate}`);
   return lines.length ? `## Runtime context\n${lines.join('\n')}` : '';
 }
 
+/**
+ * The turn's guidance, in three independent layers.
+ *
+ * Permission (workMode), provenance and stance are separate facts and each
+ * renders on its own: a background-job wake is a resume AND it is plan or
+ * build work, and the stance is neither. Collapsing them into one value is
+ * what made the resume overlay unreachable — see prompting/surface.ts.
+ *
+ * Two of the three render nothing in their default state, on purpose: `build`
+ * (Auto) is the absence of constraint, and so is the `general` stance.
+ */
 function renderOperatingGuidance(surface: PromptSurface): string {
-  const mode = surface.mode;
   const family = surface.model.family;
   const lines = [
     '- Treat ambiguous "do this" requests as work to perform.',
@@ -97,7 +116,13 @@ function renderOperatingGuidance(surface: PromptSurface): string {
     );
   }
 
-  if (mode === 'plan') {
+  for (const line of AGENT_STANCE_SPECS[surface.stance].guidance) lines.push(`- ${line}`);
+
+  if (surface.provenance === 'background_resume') {
+    lines.push('- Background-resume mode: fetch the referenced job result first, synthesize it, then continue or close the original work.');
+  }
+
+  if (surface.workMode === 'plan') {
     lines.push(
       surface.planSubmissionAvailable
         ? '- Plan mode: investigate deeply, then submit a concrete Markdown plan with affected files, risks, and verification through `submit_plan`.'
@@ -110,13 +135,6 @@ function renderOperatingGuidance(surface: PromptSurface): string {
         ? '- Do not begin implementation until the plan is approved. End by calling `submit_plan`, or ask a question only when the missing answer must come from the user.'
         : '- Do not begin implementation. Return your research and recommendations to the parent without calling or inventing `submit_plan`.',
     );
-  } else if (mode === 'release') {
-    lines.push('- Release mode: use `release.*` inside execute_tools to track plan, checks, preview, owner approval, deployment, and rollback metadata.');
-    lines.push('- Never deploy Proteus release changes without an explicit approval record.');
-  } else if (mode === 'cron') {
-    lines.push('- Scheduled wake mode: identify why you were woken, do only the scheduled work, persist any durable outcome, then stop.');
-  } else if (mode === 'background_resume') {
-    lines.push('- Background-resume mode: fetch the referenced job result first, synthesize it, then continue or close the original work.');
   }
 
   return `## Operating guidance\n${lines.join('\n')}`;
@@ -129,7 +147,7 @@ function renderOperatingGuidance(surface: PromptSurface): string {
 // the model's attention on a way of calling it we do not want.
 function renderBuiltinToolLine(name: BuiltinToolName): string {
   const spec = BUILTIN_TOOL_SPECS[name];
-  return `- **${name}** — ${spec.summary}\n  \`${spec.example}\``;
+  return BUILTIN_TOOL_LINE.render({ name, summary: spec.summary, example: spec.example });
 }
 
 function renderExternalToolLine(tool: PromptExternalToolInfo): string {
@@ -169,6 +187,11 @@ function renderToolsSection(surface: PromptSurface): string {
   ].join('\n');
 }
 
+/** The number the workspace sentence tells the model, from `worker.isolate.memory`.
+ *  Derived rather than typed: this used to read "~128 MB" as prose, which is the
+ *  drift the catalog exists to stop. */
+const WORKSPACE_MEMORY_MB = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / (1000 * 1000);
+
 /** Doctrine only — live availability labels render in the per-turn volatile
  *  context message (prompting/volatile-context.ts), never in this cacheable
  *  prefix, so a sandbox waking up doesn't re-prefill the whole conversation. */
@@ -176,13 +199,20 @@ function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): 
   switch (exec.name) {
       // What the `workspace` shell is differs by backend. Hosted, it is the
       // authoritative Nimbus session: files, runtimes and resident processes
-      // are one environment rather than a second executor beside storage.
+      // are one environment rather than a second executor beside storage. Its
+      // ceiling is prose, not a `resourceLimits` declaration — it is a platform
+      // fact rather than a cgroup this process measured, and ResourceLimits is
+      // reserved for measured values (execution/types.ts). Rendered from
+      // `worker.isolate.memory` so the sentence the model reads cannot drift
+      // from the catalog; note that entry is the PUBLISHED figure and
+      // `do.isolate.oom_catchable` measured the real wall far higher, so this
+      // sentence understates the workspace in the agent's favour.
       case 'workspace':
         return backend === 'cli-local'
           ? '- **workspace.*** / `runtime: "workspace"`: your own durable workspace filesystem and a real shell over it. The machine the CLI is running on is `laptop.*`, in the machine\'s own paths.'
-          : '- **workspace.*** / `runtime: "workspace"`: the agent\'s own durable Nimbus workspace — one filesystem and real POSIX shell with node, npm, git, resident background processes, logs, and exposable ports. Additional interpreter/toolchain support is listed in its live capabilities.';
+          : `- **workspace.*** / \`runtime: "workspace"\`: the agent's own durable Nimbus workspace — one filesystem and real POSIX shell with node, npm, git, resident background processes, logs, and exposable ports. Additional interpreter/toolchain support is listed in its live capabilities. Its shell runs inside a Worker isolate, so ~${WORKSPACE_MEMORY_MB} MB of memory is what bounds any one command: it fits editing, scripts, package installs, running services, and repositories that clone within that.`;
       case 'sandbox':
-        return '- **sandbox.*** / `runtime: "sandbox"`: full Linux sandbox for heavier installs, longer-running processes, and user-visible port-listening apps.';
+        return '- **sandbox.*** / `runtime: "sandbox"`: a full Linux container with its own CPU, memory and disk — heavier installs, longer-running processes, large clones and builds, bulk data, and user-visible port-listening apps. It provisions on first use, so moving a job here the moment it outgrows the workspace is the normal step.';
       case 'laptop':
         return backend === 'cli-local'
           ? '- **laptop.*** / `runtime: "laptop"`: the local machine the Proteus CLI is running on — direct access, no tunnel or consent prompt.'
@@ -258,6 +288,19 @@ function renderExecutorSection(surface: PromptSurface): string {
       `For a user-visible web app, keep its files and server in one preview-capable environment, start the server bound to 0.0.0.0 in the background, wait for it to bind, then call ${exposeCalls} for the environment you chose. If exposePort fails, inspect that environment's server log and retry after the server is actually listening.`,
     );
   }
+  // The approvals doctrine, stated ONCE, and only on turns that have a shell.
+  // A parked tool result used to repeat all of it on every call (222 tokens
+  // each); it is a standing fact about this surface, so it lives here and the
+  // result is now one line (safety/deferred-approval.ts). Names no executor:
+  // which ones exist this turn is the list above.
+  parts.push(
+    '',
+    '### Approvals',
+    'Commands that touch a machine which is not your own, or reach outside it — a force-push, a publish, reading the user\'s secrets — need their decision. '
+    + 'Your own workspace and sandbox are not gated: clean up, install and delete there freely.',
+    'A parked command returns one line, `NOT RUN — queued for owner approval (<id>)`. Nothing ran, and re-issuing returns the same line. '
+    + 'A decision wakes you either way, so carry on with independent work or end your turn.',
+  );
   return parts.join('\n');
 }
 
@@ -318,7 +361,15 @@ function renderAgentStateSection(surface: PromptSurface): string {
         // before any result could trip it. It says so in its own marker now
         // (tools/clamp.ts), at the trip, where the fact is actionable — and
         // costs nothing on the turns that never reach the floor.
-        '- Do it yourself — a single short coherent change.',
+        // The ladder's DEFAULT, where the zeroth rung used to be listed first.
+        // A bullet reading "- Do it yourself" made rung 0 the visually first
+        // choice and turned the section into a classification: the model had to
+        // positively recognise 2+ angles before it acted, so every ambiguous
+        // turn failed closed to doing it alone — measured 0% conversion on
+        // doctrine against 24% for the mechanical splice. The exemptions are
+        // the same three facts, stated last and stated as things to DO, so an
+        // unrecognised shape now falls the other way.
+        'Delegate once the shape of the work is settled: naming the parts is yours, running them is theirs. Work alone on a single coherent change in one file, on a direct answer that needs no change, and on a command the user asked you to run; work with two or more independent parts goes to the ladder.',
       );
     }
     if (has('fork')) {

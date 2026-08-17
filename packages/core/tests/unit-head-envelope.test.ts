@@ -163,7 +163,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
       maxSteps: DEFAULT_MAX_STEPS, isAborted: () => false,
     });
     expect(report.status).toBe('completed');
-    expect(report.steps.length).toBe(61);
+    expect(report.stepCount).toBe(61);
     expect(report.tokenUsage.output).toBe(5_000 * 61);
     expect(report.tokenUsage.total).toBeGreaterThan(19_200);
     expect(report.summary).toBe('Here is what I found.');
@@ -221,7 +221,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
       workspaceLayout: 'shared-workspace',
       maxSteps: 40, isAborted: () => false,
     });
-    expect(report.steps.length).toBe(40);
+    expect(report.stepCount).toBe(40);
     expect(report.status).toBe('budget_exceeded');
     expect(report.errorMessage).toContain('step envelope (40 steps)');
     expect(report.summary).toContain('did not complete');

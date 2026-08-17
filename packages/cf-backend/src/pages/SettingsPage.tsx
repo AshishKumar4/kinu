@@ -14,8 +14,9 @@ import {
 } from "@phosphor-icons/react";
 import {
   WORKSPACE_ARCHIVE_EXTENSION, formatScoreInterval,
-  type ArchiveCursor, type ArchivePage, type JsonValue,
+  type ApprovalGrant, type ArchiveCursor, type ArchivePage, type JsonValue,
 } from "@proteus/core";
+import { executorLabel } from "@/lib/executors";
 import { useProteus } from "@/hooks/use-proteus";
 import {
   listDevices, listDeviceConsents, setDeviceConsentScope,
@@ -242,7 +243,7 @@ export default function SettingsPage() {
             <p className="text-xs p-text-3 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1">
               <span className="font-mono">{agentId}</span>
               <CopyButton value={agentId ?? ""} what="the workspace slug" size={11}
-                className="rounded p-0.5 hover:p-card-hover hover:p-text transition-colors" />
+                className="rounded-sm p-0.5 p-card-hover hover:p-text transition-colors" />
               <span>·</span>
               <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
                 <KeyIcon size={11} /> Account settings & credentials
@@ -264,7 +265,7 @@ export default function SettingsPage() {
           </button>
         </header>
 
-        {err && <div className="p-card rounded-lg p-3 text-xs p-danger">{err}</div>}
+        {err && <div className="p-card p-3 text-xs p-danger">{err}</div>}
 
         {/* Identity */}
         <Card title="Identity" icon={BrainIcon}>
@@ -318,13 +319,14 @@ export default function SettingsPage() {
                   <button
                     key={m}
                     onClick={() => approval.edit(m)}
-                    className={`p-2 rounded-md text-xs ${value === m ? 'p-accent-bg p-accent' : 'p-card hover:p-card-hover'}`}
+                    className={`p-2 rounded-md text-xs ${value === m ? 'p-accent-bg p-accent' : 'p-card p-card-hover'}`}
                   >{m === 'strict' ? 'Strict (review)' : m === 'allow_all' ? 'Allow all' : 'Deny all'}</button>
                 ))}
               </div>
             )}
           </FieldState>
         </Card>
+        <StandingApprovalsCard rpc={rpc} />
 
         {/* MCTS knobs */}
         <Card title="MCTS tunables" icon={TreeStructureIcon}>
@@ -356,6 +358,82 @@ export default function SettingsPage() {
         <GepaOptimizationCard rpc={rpc} />
       </div>
     </div>
+  );
+}
+
+// ── Standing shell approvals ─────────────────────────────────────
+
+/**
+ * The grants "Always" minted, and the only way to take one back.
+ *
+ * `getShellApprovalGrants` / `revokeShellApprovalGrants` have been live
+ * `@callable`s with no caller: the queue could hand out a standing permission
+ * that nothing in the product could show you or withdraw. It sits under the
+ * approval mode because it is the same decision at a finer grain — the mode
+ * says whether to ask, and these are the specific questions already answered.
+ *
+ * A grant is scoped to one rule on one executor and nothing wider. It stops
+ * the asking; it never widens what a command can reach, and it cannot soften
+ * a rule the gate refuses outright.
+ */
+export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(
+    async () => (await rpc<{ grants: ApprovalGrant[] }>("getShellApprovalGrants", [])).grants,
+    [rpc],
+  );
+  const { resource, reload } = useAsyncResource(load);
+  const grants = lastValue(resource);
+
+  const revoke = async (grant: ApprovalGrant) => {
+    setBusy(`${grant.rule}@${grant.executor}`);
+    setErr(null);
+    try {
+      await rpc("revokeShellApprovalGrants", [[grant]]);
+      reload();
+    } catch (e) {
+      setErr(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Nothing granted is the common case and says all it has to say in the
+  // card above; a permanently empty card is furniture.
+  if (resource.status !== "error" && grants !== null && grants.length === 0) return null;
+  return (
+    <Card title="Standing approvals" icon={ShieldIcon}>
+      <p className="p-meta p-text-3">
+        Answers you gave with “Always”. Each one stops Proteus asking about that check on that
+        environment again. None of them gives it access it did not already have.
+      </p>
+      {resource.status === "error" && grants === null ? (
+        <LoadFailure what="your standing approvals" message={resource.message} onRetry={reload} />
+      ) : grants === null ? (
+        <p className="text-xs p-text-3">Loading…</p>
+      ) : (
+        <div className="space-y-1">
+          {grants.map((grant) => (
+            <div key={`${grant.rule}@${grant.executor}`}
+              className="flex items-center gap-2 text-xs rounded-md px-2 py-1.5 p-card">
+              <code className="font-mono p-text">{grant.rule}</code>
+              <span className="p-text-3">on</span>
+              <span className="p-text-2">{executorLabel(grant.executor)}</span>
+              <button
+                type="button"
+                onClick={() => void revoke(grant)}
+                disabled={busy !== null}
+                className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50"
+                title={`Ask again next time a command trips ${grant.rule} on ${grant.executor}`}
+              >{busy === `${grant.rule}@${grant.executor}` ? "…" : "Revoke"}</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {err && <div className="p-meta p-danger mt-1">{err}</div>}
+    </Card>
   );
 }
 
@@ -424,7 +502,7 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
           <button
             onClick={() => void toggle()}
             disabled={busy}
-            className="ml-auto px-2 py-1 rounded p-card hover:p-card-hover p-text-2 disabled:opacity-50"
+            className="ml-auto px-2 py-1 rounded-sm p-card p-card-hover p-text-2 disabled:opacity-50"
             title={full
               ? "Restrict this agent back to the consented folder on this device"
               : "Let this agent reach paths outside the consented folder on this device"}
@@ -651,7 +729,7 @@ function AlwaysActiveSkillsCard({
         {names.length === 0
           ? <span className="p-meta p-text-3 italic">(none pinned)</span>
           : names.map(n => (
-            <span key={n} className="inline-flex items-center gap-1 px-2 py-0.5 rounded p-card p-meta font-mono">
+            <span key={n} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm p-card p-meta font-mono">
               {n}
               <button type="button" onClick={() => remove(n)} className="p-text-3 hover:p-text">×</button>
             </span>

@@ -136,7 +136,7 @@ function LeafBlock({ block, sources }: { block: ViewLeafBlock; sources: Map<stri
     case "stat": {
       const shown = block.agg === "count" ? asRows(value).length : value;
       return (
-        <div className="p-card rounded-lg px-3.5 py-3">
+        <div className="p-card px-3.5 py-3">
           <div className="p-num text-2xl p-text leading-tight">
             {block.agg === "count" ? asRows(value).length.toLocaleString() : scalarText(shown)}
             {block.suffix && <span className="text-sm p-text-3 ml-1">{block.suffix}</span>}
@@ -331,7 +331,7 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
             type="button"
             onClick={() => setShowSource((v) => !v)}
             aria-pressed={showSource}
-            className="p-btn-ghost inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs cursor-pointer"
+            className="p-btn-ghost inline-flex items-center gap-1 px-2 py-1 text-xs cursor-pointer"
           >
             <CodeIcon size={12} />View source
           </button>
@@ -339,7 +339,7 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
         <button
           type="button"
           onClick={() => { void load(); }}
-          className="p-btn-ghost inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs cursor-pointer"
+          className="p-btn-ghost inline-flex items-center gap-1 px-2 py-1 text-xs cursor-pointer"
         >
           <ArrowClockwiseIcon size={12} />Refresh
         </button>

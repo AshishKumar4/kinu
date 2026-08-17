@@ -8,11 +8,11 @@ import {
   ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
   type AgentViewSummary, type PendingAction, type PlanReview,
 } from "@proteus/core";
-import type { TimelineSpan } from "@proteus/core";
+import type { ExplorationCanvasView, TimelineSpan } from "@proteus/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
-import { buildTree, type MctsRow } from "../lib/fork-tree-rows";
+import { buildTree, groupByRoot, type MctsRow } from "../lib/fork-tree-rows";
 import type {
   ToolInfo,
   MemoryEntry,
@@ -74,7 +74,6 @@ export interface ForkLineage {
 }
 
 export interface AgentStatus {
-  id: string;
   name: string;
   displayName: string;
   purpose: string;
@@ -93,7 +92,10 @@ export interface WorkspaceSnapshot {
   status: AgentStatus;
   tools: ToolDescResult;
   memoryContent: string;
-  mcts: MctsRow[];
+  /** Every recent fork, its dispatch parameters, and the search rows for the
+   *  trees that keep theirs in search_nodes — the Exploration canvas's own
+   *  projection, so first paint draws every tree rather than only the newest. */
+  exploration: ExplorationCanvasView;
   /** Still returned by the server for `proteus inspect`; no UI reads it. */
   timeline: TimelineSpan[];
   executors: ExecutorInfo[];
@@ -141,6 +143,7 @@ const PlanReviewSchema = v.object({
 const MctsRowSchema = v.object({
   id: v.string(),
   parent_id: v.nullable(v.string()),
+  root_id: v.optional(v.nullable(v.string())),
   depth: v.number(),
   visits: v.number(),
   value: v.number(),
@@ -182,7 +185,9 @@ const SocketMessageSchema = v.variant("type", [
     type: v.literal("cf_agent_use_chat_response"),
     error: v.optional(v.boolean()), done: v.optional(v.boolean()), body: v.optional(v.string()),
   }),
-  v.object({ type: v.literal("mcts-progress"), nodes: v.array(MctsRowSchema) }),
+  v.object({
+    type: v.literal("mcts-progress"), rootId: v.string(), nodes: v.array(MctsRowSchema),
+  }),
   v.object({
     type: v.literal("device_consent"), consentId: v.string(), deviceLabel: v.string(),
     method: v.optional(v.string()), command: v.string(),
@@ -416,7 +421,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
-  const [mctsTree, setMctsTree] = useState<ForkNode | null>(null);
+  const [mctsTrees, setMctsTrees] = useState<ReadonlyMap<string, ForkNode>>(new Map());
   const [memoryContent, setMemoryContent] = useState<string>("");
   // Failures keyed by source, so one source recovering never erases another's
   // error, and none of them expire on a timer: an unread failure that quietly
@@ -551,6 +556,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
   const {
     messages,
     sendMessage,
+    regenerate,
     clearHistory,
     stop,
     isStreaming,
@@ -588,9 +594,16 @@ export function useProteus(target?: string | ProteusActorAddress) {
     return () => agent.removeEventListener("open", onOpen);
   }, [agent]);
 
-  // ── A4: 25s heartbeat keeps the WS warm so Cloudflare's edge doesn't
-  // reap idle connections at ~100s. Server no-ops unknown message types.
-  // (STABILITY-AUDIT §A4.)
+  // ── A4: 25s heartbeat keeps the WS warm against Cloudflare's edge reaping an
+  // idle connection. Server no-ops unknown message types.
+  //
+  // The threshold is `edge.websocket_idle_reap_ms`, and that entry is labelled
+  // SPECULATIVE: this comment used to cite `STABILITY-AUDIT §A4`, which is not
+  // in the working tree — only its screenshots survived — and the recovered text
+  // says "Cloudflare's documented 100s reap" while citing nothing. Cloudflare
+  // publishes no such figure. See also `websocket.protocol_ping_auto_answered`:
+  // the runtime answers RFC 6455 ping FRAMES for free without waking the object,
+  // and this application-level message does not get that treatment.
   useEffect(() => {
     if (connectionStatus !== "connected") return;
     const id = setInterval(() => {
@@ -603,16 +616,23 @@ export function useProteus(target?: string | ProteusActorAddress) {
 
   const isConnected = connectionStatus === "connected";
 
-  // Rebuild the MCTS tree only when the rows actually changed — the polls
+  // Rebuild a search's tree only when ITS rows actually changed — the polls
   // return identical data most ticks, and a fresh tree object identity makes
   // the d3 visualization re-render (and drop tooltips) for nothing.
-  const mctsFingerprint = useRef("");
-  const setMctsTreeFromRows = useCallback((rows: MctsRow[]) => {
+  //
+  // Keyed by search root, because a workspace runs several searches at once and
+  // one slot made them fight over it: every surface guards the live tree on the
+  // selected run's id, so whichever search pushed last was the only live one and
+  // every other running search silently fell back to its 1.5s poll. The
+  // multi-tree canvas needs all of them at once regardless.
+  const mctsFingerprints = useRef(new Map<string, string>());
+  const setMctsTreeFromRows = useCallback((rootId: string, rows: MctsRow[]) => {
     if (rows.length === 0) return;
     const fp = rows.map((r) => `${r.id}:${r.visits}:${r.value}:${r.status}`).join("|");
-    if (fp === mctsFingerprint.current) return;
-    mctsFingerprint.current = fp;
-    setMctsTree(buildTree(rows));
+    if (fp === mctsFingerprints.current.get(rootId)) return;
+    mctsFingerprints.current.set(rootId, fp);
+    const tree = buildTree(rows);
+    setMctsTrees((prev) => new Map(prev).set(rootId, tree));
   }, []);
 
   // Typed RPC — the single boundary cast (unknown → T) lives here so call sites
@@ -695,9 +715,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
       const msg = parseSocketMessage(event.data);
       if (!msg) return;
         if (msg.type === "mcts-progress") {
-          if (msg.nodes.length > 0) {
-            setMctsTreeFromRows(msg.nodes);
-          }
+          setMctsTreeFromRows(msg.rootId, msg.nodes);
         } else if (msg.type === "device_consent") {
           setPendingConsents((prev) => prev.some((c) => c.consentId === msg.consentId) ? prev
             : [...prev, {
@@ -793,7 +811,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
   const refreshLiveData = useCallback((): Promise<void> => {
     void refreshExposedPorts();
     return Promise.all([
-      refreshCurrentLiveResource("mcts", () => rpc<MctsRow[]>("getMctsTree", []), setMctsTreeFromRows),
       refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
       refreshCurrentLiveResource(
         "tools",
@@ -821,7 +838,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
     refreshExposedPorts,
     refreshPendingActions,
     rpc,
-    setMctsTreeFromRows,
   ]);
 
   const retryLoad = useCallback(() => {
@@ -863,7 +879,11 @@ export function useProteus(target?: string | ProteusActorAddress) {
     setTools(mapToolDescriptions(snap.tools));
     setMemoryContent(snap.memoryContent);
     if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
-    setMctsTreeFromRows(snap.mcts);
+    // Every tree, not just the newest: a workspace can have several searches in
+    // flight, and the canvas draws all of them from first paint.
+    for (const [rootId, rows] of groupByRoot(snap.exploration.search)) {
+      setMctsTreeFromRows(rootId, rows);
+    }
     setExecutors(snap.executors);
     setLastActiveExecutor(snap.lastActiveExecutor);
     const outputs = new Map<string, ExecutorOutput[]>();
@@ -885,7 +905,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
     }>("getSubordinateSnapshot", []);
     if (!isCurrent()) return;
     setAgentStatus({
-      id: snapshot.name,
       name: snapshot.name,
       displayName: snapshot.displayName,
       purpose: snapshot.role,
@@ -937,8 +956,8 @@ export function useProteus(target?: string | ProteusActorAddress) {
     setTools([]);
     setMemory([]);
     setMemoryContent("");
-    setMctsTree(null);
-    mctsFingerprint.current = "";
+    setMctsTrees(new Map());
+    mctsFingerprints.current.clear();
     setExecutors([]);
     setExecutorOutputs(new Map());
     setLastActiveExecutor(null);
@@ -974,14 +993,22 @@ export function useProteus(target?: string | ProteusActorAddress) {
     sendMessage({ role: "user", parts, metadata: { proteusMode: mode } });
   }, [sendMessage]);
 
-  // Retry affordance for the error card: re-send the last user message's
-  // parts as a fresh turn (the failed turn persisted nothing to answer it).
+  /**
+   * Re-run the turn that failed — the SDK's own `regenerate`, not a fresh send.
+   *
+   * `sendMessage` APPENDED a copy of the last user message on every press, so
+   * three attempts at one failed turn left three identical user turns in the
+   * durable transcript and three chances for the model to answer the same
+   * question twice. `regenerate` drops the assistant message being retried
+   * (or keeps the trailing user message when the turn produced none), sends
+   * `trigger: 'regenerate-message'`, and the host reconciles against its own
+   * history rather than growing it.
+   */
   const retryLastMessage = useCallback(() => {
-    const lastUser = [...messages].reverse().find((m) => m.role === "user");
-    if (!lastUser) return;
+    if (messages.length === 0) return;
     setChatError(null);
-    sendMessage({ role: "user", parts: lastUser.parts, metadata: lastUser.metadata });
-  }, [messages, sendMessage]);
+    void regenerate();
+  }, [messages.length, regenerate]);
 
   // Every keystroke used to fire its own searchMemoryHybrid with nothing
   // ordering the replies, so a slow early query could land last and leave the
@@ -1101,7 +1128,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
     tools,
     memory,
     memoryContent,
-    mctsTree,
+    mctsTrees,
     activePlan,
     sendChat,
     abortChat,
@@ -1212,12 +1239,23 @@ function parseSubordinateActivityEvent<Value>(value: Value): SubordinateActivity
 }
 
 interface ToolDescResult {
-  builtIn: Array<{ name: string; summary: string; description: string; exposure: ToolInfo["exposure"] }>;
-  crafted: Array<{ name: string; description: string; exposure: ToolInfo["exposure"]; qualityScore?: number; usageCount?: number }>;
+  builtIn: Array<{
+    name: string; summary: string; description: string;
+    exposure: ToolInfo["exposure"]; wired: boolean;
+  }>;
+  crafted: Array<{
+    name: string; description: string; exposure: ToolInfo["exposure"]; wired: boolean;
+    qualityScore?: number; usageCount?: number;
+  }>;
 }
 
 /** Map a getToolDescriptions result into the UI's ToolInfo[] — single source
- *  for the mapping used by both the initial load and live refresh. */
+ *  for the mapping used by both the initial load and live refresh.
+ *
+ *  `exposure` and `wired` both come from the orchestrator: the first is the
+ *  registry's declared reach, the second is whether THIS agent wires the
+ *  capability. Neither is recomputed here — the panel used to be handed a
+ *  single guessed word and could not tell absence from codemode-only reach. */
 function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
   return [
     ...r.builtIn.map((t) => ({ ...t, learned: false, qualityScore: 1, usageCount: 0 })),

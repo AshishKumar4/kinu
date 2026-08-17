@@ -61,7 +61,7 @@ function TaskRow({ task, depth }: { task: AgentTask; depth: number }) {
 
 export function TaskTree({ task }: { task: AgentTaskTree }) {
   return (
-    <div className="p-card rounded-lg px-3 py-2">
+    <div className="p-card px-3 py-2">
       <TaskRow task={task} depth={0} />
       {task.subtasks.map((sub) => <TaskRow key={sub.id} task={sub} depth={1} />)}
     </div>

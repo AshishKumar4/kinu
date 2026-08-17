@@ -46,6 +46,7 @@ import {
   type HeadInput,
   type HeadReport,
   type HeadRuntime,
+  type HeadStep,
   type Decision,
   type MergeStrategy,
   type HeadBudget,
@@ -133,7 +134,6 @@ export class ExplorationAgent extends Agent<Env> {
   @callable()
   async setOwner(userId: string, capabilityToken: string | null): Promise<{ ok: true }> {
     if (!userId) throw new Error('userId required');
-    this.ensureFacetOwnerTable();
     this.ctx.storage.sql.exec(
       `INSERT INTO facet_owner (id, user_id, capability_token) VALUES (1, ?, ?)
        ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id, capability_token = excluded.capability_token`,
@@ -143,8 +143,27 @@ export class ExplorationAgent extends Agent<Env> {
     return { ok: true };
   }
 
-  private ensureFacetOwnerTable(): void {
+  /** Every table this facet owns. Called from `onStart`, which the SDK runs
+   *  before any @callable can be dispatched — the first `subAgent()` for a
+   *  name awaits it — so the reads below may assume their table exists and
+   *  need no tolerance: a failing read is a real fault, never an unseeded
+   *  facet. `traces` already depended on exactly this guarantee.
+   *
+   *  The PRAGMA-guarded ALTER migrates a facet seeded before
+   *  `capability_token` existed. It asks which columns are present instead of
+   *  reading a duplicate-column error as "already there", so a locked or
+   *  read-only database still fails loudly. */
+  private initFacetSchema(): void {
     const sql = this.ctx.storage.sql;
+    // MCTS mode trace table.
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS traces (
+        id         TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
+        step       INTEGER NOT NULL,
+        text       TEXT NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      )
+    `);
     sql.exec(
       `CREATE TABLE IF NOT EXISTS facet_owner (
          id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -156,19 +175,19 @@ export class ExplorationAgent extends Agent<Env> {
     if (!columns.some((c) => c.name === 'capability_token')) {
       sql.exec(`ALTER TABLE facet_owner ADD COLUMN capability_token TEXT`);
     }
+    sql.exec(
+      `CREATE TABLE IF NOT EXISTS facet_parent (
+         id INTEGER PRIMARY KEY CHECK (id = 1),
+         agent_name TEXT NOT NULL
+       )`,
+    );
   }
 
-  /** Migrate on READ as well as on write: a facet seeded before the token
-   *  column existed and resumed without a fresh setOwner would otherwise lose
-   *  its OWNER too, not merely its token, on the missing-column error. */
   private facetOwnerRow(): { user_id: string; capability_token: string | null } | null {
-    try {
-      this.ensureFacetOwnerTable();
-      const rows = this.ctx.storage.sql.exec<{ user_id: string; capability_token: string | null }>(
-        `SELECT user_id, capability_token FROM facet_owner WHERE id = 1`,
-      ).toArray();
-      return rows[0] ?? null;
-    } catch { return null; }
+    const rows = this.ctx.storage.sql.exec<{ user_id: string; capability_token: string | null }>(
+      `SELECT user_id, capability_token FROM facet_owner WHERE id = 1`,
+    ).toArray();
+    return rows[0] ?? null;
   }
 
   private getOwnerUserId(): string | null {
@@ -188,9 +207,6 @@ export class ExplorationAgent extends Agent<Env> {
   async setSharedParent(agentName: string): Promise<{ ok: true }> {
     if (!agentName) throw new Error('agentName required');
     this.ctx.storage.sql.exec(
-      `CREATE TABLE IF NOT EXISTS facet_parent (id INTEGER PRIMARY KEY CHECK (id = 1), agent_name TEXT NOT NULL)`,
-    );
-    this.ctx.storage.sql.exec(
       `INSERT INTO facet_parent (id, agent_name) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET agent_name = excluded.agent_name`,
       agentName,
     );
@@ -198,12 +214,10 @@ export class ExplorationAgent extends Agent<Env> {
   }
 
   private getSharedParent(): string | null {
-    try {
-      const rows = this.ctx.storage.sql.exec<{ agent_name: string }>(
-        `SELECT agent_name FROM facet_parent WHERE id = 1`,
-      ).toArray();
-      return rows[0]?.agent_name ?? null;
-    } catch { return null; }
+    const rows = this.ctx.storage.sql.exec<{ agent_name: string }>(
+      `SELECT agent_name FROM facet_parent WHERE id = 1`,
+    ).toArray();
+    return rows[0]?.agent_name ?? null;
   }
 
   /** Stub to the root workspace orchestrator — the head's parent — or null if
@@ -214,16 +228,9 @@ export class ExplorationAgent extends Agent<Env> {
     return this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
   }
 
-  async onStart() {
-    // MCTS mode trace table — pre-existing.
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS traces (
-        id         TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
-        step       INTEGER NOT NULL,
-        text       TEXT NOT NULL,
-        created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-      )
-    `);
+  /** Synchronous by contract — see `OrchestratorAgent.onStart`. */
+  onStart(): void {
+    this.initFacetSchema();
   }
 
   // ── MCTS mode @callables ────────────────────────────────────────
@@ -319,7 +326,29 @@ export class ExplorationAgent extends Agent<Env> {
       abortReason: () => this.headAbortReason,
     };
     if (mission) options.mission = mission;
+    const reportStep = this.stepSink(input);
+    if (reportStep) options.reportStep = reportStep;
     return runHeadInference(input, options);
+  }
+
+  /**
+   * Where this head's finished steps go: the parent's journal, over RPC, as each
+   * one lands.
+   *
+   * Same shape and same reason as {@link missionScope} — the journal lives on the
+   * orchestrator and a facet cannot write it directly. It is what makes a running
+   * branch readable: the trace is the only thing that can say what a head is
+   * doing before it reports, and the surface renders it as it arrives.
+   *
+   * Null only when this facet has no parent, which is an MCTS branch — those are
+   * toolless one-shot rollouts with no multi-step trace to record.
+   */
+  private stepSink(input: HeadInput): ((seq: number, step: HeadStep) => Promise<void>) | null {
+    const parent = this.getSharedParentStub();
+    if (!parent) return null;
+    return async (seq, step) => {
+      await parent.recordHeadStep(input.id, seq, step);
+    };
   }
 
   /**

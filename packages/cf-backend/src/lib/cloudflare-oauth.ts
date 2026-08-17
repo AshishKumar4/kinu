@@ -122,19 +122,33 @@ export async function cloudflareTokenToCredential(
   if (!accessToken) throw new Error('Cloudflare OAuth did not return an access token.');
 
   const refreshToken = stringValue(token.refresh_token);
-  // An account the token cannot see is not an authentication failure — Workers
-  // AI billing is a separate concern from who signed in. The credential is
-  // stored without an accountId, which isCloudflareCredentialUsable already
-  // reports as unusable, so the operator gets the "Connect Cloudflare Workers
-  // AI" notice instead of being locked out of the product entirely.
-  const account = (await fetchCloudflareAccounts(accessToken))[0] ?? null;
+  // Account discovery is not authentication. A token that sees no account — or
+  // an accounts API that is down — must still yield a stored credential with
+  // its refresh token: isCloudflareCredentialUsable already reports a missing
+  // account as "Connect Cloudflare Workers AI", whereas throwing here loses
+  // the whole login. Sign-in was once gated on this lookup and broke for
+  // everyone; it must never be able to fail again.
+  let accounts: CloudflareAccount[] = [];
+  try {
+    accounts = await fetchCloudflareAccounts(accessToken);
+  } catch (err) {
+    console.warn(
+      '[cloudflare-oauth] account lookup failed; storing credential without an account:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 
   const metadata: JsonObject = {
     tokenType: stringValue(token.token_type) ?? 'bearer',
   };
-  if (account) {
-    metadata.accountId = account.id;
-    metadata.accountName = account.name;
+  // Every visible account is recorded so a multi-account user can switch to the
+  // one that carries their Workers AI entitlement without a second API call —
+  // and without this layer ever handing the token back out. The first is the
+  // initial selection; UserDO rewrites `accountId` when the user picks another.
+  if (accounts.length > 0) {
+    metadata.accounts = accounts.map((account) => ({ id: account.id, name: account.name }));
+    metadata.accountId = accounts[0].id;
+    metadata.accountName = accounts[0].name;
   }
   const scopes = scopeList(token.scope);
   if (scopes) metadata.scopes = scopes;
@@ -243,6 +257,35 @@ export function cloudflareAIGatewayId(env: Pick<CloudflareOAuthEnv, 'CLOUDFLARE_
 export function accountIdFromCloudflareCredential(credential: OAuthCredential): string | null {
   const accountId = credential.metadata?.accountId;
   return v.is(v.string(), accountId) && isCloudflareAccountId(accountId) ? accountId : null;
+}
+
+/** Every Cloudflare account this login can see, as recorded at connect time.
+ *  A token issued before accounts were recorded reports just its selected
+ *  account, so the picker always has at least the account in use. */
+export function cloudflareAccountsFromCredential(credential: OAuthCredential): CloudflareAccount[] {
+  const stored = v.safeParse(v.array(CloudflareAccountSchema), credential.metadata?.accounts);
+  const accounts = stored.success
+    ? stored.output
+        .filter((row) => isCloudflareAccountId(row.id))
+        .map((row): CloudflareAccount => ({ id: row.id, name: row.name?.trim() || row.id }))
+    : [];
+  if (accounts.length > 0) return accounts;
+  const selected = accountIdFromCloudflareCredential(credential);
+  if (!selected) return [];
+  const name = credential.metadata?.accountName;
+  return [{ id: selected, name: v.is(v.string(), name) && name.trim() ? name.trim() : selected }];
+}
+
+/** The same credential pointing at another of its accounts. Rewriting the
+ *  selection in metadata keeps one source of truth for "which account serves
+ *  this user's Workers AI" — the value `cloudflareWorkersAIBaseURL` reads. */
+export function withCloudflareAccount(credential: OAuthCredential, accountId: string): OAuthCredential {
+  const account = cloudflareAccountsFromCredential(credential).find((row) => row.id === accountId);
+  if (!account) throw new Error('That Cloudflare account is not one this login can see. Reconnect Cloudflare and try again.');
+  return {
+    ...credential,
+    metadata: { ...credential.metadata, accountId: account.id, accountName: account.name },
+  };
 }
 
 export function isCloudflareCredentialUsable(credential: OAuthCredential, skewMs = 60_000): boolean {

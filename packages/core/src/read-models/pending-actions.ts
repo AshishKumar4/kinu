@@ -106,7 +106,10 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
     actions.push({
       id: action.id,
       kind: 'deferred_action',
-      title: 'Approve: a command the agent is waiting on',
+      // The machine is half the decision: `rm -rf build` on the agent's own
+      // sandbox never reaches this queue, so anything that does is against a
+      // machine the owner should see named before they approve it.
+      title: `Approve: a command the agent wants to run on ${action.executor}`,
       detail: action.command,
       at: action.requestedAt,
     });

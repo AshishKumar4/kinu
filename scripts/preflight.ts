@@ -1,0 +1,246 @@
+/**
+ * The environment invariants every other gate silently assumes.
+ *
+ * This exists because of a measured incident, not a hypothesis. On 2026-08-17
+ * deploy gate 6 (`bun test --cwd packages/cli-backend`) went red at HEAD
+ * 5183d69d, reproducibly, in a clean worktree. The message the ladder printed
+ * was:
+ *
+ *     (fail) the laptop executor reads and writes the real host filesystem
+ *       ^ this test timed out after 5000ms.
+ *
+ * which names nothing, points at a filesystem test, and blames whatever change
+ * was under review. The actual chain was three steps away from that line: a
+ * sibling stream had left a `package.json` in `/tmp`; `workdirForPath` walks
+ * ancestors looking for generic project markers and stops only at `/` and
+ * `$HOME`, so it resolved the checkpoint working directory for every temp-dir
+ * host write to `/tmp` itself; the first `laptop.writeFile` therefore
+ * shadow-git-added a 23 GB tmpfs, measured at 24,483 ms against a 5,000 ms
+ * per-test limit. Meanwhile the same tmpfs was at 1,048,576 of 1,048,576
+ * inodes, and 541,319 of those belonged to our own leaked test scratch.
+ *
+ * Every gate downstream of that was reporting on an environment nobody had
+ * looked at. So this runs first in every tier, costs milliseconds, and names
+ * the cause instead of letting it surface as an unrelated timeout.
+ *
+ * It deliberately does NOT repair anything. A gate that quietly fixes its own
+ * precondition teaches nobody and hides a leak that will come back.
+ */
+
+import { existsSync, readdirSync, statSync, statfsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { assertMeasured, finding } from './gate-ratchet.ts';
+
+/**
+ * What one full root suite run costs the temp filesystem, measured on
+ * 2026-08-17: 444 test processes, each given a throwaway `PROTEUS_HOME` by
+ * `scripts/test-preload.ts`, plus the heavier per-test homes the CLI and
+ * cli-backend suites build shadow-git checkpoint stores inside.
+ */
+const INODES_PER_FULL_RUN = 24_000;
+const BYTES_PER_FULL_RUN = 1024 * 1024 * 1024;
+
+/**
+ * Two runs' worth of headroom, so the floor is crossed while a legible message
+ * is still possible rather than at the moment a random test hits ENOSPC.
+ *
+ * The relationship is asserted rather than the literal. A future change that
+ * lowers the floor below what two runs consume fails here, at the definition,
+ * naming why the number exists — which is the difference between a threshold
+ * and a number in a diff nobody reads.
+ */
+const MIN_FREE_INODES = 60_000;
+const MIN_FREE_BYTES = 3 * BYTES_PER_FULL_RUN;
+
+if (MIN_FREE_INODES < 2 * INODES_PER_FULL_RUN) {
+  throw new Error(
+    `preflight: MIN_FREE_INODES (${String(MIN_FREE_INODES)}) is below two full suite runs `
+    + `(2 × ${String(INODES_PER_FULL_RUN)}). The floor exists so the suite fails with a `
+    + 'reason instead of with ENOSPC in an unrelated test; lowering it defeats the check.',
+  );
+}
+if (MIN_FREE_BYTES < 2 * BYTES_PER_FULL_RUN) {
+  throw new Error(
+    `preflight: MIN_FREE_BYTES (${String(MIN_FREE_BYTES)}) is below two full suite runs.`,
+  );
+}
+
+/**
+ * The markers `FileCheckpoints.workdirForPath` treats as a project root. Kept
+ * in sync with packages/cli-backend/src/checkpoints.ts by
+ * `scripts/preflight.test.ts`, which reads that file — a hardcoded copy that
+ * drifts would make this check pass over the very directory it is guarding.
+ */
+export const PROJECT_MARKERS = [
+  '.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg',
+] as const;
+
+/** Scratch prefixes our own harness mints under the temp directory. Every
+ *  prefix any harness mints MUST be here: `judge` counts orphans and `reclaim`
+ *  removes them from this one list, so a prefix missing here is simultaneously
+ *  uncollected and invisible. That is how /tmp reached 100% inode exhaustion
+ *  with 8 GB of bytes still free while this file reported healthy. */
+const SCRATCH_PREFIXES = [
+  'proteus-test-', 'proteus-home-', 'proteus-mount-', 'proteus-output-diff-',
+  'proteus-head-', 'mutation-gate-', 'dist-integrity-', 'deploy-isolation-',
+  'outcome-baseline-',
+] as const;
+
+/* There is deliberately no threshold on the orphan COUNT. It was one, at 600,
+ * and it was wrong in the way that gets gates weakened: on a box running many
+ * agents concurrently it read 10,291 while the filesystem was perfectly
+ * healthy, so the very first thing anyone would have done is raise the number,
+ * and the second time they would have deleted the check. The count is not the
+ * invariant. Free inodes are — the count only explains WHY they are low, so it
+ * is reported inside that finding and on the success line, and it is never a
+ * verdict of its own. */
+
+export interface Environment {
+  readonly temp: string;
+  readonly freeInodes: number;
+  readonly freeBytes: number;
+  /** Directories between the temp dir and `/` that carry a project marker, so a
+   *  checkpoint working directory resolves to them. Nearest first. */
+  readonly unboundedWorkdirs: readonly string[];
+  readonly scratchOrphans: number;
+  readonly tempEntries: number;
+}
+
+/** Ancestors of `from` up to but excluding `/`, nearest first, that a
+ *  `workdirForPath` walk would accept as a project root. `$HOME` terminates the
+ *  walk in the engine, so it terminates here. */
+export function unboundedWorkdirsAbove(from: string, home: string): string[] {
+  const hits: string[] = [];
+  let probe = resolve(from);
+  const stop = resolve(home);
+  while (probe !== dirname(probe) && probe !== stop) {
+    if (PROJECT_MARKERS.some((marker) => existsSync(join(probe, marker)))) hits.push(probe);
+    probe = dirname(probe);
+  }
+  return hits;
+}
+
+export function observe(): Environment {
+  const temp = resolve(tmpdir());
+  const fs = statfsSync(temp);
+  const entries = readdirSync(temp);
+  let orphans = 0;
+  for (const name of entries) {
+    if (SCRATCH_PREFIXES.some((prefix) => name.startsWith(prefix))) orphans += 1;
+  }
+  return {
+    temp,
+    freeInodes: fs.ffree,
+    freeBytes: fs.bavail * fs.bsize,
+    unboundedWorkdirs: unboundedWorkdirsAbove(temp, process.env.HOME ?? '/root'),
+    scratchOrphans: orphans,
+    tempEntries: entries.length,
+  };
+}
+
+export function judge(env: Environment): string[] {
+  const problems: string[] = [];
+
+  if (env.freeInodes < MIN_FREE_INODES) {
+    problems.push(finding({
+      at: env.temp,
+      invariant: `the temp filesystem keeps at least ${String(MIN_FREE_INODES)} free inodes `
+        + `— two full suite runs at ${String(INODES_PER_FULL_RUN)} each`,
+      found: `${String(env.freeInodes)} free inodes, ${String(env.scratchOrphans)} of `
+        + `${String(env.tempEntries)} entries are our own test scratch`,
+      silently: 'git and every mkdtemp in the suite start failing or crawling, and it '
+        + 'surfaces as "this test timed out after 5000ms" in whichever test happens to '
+        + 'write first — never in the one that leaked',
+      fix: 'bun scripts/preflight.ts --reclaim   # removes proteus-{test-home,home,mount}-* '
+        + 'older than 2h, then re-run',
+    }));
+  }
+
+  if (env.freeBytes < MIN_FREE_BYTES) {
+    problems.push(finding({
+      at: env.temp,
+      invariant: `the temp filesystem keeps at least ${String(MIN_FREE_BYTES >> 30)} GiB free`,
+      found: `${String(env.freeBytes >> 20)} MiB free`,
+      silently: 'a suite that writes a database or a checkpoint store gets ENOSPC and '
+        + 'reports it as whatever assertion happened to be next',
+      fix: 'bun scripts/preflight.ts --reclaim',
+    }));
+  }
+
+  for (const dir of env.unboundedWorkdirs) {
+    problems.push(finding({
+      at: `${dir} (marker for a checkpoint working directory)`,
+      invariant: 'no directory above the temp directory looks like a project root',
+      found: `${dir} carries `
+        + `${PROJECT_MARKERS.filter((m) => existsSync(join(dir, m))).join(', ')}`,
+      silently: `every host write under ${env.temp} resolves its checkpoint working `
+        + `directory to ${dir} and shadow-git-adds the whole of it — measured at 24,483 ms `
+        + 'for one laptop.writeFile, which lands as a 5,000 ms test timeout elsewhere',
+      fix: `rm ${join(dir, 'package.json')}  (or whichever marker above is stray) — and see `
+        + 'packages/cli-backend/src/checkpoints.ts workdirForPath, whose walk is unbounded',
+    }));
+  }
+
+  // (no orphan-count verdict — see the note above SCRATCH_PREFIXES' threshold)
+
+  return problems;
+}
+
+/** What `reclaim` reclaimed. Named because the anti-slop contract rejects an
+ *  anonymous return shape: the caller reads both fields and prints them. */
+export interface ReclaimResult {
+  readonly removed: number;
+  readonly kept: number;
+}
+
+/** Removes scratch our own harness minted and abandoned. Only entries older
+ *  than the cutoff, because a sibling suite may be mid-run in one of them. */
+export function reclaim(temp: string, olderThanMs: number): ReclaimResult {
+  const cutoff = Date.now() - olderThanMs;
+  let removed = 0;
+  let kept = 0;
+  for (const name of readdirSync(temp)) {
+    if (!SCRATCH_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
+    const path = join(temp, name);
+    try {
+      if (statSync(path).mtimeMs >= cutoff) { kept += 1; continue; }
+      Bun.spawnSync(['rm', '-rf', path]);
+      removed += 1;
+    } catch { kept += 1; }
+  }
+  return { removed, kept };
+}
+
+if (import.meta.main) {
+  const env = observe();
+
+  if (process.argv.includes('--reclaim')) {
+    const { removed, kept } = reclaim(env.temp, 2 * 60 * 60 * 1000);
+    const after = observe();
+    console.log(
+      `preflight: reclaimed ${String(removed)} scratch entries (kept ${String(kept)} younger `
+      + `than 2h); free inodes ${String(env.freeInodes)} → ${String(after.freeInodes)}`,
+    );
+    process.exit(0);
+  }
+
+  const measured = assertMeasured('preflight', [
+    ['free inodes', env.freeInodes],
+    ['entries in the temp directory', env.tempEntries],
+    ['of them our own leaked test scratch', env.scratchOrphans],
+    ['project markers probed per ancestor', PROJECT_MARKERS.length],
+  ]);
+  const problems = judge(env);
+  if (problems.length === 0) {
+    console.log(`preflight: ok — ${measured}`);
+    process.exit(0);
+  }
+  console.error(`preflight: ${String(problems.length)} environment fault(s)\n`);
+  for (const problem of problems) console.error(problem);
+  console.error(
+    '\nThese are not defects in the change under test. Every gate after this one would '
+    + '\nhave reported on an environment nobody looked at.',
+  );
+  process.exit(1);
+}

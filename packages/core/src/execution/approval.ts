@@ -28,8 +28,8 @@
 
 import { gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate.js';
 import * as v from 'valibot';
-import type { ExecutorProvider, ExecutorTool } from './types.js';
-import type { Shell, ShellExecOptions } from '../types/primitives.js';
+import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types.js';
+import type { Shell, ShellExecOptions, ShellExecResult } from '../types/primitives.js';
 
 const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
   stdin: v.optional(v.string()),
@@ -55,9 +55,14 @@ export function withApprovalGatedShell(
   shell: Shell,
   policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
 ): Shell {
-  const execute = gateExec(
+  // 'workspace': this wrapper exists for the workspace shell specifically —
+  // the one executor gateProviderExec skips, because it is gated here instead.
+  // Nothing else may be wrapped with it; another machine's shell reaches the
+  // gate through its own ExecutorProvider, under that provider's own name.
+  const execute = gateExec<ShellExecResult>(
     (command, ...rest) => shell.exec(command, parseShellExecOptions({ value: rest[0] })),
     (message) => ({ stdout: '', stderr: message, exitCode: 1 }),
+    'workspace',
     policy,
   );
   return {
@@ -99,9 +104,15 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
     if (provider.kind === 'workspace' && name === 'exec') continue;
     const entry = provider.tools[name];
     if (!entry || GATED_EXECUTES.has(entry.execute)) continue;
-    const gated = gateExec(
+    // Keyed on `name`, not `kind`: the name is this executor's identity
+    // everywhere else the owner and the model meet it — the `runtime:` value,
+    // the codemode namespace, the executor a standing grant is written
+    // against — so the gate must not answer to a different word than the one
+    // the grant is spelled with.
+    const gated = gateExec<ExecutorToolResult>(
       (command, ...rest) => entry.execute(command, ...rest),
       (message) => message,
+      provider.name,
       policy,
     );
     GATED_EXECUTES.add(gated);

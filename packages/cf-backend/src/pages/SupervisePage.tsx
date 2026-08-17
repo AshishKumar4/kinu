@@ -135,7 +135,7 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
         : (
           <div className="space-y-2">
             {tasks.map((t) => (
-              <div key={t.id} className="p-card rounded-lg p-3">
+              <div key={t.id} className="p-card p-3">
                 <div className="flex items-start gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="text-sm p-text mb-0.5">{t.task}</div>
@@ -200,7 +200,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
             {runs.map((r) => (
               <div key={r.runId} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
                 <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "aborted" ? "p-dot-danger" : "p-dot-neutral"}`} />
-                <span className="p-meta px-1 rounded p-fill p-text-3 shrink-0">{r.causedBy ?? "chat"}</span>
+                <span className="p-meta px-1 rounded-sm p-fill p-text-3 shrink-0">{r.causedBy ?? "chat"}</span>
                 <span className="p-text-2 truncate flex-1" title={r.userMessage ?? r.runId}>{r.userMessage ?? r.runId}</span>
                 {(r.tokensIn + r.tokensOut) > 0 && <span className="p-text-3 shrink-0 tabular-nums" title="tokens in+out">{fmtTokens(r.tokensIn + r.tokensOut)} tok</span>}
                 <span className="p-text-3 shrink-0 tabular-nums">{new Date(r.startedAt).toLocaleDateString()}</span>
@@ -290,13 +290,13 @@ function TriggerLine({ trigger, agentName, onRevoke }: {
       <span className={`size-1.5 rounded-full shrink-0 ${trigger.state === "active" ? "p-dot-success" : trigger.state === "paused" ? "p-dot-warning" : "p-dot-neutral"}`} />
       <span className="font-medium p-text-2 truncate max-w-40" title={spec.label ?? trigger.id}>{spec.label ?? trigger.id}</span>
       <span className="font-mono p-text-3 shrink-0">{trigger.kind}</span>
-      {spec.cron && <code className="p-fill px-1 rounded p-text-3 shrink-0">{spec.cron}</code>}
+      {spec.cron && <code className="p-fill px-1 rounded-sm p-text-3 shrink-0">{spec.cron}</code>}
       <span className="flex-1" />
       {trigger.fire_count !== undefined && trigger.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{trigger.fire_count} fires</span>}
       <span className="p-text-3 shrink-0">{trigger.state}</span>
       {url && (
         <CopyButton value={url} what="the webhook URL" size={11}
-          className="p-1 rounded hover:p-card-hover p-text-3 shrink-0" />
+          className="p-1 rounded-sm p-card-hover p-text-3 shrink-0" />
       )}
       <button
         onClick={onRevoke}
@@ -333,7 +333,7 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
   -H "content-type: application/json" -d '{"hello":"world"}'`;
 
   return (
-    <div className="p-card rounded-xl p-5 space-y-3 border p-border mb-3">
+    <div className="p-card p-5 space-y-3 border p-border mb-3">
       <div className="flex items-center gap-2">
         <CheckIcon size={16} className="p-success" />
         <span className="text-sm font-semibold">Webhook created</span>
@@ -346,22 +346,22 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
         <div>
           <div className="p-eyebrow mb-1">URL</div>
           <div className="flex items-center gap-2">
-            <code className="text-xs p-fill px-2 py-1.5 rounded font-mono flex-1 break-all">{url}</code>
-            <CopyButton value={url} what="the webhook URL" className="p-2 rounded p-card hover:p-card-hover" />
+            <code className="text-xs p-fill px-2 py-1.5 rounded-sm font-mono flex-1 break-all">{url}</code>
+            <CopyButton value={url} what="the webhook URL" className="p-2 rounded-sm p-card p-card-hover" />
           </div>
         </div>
         {result.secret && (
           <div>
             <div className="p-eyebrow mb-1">Secret <span className="p-danger">(shown once)</span></div>
             <div className="flex items-center gap-2">
-              <code className="text-xs p-fill px-2 py-1.5 rounded font-mono flex-1 break-all">{result.secret}</code>
-              <CopyButton value={result.secret} what="the secret" className="p-2 rounded p-card hover:p-card-hover" />
+              <code className="text-xs p-fill px-2 py-1.5 rounded-sm font-mono flex-1 break-all">{result.secret}</code>
+              <CopyButton value={result.secret} what="the secret" className="p-2 rounded-sm p-card p-card-hover" />
             </div>
           </div>
         )}
         <div>
           <div className="p-eyebrow mb-1">Test with curl</div>
-          <pre className="p-meta p-fill p-3 rounded font-mono overflow-x-auto whitespace-pre">{curlSnippet}</pre>
+          <pre className="p-meta p-fill p-3 rounded-sm font-mono overflow-x-auto whitespace-pre">{curlSnippet}</pre>
         </div>
       </div>
     </div>

@@ -153,7 +153,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
           <div className="space-y-1">
             {versions.map((v) => (
               <button key={v.version} onClick={() => select(v.version)}
-                className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${selected === v.version ? "p-fill" : "hover:p-card"}`}>
+                className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${selected === v.version ? "p-fill" : "p-card-hover"}`}>
                 <span className="font-mono text-xs p-text shrink-0">v{v.version}</span>
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${statusTone(v.status)}`}>{v.status}</span>
                 <span className="text-[11px] p-text-2 truncate flex-1" title={v.rationale}>{v.rationale}</span>

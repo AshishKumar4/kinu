@@ -16,14 +16,14 @@ import {
   type ToolSet, type LanguageModel,
 } from 'ai';
 import {
-  type HeadInput, type HeadReport, type HeadId,
+  type HeadInput, type HeadReport, type HeadId, type HeadStep,
   type Evidence, type Decision, type ArtifactRef,
   budgetExhausted,
 } from './types.js';
 import type { ToolCallRecord } from '../evolution/types.js';
 import { missionCallUsage, type MissionBudgetRefusal, type MissionScope } from '../mission-budget.js';
 import { nanoid } from '../utils/nanoid.js';
-import { extractFinalText, extractHeadSteps, synthesizeHeadSummary } from './head-summary.js';
+import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summary.js';
 import { HeadFileChanges } from './file-changes.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { isJsonObject, projectJsonValue, type JsonObject } from '../utils/json.js';
@@ -324,7 +324,7 @@ function exhaustedMissionReport(
   capture: HeadCapture,
   refusal: MissionBudgetRefusal,
   wallClockMs: number,
-  steps: Parameters<typeof extractHeadSteps>[0] = [],
+  stepCount = 0,
 ): HeadReport {
   return {
     id: input.id,
@@ -336,7 +336,7 @@ function exhaustedMissionReport(
     fileChanges: capture.files.snapshot(),
     childHeadIds: [...capture.childHeadIds],
     toolCalls: [...capture.toolCalls],
-    steps: extractHeadSteps(steps),
+    stepCount,
     tokenUsage: {
       input: capture.tokenUsage.input,
       output: capture.tokenUsage.output,
@@ -385,6 +385,22 @@ export interface HeadInferenceDeps {
    * the governor itself, out-of-process over an RPC to whoever holds the ledger.
    */
   mission?: MissionScope;
+  /**
+   * Where each finished step is recorded, while the head is still running.
+   *
+   * This is the head's whole observability story and the ONLY writer of its
+   * trace — the report carries a count, not the rows. A fork is not an actor:
+   * it has no chat, no run-event recorder and no socket a surface can watch, so
+   * the ordered trace it pushes here is the one thing that makes a running
+   * branch legible.
+   *
+   * The sink is the journal holding this head's own row, which is whoever
+   * spawned it. Omitted only for a recursive sub-head on the hosted backend:
+   * its spawner is another facet whose journal is that facet's private storage
+   * and is not addressable from the child — the same reason a sub-head has
+   * never appeared on the Exploration surface at all.
+   */
+  reportStep?: (seq: number, step: HeadStep) => Promise<void> | void;
 }
 
 /**
@@ -416,6 +432,11 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     return refusal !== null;
   };
 
+  // Steps recorded so far — the trace's dense sequence and the report's count.
+  // A step with no prose, reasoning or tool call is padding and is not recorded,
+  // exactly as the whole-run walk used to drop it.
+  let recorded = 0;
+
   try {
     // Before the first call as well as between steps: a head spawned into an
     // already-spent mission must not get one free inference out of it.
@@ -428,6 +449,18 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       messages: buildHeadMessages(input),
       tools: deps.tools,
       onStepFinish: async (step) => {
+        const traced = toHeadStep(step);
+        if (traced) {
+          const seq = recorded++;
+          // A failed trace write must not kill the work it was watching — the
+          // sink can be an RPC to another Durable Object. Same treatment the
+          // actor gives its own step events.
+          try {
+            await deps.reportStep?.(seq, traced);
+          } catch (err) {
+            console.warn(`[proteus] head ${input.id} could not record step ${seq}:`, err);
+          }
+        }
         const usage = missionCallUsage(step.usage);
         if (!usage) return;
         capture.recordStepUsage(usage.input, usage.output);
@@ -447,8 +480,10 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     });
 
     if (refusal) {
-      return exhaustedMissionReport(input, capture, refusal, Date.now() - startedAt, result.steps);
+      return exhaustedMissionReport(input, capture, refusal, Date.now() - startedAt, recorded);
     }
+
+
     const budgetGate = budgetExhausted(input.budget);
     // A run that used the whole step envelope without the model ever choosing to
     // stop was cut off mid-flight — reporting it 'completed' would hand the
@@ -476,7 +511,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       fileChanges: capture.files.snapshot(),
       childHeadIds: [...capture.childHeadIds],
       toolCalls: [...capture.toolCalls],
-      steps: extractHeadSteps(result.steps),
+      stepCount: recorded,
       tokenUsage: usageTotal(),
       wallClockMs: Date.now() - startedAt,
       errorMessage: status === 'completed' ? undefined : stopReason ?? undefined,
@@ -491,7 +526,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       fileChanges: capture.files.snapshot(),
       childHeadIds: [...capture.childHeadIds],
       toolCalls: [...capture.toolCalls],
-      steps: [],
+      stepCount: recorded,
       tokenUsage: usageTotal(),
       wallClockMs: Date.now() - startedAt,
       errorMessage: err instanceof Error ? err.message : String(err),

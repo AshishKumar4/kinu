@@ -263,26 +263,28 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
 });
 
 describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
-  test('cancel aborts the work + marks cancelled; the fiber does not relabel or wake', async () => {
+  test('cancel aborts the work, marks cancelled, and WAKES the agent; the fiber does not relabel or wake again', async () => {
     const { runner, store, enqueued, settled } = setup();
     const controller = new AbortController();
     const id = runner.create('run', {}, 'build', controller);
-    const rejections: Array<(error: Error) => void> = [];
-    runner.detach(id, 'run', new Promise((_, rejectPromise) => {
-      rejections.push((error) => rejectPromise(error));
-    }));
+    const work = Promise.withResolvers<never>();
+    runner.detach(id, 'run', work.promise);
 
-    expect(runner.cancel(id)).toBe(true);
+    expect(await runner.cancel(id)).toBe(true);
     expect(store.get(id)?.status).toBe('cancelled');
     expect(controller.signal.aborted).toBe(true);
-    expect(runner.cancel(id)).toBe(false);                  // already settled → no-op
+    expect(await runner.cancel(id)).toBe(false);             // already settled → no-op
 
-    const reject = rejections[0];
-    if (!reject) throw new Error('work rejection was not captured');
-    reject(new Error('aborted'));                            // the work unwinds on its abort
+    // The agent was told once, and told the truth: cancelled, no result to
+    // collect. Without this the agent goes on believing the job is in flight.
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0]?.text).toContain('CANCELLED by the operator');
+    expect(enqueued[0]?.text).toContain('no result to collect');
+
+    work.reject(new Error('aborted'));                       // the work unwinds on its abort
     await settled();
     expect(store.get(id)?.status).toBe('cancelled');        // NOT relabelled failed
-    expect(enqueued).toHaveLength(0);                        // no synthesis wake
+    expect(enqueued).toHaveLength(1);                        // and not woken a second time
   });
 
   test('cancelRunning aborts every running job and leaves settled jobs alone', async () => {

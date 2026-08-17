@@ -1,16 +1,42 @@
 /**
- * Approval gate — Hermes-style dangerous-command detection for shell exec.
+ * Approval gate — does this command need the owner's decision, and WHERE is
+ * it about to run?
  *
- * Pre-execution pass over commands the LLM wants to run in a sandbox.
- * Classifies as:
- *   • 'allow'   — safe; execute immediately
+ * A pre-execution pass over every command that reaches a real shell:
+ *   • 'allow'   — nothing to decide here; execute immediately
  *   • 'warn'    — unusual but not destructive; log + execute
- *   • 'gate'    — high risk; require user approval via cf_agent_tool_approval
- *   • 'deny'    — never execute (e.g. obvious prompt injection, recursive rm /)
+ *   • 'gate'    — the owner decides
+ *   • 'deny'    — never executes, on any executor
+ *
+ * TWO THINGS THIS FILE GETS RIGHT THAT A FLAT PATTERN TABLE CANNOT.
+ *
+ * 1. A decision is a function of (rule, EXECUTOR). `rm -rf node_modules` in
+ *    the agent's own workspace is housekeeping; the identical string against
+ *    the owner's laptop is their real machine. A table matched on the command
+ *    string alone cannot tell those apart, so it gated both — which is why
+ *    ordinary agent work spent the owner's attention on nothing. Each rule
+ *    declares where its harm LANDS ({@link ApprovalHarm}); each executor is
+ *    either the agent's own machine or somebody else's. Local harm on the
+ *    agent's own machine is not the owner's decision. Everything that reaches
+ *    past the executor — a remote, a registry, the transcript, the host's
+ *    cloud identity — is, wherever it was typed. One rule table, resolved per
+ *    executor; not a table per executor.
+ *
+ * 2. A rule fires on a command that is INVOKED, not on a string that is
+ *    mentioned. `grep -rn "rm -rf" .` and `echo "run sudo"` mutate nothing,
+ *    and a substring match gated both. Rules that name a binary now require
+ *    that binary in command position ({@link invokedBinaries}). The exception
+ *    is deliberate: when the line hands a program to an interpreter, whatever
+ *    it runs is opaque to a shell-word scan, so those rules fall back to
+ *    matching the whole line.
+ *
+ * 'deny' is absolute and is unchanged by either of the above: same patterns,
+ * whole-line, every executor. It is the tier that answers "never, anywhere",
+ * and a tier that softens is not that tier.
  *
  * Patterns are conservative; the agent can always work around them by
- * splitting commands. False positives degrade slightly (an extra approval
- * prompt) — that's the right tradeoff.
+ * splitting commands. This is a guardrail against accidents, not an adversary
+ * model.
  *
  * Influences come from Hermes's tools/approval.py (battle-tested regex set
  * for sudo / rm -rf / shell-meta escapes / cloud-metadata SSRF). Source
@@ -20,6 +46,32 @@
 
 export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 
+/**
+ * Where a rule's harm lands, which is what makes a decision executor-sensitive.
+ *
+ *   'local'       — the damage is confined to the machine the command runs on.
+ *                   Whether that matters depends entirely on whose machine it
+ *                   is: a wiped scratch workspace is a re-clone, a wiped laptop
+ *                   is the owner's life.
+ *   'reaches_out' — the effect leaves the executor. A force-push rewrites a
+ *                   remote, `npm publish` is public, an env dump lands in the
+ *                   transcript, a metadata fetch steals the host's identity.
+ *                   None of that gets safer for having been typed on a
+ *                   disposable box.
+ */
+export type ApprovalHarm = 'local' | 'reaches_out';
+
+/**
+ * Executors whose local state belongs to the agent itself — its own workspace
+ * filesystem and its own provisioned container. Local-harm rules are not the
+ * owner's decision on these.
+ *
+ * Everything else is somebody else's machine and is NOT listed: the owner's
+ * `laptop`, a fork's `parent` workspace, and any executor kind added later.
+ * Membership is opt-in precisely so a new executor fails closed.
+ */
+const AGENT_OWN_EXECUTORS: ReadonlySet<string> = new Set(['workspace', 'sandbox']);
+
 export interface ApprovalRuleHit {
   readonly decision: ApprovalDecision;
   readonly rule: string;
@@ -28,25 +80,62 @@ export interface ApprovalRuleHit {
 
 export interface ApprovalResult {
   readonly decision: ApprovalDecision;
-  /** All rules that fired (highest-severity wins; this lists every match). */
+  /** Every rule that fired, with the decision it carries ON THIS EXECUTOR.
+   *  Rules whose harm the executor cannot suffer are not hits at all. */
   readonly hits: readonly ApprovalRuleHit[];
 }
 
-/** What an interactive approval channel is asked about: the command that hit
- *  the gate and the review explaining why. */
+/** What an interactive approval channel is asked about: the command, where it
+ *  would run, and the review explaining why anyone is being asked. */
 export interface ShellApprovalRequest {
   readonly command: string;
+  /** The executor the command is bound for — `workspace`, `sandbox`,
+   *  `laptop`, `parent`. Part of the question, not decoration: the same
+   *  string is a different request on a different machine. */
+  readonly executor: string;
   readonly review: ApprovalResult;
 }
 
-/** A channel's answer. 'allow'/'deny' apply to this command only; the
- *  '_always' variants also carry the user's intent to change the session's
- *  standing shell approval mode. */
-export type ShellApprovalOutcome = 'allow' | 'allow_always' | 'deny' | 'deny_always';
+/** A channel's answer. 'allow'/'deny' apply to this command only; 'allow_always'
+ *  additionally grants every rule this command tripped, on this executor
+ *  ({@link ApprovalGrant}) — not "stop gating everything". */
+export type ShellApprovalOutcome = 'allow' | 'allow_always' | 'deny';
 
 /** Whether an outcome lets the command run. */
 export function approvalGrants(outcome: ShellApprovalOutcome): boolean {
   return outcome === 'allow' || outcome === 'allow_always';
+}
+
+/**
+ * The unit of trust a standing grant is written in: one rule, on one executor.
+ *
+ * Why this unit and not another. An exact command string never matches twice —
+ * the next `rm -rf` has a different path, so "don't ask again" would ask again.
+ * A bare rule name ("allow rm forever") throws away the only distinction that
+ * makes the gate worth having. The rule is already the vocabulary the gate
+ * reasons in and the owner reads, the executor is already the thing that
+ * decides whether the rule matters, and the product of the two is small enough
+ * to list, review and revoke one line at a time.
+ */
+export interface ApprovalGrant {
+  readonly rule: string;
+  readonly executor: string;
+}
+
+/** The stored spelling of a grant. One token, so a set of them is a plain
+ *  comma-separated config value like every other list this agent stores. */
+export function formatApprovalGrant(grant: ApprovalGrant): string {
+  return `${grant.rule}@${grant.executor}`;
+}
+
+/** Read a stored grant back. Anything malformed is not a grant — a config
+ *  value that cannot be parsed must never widen what runs. */
+export function parseApprovalGrant(raw: string): ApprovalGrant | null {
+  const at = raw.indexOf('@');
+  if (at <= 0 || at === raw.length - 1) return null;
+  const rule = raw.slice(0, at).trim();
+  const executor = raw.slice(at + 1).trim();
+  return rule && executor ? { rule, executor } : null;
 }
 
 interface Rule {
@@ -54,12 +143,22 @@ interface Rule {
   decision: ApprovalDecision;
   name: string;
   why: string;
+  harm: ApprovalHarm;
+  /** The binaries this rule is about. Present ⇒ the rule only fires when one
+   *  of them is actually invoked (see {@link invokedBinaries}). Absent ⇒ the
+   *  pattern describes the shape of the whole line, not a program: a fork
+   *  bomb, a pipe into a shell, a metadata address that can sit in any
+   *  argument. Deny rules deliberately carry none. */
+  binaries?: readonly string[];
 }
 
 /**
- * Default rule set. Roughly ordered by severity (deny → gate → warn).
- * Adding a rule: prefer specificity over breadth — false-negatives are
- * recoverable (user denies), false-positives are annoying (paper-cut UX).
+ * Default rule set — the ONE table, resolved per executor by
+ * {@link reviewCommand}. There is no per-executor copy of it.
+ *
+ * Adding a rule: prefer specificity over breadth, and say where the harm
+ * lands. A rule with `harm: 'local'` is claiming the damage stops at the
+ * machine, which is what buys the agent an ungated shell on its own box.
  */
 const RULES: Rule[] = [
   // ── DENY: obviously destructive or filesystem-corrupting ─────────
@@ -68,92 +167,119 @@ const RULES: Rule[] = [
     decision: 'deny',
     name: 'rm-rf-root',
     why: 'Deletes the entire root filesystem.',
+    harm: 'local',
   },
   {
     pattern: /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,
     decision: 'deny',
     name: 'fork-bomb',
     why: 'Classic shell fork bomb pattern.',
+    harm: 'local',
   },
   {
     pattern: /\bdd\s+if=\/dev\/(zero|urandom)\s+of=\/dev\/sd[a-z]/i,
     decision: 'deny',
     name: 'dd-overwrite-disk',
     why: 'Overwrites raw block devices.',
+    harm: 'local',
   },
   {
     pattern: /\bmkfs\.[a-z0-9]+\s+\/dev\/sd[a-z]/i,
     decision: 'deny',
     name: 'mkfs-physical-disk',
     why: 'Reformats a real disk device.',
+    harm: 'local',
   },
   {
     pattern: /\b(curl|wget)\s+[^|]*\|\s*sh\b/i,
     decision: 'deny',
     name: 'pipe-to-shell',
     why: 'Downloads remote script and pipes directly to shell.',
+    harm: 'reaches_out',
   },
   {
     pattern: /\b(curl|wget)\s+[^|]*\|\s*bash\b/i,
     decision: 'deny',
     name: 'pipe-to-bash',
     why: 'Downloads remote script and pipes directly to bash.',
+    harm: 'reaches_out',
   },
 
   // ── GATE: privileged or sensitive operations ─────────────────────
   {
-    pattern: /(?:^|\s)\bsudo\b/,
+    // Just the word: the leading-whitespace guard it used to carry was a proxy
+    // for "in command position", which `binaries` now decides properly — and
+    // the proxy was wrong, missing both `/usr/bin/sudo x` and `ssh box "sudo x"`.
+    pattern: /\bsudo\b/,
     decision: 'gate',
     name: 'sudo',
-    why: 'Privilege escalation — requires explicit user approval.',
+    why: 'Privilege escalation on a machine that is not the agent\'s own.',
+    harm: 'local',
+    binaries: ['sudo'],
   },
   {
     pattern: /\bsu\s+-/,
     decision: 'gate',
     name: 'su',
-    why: 'User switching — requires explicit user approval.',
+    why: 'User switching.',
+    harm: 'local',
+    binaries: ['su'],
   },
   {
     pattern: /\bchmod\s+(?:[ugoa]*\+s|\+s|4\d\d\d?|7\d\d\d?)/,
     decision: 'gate',
     name: 'chmod-setuid',
     why: 'Sets setuid/setgid bits.',
+    harm: 'local',
+    binaries: ['chmod'],
   },
   {
     pattern: /\b(chown|chgrp)\s+(-R\s+)?(root|0)\b/i,
     decision: 'gate',
     name: 'chown-root',
     why: 'Reassigns ownership to root.',
+    harm: 'local',
+    binaries: ['chown', 'chgrp'],
   },
   {
     pattern: /\brm\s+-[a-zA-Z]*r/i,
     decision: 'gate',
     name: 'rm-recursive',
     why: 'Recursive delete.',
-  },
-  {
-    pattern: /\bgit\s+push\s+(?:-f|--force)/,
-    decision: 'gate',
-    name: 'git-force-push',
-    why: 'Force-push rewrites remote history.',
+    harm: 'local',
+    binaries: ['rm'],
   },
   {
     pattern: /\bgit\s+reset\s+--hard/,
     decision: 'gate',
     name: 'git-reset-hard',
     why: 'Discards local changes irreversibly.',
-  },
-  {
-    pattern: /\b(npm|pnpm|yarn|bun)\s+publish\b/,
-    decision: 'gate',
-    name: 'package-publish',
-    why: 'Publishes to a public package registry.',
+    harm: 'local',
+    binaries: ['git'],
   },
   {
     pattern: /\bdocker\s+(rm\s+-f|system\s+prune)/,
     decision: 'gate',
     name: 'docker-destructive',
     why: 'Docker destructive operation.',
+    harm: 'local',
+    binaries: ['docker'],
+  },
+  {
+    pattern: /\bgit\s+push\s+(?:-f|--force)/,
+    decision: 'gate',
+    name: 'git-force-push',
+    why: 'Force-push rewrites history on a remote nobody here owns.',
+    harm: 'reaches_out',
+    binaries: ['git'],
+  },
+  {
+    pattern: /\b(npm|pnpm|yarn|bun)\s+publish\b/,
+    decision: 'gate',
+    name: 'package-publish',
+    why: 'Publishes to a public package registry.',
+    harm: 'reaches_out',
+    binaries: ['npm', 'pnpm', 'yarn', 'bun'],
   },
 
   // ── DENY: prompt-injection / cloud-metadata SSRF ─────────────────
@@ -162,26 +288,34 @@ const RULES: Rule[] = [
     decision: 'deny',
     name: 'cloud-metadata-ip',
     why: 'AWS/GCP/Azure cloud-metadata endpoint — common SSRF target.',
+    harm: 'reaches_out',
   },
   {
     pattern: /\bmetadata\.google\.internal\b/,
     decision: 'deny',
     name: 'gcp-metadata',
     why: 'GCP metadata endpoint.',
+    harm: 'reaches_out',
   },
 
   // ── WARN: secrets exposure pattern ───────────────────────────────
+  // Both leak into the transcript, which is the same place whichever machine
+  // the command ran on — so neither is 'local' and neither softens.
   {
     pattern: /\b(printenv|env)\b(?!\s*\|.*grep)/,
     decision: 'warn',
     name: 'env-dump',
     why: 'Prints environment variables (may leak secrets to LLM output).',
+    harm: 'reaches_out',
+    binaries: ['printenv', 'env'],
   },
   {
     pattern: /\bcat\s+.*(\.env|\.npmrc|\.pypirc|\.aws|\.ssh|credentials)/i,
     decision: 'warn',
     name: 'secret-file-read',
     why: 'Reads a file likely to contain secrets.',
+    harm: 'reaches_out',
+    binaries: ['cat'],
   },
 ];
 
@@ -196,22 +330,131 @@ const SEVERITY = {
   deny: 3,
 } satisfies Record<ApprovalDecision, number>;
 
-export function reviewCommand(command: string): ApprovalResult {
-  const hits: ApprovalRuleHit[] = [];
-  for (const r of RULES) {
-    if (r.pattern.test(command)) {
-      hits.push({ decision: r.decision, rule: r.name, explanation: r.why });
-    }
-  }
-  if (hits.length === 0) {
-    return { decision: 'allow', hits: [] };
-  }
-  // Pick the highest-severity decision.
-  const decision = hits.reduce<ApprovalDecision>(
+function dominant(hits: readonly ApprovalRuleHit[]): ApprovalDecision {
+  return hits.reduce<ApprovalDecision>(
     (acc, h) => (SEVERITY[h.decision] > SEVERITY[acc] ? h.decision : acc),
     'allow',
   );
-  return { decision, hits };
+}
+
+/** Words that run whatever comes after them, so the thing after them is still
+ *  in command position. Kept to the ones that actually appear in front of a
+ *  gated binary; anything else is either rare or already an interpreter. */
+const COMMAND_PREFIXES: ReadonlySet<string> = new Set(['sudo', 'command', 'exec', 'time', 'nice']);
+
+/**
+ * Programs that take another program in an argument. Whatever they run is not
+ * a shell word this scan can see — `python -c "os.system('rm -rf /home')"`,
+ * `bash -c '…'`, `xargs rm -r`, `ssh host '…'` — so when one of these is
+ * invoked, binary-scoped rules fall back to matching the whole line, exactly
+ * as they did before command-position matching existed. Over-gating an
+ * interpreter is the safe direction.
+ */
+const INLINE_INTERPRETERS: ReadonlySet<string> = new Set([
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish',
+  'python', 'python3', 'perl', 'ruby', 'node', 'bun', 'deno',
+  'xargs', 'ssh', 'env', 'nohup', 'timeout', 'watch', 'find', 'docker',
+]);
+
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** Outside quotes, each of these ends a simple command, so the next word is a
+ *  program name again. `&&` and `||` fall out of `&` and `|`. */
+const COMMAND_BREAKS = new Set([';', '&', '|', '(', ')', '{', '}', '\n', '`']);
+
+/** What one quote-aware pass over a command line yields. */
+interface CommandScan {
+  /** Every program invoked, by basename. */
+  readonly invoked: ReadonlySet<string>;
+  /** The line with every quoted span replaced by a space — the text a
+   *  binary-scoped rule is matched against, so that `git log --grep "git
+   *  reset --hard"` is a search and not a reset. The cost is that a rule
+   *  phrase spelled with quotes around it (`cat ".env"`) stops matching; that
+   *  is a warn-tier spelling nobody writes, and the alternative is reading a
+   *  quoted argument as a command. */
+  readonly unquoted: string;
+}
+
+/**
+ * Read a command line once: what it invokes, and what it says outside quotes.
+ *
+ * A word counts as a program only in command position — the start of the
+ * line, or after a shell operator — with environment assignments and
+ * `sudo`-style prefixes skipped through. Quotes are tracked so an operator
+ * inside a string does not open a new command position, which is why
+ * `echo "a; rm -rf /tmp"` stops being a gated command.
+ *
+ * Over-collection is safe and under-collection is not, so a prefix word keeps
+ * command position open even across its flags: `sudo -u bob rm -rf /` yields
+ * `sudo`, `-u`, `bob` and `rm`, and only the real binaries match anything.
+ */
+function scanCommand(command: string): CommandScan {
+  const invoked = new Set<string>();
+  let unquoted = '';
+  let word = '';
+  let atCommandStart = true;
+  let quote: string | null = null;
+
+  const endWord = () => {
+    if (word.length === 0) return;
+    if (atCommandStart && !ENV_ASSIGNMENT.test(word)) {
+      const base = word.slice(word.lastIndexOf('/') + 1);
+      invoked.add(base);
+      if (!COMMAND_PREFIXES.has(base)) atCommandStart = false;
+    }
+    word = '';
+  };
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!;
+    if (quote !== null) {
+      if (ch === quote) { quote = null; unquoted += ' '; }
+      else word += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === '\\') { i++; continue; }
+    unquoted += ch;
+    if (ch === ' ' || ch === '\t') { endWord(); continue; }
+    if (COMMAND_BREAKS.has(ch)) { endWord(); atCommandStart = true; continue; }
+    if (ch === '$' && command[i + 1] === '(') { endWord(); atCommandStart = true; i++; continue; }
+    word += ch;
+  }
+  endWord();
+  return { invoked, unquoted };
+}
+
+/**
+ * Review a command for the executor it is bound for.
+ *
+ * `executor` is required and has no default: every boundary that reaches a
+ * shell knows which machine it is, and a default would silently pick a trust
+ * tier for a caller that forgot to say.
+ */
+export function reviewCommand(command: string, executor: string): ApprovalResult {
+  const { invoked, unquoted } = scanCommand(command);
+  let opaque = false;
+  for (const binary of invoked) {
+    if (INLINE_INTERPRETERS.has(binary)) { opaque = true; break; }
+  }
+  const agentsOwn = AGENT_OWN_EXECUTORS.has(executor);
+
+  const hits: ApprovalRuleHit[] = [];
+  for (const r of RULES) {
+    // A rule that names no binary describes the shape of the whole line — a
+    // fork bomb, a pipe into a shell, a metadata address that can sit in any
+    // argument — and so does every rule when an interpreter is holding the
+    // program. Both match the raw text, which is exactly what they matched
+    // before this file knew what a command position was.
+    if (r.binaries && !opaque) {
+      if (!r.binaries.some((b) => invoked.has(b))) continue;
+      if (!r.pattern.test(unquoted)) continue;
+    } else if (!r.pattern.test(command)) continue;
+    // Local harm on the agent's own machine is the agent's own business.
+    // 'deny' is exempt: it means never, and never does not have exceptions.
+    if (agentsOwn && r.harm === 'local' && r.decision !== 'deny') continue;
+    hits.push({ decision: r.decision, rule: r.name, explanation: r.why });
+  }
+  return { decision: dominant(hits), hits };
 }
 
 /**
@@ -222,41 +465,6 @@ export function formatApproval(result: ApprovalResult): string {
   if (result.decision === 'allow') return '';
   const lines = result.hits.map((h) => `• ${h.rule} (${h.decision}): ${h.explanation}`);
   return [`Approval review: ${result.decision}`, ...lines].join('\n');
-}
-
-/**
- * Convenience: wrap an exec function with approval gating.
- *
- * The wrapped exec, given a command, runs through reviewCommand first:
- *   • 'allow' / 'warn' → exec proceeds (warn logs the hits)
- *   • 'gate' → if `onApprovalRequest` resolves true, exec proceeds; else denied string
- *   • 'deny' → never exec, returns denial string
- */
-export function withApprovalGate<R>(
-  exec: (cmd: string) => Promise<R>,
-  denyResult: (msg: string) => R,
-  onApprovalRequest?: (cmd: string, review: ApprovalResult) => Promise<boolean>,
-): (cmd: string) => Promise<R> {
-  return async (cmd) => {
-    const review = reviewCommand(cmd);
-    if (review.decision === 'allow') return exec(cmd);
-    if (review.decision === 'warn') {
-      console.warn(`[approval-gate] warn: ${formatApproval(review)}`);
-      return exec(cmd);
-    }
-    if (review.decision === 'deny') {
-      return denyResult(`Denied by approval gate:\n${formatApproval(review)}`);
-    }
-    // gate
-    if (!onApprovalRequest) {
-      return denyResult(`Requires approval (no approver wired):\n${formatApproval(review)}`);
-    }
-    const approved = await onApprovalRequest(cmd, review);
-    if (!approved) {
-      return denyResult(`Denied by user:\n${formatApproval(review)}`);
-    }
-    return exec(cmd);
-  };
 }
 
 /**
@@ -277,6 +485,10 @@ export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 export interface ShellApprovalPolicy {
   /** Current standing mode. A live read (e.g. straight off agent_config). */
   mode(): ShellApprovalMode;
+  /** Has the owner already said yes to this rule on this executor, for good?
+   *  A live read of the stored grants, consulted BEFORE anyone is asked — the
+   *  point of a standing grant is that nobody is asked again. */
+  granted?(grant: ApprovalGrant): boolean;
   /** The interactive channel consulted for a 'gate' decision under 'strict'.
    *  Omitted, or resolving null, means nobody is listening — 'strict' falls
    *  through to `deferrals` if one is wired, and otherwise keeps its
@@ -286,6 +498,10 @@ export interface ShellApprovalPolicy {
   /** Where a 'gate' decision goes when nobody answered — parked on the owner
    *  rather than refused on their behalf. See {@link DeferredApprovalChannel}. */
   deferrals?: DeferredApprovalChannel;
+  /** Remember the owner's 'allow_always'. Called with every rule the command
+   *  tripped on this executor, so the next command of the same kind in the
+   *  same place does not ask. */
+  remember?(grants: readonly ApprovalGrant[]): void;
 }
 
 /** The conservative default every gated boundary falls back to when no
@@ -313,6 +529,17 @@ export interface DeferredApprovalChannel {
   park(req: ShellApprovalRequest): { readonly run: true } | { readonly run: false; readonly message: string };
 }
 
+/** The review with the owner's standing grants taken out of it: a rule they
+ *  have already blessed on this executor is no longer something to ask about.
+ *  Deny is never grantable — it is not a question. */
+function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, executor: string): ApprovalResult {
+  if (review.decision !== 'gate' || !policy.granted) return review;
+  const hits = review.hits.filter(
+    (h) => h.decision !== 'gate' || !policy.granted?.({ rule: h.rule, executor }),
+  );
+  return hits.length === review.hits.length ? review : { decision: dominant(hits), hits };
+}
+
 /**
  * Wrap ANY exec-shaped function — a `Shell.exec`, an `ExecutorProvider`
  * tool's `execute` — with the FULL mode-aware approval gate. This is the one
@@ -324,6 +551,10 @@ export interface DeferredApprovalChannel {
  * the identical decision instead of one tool remembering to ask and the rest
  * not.
  *
+ * `executor` names the machine this boundary reaches. It is what makes the
+ * decision scope-aware, so it is a required argument rather than something
+ * inferred: a boundary that cannot say where it runs has no business gating.
+ *
  * `denyResult` shapes a gate/deny message into the wrapped function's own
  * return type — a bare string for a codemode tool, `{stdout,stderr,exitCode}`
  * for a raw `Shell`.
@@ -331,6 +562,7 @@ export interface DeferredApprovalChannel {
 export function gateExec<R>(
   execute: (command: string, ...rest: unknown[]) => Promise<R>,
   denyResult: (message: string) => R,
+  executor: string,
   policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
 ): (...args: unknown[]) => Promise<R> {
   // A rest-args signature — not `(command: string, ...)` — so the wrapped
@@ -341,9 +573,9 @@ export function gateExec<R>(
     const [command, ...rest] = args;
     const cmd = String(command);
     const mode = policy.mode();
-    const review = reviewCommand(cmd);
+    const review = afterGrants(reviewCommand(cmd, executor), policy, executor);
     if (review.decision === 'deny') {
-      return denyResult(`Denied by approval gate:\n${formatApproval(review)}`);
+      return denyResult(`Denied — ${formatApproval(review)}`);
     }
     if (review.decision === 'gate') {
       if (mode === 'allow_all') {
@@ -352,7 +584,7 @@ export function gateExec<R>(
         // 'deny_all' never asks. Under 'strict' a connected channel gets to
         // put the decision to the user; null means nobody is listening.
         const outcome = mode === 'strict' && policy.requestApproval
-          ? await policy.requestApproval({ command: cmd, review })
+          ? await policy.requestApproval({ command: cmd, executor, review })
           : null;
         if (outcome === null) {
           // Nobody decided. Under 'strict' that is an ABSENCE, not a refusal:
@@ -364,27 +596,40 @@ export function gateExec<R>(
           // has declined to decide: when a human IS on the channel their
           // answer is the better one, and replaying a grant they left in the
           // queue hours ago behind their back would be worse.
-          const parked = mode === 'strict' ? policy.deferrals?.park({ command: cmd, review }) : undefined;
+          const parked = mode === 'strict'
+            ? policy.deferrals?.park({ command: cmd, executor, review })
+            : undefined;
           if (parked && !parked.run) return denyResult(parked.message);
           if (!parked) {
-            return denyResult(
-              `Requires user approval (mode=${mode}). Ask the user to approve this command ` +
-              `or change the shell approval mode in agent settings.\n${formatApproval(review)}`,
-            );
+            // 'deny_all' is an answer the owner already gave; 'strict' with no
+            // queue and no channel is an absence. Saying "nobody to ask" under
+            // deny_all would invite the agent to keep asking.
+            return denyResult(mode === 'deny_all'
+              ? `NOT RUN — refused by standing policy (deny_all) — ${formatApproval(review)}`
+              : `NOT RUN — needs owner approval, nobody to ask — ${formatApproval(review)}`);
           }
           // parked.run — the owner approved this command while the agent was
           // away and the grant has just been spent; fall through to execute.
         } else if (!approvalGrants(outcome)) {
-          return denyResult(`Denied by the user.\n${formatApproval(review)}`);
+          return denyResult(`Denied by the owner — ${formatApproval(review)}`);
+        } else if (outcome === 'allow_always') {
+          // Scoped to exactly what was asked: these rules, this executor.
+          policy.remember?.(gatedGrants(review, executor));
         }
       }
     }
     if (review.decision === 'warn') {
       if (mode === 'deny_all') {
-        return denyResult(`Denied by approval gate (deny_all mode):\n${formatApproval(review)}`);
+        return denyResult(`Denied (deny_all mode) — ${formatApproval(review)}`);
       }
       console.warn(`[approval-gate] warn: ${formatApproval(review)}`);
     }
     return execute(cmd, ...rest);
   };
+}
+
+/** The grants an 'always' answer to this review buys: every rule that was
+ *  actually asked about, on the executor it was asked about. Nothing wider. */
+export function gatedGrants(review: ApprovalResult, executor: string): ApprovalGrant[] {
+  return review.hits.filter((h) => h.decision === 'gate').map((h) => ({ rule: h.rule, executor }));
 }

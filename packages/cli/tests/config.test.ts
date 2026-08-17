@@ -113,6 +113,54 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
     expect(out).toMatchObject({ name: "workers-ai", model: DEFAULT_WORKERS_AI_MODEL_ID });
   });
 
+  // Item 11.2: the owner runs on the native Workers AI model because it is the
+  // one he is not billed per-token for. Every BYO credential shape at once, and
+  // no chosen model, must still resolve to it — a key sitting on disk is not a
+  // selection. `openaiCompat` was the hole: its branch matched unconditionally.
+  test("no chosen model lands on the native default however many BYO credentials are stored", () => {
+    const out = runResolveLLM({
+      origin: CLOUD_ORIGIN,
+      accessToken: CLOUD_TOKEN,
+      providers: {
+        codex: { accessToken: "codex-token", refreshToken: "codex-refresh" },
+        openai: { apiKey: "sk-test" },
+        openrouter: { apiKey: "or-test" },
+        anthropic: { apiKey: "ant-test" },
+        openaiCompat: { default: { baseURL: "http://localhost:11434/v1", apiKey: "local" } },
+      },
+    });
+    expect(out).toEqual({
+      name: "workers-ai",
+      baseURL: `${CLOUD_ORIGIN}/api/user/ai/v1`,
+      headers: { Authorization: `Bearer ${CLOUD_TOKEN}` },
+      model: DEFAULT_WORKERS_AI_MODEL_ID,
+    });
+  });
+
+  // An Ollama on this machine will happily accept `@cf/deepseek-ai/…` as a
+  // model name and serve something else, so the local endpoint must never
+  // answer for a spec the signed-in account owns.
+  test("a local openai-compatible endpoint cannot answer for a native spec", () => {
+    const compat = { default: { baseURL: "http://localhost:11434/v1", apiKey: "local" } };
+    for (const model of [
+      `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`,
+      DEFAULT_WORKERS_AI_MODEL_ID,
+      "my-gateway/openai/gpt-4.1",
+    ]) {
+      const out = runResolveLLM({
+        origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, model, providers: { openaiCompat: compat },
+      });
+      expect(out).toMatchObject({ name: "workers-ai", baseURL: `${CLOUD_ORIGIN}/api/user/ai/v1` });
+    }
+
+    // …and it still answers for its own models.
+    const local = runResolveLLM({
+      origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN,
+      model: "openai-compat/gpt-oss:20b", providers: { openaiCompat: compat },
+    });
+    expect(local).toMatchObject({ name: "openai-compat", baseURL: "http://localhost:11434/v1", model: "gpt-oss:20b" });
+  });
+
   test("an explicit model selection still overrides the signed-in default", () => {
     const out = runResolveLLM({
       origin: CLOUD_ORIGIN,

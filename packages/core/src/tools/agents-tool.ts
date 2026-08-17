@@ -617,7 +617,13 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
   if (!deps.fork) return {};
   const hasMcts = !!deps.fork.registry.get('mcts');
   const properties: ForkSchemaProperties = {
-    task: { type: 'string', description: 'For action=fork: the concrete task the forks explore together.' },
+    // Gains the batch-level role oh-my-pi's `context` slot has: shared
+    // background stated ONCE rather than copied into every fork's brief. Still
+    // literally the task — settle=mcts reads only this field (mcts/engine.ts
+    // runs on ctx.task and never looks at `forks`) — so the wording has to
+    // carry both, and "the concrete task the forks explore together" carried
+    // neither past the word `task` itself.
+    task: { type: 'string', description: 'For action=fork: the task the forks explore together and the context they share — the goal, the constraints that hold for every fork, and any interface they must agree on. State it here once rather than repeating it in each fork.' },
     forks: {
       type: 'array',
       minItems: 2,
@@ -627,8 +633,16 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
         type: 'object',
         required: ['task', 'rationale'],
         properties: {
-          task: { type: 'string', description: 'What this fork explores. Be concrete.' },
-          rationale: { type: 'string', description: 'Why this angle matters.' },
+          // 16 words of guidance ("Be concrete." / "Why this angle matters.")
+          // for the most failure-prone artifact in the system. What a brief
+          // must carry follows from what a fork can SEE: the workspace, and
+          // the parent's completed turns as inherited context — never this
+          // conversation as it continues, and never a sibling's work
+          // (heads/controller.ts spawns them with no channel between them).
+          // So the acceptance criterion has to be in the brief: nothing else
+          // can tell the fork it is done.
+          task: { type: 'string', description: 'What this fork explores, complete on its own: the files or surfaces to look at, what to change or find out, and the observable result that means it is done. A fork sees this workspace but not this conversation and not its siblings, so everything it needs is here.' },
+          rationale: { type: 'string', description: 'Why this angle matters — one line, read at the merge to weigh what came back.' },
           // The field said how to set it and never what setting it is FOR, so
           // a first-class capability read as a knob. The caveat belongs on the
           // parameter rather than in the prompt: mixed panels track their

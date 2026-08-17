@@ -152,13 +152,27 @@ describe('an unmapped finish reason alone is not a dead stream', () => {
 describe('stalled provider stream aborts the turn', () => {
   test('a stream that never sends anything is aborted by the stall watchdog', async () => {
     const t0 = performance.now();
+    const { threw } = await driveTurn(
+      () => new Response(new ReadableStream({ start() { /* stall forever */ } }), { headers: SSE_HEADERS }),
+      { stallTimeoutMs: 400 },
+    );
+    expect(threw?.message ?? '').toContain('stalled');
+    expect(performance.now() - t0).toBeLessThan(10_000);
+  }, 15_000);
+
+  test('a stall keeps the steps that already finished, then reports the stall', async () => {
+    // Step 1 ran a tool and finished; step 2 goes silent. The finished step is
+    // real work the caller has already rendered and accounted for, so it rides
+    // out on `done` — and the turn is STILL reported as failed. Before this,
+    // the throw came first and every finished step went with it.
     const { threw, done } = await driveTurn(
       () => new Response(new ReadableStream({ start() { /* stall forever */ } }), { headers: SSE_HEADERS }),
       { stallTimeoutMs: 400 },
     );
-    expect(done).toBeUndefined();
     expect(threw?.message ?? '').toContain('stalled');
-    expect(performance.now() - t0).toBeLessThan(10_000);
+    const messages = done && done.type === 'done' ? done.responseMessages : [];
+    expect(messages.filter((m) => m.role === 'tool')).toHaveLength(1);
+    expect(messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
   }, 15_000);
 
   test('a slow but live stream does not trip the watchdog', async () => {

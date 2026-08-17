@@ -19,6 +19,7 @@ import { createCodeTool } from "@cloudflare/codemode/ai";
 import type { AgentsToolDeps, SqlExecutor } from "@proteus/core";
 import {
   createAgentsCodemodeProvider, createWebCodemodeProvider, createRLMProvider,
+  renderExecuteToolsDescription,
   type WebSearchProvider, type CodemodeProvider,
 } from "@proteus/core";
 import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry.js";
@@ -125,5 +126,14 @@ export function createExecuteToolsTool(options: ExecuteToolsOptions) {
   if (agentsProvider) providers.push(agentsProvider);
   if (options.extraProviders) providers.push(...options.extraProviders());
   providers.push(webProvider, ...executorProviders);
-  return createCodeTool({ tools: providers, executor });
+  // The docstring is core's (registry.renderExecuteToolsDescription), not
+  // codemode's DEFAULT_DESCRIPTION: `{{types}}` is the token createCodeTool
+  // substitutes the assembled namespace declarations into, and letting it do
+  // that substitution keeps its ability to generate a declaration for a
+  // provider that ships none of its own.
+  return createCodeTool({
+    description: renderExecuteToolsDescription('{{types}}'),
+    tools: providers,
+    executor,
+  });
 }

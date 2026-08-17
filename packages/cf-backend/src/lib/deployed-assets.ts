@@ -7,6 +7,7 @@
 // every fresh install died on a checksum mismatch and nothing reported it.
 // So: one place owns "did this deployment actually publish that file?", and
 // the SPA shell is never an acceptable answer for a file we asked for by name.
+import { tolerateAsync } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 /** CLI source archive + its checksum + the served build stamp. Written into
@@ -51,9 +52,6 @@ export async function fetchDeployedAsset(
 export async function readBuildStamp(env: Env, base: string | URL): Promise<BuildStamp | null> {
   const res = await fetchDeployedAsset(env, base, CLI_VERSION_PATH);
   if (!res) return null;
-  try {
-    return v.parse(BuildStampSchema, await res.json());
-  } catch {
-    return null;
-  }
+  const parsed = v.safeParse(BuildStampSchema, await tolerateAsync(() => res.json(), 'malformed-input'));
+  return parsed.success ? parsed.output : null;
 }

@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./identity": "./src/identity/index.ts",
+    "./obs": "./src/obs/index.ts",
     "./workspace": "./src/vfs/nimbus-workspace.ts"
   },
   "dependencies": {

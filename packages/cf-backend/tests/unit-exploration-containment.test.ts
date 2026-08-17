@@ -37,7 +37,7 @@ function report(id: string): HeadReport {
     fileChanges: [],
     childHeadIds: [],
     toolCalls: [],
-    steps: [],
+    stepCount: 0,
     tokenUsage: { input: 1, output: 1, total: 2 },
     wallClockMs: 1,
   };
@@ -234,6 +234,30 @@ describe('MCTS branch mode stays isolated', () => {
 
   test('the forked runtime is constructed in exactly one place', () => {
     expect(source.match(/createCFRuntime\(/g)).toHaveLength(1);
+  });
+
+  /**
+   * A head's step trace must actually leave the facet.
+   *
+   * The journal lives on the orchestrator and a facet cannot write it, so the
+   * trace only exists if `runAsHead` provides the `reportStep` sink. That seam is
+   * optional in core, which is how it came to have no provider at all: nothing
+   * failed, `head_steps` was simply always empty, and every branch in the
+   * Exploration surface read `STEPS 0` with "no step trace" for its whole life.
+   * The read is source-level for the same reason as the assertions above — the DO
+   * class cannot be instantiated in this runner — but it pins the two halves that
+   * were missing: the option is set, and it reaches the parent stub.
+   */
+  test('a head reports every step back to the parent journal', () => {
+    const runAsHead = source.slice(
+      source.indexOf('  async runAsHead('),
+      source.indexOf('  private missionScope('),
+    );
+    expect(runAsHead).toContain('options.reportStep = reportStep');
+    expect(runAsHead).toContain('parent.recordHeadStep(input.id, seq, step)');
+    // Reached through the shared-parent stub, like the mission ledger's port —
+    // never through this facet's own storage, which is not where the journal is.
+    expect(runAsHead).toContain('this.getSharedParentStub()');
   });
 
   test('heads stay bare Agents — no ActorAgent tool surface by inheritance', () => {

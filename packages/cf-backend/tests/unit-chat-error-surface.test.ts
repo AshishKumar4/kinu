@@ -39,10 +39,15 @@ describe('use-proteus chat-error wiring', () => {
     expect(returned).toContain('retryLastMessage,');
   });
 
-  test('retry re-sends the last user message parts', () => {
+  test('retry RE-RUNS the failed turn and never appends a second user message', () => {
     const retry = hook.slice(hook.indexOf('const retryLastMessage'), hook.indexOf('const searchMemory'));
-    expect(retry).toContain('.find((m) => m.role === "user")');
-    expect(retry).toContain('sendMessage({ role: "user", parts: lastUser.parts, metadata: lastUser.metadata })');
+    // The SDK's own regenerate: it drops the assistant message being retried,
+    // or keeps a trailing user message when the turn produced none, and sends
+    // `trigger: 'regenerate-message'`. `sendMessage` here appended a duplicate
+    // user turn on every press.
+    expect(retry).toContain('void regenerate()');
+    expect(retry).not.toContain('sendMessage(');
+    expect(hook).toContain('    regenerate,');
   });
 });
 

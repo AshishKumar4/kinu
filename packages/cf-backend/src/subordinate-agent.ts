@@ -4,7 +4,6 @@ import { convertToModelMessages } from 'ai';
 import type { ChatResponseResult } from '@cloudflare/think';
 import {
   EvolutionEngine,
-  bootstrapScaffold,
   initWorkspaceSchema,
   renderSoulMarkdown,
   snapshotCompletedTurn,
@@ -139,7 +138,7 @@ export class SubordinateAgent extends ActorAgent {
       .catch(warnSubordinateFailure('[subordinate] parent notification failed:'));
   }
 
-  private ensureSchema(): void {
+  protected ensureSchema(): void {
     if (this._schemaReady) return;
     // Every table a workspace has, on any backend — one list, in core.
     initWorkspaceSchema({
@@ -150,6 +149,8 @@ export class SubordinateAgent extends ActorAgent {
     // The one plane this root alone carries: its own identity row, seeded by
     // setSubordinateIdentity (declared per-root in core/conformance/manifest.ts).
     this.identity.ensureSchema();
+    // The shared actor plane both cf roots carry (manifest: WIRED on both).
+    this.ensureCapabilitySchema();
     this._schemaReady = true;
   }
 
@@ -183,15 +184,15 @@ export class SubordinateAgent extends ActorAgent {
     this._cachedSoulText = null;
     this._cachedSystemPrompt = null;
     this.invalidateModelCaches();
-    if (!(await this.rt.identity.scaffold.exists())) await bootstrapScaffold(this.rt);
+    await this.ensureOwnedScaffold();
     return { ok: true };
   }
 
-  async onStart(): Promise<void> {
+  /** Synchronous by contract — see `OrchestratorAgent.onStart`. The scaffold this
+   *  subordinate runs is bootstrapped where it is needed: at identity seeding
+   *  above, and on the turn path (`ActorAgent.beforeTurn`). */
+  onStart(): void {
     this.ensureSchema();
-    if (this.identity.read()) {
-      if (!(await this.rt.identity.scaffold.exists())) await bootstrapScaffold(this.rt);
-    }
   }
 
   /**
@@ -300,12 +301,12 @@ export class SubordinateAgent extends ActorAgent {
       status,
       content,
       origin,
-      mode: this.turnPromptMode() === 'plan' ? 'plan' : 'build',
+      mode: this.turnWorkMode(),
     });
   }
 
   async onChatResponse(result: ChatResponseResult): Promise<void> {
-    const turnMode = this.turnPromptMode();
+    const turnMode = this.turnWorkMode();
     const { programmaticUserMessage, errorText, completed } = this.settleTurnEvents(result);
     this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
     if (!completed) {

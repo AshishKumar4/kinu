@@ -2,6 +2,7 @@
 
 // Identity system
 export { initActorTables, initAllTables, migrateWorkspaceStorage } from './identity/schema.js';
+export { reconcileColumns } from './identity/columns.js';
 export { readActivityLog, type ActivityLogEntry } from './identity/activity-log.js';
 // The one answer to "which tables a workspace has" — every composition root
 // calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
@@ -9,7 +10,9 @@ export { initWorkspaceSchema, type WorkspaceSchemaSql } from './identity/workspa
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
+  WORKSPACE_CREATED_EVENT,
   isPlaceholderMission,
+  workspaceGenesisSignal,
   readSoul,
   readMission,
   renderSoulMarkdown,
@@ -22,6 +25,11 @@ export {
   forkWorkspaceStorage, snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage,
   type ForkOpts, type ForkResult, type ForkLineageRow, type ForkSnapshot,
 } from './identity/fork.js';
+export {
+  reconcileSessionTree, sessionTreeAncestry, chatPaneAncestry,
+  SESSION_TREE_MAX_DEPTH, CHAT_SESSION_ID,
+  type SessionTreeNode, type ChatPaneRow,
+} from './identity/session-tree.js';
 export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
 } from './identity/fork-driver.js';
@@ -287,7 +295,7 @@ export {
 } from './experience/index.js';
 
 // Chat engine (shared between server and CLI)
-export { runChat, type ChatEvent, type ChatOptions } from './chat.js';
+export { runChat, INTERRUPTED_TURN, type ChatEvent, type ChatOptions } from './chat.js';
 
 // Extension seam (public plugin API — observe + extend a turn)
 export {
@@ -312,6 +320,10 @@ export {
   STEP_RECENT_TOOL_BUDGET_TOKENS,
   type StepPruneBudget,
 } from './prompting/step-prune.js';
+export {
+  settleUnpairedToolCalls,
+  INTERRUPTED_TOOL_RESULT,
+} from './prompting/interrupted-tool-calls.js';
 export { StepInjections, type RecordedInjection } from './prompting/step-injections.js';
 export {
   classifyTurnFailure,
@@ -376,10 +388,31 @@ export {
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOL_SPECS,
   AGENTS_TOOL_ACTIONS,
+  AGENT_STANCES,
+  AGENT_STANCE_SPECS,
+  DEFAULT_AGENT_STANCE,
+  STANCE_CHOICES,
+  TASKS_TOOL_ACTIONS,
+  WEB_TOOL_ACTIONS,
+  FILE_TOOL_ACTIONS,
+  memoryActionsFor,
+  type WebToolAction,
+  type FileToolAction,
+  isAgentStance,
+  type AgentStance,
+  type AgentStanceSpec,
+  type TasksToolAction,
   DELEGATION_FRAME,
   DELEGATION_RUNGS,
   DELEGATION_CONVERSE,
   renderToolSchemaDescription,
+  renderExecuteToolsDescription,
+  // The reach axis — which surfaces each capability is projected onto, and the
+  // codemode namespace it owns. Read by both surface builders and by the Tools
+  // panel, which used to guess it from ToolSet keys.
+  TOOL_REACH,
+  isBuiltinToolName,
+  type ToolReach,
   type AgentsToolAction,
   type BuiltinToolName,
   type BuiltinToolSpec,
@@ -489,16 +522,15 @@ export {
   compilePromptSurface,
   executorIsSelectable,
   isWorkMode,
-  promptModeForTurnEvent,
-  promptModeForTurnMetadata,
-  workModeForPromptMode,
+  turnProvenanceForMetadata,
+  workModeForTurnMetadata,
   uniqueBuiltinTools,
   uniqueExternalTools,
   uniquePromptExecutors,
   type PromptBackend,
   type PromptExecutorInfo,
   type PromptExternalToolInfo,
-  type PromptMode,
+  type TurnProvenance,
   type WorkMode,
   type PromptSurface,
   type PromptSurfaceOptions,
@@ -750,6 +782,7 @@ export {
   createNimbusExecutor, createNimbusWorkspaceExecutor, nimbusSessionShell,
   type NimbusExecutorOpts, type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
   type NimbusStartResult,
+  EXECUTOR_CAPABILITIES,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
@@ -779,7 +812,7 @@ export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observ
 export {
   DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT, summarizeRestorePlan,
   type FileCheckpoints, type CheckpointTurnMeta, type CheckpointAvailability,
-  type FileCheckpointEntry, type FileRestoreChange, type FileRestoreKind,
+  type FileCheckpointEntry, type FileCheckpointListing, type FileRestoreChange, type FileRestoreKind,
   type FileRestorePlan, type FileRestoreResult, type DeviceCheckpointHint,
 } from './checkpoints/types.js';
 // Shadow-git store format — the cross-engine contract (cli-backend imports
@@ -934,17 +967,42 @@ export {
   SUBORDINATE_AGENT_SLUG,
 } from './cloud-wire.js';
 
+// The one record of what the Cloudflare platform does, and how we know. Every
+// platform number in this repo is derived from an entry here; prose cites an
+// entry by its stable id and never restates the number.
+export {
+  PLATFORM_CATALOG,
+  PLATFORM_FACT_IDS,
+  PROVEN_LABELS,
+  injectableFaults,
+  platformFact,
+  platformFactEntries,
+  type BoundsKind,
+  type EvidenceLabel,
+  type LimitUnit,
+  type PlatformFact,
+  type PlatformFactEntry,
+  type PlatformFactId,
+  type PlatformMeasurement,
+  type PlatformObservable,
+  type PlatformQuantity,
+} from './platform-catalog.js';
+
 // safety — approval gating for shell exec + digest-bound approvals
 export {
   reviewCommand,
   formatApproval,
-  withApprovalGate,
+  gatedGrants,
+  formatApprovalGrant,
+  parseApprovalGrant,
   approvalGrants,
   gateExec,
   STRICT_NO_CHANNEL_POLICY,
   type ApprovalDecision,
   type ApprovalRuleHit,
   type ApprovalResult,
+  type ApprovalHarm,
+  type ApprovalGrant,
   type ShellApprovalRequest,
   type ShellApprovalOutcome,
   type ShellApprovalPolicy,
@@ -1010,7 +1068,9 @@ export {
   DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY,
   deriveChildBudget, budgetExhausted,
   initHeadsTables,
-  HeadJournal, type HeadJournalRow, type LiveHeadRun,
+  HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
+  reconcileInterruptedForks, forkInterruptedWake,
+  FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   HeadController, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
   MergeOutputSchema, DecisionSchema, type MergeOutput,
@@ -1202,13 +1262,19 @@ export {
 export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff.js';
 export {
   getExecutorFiles, readExecutorFile, sortDirEntries, executorFiles, writeExecutorFileOp,
-  listEnvironments,
+  listEnvironments, normalizeDir, joinDir, parentDir,
 } from './read-models/files.js';
 export type {
   DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorWriteResult,
   EnvironmentInfo, MountInfo,
 } from './read-models/files.js';
-export { readLatestSearchTree, readSearchTree } from './read-models/search-tree.js';
+export { readLatestSearchTree, readSearchTree, readSearchForest } from './read-models/search-tree.js';
+export { readForkRunParams } from './read-models/fork-params.js';
+export { readExplorationCanvas } from './read-models/exploration-canvas.js';
+export type { ExplorationCanvasView } from './read-models/exploration-canvas.js';
+export type {
+  ForkRunParams, ForkSettlePolicy, CompetedForkParams, MergedForkParams,
+} from './read-models/fork-params.js';
 export { listForkRuns, readForkRun } from './read-models/fork-runs.js';
 export type { ForkRunSummary, ForkRunStatus, ForkSettle } from './read-models/fork-runs.js';
 export { buildPendingActions } from './read-models/pending-actions.js';
@@ -1228,6 +1294,7 @@ export {
   getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
   getShellApprovalMode, getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
   setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
+  getShellApprovalGrants, revokeShellApprovalGrants,
 } from './read-models/config-plane.js';
 export type {
   EvolutionConfigView, MctsConfigView, SetModelDeps,

@@ -20,6 +20,7 @@ import type { VFS, Memory, SqlExecutor } from '../types/primitives.js';
 import type { CraftStore } from '../types/agent-runtime.js';
 import { appendMemoryNote } from '../memory/note.js';
 import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno.js';
+import { WORKSPACE_ROOT } from '../vfs/workspace-path.js';
 import { readExecSignal } from './signal.js';
 import { formatExecResult } from './exec-result.js';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution.js';
@@ -437,6 +438,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     name: 'workspace',
     kind: 'workspace',
     files: vfs,
+    homeDir: async () => WORKSPACE_ROOT,
     capabilities: new Set<ExecutorCapability>(['javascript', 'typescript', 'shell', 'fs_shared']),
     isAvailable: () => true,
     connect: async () => {},

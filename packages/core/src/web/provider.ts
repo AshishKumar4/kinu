@@ -25,6 +25,7 @@ import * as v from 'valibot';
 import { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './url-safety.js';
 import { htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images } from './markdown.js';
 import type { AuthResolver } from '../providers/types.js';
+import { TOOL_REACH } from '../tools/registry.js';
 
 /** Credential key for the optional Tavily search upgrade. */
 export const TAVILY_CRED_KEY = 'tavily';
@@ -254,13 +255,40 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
   };
 }
 
+/** The `web.*` declaration the sandbox shows the model.
+ *
+ *  Explicit, like every sibling provider's, because the members take POSITIONAL
+ *  arguments. Without it @cloudflare/codemode generates a declaration from the
+ *  tools' (absent) input schemas and produces `search: (input: SearchInput) =>
+ *  Promise<SearchOutput>` with `type SearchInput = unknown` — an object-argument
+ *  signature sitting beside a member description that states the positional
+ *  shape. A model following the generated signature writes
+ *  `web.search({ query })`, which arrives as args[0] and is stringified into a
+ *  search for the literal "[object Object]". */
+const TYPES = `export declare const web: {
+  /** Search the live web. Returns up to \`limit\` ranked results (default 5,
+   *  max 20), each with title, url, snippet and position — plus a freshness
+   *  date when the source has one, and a synthesized answer when a Tavily key
+   *  is connected. */
+  search(query: string, opts?: { limit?: number }): Promise<{
+    query: string;
+    results: Array<{ title: string; url: string; snippet: string; date?: string; position: number }>;
+    answer?: string;
+    source: string;
+  }>;
+  /** Fetch one absolute http(s) URL as clean markdown. */
+  fetch(url: string): Promise<{ url: string; title?: string; retrievedAt: string; markdown: string }>;
+};
+`;
+
 /** Codemode provider exposing the same web capability inside execute_tools as
  *  `web.search(query, { limit })` / `web.fetch(url)`, so agents can loop
  *  searches and fetch in parallel from one JS block. Shape is the shared
  *  `{ name, tools }` codemode contract both backends already inject. */
 export function createWebCodemodeProvider(provider: WebSearchProvider) {
   return {
-    name: 'web',
+    name: TOOL_REACH.web.codemode,
+    types: TYPES,
     tools: {
       search: {
         description: 'web.search(query, { limit? }) → { results: [{ title, url, snippet, date, position }], answer?, source }',

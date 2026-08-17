@@ -15,10 +15,9 @@ import { createCliSession } from '../src/session.js';
 
 function inertCheckpointSurface(): FileCheckpointSurface {
   return {
-    list: async () => [],
+    list: async () => ({ availability: { available: true }, entries: [] }),
     plan: async () => { throw new Error('not used'); },
     restore: async () => { throw new Error('not used'); },
-    status: async () => ({ available: true }),
   };
 }
 
@@ -49,11 +48,17 @@ function realEngineClient(opts: { gitBin?: string } = {}) {
   const work = join(root, 'project');
   mkdirSync(work, { recursive: true });
   const engine = createHostCheckpoints({ agent: 'undo-test', base: join(root, 'shadow'), gitBin: opts.gitBin });
+  // Composed exactly as LocalAgentClient wires it through the session: one call
+  // carries reachability with the entries, so no caller can read an empty list
+  // as a statement about the turn.
   const checkpoints: FileCheckpointSurface = {
-    list: (limit) => engine.list(limit),
+    list: async (limit) => {
+      const availability = await engine.status();
+      if (!availability.available) return { availability, entries: [] };
+      return { availability, entries: await engine.list(limit) };
+    },
     plan: (dir, id) => engine.plan(dir, id),
     restore: (dir, id) => engine.restore(dir, id),
-    status: () => engine.status(),
   };
   return { root, work, engine, client: { checkpoints }, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }

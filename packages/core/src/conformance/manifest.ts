@@ -149,7 +149,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // ── the shared actor substrate (core initAllTables) ──
     workspace_identity: EVERYWHERE,
     messages: EVERYWHERE,
-    conversation_history: EVERYWHERE,
     crafted_tools: EVERYWHERE,
     craft_scores: EVERYWHERE,
     _v2_codegen_migration_done: {

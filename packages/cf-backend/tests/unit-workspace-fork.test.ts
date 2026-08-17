@@ -7,7 +7,7 @@ const caller = { workspaceToken: 'source-token' } satisfies UserCaller;
 const snapshot = {
   source: { workspaceId: 'source-id', workspaceName: 'source' },
   cut: { messageId: 'm1', createdAtMs: 1 },
-  messages: [], conversationHistory: [], assistantMessages: [], files: [],
+  messages: [], assistantMessages: [], files: [],
   memoryChunks: [], craftedTools: [], agentConfig: [],
 } satisfies ForkSnapshot;
 

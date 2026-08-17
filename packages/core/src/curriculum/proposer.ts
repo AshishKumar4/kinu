@@ -13,6 +13,7 @@
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLM } from '../types/primitives.js';
+import type { TurnOutcome } from '../evolution/outcomes.js';
 import { extractJsonArray, jsonArrayOnlyInstruction } from '../prompts/structured.js';
 import { parseJsonValue } from '../utils/json.js';
 
@@ -57,19 +58,6 @@ const ProposalListSchema = v.array(
 
 const StringListSchema = v.array(v.string());
 
-function errorMessage({ error }: { error: unknown }): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function parseStringList(text: string): string[] {
-  try {
-    const result = v.safeParse(StringListSchema, parseJsonValue(text));
-    return result.success ? result.output : [];
-  } catch {
-    return [];
-  }
-}
-
 export function initCurriculumTable(execRaw: (ddl: string) => void): void {
   execRaw(`
     CREATE TABLE IF NOT EXISTS proposed_tasks (
@@ -89,7 +77,6 @@ export function initCurriculumTable(execRaw: (ddl: string) => void): void {
 interface RecentOutcome {
   task: string;
   succeeded: boolean;
-  craftedTools: string[];
 }
 
 interface CurriculumSkill {
@@ -105,32 +92,24 @@ interface CurriculumContext {
 }
 
 function collectContext(rt: AgentRuntime, takeOutcomes = 20): CurriculumContext {
-  const skills: CurriculumSkill[] = [];
-  try {
-    const rows = rt.storage.sql<{ name: string; description: string; score: number; uses: number }>`
-      SELECT ct.name, COALESCE(ct.description, '') as description,
-             COALESCE(cs.score, 0.5) as score,
-             COALESCE(cs.uses, 0) as uses
-        FROM crafted_tools ct
-        LEFT JOIN craft_scores cs ON cs.tool_name = ct.name
-        ORDER BY cs.uses DESC NULLS LAST, ct.name`;
-    for (const r of rows) skills.push(r);
-  } catch { /* tables may not exist yet */ }
+  const skills = rt.storage.sql<CurriculumSkill>`
+    SELECT ct.name, COALESCE(ct.description, '') as description,
+           COALESCE(cs.score, 0.5) as score,
+           COALESCE(cs.uses, 0) as uses
+      FROM crafted_tools ct
+      LEFT JOIN craft_scores cs ON cs.tool_name = ct.name
+      ORDER BY cs.uses DESC NULLS LAST, ct.name`;
 
-  const recent: RecentOutcome[] = [];
-  try {
-    const rows = rt.storage.sql<{ task: string; succeeded: number; tools: string }>`
-      SELECT task, succeeded, COALESCE(crafted_tools, '[]') as tools
-        FROM completed_turns
-        ORDER BY ended_at DESC LIMIT ${takeOutcomes}`;
-    for (const r of rows) {
-      recent.push({
-        task: r.task,
-        succeeded: Boolean(r.succeeded),
-        craftedTools: parseStringList(r.tools),
-      });
-    }
-  } catch { /* table may not exist yet */ }
+  // The durable outcome ledger (evolution/outcomes.ts) — the one record of how
+  // turns landed. This read used to name `completed_turns`, a table no schema
+  // has ever created, under a catch that turned `no such table` into an empty
+  // list: the curriculum has been proposing from crafted skills alone since it
+  // shipped, and its prompt said "(no recent turns)" in a way nothing could
+  // tell apart from a genuinely fresh workspace.
+  const recent = rt.storage.sql<{ user_message: string; outcome: TurnOutcome }>`
+    SELECT user_message, outcome FROM turn_outcomes
+      ORDER BY created_at DESC LIMIT ${takeOutcomes}`
+    .map((row) => ({ task: row.user_message, succeeded: row.outcome === 'accepted' }));
 
   return { skills, recent };
 }
@@ -144,7 +123,7 @@ function buildPrompt(
     .map(s => `- ${s.name} (score=${s.score.toFixed(2)}, uses=${s.uses}): ${s.description.slice(0, 80)}`)
     .join('\n') || '(no crafted skills yet)';
   const recentList = ctx.recent.slice(0, 10)
-    .map(r => `- [${r.succeeded ? '✓' : '✗'}] ${r.task.slice(0, 120)}${r.craftedTools.length ? ` (used: ${r.craftedTools.join(', ')})` : ''}`)
+    .map(r => `- [${r.succeeded ? '✓' : '✗'}] ${r.task.slice(0, 120)}`)
     .join('\n') || '(no recent turns)';
   return `You are proposing the NEXT tasks for a self-improving agent to attempt. The
 goal is to maximize *learnability*: tasks that the agent will barely succeed
@@ -176,14 +155,7 @@ export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<Pr
   const ctx = collectContext(opts.rt);
   const prompt = buildPrompt(ctx, count, window);
 
-  let text: string;
-  try { text = await opts.judge.complete(prompt); }
-  catch (error) { throw new Error(`Curriculum LLM call failed: ${errorMessage({ error })}`); }
-
-  let parsed: unknown;
-  try { parsed = extractJsonArray(text); }
-  catch (error) { throw new Error(`Curriculum response not JSON: ${errorMessage({ error })}`); }
-
+  const parsed = extractJsonArray(await opts.judge.complete(prompt));
   const result = v.safeParse(ProposalListSchema, parsed);
   if (!result.success) {
     throw new Error(`Curriculum response schema invalid: ${result.issues.map(i => i.message).join('; ')}`);
@@ -205,48 +177,43 @@ export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<Pr
 
   // Persist for the UI / autonomous loop to consume.
   for (const p of proposals) {
-    try {
-      void opts.rt.storage.sql`
-        INSERT INTO proposed_tasks (id, task, rationale, predicted_success, targets_skills, proposed_at, status)
-        VALUES (${p.id}, ${p.task}, ${p.rationale}, ${p.predictedSuccess},
-                ${JSON.stringify(p.targetsSkills)}, ${p.proposedAt}, ${p.status})`;
-    } catch { /* table may not exist yet — best-effort */ }
+    void opts.rt.storage.sql`
+      INSERT INTO proposed_tasks (id, task, rationale, predicted_success, targets_skills, proposed_at, status)
+      VALUES (${p.id}, ${p.task}, ${p.rationale}, ${p.predictedSuccess},
+              ${JSON.stringify(p.targetsSkills)}, ${p.proposedAt}, ${p.status})`;
   }
 
   return proposals;
 }
 
 export function listProposedTasks(rt: AgentRuntime, status?: ProposedTask['status']): ProposedTask[] {
-  try {
-    const rows = status
-      ? rt.storage.sql<{ id: string; task: string; rationale: string; predicted_success: number;
-                         targets_skills: string; proposed_at: number; status: string }>`
-          SELECT id, task, rationale, predicted_success, targets_skills, proposed_at, status
-            FROM proposed_tasks WHERE status = ${status} ORDER BY proposed_at DESC`
-      : rt.storage.sql<{ id: string; task: string; rationale: string; predicted_success: number;
-                         targets_skills: string; proposed_at: number; status: string }>`
-          SELECT id, task, rationale, predicted_success, targets_skills, proposed_at, status
-            FROM proposed_tasks ORDER BY proposed_at DESC LIMIT 50`;
-    return rows.flatMap((row) => {
-      const parsedStatus = v.safeParse(ProposedTaskStatusSchema, row.status);
-      if (!parsedStatus.success) return [];
-      return [{
-        id: row.id,
-        task: row.task,
-        rationale: row.rationale,
-        predictedSuccess: row.predicted_success,
-        targetsSkills: parseStringList(row.targets_skills),
-        proposedAt: row.proposed_at,
-        status: parsedStatus.output,
-      }];
-    });
-  } catch { return []; }
+  type Row = {
+    id: string; task: string; rationale: string; predicted_success: number;
+    targets_skills: string; proposed_at: number; status: string;
+  };
+  const rows = status
+    ? rt.storage.sql<Row>`
+        SELECT id, task, rationale, predicted_success, targets_skills, proposed_at, status
+          FROM proposed_tasks WHERE status = ${status} ORDER BY proposed_at DESC`
+    : rt.storage.sql<Row>`
+        SELECT id, task, rationale, predicted_success, targets_skills, proposed_at, status
+          FROM proposed_tasks ORDER BY proposed_at DESC LIMIT 50`;
+  // These are our OWN rows: a status outside the picklist, or skills JSON that
+  // will not parse, is corruption in the workspace database — not a row to
+  // drop quietly, which is what made a truncated write look like a short list.
+  return rows.map((row) => ({
+    id: row.id,
+    task: row.task,
+    rationale: row.rationale,
+    predictedSuccess: row.predicted_success,
+    targetsSkills: v.parse(StringListSchema, parseJsonValue(row.targets_skills)),
+    proposedAt: row.proposed_at,
+    status: v.parse(ProposedTaskStatusSchema, row.status),
+  }));
 }
 
 export function updateProposedTaskStatus(
   rt: AgentRuntime, id: string, status: ProposedTask['status'],
 ): void {
-  try {
-    void rt.storage.sql`UPDATE proposed_tasks SET status = ${status} WHERE id = ${id}`;
-  } catch { /* ignore */ }
+  void rt.storage.sql`UPDATE proposed_tasks SET status = ${status} WHERE id = ${id}`;
 }

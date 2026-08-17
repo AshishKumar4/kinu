@@ -26,7 +26,7 @@ export default function Layout() {
             type="button"
             aria-label="Open menu"
             onClick={() => setDrawerOpen(true)}
-            className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text"
+            className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text"
           >
             <ListIcon size={18} />
           </button>
@@ -36,13 +36,13 @@ export default function Layout() {
           </Link>
         </div>
         <div className="flex items-center gap-1">
-          <a href="https://github.com/AshishKumar4/Proteus" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
+          <a href="https://github.com/AshishKumar4/Proteus" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
             <GithubLogoIcon size={17} />
           </a>
-          <button type="button" onClick={() => setShowCreate(true)} aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
+          <button type="button" onClick={() => setShowCreate(true)} aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
             <PlusIcon size={16} />
           </button>
-          <Link to="/user/settings" aria-label="Account settings" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
+          <Link to="/user/settings" aria-label="Account settings" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
             <GearIcon size={16} />
           </Link>
         </div>

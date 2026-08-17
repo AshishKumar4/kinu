@@ -5,11 +5,10 @@
  * DynamicWorkerExecutor; CLI: the Node `new Function` factory) bind a fixed
  * set of namespaces — `workspace`, `codemode`, `tools`, plus whatever
  * ExecutionRouter/CodemodeProvider namespaces the actor registers. Proteus's
- * OWN top-level tools (`run`, `agents`, `file`, `memory`, `tasks`, `web`,
- * `report`) are NOT in that scope — they are separate tool calls, not
- * codemode members — but a model reaching for one from inside a code block
- * is an easy, recurring mistake: `run` in particular reads as a plausible
- * global because it IS a tool the model can see in its own tool list.
+ * OWN top-level tool NAMES are not in that scope: they are separate tool
+ * calls, not codemode members. But a model reaching for one from inside a code
+ * block is an easy, recurring mistake — `run` in particular reads as a
+ * plausible global because it IS a tool the model can see in its own list.
  *
  * When that happens the sandbox throws a bare V8 ReferenceError
  * (`"run is not defined"`), which both executors propagate verbatim as
@@ -18,9 +17,16 @@
  * instead. This rewrites exactly that one error shape into an actionable
  * correction; every other error (a real bug in the model's code, a thrown
  * provider error, a timeout) passes through untouched.
+ *
+ * Where the capability actually IS comes from the registry's declared reach,
+ * not from a list here. It used to be a hardcoded `name === 'run'` branch
+ * naming `workspace.exec`, with every other native tool told "it is not
+ * reachable from inside execute_tools" — false for the six that own a codemode
+ * namespace and for `file`, whose bytes are `workspace.readFile`/`writeFile`/
+ * `editFile`. One read of TOOL_REACH makes the sentence true for all eight.
  */
 
-import { BUILTIN_TOOL_NAMES } from '../tools/registry.js';
+import { isBuiltinToolName, TOOL_REACH } from '../tools/registry.js';
 
 /** V8's ReferenceError message for a bare undefined identifier — the exact,
  *  stable shape Node/workerd/browsers all emit, so matching it precisely
@@ -34,9 +40,11 @@ const UNDEFINED_IDENTIFIER = /^([A-Za-z_$][\w$]*) is not defined$/;
  */
 export function explainNativeToolReferenceError(error: string): string {
   const name = UNDEFINED_IDENTIFIER.exec(error)?.[1];
-  if (!name || name === 'execute_tools' || !BUILTIN_TOOL_NAMES.has(name)) return error;
-  const alternative = name === 'run'
-    ? ' Call `run` directly as its own top-level tool call, not from inside execute_tools — or, for a command against this sandbox\'s own workspace, use `workspace.exec(...)` here instead.'
-    : ` Call \`${name}\` directly as its own top-level tool call — it is not reachable from inside execute_tools.`;
-  return `${error} — "${name}" is a native Proteus tool, not a codemode member.${alternative}`;
+  if (!name || !isBuiltinToolName(name)) return error;
+  const namespace = TOOL_REACH[name].codemode;
+  // execute_tools declares no codemode reach because it IS the sandbox; it
+  // names no other tool, so there is nothing to correct toward.
+  if (!namespace) return error;
+  return `${error} — "${name}" is a native Proteus tool, not a codemode member.`
+    + ` Call \`${name}\` directly as its own top-level tool call, or reach the same capability from in here through the \`${namespace}\` namespace — its members are declared in this sandbox's type block.`;
 }

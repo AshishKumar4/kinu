@@ -81,19 +81,35 @@ function toolTitle(name: string, args: JsonObject): string {
 }
 
 /** The permission choices offered for a gated command, in the order clients
- *  display them. */
-const PERMISSION_OPTIONS: readonly PermissionOption[] = [
-  { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
-  { optionId: 'allow_always', name: 'Allow and don\'t ask again', kind: 'allow_always' },
-  { optionId: 'deny', name: 'Reject', kind: 'reject_once' },
-  { optionId: 'deny_always', name: 'Reject and don\'t ask again', kind: 'reject_always' },
-];
+ *  display them.
+ *
+ *  "Don't ask again" names the rules and the machine it covers, because that
+ *  is exactly what it buys: a standing grant for those rules on that executor,
+ *  and nothing else. It used to read "Allow and don't ask again" and switch
+ *  the whole agent to allow_all — one click that turned the gate off
+ *  everywhere. There is deliberately no persistent REJECT: a standing refusal
+ *  is a different store nobody has asked for, and `deny_all` in settings
+ *  already spells "stop running these" without pretending to be per-command. */
+function permissionOptions(req: ShellApprovalRequest): PermissionOption[] {
+  const rules = req.review.hits.filter((h) => h.decision === 'gate').map((h) => h.rule).join(', ');
+  return [
+    { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+    {
+      optionId: 'allow_always',
+      name: `Allow, and stop asking about ${rules} on ${req.executor}`,
+      kind: 'allow_always',
+    },
+    { optionId: 'deny', name: 'Reject', kind: 'reject_once' },
+  ];
+}
 
+/** Untrusted input from the client: an optionId we did not offer must not
+ *  resolve to anything, which is what `.get()` says and an index signature
+ *  does not. */
 const OUTCOME_BY_OPTION = new Map<string, ShellApprovalOutcome>([
   ['allow', 'allow'],
   ['allow_always', 'allow_always'],
   ['deny', 'deny'],
-  ['deny_always', 'deny_always'],
 ]);
 
 /** One live ACP session: the Proteus client plus the per-turn state the
@@ -218,7 +234,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
               content: { type: 'text' as const, text: req.review.hits.map((h) => h.explanation).join('\n') },
             }],
           },
-          options: [...PERMISSION_OPTIONS],
+          options: permissionOptions(req),
         });
         // 'cancelled' — the turn is going away; deny so the tool stops here.
         if (outcome.outcome.outcome !== 'selected') return 'deny';

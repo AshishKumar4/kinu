@@ -109,7 +109,7 @@ export async function startBranchHead(
       status: 'budget_exceeded',
       summary: 'Branch was aborted before producing an answer.',
       evidence: [], decisions: [], artifactRefs: [], fileChanges: [],
-      childHeadIds: [], toolCalls: [], steps: [],
+      childHeadIds: [], toolCalls: [], stepCount: 0,
       tokenUsage: { input: 0, output: 0, total: 0 },
       wallClockMs: Date.now() - spawnedAt,
       errorMessage: err instanceof Error ? err.message : String(err),

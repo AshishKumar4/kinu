@@ -211,9 +211,11 @@ export function createDeviceTunnelExecutor(
     },
   };
 
+  const files = deviceFiles(transport, consent);
   const provider: ExecutorProvider = {
     name: 'laptop',
-    files: deviceFiles(transport, consent),
+    files,
+    homeDir: files.homeDir,
     kind: 'laptop',
     capabilities: new Set<ExecutorCapability>([
       'javascript', 'typescript', 'python', 'native_binary',
@@ -284,6 +286,9 @@ const ALWAYS_CONSENTED: DeviceFileConsent = {
   hasFullFilesystem: async () => true,
 };
 
+/** The device file view, plus the one thing only the device can answer. */
+export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'>;
+
 /**
  * The user's machine, in the machine's own absolute paths.
  *
@@ -291,8 +296,13 @@ const ALWAYS_CONSENTED: DeviceFileConsent = {
  * and unlink are synthesized through `exec` (GNU stat, falling back to BSD).
  * Every call still crosses the hub's per-(agent, device) action-consent
  * chokepoint; this view adds the path-scope layer on top.
+ *
+ * `homeDir` is the same directory the path-scope guard measures against — the
+ * consented root, or `$HOME` asked of the device once and cached. The host
+ * cannot derive it: `HELLO` carries user/os/hostname and no home, and mapping
+ * platform to path would be a guess.
  */
-export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConsent): VFS {
+export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConsent): DeviceVFS {
   const exec = async (command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> =>
     v.parse(DeviceExecResultSchema, await transport.rpc('exec', [command]));
 
@@ -331,6 +341,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   };
 
   return {
+    homeDir: effectiveRoot,
     async readFile(path, opts) {
       await guard(path, 'open');
       const raw = await transport.rpc('readFile', [path, { encoding: 'base64' }]);

@@ -7,7 +7,7 @@
  */
 
 import type { AgentRuntime, BranchUsage } from '../types/agent-runtime.js';
-import type { MCTSConfig, MCTSPhase, MCTSProgressEvent } from '../types/mcts.js';
+import type { MCTSConfig, MCTSPhase, MCTSProgressBody } from '../types/mcts.js';
 import type { MissionScope } from '../mission-budget.js';
 import type { ConvergenceResult } from '../types/evaluation.js';
 import type { SessionWriter } from './record-node.js';
@@ -126,7 +126,9 @@ export async function runMCTS(
     });
   }
 
-  const report = (event: MCTSProgressEvent): void => config.onProgress?.(event);
+  // The one place a progress event acquires its search identity. Every consumer
+  // reads the tree the event names instead of guessing at "the latest" one.
+  const report = (event: MCTSProgressBody): void => config.onProgress?.({ ...event, rootId });
   const { outOfBudget, charge } = missionMeter(config.mission);
   const reportedUngroundedLanguages = new Set<string>();
 

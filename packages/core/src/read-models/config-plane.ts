@@ -85,9 +85,13 @@ export function getShellApprovalMode(config: AgentConfigStore) {
  * review. Effective on the next turn, once `onChanged` has dropped the tool
  * surface the old mode built.
  *
- *   strict     — default; reject gate commands (sudo, rm-recursive, …)
+ *   strict     — default; put gate decisions to the owner (sudo on their
+ *                laptop, a force-push, a publish). Commands whose only harm
+ *                is local to the agent's own workspace or sandbox are not
+ *                gate decisions in the first place — see safety/approval-gate.ts.
  *   allow_all  — treat gate decisions as warn (logged + executed). Trusted
- *                dev environments only.
+ *                dev environments only. Prefer a standing grant: it is the
+ *                same convenience scoped to one rule on one executor.
  *   deny_all   — reject gate AND warn (env-dump, secret-file-read).
  */
 export function setShellApprovalMode(
@@ -99,6 +103,30 @@ export function setShellApprovalMode(
   deps.config.setShellApprovalMode(parsed.output);
   deps.onChanged();
   return { ok: true, mode: parsed.output };
+}
+
+/**
+ * The standing grants: every rule the owner has said "always" to, and where.
+ *
+ * This is the revoke surface. A grant is one line — `rm-recursive` on
+ * `laptop` — so what it bought is legible without reading any code, and
+ * dropping the line is the whole of taking it back. Grants never widen what a
+ * command can reach; they only stop the gate asking again.
+ */
+export function getShellApprovalGrants(config: AgentConfigStore) {
+  return { grants: config.getShellApprovalGrants() };
+}
+
+/** Revoke grants. The owner's own answers arrive here from the queue's
+ *  'always' button and the CLI's "stop asking" option; this is how they are
+ *  taken back. No `onChanged`: unlike the approval MODE, a grant binds nothing
+ *  at tool-build time — the gate reads grants live, so a revocation takes
+ *  effect on the very next command. */
+export function revokeShellApprovalGrants<Grants>(config: AgentConfigStore, grants: Grants) {
+  const parsed = v.safeParse(v.array(v.object({ rule: v.string(), executor: v.string() })), grants);
+  if (!parsed.success) throw new Error('grants must be an array of { rule, executor }');
+  config.revokeShellApproval(parsed.output);
+  return { ok: true, grants: config.getShellApprovalGrants() };
 }
 
 /** Skills pinned always-active for this agent. Empty means none. */

@@ -244,6 +244,33 @@ describe('agents tool — fork dispatch', () => {
     expect(merge).toMatch(/hands back each disagreement as an open question/);
   });
 
+  test('the fork brief says what a brief must carry, and what a fork can see', async () => {
+    // The most failure-prone artifact in the system had 16 words of guidance:
+    // "What this fork explores. Be concrete." / "Why this angle matters." What
+    // must be in a brief follows from what a fork can SEE — the workspace and
+    // the parent's completed turns, never this conversation as it continues and
+    // never a sibling — so the acceptance criterion has to be in the brief
+    // because nothing else can tell the fork it is done.
+    const schema = v.parse(v.object({ jsonSchema: v.object({ properties: v.object({
+      task: v.object({ description: v.string() }),
+      forks: v.object({ items: v.object({ properties: v.object({
+        task: v.object({ description: v.string() }),
+        rationale: v.object({ description: v.string() }),
+      }) }) }),
+    }) }) }), agentsTool({ fork: forkDeps() }).inputSchema);
+    const { task, forks } = schema.jsonSchema.properties;
+    const brief = forks.items.properties.task.description;
+    expect(brief).toMatch(/complete on its own/);
+    expect(brief).toMatch(/the observable result that means it is done/);
+    expect(brief).toMatch(/sees this workspace but not this conversation and not its siblings/);
+    expect(forks.items.properties.rationale.description).toMatch(/read at the merge to weigh what came back/);
+    // The batch slot carries the shared background ONCE — oh-my-pi's `context`
+    // role — while staying literally the task, because settle=mcts reads this
+    // field alone and never looks at `forks`.
+    expect(task.description).toMatch(/the task the forks explore together and the context they share/);
+    expect(task.description).toMatch(/State it here once rather than repeating it in each fork/);
+  });
+
   test('unknown settle id returns a structured error listing what exists', async () => {
     const t = agentsTool({ fork: forkDeps() });
     const result = v.parse(

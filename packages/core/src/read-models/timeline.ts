@@ -135,13 +135,10 @@ export function getRunTimeline(
   const runId = opts?.runId || deps.currentRunId || recent;
   const spans: TimelineSpan[] = [];
 
-  // 1) Durable per-run events for the focused run (skip noisy text_delta).
+  // 1) Durable per-run events for the focused run.
   if (runId) {
     try {
-      for (const e of deps.events.read(runId, { limit })) {
-        if (e.type === 'text_delta') continue;
-        spans.push(runEventToSpan(e));
-      }
+      for (const e of deps.events.read(runId, { limit })) spans.push(runEventToSpan(e));
     } catch { /* run_events may not exist yet */ }
   }
   // 2) Agent-level evolution events — PRESERVE the `data` payload.

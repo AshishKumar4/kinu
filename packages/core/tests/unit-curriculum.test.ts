@@ -1,13 +1,18 @@
 import { describe, test, expect } from 'bun:test';
 import {
-  initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
+  proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
 } from '../src/curriculum/proposer.ts';
 import { createScriptedLLM, createJSONLLM } from '@proteus/test-utils';
-import { createTestRuntime } from './helpers.js';
+import { createTestRuntime, makeSqlExec } from './helpers.js';
+import { initWorkspaceSchema } from '../src/identity/workspace-schema.js';
 
 function setup() {
-  const { rt } = createTestRuntime();
-  initCurriculumTable(rt.storage.execRaw);
+  const { rt, db } = createTestRuntime();
+  // The production table set, not just `proposed_tasks`: the proposer reads the
+  // crafted-tool registry and the durable turn-outcome ledger, and a harness
+  // that creates fewer tables than a real workspace is what made tolerating
+  // their absence look reasonable in shipped code.
+  initWorkspaceSchema({ execRaw: rt.storage.execRaw, sql: rt.storage.sql, exec: makeSqlExec(db) });
   return { rt };
 }
 

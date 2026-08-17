@@ -41,7 +41,7 @@ describe("writeExecutorFileOp", () => {
       mkdir: async () => undefined,
       exists: async (path) => written.has(path),
     };
-    const deps = { getProvider: () => ({ files }) };
+    const deps = { getProvider: () => ({ files, homeDir: async () => "/home/user" }) };
     return { deps, written };
   }
 
@@ -109,17 +109,22 @@ describe("writeExecutorFileOp", () => {
 });
 
 describe("CLOUD_MAX_INLINE_ATTACHMENT_BYTES", () => {
-  test("a max-size attachment message fits the agents SDK row guard", async () => {
-    const { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } = await import("@proteus/core");
+  test("a max-size attachment message fits the agents SDK row guard, under the platform row cap", async () => {
+    const { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, PLATFORM_CATALOG } = await import("@proteus/core");
     const { ROW_MAX_BYTES } = await import("agents/chat");
-    // Chat messages persist as ONE DO SQLite row (2 MB platform limit); the
-    // SDK truncates to ROW_MAX_BYTES but can shrink only TEXT parts — file
-    // parts ride through verbatim as base64 data URLs (4/3 × raw). Keep slack
-    // for the message text + JSON envelope so a max-size attachment message
-    // never hits the guard.
+    // Chat messages persist as ONE DO SQLite row; the SDK truncates to
+    // ROW_MAX_BYTES but can shrink only TEXT parts — file parts ride through
+    // verbatim as base64 data URLs (4/3 × raw). Keep slack for the message text
+    // + JSON envelope so a max-size attachment message never hits the guard.
+    //
+    // The platform end of the chain is read from `do.sqlite.row_bytes` rather
+    // than retyped here. That is the whole point of the catalog: this assertion
+    // is what makes the entry load-bearing, and it fails if either the entry or
+    // the SDK moves.
+    const platformRowBytes = PLATFORM_CATALOG["do.sqlite.row_bytes"].limit.value;
     const encoded = Math.ceil((CLOUD_MAX_INLINE_ATTACHMENT_BYTES * 4) / 3);
     const slack = 256 * 1024;
     expect(encoded + slack).toBeLessThan(ROW_MAX_BYTES);
-    expect(ROW_MAX_BYTES).toBeLessThan(2 * 1024 * 1024);
+    expect(ROW_MAX_BYTES).toBeLessThan(platformRowBytes);
   });
 });

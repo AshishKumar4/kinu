@@ -5,26 +5,51 @@
  * codemode global gets a bare V8 ReferenceError today; this rewrites exactly
  * that shape into an actionable correction and leaves every other error
  * (real bugs, thrown provider errors, timeouts) untouched.
+ *
+ * Where the capability actually IS is read from TOOL_REACH. It used to be a
+ * hardcoded `name === 'run'` branch pointing at `workspace.exec`, with every
+ * other native tool told "it is not reachable from inside execute_tools" — a
+ * sentence that was FALSE for the six that own a codemode namespace and for
+ * `file`, whose bytes are `workspace.readFile`/`writeFile`/`editFile`. The
+ * per-tool test below is what makes that impossible to reintroduce: it reads
+ * the declaration and demands the message name that tool's own namespace, so a
+ * message that hardcodes one tool's answer fails for the other seven.
  */
 import { describe, test, expect } from 'bun:test';
 import { explainNativeToolReferenceError } from '../src/execution/sandbox-errors.js';
-import { BUILTIN_TOOLS } from '../src/tools/registry.js';
+import { BUILTIN_TOOLS, TOOL_REACH } from '../src/tools/registry.js';
 
 describe('explainNativeToolReferenceError', () => {
-  test('names run, points at both the direct call and workspace.exec', () => {
-    const out = explainNativeToolReferenceError('run is not defined');
-    expect(out).toContain('run is not defined');
-    expect(out).toContain('"run" is a native Proteus tool, not a codemode member');
-    expect(out).toContain('workspace.exec(...)');
-    expect(out).toContain('Call `run` directly as its own top-level tool call');
-  });
-
-  test('every other native tool name gets the general direct-call correction', () => {
+  test('every native tool is pointed at the namespace its reach declares', () => {
     for (const name of BUILTIN_TOOLS) {
-      if (name === 'execute_tools' || name === 'run') continue;
+      const namespace = TOOL_REACH[name].codemode;
       const out = explainNativeToolReferenceError(`${name} is not defined`);
+      if (!namespace) {
+        // execute_tools IS the sandbox; it names no other tool to correct toward.
+        expect(out).toBe(`${name} is not defined`);
+        continue;
+      }
       expect(out).toContain(`"${name}" is a native Proteus tool, not a codemode member`);
       expect(out).toContain(`Call \`${name}\` directly as its own top-level tool call`);
+      expect(out).toContain(`through the \`${namespace}\` namespace`);
+    }
+  });
+
+  test('run and file point at workspace; the six namespace owners point at themselves', () => {
+    // Spelled out rather than only derived, so the derivation above cannot pass
+    // by agreeing with a declaration that is itself wrong.
+    expect(explainNativeToolReferenceError('run is not defined')).toContain('`workspace` namespace');
+    expect(explainNativeToolReferenceError('file is not defined')).toContain('`workspace` namespace');
+    for (const name of ['agents', 'memory', 'tasks', 'web', 'report'] as const) {
+      expect(explainNativeToolReferenceError(`${name} is not defined`)).toContain(`\`${name}\` namespace`);
+    }
+  });
+
+  test('no native tool is told it is unreachable from inside execute_tools', () => {
+    // The old message said exactly that for seven of eight.
+    for (const name of BUILTIN_TOOLS) {
+      expect(explainNativeToolReferenceError(`${name} is not defined`))
+        .not.toContain('not reachable from inside execute_tools');
     }
   });
 

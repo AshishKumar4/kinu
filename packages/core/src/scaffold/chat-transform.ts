@@ -74,6 +74,7 @@ const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
   v.object({
     type: v.literal('step-finish'),
     stepIndex: v.number(),
+    responseMessages: ModelMessagesSchema,
     inputTokens: v.optional(v.number()),
     outputTokens: v.optional(v.number()),
     cachedInputTokens: v.optional(v.number()),
@@ -157,7 +158,13 @@ async function* scaffoldTurn(
         };
         break;
       case 'step_finish':
-        yield { type: 'step-finish', stepIndex: ev.stepIndex };
+        // A scaffold-authored step: the scaffold IS the loop here, so there is
+        // no SDK response array behind this boundary. Empty rather than
+        // fabricated — the model output the scaffold produced itself rides
+        // `text_delta` and lands in the turn's `done` below. Steps of a
+        // DELEGATED runChat pass through the `ui_chunk` branch above with their
+        // real cumulative array, so per-step durability survives delegation.
+        yield { type: 'step-finish', stepIndex: ev.stepIndex, responseMessages: [] };
         break;
       case 'error':
         yield { type: 'error', message: ev.message };

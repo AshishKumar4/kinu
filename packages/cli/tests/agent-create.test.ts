@@ -17,25 +17,24 @@ describe('CLI mission workspace names', () => {
     );
 
     expect(identity).toEqual({
-      name: workspaceSlug('abcdef123456'),
+      name: workspaceSlug('Build a benchmark for Rust web frameworks', 'abcdef123456'),
       displayName: 'Rust Framework Benchmark',
       nameOrigin: 'auto',
     });
   });
 
-  test('derives the DISPLAY name from the mission when model naming is unavailable', async () => {
+  test('derives BOTH names from the mission when model naming is unavailable', async () => {
     // The 2026-07-15 contract — a fallback name must come from the mission,
-    // never a random pair — is about the name a person reads. The slug is the
-    // workspace's permanent address and stays out of it (2026-08-12): it is
-    // chosen before any title exists, so cutting it from the raw prompt is how
-    // `my-personal-jarvis-830c2d` ends up addressing a workspace called Jarvis.
+    // never a random pair — now covers the address too. It did not until
+    // 2026-08-16: the slug was `ironwood-elm-1234` here, and the owner reported
+    // that shape four times while every fix went to the display name.
     const identity = await suggestAgentIdentityFromMission(
       'Review the OAuth callback flow',
       { id: '123456abcdef', generate: async () => { throw new Error('offline'); } },
     );
 
     expect(identity).toEqual({
-      name: 'ironwood-elm-1234',
+      name: 'review-the-oauth-56abcdef',
       displayName: 'Review the OAuth callback flow',
       nameOrigin: 'auto',
     });
@@ -66,14 +65,14 @@ describe('CLI mission workspace names', () => {
     );
 
     expect(createdInput).toEqual({
-      name: workspaceSlug('abcdef123456'),
+      name: workspaceSlug('Build a benchmark for Rust web frameworks', 'abcdef123456'),
       displayName: 'Rust Framework Benchmark',
       purpose: 'Build a benchmark for Rust web frameworks',
       model: 'openai/gpt-5-mini',
       reasoningEffort: 'high',
     });
     expect(created).toMatchObject({
-      name: workspaceSlug('abcdef123456'),
+      name: workspaceSlug('Build a benchmark for Rust web frameworks', 'abcdef123456'),
       displayName: 'Rust Framework Benchmark',
     });
   });

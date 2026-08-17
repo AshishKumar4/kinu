@@ -130,6 +130,10 @@ const SHARED_TRANSPORTS = {
   getReplayEvals: 'listReplayEvals',
   getRunEvents: 'getRunEvents',
   getShadowStatus: 'getShadowStatus',
+  // Both are one-line delegations to read-models/config-plane.ts, exactly like
+  // the approval MODE beside them: the logic is in core, the twin is only the
+  // RPC surface each backend has to expose in its own transport.
+  getShellApprovalGrants: 'getShellApprovalGrants',
   getShellApprovalMode: 'getShellApprovalMode',
   getSkillsVfs: 'skillsVfsOver',
   getStoredModelSpec: 'getStoredModelSpec',
@@ -153,6 +157,7 @@ const SHARED_TRANSPORTS = {
   renderFactsForTurn: 'renderFactsForTurn',
   resumeBackgroundJob: 'resumeForkBackgroundJob',
   revertChangelogEntry: 'revertChangelogEntryById',
+  revokeShellApprovalGrants: 'revokeShellApprovalGrants',
   runScaffoldGepaOptimization: 'runScaffoldGepaOptimization',
   runScaffoldOnce: 'runScaffoldOnce',
   // Accessors over ONE core object (ModelCatalogSession), three lines each.
@@ -329,5 +334,42 @@ describe('backend twin methods', () => {
         !delegatesTo(cliBody, symbol) || !cfBodies.some((b) => delegatesTo(b, symbol)))
       .map(([name]) => name);
     expect(unproven).toEqual([]);
+  });
+});
+
+/**
+ * Start-of-life reconciliation, which is the OTHER half of this file's subject:
+ * not logic duplicated across backends, but logic wired into only one of them.
+ *
+ * Both defect classes have the same cause — nothing asserts the two
+ * composition surfaces agree — and both have hit this repo. The one this gate
+ * exists for: `head_journal.status = 'running'` had a single writer that
+ * cleared it (the happy-path report), so an interrupted fork's heads stayed
+ * 'running' forever and the dynamic-context block told the model "N of M heads
+ * running" on every step for the life of the workspace, while the job registry
+ * said `cancelled by operator`. The fix is one core function; a fix wired into
+ * one backend only would leave the other lying, silently, exactly as before.
+ */
+describe('interrupted work is reconciled at start of life on BOTH backends', () => {
+  const { cfBodies, cliBody } = scanTwins();
+
+  test('each composition surface settles the fork journal through the one core reconciler', () => {
+    expect(delegatesTo(cliBody, 'reconcileInterruptedForks')).toBe(true);
+    expect(cfBodies.some((body) => delegatesTo(body, 'reconcileInterruptedForks'))).toBe(true);
+  });
+
+  test('the CLI reconciles BEFORE it can resume a fork', () => {
+    // Order is load-bearing: a resume re-spawns heads under the same journal,
+    // so a sweep that ran after it would settle the LIVE attempt. Asserted on
+    // source position because the two calls sit in one method and no runtime
+    // observation distinguishes them.
+    const reconcile = cliBody.indexOf('reconcileInterruptedForks({');
+    const resume = cliBody.indexOf('this.jobRunner.recover(');
+    const sweep = cliBody.indexOf('this.jobRunner.recoverOrphans()');
+    expect(reconcile).toBeGreaterThan(-1);
+    expect(resume).toBeGreaterThan(-1);
+    expect(sweep).toBeGreaterThan(-1);
+    expect(reconcile).toBeLessThan(resume);
+    expect(reconcile).toBeLessThan(sweep);
   });
 });

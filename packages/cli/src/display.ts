@@ -142,8 +142,8 @@ export function printAgentStatus(info: WorkspaceInfo, dbSize: number, extra?: {
 
   const L = (label: string) => DIM(label.padEnd(14));
 
-  // Identity section
-  console.log(boxRow(L('Name:'), `${ACCENT(info.name)} ${DIM(`(${info.id.slice(0, 12)}...)`)}`, w));
+  // Identity: the slug and nothing else. It IS the workspace's id.
+  console.log(boxRow(L('Name:'), ACCENT(info.name), w));
   console.log(boxRow(L('Mission:'), info.purpose.slice(0, w - 22), w));
   const created = info.createdAt ? new Date(info.createdAt).toLocaleDateString() : '—';
   console.log(boxRow(L('Created:'), DIM(created), w));

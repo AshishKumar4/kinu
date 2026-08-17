@@ -12,6 +12,7 @@ export type {
   ResourceLimits,
   ExecutionRouter,
 } from './types.js';
+export { EXECUTOR_CAPABILITIES } from './types.js';
 
 export {
   formatExecResult, type ExecOutcome,

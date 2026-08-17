@@ -15,7 +15,10 @@ import { appendMemoryNote } from '../memory/note.js';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search.js';
 import { SessionSearchStore } from '../memory/session-search.js';
 import { decodeJsonValue, type JsonValue } from '../utils/json.js';
-import type { MemoryToolAction, MEMORY_FACT_ACTIONS } from './registry.js';
+import {
+  memoryActionsFor, unknownActionError,
+  type MemoryToolAction, type MEMORY_FACT_ACTIONS,
+} from './registry.js';
 
 const FactKeySchema = v.pipe(v.string(), v.nonEmpty());
 
@@ -142,8 +145,21 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
     return { ok: true, key: key.output, existed };
   };
 
+  const actions = memoryActionsFor(!!facts);
+  const ActionSchema = v.picklist(actions);
+
   return async (args: MemoryToolInput): Promise<JsonValue> => {
-    switch (args.action) {
+    // The declared `MemoryToolAction` is a claim, not a fact: the AI SDK leaves
+    // `Schema.validate` undefined for a jsonSchema-declared tool input, so this
+    // is whatever the model emitted. Refused WITH the vocabulary — and with the
+    // gated half omitted when this runtime has no FactsStore, from the same
+    // `memoryActionsFor` the enum in the schema is built from, so the words in
+    // the refusal are exactly the words that work.
+    const action = v.safeParse(ActionSchema, args.action);
+    if (!action.success) {
+      return { error: unknownActionError('memory', 'action', args.action, actions) };
+    }
+    switch (action.output) {
       case 'save':
         if (!args.content) return 'memory.save requires `content`.';
         return appendMemoryNote(memory, args.content);
@@ -155,12 +171,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
       case 'remember':
       case 'recall':
       case 'forget':
-        return runFactAction(args.action, args);
-      default:
-        // Only a model that ignored the enum gets here. Naming the action
-        // back is what lets it correct itself; falling through to a
-        // neighbouring branch would mutate state it never asked to touch.
-        return { error: `unknown memory action '${String(args.action)}'` };
+        return runFactAction(action.output, args);
     }
   };
 }

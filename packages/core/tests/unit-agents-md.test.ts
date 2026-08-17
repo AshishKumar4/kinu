@@ -110,6 +110,7 @@ function fakeSandbox(opts: { active: boolean; files?: VFS }): ExecutorProvider {
   const provider: ExecutorProvider = {
     name: 'sandbox', kind: 'sandbox', capabilities: new Set(),
     files: opts.files,
+    homeDir: async () => '/workspace',
     isAvailable: () => true,
     getStatus: () => status,
     connect: async () => {}, disconnect: async () => {},

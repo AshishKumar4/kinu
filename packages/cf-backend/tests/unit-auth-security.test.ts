@@ -6,9 +6,13 @@ import { cloudflareTokenJsonToResponse, cloudflareUserResultToProfile } from '..
 import { getConfiguredOAuthProviders, listConfiguredOAuthProviders } from '../src/auth/providers.js';
 import {
   CLOUDFLARE_WORKERS_AI_SCOPES,
+  accountIdFromCloudflareCredential,
   cloudflareAIGatewayId,
+  cloudflareAccountsFromCredential,
   cloudflareTokenToCredential,
+  cloudflareWorkersAIBaseURL,
   isCloudflareCredentialUsable,
+  withCloudflareAccount,
 } from '../src/lib/cloudflare-oauth.js';
 import { buildCliInstallCommand } from '../src/cli/install-command.js';
 import { handleCliRequest } from '../src/cli/routes.js';
@@ -190,6 +194,91 @@ describe('auth and desktop security invariants', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test('a multi-account token records every account and selects the first', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = asFetchFunction(async () => new Response(JSON.stringify({
+      success: true,
+      result: [
+        { id: 'aaa111aaa111aaa111aaa111aaa111aa', name: 'Personal' },
+        { id: 'bbb222bbb222bbb222bbb222bbb222bb', name: 'Employer' },
+        { id: 'not-an-account-id', name: 'Junk' },
+      ],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    try {
+      const credential = await cloudflareTokenToCredential({
+        access_token: 'cf-access', token_type: 'bearer', expires_in: 3600,
+        scope: CLOUDFLARE_WORKERS_AI_SCOPES,
+      });
+      expect(cloudflareAccountsFromCredential(credential)).toEqual([
+        { id: 'aaa111aaa111aaa111aaa111aaa111aa', name: 'Personal' },
+        { id: 'bbb222bbb222bbb222bbb222bbb222bb', name: 'Employer' },
+      ]);
+      expect(accountIdFromCloudflareCredential(credential)).toBe('aaa111aaa111aaa111aaa111aaa111aa');
+
+      // Switching account only rewrites the selection — the token, refresh
+      // token and the discovered list are untouched.
+      const switched = withCloudflareAccount(credential, 'bbb222bbb222bbb222bbb222bbb222bb');
+      expect(accountIdFromCloudflareCredential(switched)).toBe('bbb222bbb222bbb222bbb222bbb222bb');
+      expect(switched.metadata?.accountName).toBe('Employer');
+      expect(switched.accessToken).toBe(credential.accessToken);
+      expect(cloudflareAccountsFromCredential(switched)).toEqual(cloudflareAccountsFromCredential(credential));
+      expect(cloudflareWorkersAIBaseURL('bbb222bbb222bbb222bbb222bbb222bb'))
+        .toBe('https://api.cloudflare.com/client/v4/accounts/bbb222bbb222bbb222bbb222bbb222bb/ai/v1');
+
+      expect(() => withCloudflareAccount(credential, 'ccc333ccc333ccc333ccc333ccc333cc')).toThrow(/not one this login can see/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('a single-account token needs no selection and lists just that account', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = asFetchFunction(async () => new Response(JSON.stringify({
+      success: true, result: [{ id: 'abc123abc123abc123abc123abc123ab', name: 'User Account' }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    try {
+      const credential = await cloudflareTokenToCredential({
+        access_token: 'cf-access', token_type: 'bearer', expires_in: 3600,
+      });
+      expect(cloudflareAccountsFromCredential(credential))
+        .toEqual([{ id: 'abc123abc123abc123abc123abc123ab', name: 'User Account' }]);
+      expect(isCloudflareCredentialUsable(credential)).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // Sign-in was once gated on this lookup and broke login for everyone. A
+  // failing accounts API used to throw out of cloudflareTokenToCredential, so
+  // setCredential never ran and the refresh token was lost with it.
+  test('an accounts API failure still yields a storable credential', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = asFetchFunction(async () => new Response(
+      JSON.stringify({ success: false, errors: [{ message: 'Service unavailable' }] }),
+      { status: 503, headers: { 'content-type': 'application/json' } },
+    ));
+    try {
+      const credential = await cloudflareTokenToCredential({
+        access_token: 'cf-access', refresh_token: 'cf-refresh', token_type: 'bearer', expires_in: 3600,
+      });
+      expect(credential.accessToken).toBe('cf-access');
+      expect(credential.refreshToken).toBe('cf-refresh');
+      expect(credential.metadata?.accountId).toBeUndefined();
+      expect(cloudflareAccountsFromCredential(credential)).toEqual([]);
+      expect(isCloudflareCredentialUsable(credential)).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // A login that predates account recording still has to render a picker.
+  test('a credential stored before accounts were recorded reports its selected account', () => {
+    expect(cloudflareAccountsFromCredential({
+      kind: 'oauth', accessToken: 'cf-access',
+      metadata: { accountId: 'abc123abc123abc123abc123abc123ab', accountName: 'User Account' },
+    })).toEqual([{ id: 'abc123abc123abc123abc123abc123ab', name: 'User Account' }]);
   });
 
   test('expired access-token-only Cloudflare credentials stop advertising Workers AI', () => {

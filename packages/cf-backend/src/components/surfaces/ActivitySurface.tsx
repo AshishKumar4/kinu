@@ -92,7 +92,7 @@ function Num({ children, className = "" }: { children: React.ReactNode; classNam
 function Source({ kind }: { kind: "API" | "local" }) {
   return (
     <span
-      className={`text-[9px] px-1 py-px rounded uppercase tracking-wide ${kind === "API" ? "p-badge-info" : "p-badge-neutral"}`}
+      className={`text-[9px] px-1 py-px rounded-sm uppercase tracking-wide ${kind === "API" ? "p-badge-info" : "p-badge-neutral"}`}
       title={kind === "API"
         ? "The provider's authoritative count for this step."
         : "Exact character counts measured from the locally composed prompt content; not provider token attribution."}
@@ -208,14 +208,14 @@ function Breakdown({ context }: { context: ContextComposition | null }) {
   );
 }
 
-const swatch = "w-2 h-2 rounded-[2px] inline-block shrink-0 border p-border";
+const swatch = "w-2 h-2 rounded-xs inline-block shrink-0 border p-border";
 
 function StackedBar(
   { planes, span }: { planes: readonly BreakdownPlane[]; span: number },
 ) {
   return (
     <div>
-      <div className="flex h-3 rounded overflow-hidden" style={{ background: "var(--c-neutral-tint)" }}>
+      <div className="flex h-3 rounded-sm overflow-hidden" style={{ background: "var(--c-neutral-tint)" }}>
         {planes.map((row) => (
           <div
             key={row.plane}
@@ -319,12 +319,12 @@ function CostBlock({ snap }: { snap: ActivitySnapshot }) {
             <div key={budget.label} className="flex items-baseline gap-2 py-0.5">
               <span className="text-[11px] p-text truncate">{budget.label}</span>
               <span
-                className={`text-[9px] px-1 rounded ${budget.pricing.source === "catalog" ? "p-badge-neutral" : "p-badge-warning"}`}
+                className={`text-[9px] px-1 rounded-sm ${budget.pricing.source === "catalog" ? "p-badge-neutral" : "p-badge-warning"}`}
                 title={budget.pricing.source === "catalog"
                   ? "Every token priced from the models.dev catalog."
                   : `${budget.pricing.blendedTokens.toLocaleString()} tokens priced at the blended fallback rate, not catalog rates.`}
               >{budget.pricing.source}</span>
-              {budget.exhausted && <span className="text-[9px] px-1 rounded p-badge-danger">exhausted</span>}
+              {budget.exhausted && <span className="text-[9px] px-1 rounded-sm p-badge-danger">exhausted</span>}
               <Num className="text-[11px] p-text ml-auto">{fmtUsd(budget.spent.usd)}</Num>
               {budget.limits.usd !== undefined && (
                 <Num className="text-[10px] p-text-3">/ {fmtUsd(budget.limits.usd)}</Num>

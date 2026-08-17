@@ -7,23 +7,34 @@ const source = (path: string) => readFileSync(join(import.meta.dir, '..', path),
 const hook = source('src/hooks/use-proteus.ts');
 const page = source('src/pages/WorkspacePage.tsx');
 const output = source('src/components/surfaces/OutputSurface.tsx');
+// The composer is one shared component now; the mode control and the
+// Steer-as-Branch gate moved into it out of WorkspacePage.
+const composer = source('src/components/Composer.tsx');
 const review = source('src/components/surfaces/PlanReviewView.tsx');
 const css = source('src/index.css');
 
 describe('Plan mode browser contract', () => {
-  test('stamps typed intent and preserves it on retry', () => {
+  test('stamps typed intent, and a retry cannot lose it', () => {
     expect(hook).toContain('metadata: { proteusMode: mode }');
-    expect(hook).toContain('metadata: lastUser.metadata');
+    // Retry no longer COPIES the intent onto a fresh message — it re-runs the
+    // turn the intent is already stamped on, so the stamp cannot drift from
+    // the turn it governs. Copying was also how a retry appended a duplicate.
+    expect(hook).toContain('void regenerate()');
     expect(hook).toContain('parsePlanReview(msg.plan)');
     expect(hook).toContain('"getActivePlanReview"');
     expect(page).toContain('state.sendChat(t, pendingAttachments, effectiveChatMode)');
-    expect(page).toContain('aria-label="Turn mode"');
-    expect(page).toContain('disabled={state.isStreaming || planAwaitingDecision}');
     expect(page).toContain('planReviewAwaitingDecision(state.activePlan)');
+    expect(page).toContain('locked: planAwaitingDecision');
+    expect(composer).toContain('aria-label="Turn mode"');
+    // Build is unreachable while a plan awaits a decision, and the whole
+    // segment is inert mid-turn. Both halves matter: the first is the trust
+    // boundary, the second stops a mode swap landing on a running turn.
+    expect(composer).toContain('disabled={disabled || (locked && mode === "build")}');
+    expect(composer).toContain('disabled={disabled || streaming}');
   });
 
   test('a streaming Plan turn cannot expose Steer-as-Branch', () => {
-    expect(page).toContain('effectiveChatMode !== "plan"');
+    expect(composer).toContain('mode?.value !== "plan"');
     expect(page).toContain('!t || !state.isStreaming || effectiveChatMode === "plan"');
   });
 

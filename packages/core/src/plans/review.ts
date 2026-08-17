@@ -3,6 +3,17 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import { nanoid } from '../utils/nanoid.js';
 import { JsonArraySchema, isJsonObject, type JsonObject, type JsonValue } from '../utils/json.js';
 
+/**
+ * CONFLICTS WITH `do.sqlite.row_bytes` AND IS LEFT UNCHANGED HERE DELIBERATELY.
+ *
+ * `content` is a TEXT column of `plan_reviews` and `annotations_json` is another
+ * column of the SAME row, so their sum meets the platform's per-row ceiling,
+ * which the catalog records as 2 MB. These two admit 6 MiB between them, so a
+ * plan of 2-5 MiB passes `applyPlanEdits`' own check below and then throws raw
+ * at the storage layer on INSERT. Reconciling them is a behavioural change that
+ * belongs to whoever owns plan review; this comment exists so the next reader
+ * finds the conflict already located rather than in production.
+ */
 export const MAX_PLAN_CONTENT_BYTES = 5 * 1024 * 1024;
 export const MAX_PLAN_ANNOTATIONS_BYTES = 1024 * 1024;
 

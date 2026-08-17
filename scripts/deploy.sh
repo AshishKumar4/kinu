@@ -119,6 +119,12 @@ echo -e "${BOLD}Step 1: Required pre-deploy gates${NC}"
 # credential-free gates used by the repository workflows, plus the complete
 # package test script and both Layergate proofs. No environment variable may
 # skip one when this production deploy path is running.
+# Preflight runs BEFORE every other gate on purpose: its whole job is to refuse
+# to report on a poisoned environment. Without it, an exhausted $TMPDIR inode
+# table surfaces two minutes later as a 5-second timeout inside an unrelated
+# filesystem test, which reads as a code regression and is not one. It repairs
+# nothing; `--reclaim` is explicit and separate.
+run_required_gate "Environment preflight" bun scripts/preflight.ts
 run_required_gate "Strict lint and TypeScript" bun run check
 run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
 run_required_gate "Agent-utils, Core, and compaction suites" bun run test
@@ -130,6 +136,19 @@ run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts
 run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts
 run_required_gate "Secret scanner self-test" bun test scripts/secret-scan.test.ts
 run_required_gate "Secret scan" bun scripts/secret-scan.ts
+run_required_gate "Schema drift" bun scripts/schema-drift.ts
+# `gate:computed-style` is deliberately NOT here: it boots vite and Chrome over
+# 19 gallery frames (~68 s) and would fail this pipeline for environmental
+# reasons unrelated to the change under test. It is a deliberate standalone run.
+run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts
+run_required_gate "Gate ladder wiring" bun test scripts/ladder.test.ts
+run_required_gate "Dead code" bun run gate:dead-code
+run_required_gate "Duplicate implementations" bun run gate:duplication
+run_required_gate "Durable Object cold start" bun run gate:do-init
+run_required_gate "Unreachable RPC surface" bun run gate:reachability
+run_required_gate "Platform fact catalog" bun run gate:platform
+run_required_gate "Local-device daemon suite" bun test --cwd packages/pc-agent
+run_required_gate "Root end-to-end lifecycle suites" bun test ./tests/
 run_required_gate "Layergate conformance" bun run layergate
 run_required_gate "Layergate fault-localization matrix" bun run layergate --matrix
 run_required_gate "Lean proofs, consistency, and traceability" bun run verify:lean

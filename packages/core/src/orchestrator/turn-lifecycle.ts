@@ -72,10 +72,10 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   /** The turn's file ledger (acc.files). A turn that attempted no edit writes
    *  no row — `turn_end` is the denominator here too. */
   files?: TurnFileLedger | undefined;
-  /** The turn's mechanical steering (orch.steering.snapshot()), or null when
-   *  the turn was never steered — no row, `turn_end` being the denominator
+  /** The turn's mechanical steers (orch.steering.snapshot()) — one row each,
+   *  empty on a turn that was never steered, `turn_end` being the denominator
    *  here too. */
-  steering?: TurnSteeringRecord | null | undefined;
+  steering?: readonly TurnSteeringRecord[] | undefined;
   /** The one-shot completion gate's verdict (gate.take()), or null on every
    *  run that is not the confirming turn — one row per gated run. */
   completionGate?: CompletionGateRecord | null | undefined;
@@ -95,7 +95,7 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
     if (opts.files?.active) {
       recorder.emit(runId, { type: 'file_edit', ...opts.files.snapshot() });
     }
-    if (opts.steering) recorder.emit(runId, { type: 'turn_steering', ...opts.steering });
+    for (const steer of opts.steering ?? []) recorder.emit(runId, { type: 'turn_steering', ...steer });
     if (opts.completionGate) recorder.emit(runId, { type: 'completion_gate', ...opts.completionGate });
     if (opts.craft) recorder.emit(runId, { type: 'craft_cycle', ...opts.craft });
     if (opts.recoveries) recorder.emit(runId, { type: 'execution_recovery', ...opts.recoveries });

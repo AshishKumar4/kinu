@@ -11,12 +11,13 @@
  * rows written before the column have a NULL root_id and are therefore
  * invisible to every scoped query, which is the intended outcome.
  *
- * NOTE: This DDL must stay in sync with packages/core/src/identity/schema.ts
- * (the unified schema). Both are safe to run because of IF NOT EXISTS. The
- * duplicate exists so subsystems (MCTS engine, CLI) can self-initialize
- * without requiring the full unified schema init.
+ * This is the ONE definition of search_nodes. The unified workspace
+ * initializer (identity/schema.ts) calls this rather than carrying a copy:
+ * a second definition drifted, and workspaces created before a column landed
+ * were missing it while every reader selected it by name.
  */
 
+import { reconcileColumns } from '../identity/columns.js';
 import type { RawSqlExec } from '../types/primitives.js';
 
 export function initSearchTables(execRaw: RawSqlExec): void {
@@ -40,6 +41,13 @@ export function initSearchTables(execRaw: RawSqlExec): void {
       created_at       INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
+  // Columns added after this table's first release; see identity/columns.ts.
+  reconcileColumns(execRaw, 'search_nodes', [
+    'code_used TEXT',
+    'code_language TEXT',
+    'root_id TEXT',
+  ]);
+
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_parent ON search_nodes(parent_id)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_status_value ON search_nodes(status, value DESC)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_root_status ON search_nodes(root_id, status)`);

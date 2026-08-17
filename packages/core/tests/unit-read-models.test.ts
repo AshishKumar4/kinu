@@ -25,6 +25,7 @@ import {
   getWorkspaceDiff, initWorkspaceBaselineTable, readWorkspaceFiles, resetWorkspaceBaseline,
 } from '../src/read-models/workspace-diff.js';
 import { getExecutorFiles, readExecutorFile, writeExecutorFileOp } from '../src/read-models/files.js';
+import type { VFS } from '../src/types/primitives.js';
 import {
   cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob, jobResult,
   listBackgroundJobs, retryBackgroundJob, type BackgroundJobControl,
@@ -57,7 +58,7 @@ function jobPlane() {
   const detached: Array<{ jobId: string; kind: string }> = [];
   let created = 0;
   const runner: BackgroundJobControl = {
-    cancel: () => true,
+    cancel: () => Promise.resolve(true),
     cancelRunning: () => [],
     create: (kind, input, mode) => {
       const id = `retry-${++created}`;
@@ -119,7 +120,6 @@ describe('run timeline', () => {
     // The run events stamp themselves with the wall clock; the other sources
     // carry their own, so they are placed after it to pin the ordering.
     events.emit('r1', { type: 'run_start', agentId: 'a1', caused_by: 'chat' });
-    events.emit('r1', { type: 'text_delta', text: 'noise' });
     const base = Date.now() + 1000;
     void sql`INSERT INTO evolution_events (id, type, message, data, created_at)
       VALUES ('e1', 'scaffold_proposed', 'v2 proposed', '{"version":2}', ${base})`;
@@ -169,10 +169,10 @@ describe('agent status', () => {
     config.setReasoningEffort('high');
 
     expect(await getAgentStatus({
-      sql, vfs, config, fallbackId: 'fallback', name: 'fallback-name',
+      sql, vfs, config, name: 'fallback-name',
       displayName: 'Jarvis', fallbackMessageCount: 99,
     })).toMatchObject({
-      id: 'id-1', name: 'jarvis', displayName: 'Jarvis', createdAt: 42,
+      name: 'jarvis', displayName: 'Jarvis', createdAt: 42,
       messageCount: 1, scaffoldVersion: 0, reasoningEffort: 'high', forkLineage: null,
     });
     db.close();
@@ -183,10 +183,13 @@ describe('agent status', () => {
     const sql = makeSql(db);
     const status = await getAgentStatus({
       sql, vfs: createWorkspaceBundle(db).vfs,
-      config: createAgentConfigStore(sql), fallbackId: 'do-id', name: 'agent-7',
+      config: createAgentConfigStore(sql), name: 'agent-7',
       displayName: 'ignored on the degraded path', fallbackMessageCount: 3,
     });
-    expect(status).toMatchObject({ id: 'do-id', name: 'agent-7', displayName: 'agent-7', messageCount: 0 });
+    // One identifier reaches a surface. `workspace_identity.id` is not on it:
+    // on the cloud backend it is idFromName(name), so it said nothing new.
+    expect(status).not.toHaveProperty('id');
+    expect(status).toMatchObject({ name: 'agent-7', displayName: 'agent-7', messageCount: 0 });
   });
 
   test('chat history flattens UI-message parts and bounds the page', () => {
@@ -271,19 +274,49 @@ describe('workspace change-set', () => {
 });
 
 describe('executor file plane', () => {
-  /** A router holding one executor, the way a real runtime hands one over. */
-  function router(files?: import('../src/types/primitives.js').VFS) {
-    return { getProvider: (name: string) => (name === 'workspace' ? (files ? { files } : {}) : undefined) };
+  /** A router holding one executor, the way a real runtime hands one over —
+   *  including the one thing only the environment knows: where it starts. */
+  function router(files?: VFS) {
+    const provider = files === undefined
+      ? { homeDir: async () => '/home/user' }
+      : { homeDir: async () => '/home/user', files };
+    return { getProvider: (name: string) => (name === 'workspace' ? provider : undefined) };
   }
 
   test('workspace listings are typed, sized and directories-first', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.mkdir('proj/sub', { recursive: true });
-    await rt.storage.vfs.writeFile('proj/a.txt', 'aa');
+    await rt.storage.vfs.mkdir('/proj/sub', { recursive: true });
+    await rt.storage.vfs.writeFile('/proj/a.txt', 'aa');
 
-    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', 'proj');
+    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/proj');
     expect(listed.entries?.map((e) => [e.name, e.type])).toEqual([['sub', 'dir'], ['a.txt', 'file']]);
     expect(listed.entries?.find((e) => e.name === 'a.txt')?.size).toBe(2);
+    db.close();
+  });
+
+  test('an empty path lists where the environment itself says it starts', async () => {
+    const { rt, db } = createTestRuntime();
+    await rt.storage.vfs.writeFile('/home/user/SOUL.md', 'me');
+
+    // The browser opens an environment without knowing its paths. Cut
+    // homeDir() out of the read model and this lands somewhere else.
+    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '');
+    expect(listed.path).toBe('/home/user');
+    expect(listed.entries?.map((e) => e.name)).toContain('SOUL.md');
+    db.close();
+  });
+
+  test('the listed directory comes back absolute and resolved, so the caller can walk up', async () => {
+    const { rt, db } = createTestRuntime();
+    await rt.storage.vfs.writeFile('/home/user/SOUL.md', 'me');
+    await rt.storage.vfs.writeFile('/home/SHARED', 's');
+
+    // `..` from the agent's home is /home, NOT the filesystem root — the exact
+    // navigation the pane could not perform while every environment reported
+    // its working directory as the literal '.'.
+    const up = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/user/..');
+    expect(up.path).toBe('/home');
+    expect(up.entries?.map((e) => e.name)).toContain('SHARED');
     db.close();
   });
 
@@ -291,9 +324,9 @@ describe('executor file plane', () => {
     const { rt, db } = createTestRuntime();
     // Unknown id, and a known executor that has no filesystem to browse (the
     // laptop before a device connects) read the same way: a rendered reason.
-    expect(await getExecutorFiles(router(rt.storage.vfs), 'ghost', '.'))
+    expect(await getExecutorFiles(router(rt.storage.vfs), 'ghost', ''))
       .toEqual({ error: 'Executor "ghost" has no file plane' });
-    expect(await getExecutorFiles(router(), 'workspace', '.'))
+    expect(await getExecutorFiles(router(), 'workspace', ''))
       .toEqual({ error: 'Executor "workspace" has no file plane' });
     expect(await readExecutorFile(router(rt.storage.vfs), 'workspace', '')).toEqual({ error: 'path required' });
     db.close();

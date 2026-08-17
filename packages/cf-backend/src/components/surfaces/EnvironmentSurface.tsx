@@ -34,10 +34,10 @@ import {
   HardDrivesIcon, CircleIcon,
   LockSimpleIcon, TerminalIcon, FolderOpenIcon, PlugIcon, GearSixIcon,
 } from "@phosphor-icons/react";
-import type { MountInfo } from "@proteus/core";
+import { EXECUTOR_CAPABILITIES, type ExecutorCapability, type MountInfo } from "@proteus/core";
 import type { ExecutorCommandResult, Rpc } from "@/lib/protocol";
 import {
-  executorForMount, executorLabel, isExecutorActive, pickDefaultExecutor,
+  capabilityLabel, executorForMount, executorLabel, isExecutorActive, pickDefaultExecutor,
   type ExecutorInfo,
 } from "@/lib/executors";
 import type { ExecutorOutput } from "@/hooks/use-proteus";
@@ -53,6 +53,11 @@ const CONSISTENCY_HINT = {
   ephemeral: "ephemeral, dies with the container",
   "live-shared": "live, your own machine",
 } satisfies Record<MountInfo["policy"]["consistency"], string>;
+
+/** The two capabilities that say WHICH filesystem an environment has rather
+ *  than whether it can do something. Never rendered as an absence — see
+ *  EnvironmentCapabilities. */
+const FILESYSTEM_TOPOLOGY: ReadonlySet<ExecutorCapability> = new Set(['fs_owned', 'fs_shared']);
 
 export interface EnvironmentSurfaceProps {
   rpc: Rpc;
@@ -115,7 +120,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
     <div className="flex flex-col h-full -m-5">
       <div className="px-4 pt-3 pb-3 space-y-3 shrink-0 border-b p-border">
         {resource.status === "error" && (
-          <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="p-card rounded-lg px-3 py-2" />
+          <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="p-card px-3 py-2" />
         )}
 
         {/* One identity-stable chip per environment. */}
@@ -134,8 +139,8 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
                   title={mountTitle(m, exec)}
                   className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors cursor-pointer ${
                     selectedName === m.name ? "p-accent-subtle p-accent"
-                      : m.live ? "p-card hover:p-card-hover p-text-2"
-                      : "p-text-3 border p-border border-dashed hover:p-card-hover"
+                      : m.live ? "p-card p-card-hover p-text-2"
+                      : "p-text-3 border p-border border-dashed p-card-hover"
                   }`}>
                   <CircleIcon size={7} weight="fill" className={mountDotClass(m, exec)} />
                   <span className="font-mono">{m.prefix}</span>
@@ -174,23 +179,13 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
             </div>
           </div>
 
-          {/* Capabilities — what this runtime can actually do, so "which
-              runtime for this job" isn't guesswork (npm / git / docker / …). */}
-          {selectedExec && selectedExec.capabilities.length > 0 && (
-            <div className="flex items-center gap-1 flex-wrap px-3 py-1 border-b p-border shrink-0">
-              <span className="text-[10px] p-text-3 mr-1">{selectedExec.kind}</span>
-              {selectedExec.capabilities.map((c) => (
-                <span key={c} className="text-[10px] px-1.5 py-0.5 rounded-full p-fill p-text-3 font-mono">{c}</span>
-              ))}
-            </div>
-          )}
+          <EnvironmentCapabilities selected={selectedExec} all={executors} />
 
           <div className="flex-1 min-h-0">
             {pane.kind === "files" && (
-              /* The selected environment's own file view, opened at the
-                 working directory returned by the file read model. */
-              <FilesPane key={selectedMount.name} execName={executorForMount(selectedMount.name)}
-                rpc={rpc} initialPath={selectedMount.cwd ?? "."} />
+              /* The selected environment's own file view. It opens by asking
+                 the environment where it starts — nothing here knows. */
+              <FilesPane key={selectedMount.name} execName={executorForMount(selectedMount.name)} rpc={rpc} />
             )}
             {pane.kind === "terminal" && selectedExec && (
               <ExecutorTerminal
@@ -201,6 +196,78 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
             )}
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What this environment can do, and where to go for what it cannot.
+ *
+ * These are the executor's DECLARED capabilities — the same set the provider
+ * registers (`ExecutorProvider.capabilities`) and the same set the agent now
+ * reads in its own execution-status block. They were rendered here as a strip
+ * of raw ids with no reading and no absences, which is data rather than an
+ * answer: nothing in `workspace javascript typescript shell fs_shared npm git
+ * net_outbound net_inbound process_spawn process_long process_signal` tells
+ * you the reason a big clone dies here is that this environment is a Worker.
+ *
+ * So the row is a comparison. Every capability any REACHABLE environment
+ * offers is listed once; the ones this environment lacks name the environment
+ * that has them, which is the only action available at this point — switch.
+ * Capabilities nothing reachable offers are omitted: an absence you cannot do
+ * anything about is not information.
+ */
+function EnvironmentCapabilities(
+  { selected, all }: { selected: ExecutorInfo | undefined; all: readonly ExecutorInfo[] },
+) {
+  if (selected === undefined) return null;
+  const here = new Set(selected.capabilities);
+  const reachable = all.filter((exec) => exec.available && exec.name !== selected.name);
+
+  const has = EXECUTOR_CAPABILITIES.filter((capability) => here.has(capability));
+  // Only absences somewhere reachable can cover: an absence you cannot act on
+  // is not information, and listing all sixteen would bury the ones you can.
+  //
+  // `fs_owned`/`fs_shared` are excluded because they are not gaps. They say
+  // WHICH filesystem this environment has, and every environment has one — so
+  // rendering "its own private files — Your PC" against the workspace reads as
+  // a deficiency when sharing the agent's files is the whole point of it.
+  const missing = EXECUTOR_CAPABILITIES
+    .filter((capability) => !here.has(capability) && !FILESYSTEM_TOPOLOGY.has(capability))
+    .map((capability) => ({
+      capability,
+      where: reachable
+        .filter((exec) => exec.capabilities.includes(capability))
+        .map((exec) => executorLabel(exec.name)),
+    }))
+    .filter((row) => row.where.length > 0);
+
+  if (has.length === 0 && missing.length === 0) return null;
+  return (
+    <div className="px-3 py-1.5 border-b p-border shrink-0 space-y-1">
+      <div className="flex items-center gap-1 flex-wrap">
+        <span className="text-[10px] p-text-3 mr-1 shrink-0">{executorLabel(selected.name)} can</span>
+        {has.map((capability) => (
+          <span key={capability} data-capability-chip title={capability}
+            className="text-[10px] px-1.5 py-0.5 rounded-full p-fill p-text-2">
+            {capabilityLabel(capability)}
+          </span>
+        ))}
+        {has.length === 0 && <span className="text-[10px] p-text-3 italic">nothing declared</span>}
+      </div>
+      {missing.length > 0 && (
+        <div data-capability-absences className="text-[10px] p-text-3 leading-relaxed">
+          Not here:{" "}
+          {missing.map((row, i) => (
+            <span key={row.capability}>
+              {i > 0 && " · "}
+              <span title={row.capability}>{capabilityLabel(row.capability)}</span>
+              {" — "}
+              <span className="p-text-2">{row.where.join(" or ")}</span>
+            </span>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -217,7 +284,7 @@ function PaneTabButton({ icon: Icon, label, active, badge, onClick }: {
     <button
       onClick={onClick}
       className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors ${
-        active ? "p-card p-text" : "p-text-2 hover:p-card-hover"
+        active ? "p-card p-text" : "p-text-2 p-card-hover"
       }`}
     >
       <Icon size={12} className="opacity-70" />
@@ -274,7 +341,7 @@ function PcConnectCta() {
         hint={registered
           ? <>
               {labels} {devices.length > 1 ? "are" : "is"} registered but the daemon is not running.
-              Restart it on that machine with <code className="font-mono p-fill px-1 rounded">proteus connect</code>.
+              Restart it on that machine with <code className="font-mono p-fill px-1 rounded-sm">proteus connect</code>.
             </>
           : "Link a laptop or PC to your account so your agents can run commands, read files, and serve previews on it, with your consent. One device serves all your agents."}
       >

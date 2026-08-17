@@ -25,10 +25,11 @@ import {
   codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex,
   listAvailableModels, listProviderCatalog, getConfig, setConfig, getCliSetup,
   listCloudflareGateways, selectCloudflareGateway,
+  listCloudflareAccounts, selectCloudflareAccount,
   listDevices, registerDevice, revokeDevice,
   type UserProfile, type CredentialSummary, type CodexStatus,
   type ModelMenu, type ProviderCatalogEntry, type DeviceFlowStart, type CliSetup,
-  type CloudflareGatewayStatus, type UserDevice,
+  type CloudflareGatewayStatus, type CloudflareAccountStatus, type UserDevice,
 } from "../lib/user-api";
 import { Card, inputCls } from "@/components/ui/form";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -62,6 +63,7 @@ interface Account {
   models: ModelMenu;
   catalog: ProviderCatalogEntry[];
   gateways: CloudflareGatewayStatus | null;
+  accounts: CloudflareAccountStatus | null;
   defaultModel: string | null;
 }
 
@@ -75,7 +77,7 @@ export default function UserSettingsPage() {
   // fully connected, walking the user into a needless re-grant. They load or
   // the page says it couldn't read them.
   const load = useCallback(async (): Promise<Account> => {
-    const [profile, creds, codex, models, catalog, config, gateways] = await Promise.all([
+    const [profile, creds, codex, models, catalog, config, gateways, accounts] = await Promise.all([
       getProfile(),
       listCredentials(),
       codexStatus(),
@@ -83,8 +85,9 @@ export default function UserSettingsPage() {
       listProviderCatalog(),
       getConfig('default_model'),
       listCloudflareGateways(),
+      listCloudflareAccounts(),
     ]);
-    return { profile, creds, codex, models, catalog, gateways, defaultModel: config?.value ?? null };
+    return { profile, creds, codex, models, catalog, gateways, accounts, defaultModel: config?.value ?? null };
   }, []);
   const { resource, reload } = useAsyncResource(load);
   const account = lastValue(resource);
@@ -122,7 +125,7 @@ export default function UserSettingsPage() {
     );
   }
 
-  const { profile, creds, codex, models, catalog, gateways } = account;
+  const { profile, creds, codex, models, catalog, gateways, accounts } = account;
   const workersAIConnected = models.models.some((model) => model.provider === 'workers-ai');
 
   return (
@@ -167,6 +170,9 @@ export default function UserSettingsPage() {
               <div className="flex items-center gap-2 text-xs p-success">
                 <CheckIcon size={13} /> Connected
               </div>
+              {/* Which account serves Workers AI is upstream of which gateway
+                  is reachable, so it is asked first. */}
+              <CloudflareAccountSection status={accounts} onChanged={reload} />
               <CloudflareGatewaySection status={gateways} onChanged={reload} />
             </div>
           ) : (
@@ -197,7 +203,7 @@ export default function UserSettingsPage() {
             </p>
             <Link
               to="/user/settings/mcp"
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md p-card hover:p-card-hover"
+              className="inline-flex items-center gap-1 px-3 py-1.5 p-card p-card-hover"
             >Manage MCP servers <ArrowSquareOutIcon size={12} /></Link>
           </div>
         </Card>
@@ -311,7 +317,7 @@ function DevicesCard() {
         )}
         {devices && devices.length > 0 && !devices.some((d) => d.connected) && (
           <p className="p-meta p-text-3">
-            Offline device? Restart the daemon on that machine with <code className="font-mono p-fill px-1 rounded">proteus connect</code>.
+            Offline device? Restart the daemon on that machine with <code className="font-mono p-fill px-1 rounded-sm">proteus connect</code>.
           </p>
         )}
         {lapsingDevices(devices).length > 0 && (
@@ -338,7 +344,7 @@ function DevicesCard() {
             <div className="flex items-center gap-2 text-xs">
               <button
                 onClick={() => copy(install)}
-                className={`px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1 ${copyStatus === "failed" ? "p-danger" : "p-text-2"}`}
+                className={`px-2 py-1 rounded-sm p-card p-card-hover flex items-center gap-1 ${copyStatus === "failed" ? "p-danger" : "p-text-2"}`}
               ><CopyIcon size={11} />{copyLabel(copyStatus)}</button>
               <button onClick={() => setInstall(null)} className="p-text-3 hover:p-text">Done</button>
             </div>
@@ -365,10 +371,58 @@ function CommandCopy({ label, command }: { label: string; command: string }) {
       <code className="font-mono p-meta p-text flex-1 truncate">{command}</code>
       <button
         onClick={() => copy(command)}
-        className={`px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1 text-xs ${status === "failed" ? "p-danger" : "p-text-2"}`}
+        className={`px-2 py-1 rounded-sm p-card p-card-hover flex items-center gap-1 text-xs ${status === "failed" ? "p-danger" : "p-text-2"}`}
       >
         <CopyIcon size={11} />{copyLabel(status)}
       </button>
+    </div>
+  );
+}
+
+// ── Cloudflare account selection ────────────────────────────────────
+
+/**
+ * Which of the user's Cloudflare accounts serves this workspace's Workers AI.
+ * Only rendered when there is a choice to make: a single-account user has
+ * nothing to decide and gets no control. Picking an account clears the gateway
+ * selection server-side and rediscovers gateways, so the caller reloads.
+ */
+function CloudflareAccountSection({ status, onChanged }: {
+  status: CloudflareAccountStatus | null;
+  onChanged: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!status?.connected || status.accounts.length < 2) return null;
+
+  const choose = async (id: string) => {
+    if (!id) return;
+    setSaving(true);
+    setError(null);
+    try { await selectCloudflareAccount(id); onChanged(); }
+    catch (e) { setError(errorMessage(e)); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="text-xs p-text-2">Workers AI account</div>
+      <select
+        value={status.selectedId ?? ''}
+        onChange={(e) => choose(e.target.value)}
+        disabled={saving}
+        className={inputCls}
+      >
+        {status.selectedId === null && <option value="">(no account selected)</option>}
+        {status.accounts.map((account) => (
+          <option key={account.id} value={account.id}>{account.name}</option>
+        ))}
+      </select>
+      <p className="p-meta p-text-3">
+        Which Cloudflare account serves this workspace's Workers AI. Changing it clears the AI
+        Gateway selection below, because gateways belong to an account.
+      </p>
+      {error && <p className="text-xs p-danger">{error}</p>}
     </div>
   );
 }
@@ -498,7 +552,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
           <span>Connected{status.accountId ? <span className="p-text-3"> · account {status.accountId.slice(0, 8)}…</span> : null}</span>
         </div>
         <button onClick={disconnect}
-          className="text-xs px-3 py-1.5 rounded-md p-card hover:p-card-hover transition-colors">
+          className="text-xs px-3 py-1.5 p-card p-card-hover transition-colors">
           Disconnect
         </button>
       </div>
@@ -512,13 +566,13 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
           Open <a href={flow.portalURL} target="_blank" rel="noopener noreferrer" className="p-accent underline">{flow.portalURL}</a> and enter:
         </p>
         <div className="flex items-center gap-3">
-          <code className="text-2xl font-mono tracking-widest p-card rounded-lg px-4 py-2 select-all">{flow.userCode}</code>
+          <code className="text-2xl font-mono tracking-widest p-card px-4 py-2 select-all">{flow.userCode}</code>
           <CopyButton value={flow.userCode} what="the device code" size={14}
-            className="p-2 rounded-md p-card hover:p-card-hover" />
+            className="p-2 p-card p-card-hover" />
           <a
             href={flow.portalURL}
             target="_blank" rel="noopener noreferrer"
-            className="p-2 rounded-md p-card hover:p-card-hover"
+            className="p-2 p-card p-card-hover"
             title="Open portal"
           ><ArrowSquareOutIcon size={14} /></a>
         </div>
@@ -608,7 +662,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       {storedKeys.length > 0 && (
         <div className="space-y-1.5">
           {storedKeys.map(({ key, provider }) => (
-            <div key={key} className="flex items-center gap-2 text-xs px-2 py-1.5 p-card rounded">
+            <div key={key} className="flex items-center gap-2 text-xs px-2 py-1.5 p-card rounded-sm">
               <CheckIcon size={13} className="p-success shrink-0" />
               <span className="font-medium">{provider?.name ?? key}</span>
               {provider?.doc && (
@@ -675,7 +729,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
               <button
                 onClick={saveSelected}
                 disabled={savingKey !== null || !apiKey.trim()}
-                className="px-3 py-1.5 rounded-md p-card hover:p-card-hover disabled:opacity-50 text-xs shrink-0"
+                className="px-3 py-1.5 p-card p-card-hover disabled:opacity-50 text-xs shrink-0"
               >{savingKey === selected.credKey ? '...' : (selected.connected ? 'Replace' : 'Save')}</button>
             </div>
           </div>
@@ -710,12 +764,12 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
         <button
           onClick={saveCompat}
           disabled={savingKey !== null || !compatName.trim() || !compatBaseURL.trim() || !compatApiKey.trim()}
-          className="px-3 py-1.5 rounded-md p-card hover:p-card-hover disabled:opacity-50 text-xs"
+          className="px-3 py-1.5 p-card p-card-hover disabled:opacity-50 text-xs"
         >Add endpoint</button>
 
         {/* List existing openai-compat */}
         {creds.filter((c) => c.key.startsWith('openai-compat.')).map((c) => (
-          <div key={c.key} className="flex items-center justify-between text-xs px-2 py-1.5 p-card rounded">
+          <div key={c.key} className="flex items-center justify-between text-xs px-2 py-1.5 p-card rounded-sm">
             <span className="font-mono">{c.key}</span>
             <button onClick={() => remove(c.key, c.key)} className="flex items-center gap-1 p-text-3 hover:p-danger">
               <TrashIcon size={11} /> Remove

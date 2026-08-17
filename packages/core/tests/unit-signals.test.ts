@@ -10,6 +10,7 @@ import { SignalDelivery } from '../src/orchestrator/signals.js';
 import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host.js';
 import type { AgentSignal, SignalCardEvent } from '../src/types/signals.js';
 import { JsonObjectSchema } from '../src/utils/json.js';
+import { WORKSPACE_CREATED_EVENT, workspaceGenesisSignal } from '../src/identity/soul.js';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
@@ -392,5 +393,35 @@ describe('SignalDelivery — turn boundaries', () => {
 
     signals.beginTurn(true);
     expect(signals.prepareStep({ stepNumber: 0, messages: [user('continued')] })).toBeUndefined();
+  });
+});
+
+// The workspace's own first turn rides this same seam — no new transport for a
+// programmatic turn. Its two contracts, through the real delivery machinery.
+describe('the workspace genesis signal', () => {
+  test('an idle new workspace turns it into its own turn', async () => {
+    const { signals, queued } = setup({ turnInFlight: false });
+    const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
+
+    expect(await signals.deliver(genesis!)).toBe('queued');
+    expect(queued).toHaveLength(1);
+    expect(queued[0]!.metadata?.proteusEvent).toBe(WORKSPACE_CREATED_EVENT);
+  });
+
+  test('it is never spliced into a turn that raced it', async () => {
+    // A peer's task or an inbound email can reach a brand-new workspace first.
+    // A genesis turn IS a turn; joining someone else's as an aside is not it.
+    const { signals, queued } = setup({ turnInFlight: true });
+    const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
+
+    expect(await signals.deliver(genesis!)).toBe('queued');
+    expect(queued).toHaveLength(1);
+    expect(signals.prepareStep({ stepNumber: 0, messages: [user('the racing turn')] })).toBeUndefined();
+  });
+
+  test('a workspace created with no mission has no first turn to take', () => {
+    expect(workspaceGenesisSignal('Help the user with the work they assign.')).toBeNull();
+    expect(workspaceGenesisSignal('')).toBeNull();
+    expect(workspaceGenesisSignal(null)).toBeNull();
   });
 });

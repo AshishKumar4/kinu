@@ -16,10 +16,18 @@
  * (prompting/prepare-step.ts) — the array this function returns is what the
  * ledger's frozen positions are measured against, so it must stay free of
  * them.
+ *
+ * The last act is the pairing invariant (prompting/interrupted-tool-calls.ts):
+ * whatever the history holds, the request that leaves here has a terminal
+ * result for every tool call in it. Without that, one turn interrupted between
+ * a call and its result makes every LATER turn throw
+ * `AI_MissingToolResultsError` inside `streamText` — the session stops being
+ * usable, and no retry can change it.
  */
 
 import type { ModelMessage } from 'ai';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy } from '../prompting/attachment-sanitizer.js';
+import { settleUnpairedToolCalls } from '../prompting/interrupted-tool-calls.js';
 import type { ExtensionHost } from '../extension.js';
 
 export interface TurnContextInput {
@@ -55,5 +63,6 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
     trigger: input.trigger,
   });
 
-  return [...(transformed ?? history), ...(input.turnLocal ?? [])];
+  const assembled = [...(transformed ?? history), ...(input.turnLocal ?? [])];
+  return settleUnpairedToolCalls(assembled) ?? assembled;
 }

@@ -132,6 +132,7 @@ describe('workspace diff lifecycle', () => {
     const responses = ['/repo', 'yes', 'Error (exit 128)\nfatal: index corrupt'];
     const provider: ExecutorProvider = {
       name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']),
+      homeDir: async () => '/workspace',
       isAvailable: () => true, connect: async () => {}, disconnect: async () => {},
       tools: {
         exec: {
@@ -174,6 +175,7 @@ describe('workspace diff lifecycle', () => {
     };
     const provider: ExecutorProvider = {
       name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']),
+      homeDir: async () => '/workspace',
       isAvailable: () => true, connect: async () => {}, disconnect: async () => {},
       tools: {
         exec: {

@@ -11,7 +11,8 @@
  * step boundary where the decision is still open. Measured: doctrine 0%, a
  * mechanical splice 24%.
  *
- * Four triggers, all cheap and deterministic, in priority order:
+ * Five triggers, all cheap and deterministic. Four are REACTIVE — they read
+ * the turn's own tool traffic, in priority order:
  *
  *   repeated_call             {@link IDENTICAL_CALLS_BEFORE_STEER} calls of the
  *                             SAME tool with the SAME arguments that returned
@@ -40,12 +41,32 @@
  *                             the step count is the only evidence of that the
  *                             runtime can read without guessing at intent.
  *
- * ONE steer per turn, whichever trigger fires first. A second one carries
- * almost no new information and reads as nagging; the owner's rule is no spam
- * and no silence, and one line in a turn that is already 25 steps or 3 failures
- * or 3 identical calls or 12 stalled steps deep is the honest middle. That is
- * also why this is one object and not four detectors: four independent
+ * and the fifth is not reactive at all, because the decision it is about is
+ * made before the turn has any traffic to read:
+ *
+ *   turn_start_no_delegation  step 0 of a turn whose context holds no work of
+ *                             this agent's yet and whose ask is not a question
+ *                             — the session's first ask, and again after a
+ *                             compaction that folded the whole transcript. The
+ *                             doctrine's shape test, stated at the one moment
+ *                             the shape is still open. The 25-step steer above
+ *                             is recovery from a shape already chosen wrong,
+ *                             which prompt.ts conceded in prose and could not
+ *                             fix from there.
+ *
+ * ONE reactive steer per turn, whichever trigger fires first. A second one
+ * carries almost no new information and reads as nagging; the owner's rule is
+ * no spam and no silence, and one line in a turn that is already 25 steps or 3
+ * failures or 3 identical calls or 12 stalled steps deep is the honest middle.
+ * That is also why this is one object and not four detectors: four independent
  * mechanisms would each fire on the same thrash loop.
+ *
+ * The turn-start hint holds its OWN slot, so a turn can carry two rows: the
+ * hint at step 0 and, twenty-five steps later, the recovery steer for the
+ * shape the hint failed to prevent. One shared slot would have cost either the
+ * recovery steer on the session's first turn — the only turn a one-shot
+ * `proteus exec` run has — or the count of hints that did NOT convert, which
+ * is the number the whole comparison rests on.
  *
  * Every steer is a HINT. The message says so, nothing gates on it, and the
  * model is free to push on — but it can no longer end the turn having never
@@ -81,8 +102,9 @@
  */
 
 import * as v from 'valibot';
+import type { ModelMessage } from 'ai';
 import type { TurnSteeringRecord, TurnSteeringTrigger } from '../events/types.js';
-import type { ToolCallContext, ToolResultContext } from '../extension.js';
+import type { PrepareStepContext, ToolCallContext, ToolResultContext } from '../extension.js';
 import type { AgentSignal } from '../types/signals.js';
 import type { BuiltinToolName } from '../tools/registry.js';
 import type { RecoveryFinding } from '../evolution/recovery.js';
@@ -178,6 +200,65 @@ function longTurnText(steps: number): string {
   return `${steps} steps into this turn with no delegation. Work this long is work that splits: `
     + `fork now (\`${DELEGATION_TOOL}\` action=fork) to run the independent parts in parallel instead of grinding them one at a time. `
     + 'This is a hint, not an instruction — push on alone if the rest is genuinely sequential.';
+}
+
+/**
+ * The turn-start hint: the one decision that is the model's own — how the work
+ * splits — named at the only step where making it is still free, then the call
+ * that runs the parts.
+ *
+ * Worded as a hint in the same register as the other four, and deliberately
+ * carries no number: nothing here is evidence about THIS turn, only about when
+ * the decision is open.
+ */
+function turnStartDelegationText(): string {
+  return 'Settle the shape first: what the parts are, and what each one owes the others. That decision is yours. '
+    + `Then run the independent parts as forks (\`${DELEGATION_TOOL}\` action=fork) in one call, and carry on with what is left. `
+    + 'This is a hint, not an instruction — work alone if the whole thing is one coherent change.';
+}
+
+/** A user message's parts, read for their text alone: an image or a file part
+ *  carries none, so it contributes nothing to read. */
+const TextPartsSchema = v.array(v.looseObject({ text: v.optional(v.string()) }));
+
+/** A user message's readable text — the string form, or its text parts joined.
+ *  Narrowed with a parse rather than a shape check, the same way the context
+ *  meter reads a message's content (prompting/context-meter.ts). */
+function askText(message: ModelMessage): string {
+  if (message.role !== 'user') return '';
+  const flat = v.safeParse(v.string(), message.content);
+  if (flat.success) return flat.output;
+  const parts = v.safeParse(TextPartsSchema, message.content);
+  return parts.success ? parts.output.map((part) => part.text ?? '').join('') : '';
+}
+
+/**
+ * The turn-start hint's whole predicate: a fresh ask with no work behind it.
+ *
+ * Read off the messages the step is about to send, the one thing both backends
+ * agree on — and at THIS hook they are the durable history plus the turn-local
+ * tail, before the prune and before the dynamic-context weave
+ * (prompting/prepare-step.ts runs extensions first), so nothing runtime-authored
+ * is in them yet.
+ *
+ * Two facts, the same two oh-my-pi's eager prelude reads
+ * (session/todo-tracker.ts): no assistant message anywhere, so this agent has
+ * said nothing here and the shape of the work is still open; and an ask that
+ * does not end in `?` or `!`, because a question wants an answer and an
+ * exclamation is a correction — neither is a body of work to split. The FIRST
+ * user message is the ask: the turn-local tail is appended after it.
+ *
+ * One predicate covers both of oh-my-pi's two mechanisms. A continuation turn,
+ * a background wake and every later turn all carry the assistant side of work
+ * that already happened, so none of them fires; a compaction that folded the
+ * whole transcript leaves no assistant message either, and the shape of what
+ * remains is open again for exactly the reason it was open at session start.
+ */
+function freshAsk(messages: readonly ModelMessage[]): boolean {
+  if (messages.some((message) => message.role === 'assistant')) return false;
+  const ask = messages.find((message) => message.role === 'user');
+  const text = ask ? askText(ask).trimEnd() : '';
+  return text.length > 0 && !text.endsWith('?') && !text.endsWith('!');
 }
 
 /**
@@ -283,6 +364,12 @@ export class TurnSteering {
   private delegated = false;
   private fired: { trigger: TurnSteeringTrigger; step: number; tool?: string } | null = null;
   private converted = false;
+  /** The turn-start hint's own slot. Separate from {@link fired} because the
+   *  hint fires before any reactive trigger can have evidence, and spending the
+   *  reactive slot on it would cost the recovery steer on the session's first
+   *  turn (see the header). */
+  private startFired = false;
+  private startConverted = false;
   /** The signature the repeat steer named — anything else is a changed
    *  approach, which is what that steer asked for. Set by that trigger alone;
    *  the other three judge conversion without it (see answersTheSteer). */
@@ -300,13 +387,17 @@ export class TurnSteering {
     this.delegated = false;
     this.fired = null;
     this.converted = false;
+    this.startFired = false;
+    this.startConverted = false;
     this.repeating = null;
     this.lastProgress = -1;
     this.stalledSteps = 0;
   }
 
   onToolCall(ctx: ToolCallContext): void {
-    if (ctx.toolName === DELEGATION_TOOL) this.delegated = true;
+    const delegating = ctx.toolName === DELEGATION_TOOL;
+    if (delegating) this.delegated = true;
+    if (this.startFired && delegating) this.startConverted = true;
     if (this.fired && this.answersTheSteer(ctx)) this.converted = true;
   }
 
@@ -358,9 +449,16 @@ export class TurnSteering {
     return recovery;
   }
 
-  /** The turn's steer and whether it converted, or null when none fired. */
-  snapshot(): TurnSteeringRecord | null {
-    return this.fired ? { ...this.fired, converted: this.converted } : null;
+  /** The turn's steers and whether each converted — at most two, the turn-start
+   *  hint and the one reactive steer, in the order they were spliced. Empty on
+   *  a turn that was never steered: no row, `turn_end` being the denominator. */
+  snapshot(): TurnSteeringRecord[] {
+    const rows: TurnSteeringRecord[] = [];
+    if (this.startFired) {
+      rows.push({ trigger: 'turn_start_no_delegation', step: 0, converted: this.startConverted });
+    }
+    if (this.fired) rows.push({ ...this.fired, converted: this.converted });
+    return rows;
   }
 
   /**
@@ -398,13 +496,19 @@ export class TurnSteering {
 
   /**
    * The step-boundary trigger check: the signal to deliver into THIS step, or
-   * null. At most one, ever — the first trigger to fire owns the turn.
+   * null. At most one per step, and at most one REACTIVE one per turn — the
+   * first of those to fire owns the turn.
+   *
+   * Takes the step's own context because the turn-start trigger reads the
+   * messages the request is about to carry ({@link freshAsk}); the other
+   * four read only the tool traffic this object has been observing.
    *
    * `files` is the turn's file ledger reading, supplied by the caller that owns
    * it (the AgentOrchestrator, which owns both). Absent means no file work was
    * observed, so the trigger runs on tool-call evidence alone.
    */
-  steerFor(step: number, files: TurnProgressInputs = NO_FILE_PROGRESS): AgentSignal | null {
+  steerFor(ctx: PrepareStepContext, files: TurnProgressInputs = NO_FILE_PROGRESS): AgentSignal | null {
+    const step = ctx.stepNumber;
     // Sampled on every boundary, including ones where a steer has already
     // fired: this is the turn's own accounting, and letting it drift would
     // make the number meaningless if the trigger order ever changes.
@@ -432,6 +536,13 @@ export class TurnSteering {
     if (step >= LONG_TURN_STEPS_BEFORE_STEER && !this.delegated) {
       this.fired = { trigger: 'long_turn_no_delegation', step };
       return signal(longTurnText(step));
+    }
+    // Last, and only ever at step 0 — where none of the four above can have
+    // evidence yet, so a reactive steer that DID fire on this step is about
+    // this turn and outranks a hint that is about every turn.
+    if (step === 0 && !this.startFired && freshAsk(ctx.messages)) {
+      this.startFired = true;
+      return signal(turnStartDelegationText());
     }
     return null;
   }

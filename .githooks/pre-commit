@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#
+# Commit tier: 12s of total static analysis, no test suite.
+#
+# It runs no tests on purpose. At commit time you can afford something TOTAL —
+# every file, every line — and 12s buys exactly that: the 8-project typecheck,
+# the 15 anti-slop rules, and four structural gates that each name a defect
+# class this repo has actually shipped. A test suite at this tier would be a
+# sample, would cost 25s at minimum, and would push the hook into the range
+# where people start reaching for --no-verify.
+#
+# This tier was unaffordable until TypeScript 7. Measured 2026-08-17, cold,
+# 8 projects: 64.9s under 5.8.3, 6.9s under 7.0.2. That single number is why
+# there was no commit hook here before and why there is one now.
+#
+# NEVER --no-verify. And there is nothing to gain by it: the commit tier is a
+# proven subset of the CI tier (scripts/ladder.test.ts asserts it by the files
+# each tier claims), so skipping this cannot let anything through. It only buys
+# a slower failure, in CI, with your attention somewhere else.
+#
+# One honest imprecision: this checks the WORKING TREE, not the staged content.
+# A partial stage can pass here and fail in CI. Stashing to fix that is how
+# people lose work — and with several agents editing this checkout it would be
+# actively dangerous — so the imprecision is stated rather than papered over.
+
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)" || exit 1
+exec bun scripts/ladder.ts --tier=commit

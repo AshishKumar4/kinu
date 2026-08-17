@@ -33,6 +33,7 @@ function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbu
     name,
     kind,
     capabilities: new Set(['shell']),
+    homeDir: async () => '/home/user',
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},
@@ -71,15 +72,17 @@ describe('gateProviderExec — the executor-seam gate', () => {
     const { provider, executed } = fakeShellProvider('nimbus');
     const gated = gateProviderExec(provider, strictNoChannelPolicy());
     const result = await gated.tools.exec!.execute(DENY);
-    expect(String(result)).toContain('Denied by approval gate');
+    expect(String(result)).toContain('rm-rf-root');
     expect(executed).toEqual([]);
   });
 
   test('a gate-tier command with no approver wired is refused, not silently allowed', async () => {
-    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox');
+    // On `laptop`: on the agent's own sandbox this same string is housekeeping
+    // and there is nothing to refuse.
+    const { provider, executed } = fakeShellProvider('laptop', 'laptop');
     const gated = gateProviderExec(provider, strictNoChannelPolicy());
     const result = await gated.tools.exec!.execute(GATE);
-    expect(String(result)).toContain('Requires user approval');
+    expect(String(result)).toContain('needs owner approval');
     expect(executed).toEqual([]);
   });
 
@@ -103,7 +106,7 @@ describe('gateProviderExec — the executor-seam gate', () => {
     const { provider, executed } = fakeShellProvider('nimbus');
     const gated = gateProviderExec(provider, strictNoChannelPolicy());
     const result = await gated.tools.startProcess!.execute(DENY);
-    expect(String(result)).toContain('Denied by approval gate');
+    expect(String(result)).toContain('rm-rf-root');
     expect(executed).toEqual([]);
   });
 
@@ -124,7 +127,7 @@ describe('gateProviderExec — the executor-seam gate', () => {
     const gated = gateProviderExec(provider, strictNoChannelPolicy());
     expect(gated.tools.exec!.execute).toBe(provider.tools.exec!.execute);
     const result = await gated.tools.startProcess!.execute(DENY);
-    expect(String(result)).toContain('Denied by approval gate');
+    expect(String(result)).toContain('rm-rf-root');
     expect(executed).toEqual([]);
   });
 
@@ -168,7 +171,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
     // This is EXACTLY the call codemode's `nimbus.exec("rm -rf /x")` makes —
     // the router hands the LLM sandbox this same tools.exec.execute.
     const result = await router.getProvider('nimbus')!.tools.exec!.execute(DENY);
-    expect(String(result)).toContain('Denied by approval gate');
+    expect(String(result)).toContain('rm-rf-root');
     expect(executed).toEqual([]);
   });
 
@@ -180,7 +183,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
     const fromGetProviders = router.getProviders().find((p) => p.name === 'sandbox');
     expect(fromGetProviders).toBeDefined();
     const result = await fromGetProviders!.tools.exec!.execute(DENY);
-    expect(String(result)).toContain('Denied by approval gate');
+    expect(String(result)).toContain('rm-rf-root');
     expect(executed).toEqual([]);
   });
 
@@ -200,7 +203,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
     router.register(provider);
 
     const result = await router.getProvider('nimbus')!.tools.exec!.execute(DENY);
-    expect(String(result)).toContain('Denied by approval gate');
+    expect(String(result)).toContain('rm-rf-root');
     expect(executed).toEqual([]);
   });
 
@@ -218,12 +221,73 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
     router.register(provider);
 
     const denied = await router.getProvider('nimbus')!.tools.exec!.execute(GATE);
-    expect(String(denied)).toContain('Requires user approval');
-    expect(executed).toEqual([]);
+    expect(String(denied)).toContain('needs owner approval');
 
     mode = 'allow_all';
     const allowed = await router.getProvider('nimbus')!.tools.exec!.execute(GATE);
     expect(String(allowed)).toBe(`ran: ${GATE}`);
     expect(executed).toEqual([GATE]);
+  });
+});
+
+/**
+ * The seam that makes a decision scope-aware: `gateProviderExec` passes
+ * `provider.name` into `gateExec`. Cut that wire — hardcode any single
+ * executor there — and one of these two goes red, because they are the same
+ * command, the same policy and the same rule, differing only in which machine
+ * the provider says it is.
+ */
+describe('the executor reaches the gate', () => {
+  const HOUSEKEEPING = 'rm -rf node_modules';
+
+  test("a recursive delete on the agent's own sandbox runs, unasked", async () => {
+    const asked: ShellApprovalRequest[] = [];
+    const router = new DefaultExecutionRouter({
+      mode: () => 'strict',
+      requestApproval: async (req) => { asked.push(req); return 'deny'; },
+    });
+    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox');
+    router.register(provider);
+
+    const result = await router.getProvider('sandbox')!.tools.exec!.execute(HOUSEKEEPING);
+    expect(String(result)).toBe(`ran: ${HOUSEKEEPING}`);
+    expect(executed).toEqual([HOUSEKEEPING]);
+    expect(asked).toEqual([]);
+  });
+
+  test("the identical command against the owner's laptop is put to them", async () => {
+    const asked: ShellApprovalRequest[] = [];
+    const router = new DefaultExecutionRouter({
+      mode: () => 'strict',
+      requestApproval: async (req) => { asked.push(req); return 'deny'; },
+    });
+    const { provider, executed } = fakeShellProvider('laptop', 'laptop');
+    router.register(provider);
+
+    const result = await router.getProvider('laptop')!.tools.exec!.execute(HOUSEKEEPING);
+    expect(String(result)).toContain('Denied by the owner');
+    expect(executed).toEqual([]);
+    expect(asked.map((r) => r.executor)).toEqual(['laptop']);
+  });
+
+  test('a standing grant for that rule on that machine stops the asking', async () => {
+    const asked: ShellApprovalRequest[] = [];
+    const router = new DefaultExecutionRouter({
+      mode: () => 'strict',
+      granted: (g) => g.rule === 'rm-recursive' && g.executor === 'laptop',
+      requestApproval: async (req) => { asked.push(req); return 'deny'; },
+    });
+    const { provider, executed } = fakeShellProvider('laptop', 'laptop');
+    router.register(provider);
+
+    expect(String(await router.getProvider('laptop')!.tools.exec!.execute(HOUSEKEEPING)))
+      .toBe(`ran: ${HOUSEKEEPING}`);
+    expect(executed).toEqual([HOUSEKEEPING]);
+    expect(asked).toEqual([]);
+
+    // …and buys nothing for the rule it did not name.
+    expect(String(await router.getProvider('laptop')!.tools.exec!.execute('sudo reboot')))
+      .toContain('Denied by the owner');
+    expect(asked.map((r) => r.command)).toEqual(['sudo reboot']);
   });
 });

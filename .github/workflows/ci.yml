@@ -1,5 +1,23 @@
 name: CI
 
+# This workflow deliberately enumerates NO suites and NO gates.
+#
+# It used to. Measured 2026-08-17 at 5183d69d, its hand-written step list ran 339
+# of the repository's 400 tracked test files while `scripts/deploy.sh` ran 395 —
+# it skipped packages/compaction (95 tests), agent-utils (12), pc-agent (6), 41
+# of 42 `cli` files, the whole root `tests/` directory, and `bun run layergate`
+# entirely. None of that was visible from a green badge, and one of the
+# exclusions ("the full packages/cli suite stays out of CI for now because its
+# PTY tests need a terminal") was simply stale: the suite runs headless at 295
+# pass / 0 fail in 96s.
+#
+# Three lists that can disagree is the defect. So there is one:
+# `scripts/ladder.ts`, whose deploy tier is parsed out of deploy.sh and whose
+# CI-vs-deploy delta is a written exemption asserted by scripts/ladder.test.ts.
+# A gate added to deploy.sh now appears here on the next run, or the ladder test
+# fails naming it. Adding a `run: bun test …` step below is itself a test
+# failure — that assertion is what keeps this file from growing a second list.
+
 on:
   push:
     branches: [main, worktree-proteus-v2-runtime]
@@ -7,9 +25,11 @@ on:
     branches: [main]
 
 jobs:
-  typecheck-and-test:
+  gate-ladder:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The declared CI tier is 257s of gates; the cap is generous enough for a
+    # cold runner and tight enough that a hung gate fails rather than idles.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -29,51 +49,27 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Strict lint and TypeScript check
-        run: bun run check
+      # Prints the where-it-runs matrix into the log before anything runs, so the
+      # answer to "what did this badge actually check?" is in the artefact rather
+      # than in someone's memory of the workflow file.
+      - name: Gate ladder matrix
+        run: bun scripts/ladder.ts --matrix
 
+      - name: Gate ladder — CI tier
+        run: bun scripts/ladder.ts --tier=ci
+
+      # Not in the ladder: this proves the Worker bundles, which is a build
+      # rather than a gate, and it has no test files to claim.
       - name: Production bundle
         working-directory: packages/cf-backend
         run: ../../node_modules/.bin/vite build
 
-      - name: Core unit tests
-        run: bun test --cwd packages/core
-
-      # The shared test fixtures, including the source-slicing helpers the
-      # wiring suites assert through. Untested until now, which is how three of
-      # those suites came to run against whole files instead of the members
-      # they named.
-      - name: Test-utils unit tests
-        run: bun test --cwd packages/test-utils
-
-      # The backend suites, including the conformance gates: each backend's
-      # REAL composition root observed against the capability manifest
-      # (core/src/conformance). A gate that does not run in CI converts at the
-      # same rate as advice — these suites previously never ran here, which is
-      # how "X never worked on Y backend" stayed green.
-      - name: Backend suites (cf + cli-backend)
-        run: bun test --cwd packages/cf-backend && bun test --cwd packages/cli-backend
-
-      # The CLI conformance observer drives the production create→open→session
-      # chain; the full packages/cli suite stays out of CI for now because its
-      # PTY tests need a terminal.
-      - name: CLI conformance gate
-        run: bun test packages/cli/tests/conformance.test.ts
-
-      # Credential-free eval-gate verification. The live-model benchmark runs in
-      # the separate, gated eval.yml (manual / nightly / `run-eval` label).
-      - name: Eval gate logic
-        run: bun test scripts/eval.test.ts
-
-      # Bench harness guarantees: sandbox isolation, the seal, anti-self-scoring,
-      # budget enforcement, corpus well-formedness. No model, no credentials.
-      - name: Bench harness guarantees
-        run: bun test scripts/bench.test.ts
-
   verify-lean:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Main-push gate; pull requests use the path-filtered lean-verify workflow.
+    # The one written CI-tier exemption (scripts/ladder.ts CI_EXEMPT): the elan
+    # toolchain and a 15-minute Lean build. Main-push gate; pull requests use the
+    # path-filtered lean-verify workflow.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4

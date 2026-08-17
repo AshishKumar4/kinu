@@ -49,7 +49,7 @@ import { renderForLLM } from '../events/hub/visibility.js';
 import { StepInjections } from '../prompting/step-injections.js';
 import { SignalDelivery } from '../orchestrator/signals.js';
 import { DrainScheduler } from '../orchestrator/drain-scheduler.js';
-import { formatApproval, reviewCommand, withApprovalGate } from '../safety/approval-gate.js';
+import { formatApproval, gateExec, reviewCommand } from '../safety/approval-gate.js';
 import { argumentDigest } from '../safety/argument-digest.js';
 import { checkMisevolution } from '../scaffold/misevolution.js';
 import { decidePromotion } from '../scaffold/shadow.js';
@@ -134,7 +134,7 @@ export interface PipelineSubjects {
   // ── safety gate ──
   readonly reviewCommand: typeof reviewCommand;
   readonly formatApproval: typeof formatApproval;
-  readonly withApprovalGate: typeof withApprovalGate;
+  readonly gateExec: typeof gateExec;
   readonly argumentDigest: typeof argumentDigest;
 
   // ── evolution gate ──
@@ -220,7 +220,7 @@ export const SUBJECT_SOURCE = {
 
   reviewCommand: 'safety/approval-gate.ts',
   formatApproval: 'safety/approval-gate.ts',
-  withApprovalGate: 'safety/approval-gate.ts',
+  gateExec: 'safety/approval-gate.ts',
   argumentDigest: 'safety/argument-digest.ts',
 
   checkMisevolution: 'scaffold/misevolution.ts',
@@ -301,7 +301,7 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
 
     reviewCommand,
     formatApproval,
-    withApprovalGate,
+    gateExec,
     argumentDigest,
 
     checkMisevolution,

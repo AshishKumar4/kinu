@@ -13,7 +13,7 @@ import { createTestSql } from "@proteus/test-utils";
 
 // @cloudflare/codemode (the DWE import) needs the workerd-only module.
 mock.module("cloudflare:workers", () => ({ RpcTarget: class {}, WorkerEntrypoint: class {}, DurableObject: class {} }));
-const { selectInjectableCraftedTools, buildToolsPreamble } = await import("../src/crafted-tool-registry.js");
+const { selectInjectableCraftedTools, buildToolsPreamble, injectPreamble } = await import("../src/crafted-tool-registry.js");
 const { craftedDispatcherEntry } = await import("../src/execute-tools.js");
 
 function makeCraftStore(tools: Array<{ name: string; code: string; description?: string }>): CraftStore {
@@ -102,6 +102,48 @@ describe("selectInjectableCraftedTools — one policy with core", () => {
     const err = await rejectionOf(execution);
     expect(err.message).toBe(`${craftFailureMarker("boom")} inner`);
     expect(err.cause).toBeInstanceOf(Error);
+  });
+
+  // ── The preamble reaches EVERY code shape the model writes ──────────────
+  // injectPreamble used to regex-splice into the head of `async (...) => {` on
+  // the model's raw code and drop the preamble silently when that head was
+  // absent. A bare statement body has no such head — and a bare statement body
+  // is what BUILTIN_TOOL_SPECS.execute_tools.example teaches — so the whole
+  // crafted-tool surface was undefined on those calls. These run the injected
+  // program for real: `tools.<name>` either resolves or the test throws.
+  const doubler = () => buildToolsPreamble([{ name: "double", code: "async (n) => n * 2" }]);
+
+  test("a bare statement body still sees tools.<name>", async () => {
+    const injected = injectPreamble("const n = 4;\nreturn await tools.double(n);", doubler());
+    expect(await new Function(`return (${injected})()`)()).toBe(8);
+  });
+
+  test("a bare trailing expression still sees tools.<name>", async () => {
+    const injected = injectPreamble("await tools.double(21)", doubler());
+    expect(await new Function(`return (${injected})()`)()).toBe(42);
+  });
+
+  test("a concise-body arrow still sees tools.<name>", async () => {
+    const injected = injectPreamble("async () => await tools.double(3)", doubler());
+    expect(await new Function(`return (${injected})()`)()).toBe(6);
+  });
+
+  test("the arrow shape the model already wrote keeps working", async () => {
+    const injected = injectPreamble("async () => { return await tools.double(5); }", doubler());
+    expect(await new Function(`return (${injected})()`)()).toBe(10);
+  });
+
+  test("the model's code still closes over the sandbox namespaces around it", async () => {
+    // DWE declares each provider namespace as a `const` in the scope that
+    // encloses the evaluated arrow. Wrapping rather than splicing must not cost
+    // the model that scope — `workspace` here stands in for any of them.
+    const injected = injectPreamble("return await tools.double(await workspace.size())", doubler());
+    const run = new Function("workspace", `return (${injected})()`);
+    expect(await run({ size: async () => 6 })).toBe(12);
+  });
+
+  test("with no crafted tools the model's code is handed through untouched", () => {
+    expect(injectPreamble("return 1", buildToolsPreamble([]))).toBe("return 1");
   });
 
   test("codemode.<name> raises and names the form that works", async () => {

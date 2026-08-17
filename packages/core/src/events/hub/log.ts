@@ -31,6 +31,7 @@
 
 import * as v from 'valibot';
 import {
+  SUBORDINATE_REPORT_STATUSES,
   type AgentLogRow, type EventId, type EventVariant, type IngressDescriptor,
   type Priority, type ProteusEvent, type ReplyChannelRef, type RevisitCondition,
   type TraceId, type TurnId,
@@ -185,7 +186,7 @@ const SubordinateTaskPayloadSchema = v.object({
 });
 const SubordinateReportPayloadSchema = v.object({
   from_subordinate: v.string(),
-  status: v.picklist(['progress', 'completed', 'blocked']),
+  status: v.picklist(SUBORDINATE_REPORT_STATUSES),
   content: v.string(),
   task: v.optional(v.string()),
   content_path: v.optional(v.string()),

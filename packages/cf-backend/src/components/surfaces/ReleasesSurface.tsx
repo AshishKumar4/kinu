@@ -76,7 +76,7 @@ function sourceLabel(binding: ReleaseSource | undefined): string {
 
 function statusBadge(status: ReleaseStatus) {
   const meta = STATUS_META[status];
-  return <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${meta.tone}`}>{meta.label}</span>;
+  return <span className={`inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${meta.tone}`}>{meta.label}</span>;
 }
 
 function SectionTitle({ icon, title, count }: { icon: React.ReactNode; title: string; count?: number }) {
@@ -97,7 +97,7 @@ function SubstrateNotice({ executors }: { executors: ExecutorInfo[] }) {
   if (substrate.state === "unknown") return null;
   if (substrate.state === "unavailable") {
     return (
-      <div className="p-card rounded-lg p-3 flex items-start gap-2.5">
+      <div className="p-card p-3 flex items-start gap-2.5">
         <WarningIcon size={15} className="p-danger shrink-0 mt-0.5" />
         <div className="min-w-0 space-y-1">
           <div className="text-xs font-medium p-text">The release pipeline cannot run here</div>
@@ -125,7 +125,7 @@ function ChangeList({
     <div className="space-y-2">
       {changes.map((change) => (
         <button key={change.id} onClick={() => onSelect(change.id)}
-          className={`w-full text-left rounded-lg p-3 transition-colors border ${selectedId === change.id ? "p-fill p-border" : "border-transparent hover:p-card"}`}>
+          className={`w-full text-left rounded-lg p-3 transition-colors border ${selectedId === change.id ? "p-fill p-border" : "border-transparent p-card-hover"}`}>
           <div className="flex items-start gap-2">
             <GitDiffIcon size={15} className="p-accent mt-0.5 shrink-0" />
             <div className="min-w-0 flex-1">
@@ -155,7 +155,7 @@ function SourceList({ bindings }: { bindings: ReleaseSource[] }) {
           <div key={binding.id} className="rounded-md border p-border px-2.5 py-2">
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium p-text truncate">{binding.label}</span>
-              <span className="rounded px-1.5 py-0.5 text-[10px] p-card p-text-3">{binding.kind}</span>
+              <span className="rounded-sm px-1.5 py-0.5 text-[10px] p-card p-text-3">{binding.kind}</span>
             </div>
             <div className="text-[10px] p-text-3 truncate mt-0.5">{binding.repoUrl ?? binding.localRoot}</div>
             {binding.deployTarget && (
@@ -228,7 +228,7 @@ function CheckRow({ check }: { check: ReleaseCheck }) {
     <div className="py-2 border-b p-border last:border-0">
       <div className="flex items-center gap-2">
         <span className="text-xs p-text font-mono truncate">{check.name}</span>
-        <span className={`rounded px-1.5 py-0.5 text-[10px] ${CHECK_TONE[check.status]}`}>{check.status}</span>
+        <span className={`rounded-sm px-1.5 py-0.5 text-[10px] ${CHECK_TONE[check.status]}`}>{check.status}</span>
         {check.durationMs != null && <span className="ml-auto text-[10px] p-text-3">{check.durationMs}ms</span>}
       </div>
       {(check.stdout || check.stderr) && (
@@ -405,7 +405,7 @@ export function ReleasesSurface({ rpc, executors }: { rpc: Rpc; executors: Execu
         <Button size="sm" variant="ghost" onClick={load} icon={<ArrowClockwiseIcon size={12} />}>Refresh</Button>
       </div>
 
-      {err && <div className="text-xs p-danger p-card rounded-lg p-3">{err}</div>}
+      {err && <div className="text-xs p-danger p-card p-3">{err}</div>}
 
       <SubstrateNotice executors={executors} />
 

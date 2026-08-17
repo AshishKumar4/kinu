@@ -241,7 +241,6 @@ export class LocalAgentClient implements AgentClient {
       list: (limit) => this.session.listFileCheckpoints(limit),
       plan: (dir, id) => this.session.planFileRestore(dir, id),
       restore: (dir, id) => this.session.restoreFileCheckpoint(dir, id),
-      status: () => this.session.checkpointStatus(),
     };
   }
 

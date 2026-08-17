@@ -27,6 +27,7 @@
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types.js';
 import type { VFS } from '../types/primitives.js';
 import { makeVfsError, type VfsErrorCode } from '../vfs/errno.js';
+import { WORKSPACE_ROOT } from '../vfs/workspace-path.js';
 import { readExecSignal } from './signal.js';
 import { formatExecResult } from './exec-result.js';
 
@@ -149,6 +150,9 @@ export function createParentExecutor(deps: {
   return {
     name: 'parent',
     kind: 'parent',
+    // The parent is a Proteus workspace, so its shell starts where every
+    // workspace shell starts.
+    homeDir: async () => WORKSPACE_ROOT,
     capabilities: new Set<ExecutorCapability>(['shell', 'fs_shared']),
     isAvailable: () => true,
     getStatus: () => status,

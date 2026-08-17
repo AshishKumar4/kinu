@@ -12,9 +12,16 @@
  */
 
 import * as v from 'valibot';
+import { modelMessageSchema, type ModelMessage } from 'ai';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import type { RunEvent, RunEventInput, RunEventType } from './types.js';
 import { JsonObjectSchema, JsonValueSchema } from '../utils/json.js';
+
+/** A stored model message, validated by the AI SDK's OWN schema rather than a
+ *  hand-written copy of its part unions — the same predicate the compaction
+ *  codec narrows native handles with (compaction/src/codec.ts:634-639). */
+const StoredModelMessageSchema: v.GenericSchema<ModelMessage> =
+  v.custom<ModelMessage>((value) => modelMessageSchema.safeParse(value).success);
 
 const BaseFields = {
   eventIndex: v.number(),
@@ -49,15 +56,14 @@ const RunEventSchema = v.variant('type', [
     userMessage: v.optional(v.string()), caused_by: v.optional(v.string()),
     ingress_kind: v.optional(v.string()), trigger_id: v.optional(v.string()) }),
   v.object({ ...BaseFields, type: v.literal('turn_start'), turnIndex: v.number() }),
-  v.object({ ...BaseFields, type: v.literal('text_delta'), text: v.string() }),
   v.object({ ...BaseFields, type: v.literal('tool_call_start'), name: v.string(),
     args: JsonObjectSchema, toolCallId: v.string() }),
   v.object({ ...BaseFields, type: v.literal('tool_call_end'), name: v.string(),
     toolCallId: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.string()),
     durationMs: v.optional(v.number()) }),
   v.object({ ...BaseFields, type: v.literal('step_finish'), stepIndex: v.number(),
-    reason: v.optional(v.string()), usage: v.optional(StepUsageSchema),
-    context: v.optional(ContextCompositionSchema) }),
+    reason: v.optional(v.string()), messages: v.optional(v.array(StoredModelMessageSchema)),
+    usage: v.optional(StepUsageSchema), context: v.optional(ContextCompositionSchema) }),
   v.object({ ...BaseFields, type: v.literal('head_split'), rootId: v.string(),
     headIds: v.array(v.string()), rationale: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_merge'), rootId: v.string(),
@@ -81,7 +87,8 @@ const RunEventSchema = v.variant('type', [
       stale: v.optional(v.number()), missing: v.optional(v.number()), io: v.optional(v.number()),
     }), recoveredPaths: v.number(), abandonedPaths: v.number() }),
   v.object({ ...BaseFields, type: v.literal('turn_steering'),
-    trigger: v.picklist(['repeated_call', 'repeated_failure', 'no_progress', 'long_turn_no_delegation']),
+    trigger: v.picklist(['repeated_call', 'repeated_failure', 'no_progress',
+      'long_turn_no_delegation', 'turn_start_no_delegation']),
     step: v.number(), tool: v.optional(v.string()), converted: v.boolean() }),
   v.object({ ...BaseFields, type: v.literal('completion_gate'), converted: v.boolean() }),
   v.object({ ...BaseFields, type: v.literal('craft_cycle'), crafted: v.array(v.string()),
@@ -201,6 +208,31 @@ export class RunEventRecorder {
       ORDER BY event_index ASC
       LIMIT ${limit}`;
     return rows.map((r) => parseStoredRunEvent(r.payload));
+  }
+
+  /**
+   * The model messages a run's completed steps recorded, in step order.
+   *
+   * The read side of per-step durability: `step_finish.messages` is appended as
+   * each step finishes, so this returns the model's actual output for a run
+   * whose turn never reached its backend's once-per-turn message write — a
+   * process kill, a DO eviction, a provider throw. Concatenating the rows is
+   * enough: pairing is complete inside each row (the SDK reports a step's
+   * tool-call parts with their results), so the result assembles into a request
+   * without repair.
+   *
+   * Ordered by `event_index`, which is monotonic per run — the same ordering
+   * `read` returns, and the order the steps ran in.
+   */
+  transcript(runId: string): ModelMessage[] {
+    const rows = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events
+      WHERE run_id = ${runId} AND type = ${'step_finish' satisfies RunEventType}
+      ORDER BY event_index ASC`;
+    return rows.flatMap((r) => {
+      const event = parseStoredRunEvent(r.payload);
+      return event.type === 'step_finish' ? event.messages ?? [] : [];
+    });
   }
 
   /**

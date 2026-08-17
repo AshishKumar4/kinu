@@ -111,12 +111,15 @@ import {
   CloudflareOAuthTokenError,
   accountIdFromCloudflareCredential,
   cloudflareAIGatewayId,
+  cloudflareAccountsFromCredential,
   cloudflareWorkersAIBaseURL,
   fetchCloudflareAIGateways,
   isCloudflareAIGatewayId,
   isCloudflareCredentialExpiring,
   isCloudflareCredentialUsable,
   refreshCloudflareCredential,
+  withCloudflareAccount,
+  type CloudflareAccount,
   type CloudflareAIGatewaySummary,
 } from '../lib/cloudflare-oauth.js';
 
@@ -1598,6 +1601,39 @@ export class UserDO extends Agent<Env> {
     }
     if (!isCloudflareAIGatewayId(gatewayId)) throw new Error('Invalid AI Gateway id.');
     await this.setConfig(await ownerCaller(this.env), UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId);
+  }
+
+  // ── Cloudflare account (which account serves this user's Workers AI) ──
+
+  /** The accounts this Cloudflare login can see, plus the one currently
+   *  serving Workers AI. Reads the stored credential only — no API call, so
+   *  this cannot fail for a reason the user did not cause. */
+  async listCloudflareAccounts(caller: UserCaller): Promise<{
+    connected: boolean;
+    selectedId: string | null;
+    accounts: CloudflareAccount[];
+  }> {
+    await this.requireTier(caller, 'ai_gateway.admin');
+    const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
+    if (cred?.kind !== 'oauth') return { connected: false, selectedId: null, accounts: [] };
+    return {
+      connected: true,
+      selectedId: accountIdFromCloudflareCredential(cred),
+      accounts: cloudflareAccountsFromCredential(cred),
+    };
+  }
+
+  /** Point Workers AI at another of this login's accounts — how a user whose
+   *  entitlement lives outside their first account reaches it. The AI Gateway
+   *  selection belongs to the old account, so it is dropped and rediscovered. */
+  async selectCloudflareAccount(caller: UserCaller, accountId: string): Promise<void> {
+    await this.requireTier(caller, 'ai_gateway.admin');
+    const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
+    if (cred?.kind !== 'oauth') throw new Error('Cloudflare is not connected.');
+    await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, withCloudflareAccount(cred, accountId));
+    const owner = await ownerCaller(this.env);
+    await this.selectAIGateway(owner, null);
+    await this.listAIGateways(owner);
   }
 
   /** Returns the rotated credential, `'revoked'` when Cloudflare rejected

@@ -66,7 +66,7 @@ import {
   MISSION_LABELS_METADATA_KEY, readMissionLabels, type MissionGovernor,
 } from '../mission-budget.js';
 import { nanoid } from '../utils/nanoid.js';
-import { promptModeForTurnMetadata, workModeForPromptMode, type WorkMode } from '../prompting/surface.js';
+import { workModeForTurnMetadata, type WorkMode } from '../prompting/surface.js';
 import type { JsonObject } from '../utils/json.js';
 
 function errorMessage<Failure>(failure: Failure): string {
@@ -140,10 +140,10 @@ export class AgentOrchestrator {
    *  background-job wakes, overflow retries, take picks, MCP tasks — at the ONE
    *  time anything reaches it: its next step. Producers state intent only. */
   readonly signals: SignalDelivery;
-  /** Per-turn mechanical steering — repeat, repeated failure, no progress,
-   *  long turn.
+  /** Per-turn mechanical steering — turn start, repeat, repeated failure, no
+   *  progress, long turn.
    *  Observed through {@link turnExtension} and handed to closeTurnRun for the
-   *  durable `turn_steering` row. */
+   *  durable `turn_steering` rows. */
   readonly steering = new TurnSteering();
   /** The IN-EPISODE evolution clock: crafted tools scored by execution as the
    *  episode runs, off the same tool-result hook the steering rides. The only
@@ -168,7 +168,7 @@ export class AgentOrchestrator {
       // The turn's file ledger is the other half of the progress trigger's
       // evidence — what a codemode program actually changed, which no
       // tool-call signature can show. Both live on this object, per turn.
-      const steer = this.steering.steerFor(ctx.stepNumber, this.acc.files.progress);
+      const steer = this.steering.steerFor(ctx, this.acc.files.progress);
       return this.signals.prepareStep(ctx, steer ? [steer] : []);
     },
   };
@@ -249,9 +249,9 @@ export class AgentOrchestrator {
     // no evolution state at all, and a crafted tool's execution score is
     // evolution state — so a bench arm with evolution off measures the
     // in-episode loop's absence along with the rest of it.
-    const promptMode = promptModeForTurnMetadata(metadata);
-    this.activeWorkMode = workModeForPromptMode(promptMode);
-    const evolutionEnabled = this.deps.engine.enabled && promptMode !== 'plan';
+    const workMode = workModeForTurnMetadata(metadata);
+    this.activeWorkMode = workMode;
+    const evolutionEnabled = this.deps.engine.enabled && workMode !== 'plan';
     this.turnEvolutionEnabled = evolutionEnabled;
     this.craft.reset(evolutionEnabled);
     this.turnRecoveries = [];

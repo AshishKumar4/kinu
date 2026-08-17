@@ -7,6 +7,7 @@
  * through it were missing `status` and `parent_version`.
  */
 
+import { reconcileColumns } from '../identity/columns.js';
 import type { RawSqlExec } from '../types/primitives.js';
 
 export function initScaffoldTables(execRaw: RawSqlExec): void {
@@ -31,17 +32,12 @@ export function initScaffoldTables(execRaw: RawSqlExec): void {
       pathology      TEXT
     )
   `);
-  // Existing databases: backfill columns via ALTER if missing. Try/catch
-  // because ALTER fails if the column already exists.
-  try {
-    execRaw(`ALTER TABLE scaffold_versions ADD COLUMN status TEXT NOT NULL DEFAULT 'current'`);
-  } catch { /* column exists — fine */ }
-  try {
-    execRaw(`ALTER TABLE scaffold_versions ADD COLUMN parent_version INTEGER`);
-  } catch { /* column exists — fine */ }
-  try {
-    execRaw(`ALTER TABLE scaffold_versions ADD COLUMN pathology TEXT`);
-  } catch { /* column exists — fine */ }
+  // Columns added after this table's first release; see identity/columns.ts.
+  reconcileColumns(execRaw, 'scaffold_versions', [
+    `status TEXT NOT NULL DEFAULT 'current'`,
+    'parent_version INTEGER',
+    'pathology TEXT',
+  ]);
 
   execRaw(`
     CREATE TABLE IF NOT EXISTS scaffold_regression_fixtures (

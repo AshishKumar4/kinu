@@ -36,7 +36,7 @@ import {
   // Events
   initRunEventTables, RunEventRecorder,
   // Approval
-  reviewCommand, withApprovalGate,
+  reviewCommand, gateExec,
 } from '../src/index.js';
 import { makeSql, makeExecRaw, createTestRuntime } from './helpers.js';
 
@@ -82,7 +82,7 @@ describe('v2 e2e: branching heads → merge', () => {
         summary: 'Survey finding: 3 prior impls exist, all use the X pattern.',
         evidence: [{ id: 'e1', kind: 'fact', body: 'prior art' }],
         decisions: [{ question: 'use X pattern?', choice: 'yes', rationale: 'standard' }],
-        artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], steps: [],
+        artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], stepCount: 0,
         tokenUsage: { input: 100, output: 80, total: 180 }, wallClockMs: 120,
       },
       'design': {
@@ -90,7 +90,7 @@ describe('v2 e2e: branching heads → merge', () => {
         summary: 'Design sketch: minimal struct, no abstractions.',
         evidence: [{ id: 'e2', kind: 'fact', body: 'simple > clever' }],
         decisions: [{ question: 'add abstraction?', choice: 'no', rationale: 'YAGNI' }],
-        artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], steps: [],
+        artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], stepCount: 0,
         tokenUsage: { input: 120, output: 90, total: 210 }, wallClockMs: 180,
       },
       'risks': {
@@ -98,7 +98,7 @@ describe('v2 e2e: branching heads → merge', () => {
         summary: 'Failure modes: connection drops, race on init.',
         evidence: [{ id: 'e3', kind: 'fact', body: 'race condition' }],
         decisions: [{ question: 'add retry?', choice: 'yes', rationale: 'idempotent' }],
-        artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], steps: [],
+        artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], stepCount: 0,
         tokenUsage: { input: 110, output: 75, total: 185 }, wallClockMs: 150,
       },
     };
@@ -262,17 +262,17 @@ describe('v2 e2e: durable event log', () => {
     const runId = 'run-test';
     recorder.emit(runId, { type: 'run_start', agentId: 'agent-1' });
     recorder.emit(runId, { type: 'turn_start', turnIndex: 0 });
-    recorder.emit(runId, { type: 'text_delta', text: 'Working...' });
+    recorder.emit(runId, { type: 'step_finish', stepIndex: 1, messages: [{ role: 'assistant', content: 'Working...' }] });
     recorder.emit(runId, { type: 'tool_call_end', name: 'search_memory', toolCallId: 'tc-1', durationMs: 50 });
-    recorder.emit(runId, { type: 'text_delta', text: 'Done.' });
+    recorder.emit(runId, { type: 'step_finish', stepIndex: 2, messages: [{ role: 'assistant', content: 'Done.' }] });
     recorder.emit(runId, { type: 'turn_end', turnIndex: 0 });
     recorder.emit(runId, { type: 'run_end', reason: 'completed' });
 
     const all = recorder.read(runId);
     expect(all.length).toBe(7);
     expect(all.map((e) => e.type)).toEqual([
-      'run_start', 'turn_start', 'text_delta', 'tool_call_end',
-      'text_delta', 'turn_end', 'run_end',
+      'run_start', 'turn_start', 'step_finish', 'tool_call_end',
+      'step_finish', 'turn_end', 'run_end',
     ]);
     expect(all[0].eventIndex).toBe(0);
     expect(all[6].eventIndex).toBe(6);
@@ -290,20 +290,21 @@ describe('v2 e2e: durable event log', () => {
 // ── 5. Approval gate ─────────────────────────────────────────────────
 
 describe('v2 e2e: approval gate', () => {
-  test('classifies and routes correctly with withApprovalGate', async () => {
+  test('classifies and routes correctly through gateExec', async () => {
     const seen: string[] = [];
-    const gated = withApprovalGate(
+    const gated = gateExec<string>(
       async (cmd) => { seen.push(cmd); return `ran:${cmd}`; },
       (msg) => `DENIED:${msg}`,
-      async () => true,
+      'laptop',
+      { mode: () => 'strict', requestApproval: async () => 'allow' },
     );
 
     expect(await gated('ls')).toBe('ran:ls');
-    expect(reviewCommand('ls').decision).toBe('allow');
+    expect(reviewCommand('ls', 'laptop').decision).toBe('allow');
     expect(await gated('printenv')).toContain('ran:');
     expect(await gated('sudo apt-get install nginx')).toContain('ran:');
 
-    const result = await gated('rm -rf /');
+    const result = String(await gated('rm -rf /'));
     expect(result).toContain('DENIED');
     expect(result).toContain('rm-rf-root');
     expect(seen.includes('rm -rf /')).toBe(false);

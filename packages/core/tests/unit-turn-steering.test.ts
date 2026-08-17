@@ -27,6 +27,18 @@ import type { JsonObject } from '../src/utils/json.js';
 import { makeSqlExec } from './helpers.js';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
+const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
+
+/** A FOLLOW-UP turn's opening context: an ask with this agent's own work behind
+ *  it. The turn-start hint fires only on a fresh ask (nothing of this agent's in
+ *  the window), so this is the fixture for every test about the four reactive
+ *  triggers — it keeps the hint out of the way of what is under test. */
+const followUp = (text: string): ModelMessage[] => [user('earlier'), assistant('handled'), user(text)];
+
+/** The turn's steering rows, and the last of them: the reactive steer on every
+ *  turn where one fired, the turn-start hint on a turn that only got the hint. */
+const rows = (orch: AgentOrchestrator) => orch.steering.snapshot();
+const lastSteer = (orch: AgentOrchestrator) => orch.steering.snapshot().at(-1) ?? null;
 
 /** Steering as production wires it: the orchestrator's turn extension on a
  *  backend that never queues, so a steer that fired is a steer the model saw. */
@@ -138,37 +150,39 @@ describe('isFailingToolResult', () => {
 describe('repeated-failure trigger', () => {
   test('three failures on one tool inject exactly one nudge, at the next step boundary', () => {
     const orch = newTurn();
-    expect(step(orch, 0, [user('build it')])).toEqual([user('build it')]);
+    const base = followUp('build it');
+    expect(step(orch, 0, base)).toEqual(base);
     fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER - 1);
     // Two failures is a correction, not a pattern — nothing yet.
-    expect(injected(step(orch, 1, [user('build it')]))).toEqual([]);
-    expect(orch.steering.snapshot()).toBeNull();
+    expect(injected(step(orch, 1, base))).toEqual([]);
+    expect(lastSteer(orch)).toBeNull();
 
     fail(orch, 'run');
-    const nudged = step(orch, 2, [user('build it')]);
+    const nudged = step(orch, 2, base);
     expect(injected(nudged)).toHaveLength(1);
     const text = injected(nudged)[0]!;
     expect(text).toContain('`run` has failed 3 times in a row');
     expect(text).toContain('agents` action=fork');
     expect(text).toContain('settle=mcts');
     expect(text).toContain('hint, not an instruction');
-    expect(orch.steering.snapshot()).toEqual({ trigger: 'repeated_failure', step: 2, tool: 'run', converted: false });
+    expect(lastSteer(orch)).toEqual({ trigger: 'repeated_failure', step: 2, tool: 'run', converted: false });
   });
 
   test('the nudge holds its entry index across later steps and never repeats', () => {
     const orch = newTurn();
-    step(orch, 0, [user('q')]);
+    const base = followUp('q');
+    step(orch, 0, base);
     fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
-    const at1 = step(orch, 1, [user('q'), user('a1')]);
-    expect(at1.slice(0, 2).map((message) => message.content)).toEqual(['q', 'a1']);
-    expect(at1[2]?.content).toContain(TURN_STEERING_HEADER);
+    const at1 = step(orch, 1, [...base, user('a1')]);
+    expect(at1.slice(0, 4).map((message) => message.content)).toEqual(['earlier', 'handled', 'q', 'a1']);
+    expect(at1[4]?.content).toContain(TURN_STEERING_HEADER);
     // Later steps rebuild from scratch: the nudge re-applies at its original
     // position (cache-prefix stability) and is not re-issued.
     fail(orch, 'run', 5);
-    const at2 = step(orch, 2, [user('q'), user('a1'), user('a2')]);
+    const at2 = step(orch, 2, [...base, user('a1'), user('a2')]);
     expect(injected(at2)).toHaveLength(1);
-    expect(at2[2]!.content).toContain(TURN_STEERING_HEADER);
-    expect(orch.steering.snapshot()?.step).toBe(1);
+    expect(at2[4]!.content).toContain(TURN_STEERING_HEADER);
+    expect(lastSteer(orch)?.step).toBe(1);
   });
 
   test('a success on that tool clears its streak; failures of other tools do not', () => {
@@ -185,7 +199,7 @@ describe('repeated-failure trigger', () => {
     orch.turnExtension.onToolResult!({ toolName: 'web_fetch', args: {}, result: 'page', success: true });
     fail(orch, 'run');
     expect(injected(step(orch, 2, [user('q')]))).toHaveLength(1);
-    expect(orch.steering.snapshot()?.tool).toBe('run');
+    expect(lastSteer(orch)?.tool).toBe('run');
   });
 });
 
@@ -204,7 +218,7 @@ describe('repeated-call trigger', () => {
     expect(text).toContain('make');
     expect(text).toContain('change the approach');
     expect(text).toContain('hint, not an instruction');
-    expect(orch.steering.snapshot()).toEqual({
+    expect(lastSteer(orch)).toEqual({
       trigger: 'repeated_call', step: 2, tool: 'run', converted: false,
     });
   });
@@ -217,7 +231,7 @@ describe('repeated-call trigger', () => {
       });
     }
     expect(injected(step(orch, 3, [user('q')]))).toEqual([]);
-    expect(orch.steering.snapshot()).toBeNull();
+    expect(lastSteer(orch)).toBeNull();
   });
 
   test('two runs that differ only past a long shared preamble are not a repeat', () => {
@@ -232,7 +246,7 @@ describe('repeated-call trigger', () => {
       });
     }
     expect(injected(step(orch, 3, [user('q')]))).toEqual([]);
-    expect(orch.steering.snapshot()).toBeNull();
+    expect(lastSteer(orch)).toBeNull();
   });
 
   test('argument order is not an approach: {a,b} and {b,a} are one call', () => {
@@ -241,7 +255,7 @@ describe('repeated-call trigger', () => {
     repeat(orch, 'run', { runtime: 'laptop', command: 'make' });
     repeat(orch, 'run', { command: 'make', runtime: 'laptop' });
     expect(injected(step(orch, 1, [user('q')]))).toHaveLength(1);
-    expect(orch.steering.snapshot()?.trigger).toBe('repeated_call');
+    expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });
 
   test('different arguments are different work, however many calls', () => {
@@ -256,7 +270,7 @@ describe('repeated-call trigger', () => {
     const orch = newTurn();
     repeat(orch, 'run', { command: 'cat gates.txt' }, IDENTICAL_CALLS_BEFORE_STEER);
     expect(injected(step(orch, 1, [user('q')]))).toHaveLength(1);
-    expect(orch.steering.snapshot()?.trigger).toBe('repeated_call');
+    expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });
 
   test('it outranks the failure streak, because it can name what is repeating', () => {
@@ -267,21 +281,21 @@ describe('repeated-call trigger', () => {
       });
     }
     expect(injected(step(orch, 1, [user('q')]))).toHaveLength(1);
-    expect(orch.steering.snapshot()?.trigger).toBe('repeated_call');
+    expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });
 
   test('converted means the model did something ELSE, not that it forked', () => {
     const orch = newTurn();
     repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
     step(orch, 1, [user('q')]);
-    expect(orch.steering.snapshot()?.converted).toBe(false);
+    expect(lastSteer(orch)?.converted).toBe(false);
 
     // Repeating it once more is not a conversion.
     orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'make' } });
-    expect(orch.steering.snapshot()?.converted).toBe(false);
+    expect(lastSteer(orch)?.converted).toBe(false);
 
     orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'cat config.log' } });
-    expect(orch.steering.snapshot()?.converted).toBe(true);
+    expect(lastSteer(orch)?.converted).toBe(true);
   });
 
   test('the previous turn\'s repeats do not carry into the next one', () => {
@@ -289,8 +303,8 @@ describe('repeated-call trigger', () => {
     repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
     step(orch, 1, [user('q')]);
     orch.beginTurn(Date.now());
-    expect(orch.steering.snapshot()).toBeNull();
-    expect(injected(step(orch, 0, [user('next')]))).toEqual([]);
+    expect(lastSteer(orch)).toBeNull();
+    expect(injected(step(orch, 0, followUp('next')))).toEqual([]);
   });
 });
 
@@ -320,7 +334,7 @@ describe('no-progress trigger', () => {
     expect(steered[0]).toContain('steps in a row with nothing new');
     expect(steered[0]).toContain('Steps that succeed are not the same as steps that get somewhere');
     expect(steered[0]).toContain('hint, not an instruction');
-    expect(orch.steering.snapshot()).toEqual({
+    expect(lastSteer(orch)).toEqual({
       trigger: 'no_progress', step: STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1, converted: false,
     });
   });
@@ -336,7 +350,7 @@ describe('no-progress trigger', () => {
       });
       expect(injected(step(orch, s, [user('q')]))).toEqual([]);
     }
-    expect(orch.steering.snapshot()).toBeNull();
+    expect(lastSteer(orch)).toBeNull();
   });
 
   test('a file touched for the first time is progress, and resets the stall', () => {
@@ -363,7 +377,7 @@ describe('no-progress trigger', () => {
     runStall();
 
     expect(boundary).toBeGreaterThan(STEPS_WITHOUT_PROGRESS_BEFORE_STEER);
-    expect(orch.steering.snapshot()).toBeNull();
+    expect(lastSteer(orch)).toBeNull();
   });
 
   test('an edit that landed is progress; one that missed is not', () => {
@@ -386,15 +400,15 @@ describe('no-progress trigger', () => {
     }
     // Both turns re-issue an identical-looking call, so neither trips the
     // repeat detector on args alone; only the landed edit is progress.
-    expect(orch.steering.snapshot()).toBeNull();
-    expect(missed.steering.snapshot()?.trigger).toBe('no_progress');
+    expect(lastSteer(orch)).toBeNull();
+    expect(lastSteer(missed)?.trigger).toBe('no_progress');
   });
 
   test('the identical-call steer still outranks it — it can name what repeats', () => {
     const orch = newTurn();
     repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) step(orch, s, [user('q')]);
-    expect(orch.steering.snapshot()?.trigger).toBe('repeated_call');
+    expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });
 
   test('…and it outranks the long-turn steer, because it can say why', () => {
@@ -412,8 +426,8 @@ describe('no-progress trigger', () => {
         toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
       });
     }
-    expect(orch.steering.snapshot()?.trigger).toBe('no_progress');
-    expect(orch.steering.snapshot()!.step).toBeLessThan(LONG_TURN_STEPS_BEFORE_STEER);
+    expect(lastSteer(orch)?.trigger).toBe('no_progress');
+    expect(lastSteer(orch)!.step).toBeLessThan(LONG_TURN_STEPS_BEFORE_STEER);
   });
 
   test('converted means the turn went somewhere it had not been', () => {
@@ -427,15 +441,15 @@ describe('no-progress trigger', () => {
         toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
       });
     }
-    expect(orch.steering.snapshot()).toMatchObject({ trigger: 'no_progress', converted: false });
+    expect(lastSteer(orch)).toMatchObject({ trigger: 'no_progress', converted: false });
 
     // Re-covering the same ground is not a conversion…
     orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'git status' } });
-    expect(orch.steering.snapshot()?.converted).toBe(false);
+    expect(lastSteer(orch)?.converted).toBe(false);
 
     // …reaching for something the turn has not done is.
     orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'git log -1' } });
-    expect(orch.steering.snapshot()?.converted).toBe(true);
+    expect(lastSteer(orch)?.converted).toBe(true);
   });
 
   test('a new turn starts with a clean stall counter', () => {
@@ -445,9 +459,9 @@ describe('no-progress trigger', () => {
     });
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) step(orch, s, [user('q')]);
     orch.beginTurn(Date.now());
-    expect(orch.steering.snapshot()).toBeNull();
+    expect(lastSteer(orch)).toBeNull();
     for (let s = 0; s < STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) {
-      expect(injected(step(orch, s, [user('next')]))).toEqual([]);
+      expect(injected(step(orch, s, followUp('next')))).toEqual([]);
     }
   });
 });
@@ -460,7 +474,7 @@ describe('long-turn trigger', () => {
     expect(injected(nudged)).toHaveLength(1);
     expect(injected(nudged)[0]).toContain('25 steps into this turn with no delegation');
     expect(injected(nudged)[0]).toContain('agents` action=fork');
-    expect(orch.steering.snapshot()).toEqual({
+    expect(lastSteer(orch)).toEqual({
       trigger: 'long_turn_no_delegation', step: LONG_TURN_STEPS_BEFORE_STEER, converted: false,
     });
     // Every later step of a 130-step turn stays silent — a nudge that repeats
@@ -474,7 +488,7 @@ describe('long-turn trigger', () => {
     const orch = newTurn();
     orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'fork' } });
     expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER + 5, [user('q')]))).toEqual([]);
-    expect(orch.steering.snapshot()).toBeNull();
+    expect(lastSteer(orch)).toBeNull();
   });
 
   test('one nudge per turn, whichever trigger fires first', () => {
@@ -483,7 +497,78 @@ describe('long-turn trigger', () => {
     expect(injected(step(orch, 1, [user('q')]))).toHaveLength(1);
     // Long and undelegated as well — still one line in the conversation.
     expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER + 1, [user('q')]))).toHaveLength(1);
-    expect(orch.steering.snapshot()?.trigger).toBe('repeated_failure');
+    expect(lastSteer(orch)?.trigger).toBe('repeated_failure');
+  });
+});
+
+// The trigger the other four cannot be: they all read the turn's own traffic,
+// and the decision this one is about — how the work splits — is made in the
+// model's FIRST reply, before there is any traffic to read. The 25-step steer
+// above arrives after the shape is already a fact, which is what a 24%
+// conversion rate at step 25 is a rate of.
+describe('turn-start trigger', () => {
+  const fresh = 'add caching to the api and update the docs';
+
+  test('a fresh ask is nudged at step 0, naming fork, as a hint', () => {
+    const orch = newTurn();
+    const nudged = step(orch, 0, [user(fresh)]);
+    expect(injected(nudged)).toHaveLength(1);
+    const text = injected(nudged)[0]!;
+    expect(text).toContain('Settle the shape first');
+    expect(text).toContain('agents` action=fork');
+    expect(text).toContain('hint, not an instruction');
+    expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: false }]);
+    // Step 0 only: a hint that re-arrived every step would be the nagging the
+    // one-per-turn rule exists to prevent.
+    expect(injected(step(orch, 1, [user(fresh)]))).toHaveLength(1);
+  });
+
+  test('a question is answered and an exclamation is a correction — neither is work to split', () => {
+    const asked = newTurn();
+    expect(injected(step(asked, 0, [user('where does the retry budget come from?')]))).toEqual([]);
+    expect(rows(asked)).toEqual([]);
+
+    const told = newTurn();
+    expect(injected(step(told, 0, [user('revert that last change!')]))).toEqual([]);
+    expect(rows(told)).toEqual([]);
+  });
+
+  test('an ask with this agent\'s own work behind it is not a fresh shape', () => {
+    const orch = newTurn();
+    expect(injected(step(orch, 0, followUp(fresh)))).toEqual([]);
+    expect(rows(orch)).toEqual([]);
+  });
+
+  test('it does not spend the reactive slot: the 25-step recovery steer still fires, and both rows are recorded', () => {
+    // The whole reason the hint has its own slot. A one-shot `proteus exec` run
+    // is ONE turn and it is always the session's first, so a shared slot would
+    // have cost that run every recovery steer it has.
+    const orch = newTurn();
+    expect(injected(step(orch, 0, [user(fresh)]))).toHaveLength(1);
+    const late = step(orch, LONG_TURN_STEPS_BEFORE_STEER, [user(fresh)]);
+    expect(injected(late)).toHaveLength(2);
+    expect(injected(late)[1]).toContain('25 steps into this turn with no delegation');
+    expect(rows(orch)).toEqual([
+      { trigger: 'turn_start_no_delegation', step: 0, converted: false },
+      { trigger: 'long_turn_no_delegation', step: LONG_TURN_STEPS_BEFORE_STEER, converted: false },
+    ]);
+  });
+
+  test('a fork after the hint converts it, and leaves the length steer nothing to say', () => {
+    const orch = newTurn();
+    step(orch, 0, [user(fresh)]);
+    expect(rows(orch)[0]?.converted).toBe(false);
+    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'fork' } });
+    expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: true }]);
+    expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER, [user(fresh)]))).toHaveLength(1);
+  });
+
+  test('a new turn starts with a clean hint slot', () => {
+    const orch = newTurn();
+    step(orch, 0, [user(fresh)]);
+    orch.beginTurn(Date.now());
+    expect(rows(orch)).toEqual([]);
+    expect(injected(step(orch, 0, [user(fresh)]))).toHaveLength(1);
   });
 });
 
@@ -544,26 +629,26 @@ describe('conversion + turn boundaries', () => {
     before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'fork' } });
     fail(before, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
     step(before, 1, [user('q')]);
-    expect(before.steering.snapshot()).toEqual({
+    expect(lastSteer(before)).toEqual({
       trigger: 'repeated_failure', step: 1, tool: 'run', converted: false,
     });
 
     before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'fork' } });
-    expect(before.steering.snapshot()?.converted).toBe(true);
+    expect(lastSteer(before)?.converted).toBe(true);
   });
 
   test('reset clears the streaks, the splice state and the record', () => {
     const orch = newTurn();
     fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
     step(orch, 1, [user('q')]);
-    expect(orch.steering.snapshot()).not.toBeNull();
+    expect(lastSteer(orch)).not.toBeNull();
 
     orch.beginTurn(Date.now());
-    expect(orch.steering.snapshot()).toBeNull();
+    expect(lastSteer(orch)).toBeNull();
     // The previous turn's failures do not carry into this one.
-    expect(injected(step(orch, 0, [user('next')]))).toEqual([]);
+    expect(injected(step(orch, 0, followUp('next')))).toEqual([]);
     fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
-    expect(injected(step(orch, 1, [user('next')]))).toHaveLength(1);
+    expect(injected(step(orch, 1, followUp('next')))).toHaveLength(1);
   });
 });
 
@@ -656,7 +741,7 @@ describe('through a real runChat turn', () => {
     for await (const _ of runChat({
       model: grindingModel(prompts),
       system: 'sys',
-      history: [user('build caffe')],
+      history: followUp('build caffe'),
       tools,
       maxSteps: 6,
       extensions: new ExtensionHost().register(orch.turnExtension),
@@ -672,7 +757,7 @@ describe('through a real runChat turn', () => {
     for (const prompt of prompts.slice(3)) {
       expect(promptText(prompt).split(TURN_STEERING_HEADER)).toHaveLength(2);
     }
-    expect(orch.steering.snapshot()).toEqual({
+    expect(lastSteer(orch)).toEqual({
       trigger: 'repeated_failure', step: 3, tool: 'flaky', converted: false,
     });
   });
@@ -693,7 +778,7 @@ describe('through a real runChat turn', () => {
     for await (const _ of runChat({
       model: repeatingModel(prompts, 'make'),
       system: 'sys',
-      history: [user('build it')],
+      history: followUp('build it'),
       tools,
       maxSteps: 6,
       extensions: new ExtensionHost().register(orch.turnExtension),
@@ -704,7 +789,7 @@ describe('through a real runChat turn', () => {
     expect(seen[3]).toBe(true);
     expect(promptText(prompts[3] ?? [])).toContain('`run` has run 3 times with the same arguments');
     expect(promptText(prompts[3] ?? [])).toContain('make');
-    expect(orch.steering.snapshot()).toEqual({
+    expect(lastSteer(orch)).toEqual({
       trigger: 'repeated_call', step: 3, tool: 'run', converted: false,
     });
   });
@@ -722,14 +807,49 @@ describe('through a real runChat turn', () => {
     for await (const _ of runChat({
       model: repeatingModel(prompts, null),
       system: 'sys',
-      history: [user('look around')],
+      history: followUp('look around'),
       tools,
       maxSteps: 6,
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
 
     expect(prompts.some((p) => promptText(p).includes(TURN_STEERING_HEADER))).toBe(false);
-    expect(orch.steering.snapshot()).toBeNull();
+    expect(lastSteer(orch)).toBeNull();
+  });
+
+  test('a fresh ask carries the turn-start hint in the FIRST request the model ever sees', async () => {
+    // The decisive one. Everything above proves a steer reaches the model
+    // eventually; this proves the delegation hint is in request #1, which is
+    // the only request in which the shape of the work is still undecided. Cut
+    // the step === 0 branch in turn-steering.ts and this fails.
+    const prompts: PromptMessage[][] = [];
+    const orch = newTurn();
+    const tools = {
+      run: tool({
+        description: 'runs a command',
+        inputSchema: z.object({ command: z.string() }),
+        execute: async () => 'ok',
+      }),
+    };
+    for await (const _ of runChat({
+      model: repeatingModel(prompts, null),
+      system: 'sys',
+      history: [user('add caching to the api and update the docs')],
+      tools,
+      maxSteps: 4,
+      extensions: new ExtensionHost().register(orch.turnExtension),
+    })) { /* drain */ }
+
+    const first = promptText(prompts[0] ?? []);
+    expect(first).toContain(TURN_STEERING_HEADER);
+    expect(first).toContain('Settle the shape first');
+    expect(first).toContain('agents` action=fork');
+    expect(first).toContain('hint, not an instruction');
+    // Once, however long the turn then runs.
+    for (const prompt of prompts) {
+      expect(promptText(prompt).split(TURN_STEERING_HEADER)).toHaveLength(2);
+    }
+    expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: false }]);
   });
 });
 

@@ -188,7 +188,7 @@ describe('a declared budget reaches the head mid-flight', () => {
     expect(report.errorMessage).toContain('Mission budget "mission" is spent');
     // Stopped where the ledger ran out, nowhere near the 50 steps the model
     // was willing to take or the 500-step envelope it had.
-    expect(report.steps.length).toBeLessThan(5);
+    expect(report.stepCount).toBeLessThan(5);
     expect(governor.snapshot('mission')[0]!.exhausted).toBe(true);
     ledger.db.close();
   });
@@ -201,7 +201,7 @@ describe('a declared budget reaches the head mid-flight', () => {
 
     const { report } = await runHead(localMissionScope(governor, ['mission']), { stopAfter: 50 });
     expect(report.status).toBe('budget_exceeded');
-    expect(report.steps).toEqual([]);
+    expect(report.stepCount).toBe(0);
     // Nothing of its own was spent — the guard ran before the first call.
     expect(report.tokenUsage.total).toBe(0);
     ledger.db.close();

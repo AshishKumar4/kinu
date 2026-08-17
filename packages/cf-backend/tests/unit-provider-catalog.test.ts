@@ -44,7 +44,7 @@ describe('agent registry × models.dev catalog', () => {
     expect(models.map((m) => `${m.provider}/${m.id}`)).toContain('groq/llama-3.3-70b-versatile');
   });
 
-  test('resolveSpec accepts a catalog provider spec', async () => {
+  test('normalizeSpecSync accepts a catalog provider spec', () => {
     const mock = createMockFetch([
       { match: 'models.dev/api.json', respond: { status: 200, body: CATALOG } },
     ]);
@@ -53,7 +53,7 @@ describe('agent registry × models.dev catalog', () => {
       userDO: fakeUserDOStub({ 'groq.bearer': { Authorization: 'Bearer gsk' } }),
       fetch: mock.fetch,
     });
-    expect(await reg.resolveSpec('groq/llama-3.3-70b-versatile')).toBe('groq/llama-3.3-70b-versatile');
+    expect(reg.normalizeSpecSync('groq/llama-3.3-70b-versatile')).toBe('groq/llama-3.3-70b-versatile');
     expect(reg.resolveModel('groq/llama-3.3-70b-versatile')).toBeDefined();
   });
 });

@@ -2,6 +2,8 @@
  * Worker entry point — exports all DO classes and routes agent requests.
  *
  * Routing order (Worker runs first for every non-hashed-asset path):
+ *   0. Transport — plain HTTP is redirected to HTTPS before anything is
+ *      served, and every HTTPS response leaves pinned with HSTS.
  *   1. Preview host — every host under PREVIEW_HOST_SUFFIX serves an isolated
  *      Workspace or Sandbox preview and nothing else.
  *   2. /pc/* — PC agent WebSocket tunnel + install endpoint.
@@ -200,127 +202,11 @@ async function authenticateCliAgentTicketRequest(
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
-
-    // 1. Preview host — Workspace and Sandbox each get one hostname per exposed
-    //    port, capability-gated by that hostname. It is the ONLY thing served there: no
-    //    SPA, no login, no OAuth callback, so nothing ever mints a session on
-    //    those origins and hostile preview HTML has none to steal
-    //    (lib/preview-origin.ts).
-    if (isPreviewHostRequest(url, env)) {
-      const nimbus = await handleNimbusPreviewHostRequest(request, env);
-      if (nimbus) return containPreviewResponse(nimbus);
-      return servePreviewRequest(request, env);
-    }
-
-    // 2. PC agent tunnel — its own auth (short-lived ticket + UserDO token hash).
-    if (url.pathname.startsWith("/pc/")) {
-      return handlePcRequest(request, env);
-    }
-
-    // 3. OAuth/OIDC login, callback, session, logout.
-    const appAuthResp = await handleAuthRequest(request, env, ctx);
-    if (appAuthResp) return appAuthResp;
-
-    // 4. Public landing page for visitors with no Proteus session.
-    const landingResp = await handleLandingRequest(request, env);
-    if (landingResp) return landingResp;
-
-    // 5. CLI install + device-code auth + token-authenticated account API.
-    const cliResp = await handleCliRequest(request, env, ctx);
-    if (cliResp) return cliResp;
-
-    // 6. Public — build-info health.
-    const healthResp = await handleHealthRequest(request, env);
-    if (healthResp) return healthResp;
-
-    // 6b. MCP server — its own auth (CLI bearer token for external MCP
-    //     clients, which can never pass the browser-session gate below;
-    //     session/dev identity otherwise) + per-agent ownership inside.
-    if (url.pathname.startsWith("/mcp/v1/")) {
-      const mcpResp = await handleMcpRequest(request, env);
-      if (mcpResp) return mcpResp;
-    }
-
-    // 7. Public bypass list.
-    if (isPublicPath(url.pathname)) {
-      return serveApp(request, env);
-    }
-
-    // 7b. Webhook delivery — public-but-per-trigger-authenticated. The
-    //     hub's webhook ingress (HMAC / Bearer / mTLS) is the gate.
-    if (isWebhookDeliveryPath(url.pathname)) {
-      const m = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/webhook\//);
-      if (m) {
-        const hubResp = await handleHubRequest(request, env, decodeURIComponent(m[1]));
-        if (hubResp) return hubResp;
-      }
-    }
-
-    // 8. Auth gate. Everything below requires an authenticated identity.
-    let identity: AuthIdentity;
-    let authenticatedRequest = request;
-    const cliAgentTicket = await authenticateCliAgentTicketRequest(request, env);
-    if (cliAgentTicket instanceof Response) return cliAgentTicket;
-    if (cliAgentTicket) {
-      identity = cliAgentTicket.identity;
-      authenticatedRequest = cliAgentTicket.request;
-    } else {
-      try { identity = await authenticateRequest(request, env); }
-      catch (e) {
-        if (e instanceof AuthError) return authError(request, e);
-        const message = e instanceof Error ? e.message : String(e);
-        return new Response(JSON.stringify({ error: message }), {
-          status: 500, headers: { 'content-type': 'application/json' },
-        });
-      }
-    }
-
-    // 8b. CSRF. Everything below is reachable with the ambient session cookie,
-    //     so a state-changing request must prove the app issued it.
-    const crossSite = crossSiteRejection(request);
-    if (crossSite) return crossSite;
-
-    // 9. /api/user/* — user-scoped routes.
-    const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);
-    if (userResp) return withD1Bookmark(userResp, identity);
-
-    // 10. Per-agent routes — reject every namespace/facet path outside the
-    // closed public actor grammar before ownership lookup or SDK routing.
-    if (isForeignAgentNamespacePath(url.pathname)) {
-      return withD1Bookmark(err(404, 'Not found'), identity);
-    }
-
-    // Verify ownership of the root workspace. A direct subordinate facet is
-    // owned through its parent workspace; extractAgentName returns that parent.
-    const agentName = extractAgentName(url.pathname);
-    if (agentName) {
-      // SECURITY (F1): routeAgentRequest (partyserver) maps EVERY DO namespace
-      // binding by slug, and its facet router recursively resolves literal
-      // /sub/{class}/{name} segments. The closed-path rejection above keeps
-      // UserDO, ExplorationAgent, ProteusSandbox and Nimbus* worker-side-only.
-      const denial = await ensureAgentOwnership(env, identity, agentName);
-      if (denial) return withD1Bookmark(denial, identity);
-      // Inject the userId so downstream handlers can resolve UserDO without
-      // re-running auth. Worker → DO requests preserve headers.
-      const reqWithId = new Request(authenticatedRequest, {
-        headers: appendIdentityHeaders(authenticatedRequest.headers, identity),
-      });
-
-      const runEventsResp = await handleRunEventsRequest(reqWithId, env);
-      if (runEventsResp) return withD1Bookmark(runEventsResp, identity);
-      // EventsHub authenticated routes: /triggers, /events
-      const hubResp = await handleHubRequest(reqWithId, env, agentName);
-      if (hubResp) return withD1Bookmark(hubResp, identity);
-      // File uploads: HTTP rather than an agent RPC, because the RPC transport
-      // is the chat WebSocket and its frame ceiling is below ordinary files.
-      const filesResp = await handleFilesRequest(reqWithId, env, agentName);
-      if (filesResp) return withD1Bookmark(filesResp, identity);
-      const agentResp = await routeAgentRequest(reqWithId, env);
-      if (agentResp) return withD1Bookmark(agentResp, identity);
-    }
-
-    // 11. SPA fallback.
-    return withD1Bookmark(await serveApp(request, env), identity);
+    // Cleartext gets a redirect and nothing else; everything actually served
+    // leaves through the one pin.
+    const upgrade = httpsUpgrade(url, env);
+    if (upgrade) return upgrade;
+    return withTransportSecurity(await route(request, env, ctx, url), url, env);
   },
 
   // Mission Inbox — Cloudflare Email Routing (catch-all rule on EMAIL_DOMAIN)
@@ -373,4 +259,193 @@ function wantsHtml(request: Request): boolean {
 function withD1Bookmark(response: Response, identity: AuthIdentity): Response {
   if (response.status === 101) return response;
   return withD1BookmarkCookie(response, identity.d1Bookmark);
+}
+
+/**
+ * The hostnames this deployment publishes over HTTPS.
+ *
+ * Derived from the two vars that already state what this deployment is on the
+ * internet — the same pair the preview router keys on — rather than from a new
+ * flag or a hand-maintained private-address list. A dev server on localhost or
+ * a LAN address matches neither and is left on plain HTTP, which is what makes
+ * `vite dev` keep working with nothing to remember.
+ */
+function isPublishedHost(url: URL, env: Env): boolean {
+  if (isPreviewHostRequest(url, env)) return true;
+  try { return url.hostname.toLowerCase() === new URL(env.CLI_PUBLIC_ORIGIN ?? '').hostname.toLowerCase(); }
+  catch { return false; }
+}
+
+/**
+ * Redirect cleartext to HTTPS.
+ *
+ * Nothing upstream does this: the zone carries no "Always Use HTTPS" rule and a
+ * Workers custom domain does not add one, so plain-HTTP requests reach the
+ * Worker and are answered in the clear. Measured against production on
+ * 2026-08-16 — `http://proteus.ashishkumarsingh.com/install.sh` returned 200
+ * and baked an `http://` download origin into the script it hands to `sh`.
+ * `url.protocol` is the client-facing scheme at this edge, confirmed by that
+ * same probe, so no `CF-Visitor` parsing is involved.
+ */
+function httpsUpgrade(url: URL, env: Env): Response | null {
+  if (url.protocol !== 'http:' || !isPublishedHost(url, env)) return null;
+  // The port is dropped rather than carried: Cloudflare's other plaintext
+  // ports (8080, 2052, …) have no TLS counterpart on this zone.
+  return Response.redirect(`https://${url.hostname}${url.pathname}${url.search}`, 301);
+}
+
+// One year: a pin that lapses between visits is not a pin.
+const HSTS = 'max-age=31536000; includeSubDomains';
+
+/**
+ * Pin the browser to HTTPS for this host.
+ *
+ * `includeSubDomains` deliberately reaches the preview hosts. They are strict
+ * subdomains of the app host (`isPreviewHostRequest` matches `.<suffix>` and
+ * the app host is the suffix itself), they are matched before app auth, and
+ * they serve agent-authored HTML — the hosts most worth pinning. Every one of
+ * them is this same Worker behind the zone certificate, whose SANs include the
+ * second-level wildcard, so subdomain inclusion cannot strand a preview on a
+ * hostname that has no TLS. No `preload`: that is a one-way submission over the
+ * whole subtree.
+ *
+ * 101 passes through untouched — a WebSocket handshake's headers are immutable
+ * and its socket does not survive reconstruction (same rule, and reason, as
+ * `containPreviewResponse`).
+ */
+function withTransportSecurity(response: Response, url: URL, env: Env): Response {
+  if (url.protocol !== 'https:' || response.status === 101 || !isPublishedHost(url, env)) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  headers.set('strict-transport-security', HSTS);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+/** The host-aware route table. Transport security is settled by the caller. */
+async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> {
+  // 1. Preview host — Workspace and Sandbox each get one hostname per exposed
+  //    port, capability-gated by that hostname. It is the ONLY thing served there: no
+  //    SPA, no login, no OAuth callback, so nothing ever mints a session on
+  //    those origins and hostile preview HTML has none to steal
+  //    (lib/preview-origin.ts).
+  if (isPreviewHostRequest(url, env)) {
+    const nimbus = await handleNimbusPreviewHostRequest(request, env);
+    if (nimbus) return containPreviewResponse(nimbus);
+    return servePreviewRequest(request, env);
+  }
+
+  // 2. PC agent tunnel — its own auth (short-lived ticket + UserDO token hash).
+  if (url.pathname.startsWith("/pc/")) {
+    return handlePcRequest(request, env);
+  }
+
+  // 3. OAuth/OIDC login, callback, session, logout.
+  const appAuthResp = await handleAuthRequest(request, env, ctx);
+  if (appAuthResp) return appAuthResp;
+
+  // 4. Public landing page for visitors with no Proteus session.
+  const landingResp = await handleLandingRequest(request, env);
+  if (landingResp) return landingResp;
+
+  // 5. CLI install + device-code auth + token-authenticated account API.
+  const cliResp = await handleCliRequest(request, env, ctx);
+  if (cliResp) return cliResp;
+
+  // 6. Public — build-info health.
+  const healthResp = await handleHealthRequest(request, env);
+  if (healthResp) return healthResp;
+
+  // 6b. MCP server — its own auth (CLI bearer token for external MCP
+  //     clients, which can never pass the browser-session gate below;
+  //     session/dev identity otherwise) + per-agent ownership inside.
+  if (url.pathname.startsWith("/mcp/v1/")) {
+    const mcpResp = await handleMcpRequest(request, env);
+    if (mcpResp) return mcpResp;
+  }
+
+  // 7. Public bypass list.
+  if (isPublicPath(url.pathname)) {
+    return serveApp(request, env);
+  }
+
+  // 7b. Webhook delivery — public-but-per-trigger-authenticated. The
+  //     hub's webhook ingress (HMAC / Bearer / mTLS) is the gate.
+  if (isWebhookDeliveryPath(url.pathname)) {
+    const m = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/webhook\//);
+    if (m) {
+      const hubResp = await handleHubRequest(request, env, decodeURIComponent(m[1]));
+      if (hubResp) return hubResp;
+    }
+  }
+
+  // 8. Auth gate. Everything below requires an authenticated identity.
+  let identity: AuthIdentity;
+  let authenticatedRequest = request;
+  const cliAgentTicket = await authenticateCliAgentTicketRequest(request, env);
+  if (cliAgentTicket instanceof Response) return cliAgentTicket;
+  if (cliAgentTicket) {
+    identity = cliAgentTicket.identity;
+    authenticatedRequest = cliAgentTicket.request;
+  } else {
+    try { identity = await authenticateRequest(request, env); }
+    catch (e) {
+      if (e instanceof AuthError) return authError(request, e);
+      const message = e instanceof Error ? e.message : String(e);
+      return new Response(JSON.stringify({ error: message }), {
+        status: 500, headers: { 'content-type': 'application/json' },
+      });
+    }
+  }
+
+  // 8b. CSRF. Everything below is reachable with the ambient session cookie,
+  //     so a state-changing request must prove the app issued it.
+  const crossSite = crossSiteRejection(request);
+  if (crossSite) return crossSite;
+
+  // 9. /api/user/* — user-scoped routes.
+  const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);
+  if (userResp) return withD1Bookmark(userResp, identity);
+
+  // 10. Per-agent routes — reject every namespace/facet path outside the
+  // closed public actor grammar before ownership lookup or SDK routing.
+  if (isForeignAgentNamespacePath(url.pathname)) {
+    return withD1Bookmark(err(404, 'Not found'), identity);
+  }
+
+  // Verify ownership of the root workspace. A direct subordinate facet is
+  // owned through its parent workspace; extractAgentName returns that parent.
+  const agentName = extractAgentName(url.pathname);
+  if (agentName) {
+    // SECURITY (F1): routeAgentRequest (partyserver) maps EVERY DO namespace
+    // binding by slug, and its facet router recursively resolves literal
+    // /sub/{class}/{name} segments. The closed-path rejection above keeps
+    // UserDO, ExplorationAgent, ProteusSandbox and Nimbus* worker-side-only.
+    const denial = await ensureAgentOwnership(env, identity, agentName);
+    if (denial) return withD1Bookmark(denial, identity);
+    // Inject the userId so downstream handlers can resolve UserDO without
+    // re-running auth. Worker → DO requests preserve headers.
+    const reqWithId = new Request(authenticatedRequest, {
+      headers: appendIdentityHeaders(authenticatedRequest.headers, identity),
+    });
+
+    const runEventsResp = await handleRunEventsRequest(reqWithId, env);
+    if (runEventsResp) return withD1Bookmark(runEventsResp, identity);
+    // EventsHub authenticated routes: /triggers, /events
+    const hubResp = await handleHubRequest(reqWithId, env, agentName);
+    if (hubResp) return withD1Bookmark(hubResp, identity);
+    // File uploads: HTTP rather than an agent RPC, because the RPC transport
+    // is the chat WebSocket and its frame ceiling is below ordinary files.
+    const filesResp = await handleFilesRequest(reqWithId, env, agentName);
+    if (filesResp) return withD1Bookmark(filesResp, identity);
+    const agentResp = await routeAgentRequest(reqWithId, env);
+    if (agentResp) return withD1Bookmark(agentResp, identity);
+  }
+
+  // 11. SPA fallback.
+  return withD1Bookmark(await serveApp(request, env), identity);
 }

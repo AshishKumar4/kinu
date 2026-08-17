@@ -464,13 +464,19 @@ describe('MCTS progress reporting', () => {
       branches: 2,
       onProgress: (event) => events.push(event),
     });
-    expect(events.filter(({ type }) => type === 'grounding-unavailable')).toEqual([{
+    const grounding = events.filter(({ type }) => type === 'grounding-unavailable');
+    expect(grounding).toHaveLength(1);
+    expect(grounding[0]).toMatchObject({
       type: 'grounding-unavailable',
       language: 'python',
       canRun: ['javascript'],
       iteration: 1,
       remainingBudget: 2,
-    }]);
+    });
+    // Every event names the search that raised it — that is what lets a
+    // consumer answer it with the right tree when two searches are live.
+    expect(events.every((event) => event.rootId === grounding[0]!.rootId)).toBe(true);
+    expect(grounding[0]!.rootId).toBeTruthy();
   });
 
   test('a failed exploration is reported with its provider error, and the search continues', async () => {

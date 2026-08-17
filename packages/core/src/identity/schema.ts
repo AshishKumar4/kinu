@@ -7,6 +7,8 @@
  * file plane, sessions, evolution state, and its default orchestrator agent).
  */
 
+import { reconcileColumns } from './columns.js';
+import { initSearchTables } from '../mcts/schemas.js';
 import { initScaffoldTables } from '../scaffold/schemas.js';
 import { initViewTables } from '../views/store.js';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
@@ -30,28 +32,10 @@ export const WORKSPACE_IDENTITY_DDL =
 /** Durable state owned by every full-loop actor, including facet actors. */
 const ACTOR_DDL = [
   // ── MCTS search tree ───────────────────────────────────────────
-  // BUG-1 FIX: value defaults to 0, NOT 0.5
-  `CREATE TABLE IF NOT EXISTS search_nodes (
-    id               TEXT PRIMARY KEY,
-    parent_id        TEXT REFERENCES search_nodes(id) ON DELETE CASCADE,
-    root_id          TEXT,
-    task             TEXT NOT NULL,
-    action           TEXT NOT NULL DEFAULT '',
-    observation      TEXT NOT NULL DEFAULT '',
-    code_used        TEXT,
-    code_language    TEXT,
-    visits           INTEGER NOT NULL DEFAULT 0,
-    value            REAL NOT NULL DEFAULT 0,
-    depth            INTEGER NOT NULL DEFAULT 0,
-    status           TEXT NOT NULL DEFAULT 'open'
-                     CHECK(status IN ('open','terminal','failed','pruned')),
-    msg_id           TEXT,
-    branch_agent_key TEXT,
-    created_at       INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_sn_parent ON search_nodes(parent_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sn_status_value ON search_nodes(status, value DESC)`,
-  `CREATE INDEX IF NOT EXISTS idx_sn_root_status ON search_nodes(root_id, status)`,
+  // Canonical DDL owned by mcts/schemas.ts (initSearchTables, run below): it
+  // carries the guarded ALTERs that add code_used, code_language and root_id
+  // to workspaces created before those columns, and a second copy here is
+  // exactly what let `code_language` go missing on a live workspace.
 
   // ── Scaffold management + task history ─────────────────────────
   // Canonical DDL owned by scaffold/schemas.ts (initScaffoldTables, run below):
@@ -91,18 +75,6 @@ const ACTOR_DDL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id)`,
   `CREATE INDEX IF NOT EXISTS idx_msg_parent ON messages(parent_id)`,
-
-  // ── Full conversation history (CoreMessage as JSON for LLM context) ──
-  // Each row is one ModelMessage (user, assistant with tool_call parts,
-  // or tool with tool_result parts). Stored as JSON for full fidelity.
-  `CREATE TABLE IF NOT EXISTS conversation_history (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL DEFAULT 'default',
-    role       TEXT NOT NULL,
-    message    TEXT NOT NULL,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_convhist_session ON conversation_history(session_id)`,
 
   // ── Memory chunks — schema owned by MemoryStore (agent-utils) ──
   // NOT created here. MemoryStore.ensureSchema() creates the table
@@ -171,6 +143,7 @@ const FORK_LINEAGE_DDL = `CREATE TABLE IF NOT EXISTS fork_lineage (
  * workspace ownership root or independent fork lineage. */
 export function initActorTables(execRaw: RawSqlExec): void {
   for (const ddl of ACTOR_DDL) execRaw(ddl);
+  initSearchTables(execRaw);
   initScaffoldTables(execRaw);
   initViewTables(execRaw);
 }
@@ -178,6 +151,8 @@ export function initActorTables(execRaw: RawSqlExec): void {
 /** Initialize all workspace tables. Idempotent — safe to call on every startup. */
 export function initAllTables(execRaw: RawSqlExec): void {
   execRaw(WORKSPACE_IDENTITY_DDL);
+  // Columns added after this table's first release; see columns.ts.
+  reconcileColumns(execRaw, 'workspace_identity', [`mission TEXT NOT NULL DEFAULT ''`]);
   initActorTables(execRaw);
   execRaw(FORK_LINEAGE_DDL);
 }
@@ -188,8 +163,9 @@ export function initAllTables(execRaw: RawSqlExec): void {
  * initAllTables, which is what keeps the read paths (`proteus list`,
  * `proteus status`, both of which open the database readonly) pure reads.
  */
-export function migrateWorkspaceStorage(sql: SqlExecutor): void {
+export function migrateWorkspaceStorage(sql: SqlExecutor, execRaw: RawSqlExec): void {
   adoptLegacyAgentIdentity(sql);
+  adoptLegacyForkLineage(sql, execRaw);
 }
 
 /** Move the pre-rename `agent_identity` row (identical columns) into
@@ -214,4 +190,33 @@ function adoptLegacyAgentIdentity(sql: SqlExecutor): void {
         VALUES (${legacy.id}, ${legacy.name}, ${legacy.owner_user_id ?? ''}, ${legacy.created_at})`;
   }
   void sql`DROP TABLE agent_identity`;
+}
+
+/** Carry a pre-rename fork's lineage across the agent→workspace rename.
+ *  `source_agent_id`/`source_agent_name` became `source_workspace_id`/
+ *  `source_workspace_name`; the columns were renamed rather than added, so
+ *  adding the new ones is not enough — the values live in the old ones, and
+ *  readForkLineage selects the new names. Same reason as the identity
+ *  adoption above: a local ~/.proteus workspace outlives the rename. */
+function adoptLegacyForkLineage(sql: SqlExecutor, execRaw: RawSqlExec): void {
+  const legacy = sql<{ name: string }>`
+    SELECT name FROM pragma_table_info('fork_lineage') WHERE name = 'source_agent_id'
+  `;
+  if (legacy.length === 0) return;
+
+  const rows = sql<{
+    source_agent_id: string; source_agent_name: string;
+    source_message_id: string; source_message_created_at: number; forked_at: number;
+  }>`SELECT source_agent_id, source_agent_name, source_message_id,
+            source_message_created_at, forked_at
+     FROM fork_lineage ORDER BY id LIMIT 1`;
+  void sql`DROP TABLE fork_lineage`;
+  execRaw(FORK_LINEAGE_DDL);
+  const row = rows[0];
+  if (row) {
+    void sql`INSERT INTO fork_lineage (source_workspace_id, source_workspace_name,
+        source_message_id, source_message_created_at, forked_at)
+      VALUES (${row.source_agent_id}, ${row.source_agent_name}, ${row.source_message_id},
+        ${row.source_message_created_at}, ${row.forked_at})`;
+  }
 }

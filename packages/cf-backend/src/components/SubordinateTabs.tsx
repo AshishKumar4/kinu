@@ -24,7 +24,7 @@ interface SubordinateTabsProps {
 
 function StatusMark({ subordinate }: { subordinate: SubordinateRosterEntry }) {
   if (subordinate.status === "awaiting_input") {
-    return <span className="rounded px-1.5 py-0.5 text-[9px] font-medium p-badge-warning">input</span>;
+    return <span className="rounded-sm px-1.5 py-0.5 text-[9px] font-medium p-badge-warning">input</span>;
   }
   return (
     <span
@@ -80,7 +80,7 @@ function SpawnSubordinateDialog({ onClose, onSpawn }: {
             onChange={(event) => setRole(event.target.value)}
             placeholder="e.g. Research lead"
             maxLength={120}
-            className="w-full rounded-lg border p-border p-card px-3 py-2 text-sm p-text placeholder:p-text-3 focus:outline-none focus:border-[var(--c-accent)]"
+            className="w-full border p-border p-card px-3 py-2 text-sm p-text placeholder:p-text-3 focus:outline-none focus:border-[var(--c-accent)]"
           />
         </label>
         <label className="block space-y-1.5">
@@ -91,7 +91,7 @@ function SpawnSubordinateDialog({ onClose, onSpawn }: {
             placeholder="Describe the outcome this subordinate should deliver."
             rows={5}
             maxLength={4_000}
-            className="w-full resize-y rounded-lg border p-border p-card px-3 py-2 text-sm leading-relaxed p-text placeholder:p-text-3 focus:outline-none focus:border-[var(--c-accent)]"
+            className="w-full resize-y border p-border p-card px-3 py-2 text-sm leading-relaxed p-text placeholder:p-text-3 focus:outline-none focus:border-[var(--c-accent)]"
           />
         </label>
         <p className="text-[11px] leading-relaxed p-text-3">
@@ -153,7 +153,7 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
                 <button
                   type="button"
                   onClick={() => { setDismissError(null); setDismissTarget(subordinate); }}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 opacity-0 p-text-3 transition-all hover:p-danger focus-visible:opacity-100 group-hover/tab:opacity-70"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-1 opacity-0 p-text-3 transition-all hover:p-danger focus-visible:opacity-100 group-hover/tab:opacity-70"
                   title={`Dismiss ${subordinate.displayName}`}
                   aria-label={`Dismiss ${subordinate.displayName}`}
                 >

@@ -34,11 +34,18 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 // so standing in for it here leaves everything Proteus owns under test.
 let sdkResponse: Response | null = null;
 let sdkRequest: Request | null = null;
+// `mock.module` replaces the whole module for the rest of the run, so the stub
+// has to carry every export the src graph binds — `Sandbox` and `getSandbox`
+// are load-time named imports in proteus-sandbox/orchestrator/runtime, and a
+// proxyToSandbox-only stub makes any later import of the Worker entry a
+// load-time SyntaxError.
 mock.module('@cloudflare/sandbox', () => ({
   proxyToSandbox: async (request: Request) => {
     sdkRequest = request;
     return sdkResponse;
   },
+  Sandbox: class {},
+  getSandbox: () => { throw new Error('getSandbox is not exercised by this suite.'); },
 }));
 const { SDK_FORWARD_FAILURE, servePreviewRequest } = await import('../src/preview-proxy.js');
 

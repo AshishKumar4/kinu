@@ -75,7 +75,7 @@ export interface WorkSurfaceProps {
   memoryContent: string;
   onSearchMemory: (q: string) => void;
   // Exploration — the tree of the search in flight, pushed by the engine.
-  mctsTree: ForkNode | null;
+  mctsTrees: ReadonlyMap<string, ForkNode>;
   /** A turn is in flight — the live surfaces revalidate while it is. */
   isStreaming: boolean;
   // Environment (mounts + terminals)
@@ -195,7 +195,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           {surface === "Releases" && <ReleasesSurface rpc={props.rpc} executors={props.executors} />}
           {surface === "Exploration" && (
             <ExplorationSurface
-              liveTree={props.mctsTree}
+              liveTrees={props.mctsTrees}
               isStreaming={props.isStreaming}
               backgroundJobs={props.backgroundJobs}
               rpc={props.rpc}

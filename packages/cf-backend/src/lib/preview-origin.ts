@@ -54,8 +54,8 @@ interface PreviewHostEnv {
 const PREVIEW_SUFFIX_META = 'proteus-preview-host-suffix';
 
 function hostOf(origin: string | undefined): string | null {
-  if (!origin) return null;
-  try { return new URL(origin).hostname.toLowerCase() || null; } catch { return null; }
+  if (!origin || !URL.canParse(origin)) return null;
+  return new URL(origin).hostname.toLowerCase() || null;
 }
 
 /**
@@ -149,8 +149,8 @@ function validPort(value: string | undefined): boolean {
  * rejects the shapes that never come from Proteus at all.
  */
 export function isPreviewUrl(value: string, configuredSuffix: string | null = browserPreviewHostSuffix()): boolean {
-  let url: URL;
-  try { url = new URL(value); } catch { return false; }
+  if (!URL.canParse(value)) return false;
+  const url = new URL(value);
   if (url.username || url.password) return false;
   if (url.protocol !== 'https:') return false;
   const suffix = previewHostSuffix({ PREVIEW_HOST_SUFFIX: configuredSuffix ?? undefined });
@@ -184,5 +184,6 @@ export function extractPreviewUrl<Output>(
   if (v.is(v.string(), output)) return scan(output);
   const withUrl = v.safeParse(v.object({ url: v.string() }), output);
   if (withUrl.success) return scan(withUrl.output.url);
-  try { return scan(JSON.stringify(output)); } catch { return null; }
+  const serialized = JSON.stringify(output);
+  return serialized === undefined ? null : scan(serialized);
 }

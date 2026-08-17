@@ -29,6 +29,19 @@ const SteeringEnvelopeSchema = v.object({
     converted: v.boolean(),
   }),
 });
+/** The turn-start hint carries no `tool` — it names no failing call, because it
+ *  fires before there is one. Its own envelope, so the reactive-steer schema
+ *  above stays exact rather than loosening `tool` to optional. */
+const StartHintEnvelopeSchema = v.object({
+  type: v.literal("run_event"),
+  event: v.object({
+    type: v.literal("turn_steering"),
+    runId: v.string(),
+    step: v.number(),
+    trigger: v.literal("turn_start_no_delegation"),
+    converted: v.boolean(),
+  }),
+});
 const ErrorEventSchema = v.object({
   type: v.literal("error"),
   message: v.string(),
@@ -144,11 +157,15 @@ describe("CLI behavior", () => {
       user: { id: "user_123", email: "ashish@example.com" },
     });
 
-    const proc = runCliInPty(["setup"], { home, stdin: "7\n" });
+    const proc = runCliInPty(["setup"], { home, stdin: "8\n" });
     const stdout = proc.stdout.toString();
 
     expect(proc.exitCode).toBe(0);
     expect(stdout).toContain("Local model provider");
+    // Native Workers AI is the recommendation and the default answer; Skip is 8.
+    expect(stdout).toContain("1 Cloudflare Workers AI through your Proteus account");
+    expect(stdout).toContain("(recommended)");
+    expect(stdout).toContain("Choice [1]");
     expect(stdout).toContain("Skipped local model setup");
   });
 
@@ -411,7 +428,7 @@ describe("proteus exec (headless)", () => {
 // agent's database — which a benchmark container deletes with the container.
 // Zero nudges were observable across a whole ten-task run as a result.
 describe("proteus exec --json — the delegation nudge is observable from outside", () => {
-  test("a turn that grinds on one failing tool reports its nudge, trigger and conversion", async () => {
+  test("a turn reports both steering rows it wrote — the step-0 hint and the reactive nudge — with trigger and conversion", async () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-nudge-"));
     tempDirs.push(home);
     // Three failures from the same tool is the `repeated_failure` trigger; an
@@ -448,6 +465,18 @@ describe("proteus exec --json — the delegation nudge is observable from outsid
         converted: false,
       });
       expect(steers[0]?.step).toBeNumber();
+
+      // Both arms of the delegation A/B leave the process, on the same turn:
+      // the step-0 hint (fired before any tool ran — "Fix it" is a fresh ask
+      // with no work behind it) and the reactive steer above. The bench reader
+      // is the only copy of either, so a row that never reaches stdout is a row
+      // the measurement cannot see.
+      const hints = events.flatMap((event) => {
+        const parsed = v.safeParse(StartHintEnvelopeSchema, event);
+        return parsed.success ? [parsed.output.event] : [];
+      });
+      expect(hints).toHaveLength(1);
+      expect(hints[0]).toMatchObject({ trigger: "turn_start_no_delegation", step: 0, converted: false });
     } finally {
       server.stop();
     }

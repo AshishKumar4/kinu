@@ -151,6 +151,37 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getShellApprovalMode()).toBe('strict');
   });
 
+  test('shellApprovalGrants: empty by default, dedupes, revokes, survives garbage', () => {
+    const c = setup();
+    expect(c.getShellApprovalGrants()).toEqual([]);
+
+    c.grantShellApproval([{ rule: 'rm-recursive', executor: 'laptop' }]);
+    // Granting the same thing twice is one grant, not two.
+    c.grantShellApproval([
+      { rule: 'rm-recursive', executor: 'laptop' },
+      { rule: 'sudo', executor: 'parent' },
+    ]);
+    expect(c.getShellApprovalGrants()).toEqual([
+      { rule: 'rm-recursive', executor: 'laptop' },
+      { rule: 'sudo', executor: 'parent' },
+    ]);
+
+    // Revoking one leaves the other; revoking something never granted is fine.
+    c.revokeShellApproval([
+      { rule: 'rm-recursive', executor: 'laptop' },
+      { rule: 'nothing', executor: 'nowhere' },
+    ]);
+    expect(c.getShellApprovalGrants()).toEqual([{ rule: 'sudo', executor: 'parent' }]);
+
+    // A value that cannot be parsed must never widen what runs.
+    c.set(AGENT_CONFIG_KEYS.shellApprovalGrants, 'bogus,@,rule@,,sudo@laptop');
+    expect(c.getShellApprovalGrants()).toEqual([{ rule: 'sudo', executor: 'laptop' }]);
+
+    c.revokeShellApproval([{ rule: 'sudo', executor: 'laptop' }]);
+    expect(c.getShellApprovalGrants()).toEqual([]);
+    expect(c.get(AGENT_CONFIG_KEYS.shellApprovalGrants)).toBeNull();
+  });
+
   test('sleepTimeCompute: defaults ON; explicit false sticks', () => {
     const c = setup();
     expect(c.getSleepTimeComputeEnabled()).toBe(true); // autonomy default ON
@@ -295,7 +326,9 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setCacheRetention('long'),
     (c) => c.setDisplayName('Ada'),
     (c) => c.setNameOrigin('user'),
+    (c) => c.setStance('audit'),
     (c) => c.setShellApprovalMode('allow_all'),
+    (c) => c.grantShellApproval([{ rule: 'rm-recursive', executor: 'laptop' }]),
     (c) => c.setSleepTimeComputeEnabled(false),
     (c) => c.setAutoPromoteScaffold(false),
     (c) => c.setShadowSampleRate(0.5),

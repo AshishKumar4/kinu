@@ -485,7 +485,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('gated run commands return an error the MODEL can act on', async () => {
     // Regression: the gate message used to tell the model to call
     // setShellApprovalMode('allow_all') — a backend RPC the model cannot
-    // reach. The actionable path is asking the user.
+    // reach. The actionable path is the owner deciding, and the words say so
+    // without spending a paragraph on it.
     //
     // The gate itself now lives at the execution seam (`shell`/the
     // ExecutionRouter — see execution/approval.ts), not inside `run`'s own
@@ -495,9 +496,12 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const shell = withApprovalGatedShell({ exec: async () => ({ stdout: 'ran', stderr: '', exitCode: 0 }) });
     const t = tools({ ...rt, shell });
     const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
-    const result = await tool.execute({ command: 'sudo whoami' });
-    expect(result).toContain('Requires user approval (mode=strict)');
-    expect(result).toContain('Ask the user');
+    // A force-push: gated even on the agent's own workspace, because the harm
+    // lands on a remote. `sudo whoami` would run here now — that shell IS the
+    // agent's own machine.
+    const result = await tool.execute({ command: 'git push --force origin main' });
+    expect(result).toContain('needs owner approval, nobody to ask');
+    expect(result).toContain('git-force-push');
     expect(result).not.toContain('setShellApprovalMode');
   });
 

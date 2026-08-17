@@ -266,10 +266,20 @@ function countLabel(chosen: number, total: number): string {
   return chosen === total ? "all" : String(chosen);
 }
 
+/**
+ * `always` is the third answer the queue has always accepted and never
+ * offered. It approves these commands AND records a standing grant for each
+ * gate-tier check they tripped, on the environment they were asked about — so
+ * the same question stops arriving. Nothing wider: the grant is one rule on
+ * one machine, it widens no access, and a rule the gate refuses outright
+ * cannot be granted at all. Settings → Standing approvals lists what is held
+ * and is the only place to take one back.
+ */
 function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }) {
   const [selected, setSelected] = useState<Set<string> | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [decided, setDecided] = useState<string | null>(null);
   // Null means "everything", so a newly-parked action arriving mid-review is
   // included rather than silently left out of an "approve all" click.
   const chosen = selected ?? new Set(actions.map((a) => a.id));
@@ -280,13 +290,22 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
     ));
   };
 
-  const decide = async (decision: "approved" | "denied") => {
+  const decide = async (decision: "approved" | "denied" | "always") => {
     if (busy || chosen.size === 0) return;
     setBusy(true);
     setError(null);
+    setDecided(null);
     try {
       await rpc("decideDeferredApprovals", [[...chosen], decision]);
       setSelected(null);
+      // Permission is not an effect: the command still has not run, and the
+      // agent is the only thing that runs it. Saying "done" here would be the
+      // same lie the queued tool result is worded to avoid.
+      setDecided(decision === "denied"
+        ? "Denied. The agent will be told, and nothing runs."
+        : decision === "always"
+          ? "Approved, and Proteus will stop asking about these checks on that environment. It runs when the agent picks the decision up."
+          : "Approved. It runs when the agent picks the decision up.");
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(`Could not record the decision: ${message}`);
@@ -296,7 +315,7 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
   };
 
   return (
-    <div className="p-card rounded-lg px-3 py-2.5 space-y-2">
+    <div className="p-card px-3 py-2.5 space-y-2">
       <div className="flex items-start gap-2">
         <ShieldWarningIcon size={14} className="p-accent shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
@@ -318,18 +337,27 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
               onChange={() => toggle(action.id)} disabled={busy} />
             <span className="min-w-0 flex-1">
               <code className="block text-[11px] p-text break-all whitespace-pre-wrap">{action.detail}</code>
-              <span className="block text-[10px] p-text-3 mt-0.5">queued {timeAgo(action.at)}</span>
+              {/* Which machine, before you authorise it. The read model puts it
+                  in the title precisely because it is half the decision, and
+                  this card used to drop the title on the floor. */}
+              <span className="block text-[10px] p-text-3 mt-0.5">{action.title} · queued {timeAgo(action.at)}</span>
             </span>
           </label>
         ))}
       </div>
 
       {error && <div className="text-[10px] p-danger">{error}</div>}
+      {decided && <div className="text-[10px] p-text-3">{decided}</div>}
 
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 flex-wrap">
         <Button size="sm" variant="primary" disabled={busy || chosen.size === 0}
           onClick={() => decide("approved")}>
           Approve {countLabel(chosen.size, actions.length)}
+        </Button>
+        <Button size="sm" variant="secondary" disabled={busy || chosen.size === 0}
+          onClick={() => decide("always")}
+          title="Approve these, and stop asking about the same checks on the same environment. Manage or revoke in Settings → Standing approvals.">
+          Always allow {countLabel(chosen.size, actions.length)}
         </Button>
         <Button size="sm" variant="ghost" disabled={busy || chosen.size === 0}
           onClick={() => decide("denied")}>
@@ -364,11 +392,11 @@ function PendingRow(
     </>
   );
   if (home.surface === null) {
-    return <div className="p-card rounded-lg px-3 py-2 flex items-start gap-2">{body}</div>;
+    return <div className="p-card px-3 py-2 flex items-start gap-2">{body}</div>;
   }
   return (
     <button type="button" onClick={() => onOpenSurface(home.surface!)}
-      className="w-full p-card rounded-lg px-3 py-2 flex items-start gap-2 text-left hover:p-elevated transition-colors">
+      className="w-full p-card px-3 py-2 flex items-start gap-2 text-left hover:p-elevated transition-colors">
       {body}
       <CaretRightIcon size={12} className="p-text-3 shrink-0 mt-1" />
     </button>

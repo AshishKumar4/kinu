@@ -5,7 +5,9 @@
  * table. To invoke one, that text must become a callable function. V8 isolates
  * used by Cloudflare Durable Objects disallow all runtime string-compilation
  * primitives with the error "Code generation from strings disallowed for this
- * context".
+ * context" — `isolate.codegen_blocked`, which also records that the ban covers
+ * a DO alarm handler and a Worker Loader child at request time, and that module
+ * top level is the only exception.
  *
  * The CF adapter satisfies this by spawning a per-tool child Worker via
  * `env.LOADER.get(name, factory)` — modules are compiled by the workerd loader,

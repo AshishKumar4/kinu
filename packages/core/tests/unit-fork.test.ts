@@ -9,11 +9,33 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { forkWorkspaceStorage, readForkLineage, initAllTables, readSoul, writeSoul } from '../src/index.js';
+import {
+  forkWorkspaceStorage, readForkLineage, initAllTables, readSoul, writeSoul, sessionTreeAncestry,
+} from '../src/index.js';
+import type { RawSqlExec, SqlExecutor, VFS } from '../src/types/primitives.js';
 import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers.js';
 
-/** Build a fresh in-memory DB with the full production schema applied. */
-function fresh() {
+/** The SDK's own DDL, verbatim from `agents`' AgentSessionProvider.ensureTable.
+ *  `created_at` is a whole-second DATETIME — the reason a fork cut cannot be a
+ *  timestamp comparison. */
+const SDK_SESSION_DDL = `CREATE TABLE IF NOT EXISTS assistant_messages (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL DEFAULT '',
+  parent_id TEXT,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`;
+
+/** One in-memory workspace: the full production schema plus its filesystem. */
+interface WorkspaceFixture {
+  db: Database;
+  sql: SqlExecutor;
+  execRaw: RawSqlExec;
+  vfs: VFS;
+}
+
+function fresh(): WorkspaceFixture {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
@@ -22,9 +44,12 @@ function fresh() {
   return { db, sql, execRaw, vfs };
 }
 
-/** Seed a source DB with identity, SOUL.md, N messages, and some crafted tools. */
+/** Seed a source DB with identity, SOUL.md, N messages, and some crafted tools.
+ *  A message with no explicit `parent_id` is linked to the previous one, which
+ *  is what the SDK's session provider does (`parentId ?? latestLeaf`) — a
+ *  transcript always has edges, and a seed without them is not a transcript. */
 async function seedSource(
-  { sql, execRaw, vfs }: ReturnType<typeof fresh>,
+  { sql, execRaw, vfs }: WorkspaceFixture,
   opts: {
     identity: { id: string; name: string };
     purpose: string;
@@ -34,11 +59,12 @@ async function seedSource(
 ) {
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${opts.identity.id}, ${opts.identity.name}, ${100})`;
   await writeSoul(vfs, sql, opts.purpose);
+  let previousId: string | null = null;
   for (const m of opts.messages) {
+    const parent = m.parent_id !== undefined ? m.parent_id : previousId;
     void sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${m.id}, ${'default'}, ${m.parent_id ?? null}, ${m.role}, ${m.content}, ${m.created_at})`;
-    void sql`INSERT INTO conversation_history (session_id, role, message, created_at)
-        VALUES (${'default'}, ${m.role}, ${JSON.stringify({ role: m.role, content: m.content })}, ${m.created_at})`;
+        VALUES (${m.id}, ${'default'}, ${parent}, ${m.role}, ${m.content}, ${m.created_at})`;
+    previousId = m.id;
   }
   for (const t of opts.craftedTools ?? []) {
     void sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
@@ -51,7 +77,7 @@ async function seedSource(
   void sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'display_name'}, ${opts.identity.name})`;
 }
 
-async function seedTargetBootstrap({ sql, execRaw, vfs }: ReturnType<typeof fresh>) {
+async function seedTargetBootstrap({ sql, execRaw, vfs }: WorkspaceFixture) {
   // Simulate what the fork DO's onStart path inserts: default SOUL.md + identity.
   // forkWorkspaceStorage should purge these before writing the real fork rows.
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'TARGET-BOOTSTRAP-ID'}, ${'target-bootstrap'}, ${200})`;
@@ -87,7 +113,8 @@ describe('forkWorkspaceStorage', () => {
     expect(result.messagesCopied).toBe(3);
 
     const targetMsgs = tgt.sql<{ id: string; parent_id: string | null; role: string; content: string }>`
-      SELECT id, parent_id, role, content FROM messages ORDER BY created_at ASC
+      SELECT id, parent_id, role, content FROM messages
+      WHERE role != 'system' ORDER BY created_at ASC
     `;
     expect(targetMsgs.length).toBe(3);
     expect(targetMsgs.map(m => m.id)).toEqual(['msg-1', 'msg-2', 'msg-3']);
@@ -239,8 +266,9 @@ describe('forkWorkspaceStorage', () => {
     // Fork B → C
     await forkWorkspaceStorage(b.sql, b.vfs, c.sql, c.vfs, { untilMessageId: 'b4', targetWorkspaceId: 'C-ID', targetWorkspaceName: 'agent-C', now: 7000 });
 
-    // C has all 4 messages (a1, a2, b3, b4)
-    const cMsgs = c.sql<{ id: string }>`SELECT id FROM messages ORDER BY created_at ASC`;
+    // C inherits b4's ancestry: a1, a2, b3, b4 (its own marker excluded).
+    const cMsgs = c.sql<{ id: string }>`
+      SELECT id FROM messages WHERE role != 'system' ORDER BY created_at ASC`;
     expect(cMsgs.map(m => m.id)).toEqual(['a1', 'a2', 'b3', 'b4']);
 
     // C's lineage points to B (immediate parent), not A
@@ -264,7 +292,10 @@ describe('forkWorkspaceStorage', () => {
     })).rejects.toThrow('fork point not found');
   });
 
-  test('9. forkPointMs is inclusive (messages at created_at == T are copied)', async () => {
+  test('9. the cut resolves on edges, not on time — a whole-second clock cannot', async () => {
+    // The SDK's store stamps `DATETIME DEFAULT CURRENT_TIMESTAMP`, so every
+    // message of a turn can share one timestamp. `created_at <= T` therefore
+    // could not say which side of the cut m2 and m3 were on; the edges can.
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -272,17 +303,38 @@ describe('forkWorkspaceStorage', () => {
       identity: { id: 'S', name: 's' }, purpose: 'p',
       messages: [
         { id: 'm1', role: 'user', content: 'a', created_at: 1000 },
-        { id: 'm2', role: 'assistant', content: 'b', created_at: 1000 },  // same ts
-        { id: 'm3', role: 'user', content: 'c', created_at: 1001 },       // just after
+        { id: 'm2', role: 'assistant', content: 'b', created_at: 1000 },
+        { id: 'm3', role: 'user', content: 'c', created_at: 1000 },
       ],
     });
 
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
-    const ids = tgt.sql<{ id: string }>`SELECT id FROM messages ORDER BY created_at ASC, id ASC`.map(r => r.id);
-    expect(ids).toContain('m1');
-    expect(ids).toContain('m2');  // same ts as the fork point — included
-    expect(ids).not.toContain('m3');
+    const ids = tgt.sql<{ id: string }>`
+      SELECT id FROM messages WHERE role != 'system' ORDER BY created_at ASC, id ASC`.map(r => r.id);
+    expect(ids).toEqual(['m1', 'm2']);
+  });
+
+  test('9b. a sibling branch is not inherited — only the cut point\'s ancestry', async () => {
+    // Two children of m1: forking at one must not carry the other. A prefix cut
+    // cannot express this at all, which is why the model had to change.
+    const src = fresh();
+    const tgt = fresh();
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
+      identity: { id: 'S', name: 's' }, purpose: 'p',
+      messages: [
+        { id: 'm1', role: 'user', content: 'root', created_at: 1000 },
+        { id: 'left', role: 'assistant', content: 'take one', parent_id: 'm1', created_at: 1100 },
+        { id: 'right', role: 'assistant', content: 'take two', parent_id: 'm1', created_at: 1100 },
+      ],
+    });
+
+    await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'left', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
+
+    const ids = tgt.sql<{ id: string }>`
+      SELECT id FROM messages WHERE role != 'system' ORDER BY created_at ASC, id ASC`.map(r => r.id);
+    expect(ids).toEqual(['m1', 'left']);
   });
 
   test('10. workspace_identity rewritten with new UUID + name + fresh created_at', async () => {
@@ -309,7 +361,7 @@ describe('forkWorkspaceStorage', () => {
     expect(ident[0]!.id).not.toBe('TARGET-BOOTSTRAP-ID');   // bootstrap row was purged
   });
 
-  test('11. synthetic fork-notice system message appended to conversation_history', async () => {
+  test('11. the fork marker is a node of the fork\'s own tree, parented on the cut', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -323,15 +375,18 @@ describe('forkWorkspaceStorage', () => {
 
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'beta', now: 5000 });
 
-    // Post-fork conversation_history has 3 rows: 2 copied + 1 synthetic system
-    const rows = tgt.sql<{ role: string; created_at: number; message: string }>`
-      SELECT role, created_at, message FROM conversation_history ORDER BY created_at ASC, id ASC
+    const rows = tgt.sql<{ id: string; parent_id: string | null; role: string; created_at: number; content: string }>`
+      SELECT id, parent_id, role, created_at, content FROM messages ORDER BY created_at ASC, id ASC
     `;
-    expect(rows.length).toBe(3);
-    expect(rows[2]!.role).toBe('system');
-    expect(rows[2]!.created_at).toBe(1101);    // forkPointMs + 1
-    expect(rows[2]!.message).toContain('forked from workspace');
-    expect(rows[2]!.message).toContain('alpha');
+    expect(rows.map((r) => r.role)).toEqual(['user', 'assistant', 'system']);
+    const marker = rows[2]!;
+    expect(marker.parent_id).toBe('m2');
+    expect(marker.created_at).toBe(1101);    // forkPointMs + 1
+    expect(marker.content).toContain('forked from workspace');
+    expect(marker.content).toContain('alpha');
+    // The marker is the fork's leaf, so the whole inherited chain hangs off it.
+    expect(sessionTreeAncestry(tgt.sql, marker.id).map((n) => n.id))
+      .toEqual(['m1', 'm2', marker.id]);
   });
 
   test('12. agent_config copied but display_name overwritten', async () => {
@@ -360,9 +415,7 @@ describe('forkWorkspaceStorage', () => {
     expect(readForkLineage(sql)).toBeNull();
   });
 
-  test('14. assistant_messages (Think Session table) carried to fork', async () => {
-    // Populate the Session-owned table on the source and verify the fork
-    // hydrates its chat UI from the same rows.
+  test('14. the pane rows a fork carries are the cut point\'s ancestry', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -371,48 +424,32 @@ describe('forkWorkspaceStorage', () => {
       messages: [
         { id: 'm1', role: 'user', content: 'hello', created_at: 1000 },
         { id: 'm2', role: 'assistant', content: 'hi', parent_id: 'm1', created_at: 1100 },
+        { id: 'm3', role: 'user', content: 'after', parent_id: 'm2', created_at: 1200 },
       ],
     });
-    // Session's schema as created by appendMessage's ensureTable. Timestamps
-    // stored as DATETIME strings; the helper uses strftime to compare.
-    src.execRaw(`
-      CREATE TABLE IF NOT EXISTS assistant_messages (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL DEFAULT '',
-        parent_id TEXT,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    // 1000ms → 1970-01-01T00:00:01.000Z; 1100ms → 1970-01-01T00:00:01.100Z.
-    // strftime('%s', ...) yields seconds → *1000 gives 1000 and 1000 (rounds
-    // down). We use a clearly-separated second to avoid truncation.
-    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES ('m1', '', NULL, 'user',
-              ${JSON.stringify({ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hello' }] })},
-              '1970-01-01 00:00:01.000')`;
-    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES ('m2', '', 'm1', 'assistant',
-              ${JSON.stringify({ id: 'm2', role: 'assistant', parts: [{ type: 'text', text: 'hi' }] })},
-              '1970-01-01 00:00:02.000')`;
+    src.execRaw(SDK_SESSION_DDL);
+    // Both messages land in the SAME second, which is all the SDK's
+    // `DATETIME DEFAULT CURRENT_TIMESTAMP` can record. The old cut compared
+    // `strftime('%s', created_at) * 1000` against the fork point and so could
+    // not tell m2 from m3; the ancestry can.
+    for (const [id, parent, role, text] of [
+      ['m1', null, 'user', 'hello'], ['m2', 'm1', 'assistant', 'hi'], ['m3', 'm2', 'user', 'after'],
+    ] as const) {
+      void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+        VALUES (${id}, ${''}, ${parent}, ${role},
+                ${JSON.stringify({ id, role, parts: [{ type: 'text', text }] })},
+                ${'1970-01-01 00:00:01'})`;
+    }
 
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
-      untilMessageId: 'm2',    // forkPointMs = 1100
-      targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
+      untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
     });
 
-    // Only m1 (at second=1, strftime returns 1s → 1000ms ≤ 1100ms) is copied.
-    // m2 is at second=2 → 2000ms > 1100ms, excluded by the cut point.
-    // Step 12 also writes a system-role synthetic marker — we assert on the
-    // copied user-role row here; test 16 covers the synthetic marker.
-    const userRows = tgt.sql<{ id: string; role: string; content: string; parent_id: string | null }>`
-      SELECT id, role, content, parent_id FROM assistant_messages WHERE role = 'user'
+    const carried = tgt.sql<{ id: string; role: string; parent_id: string | null }>`
+      SELECT id, role, parent_id FROM assistant_messages WHERE role != 'system' ORDER BY rowid
     `;
-    expect(userRows.length).toBe(1);
-    expect(userRows[0]!.id).toBe('m1');
-    expect(userRows[0]!.parent_id).toBeNull();
-    expect(userRows[0]!.content).toContain('hello');
+    expect(carried.map((r) => r.id)).toEqual(['m1', 'm2']);
+    expect(carried[1]!.parent_id).toBe('m1');
   });
 
   test('15. assistant_messages copy is no-op when source has no such table', async () => {
@@ -430,7 +467,7 @@ describe('forkWorkspaceStorage', () => {
     })).resolves.toBeDefined();
   });
 
-  test('16. synthetic fork marker written to assistant_messages for UI visibility', async () => {
+  test('16. the fork marker reaches the pane store when the fork carried one', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -438,6 +475,12 @@ describe('forkWorkspaceStorage', () => {
       identity: { id: 'SRC', name: 'alpha' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
+    src.execRaw(SDK_SESSION_DDL);
+    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${'m1'}, ${''}, ${null}, ${'user'},
+              ${JSON.stringify({ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] })},
+              ${'1970-01-01 00:00:01'})`;
+
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'beta',
     });

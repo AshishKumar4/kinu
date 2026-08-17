@@ -11,9 +11,17 @@ import * as v from 'valibot';
 import type { DirectoryBackup } from '../execution/sandbox.js';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort.js';
 import {
+  DEFAULT_AGENT_STANCE,
+  isAgentStance,
+  type AgentStance,
+} from '../tools/registry.js';
+import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
 } from '../prompting/cache-breakpoints.js';
 import { parseJsonValue } from '../utils/json.js';
+import {
+  formatApprovalGrant, parseApprovalGrant, type ApprovalGrant,
+} from '../safety/approval-gate.js';
 
 const DirectoryBackupSchema: v.GenericSchema<DirectoryBackup> = v.object({
   id: v.string(),
@@ -34,7 +42,14 @@ export const AGENT_CONFIG_KEYS = {
   displayName: 'display_name',
   /** 'user' once the operator sets a name explicitly — suppresses auto-titling. */
   nameOrigin: 'name_origin',
+  /** The working stance the AGENT selected for itself through `tasks`
+   *  action=mode. Guidance only — permission is the Plan/Auto axis. */
+  agentStance: 'agent_stance',
   shellApprovalMode: 'shell_approval_mode',
+  /** Comma-separated `<rule>@<executor>` pairs the owner has said "always" to.
+   *  Sits beside the approval MODE deliberately: both are the same knob — how
+   *  much the gate asks — read live at exec time, revocable in one place. */
+  shellApprovalGrants: 'shell_approval_grants',
   sleepTimeCompute: 'sleep_time_compute',
   autoPromoteScaffold: 'auto_promote_scaffold',
   shadowSampleRate: 'shadow_sample_rate',
@@ -117,8 +132,21 @@ export interface AgentConfigStore {
   setDisplayName(name: string): void;
   getNameOrigin(): 'user' | 'auto' | null;
   setNameOrigin(origin: 'user' | 'auto'): void;
+  /** The agent's current working stance. Always answers: unset or unknown
+   *  reads as `general`, which renders no guidance at all. */
+  getStance(): AgentStance;
+  setStance(stance: AgentStance): void;
   getShellApprovalMode(): ShellApprovalMode;
   setShellApprovalMode(mode: ShellApprovalMode): void;
+  /** Standing (rule, executor) grants. Never widens what a command may reach;
+   *  it only stops the gate asking again about a kind of command the owner has
+   *  already blessed in one place. */
+  getShellApprovalGrants(): ApprovalGrant[];
+  /** Remember one or more grants. Idempotent — granting twice is one grant. */
+  grantShellApproval(grants: readonly ApprovalGrant[]): void;
+  /** Forget grants. An unknown grant is not an error: revoking twice is one
+   *  revocation, which is what a UI that can double-submit needs. */
+  revokeShellApproval(grants: readonly ApprovalGrant[]): void;
   getSleepTimeComputeEnabled(): boolean;
   setSleepTimeComputeEnabled(enabled: boolean): void;
   getAutoPromoteScaffold(): boolean;
@@ -245,6 +273,18 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     void sql`INSERT INTO agent_config (key, value) VALUES (${key}, ${value})
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
   };
+  /** Reads in the parsed domain, so an unparseable token is not just ignored
+   *  on read but dropped on the next write — the row never accretes rubbish a
+   *  human has to look at when they go to revoke something. */
+  const storedGrants = (): ApprovalGrant[] => {
+    const raw = get(AGENT_CONFIG_KEYS.shellApprovalGrants) ?? '';
+    return raw.split(',').map(parseApprovalGrant).filter((g) => g !== null);
+  };
+  const writeGrants = (grants: readonly ApprovalGrant[]): void => {
+    const value = [...new Set(grants.map(formatApprovalGrant))].join(',');
+    if (value.length === 0) void sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.shellApprovalGrants}`;
+    else set(AGENT_CONFIG_KEYS.shellApprovalGrants, value);
+  };
   return {
     get,
     set,
@@ -279,11 +319,22 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     setDisplayName(name) { set(AGENT_CONFIG_KEYS.displayName, name); },
     getNameOrigin() { const v = get(AGENT_CONFIG_KEYS.nameOrigin); return v === 'user' || v === 'auto' ? v : null; },
     setNameOrigin(origin) { set(AGENT_CONFIG_KEYS.nameOrigin, origin); },
+    getStance() {
+      const stored = get(AGENT_CONFIG_KEYS.agentStance);
+      return isAgentStance(stored) ? stored : DEFAULT_AGENT_STANCE;
+    },
+    setStance(stance) { set(AGENT_CONFIG_KEYS.agentStance, stance); },
     getShellApprovalMode(): ShellApprovalMode {
       const v = get(AGENT_CONFIG_KEYS.shellApprovalMode);
       return v === 'allow_all' || v === 'deny_all' ? v : 'strict';
     },
     setShellApprovalMode(mode) { set(AGENT_CONFIG_KEYS.shellApprovalMode, mode); },
+    getShellApprovalGrants: storedGrants,
+    grantShellApproval(grants) { writeGrants([...storedGrants(), ...grants]); },
+    revokeShellApproval(grants) {
+      const dropped = new Set(grants.map(formatApprovalGrant));
+      writeGrants(storedGrants().filter((g) => !dropped.has(formatApprovalGrant(g))));
+    },
     // Autonomy switches default ON (the "unleash, don't cap" flip): the
     // Evolution Changelog makes every self-change visible and revertable,
     // and the misevolution gate + shadow veto + archive are the safety net.

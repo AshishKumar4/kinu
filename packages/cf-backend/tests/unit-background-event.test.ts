@@ -4,7 +4,7 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildDrainBatch } from '@proteus/core';
+import { buildDrainBatch, WORKSPACE_CREATED_EVENT, workspaceGenesisSignal } from '@proteus/core';
 import type { JsonValue, ProteusEvent } from '@proteus/core';
 import {
   applySignalCard, classifyProgrammaticTurn, eventVariantLabel, messageSignalId,
@@ -33,6 +33,18 @@ describe('programmatic turn provenance', () => {
     expect(classifyProgrammaticTurn(undefined)).toBeNull();
     expect(classifyProgrammaticTurn({})).toBeNull();
     expect(classifyProgrammaticTurn('event_drain')).toBeNull();
+  });
+
+  // Genesis: the card and the signal that produces it must agree on ONE string.
+  // The signal is built in core (identity/soul.ts) and classified here; if they
+  // ever drift, the workspace's first turn silently renders as a message the
+  // owner never typed. So the assertion uses the core constant, not a literal.
+  test('the workspace\'s own first turn is not the owner speaking', () => {
+    const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
+    expect(genesis).not.toBeNull();
+    expect(classifyProgrammaticTurn({ proteusEvent: genesis!.kind, signalId: 'sig-1' }))
+      .toEqual({ kind: 'workspace_created' });
+    expect(genesis!.kind).toBe(WORKSPACE_CREATED_EVENT);
   });
 });
 

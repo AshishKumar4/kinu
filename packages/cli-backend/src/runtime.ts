@@ -330,18 +330,21 @@ export function createCLIRuntime(
   let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
   const approvalPolicy: ShellApprovalPolicy = {
     mode: () => agentConfig.getShellApprovalMode(),
+    granted: (grant) => agentConfig.getShellApprovalGrants()
+      .some((g) => g.rule === grant.rule && g.executor === grant.executor),
     requestApproval: (req) => approvalChannel?.(req) ?? Promise.resolve(null),
   };
-  // Gate is the OUTERMOST wrap: a denied/gated command never reaches
-  // checkpointing, so a refused `rm -rf /` doesn't spend a snapshot on a
-  // command that never ran.
-  // The `workspace` runtime is the workspace filesystem's own shell. The host
-  // machine's shell is the `laptop` executor, checkpointed and gated there.
+  // The `workspace` runtime is the workspace filesystem's own shell, gated
+  // here because `gateProviderExec` deliberately skips it (execution/
+  // approval.ts). The host machine's shell is NOT gated here: it reaches the
+  // model only as the `laptop` ExecutorProvider below, which the router gates
+  // under that name. It used to be wrapped in both places, which reviewed
+  // every host command twice and asked the user twice for one command.
+  // Checkpointing still sits inside the gate, so a refused `rm -rf /` does
+  // not spend a snapshot on a command that never ran.
   const shell: Shell = withApprovalGatedShell(workspace.shell, approvalPolicy);
-  const hostShell: Shell = withApprovalGatedShell(
-    withCheckpointedShell(createHostShell(process.cwd()), checkpoints, process.cwd()),
-    approvalPolicy,
-  );
+  const hostShell: Shell = withCheckpointedShell(
+    createHostShell(process.cwd()), checkpoints, process.cwd());
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
   // Both local executors run their commands in THIS process's container, so
   // both carry its measured cgroup limits — the truth `nproc` cannot tell the
@@ -579,6 +582,9 @@ function createLocalLaptopExecutor(
     // snapshot into the same shadow-git checkpoints the bound shell uses, so
     // /undo covers file-plane mutations too.
     files: createHostMountVFS(checkpoints),
+    // Where the CLI was invoked — the directory its shell starts in and the
+    // one its relative paths already resolve against (`toHostPath`).
+    homeDir: async () => cwd,
     capabilities: new Set(['shell', 'git', 'npm', 'fs_shared', 'net_outbound', 'process_spawn']),
     positionalArgs: true,
     isAvailable: () => true,
