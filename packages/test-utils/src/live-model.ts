@@ -35,7 +35,7 @@
  * it was configured. That returns `misconfigured` and the suites throw.
  */
 import {
-  createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, type LLMProviderConfig,
+  cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, type LLMProviderConfig,
 } from '@proteus/core';
 import type { LanguageModel } from 'ai';
 import { appendFileSync } from 'node:fs';
@@ -110,7 +110,7 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
         via: 'worker-proxy',
         llm: {
           name: 'workers-ai',
-          baseURL: userAIProxyBaseURL(origin),
+          baseURL: cloudProxyBaseURL(origin),
           headers: { Authorization: bearer(token) },
           model,
         },
@@ -160,12 +160,6 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
       + `for the deployed worker proxy (cheapest — native Workers AI), or `
       + `${LIVE_MODEL_ENV.gatewayURL[0]} + ${LIVE_MODEL_ENV.gatewayAuth[0]} for an AI Gateway.`,
   };
-}
-
-/** The worker's signed-in OpenAI-compatible inference proxy. Mirrors
- *  `USER_AI_PROXY_PREFIX` in cf-backend/src/user/ai-proxy.ts. */
-function userAIProxyBaseURL(origin: string): string {
-  return `${origin.replace(/\/+$/, '')}/api/user/ai/v1`;
 }
 
 /**
