@@ -599,6 +599,11 @@ function startInBandErrorLlm(payload: JsonValue) {
     port: 0,
     hostname: "127.0.0.1",
     async fetch(request) {
+      // A provider registry lists the endpoint's models before it completes
+      // anything, and that probe is a GET with no body. Parsing one as JSON
+      // threw INSIDE Bun.serve, which surfaces as an unhandled error "between
+      // tests" and fails whichever neighbour happens to be running.
+      if (request.method === 'GET') return Response.json({ data: [] });
       const body = v.parse(RequestBodySchema, await request.json());
       if (!body.stream) return Response.json(payload, { status: 400 });
       return new Response(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`, {

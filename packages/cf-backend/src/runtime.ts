@@ -31,6 +31,7 @@ import {
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   withApprovalGatedShell, createInheritedApprovalPolicy,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
+  type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
@@ -41,6 +42,7 @@ import {
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
 import { getSandbox } from "@cloudflare/sandbox";
+import { configureContainerEgress, withConfiguredEgress } from "./egress/configure.js";
 import { previewHostSuffix } from "./lib/preview-origin.js";
 import { MemoryStore } from "@proteus/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
@@ -59,7 +61,7 @@ import {
   type UserCredentialSource,
 } from "./providers/agent-registry.js";
 import { resolveJudgeModelSelection } from "./providers/judge-model.js";
-import type { UserCaller } from "./user/workspace-capability.js";
+import { ownerCaller, type UserCaller } from "./user/workspace-capability.js";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
 import { agentAffinityKey, explorePrompt, formatInheritedContext, missionCallUsage, reflectionPrompt } from "@proteus/core";
 import type { ProteusSandbox } from "./proteus-sandbox.js";
@@ -168,6 +170,34 @@ function userDOStubFor(env: Env, actor: ActorRuntimeIdentity): RuntimeUserDOClie
   // RPC signature at each runtime call site.
   const namespace = namespaceView as RuntimeUserDONamespace;
   return namespace.get(namespace.idFromName(userId));
+}
+
+/** The owner's whole egress vault, secret-free. Empty when the workspace is
+ *  unclaimed or the UserDO cannot be reached: an unreadable vault must narrow
+ *  what the container may spend, never widen it. */
+async function listOwnerEgressVault(
+  env: Env, actor: ActorRuntimeIdentity,
+): Promise<EgressSecretBinding[]> {
+  try {
+    const vaultView: Partial<EgressVaultClient> = {};
+    const userId = actor.ownerUserId();
+    if (!userId) return [];
+    Object.assign(vaultView, env.UserDO.get(env.UserDO.idFromName(userId)));
+    // SAFETY: the compiler guarantees this name is a real UserDO method — it is
+    // declared public there and listed in USER_DO_METHODS, whose
+    // `as const satisfies readonly (keyof UserDO)[]` contract fails the build on
+    // a typo, so `sealRpcSurface` leaves it reachable on the stub.
+    // unit-egress-vault.test.ts asserts it is on USER_DO_RPC_SURFACE.
+    const vault = vaultView as EgressVaultClient;
+    return [...await vault.listEgressSecrets(await ownerCaller(env))];
+  } catch (err) {
+    console.warn("[proteus] egress vault unreadable, no secret is injectable:", errorMessage(err));
+    return [];
+  }
+}
+
+interface EgressVaultClient {
+  listEgressSecrets(caller: UserCaller): Promise<readonly EgressSecretBinding[]>;
 }
 
 /** This actor's identity for a privileged UserDO call. Rejects — rather than
@@ -393,30 +423,50 @@ export function createCFRuntime(
   // by preview-proxy.ts. `sandboxId` is the stable DO key those URLs carry.
   const previewSuffix = previewHostSuffix(env) ?? undefined;
   const sandboxId = `proteus-${actor.workspaceName}`;
-  // Every remote mount exposes the environment's REAL root ('/'); the
   let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox) {
     try {
-      const rawHandle = adaptCloudflareSandbox(getSandbox(env.Sandbox, sandboxId, { normalizeId: true }));
-      // Restoring the container belongs to whoever owns its NAME. `sandboxId` is
-      // keyed to actor.workspaceName, which for a facet — a head, a subordinate —
-      // is its PARENT's: it rides a container it does not own, and its own
-      // `workspace_backup` row is not that container's history. A facet that
-      // wrapped this handle read its own empty key and marked the container
-      // restored having restored nothing, then execed against whatever state it
-      // found — permanently, because the mark is one-shot and never retried. A
-      // facet that cannot mark the container restored cannot mark it falsely.
-      const ownsContainer = agent.name === actor.workspaceName;
-      const handle = ownsContainer
-        ? createRestoringSandboxHandle(rawHandle, createAgentConfigStore(sql))
-        : rawHandle;
+      // `transport: 'websocket'` multiplexes the whole container control plane
+      // over one WebSocket instead of a request per call. It must be passed
+      // identically on EVERY getSandbox() for an id — changing it mid-life
+      // disconnects the active client and drops in-flight requests — so this
+      // option list is the single place it is chosen (see orchestrator.ts's
+      // release-preview lookup, which passes the same).
+      const sdk = getSandbox(env.Sandbox, sandboxId, { normalizeId: true, transport: "websocket" });
+      // Egress interception is configured before the container can run anything,
+      // and awaited inside the operation that needed it. Not in `onStart`: the
+      // Container base re-applies its persisted outbound configuration
+      // immediately BEFORE `container.start()`, and `onStart` runs after the
+      // container is already up, so the hook is too late to install it. Until it
+      // lands the container has no network at all — `enableInternet = false` with
+      // no handler bound means the platform denies everything — so the window
+      // before configuration fails closed rather than leaking an unintercepted
+      // request. Only the workspace that OWNS the grants configures; a facet
+      // rides the configuration its root installed.
+      const handle = withConfiguredEgress(adaptCloudflareSandbox(sdk), async () => {
+        const userId = actor.ownerUserId();
+        if (!userId) return;
+        await configureContainerEgress(sdk, {
+          workspaceName: actor.workspaceName,
+          ownerUserId: userId,
+          vault: await listOwnerEgressVault(env, actor),
+          grants: memoryConfig.getShellApprovalGrants(),
+        });
+      });
       sandboxHandle = handle;
+      // No restore wrapper here, deliberately. Restoring /workspace is the
+      // container's own affair and happens in ProteusSandbox.onStart, inside the
+      // blockConcurrencyWhile that no exec can jump ahead of. The predicate this
+      // replaced ("only the container's owner may decide a restore") existed to
+      // stop a facet reading its own empty `agent_config` and latching the
+      // container as restored; with the state on the container's own object
+      // there is one reader, one writer, and nothing to arbitrate.
       // The executor carries its own file view over this same handle, for the
       // file manager's sandbox pane. An unset PREVIEW_HOST_SUFFIX turns off
       // previews alone: exec, files and the release engine keep working, and
       // port exposure refuses with the preview-specific reason.
       executionRouter.register(createSandboxExecutor(handle, previewSuffix));
-      console.log(`[proteus] SandboxExecutor registered (${previewSuffix ? `previews=*.${previewSuffix}` : "previews off — PREVIEW_HOST_SUFFIX unset"} id=${sandboxId} restore=${ownsContainer ? 'owner' : `deferred to ${actor.workspaceName}`})`);
+      console.log(`[proteus] SandboxExecutor registered (${previewSuffix ? `previews=*.${previewSuffix}` : "previews off — PREVIEW_HOST_SUFFIX unset"} id=${sandboxId} transport=websocket)`);
     } catch (err) {
       console.warn("[proteus] Failed to register SandboxExecutor:", errorMessage(err));
       executionRouter.register(createSandboxExecutor());
@@ -568,51 +618,6 @@ function adaptCloudflareSandbox(handle: ProteusSandbox): SandboxHandle {
     exposePort: (port, opts) => handle.exposePort(port, opts),
     unexposePort: (port) => jsonResultOrVoid(handle.unexposePort(port)),
     getExposedPorts: (hostname) => handle.getExposedPorts(hostname),
-    createBackup: async (opts) => {
-      const backup = await handle.createBackup({
-        ...opts,
-        excludes: opts.excludes ? [...opts.excludes] : undefined,
-      });
-      if (backup.localBucket !== undefined) {
-        return { id: backup.id, dir: backup.dir, localBucket: backup.localBucket };
-      }
-      return { id: backup.id, dir: backup.dir };
-    },
-    restoreBackup: async (backup) => {
-      const restored = await handle.restoreBackup(backup);
-      return { success: restored.success, dir: restored.dir, id: restored.id };
-    },
-  };
-}
-
-function createRestoringSandboxHandle(
-  handle: SandboxHandle,
-  config: ReturnType<typeof createAgentConfigStore>,
-): SandboxHandle {
-  let restored = false;
-  const restoreOnce = async () => {
-    if (restored) return;
-    restored = true;
-    const backup = config.getWorkspaceBackup();
-    if (!backup) return;
-    try { await handle.restoreBackup(backup); }
-    catch (err) { console.warn('[proteus] workspace restore failed:', errorMessage(err)); }
-  };
-  const before = async <T>(fn: () => Promise<T>): Promise<T> => {
-    await restoreOnce();
-    return fn();
-  };
-  return {
-    exec: (command, opts) => before(() => handle.exec(command, opts)),
-    readFile: (path, opts) => before(() => handle.readFile(path, opts)),
-    writeFile: (path, content, opts) => before(() => handle.writeFile(path, content, opts)),
-    listFiles: (path, opts) => before(() => handle.listFiles(path, opts)),
-    deleteFile: (path) => before(() => handle.deleteFile(path)),
-    exposePort: (port, opts) => before(() => handle.exposePort(port, opts)),
-    unexposePort: (port) => before(() => Promise.resolve(handle.unexposePort(port))),
-    getExposedPorts: (hostname) => before(() => handle.getExposedPorts(hostname)),
-    createBackup: (opts) => handle.createBackup(opts),
-    restoreBackup: (backup) => handle.restoreBackup(backup),
   };
 }
 

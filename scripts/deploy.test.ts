@@ -36,6 +36,7 @@ const REQUIRED_GATES = [
   "bun test scripts/ladder.test.ts",
   "bun run gate:dead-code",
   "bun run gate:duplication",
+  "bun run gate:capability-parity",
   "bun run gate:do-init",
   "bun run gate:reachability",
   "bun run gate:platform",

@@ -125,8 +125,6 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
     },
     async unexposePort() {},
     async getExposedPorts() { return []; },
-    async createBackup() { throw new Error('Backups are outside this VFS conformance test'); },
-    async restoreBackup() { throw new Error('Backups are outside this VFS conformance test'); },
   };
   return handle;
 }

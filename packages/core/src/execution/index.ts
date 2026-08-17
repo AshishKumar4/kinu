@@ -22,11 +22,20 @@ export { DefaultExecutionRouter } from './router.js';
 export { createInlineExecutor, type InlineExecutorDeps } from './inline.js';
 export { withApprovalGatedShell, gateProviderExec } from './approval.js';
 export {
-  createSandboxExecutor, type SandboxHandle,
-  type BackupOptions, type DirectoryBackup, type RestoreBackupResult,
-  shouldBackupWorkspace, workspaceBackupOptions, BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS,
-  isSandboxTransientError,
+  createSandboxExecutor, type SandboxHandle, isSandboxTransientError,
 } from './sandbox.js';
+export {
+  createWorkspaceSnapshots, type WorkspaceSnapshots, type WorkspaceSnapshotPorts,
+  type WorkspaceSnapshotState, type WorkspaceRestoreOutcome, type WorkspaceSnapshotOutcome,
+  type WorkspaceRestoreOutcomeKind, type WorkspaceSnapshotOutcomeKind,
+  WORKSPACE_RESTORE_OUTCOMES, WORKSPACE_SNAPSHOT_OUTCOMES,
+  type BackupOptions, type DirectoryBackup, type WorkspaceChangeStatus,
+  shouldBackupWorkspace, workspaceBackupOptions, workspaceRestoreMode,
+  BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS, WORKSPACE_BACKUP_DIR,
+  WORKSPACE_RESTORE_DEADLINE_MS, isDirectoryOverlayMounted,
+  snapshotIntegrityFailure, snapshotObjectKeys, withContainerStartDeadline,
+  type SnapshotObjectKeys, type LateStartFailure,
+} from './workspace-snapshot.js';
 export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunnel-executor.js';
 export { explainNativeToolReferenceError } from './sandbox-errors.js';
 export {

@@ -326,6 +326,15 @@ export function classMembers(node: SyntaxNode): readonly SyntaxNode[] {
   return body?.children ?? [];
 }
 
+/** The name in a class's `extends` clause when it is a plain identifier —
+ *  `class A extends B<C>` yields `B`. Which base a class extends is how a gate
+ *  tells two same-named lifecycle hooks apart without any type information. */
+export const superClassName = (node: SyntaxNode): string | undefined =>
+  (node.raw.type === 'ClassDeclaration' || node.raw.type === 'ClassExpression')
+  && node.raw.superClass !== null && node.raw.superClass !== undefined
+    ? identifierName(node.raw.superClass)
+    : undefined;
+
 /* ── Module structure ─────────────────────────────────────────────────────
    ESTree wraps an exported declaration instead of flagging it, so "the
    declaration this statement declares" and "is it exported" are one question

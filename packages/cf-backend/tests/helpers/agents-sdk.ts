@@ -87,10 +87,22 @@ export function mockAgentsSdk(): void {
   }));
   // The DO layer reaches the runtime + codemode module graph (a head builds a
   // CF runtime and an execute_tools tool), both of which import this
-  // workerd-only module at load.
+  // workerd-only module at load. So does `@cloudflare/sandbox`, and its import
+  // list grew in 0.12.0: it now names `tracing` as well as `RpcTarget`, and an
+  // ES named import that the mock does not provide is a SyntaxError at module
+  // load, not an undefined at use — which is why omitting one takes out every
+  // suite whose graph reaches the SDK rather than just the code that calls it.
+  // `enterSpan(name, fn)` is what the SDK invokes, and it hands `fn` a span it
+  // stamps attributes on. The stub runs the body and accepts the attributes, so
+  // the traced path is the one under test — the SDK also has a no-tracer
+  // fallback, and a mock that triggered it would leave that path unexercised.
   mock.module('cloudflare:workers', () => ({
     RpcTarget: class {},
     WorkerEntrypoint: class {},
     DurableObject: class {},
+    tracing: {
+      enterSpan: <T>(_name: string, fn: (span: { setAttribute: () => void }) => T): T =>
+        fn({ setAttribute: () => {} }),
+    },
   }));
 }

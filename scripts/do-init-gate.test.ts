@@ -97,15 +97,86 @@ describe('DO init-gate purity', () => {
   });
 });
 
+// ── The container-start hook: the same name, the opposite requirement ────────
+//
+// `@cloudflare/containers`' Container.onStart is awaited inside
+// blockConcurrencyWhile too, but only on the container start path — never on DO
+// construction and never per request. There, returning the promise is what gives
+// the restore its ordering guarantee, and detaching it loses the work outright.
+// So the rule inverts, and the protection is replaced rather than removed: the
+// method still cannot await (it is not async), and what it returns must be
+// bounded.
+describe('DO init-gate purity — container-start hook', () => {
+  const CORRECT = `export class ProteusSandbox extends Sandbox<Env> {
+    onStart(): Promise<void> {
+      return withContainerStartDeadline('x', 25_000, () => this.start(), () => {});
+    }
+  }`;
+
+  test('the correct shape is clean', () => {
+    expect(reasons(CORRECT)).toEqual([]);
+  });
+
+  test('`: void` is the violation here — it detaches the work the gate must hold', () => {
+    const detached = `export class ProteusSandbox extends Sandbox<Env> {
+      onStart(): void {
+        void withContainerStartDeadline('x', 1, () => this.start(), () => {});
+      }
+    }`;
+    expect(reasons(detached))
+      .toEqual([expect.stringContaining('must annotate `: Promise<void>`')]);
+  });
+
+  test('unbounded work is a violation even with the right annotation', () => {
+    const unbounded = `export class ProteusSandbox extends Sandbox<Env> {
+      onStart(): Promise<void> {
+        return this.restoreWorkspace();
+      }
+    }`;
+    expect(reasons(unbounded))
+      .toEqual([expect.stringContaining('must route its work through `withContainerStartDeadline`')]);
+  });
+
+  test('`async` is still a violation — it is how an unbounded await gets in', () => {
+    const widened = `export class ProteusSandbox extends Sandbox<Env> {
+      async onStart(): Promise<void> {
+        await withContainerStartDeadline('x', 1, () => this.start(), () => {});
+      }
+    }`;
+    expect(reasons(widened)).toEqual([
+      expect.stringContaining('declared `async`'),
+      expect.stringContaining('awaits in its own scope'),
+    ]);
+  });
+
+  test('the narrowing is keyed on the base class, not on the file or the name', () => {
+    // Same method body, a different `extends`: held to the per-request rule.
+    const impostor = `export class ProteusSandbox extends ActorAgent {
+      onStart(): Promise<void> {
+        return withContainerStartDeadline('x', 1, () => this.start(), () => {});
+      }
+    }`;
+    expect(reasons(impostor))
+      .toEqual([expect.stringContaining('must annotate `: void`')]);
+  });
+});
+
 describe('DO init-gate purity, against the real tree', () => {
   const SOURCES = readSources();
 
-  test('it inspects every onStart the backend declares', () => {
+  test('it inspects every onStart the backend declares, in both populations', () => {
     // The denominator. `violations: []` is only good news over a non-empty
-    // `inspected`; a matcher that stopped matching would pass forever.
+    // `inspected`; a matcher that stopped matching would pass forever. And the
+    // split matters as much as the total: the container-start rule is the
+    // narrower one, so an empty container-start population would mean the
+    // narrowing had quietly become an exemption over nothing.
     const { inspected } = audit(SOURCES);
-    expect(inspected.map((i) => i.owner).sort())
-      .toEqual(['ExplorationAgent', 'OrchestratorAgent', 'SubordinateAgent']);
+    expect(inspected.map((i) => `${i.owner}:${i.hook}`).sort()).toEqual([
+      'ExplorationAgent:per-request',
+      'OrchestratorAgent:per-request',
+      'ProteusSandbox:container-start',
+      'SubordinateAgent:per-request',
+    ]);
   });
 
   test('the real tree passes', () => {
@@ -123,5 +194,31 @@ describe('DO init-gate purity, against the real tree', () => {
     const { violations } = auditFile(file, widened);
     expect(violations.map((v) => v.owner)).toContain('OrchestratorAgent');
     expect(violations[0]!.reason).toContain('async');
+  });
+
+  test('cut the wire: unbounding the real container hook goes red', () => {
+    // The restore is the reason this hook may hold the gate at all. Take its
+    // budget away against the real file and the gate must say so.
+    const file = 'packages/cf-backend/src/proteus-sandbox.ts';
+    const real = SOURCES.get(file);
+    expect(real).toBeDefined();
+
+    const unbounded = real!.replace(
+      'return withContainerStartDeadline(', 'return this.unbounded(',
+    );
+    expect(unbounded).not.toBe(real);
+    const { violations } = auditFile(file, unbounded);
+    expect(violations.map((v) => v.owner)).toEqual(['ProteusSandbox']);
+    expect(violations[0]!.reason).toContain('must route its work through');
+  });
+
+  test('cut the wire: detaching the real container hook goes red', () => {
+    const file = 'packages/cf-backend/src/proteus-sandbox.ts';
+    const real = SOURCES.get(file);
+    const detached = real!.replace('onStart(): Promise<void> {', 'onStart(): void {');
+    expect(detached).not.toBe(real);
+    const { violations } = auditFile(file, detached);
+    expect(violations.map((v) => v.reason))
+      .toEqual([expect.stringContaining('must annotate `: Promise<void>`')]);
   });
 });

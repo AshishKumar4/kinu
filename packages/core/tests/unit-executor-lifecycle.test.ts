@@ -44,14 +44,6 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
       calls.push(`ports:${hostname}`);
       return [];
     },
-    async createBackup() {
-      calls.push("backup");
-      return { id: "backup-1", dir: "/workspace", localBucket: true };
-    },
-    async restoreBackup() {
-      calls.push("restore");
-      return { success: true, id: "backup-1", dir: "/workspace" };
-    },
   };
 }
 

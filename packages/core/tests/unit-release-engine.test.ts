@@ -731,8 +731,6 @@ describe('createSandboxReleaseExec', () => {
       exposePort: async () => ({ url: 'x', port: 0 }),
       unexposePort: async () => ({}),
       getExposedPorts: async () => [],
-      createBackup: async () => ({ id: 'b', dir: '/workspace' }),
-      restoreBackup: async () => ({ success: true, dir: '/workspace', id: 'b' }),
     };
   }
 

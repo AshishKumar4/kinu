@@ -30,7 +30,6 @@ import {
   readActivityLog,
   summarizeSteps,
   initWorkspaceSchema,
-  shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   // The declared reach axis — getToolDescriptions reports it rather than
@@ -392,10 +391,6 @@ export class OrchestratorAgent extends ActorAgent {
       timestamp: event.timestamp,
     } satisfies SubordinateActivityEvent));
   }
-  /** /workspace backups are debounced via the persisted last-backup time +
-   *  this optimistic gate. Restore happens lazily in the sandbox handle on
-   *  first actual sandbox use, not at turn startup. */
-  private _lastWorkspaceBackupAt = 0;
   /** Turns of new execution traces since the last auto-GEPA pass (in-memory
    *  cadence; resets on eviction, which just delays the next pass slightly). */
   private _turnsSinceGepa = 0;
@@ -938,22 +933,6 @@ export class OrchestratorAgent extends ActorAgent {
     return { owner: current, capabilityHash };
   }
 
-  /** Snapshot /workspace to R2 if the agent used the sandbox this turn and the
-   *  debounce window elapsed. Fire-and-forget (never blocks the turn loop); the
-   *  handle is persisted only on success, so a failed backup keeps the last good
-   *  snapshot. */
-  private backupWorkspaceIfDue(): void {
-    const handle = this.rt.sandboxHandle;
-    if (!handle) return;
-    const now = Date.now();
-    const lastAt = Math.max(this._lastWorkspaceBackupAt, this.config.getWorkspaceBackupAt());
-    if (!shouldBackupWorkspace(this._executorsUsedThisTurn.has('sandbox'), lastAt, now)) return;
-    this._lastWorkspaceBackupAt = now;          // optimistic gate (concurrency within activation)
-    void handle.createBackup(workspaceBackupOptions())
-      .then((b) => this.config.setWorkspaceBackup(b))
-      .catch((err) => console.warn('[proteus] workspace backup failed:', err instanceof Error ? err.message : String(err)));
-  }
-
   // The reactor (drain-then-stop) now lives on the core AgentOrchestrator
   // (it binds selected pending events via markConsumed, then injects one
   // signal through the core delivery seam). Ingress paths use
@@ -1092,10 +1071,6 @@ export class OrchestratorAgent extends ActorAgent {
       // (persisting an auto title marks name_origin).
       const mission = readMission(this.boundSql);
       void this.maybeAutoTitleWorkspace(isPlaceholderMission(mission) ? userText : mission!);
-
-      // Persist /workspace to R2 if the agent used the sandbox this turn — so the
-      // work survives the container sleeping. Debounced + fire-and-forget.
-      this.backupWorkspaceIfDue();
 
       // Trace-driven continuous self-optimization (when enabled): run GEPA once
       // enough new turns have accrued. Fire-and-forget; no-op when disabled.
@@ -2564,14 +2539,19 @@ export class OrchestratorAgent extends ActorAgent {
     const ownerUserId = this.getOwnerUserId();
     if (ownerUserId !== expectedOwnerUserId) throw new Error('Agent owner mismatch; refusing to destroy.');
     if (this.env.Sandbox) {
-      const sb = getSandbox(this.env.Sandbox, `proteus-${this.name}`, { normalizeId: true });
+      // Same `transport` as every other getSandbox for this id — the SDK drops
+      // in-flight requests if it changes between calls on one sandbox.
+      const sb = getSandbox(this.env.Sandbox, `proteus-${this.name}`, {
+        normalizeId: true, transport: "websocket",
+      });
+      // Before destroy(): the container object owns its /workspace snapshot, and
+      // once its storage is gone nothing knows which R2 objects were its.
+      await sb.discardWorkspaceSnapshot();
       await sb.destroy();
     }
     await createNimbusWorkspaceSandbox(this.env, ownerUserId, this.name).destroy({
       reason: 'Proteus workspace deleted',
     });
-    // The R2 /workspace snapshot self-expires via the BACKUP_TTL lifecycle rule
-    // on the bucket (there is no SDK deleteBackup and the key scheme is internal).
     await this.destroy(); // agents base: drops SDK tables + deleteAlarm + deleteAll + aborts the isolate
     return { ok: true };
   }

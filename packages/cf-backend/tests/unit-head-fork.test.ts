@@ -41,6 +41,8 @@ const lastRequestedSandboxId = (): string | null => requestedSandboxId;
 /** Restores performed through the handle the runtime built. A head rides a
  *  container it does not own, so this must stay at zero however it is touched. */
 let restoresPerformed = 0;
+let egressHandlersBound = 0;
+let egressHostsBound = 0;
 mock.module('@cloudflare/sandbox', () => ({
   getSandbox: (_ns: DurableObjectNamespace, id: string) => {
     requestedSandboxId = id;
@@ -55,6 +57,13 @@ mock.module('@cloudflare/sandbox', () => ({
       getExposedPorts: async () => [],
       createBackup: async () => null,
       restoreBackup: async () => { restoresPerformed += 1; },
+      // Egress interception is configured before the container can run
+      // anything, so every handle-backed operation reaches these two. Recorded
+      // rather than ignored: a facet must ride the configuration its ROOT
+      // installed, so a head configuring the container would be a defect of
+      // the same shape as a head deciding its restore.
+      setOutboundHandler: async () => { egressHandlersBound += 1; },
+      setOutboundByHost: async () => { egressHostsBound += 1; },
     };
   },
 }));
