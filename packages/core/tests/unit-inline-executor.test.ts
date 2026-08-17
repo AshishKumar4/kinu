@@ -206,15 +206,19 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     const { vfs, exec } = buildPlane();
     await vfs.writeFile('victim.txt', 'keep me');
 
+    // The classification is part of the contract, not incidental: a caller
+    // branches on `reason` to tell "read it first" from a genuine IO failure,
+    // and the declared codemode type promises it.
     expect(await exec.tools.writeFile.execute('victim.txt', 'destroyed blind')).toEqual({
       error: expect.stringContaining('has not been read here yet'),
+      reason: 'unread',
     });
     expect(await vfs.readFile('victim.txt', { encoding: 'utf8' })).toBe('keep me');
 
     await exec.tools.readFile.execute('victim.txt');
     expect(String(await exec.tools.writeFile.execute('victim.txt', 'replacement'))).toContain('Written');
     expect(await vfs.readFile('victim.txt', { encoding: 'utf8' })).toBe('replacement');
-    expect(exec.types).toContain('Promise<string | { error: string }>');
+    expect(exec.types).toContain("Promise<string | { error: string; reason?: 'unread' | 'stale' | 'io' }>");
   });
 
   test('relative and absolute name the same file — one namespace, no prefixes', async () => {

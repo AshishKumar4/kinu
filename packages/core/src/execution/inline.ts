@@ -395,7 +395,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
   const types = `declare namespace workspace {
   function readFile(path: string): Promise<string>;
-  function writeFile(path: string, content: string): Promise<string | { error: string }>;
+  function writeFile(path: string, content: string): Promise<string | { error: string; reason?: 'unread' | 'stale' | 'io' }>;
   /**
    * Replace exact text inside a file — old_text must occur exactly once,
    * copied verbatim (indentation and all) from what readFile/writeFile/
@@ -407,7 +407,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
    */
   function editFile(
     path: string, edits: Array<{ old_text: string; new_text: string }>
-  ): Promise<{ ok: boolean; path?: string; applied?: Array<{ line: number; removed_lines: number; added_lines: number }>; error?: string }>;
+  ): Promise<{ ok: boolean; path?: string; applied?: Array<{ line: number; removed_lines: number; added_lines: number }>; error?: string; reason?: 'unread' | 'stale' | 'io' }>;
   function readdir(path: string): Promise<string[]>;
   function exists(path: string): Promise<boolean>;
   /**
