@@ -543,7 +543,7 @@ export async function runLocalOutcomeEnsemble(
     return await runEnsemble(sql, {
       specs: async () => (await selectEnsembleJudges({
         specs,
-        chatSpec: resolver.normalizeSpecSync(createAgentConfigStore(sql).getModel()),
+        chatSpec: () => resolver.normalizeSpecSync(createAgentConfigStore(sql).getModel()),
         candidates: () => resolver.judgeCandidates(),
       })).specs,
       judge: (named) => localJudge(resolver, named),
@@ -574,7 +574,7 @@ export async function runLocalCorpusEval(name: string, input: {
   );
   const selection = await selectEnsembleJudges({
     specs: input.specs,
-    chatSpec,
+    chatSpec: () => chatSpec,
     candidates: () => resolver.judgeCandidates(),
   });
   const judges = selection.specs.map((named) => localJudge(resolver, named));

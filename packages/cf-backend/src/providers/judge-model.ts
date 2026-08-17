@@ -47,7 +47,7 @@ export async function resolveEnsembleJudgeSelection(opts: {
   const { registry } = opts;
   const selection = await selectEnsembleJudges({
     specs: opts.specs,
-    chatSpec: registry.normalizeSpecSync(opts.chatSpec),
+    chatSpec: () => registry.normalizeSpecSync(opts.chatSpec),
     candidates: candidatesFor(registry),
   });
   return { ...selection, specs: selection.specs.map((spec) => registry.normalizeSpecSync(spec)) };
