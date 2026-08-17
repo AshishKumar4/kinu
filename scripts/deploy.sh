@@ -156,6 +156,7 @@ run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.t
 run_required_gate "Gate ladder wiring" bun test scripts/ladder.test.ts
 run_required_gate "Dead code" bun run gate:dead-code
 run_required_gate "Duplicate implementations" bun run gate:duplication
+run_required_gate "Cross-backend capability parity" bun run gate:capability-parity
 run_required_gate "Durable Object cold start" bun run gate:do-init
 run_required_gate "Unreachable RPC surface" bun run gate:reachability
 run_required_gate "Platform fact catalog" bun run gate:platform
