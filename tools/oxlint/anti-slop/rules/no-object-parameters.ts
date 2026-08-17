@@ -2,6 +2,8 @@ import { defineRule } from "@oxlint/plugins";
 
 import type { ESTree, SourceCode } from "@oxlint/plugins";
 
+import { lexicalTypeParameterNames } from "../shared/lexical-type-parameters.ts";
+
 type Parameter = ESTree.ParamPattern;
 type ParameterOwner =
 	| ESTree.ArrowFunctionExpression
@@ -31,22 +33,6 @@ function parameterName(parameter: Parameter, sourceCode: SourceCode): string {
 		: sourceCode.getText(parameter).replace(/\s*:\s*object\s*$/u, "");
 }
 
-function lexicalTypeParameterNames(node: ESTree.Node): ReadonlySet<string> {
-	const names = new Set<string>();
-	let current: ESTree.Node | null = node;
-	while (current !== null && current.type !== "Program") {
-		if ("typeParameters" in current) {
-			for (const parameter of current.typeParameters?.params ?? []) {
-				names.add(parameter.name.name);
-			}
-		}
-		if (current.type === "TSMappedType") names.add(current.key.name);
-		if (current.type === "TSInferType") names.add(current.typeParameter.name.name);
-		current = current.parent;
-	}
-	return names;
-}
-
 /** Ban the broad object type on function inputs, including local aliases to object. */
 export const noObjectParametersRule = defineRule({
 	meta: {
@@ -60,7 +46,7 @@ export const noObjectParametersRule = defineRule({
 				"Parameter `{{parameter}}` uses the broad `object` type. Accept a named owner type; parse external input at its boundary before calling this function.",
 		},
 	},
-	create(context) {
+	createOnce(context) {
 		const aliases = new Map<string, ESTree.TSType>();
 
 		const resolvesToObject = (
@@ -95,7 +81,10 @@ export const noObjectParametersRule = defineRule({
 		};
 
 		const checkParameters = (node: ParameterOwner) => {
-			const shadowedAliases = lexicalTypeParameterNames(node);
+			const shadowedAliases = lexicalTypeParameterNames(
+				node,
+				context.sourceCode.visitorKeys,
+			);
 			for (const parameter of node.params) {
 				const annotation = parameterAnnotation(parameter);
 				if (annotation === null || annotation === undefined) continue;
@@ -110,6 +99,7 @@ export const noObjectParametersRule = defineRule({
 
 		return {
 			Program(node) {
+				aliases.clear();
 				for (const statement of node.body) {
 					const declaration =
 						statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;

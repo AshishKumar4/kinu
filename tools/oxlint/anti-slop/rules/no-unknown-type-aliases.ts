@@ -25,7 +25,7 @@ export const noUnknownTypeAliasesRule = defineRule({
 				"Type alias `{{alias}}` hides `unknown`. Keep `unknown` explicit at the parsing boundary or on an allowed `cause` field; otherwise use the parsed owner type.",
 		},
 	},
-	create(context) {
+	createOnce(context) {
 		const aliases = new Map<string, ESTree.TSTypeAliasDeclaration>();
 
 		const resolvesToUnknown = (type: ESTree.TSType, visited = new Set<string>()): boolean => {
@@ -48,6 +48,7 @@ export const noUnknownTypeAliasesRule = defineRule({
 
 		return {
 			Program(node) {
+				aliases.clear();
 				for (const statement of node.body) {
 					const declaration =
 						statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;

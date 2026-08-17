@@ -1,5 +1,8 @@
 import { defineRule } from "@oxlint/plugins";
+
 import type { ESTree } from "@oxlint/plugins";
+
+import { lexicalTypeParameterNames } from "../shared/lexical-type-parameters.ts";
 
 type Parameter = ESTree.ParamPattern;
 type ParameterOwner =
@@ -39,20 +42,6 @@ function parameterName(parameter: Parameter, sourceText: string): string {
     : sourceText.replace(/\s*:\s*unknown\s*$/u, "");
 }
 
-function lexicalTypeParameterNames(node: ESTree.Node): ReadonlySet<string> {
-  const names = new Set<string>();
-  let current: ESTree.Node | null = node;
-  while (current !== null && current.type !== "Program") {
-    if ("typeParameters" in current) {
-      for (const parameter of current.typeParameters?.params ?? []) {
-        names.add(parameter.name.name);
-      }
-    }
-    current = current.parent;
-  }
-  return names;
-}
-
 function referencedAliasName(type: ESTree.TSType): string | null {
   if (type.type === "TSParenthesizedType") return referencedAliasName(type.typeAnnotation);
   if (type.type !== "TSTypeReference" || type.typeName.type !== "Identifier") return null;
@@ -63,6 +52,11 @@ function referencedAliasName(type: ESTree.TSType): string | null {
     : null;
 }
 
+/**
+ * PROTEUS-LOCAL: upstream flags only a literal `unknown` annotation and exempts a parameter named
+ * `cause`. Both carve-outs let unparsed input through, so this copy resolves aliases, unions and
+ * parentheses and exempts nothing. See tools/oxlint/anti-slop/upstream.json.
+ */
 /** Disallow unknown inputs; callers must pass a parsed or explicitly wrapped boundary value. */
 export const noUnknownParametersRule = defineRule({
   meta: {
@@ -108,7 +102,7 @@ export const noUnknownParametersRule = defineRule({
     };
 
     const checkParameters = (node: ParameterOwner) => {
-      const shadowedAliases = lexicalTypeParameterNames(node);
+      const shadowedAliases = lexicalTypeParameterNames(node, context.sourceCode.visitorKeys);
       for (const parameter of node.params) {
         const annotation = parameterAnnotation(parameter);
         if (
@@ -129,6 +123,7 @@ export const noUnknownParametersRule = defineRule({
 
     return {
       Program(node) {
+        aliases.clear();
         for (const statement of node.body) {
           const declaration =
             statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
