@@ -369,6 +369,11 @@ describe('computeGain (stateful vs stateless)', () => {
     expect(g.statelessReward).toBe(0.5);
     expect(g.gain).toBeCloseTo(0.5, 10);
     expect(g.normalizedGain).toBeCloseTo(1, 10); // captured all the headroom
+    // Two of four tasks differed, and two differing pairs bottom out at p=0.5,
+    // so the arithmetic is right and the design still cannot decide.
+    expect(g.pairsWithDifference).toBe(2);
+    expect(g.canReachSignificance).toBe(false);
+    expect(g.verdict).toContain('UNDECIDABLE');
   });
 
   test('zero gain is reportable as a real result', () => {
@@ -379,7 +384,12 @@ describe('computeGain (stateful vs stateless)', () => {
       { taskId: 'd', stateful: 0, stateless: 0 },
     ], { seed: 4, iterations: 2000 });
     expect(g.gain).toBe(0);
-    expect(g.verdict).toContain('no measurable contribution');
+    // An empty denominator is vacuous per task and a failure per design: no task
+    // differed, so this contrast measured nothing and must not read as a neutral
+    // "no effect". That is what an inert mechanism looks like from the outside.
+    expect(g.pairsWithDifference).toBe(0);
+    expect(g.canReachSignificance).toBe(false);
+    expect(g.verdict).toContain('measured nothing at all');
   });
 
   test('a negative gain is reported as the stateful arm doing worse', () => {
@@ -390,8 +400,40 @@ describe('computeGain (stateful vs stateless)', () => {
       { taskId: 'd', stateful: 0, stateless: 1 },
     ], { seed: 4, iterations: 2000 });
     expect(g.gain).toBeCloseTo(-1, 10);
-    expect(g.verdict).toContain('WORSE');
     expect(g.pValue).toBeCloseTo(2 / 16, 10);
+    // Four differing pairs floor at p=0.125, above alpha, so the direction is
+    // withheld: "the stateful arm did WORSE" on four pairs is the same
+    // over-reading as calling a null a finding.
+    expect(g.canReachSignificance).toBe(false);
+    expect(g.verdict).toContain('UNDECIDABLE');
+  });
+
+  test('past the exact test\'s floor, the direction is stated', () => {
+    const g = computeGain(
+      Array.from({ length: 6 }, (_, i) => ({ taskId: `t${i}`, stateful: 0, stateless: 1 })),
+      { seed: 4, iterations: 2000 },
+    );
+    expect(g.pairsWithDifference).toBe(6);
+    expect(g.floorPValue).toBeCloseTo(2 / 64, 10);
+    expect(g.canReachSignificance).toBe(true);
+    expect(g.verdict).toContain('WORSE');
+  });
+
+  test('an unbounded reward scale gets no normalized gain', () => {
+    // CL-Bench's poker rewards are signed chip counts. "Fraction of remaining
+    // headroom" assumes rewards in [0,1]; on that scale it is not a quantity,
+    // and the first real run would otherwise have reported -25% of headroom.
+    const g = computeGain([
+      { taskId: 'hand1', stateful: -1.0, stateless: -1.0 },
+      { taskId: 'hand2', stateful: -0.5, stateless: 2.0 },
+      { taskId: 'hand3', stateful: -1.0, stateless: -1.0 },
+      { taskId: 'hand4', stateful: 3.0, stateless: 3.0 },
+      { taskId: 'hand5', stateful: -0.5, stateless: -2.0 },
+    ], { seed: 4, iterations: 2000 });
+    expect(g.gain).toBeCloseTo(-0.2, 10);
+    expect(g.normalizedGain).toBeNull();
+    expect(g.pairsWithDifference).toBe(2);
+    expect(g.verdict).toContain('UNDECIDABLE');
   });
 
   test('no headroom leaves the normalized gain undefined rather than infinite', () => {

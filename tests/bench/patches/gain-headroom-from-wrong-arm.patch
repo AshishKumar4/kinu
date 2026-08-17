@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/bench/stats.ts b/packages/core/src/bench/stats.ts
-index 3e55c9f..a46c597 100644
+index 61b4f077a..684bd4948 100644
 --- a/packages/core/src/bench/stats.ts
 +++ b/packages/core/src/bench/stats.ts
-@@ -308,7 +308,7 @@ export function computeGain(
-   const statelessReward = mean((p) => p.stateless);
-   const diffs = paired.map((p) => p.stateful - p.stateless);
-   const { mean: gain, ci } = pairedBootstrapCI(diffs, opts);
+@@ -435,7 +435,7 @@ export function computeGain(
+   const bounded = paired.every((p) => (
+     p.stateful >= 0 && p.stateful <= 1 && p.stateless >= 0 && p.stateless <= 1
+   ));
 -  const headroom = 1 - statelessReward;
 +  const headroom = 1 - statefulReward;
-   const normalizedGain = headroom > 1e-9 ? gain / headroom : null;
+   const normalizedGain = bounded && headroom > 1e-9 ? gain / headroom : null;
    // Binary-safe significance: the same exact paired test, on sign of the diff.
    const wins = diffs.filter((d) => d > 0).length;
