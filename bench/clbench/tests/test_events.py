@@ -200,3 +200,54 @@ class RunEvents(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ActivityVersusEvolutionTest(unittest.TestCase):
+    """The activity channel is not the evolution channel.
+
+    Both prior Terminal-Bench runs were made with ``evolve=false`` and later read
+    as if evolution had been on. The field a reader would have consulted to catch
+    that counted every event on the CLI's ``type:"evolution"`` stream -- which
+    also carries ``bg_job_started``, ``mcp`` and ``system_prompt_hash``. The
+    2026-08-10 2.1 run recorded 7 of them, every one ``bg_job_started``, on a
+    trial configured with evolution off.
+    """
+
+    def test_background_job_notices_are_activity_and_not_evolution(self) -> None:
+        activity, evolution = events.split_activity([
+            {"type": "evolution", "event": "bg_job_started", "message": f"run -> bgjob-{i}"}
+            for i in range(7)
+        ])
+        self.assertEqual(len(activity), 7)
+        self.assertEqual(evolution, [])
+
+    def test_mcp_and_prompt_hash_notices_are_activity_too(self) -> None:
+        activity, evolution = events.split_activity([
+            {"type": "evolution", "event": "mcp", "message": "connected"},
+            {"type": "evolution", "event": "system_prompt_hash", "message": "changed -> abc"},
+            {"type": "evolution", "event": "bg_jobs_settling", "message": "1 job"},
+            {"type": "evolution", "event": "bg_jobs_abandoned", "message": "gave up"},
+        ])
+        self.assertEqual(len(activity), 4)
+        self.assertEqual(evolution, [])
+
+    def test_real_evolution_is_recorded_as_evolution(self) -> None:
+        activity, evolution = events.split_activity([
+            {"type": "evolution", "event": "mcts_started", "message": "4 branches"},
+            {"type": "evolution", "event": "mcts_complete", "message": "settled"},
+            {"type": "evolution", "event": "scaffold_promotion", "message": "promoted"},
+            {"type": "evolution", "event": "bg_job_started", "message": "run -> bgjob-x"},
+        ])
+        self.assertEqual(len(activity), 4)
+        self.assertEqual(
+            [e["event"] for e in evolution],
+            ["mcts_started", "mcts_complete", "scaffold_promotion"],
+        )
+
+    def test_non_activity_events_are_ignored_entirely(self) -> None:
+        activity, evolution = events.split_activity([
+            {"type": "tool_call", "toolName": "run"},
+            {"type": "error", "message": "boom"},
+        ])
+        self.assertEqual(activity, [])
+        self.assertEqual(evolution, [])

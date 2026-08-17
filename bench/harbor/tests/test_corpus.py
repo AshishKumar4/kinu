@@ -127,5 +127,84 @@ class CorpusIdentityTest(unittest.TestCase):
         self.assertIsNone(corpus.resolve_for_trial(trial / "agent"))
 
 
+class CrossReleaseSamenessTest(unittest.TestCase):
+    """The denominator a cross-release flip rate needs.
+
+    2.1 migrated every task.toml from schema 1.0 to 1.1, so NO task directory is
+    byte-identical across the releases even where the work and the verifier are
+    unchanged. A flip rate quoted over the graded definition therefore has a
+    denominator of zero identical tasks, while the scored definition -- what the
+    agent must do and how it is judged -- keeps the tasks that really are the
+    same task. Both are reported; neither is guessed.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_a_manifest_schema_migration_changes_graded_but_not_scored(self) -> None:
+        a, b = self.root / "r20", self.root / "r21"
+        for d in (a, b):
+            d.mkdir()
+            make_task(d, "alpha")
+        (b / "alpha" / "task.toml").write_text('schema_version = "1.1"\n[task]\nname = "alpha"\n')
+        (b / "alpha" / "README.md").write_text("added in 2.1\n")
+        [row] = corpus.compare(a, b)
+        self.assertEqual(row.name, "alpha")
+        self.assertTrue(row.in_both)
+        self.assertFalse(row.graded_same)
+        self.assertTrue(row.scored_same)
+
+    def test_a_rewritten_instruction_is_not_the_same_task(self) -> None:
+        a, b = self.root / "r20", self.root / "r21"
+        a.mkdir(); b.mkdir()
+        make_task(a, "alpha")
+        make_task(b, "alpha", instruction="do the thing, precisely, with a signature")
+        [row] = corpus.compare(a, b)
+        self.assertFalse(row.scored_same)
+
+    def test_a_task_present_in_only_one_release_is_marked_absent(self) -> None:
+        a, b = self.root / "r20", self.root / "r21"
+        a.mkdir(); b.mkdir()
+        make_task(a, "alpha")
+        make_task(a, "gone")
+        make_task(b, "alpha")
+        rows = {r.name: r for r in corpus.compare(a, b)}
+        self.assertFalse(rows["gone"].in_both)
+        self.assertTrue(rows["alpha"].in_both)
+
+
+class SeededSampleTest(unittest.TestCase):
+    """`-l 10` took the alphabetical head, so the same ten of eighty-nine were
+    measured every time. A sample has to be a sample."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name) / "tb"
+        self.root.mkdir(parents=True)
+        for i in range(20):
+            make_task(self.root, f"task-{i:02d}")
+
+    def test_the_same_seed_draws_the_same_tasks(self) -> None:
+        self.assertEqual(corpus.sample(self.root, 5, 42), corpus.sample(self.root, 5, 42))
+
+    def test_a_different_seed_draws_a_different_subset(self) -> None:
+        self.assertNotEqual(corpus.sample(self.root, 5, 42), corpus.sample(self.root, 5, 43))
+
+    def test_it_is_not_the_alphabetical_head(self) -> None:
+        names = sorted(p.name for p in corpus.task_dirs(self.root))
+        drawn = corpus.sample(self.root, 5, 42)
+        self.assertEqual(len(drawn), 5)
+        self.assertTrue(set(drawn) <= set(names))
+        self.assertNotEqual(drawn, names[:5])
+
+    def test_a_size_at_or_above_the_corpus_returns_everything(self) -> None:
+        names = sorted(p.name for p in corpus.task_dirs(self.root))
+        self.assertEqual(corpus.sample(self.root, 20, 42), names)
+        self.assertEqual(corpus.sample(self.root, 99, 42), names)
+
+
 if __name__ == "__main__":
     unittest.main()

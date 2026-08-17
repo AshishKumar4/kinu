@@ -193,3 +193,50 @@ describe('the inline cap belongs to the backend, not to the CLI', () => {
     expect(cloud.errors[0]).toContain('screenshot.png is too large to attach');
   });
 });
+
+describe('a quoted sentence is prose, not a path', () => {
+  // Measured on the first CL-Bench rollout Proteus ever ran: TOKEN_RE treats any
+  // double-quoted single-line string as a path candidate, and stat() answered
+  // ENAMETOOLONG rather than ENOENT, which is not the tolerated failure, so it
+  // escaped resolvePromptAttachments and killed `proteus exec` mid-turn:
+  //   ENAMETOOLONG, statx '…/work/I am the big blind with J7 offsuit facing a limp…'
+  // The benchmark hits it because a repair prompt embeds the model's own prior
+  // answer verbatim; a user pasting a long quoted sentence into the TUI or chat
+  // hits exactly the same path.
+  const SENTENCE = 'I am the big blind with J7 offsuit facing a limp from the opponent. '
+    + 'This is a weak, poorly-connected hand, so raising would be a risky bluff with little equity. '
+    + 'Since the opponent only limped, I can see the flop for free, which is the safest and most '
+    + 'profitable default against an unknown opponent.';
+  test('a quoted token longer than a filename resolves to nothing and throws nothing', async () => {
+    const dir = makeDir();
+    expect(SENTENCE.length).toBeGreaterThan(255);
+    const result = await resolvePromptAttachments(`Answer: "${SENTENCE}"`, { limitBytes: CAP, cwd: dir });
+    expect(result.attached).toEqual([]);
+    expect(result.files).toEqual([]);
+    expect(result.errors).toEqual([]);
+    expect(result.text).toBe(`Answer: "${SENTENCE}"`);
+  });
+
+  test('the token is still lexically extracted — the bound is on resolution, not detection', async () => {
+    const [token] = extractPathTokens(`Answer: "${SENTENCE}"`);
+    expect(token?.path).toBe(SENTENCE);
+  });
+
+  test('a quoted filename shorter than the bound still attaches', async () => {
+    const dir = makeDir();
+    const name = `${'a'.repeat(160)}.png`;
+    writeFileSync(join(dir, name), PNG_BYTES);
+
+    const result = await resolvePromptAttachments(`look at "${name}"`, { limitBytes: CAP, cwd: dir });
+    expect(result.files).toHaveLength(1);
+    expect(result.attached[0]?.filename).toBe(name);
+  });
+
+  test('an absolute path over the resolvable limit is refused before stat', async () => {
+    const dir = makeDir();
+    const deep = Array.from({ length: 40 }, () => 'd'.repeat(120)).join('/');
+    const result = await resolvePromptAttachments(`look at "${deep}"`, { limitBytes: CAP, cwd: dir });
+    expect(result.attached).toEqual([]);
+    expect(result.errors).toEqual([]);
+  });
+});

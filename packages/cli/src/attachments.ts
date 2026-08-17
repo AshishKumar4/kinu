@@ -85,6 +85,17 @@ export interface PromptAttachments {
   errors: string[];
 }
 
+/** Longest single filename POSIX filesystems accept, and the longest absolute
+ *  path they will resolve. A candidate that breaks either cannot name an
+ *  existing file, so it is prose that happened to be quoted rather than a
+ *  mention — and `stat` answers ENAMETOOLONG, which is not ENOENT and so
+ *  escaped this function and killed the turn. Measured: `proteus exec` died on
+ *  a 298-byte quoted sentence with
+ *  `ENAMETOOLONG, statx '…/work/I am the big blind with J7 offsuit…'`,
+ *  which is how a CL-Bench poker rollout ended. */
+const NAME_MAX_BYTES = 255;
+const PATH_MAX_BYTES = 4095;
+
 /** Expand ~ and resolve against cwd; retry once without one trailing
  *  punctuation mark so "see @/tmp/shot.png." still matches the file. */
 async function statCandidate(token: string, cwd: string): Promise<{ path: string; size: number } | null> {
@@ -94,6 +105,10 @@ async function statCandidate(token: string, cwd: string): Promise<{ path: string
   for (const candidate of candidates) {
     const expanded = candidate.startsWith('~/') ? homedir() + candidate.slice(1) : candidate;
     const absolute = resolve(cwd, expanded);
+    if (
+      Buffer.byteLength(absolute) > PATH_MAX_BYTES
+      || absolute.split('/').some((part) => Buffer.byteLength(part) > NAME_MAX_BYTES)
+    ) continue;
     // A token naming nothing is the normal case — most words are not paths. Any OTHER stat failure
     // (an unreadable parent, a path component that is not a directory) would silently drop a
     // mention the user typed, so it is theirs to see.

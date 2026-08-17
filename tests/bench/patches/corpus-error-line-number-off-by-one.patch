@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/eval/corpus.ts b/packages/core/src/eval/corpus.ts
+index 51aad7cee..ff164a8e8 100644
 --- a/packages/core/src/eval/corpus.ts
 +++ b/packages/core/src/eval/corpus.ts
-@@ -22,7 +22,7 @@
+@@ -21,7 +21,7 @@ export function parseCorpus(jsonl: string): EvalCase[] {
+     let parsed: unknown;
      try { parsed = JSON.parse(lines[i]); }
-     catch (err) {
-       const message = err instanceof Error ? err.message : String(err);
--      throw new Error(`Eval corpus line ${i + 1}: invalid JSON: ${message}`);
-+      throw new Error(`Eval corpus line ${i}: invalid JSON: ${message}`);
+     catch (error) {
+-      throw new Error(`Eval corpus line ${i + 1}: invalid JSON`, { cause: error });
++      throw new Error(`Eval corpus line ${i}: invalid JSON`, { cause: error });
      }
      const result = v.safeParse(CaseSchema, parsed);
      if (!result.success) {

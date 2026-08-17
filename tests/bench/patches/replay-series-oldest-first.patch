@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/evolution/replay.ts b/packages/core/src/evolution/replay.ts
-index 8534fdb..199d363 100644
+index 2b026fdcb..56bb428b0 100644
 --- a/packages/core/src/evolution/replay.ts
 +++ b/packages/core/src/evolution/replay.ts
-@@ -188,7 +188,7 @@ export function listReplayEvals(sql: SqlExecutor, limit = 50): ReplayEvalSummary
-       negative_n: number; mean_score: number; loss: number;
-       scaffold_version: number | null; details: string;
-       score_lo: number | null; score_hi: number | null;
--    }>`SELECT * FROM replay_evals ORDER BY ran_at DESC, id DESC LIMIT ${limit}`;
-+    }>`SELECT * FROM replay_evals ORDER BY ran_at ASC, id ASC LIMIT ${limit}`;
-     return rows.map((r) => {
-       let results: ReplayInstanceResult[] = [];
-       try {
+@@ -212,7 +212,7 @@ export function listReplayEvals(sql: SqlExecutor, limit = 50): ReplayEvalSummary
+     negative_n: number; mean_score: number; loss: number;
+     scaffold_version: number | null; details: string;
+     score_lo: number | null; score_hi: number | null;
+-  }>`SELECT * FROM replay_evals ORDER BY ran_at DESC, id DESC LIMIT ${limit}`;
++  }>`SELECT * FROM replay_evals ORDER BY ran_at ASC, id ASC LIMIT ${limit}`;
+   return rows.map((r) => {
+     // Malformed details are the one tolerable corruption here: the summary
+     // numbers live in the row's own columns, so the point on the curve stands.

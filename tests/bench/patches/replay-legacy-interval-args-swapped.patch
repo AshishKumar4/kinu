@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/evolution/replay.ts b/packages/core/src/evolution/replay.ts
-index 8534fdb..c1099e8 100644
+index 2b026fdcb..c1810396d 100644
 --- a/packages/core/src/evolution/replay.ts
 +++ b/packages/core/src/evolution/replay.ts
-@@ -198,7 +198,7 @@ export function listReplayEvals(sql: SqlExecutor, limit = 50): ReplayEvalSummary
-       // Pre-interval rows carry no bounds; mean and n determine them exactly.
-       const interval: ScoreInterval = r.score_lo != null && r.score_hi != null
-         ? { mean: r.mean_score, lo: r.score_lo, hi: r.score_hi, n: r.sample_size }
--        : wilsonInterval(r.mean_score * r.sample_size, r.sample_size);
-+        : wilsonInterval(r.sample_size, r.mean_score * r.sample_size);
-       return {
-         id: r.id, ranAt: r.ran_at, sampleSize: r.sample_size,
-         acceptedCount: r.accepted_n, negativeCount: r.negative_n,
+@@ -221,7 +221,7 @@ export function listReplayEvals(sql: SqlExecutor, limit = 50): ReplayEvalSummary
+     // Pre-interval rows carry no bounds; mean and n determine them exactly.
+     const interval: ScoreInterval = r.score_lo != null && r.score_hi != null
+       ? { mean: r.mean_score, lo: r.score_lo, hi: r.score_hi, n: r.sample_size }
+-      : wilsonInterval(r.mean_score * r.sample_size, r.sample_size);
++      : wilsonInterval(r.sample_size, r.mean_score * r.sample_size);
+     return {
+       id: r.id, ranAt: r.ran_at, sampleSize: r.sample_size,
+       acceptedCount: r.accepted_n, negativeCount: r.negative_n,

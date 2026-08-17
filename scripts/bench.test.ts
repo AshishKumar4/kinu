@@ -2,13 +2,13 @@
 // anti-self-scoring guarantees, plus corpus validation. Runs no model and needs
 // no provider — CI can gate on all of it.
 import { describe, test, expect, afterAll } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
   LONGHORIZON_ANSWER_FILE, buildLongHorizonQuestions, decodeLongHorizonSpec,
-  encodeLongHorizonSpec, renderLongHorizonAnswerFile, SealedSplit, splitOf,
+  encodeLongHorizonSpec, parseJsonValue, renderLongHorizonAnswerFile, SealedSplit, splitOf,
   type AttemptOutcome, type BenchTask, type JsonValue,
 } from '../packages/core/src/index.js';
 import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, panelArm, panelProviders, parseArgv, parseCommon } from './bench.js';
@@ -18,6 +18,11 @@ import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, rest
 import {
   VALIDATION_DIAGNOSTICS_FILE, loadValidationDiagnostics, runValidation,
 } from './bench-validation.js';
+import {
+  ARTIFACT_DIRNAME, assertDurableArtifactRoot, openRunRetention, readGitIdentity,
+  readRetainedAttempts, resolveArtifactRoot,
+} from './bench-retention.js';
+import { gitEnv } from '@proteus/test-utils';
 import { parseAgentWorkerInput, parseWorkerOutput } from './bench-worker-protocol.js';
 import { buildPilotReport, validatePilotReport } from './bench-pilot.js';
 
@@ -276,6 +281,124 @@ describe('parseCommon — repeats and the validation retry budget', () => {
   });
 });
 
+describe('artifact retention — a scored run leaves evidence or it does not run', () => {
+  const durableDir = (prefix: string): string => {
+    const dir = mkdtempSync(join(REPO_ROOT, ARTIFACT_DIRNAME, prefix));
+    scratch.push(dir);
+    return dir;
+  };
+  const resolveRoot = (flag: string | undefined, env: string | undefined, runRoot: string): string =>
+    resolveArtifactRoot({ flag, env: { BENCH_ARTIFACTS: env }, repoRoot: REPO_ROOT, runRoot });
+
+  test('defaults into the repo, which .gitignore already reserves', () => {
+    expect(resolveRoot(undefined, undefined, tempDir('bench-retention-run-')))
+      .toBe(join(REPO_ROOT, ARTIFACT_DIRNAME));
+  });
+
+  test('refuses every swept root, because that is how the R3 evidence was lost', () => {
+    const runRoot = tempDir('bench-retention-run-');
+    for (const swept of ['/tmp/proteus-bench', '/var/tmp/proteus-bench', '/dev/shm/proteus-bench', join(tmpdir(), 'x')]) {
+      expect(() => resolveRoot(swept, undefined, runRoot)).toThrow(/which is swept/);
+      expect(() => resolveRoot(undefined, swept, runRoot)).toThrow(/which is swept/);
+    }
+  });
+
+  test('refuses the run root, whose sandboxes the run itself deletes', () => {
+    // Not under a swept root, so this exercises the containment rule itself
+    // rather than tripping the swept-root rule first.
+    const runRoot = durableDir('retain-runroot-');
+    expect(() => assertDurableArtifactRoot(join(runRoot, 'artifacts'), runRoot)).toThrow(/inside the run root/);
+    expect(() => assertDurableArtifactRoot('relative/path', runRoot)).toThrow(/must be absolute/);
+  });
+
+  test('has no off switch: an empty value is an error, not an opt-out', () => {
+    const runRoot = tempDir('bench-retention-run-');
+    expect(() => resolveRoot('', undefined, runRoot)).toThrow(/retention cannot be switched off/);
+    expect(() => resolveRoot(undefined, '  ', runRoot)).toThrow(/retention cannot be switched off/);
+  });
+
+  const provenance = (taskIds: readonly string[]) => ({
+    command: 'compare',
+    runId: 'fixture01',
+    family: 'defect',
+    corpus: 'tests/bench/tasks.jsonl (random 2 of 159, seed 7)',
+    manifestHash: 'fixture-manifest',
+    seed: 7,
+    repeats: 1,
+    budget: { wallClockMs: 1000, maxTokens: 10 },
+    variants: ['agent', 'agent-evolving'],
+    evolving: true,
+    model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
+    providerHash: 'fixture-endpoint',
+    taskIds,
+  });
+
+  const attempt = (taskId: string, variantId: string, passed: boolean): AttemptOutcome => ({
+    taskId, variantId, slot: variantId === 'agent' ? 'a' : 'b', repeat: 0, passed,
+    checks: [{ id: 'core-tests', passed, exitCode: passed ? 0 : 1, durationMs: 12, output: 'tail' }],
+    durationMs: 34, tokens: 56, peakPromptTokens: 78, budgetBreach: null,
+  });
+
+  test('records the commit, the model, the corpus, the task list and every trial', () => {
+    const artifactRoot = durableDir('retain-ok-');
+    const retention = openRunRetention({
+      artifactRoot, repoRoot: REPO_ROOT, provenance: provenance(['task-a', 'task-b']),
+    });
+    retention.recordAttempt(attempt('task-a', 'agent', false));
+    retention.recordAttempt(attempt('task-a', 'agent-evolving', true));
+
+    // Read BEFORE finish: a run that dies mid-flight must still have its trials.
+    expect(readRetainedAttempts(retention.dir).map((o) => [o.taskId, o.variantId, o.passed]))
+      .toEqual([['task-a', 'agent', false], ['task-a', 'agent-evolving', true]]);
+    expect(parseJsonValue(readFileSync(join(retention.dir, 'run.json'), 'utf8'))).toMatchObject({
+      completedAt: null,
+      commit: readGitIdentity(REPO_ROOT).commit,
+      model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
+      corpus: 'tests/bench/tasks.jsonl (random 2 of 159, seed 7)',
+      evolving: true,
+      taskIds: ['task-a', 'task-b'],
+    });
+    expect(readGitIdentity(REPO_ROOT).commit).toMatch(/^[0-9a-f]{40}$/);
+
+    retention.recordAttempt(attempt('task-b', 'agent', true));
+    retention.finish({ headline: 'fixture' });
+    expect(parseJsonValue(readFileSync(join(retention.dir, 'run.json'), 'utf8'))).toMatchObject({
+      completedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+      report: { headline: 'fixture' },
+      perTask: [
+        { taskId: 'task-a', byVariant: { agent: { attempts: 1, passed: 0 }, 'agent-evolving': { attempts: 1, passed: 1 } } },
+        { taskId: 'task-b', byVariant: { agent: { attempts: 1, passed: 1 } } },
+      ],
+    });
+  });
+
+  test('proves the root writable rather than assuming it', () => {
+    const parent = durableDir('retain-readonly-');
+    const artifactRoot = join(parent, 'nested');
+    chmodSync(parent, 0o500);
+    try {
+      expect(() => openRunRetention({ artifactRoot, repoRoot: REPO_ROOT, provenance: provenance(['task-a']) }))
+        .toThrow(/is not writable, so this scored run would leave no evidence/);
+    } finally {
+      chmodSync(parent, 0o700);
+    }
+  });
+
+  test('a scored run pointed at a swept root fails before it spends anything', () => {
+    const result = Bun.spawnSync([
+      'bun', join(REPO_ROOT, 'scripts', 'bench.ts'), 'validate',
+      '--run-root', tempDir('bench-retention-e2e-'),
+      '--artifacts', join(tmpdir(), 'proteus-bench-swept'),
+      '--limit', '1',
+    ], { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain('which is swept');
+    // Nothing ran: the refusal is at argument parsing, ahead of the first sandbox.
+    expect(result.stderr.toString()).not.toContain('Validating');
+    expect(existsSync(join(tmpdir(), 'proteus-bench-swept'))).toBe(false);
+  });
+});
+
 describe('validation diagnostics', () => {
   const task = (id: string): BenchTask => ({
     id,
@@ -312,12 +435,12 @@ describe('validation diagnostics', () => {
     const sealed = task('sealed-diagnostic');
     const stdout: string[] = [];
 
-    const exitCode = await runValidation({
+    const summary = await runValidation({
       family: 'defect',
       corpusPath: '/fixture/tasks.jsonl',
       manifestHash: 'fixture-manifest',
       validateRetries: 1,
-      runRoot,
+      diagnosticsDir: runRoot,
       devTasks: [dev],
       sealed: new SealedSplit([sealed]),
       runAttempt: async (current, repeat) => ({
@@ -327,7 +450,7 @@ describe('validation diagnostics', () => {
       log: (line) => stdout.push(line),
     });
 
-    expect(exitCode).toBe(0);
+    expect(summary).toEqual({ total: 2, badIds: [], flakyIds: [dev.id, sealed.id], ok: true });
     const diagnostics = loadValidationDiagnostics(join(runRoot, VALIDATION_DIAGNOSTICS_FILE));
     expect(diagnostics.attempts.map(({ taskId, split, attempt }) => ({ taskId, split, attempt }))).toEqual([
       { taskId: dev.id, split: 'dev', attempt: 1 },
@@ -423,6 +546,20 @@ describe('createAttemptSandbox', () => {
     expect(existsSync(join(sandbox.dir, 'tests', 'bench'))).toBe(false);
     // The rest of tests/ is still there, so the checks can run.
     expect(existsSync(join(sandbox.dir, 'tests', 'eval'))).toBe(true);
+    sandbox.dispose();
+  });
+
+  test('retained evidence is absent too — the seal has a second ring now', () => {
+    // A retained run holds per-trial outcomes and check output for SEALED tasks.
+    // Copying bench-artifacts/ into the sandbox would hand a solver the held-out
+    // answers by a route that excluding tests/bench does not cover.
+    const runRoot = tempDir('bench-seal-artifacts-');
+    const leak = mkdtempSync(join(REPO_ROOT, ARTIFACT_DIRNAME, 'seal-probe-'));
+    scratch.push(leak);
+    writeFileSync(join(leak, 'attempts.jsonl'), '{"taskId":"a-sealed-task"}\n');
+    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a7', prepare });
+    expect(existsSync(join(REPO_ROOT, ARTIFACT_DIRNAME))).toBe(true);
+    expect(existsSync(join(sandbox.dir, ARTIFACT_DIRNAME))).toBe(false);
     sandbox.dispose();
   });
 
@@ -550,11 +687,22 @@ describe('loadBenchCorpus', () => {
   // attempt time, long after anyone would connect it to the refactor. The
   // check is the same `git apply` the sandbox runs, so nothing can pass here
   // and fail there.
+  // gitEnv() strips GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE from the child. Measured,
+  // because the obvious claim is wrong: a bare `git apply --check` resolves its
+  // paths against `cwd` and ignores GIT_WORK_TREE, so these two sites were NOT
+  // reachable by the hook-exported GIT_DIR that mis-authored ten commits. The env
+  // is stripped anyway because the ban is a blanket one and the next git verb
+  // added here — anything touching the index — would obey it.
   test('every defect patch still applies to the tree it was seeded against', () => {
     const { patches } = loadBenchCorpus(REPO_ROOT);
     const stale = [...patches].filter(([, patch]) => Bun.spawnSync(
       ['git', 'apply', '--check', '--whitespace=nowarn', '-'],
-      { cwd: REPO_ROOT, stdin: Buffer.from(patch), stdout: 'ignore', stderr: 'ignore' },
+      // The real checkout at `cwd` IS the subject here — the question is whether
+      // each patch still applies to the tree as it stands. `gitEnv()` names the
+      // env, which `no-ambient-git-in-tests` requires, and strips the three
+      // variables that would let an ambient GIT_DIR/GIT_WORK_TREE answer for a
+      // different repository than the one `cwd` names.
+      { cwd: REPO_ROOT, env: gitEnv(), stdin: Buffer.from(patch), stdout: 'ignore', stderr: 'ignore' },
     ).exitCode !== 0).map(([id]) => id);
     expect(stale).toEqual([]);
   });
@@ -744,7 +892,9 @@ describe('the task corpus stays applicable to HEAD', () => {
       .filter((f) => f.endsWith('.patch'))
       .filter((f) => Bun.spawnSync(
         ['git', 'apply', '--check', join(dir, f)],
-        { cwd: repo, stdout: 'pipe', stderr: 'pipe' },
+        // Same as above: the tree at `cwd` is the subject, and the env is named
+        // so nothing ambient can answer for a different repository.
+        { cwd: repo, env: gitEnv(), stdout: 'pipe', stderr: 'pipe' },
       ).exitCode !== 0);
     expect(stale).toEqual([]);
   });
@@ -838,5 +988,56 @@ describe('panel arms — only the provider list may differ', () => {
   test('panel size is bounded by what a fork panel actually accepts', () => {
     expect(() => withEnv({ BENCH_PANEL_SIZE: '1' }, () => panelArm('panel:self', analyst))).toThrow(/\[2,6\]/);
     expect(() => withEnv({ BENCH_PANEL_SIZE: '7' }, () => panelArm('panel:self', analyst))).toThrow(/\[2,6\]/);
+  });
+});
+
+describe('the evolution-event vocabulary does not drift across languages', () => {
+  // bench/clbench/proteus/events.py must know which activity-channel events are
+  // really evolution, and it cannot import TypeScript. So the set is duplicated
+  // once, deliberately, and this is the gate that stops the copy from rotting.
+  // Without it, an event type added to core would silently stop counting as
+  // evolution in both external benchmark adapters -- which is exactly how a run
+  // comes to report that the mechanism under test did not fire when it did.
+  const readSource = (rel: string) => readFileSync(join(REPO_ROOT, rel), 'utf8');
+
+  test('every EvolutionEvent type is classified as evolution by the Python reader', () => {
+    const union = /export interface EvolutionEvent \{\s*type:\s*([^;]+);/
+      .exec(readSource('packages/core/src/evolution/types.ts'));
+    expect(union).not.toBeNull();
+    const fromCore = [...union![1]!.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
+    expect(fromCore.length).toBeGreaterThan(5);
+
+    // The two shadow-eval outcomes local-session.ts emits directly, not via the
+    // engine's listener, so they are absent from the union above.
+    const session = readSource('packages/cli-backend/src/local-session.ts');
+    const direct = ['scaffold_promotion', 'scaffold_rollback'];
+    for (const name of direct) expect(session).toContain(`'${name}'`);
+
+    const python = readSource('bench/clbench/proteus/events.py');
+    const block = /EVOLUTION_EVENTS = frozenset\(\{([\s\S]*?)\}\)/.exec(python);
+    expect(block).not.toBeNull();
+    const fromPython = [...block![1]!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]!);
+
+    expect([...fromPython].sort()).toEqual([...new Set([...fromCore, ...direct])].sort());
+  });
+
+  test('the activity-channel events that are NOT evolution stay out of the set', () => {
+    // Measured from the 2026-08-10 Terminal-Bench 2.1 artifacts: 7 events on the
+    // activity channel of a trial configured evolve=false, all bg_job_started.
+    // Each exclusion names its live emitter, so the set excludes real traffic
+    // rather than a hypothesis.
+    const emitters = {
+      bg_job_started: 'packages/core/src/jobs/runner.ts',
+      bg_jobs_settling: 'packages/cli-backend/src/local-session.ts',
+      bg_jobs_abandoned: 'packages/cli-backend/src/local-session.ts',
+      system_prompt_hash: 'packages/cli-backend/src/local-session.ts',
+      mcp: 'packages/cf-backend/src/actor-agent.ts',
+    };
+    const block = /EVOLUTION_EVENTS = frozenset\(\{([\s\S]*?)\}\)/
+      .exec(readSource('bench/clbench/proteus/events.py'))![1]!;
+    for (const [notEvolution, emitter] of Object.entries(emitters)) {
+      expect(block).not.toContain(`"${notEvolution}"`);
+      expect(readSource(emitter)).toContain(`'${notEvolution}'`);
+    }
   });
 });

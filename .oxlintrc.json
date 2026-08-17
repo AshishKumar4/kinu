@@ -13,6 +13,7 @@
     "anti-slop/no-ddl-in-catch": "error",
     "anti-slop/no-empty-catch": "error",
     "anti-slop/no-known-value-widening": "error",
+    "anti-slop/no-ambient-git-in-tests": "error",
     "anti-slop/no-module-mocking": "error",
     "anti-slop/no-object-parameters": "error",
     "anti-slop/no-reflect-apply": "error",

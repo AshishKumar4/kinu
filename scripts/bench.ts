@@ -32,8 +32,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  DEFAULT_ATTEMPT_BUDGET, buildBenchReport, buildGainReport, renderBenchSummary,
-  renderGainSummary, runOrder, fnv1a64,
+  DEFAULT_ATTEMPT_BUDGET, buildBenchReport, buildGainReport, decodeJsonValue,
+  renderBenchSummary, renderGainSummary, runOrder, fnv1a64, unitHash,
 } from '../packages/core/src/index.js';
 import type {
   AttemptBudget, AttemptOutcome, BenchCorpus, BenchRunConfig, BenchTask, GainTaskScore,
@@ -58,6 +58,9 @@ import {
   loadAndValidatePilotReport, type PilotReport,
 } from './bench-pilot.js';
 import { runValidation, type WellFormedAttempt } from './bench-validation.js';
+import {
+  ARTIFACT_DIRNAME, openRunRetention, resolveArtifactRoot, type RunRetention,
+} from './bench-retention.js';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const SEAL_LEDGER = join(REPO_ROOT, 'tests', 'bench', 'seal-ledger.jsonl');
@@ -69,6 +72,9 @@ export const DEFAULT_VALIDATE_RETRIES = 2;
 
 export interface CommonOptions {
   runRoot: string;
+  /** Where per-trial evidence lands. Durable by construction — see
+   *  bench-retention.ts. There is no way to run scored and retain nothing. */
+  artifactRoot: string;
   seed: number;
   budget: AttemptBudget;
   /** Attempts per task per variant. */
@@ -114,9 +120,14 @@ export function parseCommon(args: Map<string, string>): CommonOptions {
   if (!isBenchFamilyId(family)) {
     throw new Error(`--family must be one of ${BENCH_FAMILIES.join(' | ')}, got "${family}"`);
   }
+  const resolvedRunRoot = ensureRunRoot(runRoot, REPO_ROOT);
   return {
     family,
-    runRoot: ensureRunRoot(runRoot, REPO_ROOT),
+    runRoot: resolvedRunRoot,
+    artifactRoot: resolveArtifactRoot({
+      flag: args.get('artifacts'), env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS },
+      repoRoot: REPO_ROOT, runRoot: resolvedRunRoot,
+    }),
     seed: num('seed', 1),
     budget: {
       wallClockMs: num('wall-clock-ms', DEFAULT_ATTEMPT_BUDGET.wallClockMs),
@@ -354,6 +365,10 @@ interface AttemptRequest {
   family: BenchFamily;
   common: CommonOptions;
   attemptId: string;
+  /** Required, not optional: an attempt that cannot be retained cannot be run,
+   *  so the type system asks every caller for a durable home rather than
+   *  trusting each command to remember one. */
+  retention: RunRetention;
 }
 
 async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
@@ -413,6 +428,7 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
   };
   if (modelCalls !== undefined) outcome.modelCalls = modelCalls;
   if (error) outcome.error = error;
+  req.retention.recordAttempt(outcome);
   return outcome;
 }
 
@@ -425,12 +441,13 @@ async function runPair(
   solvers: { a: Solver; b: Solver },
   family: BenchFamily,
   common: CommonOptions,
+  retention: RunRetention,
 ): Promise<{ a: AttemptOutcome; b: AttemptOutcome }> {
   const order = runOrder(task.id, common.seed, repeat);
   const first = order === 'ab' ? 'a' : 'b';
   const second = first === 'a' ? 'b' : 'a';
   const attempt = (slot: 'a' | 'b') => runAttempt({
-    task, solver: solvers[slot], slot, repeat, family, common,
+    task, solver: solvers[slot], slot, repeat, family, common, retention,
     attemptId: `${task.id}-${slot}-r${repeat}-${fnv1a64(`${common.seed}:${task.id}:${slot}:${repeat}`).slice(0, 8)}`,
   });
   const firstOut = await attempt(first);
@@ -445,11 +462,12 @@ async function runRepeats(
   solvers: { a: Solver; b: Solver },
   family: BenchFamily,
   common: CommonOptions,
+  retention: RunRetention,
 ): Promise<{ a: AttemptOutcome[]; b: AttemptOutcome[] }> {
   const a: AttemptOutcome[] = [];
   const b: AttemptOutcome[] = [];
   for (let repeat = 0; repeat < common.repeats; repeat++) {
-    const pair = await runPair(task, repeat, solvers, family, common);
+    const pair = await runPair(task, repeat, solvers, family, common, retention);
     a.push(pair.a);
     b.push(pair.b);
   }
@@ -463,13 +481,35 @@ function tally(outcomes: readonly AttemptOutcome[]): string {
   return `${passes}/${outcomes.length}${passes > 0 && passes < outcomes.length ? '~' : ''}`;
 }
 
-function limitTasks(tasks: readonly BenchTask[], limit: number | null): BenchTask[] {
-  const ordered = [...tasks].sort((x, y) => x.id.localeCompare(y.id));
-  return limit === null ? ordered : ordered.slice(0, limit);
+/**
+ * The run's subset of the corpus, and why it is a random one.
+ *
+ * Taking the alphabetical head is what both prior Terminal-Bench runs did:
+ * `-l 10` measured the first 10 of 89 task names in sort order, every time, so
+ * the sample was not merely small but fixed and unrepresentative — and no
+ * comparison drawn from it generalizes to the corpus. Sampling from the seed
+ * keeps the run exactly reproducible while making the subset an actual sample.
+ * The winners are then run in id order so execution stays stable.
+ */
+export function selectTasks(
+  tasks: readonly BenchTask[],
+  limit: number | null,
+  seed: number,
+): BenchTask[] {
+  const byId = [...tasks].sort((x, y) => x.id.localeCompare(y.id));
+  if (limit === null || limit >= byId.length) return byId;
+  return byId
+    .map((task) => ({ task, draw: unitHash(`sample:${seed}:${task.id}`) }))
+    .sort((x, y) => x.draw - y.draw)
+    .slice(0, limit)
+    .map((entry) => entry.task)
+    .sort((x, y) => x.id.localeCompare(y.id));
 }
 
-function corpusLabel(path: string, limit: number | null): string {
-  return limit === null ? path : `${path} (limit ${limit})`;
+function corpusLabel(path: string, limit: number | null, total: number, seed: number): string {
+  return limit === null || limit >= total
+    ? `${path} (all ${total})`
+    : `${path} (random ${limit} of ${total}, seed ${seed})`;
 }
 
 function appendSealLedger(entry: JsonObject): number {
@@ -482,6 +522,47 @@ function appendSealLedger(entry: JsonObject): number {
   return ordinal;
 }
 
+/** Provenance every command records, in one place so no command can quietly
+ *  record less than another. `evolving` is a field rather than an inference:
+ *  both prior Terminal-Bench runs were made with evolution off and later read
+ *  as if it had been on, which is how a mechanism gets credited for a number it
+ *  never influenced. */
+function openRetention(opts: {
+  command: string;
+  runId: string;
+  common: CommonOptions;
+  family: BenchFamily;
+  variants: readonly string[];
+  tasks: readonly BenchTask[];
+  /** Recorded, not resolved here: the deterministic controls make no calls, and
+   *  a model-backed run already holds its pinned identity in the pilot report. */
+  model: string | null;
+  providerHash: string | null;
+}): RunRetention {
+  const { common, family } = opts;
+  const retention = openRunRetention({
+    artifactRoot: common.artifactRoot,
+    repoRoot: REPO_ROOT,
+    provenance: {
+      command: opts.command,
+      runId: opts.runId,
+      family: family.id,
+      corpus: corpusLabel(family.path, common.limit, family.corpus.dev.length, common.seed),
+      manifestHash: family.corpus.manifestHash,
+      seed: common.seed,
+      repeats: common.repeats,
+      budget: common.budget,
+      variants: opts.variants,
+      evolving: opts.variants.includes('agent-evolving'),
+      model: opts.model,
+      providerHash: opts.providerHash,
+      taskIds: opts.tasks.map((task) => task.id),
+    },
+  });
+  console.error(`retaining per-trial evidence in ${retention.dir}`);
+  return retention;
+}
+
 /** One well-formedness check: the task must fail with nothing done and pass
  *  under the oracle. Both directions are machine-run; neither involves a
  *  variant, so this says nothing about anyone's performance. */
@@ -491,13 +572,14 @@ async function runWellFormedAttempt(
   family: BenchFamily,
   common: CommonOptions,
   oracle: Solver,
+  retention: RunRetention,
 ): Promise<WellFormedAttempt> {
   const broken = await runAttempt({
-    task, solver: nullSolver, slot: 'a', repeat, family, common,
+    task, solver: nullSolver, slot: 'a', repeat, family, common, retention,
     attemptId: `validate-broken-${task.id}-${repeat}`,
   });
   const fixed = await runAttempt({
-    task, solver: oracle, slot: 'b', repeat, family, common,
+    task, solver: oracle, slot: 'b', repeat, family, common, retention,
     attemptId: `validate-fixed-${task.id}-${repeat}`,
   });
   return { broken, oracle: fixed };
@@ -506,19 +588,27 @@ async function runWellFormedAttempt(
 async function cmdValidate(common: CommonOptions): Promise<number> {
   const family = loadFamily(common.family);
   const corpus = family.corpus;
-  const devTasks = limitTasks(corpus.dev, common.limit);
+  const devTasks = selectTasks(corpus.dev, common.limit, common.seed);
   const oracle = family.resolveSolver('oracle', {});
+  const retention = openRetention({
+    command: 'validate',
+    runId: fnv1a64(`validate:${Date.now()}:${common.seed}`).slice(0, 12),
+    common, family, variants: ['null', 'oracle'], tasks: devTasks,
+    model: null, providerHash: null,
+  });
 
-  return runValidation({
+  const summary = await runValidation({
     family: common.family,
     corpusPath: family.path,
     manifestHash: corpus.manifestHash,
     validateRetries: common.validateRetries,
-    runRoot: common.runRoot,
+    diagnosticsDir: retention.dir,
     devTasks,
     sealed: corpus.sealed,
-    runAttempt: (task, repeat) => runWellFormedAttempt(task, repeat, family, common, oracle),
+    runAttempt: (task, repeat) => runWellFormedAttempt(task, repeat, family, common, oracle, retention),
   });
+  retention.finish(decodeJsonValue({ value: summary }));
+  return summary.ok ? 0 : 1;
 }
 
 async function cmdCompare(args: Map<string, string>, common: CommonOptions): Promise<number> {
@@ -536,9 +626,9 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
     b: family.resolveSolver(specB, { sharedHome: sharedHomeB }),
   };
 
-  const devTasks = limitTasks(corpus.dev, common.limit);
+  const devTasks = selectTasks(corpus.dev, common.limit, common.seed);
   const config: BenchRunConfig = {
-    corpus: corpusLabel(family.path, common.limit),
+    corpus: corpusLabel(family.path, common.limit, corpus.dev.length, common.seed),
     budget: common.budget,
     seed: common.seed,
     variantA: solvers.a.id,
@@ -547,11 +637,16 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
     manifestHash: corpus.manifestHash,
   };
   const runId = fnv1a64(`${Date.now()}:${config.variantA}:${config.variantB}:${config.seed}`).slice(0, 12);
+  const retention = openRetention({
+    command: 'compare', runId, common, family,
+    variants: [solvers.a.id, solvers.b.id], tasks: devTasks,
+    model: pilot?.model ?? null, providerHash: pilot?.providerHash ?? null,
+  });
 
   console.error(`dev split: ${devTasks.length} tasks × 2 variants × ${common.repeats} repeat(s)`);
   const devAttempts: AttemptOutcome[] = [];
   for (const task of devTasks) {
-    const { a, b } = await runRepeats(task, solvers, family, common);
+    const { a, b } = await runRepeats(task, solvers, family, common, retention);
     devAttempts.push(...a, ...b);
     console.error(`  ${task.id.padEnd(28)} ${config.variantA}=${tally(a)}  ${config.variantB}=${tally(b)}`);
   }
@@ -561,7 +656,7 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
   if (args.has('sealed')) {
     console.error(`sealed split: ${corpus.sealed.size} tasks × 2 variants × ${common.repeats} repeat(s) (aggregates only)`);
     sealed = await corpus.sealed.evaluate(async (task) => {
-      const { a, b } = await runRepeats(task, solvers, family, common);
+      const { a, b } = await runRepeats(task, solvers, family, common, retention);
       return { a: a.map((o) => o.passed), b: b.map((o) => o.passed) };
     }, { seed: common.seed });
     ordinal = appendSealLedger({
@@ -577,6 +672,7 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
     ...buildBenchReport({ runId, config, devAttempts, sealed, sealAccessOrdinal: ordinal }),
     modelEvidence: pilotEvidence(pilot),
   };
+  retention.finish(decodeJsonValue({ value: report }));
   if (common.out) {
     writeFileSync(common.out, JSON.stringify(report, null, 2));
     console.error(`Wrote ${common.out}`);
@@ -636,7 +732,7 @@ async function cmdPilot(args: Map<string, string>, common: CommonOptions): Promi
   }
   if (!common.out) throw new Error('pilot needs --out <report.json>');
   const family = loadFamily(common.family);
-  const tasks = limitTasks(family.corpus.dev, common.limit);
+  const tasks = selectTasks(family.corpus.dev, common.limit, common.seed);
   if (tasks.length < MIN_PILOT_TASKS) {
     throw new Error(`stability pilot needs at least ${MIN_PILOT_TASKS} development tasks; ${family.id} selected ${tasks.length}`);
   }
@@ -645,6 +741,12 @@ async function cmdPilot(args: Map<string, string>, common: CommonOptions): Promi
   }
   const llm = benchLLM();
   const solver = family.resolveSolver(spec, { sharedHome: join(common.runRoot, 'pilot-shared') });
+  const retention = openRetention({
+    command: 'pilot',
+    runId: fnv1a64(`pilot:${Date.now()}:${solver.id}:${common.seed}`).slice(0, 12),
+    common, family, variants: [solver.id], tasks,
+    model: llm.model, providerHash: benchProviderHash(llm),
+  });
   const outcomes: AttemptOutcome[] = [];
   console.error(`stability pilot: ${tasks.length} tasks × 1 variant × ${common.repeats} repeats`);
   for (const task of tasks) {
@@ -657,6 +759,7 @@ async function cmdPilot(args: Map<string, string>, common: CommonOptions): Promi
         repeat,
         family,
         common,
+        retention,
         attemptId: `pilot-${task.id}-r${repeat}`,
       });
       repeated.push(outcome);
@@ -674,6 +777,7 @@ async function cmdPilot(args: Map<string, string>, common: CommonOptions): Promi
     repeats: common.repeats,
     outcomes,
   });
+  retention.finish(decodeJsonValue({ value: report }));
   writeFileSync(common.out, JSON.stringify(report, null, 2));
   console.log(
     `Pilot ${report.variant}: ${report.passed}/${report.attempts} attempts passed; `
@@ -689,7 +793,7 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
   const statelessSpec = args.get('stateless') ?? 'agent';
   const family = loadFamily(common.family);
   const pilot = requireStabilityPilot(args, common, family, [statefulSpec, statelessSpec]);
-  const sequence = limitTasks(family.corpus.dev, common.limit);
+  const sequence = selectTasks(family.corpus.dev, common.limit, common.seed);
   if (sequence.length === 0) throw new Error('no tasks in the sequence');
 
   const stateless = family.resolveSolver(statelessSpec, {});
@@ -704,7 +808,7 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
   ));
 
   const config: BenchRunConfig = {
-    corpus: corpusLabel(family.path, common.limit),
+    corpus: corpusLabel(family.path, common.limit, family.corpus.dev.length, common.seed),
     budget: common.budget,
     seed: common.seed,
     variantA: stateless.id,
@@ -713,6 +817,11 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
     manifestHash: family.corpus.manifestHash,
   };
   const runId = fnv1a64(`gain:${Date.now()}:${config.seed}`).slice(0, 12);
+  const retention = openRetention({
+    command: 'gain', runId, common, family,
+    variants: [stateless.id, statefulPasses[0]!.id], tasks: sequence,
+    model: pilot?.model ?? null, providerHash: pilot?.providerHash ?? null,
+  });
 
   const scores = new Map<string, { stateful: number; stateless: number }>();
   const attempts: AttemptOutcome[] = [];
@@ -731,7 +840,7 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
       console.error(`${arm.key} arm, pass ${pass + 1}/${common.repeats}: ${sequence.length} tasks in sequence`);
       for (const [index, task] of sequence.entries()) {
         const outcome = await runAttempt({
-          task, solver: arm.solver, slot: arm.key === 'stateful' ? 'b' : 'a', repeat: pass, family, common,
+          task, solver: arm.solver, slot: arm.key === 'stateful' ? 'b' : 'a', repeat: pass, family, common, retention,
           attemptId: `gain-${arm.key}-p${pass}-${index}-${task.id}`,
         });
         attempts.push(outcome);
@@ -754,6 +863,7 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
     ...buildGainReport({ runId, config, perTask, attempts }),
     modelEvidence: pilotEvidence(pilot),
   };
+  retention.finish(decodeJsonValue({ value: report }));
   if (common.out) {
     writeFileSync(common.out, JSON.stringify(report, null, 2));
     console.error(`Wrote ${common.out}`);
@@ -801,11 +911,19 @@ Options:
   --validate-retries <n>  validate: extra well-formedness checks a failing task
                        gets before it is called BAD (default ${DEFAULT_VALIDATE_RETRIES}). A task that
                        only passes on a retry is reported as FLKY, not ok.
-  --limit <n>          Use only the first n tasks (recorded in the report)
-  --out <path>         Write the JSON report here
+  --limit <n>          Use a RANDOM n-task sample drawn from --seed, not the
+                       alphabetical head. Recorded in the report and in the
+                       retained provenance as "random n of N, seed s".
+  --out <path>         Also write the JSON report here (retention is separate
+                       and unconditional)
   --pilot-report <path>  Required for model-backed compare/gain. Must match the
                        corpus, model, endpoint hash, and exact compute envelope.
   --keep-sandboxes     Do not delete attempt sandboxes (debugging)
+  --artifacts <dir>    Where per-trial evidence is retained (default
+                       <repo>/${ARTIFACT_DIRNAME}, or BENCH_ARTIFACTS). Must be
+                       durable: a swept temp root is refused before any attempt
+                       runs, because a scored run that leaves no evidence
+                       produces a rumour rather than a number.
 
 Model-backed variants read BENCH_BASE_URL / BENCH_AUTH / BENCH_MODEL. Deterministic
 variants need no credentials and make no model calls.`;

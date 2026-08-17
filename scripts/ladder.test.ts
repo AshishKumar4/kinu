@@ -390,8 +390,11 @@ describe('the hooks run the tiers they claim to', () => {
     // tiers never executed. `prepare` now installs the hooks on every `bun
     // install`, in developer checkouts and CI alike, so a wrong value here is
     // unambiguously a fault rather than an artefact of where the gate is running.
+    // `env: process.env` is deliberate and required by `no-ambient-git-in-tests`:
+    // the REAL repository's config is the subject here, so the ambient
+    // environment is the point rather than a hazard. Stating it is the whole ask.
     const configured = execFileSync('git', ['config', '--get', 'core.hooksPath'], {
-      cwd: root, encoding: 'utf8',
+      cwd: root, encoding: 'utf8', env: process.env,
     }).trim();
     expect(configured).toBe(HOOKS_DIR);
   });
