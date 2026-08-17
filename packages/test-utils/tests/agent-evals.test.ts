@@ -720,7 +720,7 @@ describe('toolOutcomes — the coarse instrument that always has a denominator',
     const score = toolOutcomes.score(store.sql);
     expect(score.eligible).toBe(2);
     expect(score.passed).toBe(2);
-    expect(score.detail).toBe('2/2 tool calls returned; 0 refused, 0 work failed, 0 broke');
+    expect(score.detail).toBe('2/2 tool calls returned; 0 refused, 0 work failed, 0 runtime absent, 0 broke');
     expect(score.detail).not.toContain('run×1');
     store.close();
   });
@@ -750,7 +750,7 @@ describe('toolOutcomes — the coarse instrument that always has a denominator',
     // failing suite, nothing broken. Reported split, because which part a
     // failure sits in is the whole finding.
     expect(score.detail).toBe(
-      '0/3 tool calls returned; 2 refused, 1 work failed, 0 broke; '
+      '0/3 tool calls returned; 2 refused, 1 work failed, 0 runtime absent, 0 broke; '
       + 'failed: file·edit·not_found×2, run·exit_1×1',
     );
     store.close();
@@ -776,7 +776,7 @@ describe('toolOutcomes — the coarse instrument that always has a denominator',
     const score = toolOutcomes.score(store.sql);
     expect(score.eligible).toBe(2);
     expect(score.passed).toBe(0);
-    expect(score.detail).toContain('0 refused, 0 work failed, 2 broke');
+    expect(score.detail).toContain('0 refused, 0 work failed, 0 runtime absent, 2 broke');
     expect(score.detail).toContain('execute_tools·returned_error×2');
     store.close();
   });
