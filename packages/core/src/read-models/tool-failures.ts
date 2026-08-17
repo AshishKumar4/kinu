@@ -27,7 +27,6 @@
 
 import * as v from 'valibot';
 import { isFailingResultText } from '../execution/exec-result.js';
-import { citesApprovalDenial } from '../safety/approval-gate.js';
 import { FAILURE_WITHOUT_ERROR, type RunEvent } from '../events/types.js';
 import { JsonObjectSchema, parseJsonValue, type JsonValue } from '../utils/json.js';
 import { tolerate } from '../obs/index.js';
@@ -167,10 +166,7 @@ export function classifyToolFailure(
 
   const threw = row.error != null && row.error !== '';
   const resultText = v.safeParse(v.string(), row.result);
-  // Narrowed once, so the exit code and the approval check read the same value
-  // rather than re-narrowing a parse result at each use.
-  const text = resultText.success ? resultText.output : null;
-  const failingResult = text !== null && isFailingResultText(text);
+  const failingResult = resultText.success && isFailingResultText(resultText.output);
   const object = resultObject(row.result);
   const objectReason = object ? v.safeParse(FileReasonSchema, object.reason) : null;
   // A structured `{error, …}` payload is a failure however it is carried: the
@@ -187,15 +183,8 @@ export function classifyToolFailure(
     };
   }
 
-  const exit = text !== null ? exitCodeOf(text) : null;
-  if (text !== null && exit !== null && exit !== 0) {
-    // The APPROVAL LADDER refusing is checked before the exit code, because a
-    // denial arrives as an ordinary non-zero exit and would otherwise read as
-    // the work failing. It is the clearest correct refusal there is: the command
-    // never ran because policy said it must not.
-    if (citesApprovalDenial(text)) {
-      return { ...base, reason: 'approval_denied', refused: true, workFailed: false };
-    }
+  const exit = resultText.success ? exitCodeOf(resultText.output) : null;
+  if (exit !== null && exit !== 0) {
     const named = EXEC_REASON_BY_EXIT.get(exit);
     return {
       ...base,

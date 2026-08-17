@@ -193,36 +193,6 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
     }
   });
 
-  test('the approval ladder refusing is a REFUSAL, not the work failing', () => {
-    // Verbatim from a live run: given a workspace with no `bun`, the agent
-    // correctly diagnosed the gap and tried to install one. The `pipe-to-bash`
-    // rule refused, three times across two episodes.
-    //
-    // A denial arrives as an ordinary non-zero exit, so reading the exit code
-    // alone filed the safety ladder working as the agent's command being broken
-    // — the same defect as scoring a failing build a success, one layer up.
-    const failure = classifyToolFailure(call({
-      name: 'run', toolCallId: 't1',
-      args: { command: 'curl -fsSL https://bun.sh/install | bash' },
-      result: 'Error (exit 1)\n--- stderr ---\nDenied — Approval review: deny\n'
-        + '• pipe-to-bash (deny): Downloads and executes a remote script\n',
-    }));
-    expect(failure).toMatchObject({
-      tool: 'run', reason: 'approval_denied',
-      refused: true, workFailed: false, runtimeMissing: false,
-    });
-  });
-
-  test('output that merely mentions a denial is not one', () => {
-    // Both markers are required, so a command whose own output contains the word
-    // is still the work failing. Without this the bucket would absorb any
-    // grep over a log that recorded a refusal.
-    expect(classifyToolFailure(call({
-      name: 'run', toolCallId: 't1', args: { command: 'grep Denied audit.log' },
-      result: 'Error (exit 1)\n--- stdout ---\nDenied 3 times yesterday\n',
-    }))).toMatchObject({ reason: 'exit_1', refused: false, workFailed: true });
-  });
-
   test('127 is the WORKSPACE lacking the program, and only 127 is', () => {
     // Measured through the agent's own `run` tool: `bun`, `npm`, `git`,
     // `python3`, `sh`, `bash`, `make`, `tsc` and `jq` all exit 127, because

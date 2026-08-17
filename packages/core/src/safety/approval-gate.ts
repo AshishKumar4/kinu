@@ -468,26 +468,6 @@ export function formatApproval(result: ApprovalResult): string {
 }
 
 /**
- * The two markers every approval REFUSAL carries, named here because this file
- * writes them and a reader must not keep a second copy of the strings.
- *
- * A denied command reaches the ledger as an ordinary non-zero exit whose stderr
- * is this message, so the durable row is indistinguishable from a failing build
- * unless something looks for these. Measured on a live run: three attempts at
- * `curl -fsSL https://bun.sh/install | bash` were refused by the `pipe-to-bash`
- * rule and counted as the WORK failing — the safety ladder working correctly,
- * filed as the agent's command being broken.
- */
-export const APPROVAL_DENIED = 'Denied';
-export const APPROVAL_REVIEW_LABEL = 'Approval review:';
-
-/** Whether `text` is a refusal this gate wrote, rather than output that merely
- *  mentions one of the words. Both markers are required for that reason. */
-export function citesApprovalDenial(text: string): boolean {
-  return text.includes(APPROVAL_DENIED) && text.includes(APPROVAL_REVIEW_LABEL);
-}
-
-/**
  * How the `mode`/`allow_all`/`deny_all` ladder is spelled wherever a policy
  * is threaded — kept a plain union here (not imported from config/store.ts)
  * so this file stays import-free: it is a layergate subject source, and the
@@ -643,7 +623,7 @@ export async function decideApproval(
   const review = afterGrants(rawReview, policy, executor);
   const deny = (message: string) => ({ run: false, message }) as const;
   if (review.decision === 'deny') {
-    return deny(`${APPROVAL_DENIED} — ${formatApproval(review)}`);
+    return deny(`Denied — ${formatApproval(review)}`);
   }
   if (review.decision === 'gate') {
     if (mode === 'allow_all') {
@@ -679,7 +659,7 @@ export async function decideApproval(
         // parked.run — the owner approved this command while the agent was
         // away and the grant has just been spent; fall through to execute.
       } else if (!approvalGrants(outcome)) {
-        return deny(`${APPROVAL_DENIED} by the owner — ${formatApproval(review)}`);
+        return deny(`Denied by the owner — ${formatApproval(review)}`);
       } else if (outcome === 'allow_always') {
         // Scoped to exactly what was asked: these rules, this executor.
         policy.remember?.(gatedGrants(review, executor));
@@ -688,7 +668,7 @@ export async function decideApproval(
   }
   if (review.decision === 'warn') {
     if (mode === 'deny_all') {
-      return deny(`${APPROVAL_DENIED} (deny_all mode) — ${formatApproval(review)}`);
+      return deny(`Denied (deny_all mode) — ${formatApproval(review)}`);
     }
     console.warn(`[approval-gate] warn: ${formatApproval(review)}`);
   }
