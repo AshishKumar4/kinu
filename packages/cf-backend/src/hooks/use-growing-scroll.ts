@@ -77,6 +77,18 @@ export function useGrowingScroll<T extends HTMLElement>({
     el.current?.removeEventListener("scroll", onScroll);
     el.current = node;
     if (!node) return;
+    // Chrome and Firefox anchor a scroller against content inserted above the
+    // viewport all by themselves, and they do it BEFORE this hook's layout
+    // effect runs — measured: a prepend moved scrollTop 250 -> 1440 before the
+    // effect saw the node, and the effect's own correction on top of that
+    // double-counted and clamped the reader to the bottom of the transcript.
+    //
+    // Turned off rather than relied on. The browser's version is a heuristic
+    // that picks its own anchor node and gives up in cases it cannot resolve,
+    // Safari does not implement it at all, and the correction here is exact
+    // because the hook knows precisely how much was inserted. One mechanism,
+    // the same on every engine.
+    node.style.overflowAnchor = "none";
     pinned.current = grows === "up";
     node.scrollTop = grows === "up" ? node.scrollHeight : 0;
     lastHeight.current = node.scrollHeight;

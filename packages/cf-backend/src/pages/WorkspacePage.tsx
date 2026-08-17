@@ -116,42 +116,38 @@ export function EmptyConversation({ mission }: { mission: string }) {
  * Four distinct answers, never collapsed into silence. "Failed" in particular
  * has to be its own state — rendering nothing there would tell the reader they
  * had reached the beginning of a conversation the pane simply could not fetch.
+ *
+ * All four are the same height, including the idle one. This row sits directly
+ * above the prepend, so a row that changes size as it changes state moves the
+ * transcript under the reader by the difference — measured at 15px per page
+ * before it was pinned, which is small, constant, and accumulates once per
+ * page for as long as someone keeps scrolling.
  */
-function HistoryBoundary({ loading, error, exhausted, onRetry }: {
+export function HistoryBoundary({ loading, error, exhausted, onRetry }: {
   loading: boolean;
   error: string | null;
   exhausted: boolean;
   onRetry: () => void;
 }) {
-  if (error) {
-    return (
-      <div className="flex items-center justify-center gap-2 py-2 text-xs">
-        <WarningCircleIcon size={13} className="p-danger shrink-0" />
-        <span className="p-text-3">Could not load earlier messages.</span>
-        <button onClick={onRetry} className="p-accent hover:underline">Retry</button>
-      </div>
-    );
-  }
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center gap-2 py-2 text-xs p-text-3">
-        <Loader size="sm" />Loading earlier messages…
-      </div>
-    );
-  }
-  if (exhausted) {
-    return (
-      <div className="flex items-center gap-3 py-2 text-[11px] p-text-3">
-        <span className="h-px flex-1 p-border border-t" />
-        Beginning of the conversation
-        <span className="h-px flex-1 p-border border-t" />
-      </div>
-    );
-  }
-  // Not loading, not exhausted, no error: more exists and the reader has not
-  // scrolled far enough to ask for it. Reserving the row keeps the prepend
-  // from resizing this element and nudging the viewport.
-  return <div className="py-2" aria-hidden />;
+  return (
+    <div className="flex h-7 items-center justify-center gap-2 text-xs">
+      {error ? (
+        <>
+          <WarningCircleIcon size={13} className="p-danger shrink-0" />
+          <span className="p-text-3">Could not load earlier messages.</span>
+          <button onClick={onRetry} className="p-accent hover:underline">Retry</button>
+        </>
+      ) : loading ? (
+        <span className="flex items-center gap-2 p-text-3"><Loader size="sm" />Loading earlier messages…</span>
+      ) : exhausted ? (
+        <>
+          <span className="h-px flex-1 p-border border-t" />
+          <span className="p-text-3 text-[11px]">Beginning of the conversation</span>
+          <span className="h-px flex-1 p-border border-t" />
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 /** Render one file part inside a message: inline preview for images, a

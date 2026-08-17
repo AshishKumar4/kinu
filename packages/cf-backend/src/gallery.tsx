@@ -35,7 +35,7 @@
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
  */
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
@@ -57,17 +57,19 @@ import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
-import { MessageView, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
+import { MessageView, DeviceConsentCard, ChatErrorCard, EmptyConversation, HistoryBoundary } from "@/pages/WorkspacePage";
+import { usePagedScroll } from "@/hooks/use-paged-scroll";
+import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { SupervisePage } from "@/pages/SupervisePage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
-import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, type JsonValue } from "@proteus/core";
+import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript, type JsonValue } from "@proteus/core";
 import type { BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ExecutorInfo } from "@/lib/executors";
 import type {
-  DirEntry, ExplorationCanvasRun, ForkRunParams, ForkRunSummary, HeadRunView,
-  MountInfo, Page, PageRequest, PendingAction, RunSummary, SearchNode,
+  ChatHistoryEntry, DirEntry, ExplorationCanvasRun, ForkRunParams, ForkRunSummary,
+  HeadRunView, MountInfo, Page, PageRequest, PendingAction, RunSummary, SearchNode,
 } from "@proteus/core";
 import { seekPage } from "@proteus/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
@@ -897,6 +899,101 @@ function ChatEmptyFrame() {
         <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
           <EmptyConversation mission={BRAIN_STATUS.purpose} />
         </div>
+        <GalleryComposer />
+      </div>
+    </div>
+  );
+}
+/* ── Chat infinite scroll ───────────────────────────────────────────
+
+   The REAL hooks (usePagedScroll + useGrowingScroll), the REAL merge rule and
+   the REAL HistoryBoundary, over a stub page source whose latency, failure and
+   live-arrival timing this frame can drive. The hooks are the whole of the
+   behaviour under test and none of them touch the socket, so a harness that
+   can make a page arrive slowly proves more here than the live app can — in
+   the live app the awkward cases are exactly the ones you cannot arrange.
+
+   Query params: ?latency=ms  ?fail=1 (first fetch fails)  ?depth=N (pages
+   before exhaustion). */
+const HISTORY_PAGE = 12;
+const historyParams = new URLSearchParams(location.search);
+const HISTORY_LATENCY = Number(historyParams.get("latency") ?? 400);
+const HISTORY_DEPTH = Number(historyParams.get("depth") ?? 4);
+
+/** The stored transcript this frame pages back through, oldest first. */
+const STORED_HISTORY: ChatHistoryEntry[] = Array.from(
+  { length: HISTORY_PAGE * HISTORY_DEPTH },
+  (_, i) => ({
+    id: `h${i + 1}`,
+    role: i % 2 === 0 ? "user" as const : "assistant" as const,
+    content: `Archived message ${i + 1} of ${HISTORY_PAGE * HISTORY_DEPTH}. `
+      + "Long enough to occupy real vertical space, so the scroll anchoring is "
+      + "measured against a container that actually overflows.",
+    createdAt: "2026-01-01 00:00:00",
+  }),
+);
+
+function ChatHistoryFrame() {
+  const [live, setLive] = useState<UIMessage[]>(() => MESSAGES.slice(-3));
+  const failed = useRef(historyParams.get("fail") === "1");
+  const [calls, setCalls] = useState<string[]>([]);
+
+  const history = usePagedScroll<ChatHistoryEntry>({
+    grows: "up",
+    fetchPage: useCallback(async (cursor) => {
+      setCalls((prev) => [...prev, cursor.after]);
+      const settled = Promise.withResolvers<void>();
+      setTimeout(settled.resolve, HISTORY_LATENCY);
+      await settled.promise;
+      if (failed.current) { failed.current = false; throw new Error("stub failure"); }
+      const end = STORED_HISTORY.findIndex((row) => row.id === cursor.after);
+      const from = end < 0 ? STORED_HISTORY.length : end;
+      const start = Math.max(0, from - HISTORY_PAGE);
+      const items = STORED_HISTORY.slice(start, from);
+      return start === 0 ? { status: "end", items } : { status: "more", items, next: { after: items[0]!.id } };
+    }, []),
+    startFrom: useCallback(() => live[0] ? { after: live[0].id } : null, [live]),
+  });
+
+  const transcript = useMemo(() => mergeTranscript(history.fetched, live), [history.fetched, live]);
+  const messagesRef = useGrowingScroll<HTMLDivElement>({
+    grows: "up", content: transcript, fetched: history.fetched, onReachEdge: history.loadMore,
+  });
+
+  // Driven from the test, so a live turn can be made to land while an older
+  // page is still in flight — the case that decides whether the two sources
+  // can double-render the same message.
+  useEffect(() => {
+    const onArrive = (event: Event) => {
+      const detail = v.safeParse(v.pipe(v.string(), v.nonEmpty()), event instanceof CustomEvent ? event.detail : null);
+      const id = detail.success ? detail.output : `live-${Date.now()}`;
+      setLive((prev) => [...prev, {
+        id, role: "assistant", parts: [{ type: "text", text: `Live arrival ${id}` }],
+      }]);
+    };
+    window.addEventListener("gallery:arrive", onArrive);
+    return () => window.removeEventListener("gallery:arrive", onArrive);
+  }, []);
+
+  return (
+    <div className="flex h-screen justify-center p-bg p-text">
+      <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
+        <GalleryChatTabs />
+        <div ref={messagesRef} data-testid="chat-scroll"
+          className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
+          <HistoryBoundary
+            loading={history.loading} error={history.error}
+            exhausted={history.exhausted} onRetry={history.loadMore} />
+          {transcript.map((m, i) => (
+            <div key={m.id} data-msg={m.id}>
+              <MessageView message={m} isLast={i === transcript.length - 1} isStreaming={false} />
+            </div>
+          ))}
+        </div>
+        <div data-testid="probe" className="hidden">{JSON.stringify({
+          ids: transcript.map((m) => m.id), calls,
+          loading: history.loading, exhausted: history.exhausted, error: history.error,
+        })}</div>
         <GalleryComposer />
       </div>
     </div>
@@ -1979,6 +2076,7 @@ async function mount() {
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "chatempty") node = <ChatEmptyFrame />;
+  else if (frame === "chathistory") node = <ChatHistoryFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
