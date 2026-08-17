@@ -360,7 +360,49 @@ describe('scoreDelegation — conversion over eligible turns', () => {
     expect(score.forkedRuns).toBe(0);
     expect(score.headsOpened).toBe(0);
     expect(score.completedTurns).toBe(0);
+    expect(score.toolCalls).toBe(0);
     expect(score.arms.map((a) => a.rate)).toEqual([null, null]);
+    store.close();
+  });
+
+  test('PRECONDITION: an inert turn yields rate 0 with ZERO tool calls, so the rate is undecidable', () => {
+    // The corpus a real bench run produced: evolution fired 14 times over 14
+    // turns and every outcome read "ungraded | 0 tool calls | 1 step". Over
+    // turns like these the arithmetic rate is a clean-looking 0%, and it would
+    // be read as "the agent chose not to delegate" when nothing happened at
+    // all. `toolCalls` is what lets a caller tell those apart, so it must be
+    // reported as zero here while `rate` is still numerically 0.
+    const store = eventStore();
+    for (let i = 0; i < 3; i++) {
+      emit(store.sql, `inert-${String(i)}`, 'turn_steering', {
+        trigger: 'turn_start_no_delegation', step: 0, converted: false,
+      });
+      emit(store.sql, `inert-${String(i)}`, 'turn_end', {});
+    }
+
+    const score = scoreDelegation(store.sql);
+
+    expect(score.eligible).toBe(3);
+    expect(score.completedTurns).toBe(3);
+    expect(score.arms.find((a) => a.trigger === 'turn_start_no_delegation')?.rate).toBe(0);
+    // The precondition that makes that 0 meaningless.
+    expect(score.toolCalls).toBe(0);
+    store.close();
+  });
+
+  test('a turn that used tools reports a non-zero precondition', () => {
+    const store = eventStore();
+    emit(store.sql, 'busy', 'turn_steering', {
+      trigger: 'turn_start_no_delegation', step: 0, converted: false,
+    });
+    emit(store.sql, 'busy', 'tool_call_end', { name: 'run', toolCallId: 't1', durationMs: 3 });
+    emit(store.sql, 'busy', 'turn_end', {});
+
+    const score = scoreDelegation(store.sql);
+
+    expect(score.eligible).toBe(1);
+    expect(score.toolCalls).toBe(1);
+    expect(score.forkedRuns).toBe(0);
     store.close();
   });
 });

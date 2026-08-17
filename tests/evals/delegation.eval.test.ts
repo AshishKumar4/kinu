@@ -117,6 +117,7 @@ describe('Delegation evals — conversion over eligible turns', () => {
     const forkedRuns = scores.reduce((n, s) => n + s.forkedRuns, 0);
     const headsOpened = scores.reduce((n, s) => n + s.headsOpened, 0);
     const completedTurns = scores.reduce((n, s) => n + s.completedTurns, 0);
+    const toolCalls = scores.reduce((n, s) => n + s.toolCalls, 0);
 
     for (const [index, score] of scores.entries()) {
       const start = score.arms.find((arm) => arm.trigger === 'turn_start_no_delegation');
@@ -128,6 +129,7 @@ describe('Delegation evals — conversion over eligible turns', () => {
       + `converted (${eligible === 0 ? 'n/a' : String(Math.round((converted / eligible) * 100))}%)`);
     console.log(`    forks that actually opened heads: ${String(forkedRuns)} run(s), `
       + `${String(headsOpened)} head(s)`);
+    console.log(`    precondition — tool calls across the eligible turns: ${String(toolCalls)}`);
 
     // Every turn closed. Rows are written on settle, so a turn killed by a
     // timeout contributes to neither numerator nor denominator — and a run where
@@ -141,6 +143,16 @@ describe('Delegation evals — conversion over eligible turns', () => {
     // taking the slot — this fails, instead of the rate quietly becoming a
     // measurement over nothing.
     expect(eligible).toBe(ELIGIBLE_ASKS.length);
+
+    // THE PRECONDITION, and it has to come before the rate is read at all.
+    // A turn can settle, be eligible, and have done NOTHING: a recorded bench
+    // run fired evolution 14 times over 14 turns with every outcome "ungraded,
+    // 0 tool calls, 1 step". Over turns like those the arithmetic here is a
+    // clean-looking 0%, and it reads as "the agent declined to delegate" when
+    // the truth is that the turn was inert. Those are different findings and
+    // only one of them is about delegation, so a zero here fails the eval
+    // rather than being published as a rate.
+    expect(toolCalls).toBeGreaterThan(0);
 
     // The rate itself is the finding, not the gate. Bounds only.
     expect(converted).toBeGreaterThanOrEqual(0);

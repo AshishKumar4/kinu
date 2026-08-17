@@ -252,6 +252,21 @@ export interface DelegationScore {
   /** Completed turns in the store. Delegation rows are written when a turn
    *  settles, so a turn killed by a timeout contributes to neither. */
   readonly completedTurns: number;
+  /**
+   * Tool calls the eligible turns actually made — the PRECONDITION, not a
+   * result.
+   *
+   * A turn can settle, be eligible, and have done nothing: a recorded bench run
+   * fired evolution 14 times over 14 turns and every one read "ungraded, 0 tool
+   * calls, 1 step". Over turns like those this scorer would report a delegation
+   * rate of 0%, and that number would be read as "the agent chose not to
+   * delegate" when the truth is that nothing happened at all. Those are
+   * completely different findings and only one of them is about delegation.
+   *
+   * So a caller must assert this is non-zero BEFORE reading `rate`. Zero here
+   * makes the rate UNDECIDABLE rather than 0.
+   */
+  readonly toolCalls: number;
 }
 
 export function scoreDelegation(sql: SqlExecutor): DelegationScore {
@@ -280,6 +295,11 @@ export function scoreDelegation(sql: SqlExecutor): DelegationScore {
   const completedTurns = sql<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE type = 'turn_end'`[0]?.n ?? 0;
 
+  // `tool_call_end` rather than `tool_call_start`: nothing in production emits
+  // the latter. See DELEGATION_EVENT_TYPE above for the same trap.
+  const toolCalls = sql<{ n: number }>`
+    SELECT COUNT(*) AS n FROM run_events WHERE type = 'tool_call_end'`[0]?.n ?? 0;
+
   return {
     arms,
     eligible: arms.reduce((total, arm) => total + arm.eligible, 0),
@@ -287,5 +307,6 @@ export function scoreDelegation(sql: SqlExecutor): DelegationScore {
     forkedRuns: forkedRuns.size,
     headsOpened: splits.reduce((total, row) => total + (row.heads ?? 0), 0),
     completedTurns,
+    toolCalls,
   };
 }
