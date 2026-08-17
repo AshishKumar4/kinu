@@ -35,9 +35,10 @@
  * it was configured. That returns `misconfigured` and the suites throw.
  */
 import {
-  cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, type LLMProviderConfig,
+  addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
+  usageReported, type LLMProviderConfig, type Usage,
 } from '@proteus/core';
-import type { LanguageModel } from 'ai';
+import type { LanguageModel, LanguageModelUsage } from 'ai';
 import { appendFileSync } from 'node:fs';
 
 /** Which of the two resolution paths produced a target. */
@@ -171,6 +172,22 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
  * whole module exists to remove.
  */
 export function liveModelTarget(suite: string): LiveModelTarget | null {
+  // Ambient credentials are NOT consent to spend. These suites are named
+  // `*.eval.test.ts`, so a root `bun test` collects them, so the COMMIT tier
+  // collects them — and on a machine that happens to export PROTEUS_BASE_URL /
+  // PROTEUS_AUTH they fired real paid model calls from a git hook (measured:
+  // 101s and 81s for two tests) and then failed on a remote model's choices. A
+  // developer's exported credential is a fact about their shell, never a
+  // request to bill the owner's account during a commit.
+  //
+  // So a live run requires the eval tier to be DRIVING it. `PROTEUS_EVAL_LIVE`
+  // is set by scripts/eval-tier.sh and by nothing else; absent it, the suite
+  // skips exactly as it does with no credential at all — and the skip-ratchet
+  // gate still requires that skip to be declared, so the suite cannot go quiet.
+  if (process.env['PROTEUS_EVAL_LIVE'] !== '1') {
+    console.warn(`[skip] ${suite} — live evals are opt-in: run 'bun run test:eval' (PROTEUS_EVAL_LIVE=1)`);
+    return null;
+  }
   const resolved = resolveLiveModel();
   if (resolved.kind === 'misconfigured') {
     throw new Error(`${suite}: live-model environment is half-configured — ${resolved.reason}`);
@@ -230,40 +247,45 @@ export function liveChatModel(llm: LLMProviderConfig): LanguageModel {
  * process appends its own total to `PROTEUS_EVAL_SPEND_FILE`, and the eval tier
  * sums the files into the one number a run reports.
  *
- * A call whose usage the provider did not report still increments `calls`. The
- * gap between `calls` and the token totals is then visible, rather than a token
- * count that silently under-reports.
+ * A call whose usage the provider did not report still increments `calls` and
+ * `callsWithoutUsage`, and contributes NOTHING to the token total. That gap is
+ * the honest form of the sentence: the totals are a floor over the calls that
+ * were actually reported, and `callsWithoutUsage` says how many were not. A
+ * partial report is the same rule one field at a time — a provider that returns
+ * output tokens and no input tokens adds output only, because the alternative
+ * (`+= input ?? 0`) reports an input total that reads as measured.
  */
 export interface LiveModelSpend {
   readonly calls: number;
   /** Calls the provider returned no usage for. */
   readonly callsWithoutUsage: number;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
+  /** Accumulated with `addUsage`, so a field no call reported stays absent. */
+  readonly usage: Usage;
 }
 
 /** The env var naming the file a suite process appends its total to. */
 export const LIVE_MODEL_SPEND_FILE_ENV = 'PROTEUS_EVAL_SPEND_FILE';
 
-const spend = { calls: 0, callsWithoutUsage: 0, inputTokens: 0, outputTokens: 0 };
+// The process's running total. Three plain bindings rather than one mutable
+// object, so `usage` keeps its `Usage` type through accumulation and
+// `liveModelSpend()` is the single place the reported shape is assembled.
+let spendCalls = 0;
+let spendCallsWithoutUsage = 0;
+let spendUsage: Usage = {};
 
 /** Record one model call. Pass the AI SDK's `result.usage`. */
-export function recordLiveModelSpend(
-  usage?: { inputTokens?: number | undefined; outputTokens?: number | undefined },
-): void {
-  spend.calls += 1;
-  const input = usage?.inputTokens;
-  const output = usage?.outputTokens;
-  if (input === undefined && output === undefined) {
-    spend.callsWithoutUsage += 1;
+export function recordLiveModelSpend(usage?: LanguageModelUsage): void {
+  spendCalls += 1;
+  const reported = normalizeUsage(usage);
+  if (!usageReported(reported)) {
+    spendCallsWithoutUsage += 1;
     return;
   }
-  spend.inputTokens += input ?? 0;
-  spend.outputTokens += output ?? 0;
+  spendUsage = addUsage(spendUsage, reported);
 }
 
 export function liveModelSpend(): LiveModelSpend {
-  return { ...spend };
+  return { calls: spendCalls, callsWithoutUsage: spendCallsWithoutUsage, usage: spendUsage };
 }
 
 /** One line stating this process's spend, and the same appended to the
@@ -273,7 +295,7 @@ export function reportLiveModelSpend(suite: string): LiveModelSpend {
   const total = liveModelSpend();
   console.warn(
     `[spend] ${suite} — ${total.calls} model call(s), `
-    + `${total.inputTokens} in / ${total.outputTokens} out tokens`
+    + `${total.usage.input ?? 'unreported'} in / ${total.usage.output ?? 'unreported'} out tokens`
     + (total.callsWithoutUsage > 0 ? `, ${total.callsWithoutUsage} without reported usage` : ''),
   );
   const path = process.env[LIVE_MODEL_SPEND_FILE_ENV]?.trim();

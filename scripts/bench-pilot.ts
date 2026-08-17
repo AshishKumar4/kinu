@@ -13,6 +13,10 @@ const AttemptBudgetSchema = v.strictObject({
   wallClockMs: PositiveIntegerSchema,
   maxTokens: PositiveIntegerSchema,
 });
+/** One task's repeats. `tokens` and `modelCalls` are required and complete: a
+ *  stability pilot exists to say what a live variant costs run to run, so an
+ *  attempt with no measurement is not a cheap data point, it is a hole in the
+ *  measurement — `buildPilotReport` throws on one rather than writing a zero. */
 const PilotTaskResultSchema = v.strictObject({
   taskId: v.pipe(v.string(), v.minLength(1)),
   attempts: PositiveIntegerSchema,
@@ -43,11 +47,14 @@ export const PilotReportSchema = v.strictObject({
   unstableTaskIds: v.array(v.pipe(v.string(), v.minLength(1))),
   errors: NonNegativeIntegerSchema,
   budgetBreaches: NonNegativeIntegerSchema,
-  meanTokens: NonNegativeNumberSchema,
-  maxObservedTokens: NonNegativeIntegerSchema,
+  /** Null only for an empty sample: the mean and the maximum of no attempts do
+   *  not exist, and reporting them as 0 puts a measured-looking cost on a run
+   *  that measured nothing. A total over no attempts really is 0. */
+  meanTokens: v.nullable(NonNegativeNumberSchema),
+  maxObservedTokens: v.nullable(NonNegativeIntegerSchema),
   totalModelCalls: NonNegativeIntegerSchema,
-  meanModelCalls: NonNegativeNumberSchema,
-  maxObservedModelCalls: NonNegativeIntegerSchema,
+  meanModelCalls: v.nullable(NonNegativeNumberSchema),
+  maxObservedModelCalls: v.nullable(NonNegativeIntegerSchema),
 });
 
 export type PilotReport = v.InferOutput<typeof PilotReportSchema>;
@@ -124,16 +131,21 @@ export function validatePilotReport(input: JsonValue, expected: ExpectedPilot): 
   if (JSON.stringify([...report.unstableTaskIds].sort()) !== JSON.stringify(unstable)) {
     throw new Error('stability pilot unstable task list does not match its task results');
   }
+  // Re-derived, not trusted. The producer and this validator have to agree about
+  // the empty sample too: a mean or a maximum over no attempts is absent, so a
+  // report claiming 0 there disagrees with its own task results and is rejected.
   const reportedTokens = report.taskResults.flatMap((result) => result.tokens);
-  const meanTokens = reportedTokens.reduce((sum, tokens) => sum + tokens, 0) / reportedTokens.length;
-  const maxObservedTokens = Math.max(...reportedTokens);
+  const meanTokens = reportedTokens.length === 0
+    ? null
+    : reportedTokens.reduce((sum, tokens) => sum + tokens, 0) / reportedTokens.length;
+  const maxObservedTokens = reportedTokens.length === 0 ? null : Math.max(...reportedTokens);
   if (report.meanTokens !== meanTokens || report.maxObservedTokens !== maxObservedTokens) {
     throw new Error('stability pilot token aggregates do not match its task results');
   }
   const reportedCalls = report.taskResults.flatMap((result) => result.modelCalls);
   const totalModelCalls = reportedCalls.reduce((sum, calls) => sum + calls, 0);
-  const meanModelCalls = totalModelCalls / reportedCalls.length;
-  const maxObservedModelCalls = Math.max(...reportedCalls);
+  const meanModelCalls = reportedCalls.length === 0 ? null : totalModelCalls / reportedCalls.length;
+  const maxObservedModelCalls = reportedCalls.length === 0 ? null : Math.max(...reportedCalls);
   if (
     report.totalModelCalls !== totalModelCalls
     || report.meanModelCalls !== meanModelCalls
@@ -207,7 +219,12 @@ export function buildPilotReport(input: {
       attempts: outcomes.length,
       repeatIndices: outcomes.map((outcome) => outcome.repeat),
       passes: outcomes.filter((outcome) => outcome.passed).length,
-      tokens: outcomes.map((outcome) => outcome.tokens),
+      tokens: outcomes.map((outcome) => {
+        if (outcome.tokens === undefined) {
+          throw new Error(`stability pilot task ${taskId} has no token measurement for repeat ${outcome.repeat}`);
+        }
+        return outcome.tokens;
+      }),
       modelCalls: outcomes.map((outcome) => {
         if (outcome.modelCalls === undefined) {
           throw new Error(`stability pilot task ${taskId} has no model-call evidence for repeat ${outcome.repeat}`);
@@ -218,7 +235,12 @@ export function buildPilotReport(input: {
       budgetBreaches: outcomes.filter((outcome) => outcome.budgetBreach !== null).length,
     };
   });
-  const tokens = input.outcomes.map((outcome) => outcome.tokens);
+  const tokens = input.outcomes.map((outcome) => {
+    if (outcome.tokens === undefined) {
+      throw new Error(`stability pilot attempt ${outcome.taskId} repeat ${outcome.repeat} has no token measurement`);
+    }
+    return outcome.tokens;
+  });
   const modelCalls = input.outcomes.map((outcome) => {
     if (outcome.modelCalls === undefined) {
       throw new Error(`stability pilot attempt ${outcome.taskId} repeat ${outcome.repeat} has no model-call evidence`);
@@ -247,10 +269,12 @@ export function buildPilotReport(input: {
     unstableTaskIds,
     errors: input.outcomes.filter((outcome) => outcome.error !== undefined).length,
     budgetBreaches: input.outcomes.filter((outcome) => outcome.budgetBreach !== null).length,
-    meanTokens: tokens.length === 0 ? 0 : tokens.reduce((sum, value) => sum + value, 0) / tokens.length,
-    maxObservedTokens: tokens.length === 0 ? 0 : Math.max(...tokens),
+    meanTokens: tokens.length === 0 ? null : tokens.reduce((sum, value) => sum + value, 0) / tokens.length,
+    maxObservedTokens: tokens.length === 0 ? null : Math.max(...tokens),
     totalModelCalls: modelCalls.reduce((sum, value) => sum + value, 0),
-    meanModelCalls: modelCalls.length === 0 ? 0 : modelCalls.reduce((sum, value) => sum + value, 0) / modelCalls.length,
-    maxObservedModelCalls: modelCalls.length === 0 ? 0 : Math.max(...modelCalls),
+    meanModelCalls: modelCalls.length === 0
+      ? null
+      : modelCalls.reduce((sum, value) => sum + value, 0) / modelCalls.length,
+    maxObservedModelCalls: modelCalls.length === 0 ? null : Math.max(...modelCalls),
   });
 }

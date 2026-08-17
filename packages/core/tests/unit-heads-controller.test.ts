@@ -49,7 +49,7 @@ function fakeReport(id: string, overrides: Partial<HeadReport> = {}): HeadReport
     fileChanges: [],
     childHeadIds: [],
     toolCalls: [],
-    tokenUsage: { input: 100, output: 80, total: 180 },
+    usage: { input: 100, output: 80 },
     wallClockMs: 250,
     ...overrides,
     stepCount: overrides.stepCount ?? 0,
@@ -247,6 +247,80 @@ describe('HeadController.run', () => {
       SELECT status, error_message FROM head_journal`;
     expect(rows[0]?.status).toBe('budget_exceeded');
     expect(rows[0]?.error_message).toMatch(/wall-clock/i);
+  });
+
+  /**
+   * A head aborted before it could report is the case this whole vocabulary
+   * exists for. The controller writes that head's report itself, and it used to
+   * write `{ input: 0, output: 0, total: 0 }` — a measurement nobody took. The
+   * head may well have burned real tokens before the deadline cut it off, so
+   * every layer below has to be able to say "unknown", including the SQL.
+   */
+  test('a head aborted before reporting carries no usage, and its reporting sibling still counts', async () => {
+    const { sql, journal } = newJournal();
+    // 'angle A' never answers inside the 50ms budget, so the controller
+    // synthesizes its report; 'angle B' answers with the default fake report,
+    // which carries a real provider figure of 100 + 80 under its own spawn id
+    // (a canned report keyed by task would carry a literal id the journal has
+    // no row for, so its usage would never reach the columns below).
+    const runtime = buildRuntime({ reportDelays: { 'angle A': 1000 } });
+    const controller = new HeadController(runtime, journal);
+
+    const result = await controller.run({
+      mode: 'build',
+      parentHeadId: null,
+      rootId: 'root-mixed',
+      inheritedContext: baseContext,
+      request: baseRequest,
+      parentBudget: { maxDepth: 2, maxWallClockMs: 50, spawnedAt: Date.now() },
+    });
+
+    // Exactly the sibling's tokens — the aborted head neither added to the
+    // total nor dragged it toward a zero it never earned.
+    expect(result.costSummary.totalTokens).toBe(180);
+
+    // Asserted on the COLUMNS, because the durable shape is the claim: a schema
+    // with `DEFAULT 0` on these could not represent "we do not know".
+    const rows = sql<{ status: string; token_input: number | null; token_output: number | null }>`
+      SELECT status, token_input, token_output FROM head_journal`;
+    const aborted = rows.find((r) => r.status === 'budget_exceeded');
+    expect(aborted?.token_input).toBeNull();
+    expect(aborted?.token_output).toBeNull();
+
+    const view = journal.readRun('root-mixed');
+    expect(view?.heads.find((h) => h.status === 'budget_exceeded')?.usage).toEqual({});
+    expect(view?.heads.find((h) => h.status === 'completed')?.usage).toEqual({ input: 100, output: 80 });
+  });
+
+  test('a split no head reported on has undefined tokens, never 0 — through the cache too', async () => {
+    const { journal } = newJournal();
+    // Both heads are cut off before they report anything. Nothing measured this
+    // split, and the reports the controller writes for them carry no findings,
+    // so it settles down the deterministic empty-split path.
+    const runtime = buildRuntime({ reportDelays: { 'angle A': 1000, 'angle B': 1000 } });
+    const controller = new HeadController(runtime, journal);
+
+    const result = await controller.run({
+      mode: 'build',
+      parentHeadId: null,
+      rootId: 'root-blank',
+      inheritedContext: baseContext,
+      request: baseRequest,
+      parentBudget: { maxDepth: 2, maxWallClockMs: 50, spawnedAt: Date.now() },
+    });
+
+    expect(result.costSummary.headCount).toBe(2);
+    expect(result.costSummary.totalTokens).toBeUndefined();
+
+    // This narrative goes into the parent's context verbatim. "0 tokens" is the
+    // sentence that used to tell the agent a failed delegation had been free.
+    expect(result.mergedNarrative).not.toContain('0 tokens');
+    expect(result.mergedNarrative).toContain('tokens unreported');
+
+    // The absence survives the durable round-trip: NULL in the column, absent
+    // again on the way back, so a replayed merge makes the same claim.
+    expect(journal.readRun('root-blank')?.merge?.totalTokens).toBeNull();
+    expect(journal.readCachedMerge('root-blank')?.costSummary.totalTokens).toBeUndefined();
   });
 
   test('falls back gracefully when merge LLM throws', async () => {

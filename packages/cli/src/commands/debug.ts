@@ -35,8 +35,9 @@
 import { appendFileSync } from 'node:fs';
 import { writeSecretFile } from '@proteus/cli-backend';
 import {
-  decodeJsonValue, JsonObjectSchema, JsonValueSchema,
-  type JsonObject, type JsonValue,
+  addUsage, decodeJsonValue, JsonObjectSchema, JsonValueSchema, projectJsonValue,
+  usageReported, UsageSchema,
+  type JsonObject, type JsonValue, type Usage,
 } from '@proteus/core';
 import * as v from 'valibot';
 import { resolveAgentTarget } from '../agent-target.js';
@@ -70,6 +71,17 @@ interface DebugRun extends JsonObject {
   runId: string;
 }
 
+/** One ledger event as a bundle row. `usage` is a domain value rather than a
+ *  plain JSON object, so it is projected here — the one place the bundle's
+ *  JSON boundary is crossed. Absent stays absent: no key is written for a turn
+ *  whose provider reported nothing. */
+function runEventRecord(event: DebugRunEvent): BundleRecord {
+  const { usage, ...rest } = event;
+  const record: BundleRecord = { t: 'run_event', ...rest };
+  if (usage !== undefined) record.usage = projectJsonValue({ value: usage });
+  return record;
+}
+
 interface DebugRunEvent {
   eventIndex: number;
   runId: string;
@@ -82,7 +94,7 @@ interface DebugRunEvent {
   result?: JsonValue;
   error?: string;
   message?: string;
-  tokenUsage?: { input: number; output: number; cached?: number };
+  usage?: Usage;
   reason?: string;
 }
 
@@ -130,7 +142,7 @@ const DebugRunEventSchema: v.GenericSchema<DebugRunEvent> = v.objectWithRest({
   caused_by: v.optional(v.string()), userMessage: v.optional(v.string()), name: v.optional(v.string()),
   args: v.optional(JsonObjectSchema), result: v.optional(JsonValueSchema), error: v.optional(v.string()),
   message: v.optional(v.string()),
-  tokenUsage: v.optional(v.object({ input: v.number(), output: v.number(), cached: v.optional(v.number()) })),
+  usage: v.optional(UsageSchema),
   reason: v.optional(v.string()),
 }, JsonValueSchema);
 const DebugHeadSchema: v.GenericSchema<DebugHead> = v.objectWithRest({ status: v.string() }, JsonValueSchema);
@@ -323,8 +335,12 @@ interface RunStats {
   startedAt: number | null;
   endedAt: number | null;
   endReason: string | null;
-  tokensIn: number;
-  tokensOut: number;
+  /** What the run's turns reported, absence preserved — a field no turn
+   *  mentioned stays absent instead of reading as a metered zero. */
+  usage: Usage;
+  /** Turns whose provider reported nothing at all. The denominator that stops
+   *  a silent run from reading as a free one. */
+  turnsWithoutUsage: number;
   backgroundHandles: string[];
   jobPollsAfterHandle: number;
 }
@@ -362,7 +378,7 @@ interface DebugSummary {
 function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
   const stats: RunStats = {
     runId, eventCount: events.length, toolCalls: 0, errors: [], causedBy: null, userMessage: null,
-    startedAt: null, endedAt: null, endReason: null, tokensIn: 0, tokensOut: 0,
+    startedAt: null, endedAt: null, endReason: null, usage: {}, turnsWithoutUsage: 0,
     backgroundHandles: [], jobPollsAfterHandle: 0,
   };
   const handledJobIds = new Set<string>();
@@ -388,9 +404,9 @@ function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
       if (e.error) stats.errors.push(`tool_call_end(${e.name ?? 'tool'}): ${e.error}`);
     } else if (e.type === 'error') {
       if (e.message) stats.errors.push(e.message);
-    } else if (e.type === 'turn_end' && e.tokenUsage) {
-      stats.tokensIn += e.tokenUsage.input;
-      stats.tokensOut += e.tokenUsage.output;
+    } else if (e.type === 'turn_end') {
+      if (e.usage && usageReported(e.usage)) stats.usage = addUsage(stats.usage, e.usage);
+      else stats.turnsWithoutUsage++;
     } else if (e.type === 'run_end') {
       stats.endedAt = ts;
       stats.endReason = e.reason ?? null;
@@ -483,7 +499,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
       for (;;) {
         const page = await safe(source.runEvents(run.runId, since, DEFAULT_EVENT_PAGE), []);
         if (page.length === 0) break;
-        for (const e of page) writer.write({ t: 'run_event', ...e });
+        for (const e of page) writer.write(runEventRecord(e));
         events.push(...page);
         if (page.length < DEFAULT_EVENT_PAGE) break;
         since = page[page.length - 1]!.eventIndex + 1;

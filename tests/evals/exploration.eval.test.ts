@@ -35,6 +35,7 @@ import {
   buildBuiltinTools,
   createMCTSStrategy,
   createStrategyRegistry,
+  initWorkspaceSchema,
   readSoul,
   type AgentRuntime,
   type LLMProviderConfig,
@@ -43,6 +44,8 @@ import {
   type StrategyRegistry,
 } from '../../packages/core/src/index.js';
 import { createWorkspace } from '../../packages/core/src/identity/index.js';
+import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
+import { makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
 import {
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend,
   scoreExploration, scoreSettleVisibility, UNCONFIGURED_LLM,
@@ -101,11 +104,22 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     mkdirSync(TEST_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
-    rt = await createWorkspace(db, {
+    // Birth, then OPEN — the same two steps production takes (`proteus agent
+    // create` then every running surface). The runtime `createWorkspace`
+    // returns is what open.ts:49-50 calls "degraded inline
+    // VFS/Memory/Executor", and its `spawnBranch` is a HARDCODED MOCK whose
+    // every branch resolves to the literal string 'exploration result'
+    // (identity/create.ts:57-68). An MCTS suite driving that stub is scoring
+    // the stub, not exploration. `initWorkspaceSchema` is also what makes
+    // `head_journal` exist at all, which this suite's settle-visibility
+    // assertion requires of both halves.
+    await createWorkspace(db, {
       name: 'exploration-eval',
       purpose: 'An architecture advisor that compares competing designs before recommending one.',
       llm: LLM_CONFIG,
     });
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG }));
     model = liveChatModel(LLM_CONFIG);
 
     // Only `mcts` is registered, so `settle` has exactly one destination and a

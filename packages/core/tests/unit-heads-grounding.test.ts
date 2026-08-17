@@ -52,7 +52,7 @@ function report(id: string, o: Partial<HeadReport> = {}): HeadReport {
   return {
     id, status: 'completed', summary: `Head ${id} finding.`,
     evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
-    toolCalls: [], stepCount: 0, tokenUsage: { input: 10, output: 10, total: 20 },
+    toolCalls: [], stepCount: 0, usage: { input: 10, output: 10 },
     wallClockMs: 5, ...o,
   };
 }

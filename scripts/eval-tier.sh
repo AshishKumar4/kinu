@@ -52,6 +52,10 @@ SPEND="$REPORT_DIR/spend.jsonl"
 trap 'rm -rf "$REPORT_DIR"' EXIT
 
 export PROTEUS_EVAL_SPEND_FILE="$SPEND"
+# The ONE place this is set. `liveModelTarget` refuses to spend without it, so a
+# credential exported in a developer's shell can no longer make the commit hook
+# bill the owner's account — being driven by this script is the consent.
+export PROTEUS_EVAL_LIVE=1
 
 echo "── eval tier ─────────────────────────────────────────────"
 if [[ -n "${PROTEUS_TOKEN:-}" && -n "${PROTEUS_ORIGIN:-}" ]]; then

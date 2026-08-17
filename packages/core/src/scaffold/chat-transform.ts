@@ -30,6 +30,7 @@ import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { ChatEvent } from '../chat.js';
 import { JsonObjectSchema, projectJsonValue, type JsonValue } from '../utils/json.js';
+import { UsageSchema } from '../usage.js';
 import {
   runScaffold,
   type ScaffoldDefaultInferenceChunk,
@@ -75,9 +76,7 @@ const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
     type: v.literal('step-finish'),
     stepIndex: v.number(),
     responseMessages: ModelMessagesSchema,
-    inputTokens: v.optional(v.number()),
-    outputTokens: v.optional(v.number()),
-    cachedInputTokens: v.optional(v.number()),
+    usage: v.optional(UsageSchema),
   }),
   v.object({ type: v.literal('error'), message: v.string() }),
   v.object({

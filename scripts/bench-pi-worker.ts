@@ -134,14 +134,15 @@ async function main(): Promise<void> {
   process.stdout.write(`${JSON.stringify(out)}\n`);
 }
 
+// A crash before the meter reported carries no token figures at all. Reporting
+// zeros here billed a crashed attempt as the cheapest run in the arm and as
+// inside its token budget, which is the one thing a budget must never say about
+// an attempt it never measured.
 main().catch((caught) => {
   const out: WorkerOutput = {
-    tokens: 0,
     steps: 0,
     hadError: true,
     budgetBreach: null,
-    peakPromptTokens: 0,
-    modelCalls: 0,
     error: caught instanceof Error ? (caught.stack ?? caught.message) : String(caught),
   };
   process.stdout.write(`${JSON.stringify(out)}\n`);

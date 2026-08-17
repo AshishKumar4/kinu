@@ -1416,7 +1416,7 @@ export class LocalAgentSession implements BackendHost {
     if (!this.currentRunId) return;
     const outcome: Parameters<typeof closeTurnRun>[2] = {
       turnIndex: this.orch.sessionTurnIndex,
-      usage: this.orch.acc.usage,
+      usage: this.orch.acc.reportedUsage(),
       context: this.orch.acc.context,
       files: this.orch.acc.files,
       steering: this.orch.steering.snapshot(),
@@ -1721,11 +1721,10 @@ export class LocalAgentSession implements BackendHost {
             // reaches disk at `persist()` below, so a kill at step 12 left
             // twelve steps of work nowhere.
             const step: StepLike = { response: { messages: ev.responseMessages } };
-            if (ev.inputTokens !== undefined || ev.outputTokens !== undefined || ev.cachedInputTokens !== undefined) {
-              step.usage = {
-                inputTokens: ev.inputTokens, outputTokens: ev.outputTokens, cachedInputTokens: ev.cachedInputTokens,
-              };
-            }
+            // The chat event already carries the ONE normalized usage, present
+            // only when the provider reported something — so it travels whole
+            // rather than being taken apart and rebuilt field by field.
+            if (ev.usage) step.usage = ev.usage;
             this.orch.acc.recordStep(step);
             break;
           }

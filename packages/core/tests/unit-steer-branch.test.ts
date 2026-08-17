@@ -34,7 +34,7 @@ function completedReport(id: string, summary: string, status: HeadReport['status
   return {
     id, status, summary,
     evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], stepCount: 0,
-    tokenUsage: { input: 10, output: 20, total: 30 },
+    usage: { input: 10, output: 20 },
     wallClockMs: 5,
   };
 }

@@ -5,6 +5,7 @@
 import type { ModelMessage } from 'ai';
 
 import type { MCTSProgressEvent } from '../types/mcts.js';
+import type { Usage } from '../usage.js';
 import type { JsonObject, JsonValue } from '../utils/json.js';
 
 /** A tool call as reported by the AI SDK's structured result */
@@ -12,14 +13,6 @@ export interface ToolCallRecord {
   name: string;
   args: JsonObject;
   result?: JsonValue;
-}
-
-/** Provider-reported token usage for one turn, summed over its steps.
- *  `cached` is the cache-read share of `input`, not an addition to it. */
-export interface TurnUsage {
-  input: number;
-  output: number;
-  cached: number;
 }
 
 /** A completed turn — input + output + metadata for the evolution engine */
@@ -60,7 +53,7 @@ export interface CompletedTurn {
   origin?: 'user' | 'programmatic';
   /** What the turn spent, as the provider reported it per step. Absent when
    *  the provider reported no usage at all. */
-  usage?: TurnUsage;
+  usage?: Usage;
 }
 
 /** A completed session — sequence of turns */

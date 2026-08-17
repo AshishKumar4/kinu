@@ -20,7 +20,7 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID,
   explorePrompt,
   formatInheritedContext,
-  missionCallUsage,
+  normalizeUsage,
   parseModelSpec,
   reasoningEffortOptions,
   reflectionPrompt,
@@ -147,7 +147,7 @@ process.on('message', async (rawMessage: JsonValue) => {
         // The spend travels back with the proposal: this process resolves its
         // own model, so the parent's mission ledger cannot see the call any
         // other way (mcts/engine.ts debits it).
-        result = { text: trimmed, usage: missionCallUsage(usage) };
+        result = { text: trimmed, usage: normalizeUsage(usage) };
         break;
       }
       case 'reflect': {
@@ -164,7 +164,7 @@ process.on('message', async (rawMessage: JsonValue) => {
         };
         if (providerOptions) request.providerOptions = providerOptions;
         const { text, usage } = await generateText(request);
-        result = { text: text.trim(), usage: missionCallUsage(usage) };
+        result = { text: text.trim(), usage: normalizeUsage(usage) };
         break;
       }
     }

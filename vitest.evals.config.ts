@@ -44,6 +44,17 @@ export default defineConfig({
     name: 'evals',
     include: ['tests/evals/**/*.eval.ts'],
     environment: 'node',
+    // The SAME throwaway PROTEUS_HOME every `bun test` process gets, because
+    // `bunfig.toml`'s `preload` reaches only bun's runner and this tier is
+    // vitest. It is load-bearing here, not hygiene: the behaviour harness opens
+    // the workspace through `createCLIRuntime`, which roots a shadow-git
+    // checkpoint engine at `$PROTEUS_HOME/checkpoints`
+    // (cli-backend/src/checkpoints.ts:52) and snapshots on every host-FS
+    // mutation. `proteusHome()` falls back to `~/.proteus`, and measured here
+    // before this line existed, `PROTEUS_HOME` was UNSET under this config — so
+    // a live eval run wrote checkpoint stores into the developer's real home,
+    // which is the same defect that once put ~580 of them there.
+    setupFiles: ['./scripts/test-preload.ts'],
     // One task is a full agent episode against a remote model: minutes, not
     // seconds. A default 5s timeout would report the tier as broken.
     testTimeout: 1_800_000,

@@ -1,43 +1,34 @@
 // The ChatEvent seam is a projection of what the ai-SDK stream hands runChat.
 // It used to drop the tool success/error discriminator (poisoning the CLI's
 // evolution signal — hadError, outcome review) and cached-prefix tokens (cache
-// telemetry read 0 on the CLI path). These tests pin both fidelities through
-// the public runChat interface.
+// telemetry read 0 on the CLI path). It then flattened usage into three numbers
+// gated on `> 0`, which turned a provider-reported zero into "unreported" and
+// made a cold prefix indistinguishable from a provider that says nothing. These
+// tests pin all of it through the public runChat interface.
 import { describe, test, expect } from 'bun:test';
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
-import { runChat, ExtensionHost, type ChatEvent, type ProteusExtension } from '../src/index.ts';
+import { runChat, ExtensionHost, type ChatEvent, type ProteusExtension, type Usage } from '../src/index.ts';
 
 type FinishPart = Extract<LanguageModelV3StreamPart, { type: 'finish' }>;
-type FinishOverrides = Partial<Pick<FinishPart, 'usage' | 'providerMetadata'>>;
 
 const USAGE: FinishPart['usage'] = {
   inputTokens: { total: 3, noCache: 3, cacheRead: undefined, cacheWrite: undefined },
   outputTokens: { total: 2, text: 2, reasoning: undefined },
 };
 
-function finishPart(
-  reason: 'stop' | 'tool-calls',
-  overrides: FinishOverrides = {},
-): FinishPart {
-  const base: FinishPart = {
-    type: 'finish',
-    finishReason: { unified: reason, raw: undefined },
-    usage: overrides.usage ?? USAGE,
-  };
-  return overrides.providerMetadata === undefined
-    ? base
-    : { ...base, providerMetadata: overrides.providerMetadata };
+function finishPart(reason: 'stop' | 'tool-calls', usage: FinishPart['usage'] = USAGE): FinishPart {
+  return { type: 'finish', finishReason: { unified: reason, raw: undefined }, usage };
 }
 
-/** A model whose first step calls one tool, then answers with text. The
- *  finish parts carry the caller-supplied usage/providerMetadata so a test can
- *  assert what the ChatEvent seam surfaces. */
+/** A model whose first step calls one tool, then answers with text. The first
+ *  step's finish part carries the caller-supplied usage so a test can assert
+ *  what the ChatEvent seam surfaces. */
 function toolThenTextModel(opts: {
   toolName: string;
-  firstFinish?: FinishOverrides;
+  firstUsage?: FinishPart['usage'];
 }): LanguageModel {
   let step = 0;
   return new MockLanguageModelV3({
@@ -50,7 +41,7 @@ function toolThenTextModel(opts: {
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'tool-call', toolCallId: 'tc1', toolName: opts.toolName, input: '{}' });
-              c.enqueue(finishPart('tool-calls', opts.firstFinish));
+              c.enqueue(finishPart('tool-calls', opts.firstUsage));
               c.close();
             },
           })
@@ -191,36 +182,45 @@ describe('ChatEvent tool-result completeness', () => {
   });
 });
 
-describe('ChatEvent cached-token fidelity', () => {
-  test('step-finish carries usage.cachedInputTokens plus the Anthropic providerMetadata read', async () => {
-    const model = toolThenTextModel({
-      toolName: 'ok',
-      firstFinish: {
-        usage: {
-          inputTokens: { total: 20, noCache: 8, cacheRead: 12, cacheWrite: undefined },
-          outputTokens: { total: 5, text: 5, reasoning: undefined },
-        },
-        providerMetadata: { anthropic: { cacheReadInputTokens: 3 } },
-      },
+describe('ChatEvent usage fidelity', () => {
+  const okTool = {
+    ok: tool({ description: 'works', inputSchema: z.object({}), execute: async () => 'fine' }),
+  };
+
+  /** The first step's normalized usage, or the fact that the seam omitted it. */
+  async function firstStepUsage(firstUsage: FinishPart['usage']): Promise<Usage | undefined> {
+    const model = toolThenTextModel({ toolName: 'ok', firstUsage });
+    const events = await collect(model, okTool);
+    const step = events.find((e) => e.type === 'step-finish');
+    if (step?.type !== 'step-finish') throw new Error('the turn produced no step-finish');
+    return step.usage;
+  }
+
+  test('step-finish reports the step request, cache read included, under the normalized names', async () => {
+    const usage = await firstStepUsage({
+      inputTokens: { total: 20, noCache: 8, cacheRead: 12, cacheWrite: undefined },
+      outputTokens: { total: 5, text: 5, reasoning: 2 },
     });
-    const tools = {
-      ok: tool({ description: 'works', inputSchema: z.object({}), execute: async () => 'fine' }),
-    };
-    const events = await collect(model, tools);
-    const firstStep = events.find((e) => e.type === 'step-finish');
-    expect(firstStep).toBeDefined();
-    // 12 (usage) + 3 (anthropic providerMetadata) combined into the one flat field.
-    expect(firstStep?.type === 'step-finish' && firstStep.cachedInputTokens).toBe(15);
-    expect(firstStep?.type === 'step-finish' && firstStep.inputTokens).toBe(20);
+    expect(usage).toEqual({ input: 20, output: 5, cacheRead: 12, reasoning: 2 });
   });
 
-  test('step-finish omits cachedInputTokens when the provider reports none', async () => {
-    const model = toolThenTextModel({ toolName: 'ok' });
-    const tools = {
-      ok: tool({ description: 'works', inputSchema: z.object({}), execute: async () => 'fine' }),
-    };
-    const events = await collect(model, tools);
-    const step = events.find((e) => e.type === 'step-finish');
-    expect(step?.type === 'step-finish' && step.cachedInputTokens).toBeUndefined();
+  test('a provider-reported zero cache read stays 0, while an unreported reasoning split stays absent', async () => {
+    // The distinction this ticket exists for: a cold prefix on a working cache
+    // plan reports 0, and `0` must not read as "this provider never mentions
+    // cache reads" — which is what the old `> 0` gate made of it.
+    const usage = await firstStepUsage({
+      inputTokens: { total: 20, noCache: 20, cacheRead: 0, cacheWrite: undefined },
+      outputTokens: { total: 5, text: 5, reasoning: undefined },
+    });
+    expect(usage?.cacheRead).toBe(0);
+    expect(Object.keys(usage ?? {}).sort()).toEqual(['cacheRead', 'input', 'output']);
+  });
+
+  test('a step whose provider reports nothing at all carries no usage', async () => {
+    const usage = await firstStepUsage({
+      inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: undefined, text: undefined, reasoning: undefined },
+    });
+    expect(usage).toBeUndefined();
   });
 });

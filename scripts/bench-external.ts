@@ -22,9 +22,10 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import * as v from 'valibot';
 import {
-  computeGain, decodeJsonValue, fmtPp, pairedBinaryComparison, parseJsonValue,
+  addUsage, computeGain, decodeJsonValue, fmtPp, pairedBinaryComparison, parseJsonValue,
+  usageReported,
 } from '../packages/core/src/index.js';
-import type { JsonValue, PairedOutcome } from '../packages/core/src/index.js';
+import type { JsonValue, PairedOutcome, Usage } from '../packages/core/src/index.js';
 import { openRunRetention, resolveArtifactRoot } from './bench-retention.js';
 import { parseArgv } from './bench.js';
 
@@ -78,6 +79,21 @@ const TrialSchema = v.object({
   exception_info: v.optional(v.nullable(v.unknown())),
 });
 
+/** Harbor's three token counts keyed by our own field names. The counterpart of
+ *  core's `reportedByProvider`: every count a foreign harness omitted stays
+ *  omitted, because "this trial recorded no tokens" and "this trial cost nothing"
+ *  are the two claims an arm's spend must never confuse. */
+function harborUsage(result: v.InferOutput<typeof TrialSchema>['agent_result']): Usage {
+  const out: { -readonly [K in keyof Usage]: number } = {};
+  const input = result?.n_input_tokens ?? undefined;
+  const output = result?.n_output_tokens ?? undefined;
+  const cacheRead = result?.n_cache_tokens ?? undefined;
+  if (input !== undefined) out.input = input;
+  if (output !== undefined) out.output = output;
+  if (cacheRead !== undefined) out.cacheRead = cacheRead;
+  return out;
+}
+
 export interface ExternalTrial {
   /** Harbor prefixes the dataset in 2.1 (`terminal-bench/foo`) and not in 2.0,
    *  so the bare task name is the only key that pairs across releases. */
@@ -102,16 +118,11 @@ export interface ExternalTrial {
   /** Turns that completed at all — the denominator the count above needs. */
   turnsCompleted: number | null;
   toolCalls: number | null;
-  inputTokens: number;
-  outputTokens: number;
-  cachedTokens: number;
-  /** Whether the trial reported any usage at all. A turn killed by the agent
-   *  timeout emits no `turn_end`, so it carries no usage — and those are the
-   *  most expensive trials in the run. The counts above read 0 for them, which
-   *  is why this flag exists: the arm's total is a LOWER BOUND whenever this is
-   *  false anywhere, and the harness says so rather than passing the sum off as
-   *  the spend. Same rule the gain report already applies to model calls. */
-  usageReported: boolean;
+  /** What Harbor's own `agent_result` reported, in this repo's one usage shape.
+   *  All three counts are `optional(nullable(...))` upstream and both spellings
+   *  mean the adapter recorded nothing, so a trial that was never metered carries
+   *  an empty usage rather than three zeros. */
+  usage: Usage;
   errored: boolean;
 }
 
@@ -150,11 +161,7 @@ export function readHarborJob(dir: string): ExternalArm {
       executionGradedTurns: meta?.turn_grading?.execution_graded ?? null,
       turnsCompleted: meta?.turns_completed ?? null,
       toolCalls: meta?.tool_calls ?? null,
-      inputTokens: parsed.agent_result?.n_input_tokens ?? 0,
-      outputTokens: parsed.agent_result?.n_output_tokens ?? 0,
-      cachedTokens: parsed.agent_result?.n_cache_tokens ?? 0,
-      usageReported: (parsed.agent_result?.n_input_tokens ?? null) !== null
-        || (parsed.agent_result?.n_output_tokens ?? null) !== null,
+      usage: harborUsage(parsed.agent_result),
       errored: parsed.exception_info !== null && parsed.exception_info !== undefined,
     });
   }
@@ -164,12 +171,18 @@ export function readHarborJob(dir: string): ExternalArm {
 
 export interface ArmSpend {
   trials: number;
-  inputTokens: number;
-  outputTokens: number;
-  cachedTokens: number;
+  /** The arm's total, accumulated with `addUsage`, so a count no trial reported
+   *  stays absent instead of summing to a zero the harness never observed. */
+  usage: Usage;
   /** Uncached input plus output — what the arm actually asked the model to
-   *  process. Two arms at "equal spend" must match on this, not on trial count. */
-  billableTokens: number;
+   *  process. Two arms at "equal spend" must match on this, not on trial count,
+   *  which is exactly why it is null as soon as one trial reported no input or no
+   *  output: an arm holding unmeasured tasks cannot be equalized against
+   *  anything, and summing those tasks as zero made it look CHEAPER than the arm
+   *  it was being equalized with, which is the one direction the claim cannot
+   *  survive. An unreported cache read is treated as no cache read, the
+   *  conservative direction — it can only overstate what this arm was billed. */
+  billableTokens: number | null;
   models: string[];
   evolveFlags: (boolean | null)[];
   totalEvolutionEvents: number | null;
@@ -192,8 +205,12 @@ export interface ArmSpend {
 }
 
 export function armSpend(arm: ExternalArm): ArmSpend {
-  const sum = (pick: (t: ExternalTrial) => number) => arm.trials.reduce((n, t) => n + pick(t), 0);
   const events = arm.trials.map((t) => t.evolutionEvents);
+  const billable = arm.trials.map((t) => (
+    t.usage.input === undefined || t.usage.output === undefined
+      ? null
+      : Math.max(0, t.usage.input - (t.usage.cacheRead ?? 0)) + t.usage.output
+  ));
   const graded = arm.trials.map((t) => t.executionGradedTurns);
   const completed = arm.trials.map((t) => t.turnsCompleted);
   // `every === null` means no trial reported at all, which is missing evidence.
@@ -204,10 +221,11 @@ export function armSpend(arm: ExternalArm): ArmSpend {
     : xs.reduce<number>((n, x) => n + (x ?? 0), 0));
   return {
     trials: arm.trials.length,
-    inputTokens: sum((t) => t.inputTokens),
-    outputTokens: sum((t) => t.outputTokens),
-    cachedTokens: sum((t) => t.cachedTokens),
-    billableTokens: sum((t) => Math.max(0, t.inputTokens - t.cachedTokens) + t.outputTokens),
+    usage: arm.trials.reduce<Usage>((total, t) => addUsage(total, t.usage), {}),
+    spendUnreported: arm.trials.filter((t) => !usageReported(t.usage)).length,
+    billableTokens: billable.every((tokens) => tokens !== null)
+      ? billable.reduce((total, tokens) => total + tokens, 0)
+      : null,
     models: [...new Set(arm.trials.map((t) => t.model ?? 'unknown'))].sort(),
     evolveFlags: [...new Set(arm.trials.map((t) => t.evolve))],
     totalEvolutionEvents: total(events),
@@ -216,7 +234,6 @@ export function armSpend(arm: ExternalArm): ArmSpend {
     executionGradedTurns: total(graded),
     turnsCompleted: total(completed),
     gradingUnreported: arm.trials.filter((t) => t.executionGradedTurns === null).length,
-    spendUnreported: arm.trials.filter((t) => !t.usageReported).length,
   };
 }
 
@@ -314,7 +331,13 @@ export function admissibility(
   const spendA = armSpend(a);
   const spendB = armSpend(b);
   const candidateEvolves = spendB.evolveFlags.length === 1 && spendB.evolveFlags[0] === true;
-  const ratio = spendA.billableTokens === 0 ? null : spendB.billableTokens / spendA.billableTokens;
+  // Null when either arm holds an unmetered trial: a ratio against a floor is
+  // not a ratio, and summing unmeasured trials as zero made the candidate arm
+  // look cheaper than the arm it was being equalized against.
+  const ratio = spendA.billableTokens === null || spendB.billableTokens === null
+    || spendA.billableTokens === 0
+    ? null
+    : spendB.billableTokens / spendA.billableTokens;
   const mismatched = paired.filter((p) => p.sameChecksum === false).map((p) => p.taskId);
   const gradedB = spendB.executionGradedTurns;
 
@@ -406,11 +429,15 @@ function retain(
 }
 
 function describeSpend(label: string, spend: ArmSpend): string {
+  const count = (value: number | undefined): string => (
+    value === undefined ? 'unreported' : value.toLocaleString()
+  );
   return `${label.padEnd(28)} trials=${String(spend.trials).padStart(3)}  `
-    + `billable=${spend.billableTokens.toLocaleString().padStart(12)}  `
-    + `in=${spend.inputTokens.toLocaleString().padStart(12)}  `
-    + `cached=${spend.cachedTokens.toLocaleString().padStart(12)}  `
-    + `out=${spend.outputTokens.toLocaleString().padStart(9)}  `
+    + `billable=${(spend.billableTokens === null ? 'unmeasurable' : spend.billableTokens.toLocaleString()).padStart(12)}  `
+    + `in=${count(spend.usage.input).padStart(12)}  `
+    + `cached=${count(spend.usage.cacheRead).padStart(12)}  `
+    + `out=${count(spend.usage.output).padStart(9)}  `
+    + (spend.spendUnreported > 0 ? `unmetered=${String(spend.spendUnreported)}/${String(spend.trials)}  ` : '')
     + `evolve=${spend.evolveFlags.map((f) => String(f)).join('/')}  `
     + `evolutionEvents=${spend.totalEvolutionEvents ?? 'not recorded'}  `
     + `firedOn=${spend.trialsWithEvolution}/${spend.trials}  `
@@ -448,7 +475,15 @@ function cmdCompare(args: Map<string, string>): number {
   const flips = flipAccounting(paired);
   const spendA = armSpend(a);
   const spendB = armSpend(b);
-  const spendRatio = spendA.billableTokens === 0 ? null : spendB.billableTokens / spendA.billableTokens;
+  // A ratio against a floor is not a ratio: one unmetered trial in either arm and
+  // the equal-spend claim is unmeasurable rather than favourable.
+  const spendRatio = spendA.billableTokens === null || spendB.billableTokens === null
+    || spendA.billableTokens === 0
+    ? null
+    : spendB.billableTokens / spendA.billableTokens;
+  const noRatioBecause = spendA.billableTokens === null || spendB.billableTokens === null
+    ? 'unmeasurable — an arm holds trials that reported no token counts'
+    : 'n/a — arm A billed no tokens';
   const verdict = admissibility(a, b, paired);
 
   const report = {
@@ -468,7 +503,7 @@ function cmdCompare(args: Map<string, string>): number {
   console.log(`B = ${b.id}`);
   console.log(describeSpend('  A spend', spendA));
   console.log(describeSpend('  B spend', spendB));
-  console.log(`  spend ratio B/A on billable tokens: ${spendRatio === null ? 'n/a' : spendRatio.toFixed(3)}`);
+  console.log(`  spend ratio B/A on billable tokens: ${spendRatio === null ? noRatioBecause : spendRatio.toFixed(3)}`);
   if (onlyA.length || onlyB.length) {
     console.log(`  unpaired: ${onlyA.length} only in A, ${onlyB.length} only in B (excluded from the test)`);
   }

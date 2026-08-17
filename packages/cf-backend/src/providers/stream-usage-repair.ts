@@ -10,8 +10,9 @@
  * @cf/moonshotai/kimi-k2.6's duplicate is faithful). @ai-sdk/openai-compatible
  * keeps the LAST usage chunk it sees, so without repair every streamed step
  * reports cachedInputTokens:0 and prefix-cache efficacy is invisible to
- * per-turn accounting (`tokensCached: 0` on every run) — the cache itself
- * works; only the reporting is lost.
+ * per-turn accounting (`cacheRead: 0` on every run, which reads as a total
+ * cache miss because a reported zero is evidence) — the cache itself works;
+ * only the reporting is lost.
  *
  * Repair rule: within one response, `cached_tokens` cannot legitimately
  * decrease. Track the largest value seen; rewrite any later usage chunk that

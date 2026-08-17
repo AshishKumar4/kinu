@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/orchestrator/turn-accumulator.ts b/packages/core/src/orchestrator/turn-accumulator.ts
-index 911dd2b..08c1917 100644
 --- a/packages/core/src/orchestrator/turn-accumulator.ts
 +++ b/packages/core/src/orchestrator/turn-accumulator.ts
-@@ -114,7 +114,7 @@ export class TurnAccumulator {
-     // whole current prompt (ai v6 usage.inputTokens is the cache-inclusive
-     // total). Keep the last non-zero report: a trailing step with absent
-     // usage must not erase a real measurement.
--    if (inTok > 0) this.lastPromptTokens = inTok;
-+    if (inTok >= 0) this.lastPromptTokens = inTok;
-     const extras: string[] = [];
-     if (cached > 0) extras.push(`cached=${cached}`);
-     if (reasoning > 0) extras.push(`reasoning=${reasoning}`);
+@@ -213,7 +213,7 @@ export class TurnAccumulator {
+     // current prompt (`input` is the cache-inclusive total). A step that
+     // reported no prompt size leaves the last real measurement standing; a step
+     // that reported 0 overwrites it, because that is a measurement too.
+-    if (usage.input !== undefined) this.lastPromptTokens = usage.input;
++    this.lastPromptTokens = usage.input;
+     // Every field the provider actually mentioned, zeros included: a reported
+     // `cacheRead=0` is a cold prefix on a working cache plan, and hiding it
+     // makes that indistinguishable from a provider that never mentions caching.

@@ -18,6 +18,7 @@ import {
   EVAL_MODELS, FULL_TOOL_SURFACE, assessAdmissibility,
   type EvalArmState, type EvalObservation, type EvalRunRecord, type EvalScoreRow,
 } from '../src/eval-run.js';
+import { TASK_OUTCOME } from '../src/eval-outcome.js';
 
 /** Fixed so every interval below is reproducible; small so the suite is fast. */
 const OPTS = { seed: 1, iterations: 500 };
@@ -32,14 +33,22 @@ function score(name: string, eligible: number, passed: number): EvalScoreRow {
   };
 }
 
-/** A trajectory that behaved: turns closed and tools called, so it satisfies the
- *  headline's success predicate unless a test deliberately says otherwise. */
+/**
+ * A trajectory that behaved: turns closed, tools called, and — since a run that
+ * never checked whether the task was solved is no longer evidence — a measured
+ * `task_outcome`. A caller that supplies its own outcome row keeps it, so a test
+ * can still say "this task was solved" or "this one was not".
+ */
 function scored(
   taskId: string, repetition: number, scores: readonly EvalScoreRow[],
   cost: { turns?: number; toolCalls?: number; tokensIn?: number; tokensOut?: number; ms?: number } = {},
 ): EvalObservation {
+  const withOutcome = scores.some((s) => s.name === TASK_OUTCOME)
+    ? scores
+    : [...scores, score(TASK_OUTCOME, 1, 1)];
   return {
-    taskId, repetition, outcome: 'scored', scores,
+    taskId, repetition, outcome: 'scored', scores: withOutcome,
+    toolNames: ['run', 'file'],
     turns: cost.turns ?? 3, toolCalls: cost.toolCalls ?? 4,
     tokensIn: cost.tokensIn ?? 1000, tokensOut: cost.tokensOut ?? 200, ms: cost.ms ?? 5000,
   };
@@ -426,12 +435,23 @@ describe('compareRuns — ragged and ungradable observations', () => {
   });
 });
 
-describe('compareRuns — the binary headline', () => {
-  test('a scored trajectory with no tool call is not a success', () => {
-    const baseline = run('base', Array.from({ length: 8 }, (_, i) =>
-      scored(`task-${String(i)}`, 1, [score(SCORER, 4, 4)])));
-    const candidate = run('cand', Array.from({ length: 8 }, (_, i) =>
-      scored(`task-${String(i)}`, 1, [score(SCORER, 4, 4)], i < 6 ? { toolCalls: 0 } : {})));
+describe('compareRuns — the binary headline is the OUTCOME', () => {
+  /**
+   * These two cases used to vary `toolCalls: 0` to move the headline, because
+   * under `turns > 0 && toolCalls > 0` that was the only thing that COULD move
+   * it — an admissible trajectory passed by construction. They now vary whether
+   * the task was solved, which is the thing the headline is supposed to be about.
+   */
+  const solvedRun = (id: string, solvedCount: number) =>
+    run(id, Array.from({ length: 8 }, (_, i) =>
+      scored(`task-${String(i)}`, 1, [
+        score(SCORER, 4, 4),
+        score(TASK_OUTCOME, 4, i < solvedCount ? 4 : 0),
+      ])));
+
+  test('a task the agent did not solve is not a success', () => {
+    const baseline = solvedRun('base', 8);
+    const candidate = solvedRun('cand', 2);
 
     const { headline } = attributable(compareRuns(baseline, candidate, OPTS));
 
@@ -447,17 +467,44 @@ describe('compareRuns — the binary headline', () => {
     expect(headline.significant).toBe(true);
   });
 
-  test('the report carries the predicate, the interval and the differing count', () => {
-    const baseline = run('base', Array.from({ length: 8 }, (_, i) =>
-      scored(`task-${String(i)}`, 1, [score(SCORER, 4, 4)])));
+  test('activity alone no longer moves the headline — a busy run that solved nothing scores 0', () => {
+    // The retired predicate's exact defect, pinned so it cannot come back: both
+    // runs closed turns and called tools, so the OLD headline scored them 1.000
+    // against 1.000. Under the outcome they are 1.000 against 0.000.
+    const baseline = solvedRun('base', 8);
+    const candidate = solvedRun('cand', 0);
+    const { headline } = attributable(compareRuns(baseline, candidate, OPTS));
+    expect(headline.passAtOneA).toBe(1);
+    expect(headline.passAtOneB).toBe(0);
+    expect(headline.discordant).toBe(8);
+  });
+
+  test('an attempt nothing verified is DROPPED and named, never counted as a failure', () => {
+    // A missing verifier is a gap in the corpus. Scoring it as a loss would turn
+    // that gap into a fact about the agent.
+    const baseline = solvedRun('base', 8);
     const candidate = run('cand', Array.from({ length: 8 }, (_, i) =>
-      scored(`task-${String(i)}`, 1, [score(SCORER, 4, 4)], i < 6 ? { toolCalls: 0 } : {})));
+      i === 0
+        ? scored('task-0', 1, [score(SCORER, 4, 4), score(TASK_OUTCOME, 0, 0)])
+        : scored(`task-${String(i)}`, 1, [score(SCORER, 4, 4), score(TASK_OUTCOME, 4, 4)])));
 
-    const report = formatComparison(compareRuns(baseline, candidate, OPTS));
+    const comparison = attributable(compareRuns(baseline, candidate, OPTS));
+    const dropped = comparison.diagnostics.find((d) => d.key === 'task-0#1');
+    expect(dropped?.reason).toBe('candidate-unverified');
+    expect(dropped?.detail).toContain('never checked');
+    // Excluded from the headline entirely rather than scored 0.
+    expect(comparison.headline.pairs).toBe(7);
+    expect(comparison.headline.passAtOneB).toBe(1);
+  });
 
-    expect(report).toContain('success = turns > 0 && toolCalls > 0');
+  test('the report carries the predicate, the interval and the differing count', () => {
+    const report = formatComparison(compareRuns(solvedRun('base', 8), solvedRun('cand', 2), OPTS));
+
+    expect(report).toContain(`success = ${TASK_OUTCOME} rate === 1`);
+    expect(report).not.toContain('turns > 0 && toolCalls > 0');
     expect(report).toContain('6 of 8 tasks differed');
     expect(report).toContain('pass@1 1.000 → 0.250');
+    expect(report).toContain('covariates (mechanism telemetry');
     expect(report).toContain('cost, paired per task');
   });
 });

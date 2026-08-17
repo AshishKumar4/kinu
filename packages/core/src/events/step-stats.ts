@@ -13,7 +13,8 @@
  * number you cannot check.
  */
 
-import type { StepUsage } from './types.js';
+import type { StepCost } from './types.js';
+import { addUsage, usageReported, type Usage } from '../usage.js';
 
 /** How much of the newest sample one EMA step absorbs. 0.2 ≈ a nine-step
  *  effective window: fast enough to show a cache break within a turn, slow
@@ -21,16 +22,22 @@ import type { StepUsage } from './types.js';
 export const CACHE_HIT_EMA_ALPHA = 0.2;
 
 /**
- * The ONE cache-hit definition: cached input over total input.
+ * The ONE cache-hit definition: cache-read input over total input.
  *
- * `cached` is a SUBSET of `input` — ai v6 reports the cache-inclusive total —
- * so this is a share of the prompt that was read from cache, never a ratio
- * over a different base. Null when the step reported no input tokens at all:
- * a step with nothing to cache has no hit rate, and 0% would read as a miss.
+ * `cacheRead` is a SUBSET of `input` — ai v6 reports the cache-inclusive total —
+ * so this is a share of the prompt that was read from cache, never a ratio over
+ * a different base.
+ *
+ * Null unless BOTH numbers were actually reported. A provider that says nothing
+ * about caching has no hit rate to report, and rendering that as 0% would claim
+ * a total cache miss on evidence that does not exist — which is the whole reason
+ * `Usage` distinguishes absent from zero. Null also when `input` is 0: a step
+ * with nothing to cache has no rate either.
  */
-export function cacheHitRate(usage: { input: number; cached: number }): number | null {
-  if (usage.input <= 0) return null;
-  return usage.cached / usage.input;
+export function cacheHitRate(usage: Usage): number | null {
+  const { input, cacheRead } = usage;
+  if (input === undefined || cacheRead === undefined || input <= 0) return null;
+  return cacheRead / input;
 }
 
 /** Distribution of cache hit rate over the sample. Every field is null when
@@ -52,7 +59,9 @@ export interface StepTelemetry {
   readonly steps: number;
   /** The window actually read back, so a reader can see the bound. */
   readonly windowLimit: number;
-  readonly tokens: { input: number; cached: number; output: number; reasoning: number };
+  /** The window's totals, accumulated field by field. A field no step in the
+   *  window reported is ABSENT here rather than summed to zero. */
+  readonly tokens: Usage;
   readonly cacheHit: CacheHitStats;
   /** Summed USD of the steps that carried a catalog price. */
   readonly usd: number;
@@ -61,6 +70,10 @@ export interface StepTelemetry {
   /** Steps whose model had no catalog rate. Their cost is NOT in `usd` and is
    *  NOT estimated — an unpriced step is reported as unpriced. */
   readonly unpricedSteps: number;
+  /** Steps whose provider reported no usage at all. `tokens` does not include
+   *  them, so this is the denominator a reader needs to know the totals
+   *  under-count rather than that the steps were free. */
+  readonly stepsWithoutUsage: number;
 }
 
 /** Nearest-rank percentile over an ascending-sorted array. */
@@ -72,28 +85,28 @@ function percentile(sorted: readonly number[], q: number): number | null {
 
 /** Aggregate a time-ordered (oldest first) sample of finished steps. */
 export function summarizeSteps(
-  samples: readonly StepUsage[],
+  samples: readonly StepCost[],
   opts: { windowLimit: number; emaAlpha?: number },
 ): StepTelemetry {
   const alpha = opts.emaAlpha ?? CACHE_HIT_EMA_ALPHA;
-  const tokens = { input: 0, cached: 0, output: 0, reasoning: 0 };
+  let tokens: Usage = {};
   const rates: number[] = [];
   let ema: number | null = null;
   let usd = 0;
   let pricedSteps = 0;
   let unpricedSteps = 0;
+  let stepsWithoutUsage = 0;
 
   for (const step of samples) {
-    tokens.input += step.input;
-    tokens.cached += step.cached;
-    tokens.output += step.output;
-    tokens.reasoning += step.reasoning;
+    const usage = step.usage ?? {};
+    if (usageReported(usage)) tokens = addUsage(tokens, usage);
+    else stepsWithoutUsage++;
     if (step.usd === undefined) unpricedSteps++;
     else {
       usd += step.usd;
       pricedSteps++;
     }
-    const rate = cacheHitRate(step);
+    const rate = cacheHitRate(usage);
     if (rate === null) continue;
     rates.push(rate);
     ema = ema === null ? rate : alpha * rate + (1 - alpha) * ema;
@@ -115,5 +128,6 @@ export function summarizeSteps(
     usd,
     pricedSteps,
     unpricedSteps,
+    stepsWithoutUsage,
   };
 }

@@ -65,7 +65,7 @@ import type { BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ExecutorInfo } from "@/lib/executors";
-import type { DirEntry, ForkRunParams, ForkRunSummary, HeadRunView, MountInfo, PendingAction } from "@proteus/core";
+import type { DirEntry, ForkRunParams, ForkRunSummary, HeadRunView, MountInfo, PendingAction, RunSummary } from "@proteus/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
 import * as v from "valibot";
 
@@ -476,7 +476,7 @@ const MERGED_RUN: HeadRunView = {
     {
       id: "root-merge-1-h0", task: "packages/checkout/src/apply-coupon.ts", rationale: "the reported 500",
       status: "completed", summary: "Two more reads of rules[kind]; both guarded by the same ?? inferKind fix.",
-      errorMessage: null, tokenInput: 8_420, tokenOutput: 610, wallClockMs: 14_200,
+      errorMessage: null, usage: { input: 8_420, output: 610 }, wallClockMs: 14_200,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5,
       decisions: [{ question: "Guard at the edge or at the reader?", choice: "at the reader", rationale: "the edge would still let a null through the cart serializer" }],
       steps: [
@@ -487,7 +487,7 @@ const MERGED_RUN: HeadRunView = {
     {
       id: "root-merge-1-h1", task: "packages/cart/src/serializer.ts", rationale: "the lazy path",
       status: "completed", summary: "One read, already null-safe — no change needed here.",
-      errorMessage: null, tokenInput: 5_110, tokenOutput: 240, wallClockMs: 9_800,
+      errorMessage: null, usage: { input: 5_110, output: 240 }, wallClockMs: 9_800,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 515e4, decisions: [],
       steps: [{ text: "Already uses the optional chain.", toolCalls: [{ name: "file", input: { action: "read", path: "packages/cart/src/serializer.ts" }, output: "…" }] }],
     },
@@ -495,7 +495,7 @@ const MERGED_RUN: HeadRunView = {
       id: "root-merge-1-h2", task: "packages/admin/src/coupon-report.ts", rationale: "the reporting path",
       status: "errored", summary: null,
       errorMessage: "the admin package is not checked out in this sandbox",
-      tokenInput: 1_020, tokenOutput: 0, wallClockMs: 2_100,
+      usage: { input: 1_020, output: 0 }, wallClockMs: 2_100,
       spawnedAt: NOW - 52e5, lastStepAt: null, decisions: [], steps: [],
     },
   ],
@@ -1594,16 +1594,21 @@ const SUPERVISE_TASKS = [
   },
 ];
 
-const SUPERVISE_RUNS = [
+/** Typed, so the fixtures move with `RunSummary` instead of only failing at the
+ *  browser-side valibot parse. The second run is deliberately a SILENT one — the
+ *  provider reported nothing for any of its turns — because that is the case the
+ *  history block has to render as unreported rather than as free. */
+const SUPERVISE_RUNS: RunSummary[] = [
   {
     runId: "run_9c1", startedAt: NOW - 45 * 60e3, causedBy: "chat",
     userMessage: "Why does the percentage coupon drop off at checkout?",
-    status: "completed", tokensIn: 184_320, tokensOut: 9_140, tokensCached: 121_400, eventCount: 62,
+    status: "completed", eventCount: 62, turnsWithoutUsage: 0,
+    usage: { input: 184_320, output: 9_140, cacheRead: 121_400 },
   },
   {
     runId: "run_9b7", startedAt: NOW - 6 * 36e5, causedBy: "timer",
-    userMessage: null, status: "completed",
-    tokensIn: 42_100, tokensOut: 1_880, tokensCached: 0, eventCount: 18,
+    userMessage: null, status: "completed", eventCount: 18,
+    usage: {}, turnsWithoutUsage: 3,
   },
 ];
 

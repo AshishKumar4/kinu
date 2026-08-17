@@ -72,32 +72,62 @@ function jobPlane() {
 }
 
 describe('run reads', () => {
-  test('summaries fold provenance and cost out of the event log', () => {
+  /** A bare event log — the only storage the run reads need. No caller closes
+   *  it: an in-memory Database is collected with the test. */
+  function eventLog(): RunEventRecorder {
     const db = new Database(':memory:');
-    const sql = makeSql(db);
     initRunEventTables(makeExecRaw(db));
-    const events = new RunEventRecorder(sql);
+    return new RunEventRecorder(makeSql(db));
+  }
+
+  test('summaries fold provenance and cost out of the event log', () => {
+    const events = eventLog();
 
     events.emit('r1', { type: 'run_start', agentId: 'a1', caused_by: 'timer', userMessage: 'do the thing' });
-    events.emit('r1', { type: 'turn_end', turnIndex: 0, tokenUsage: { input: 10, output: 4, cached: 2 } });
-    events.emit('r1', { type: 'turn_end', turnIndex: 1, tokenUsage: { input: 5, output: 1 } });
+    events.emit('r1', { type: 'turn_end', turnIndex: 0, usage: { input: 10, output: 4, cacheRead: 2 } });
+    events.emit('r1', { type: 'turn_end', turnIndex: 1, usage: { input: 5, output: 1 } });
     events.emit('r1', { type: 'run_end', reason: 'completed' });
 
     const [summary] = getRunSummaries(events);
     expect(summary).toMatchObject({
       runId: 'r1', causedBy: 'timer', userMessage: 'do the thing', status: 'completed',
-      tokensIn: 15, tokensOut: 5, tokensCached: 2, eventCount: 4,
+      eventCount: 4, turnsWithoutUsage: 0,
     });
+    // `cacheRead` came from one turn only and is summed over that turn alone;
+    // the fields NEITHER turn reported stay absent instead of appearing as 0.
+    expect(summary?.usage).toEqual({ input: 15, output: 5, cacheRead: 2 });
+  });
+
+  test('a run whose turns reported nothing is not a run that cost nothing', () => {
+    const events = eventLog();
+    events.emit('silent', { type: 'run_start', agentId: 'a1', caused_by: 'chat' });
+    events.emit('silent', { type: 'turn_end', turnIndex: 0 });
+    events.emit('silent', { type: 'turn_end', turnIndex: 1 });
+    events.emit('zeroed', { type: 'run_start', agentId: 'a1', caused_by: 'chat' });
+    events.emit('zeroed', { type: 'turn_end', turnIndex: 0, usage: { input: 0, output: 0 } });
+
+    const summaries = getRunSummaries(events);
+    const silent = summaries.find((s) => s.runId === 'silent');
+    const zeroed = summaries.find((s) => s.runId === 'zeroed');
+
+    // The provider said nothing: no field is present, and the count of silent
+    // turns is the denominator that says so.
+    expect(silent?.usage).toEqual({});
+    expect(silent?.turnsWithoutUsage).toBe(2);
+
+    // The provider said "zero": that IS a report, and it must not be folded
+    // into the same shape as the silence above.
+    expect(zeroed?.usage).toEqual({ input: 0, output: 0 });
+    expect(zeroed?.turnsWithoutUsage).toBe(0);
   });
 
   test('a run with no run_start still reports as a run, caused by nothing', () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    initRunEventTables(makeExecRaw(db));
-    const events = new RunEventRecorder(sql);
+    const events = eventLog();
     events.emit('r2', { type: 'error', message: 'boom' });
 
-    expect(getRunSummaries(events)[0]).toMatchObject({ runId: 'r2', causedBy: null, tokensIn: 0 });
+    expect(getRunSummaries(events)[0]).toMatchObject({
+      runId: 'r2', causedBy: null, usage: {}, turnsWithoutUsage: 0,
+    });
     expect(listRuns(events).map((r) => r.runId)).toEqual(['r2']);
     expect(getRunEvents(events, 'r2')).toHaveLength(1);
   });

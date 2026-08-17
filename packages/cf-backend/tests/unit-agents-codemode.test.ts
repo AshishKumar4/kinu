@@ -247,7 +247,7 @@ describe('agents.fork called back from an in-flight sandbox call', () => {
   const headReport: HeadReport = {
     id: 'head-1', status: 'completed', summary: 'done', evidence: [], decisions: [],
     artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], stepCount: 0,
-    tokenUsage: { input: 1, output: 1, total: 2 }, wallClockMs: 1,
+    usage: { input: 1, output: 1 }, wallClockMs: 1,
   };
 
   function headInput(): HeadInput {

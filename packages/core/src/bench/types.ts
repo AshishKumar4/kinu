@@ -5,6 +5,8 @@
 // own checks. Nothing in the scoring path is LLM-judged; a task passes when a
 // process exits 0.
 import { unitHash } from './stats.js';
+import { normalizeUsage, usageTotal } from '../usage.js';
+import type { LanguageModelUsage } from 'ai';
 import * as v from 'valibot';
 
 /** One machine-run check. All of a task's checks must exit 0 to score 1. */
@@ -79,15 +81,22 @@ export interface AttemptOutcome {
   passed: boolean;
   checks: readonly CheckOutcome[];
   durationMs: number;
-  tokens: number;
+  /** Total tokens the attempt's own meter observed. Absent when nothing metered
+   *  the attempt — a worker that crashed before it could report, a
+   *  deterministic control that never calls a model — because an attempt priced
+   *  at zero looks FREE, and every budget comparison then reads it as
+   *  comfortably inside its envelope. Zero is an observed zero: the meter ran
+   *  and counted none. */
+  tokens?: number;
   /** Exact inference requests observed by the attempt-local meter. Absent only
    *  for an uninstrumented/legacy solver result; zero is an observed zero. */
   modelCalls?: number;
-  /** Largest per-turn prompt the provider actually priced over the attempt, or
-   *  0 when the variant made no model call. Total tokens says what an attempt
-   *  cost; this says how big its working set got, and a context-discipline
-   *  change moves the two independently. */
-  peakPromptTokens: number;
+  /** Largest per-turn prompt the provider actually priced over the attempt.
+   *  Absent for the same reason `tokens` is; zero means the meter ran and the
+   *  variant made no model call. Total tokens says what an attempt cost; this
+   *  says how big its working set got, and a context-discipline change moves the
+   *  two independently. */
+  peakPromptTokens?: number;
   /** null when the attempt stayed inside its envelope. */
   budgetBreach: BudgetBreach | null;
   error?: string;
@@ -116,9 +125,9 @@ export const AttemptOutcomeSchema = v.strictObject({
   passed: v.boolean(),
   checks: v.array(CheckOutcomeSchema),
   durationMs: NonNegativeInteger,
-  tokens: NonNegativeInteger,
+  tokens: v.optional(NonNegativeInteger),
   modelCalls: v.optional(NonNegativeInteger),
-  peakPromptTokens: NonNegativeInteger,
+  peakPromptTokens: v.optional(NonNegativeInteger),
   budgetBreach: v.nullable(v.picklist(['wall-clock', 'tokens'])),
   error: v.optional(v.string()),
 });
@@ -141,11 +150,15 @@ export interface SolverContext {
   repeat: number;
 }
 
+/** What a solver claims it spent. Every field is optional and absence means
+ *  UNMEASURED, never free: a worker that died before its meter reported omits
+ *  them, while a deterministic control that issues no request at all reports
+ *  explicit zeros, because that zero is something it observed. */
 export interface SolverResult {
   tokens?: number;
   /** Exact inference requests observed by the solver's attempt-local meter. */
   modelCalls?: number;
-  /** See AttemptOutcome.peakPromptTokens. Deterministic controls omit it. */
+  /** See AttemptOutcome.peakPromptTokens. */
   peakPromptTokens?: number;
   error?: string;
 }
@@ -162,38 +175,70 @@ export function attemptPassed(checks: readonly CheckOutcome[]): boolean {
   return checks.length > 0 && checks.every((c) => c.passed);
 }
 
-/** Tokens spent on one model call, read from the AI SDK's low-level stream
- *  `finish` part.
+/** Tokens spent on one model call, or undefined when the report carried no
+ *  countable input or output at all.
  *
  *  That usage object is a provider trust boundary and its shape is
- *  version-dependent: at the LanguageModelV2 layer ai v6 reports
- *  `inputTokens: { total, noCache, cacheRead }`, while the higher-level
- *  streamText result normalizes the same field to a plain number. Both are
- *  accepted and anything else counts as zero, because a token budget that
- *  silently mis-sums is worse than no budget — the first version of this added
- *  the objects together and produced the STRING "0[object Object]". */
+ *  version-dependent. At the provider layer ai v6 reports the NESTED
+ *  `inputTokens: { total, noCache, cacheRead }` (`LanguageModelV3Usage`,
+ *  @ai-sdk/provider dist/index.d.ts:1797-1818; V2's flat form is at :2673-2696,
+ *  which is what the comment here used to name), while the higher-level
+ *  streamText result reports the flat `LanguageModelUsage` (ai
+ *  dist/index.d.ts:267-325). Both dialects are read here and the nested one is
+ *  lifted onto the flat one, so `normalizeUsage` stays the ONE thing that
+ *  decides what a provider reported — the first version of this added the
+ *  objects together and produced the STRING "0[object Object]".
+ *
+ *  What it no longer does is call an unreadable or missing field zero. A token
+ *  budget that silently mis-sums is worse than no budget, and a fabricated zero
+ *  is that mis-sum in its most expensive form: it prices an unmeasured attempt
+ *  as free, which any comparison against a cap then reads as "inside budget". So
+ *  absence comes back as absence and the BUDGET CALLER decides what an
+ *  unmeasured attempt means — scripts/bench.ts refuses to judge one. */
 const UsageBoundarySchema = v.object({
   inputTokens: v.optional(v.unknown()),
   outputTokens: v.optional(v.unknown()),
 });
 
-const TokenFieldSchema = v.union([
-  v.number(),
-  v.object({ total: v.optional(v.number()) }),
-]);
+/** One token figure in either dialect, reduced at the boundary to the count it
+ *  reports: the flat count, or the nested object whose `total` is that same
+ *  count. The two fields are parsed one at a time rather than as a single shape,
+ *  so a provider that garbles its input figure still has its output figure read.
+ *  `v.finite()` is what keeps NaN and Infinity out of a budget — neither is a
+ *  quantity, and arithmetic that swallows one stops being a budget at all. */
+const TokenFigureSchema = v.pipe(
+  v.union([
+    v.pipe(v.number(), v.finite()),
+    v.looseObject({ total: v.optional(v.nullable(v.pipe(v.number(), v.finite()))) }),
+  ]),
+  v.transform((figure): number | undefined => (
+    v.is(v.number(), figure) ? figure : figure.total ?? undefined
+  )),
+);
 
-function finiteTokenCount(value: v.InferOutput<typeof TokenFieldSchema>): number {
-  const count = v.is(v.number(), value) ? value : value.total ?? 0;
-  return Number.isFinite(count) ? count : 0;
-}
-
-export function usageTokens<Usage>(usage: Usage): number {
+export function usageTokens<Reported>(usage: Reported): number | undefined {
   const parsed = v.safeParse(UsageBoundarySchema, usage);
-  if (!parsed.success) return 0;
-  const input = v.safeParse(TokenFieldSchema, parsed.output.inputTokens);
-  const output = v.safeParse(TokenFieldSchema, parsed.output.outputTokens);
-  return (input.success ? finiteTokenCount(input.output) : 0)
-    + (output.success ? finiteTokenCount(output.output) : 0);
+  if (!parsed.success) return undefined;
+  const input = v.safeParse(TokenFigureSchema, parsed.output.inputTokens);
+  const output = v.safeParse(TokenFigureSchema, parsed.output.outputTokens);
+  // The nested dialect's cache and reasoning parts are SUBSETS of these two
+  // totals, so they cannot move a token count — and the provider's own `raw`
+  // payload is left out for the same reason. `raw` is the oracle for WHETHER a
+  // field was reported, but the adapters only fabricate zeros in the DETAIL
+  // fields (@ai-sdk/openai-compatible dist/index.js:88-89,
+  // @ai-sdk/anthropic dist/index.js:1782-1783); they leave an unreported total
+  // undefined. A caller that needs the details reads the `Usage` on the step
+  // event rather than this budget reader.
+  const report: LanguageModelUsage = {
+    inputTokens: input.success ? input.output : undefined,
+    inputTokenDetails: {
+      noCacheTokens: undefined, cacheReadTokens: undefined, cacheWriteTokens: undefined,
+    },
+    outputTokens: output.success ? output.output : undefined,
+    outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+    totalTokens: undefined,
+  };
+  return usageTotal(normalizeUsage(report));
 }
 
 /** Which variant attempts a task first, randomized per task and repeat from the

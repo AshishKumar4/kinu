@@ -56,4 +56,27 @@ describe('single-shot strategy', () => {
     expect(result.cost.tokens).toBe(46);
     expect(result.cost.durationMs).toBeGreaterThanOrEqual(0);
   });
+
+  test('a provider that reported no usage leaves cost.tokens ABSENT, not zero', async () => {
+    // The AI SDK carries undefined totals when the provider said nothing, and a
+    // baseline whose cost reads `0` is a baseline that looks free in an eval
+    // comparison. `cost.tokens` is optional exactly so this can be said.
+    const { rt } = createTestRuntime();
+    const result = await createSingleShotStrategy().explore({
+      task: 't', mode: 'build', rt,
+      model: new MockLanguageModelV3({
+        doGenerate: async () => ({
+          content: [{ type: 'text', text: 'done' }],
+          finishReason: { unified: 'stop', raw: undefined },
+          usage: {
+            inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: undefined, text: undefined, reasoning: undefined },
+          },
+          warnings: [],
+        }),
+      }),
+    });
+    expect(result.cost.tokens).toBeUndefined();
+    expect(result.best.text).toBe('done');
+  });
 });

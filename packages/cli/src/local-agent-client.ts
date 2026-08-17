@@ -2,7 +2,7 @@ import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { AgentRuntime, SessionSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@proteus/core';
 import type { WorkspaceInfo } from '@proteus/core/identity';
-import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, readLatestSearchTree, BACKGROUND_POLICY, decodeJsonValue, type GepaOptimizationResult } from '@proteus/core';
+import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, readLatestSearchTree, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@proteus/core';
 import {
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   LocalAgentSession,
@@ -562,7 +562,10 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
           result: call.result === undefined ? undefined : String(call.result),
         })),
       };
-      if (event.turn.usage) turn.usage = event.turn.usage;
+      // An all-absent report is an object, and a truthy one — gate on the
+      // contract's own predicate so a turn nobody metered does not travel
+      // looking like a measurement.
+      if (event.turn.usage && usageReported(event.turn.usage)) turn.usage = event.turn.usage;
       return {
         type: 'turn-end',
         turn,

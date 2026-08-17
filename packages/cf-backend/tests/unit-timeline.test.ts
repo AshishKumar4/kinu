@@ -6,7 +6,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   runEventToSpan, classifyEvolutionType, toolKindFor, safeJsonParse,
-  type RunEvent, type RunEventInput,
+  type RunEvent, type RunEventInput, type Usage,
 } from '@proteus/core';
 
 function ev(event: RunEventInput): RunEvent {
@@ -44,6 +44,25 @@ describe('runEventToSpan', () => {
     expect(runEventToSpan(ev({ type: 'error', message: 'boom' })).kind).toBe('error');
     expect(runEventToSpan(ev({ type: 'run_end', reason: 'aborted' })).kind).toBe('abort');
     expect(runEventToSpan(ev({ type: 'fiber_recovered', fiberName: 'mcts', fiberId: 'f1' })).kind).toBe('recovery');
+  });
+
+  test('a finished turn prints only the token counts the provider reported', () => {
+    const detail = (usage?: Usage) => {
+      const turn: Extract<RunEventInput, { type: 'turn_end' }> = { type: 'turn_end', turnIndex: 0 };
+      if (usage !== undefined) turn.usage = usage;
+      return runEventToSpan(ev(turn)).detail;
+    };
+
+    expect(detail({ input: 120, output: 8 })).toBe('120 in + 8 out tok');
+    // A reported zero is evidence and prints; an unreported side is left out
+    // entirely rather than rendered as "undefined" or as a zero.
+    expect(detail({ input: 0, output: 0 })).toBe('0 in + 0 out tok');
+    expect(detail({ input: 120 })).toBe('120 in tok');
+    expect(detail({ output: 8 })).toBe('8 out tok');
+    // Nothing reported — no detail line at all, which is the pre-existing
+    // behaviour for a turn_end carrying no usage.
+    expect(detail({})).toBeUndefined();
+    expect(detail()).toBeUndefined();
   });
 
   test('head split/merge carry their structured payload + ref', () => {

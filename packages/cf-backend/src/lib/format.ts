@@ -1,8 +1,13 @@
 /** Number formatting shared by the surfaces that report token spend. */
 
 /** Compact token counts: 1.2M / 200k / 4.5k / 812. A round figure drops its
- *  trailing zero — "200k" is the window, "200.0k" is false precision. */
-export function fmtTokens(n: number): string {
+ *  trailing zero — "200k" is the window, "200.0k" is false precision.
+ *
+ *  Undefined in, dash out, on the same rule as {@link fmtPct}: a `Usage` field
+ *  the provider never reported is a silence, and printing "0" for it would
+ *  claim a measurement nobody made. */
+export function fmtTokens(n: number | undefined): string {
+	if (n === undefined) return "—";
 	const scaled = (value: number, suffix: string): string =>
 		`${Number(value.toFixed(1))}${suffix}`;
 	if (n >= 1_000_000) return scaled(n / 1_000_000, "M");

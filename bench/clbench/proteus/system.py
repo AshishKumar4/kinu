@@ -52,7 +52,8 @@ from ..utils.structured_output import (
     validate_with_coercion,
 )
 from .events import (
-    EMPTY_USAGE,
+    Usage,
+    add_usage,
     assistant_text,
     had_error,
     has_answer,
@@ -61,6 +62,7 @@ from .events import (
     sum_usages,
     tool_calls,
     turn_usage,
+    usage_reported,
 )
 
 logger = logging.getLogger(__name__)
@@ -339,21 +341,26 @@ class ProteusSystem(ContinualLearningSystem):
         except Exception:
             return validate_with_coercion(extract_json(text), schema)
 
-    def _record_usage(self, usages: list[dict[str, int]]) -> dict[str, int]:
+    def _record_usage(self, usages: list[Usage]) -> Usage:
         for usage in usages:
+            # Only a turn the provider actually metered becomes a priced row.
+            # `.get(field, 0)` below is safe precisely because of this gate:
+            # CL-Bench's UsageEvent is a plain integer ledger, so once the row
+            # is known to be real an unreported part of it is genuinely zero.
+            if not usage_reported(usage):
+                continue
             self.record_usage_event(
                 build_usage_event(
                     model=self._model,
                     provider=self._provider,
-                    input_tokens=usage["input"],
-                    output_tokens=usage["output"],
-                    cached_input_tokens=usage["cached"],
+                    input_tokens=usage.get("input", 0),
+                    output_tokens=usage.get("output", 0),
+                    cached_input_tokens=usage.get("cacheRead", 0),
                     call_type="completion",
                 )
             )
         total = sum_usages(usages)
-        for key in self._cumulative_usage:
-            self._cumulative_usage[key] += total[key]
+        self._cumulative_usage = add_usage(self._cumulative_usage, total)
         return total
 
     def respond(self, query: Query) -> Response:
@@ -379,12 +386,10 @@ class ProteusSystem(ContinualLearningSystem):
         spent = self._record_usage(usages)
         self._pending_feedback = None
         self._interaction_count += 1
-        logger.info(
-            "Response parsed (in=%d out=%d cached=%d)",
-            spent["input"],
-            spent["output"],
-            spent["cached"],
-        )
+        # The report verbatim, absences and all: a fixed "in=%d out=%d cached=%d"
+        # line had to invent a number for every field the provider never
+        # mentioned.
+        logger.info("Response parsed (usage %s)", spent or "unreported")
 
         return Response(
             action=action,
@@ -426,7 +431,7 @@ class ProteusSystem(ContinualLearningSystem):
         self._session_id: str | None = None
         self._pending_feedback: str | None = None
         self._event_log: list[dict[str, Any]] = []
-        self._cumulative_usage = dict(EMPTY_USAGE)
+        self._cumulative_usage: Usage = {}
 
     def reset(self) -> None:
         self._destroy_workspace()

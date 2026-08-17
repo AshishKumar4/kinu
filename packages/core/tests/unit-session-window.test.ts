@@ -56,7 +56,7 @@ describe('SessionWindow — the open window', () => {
     const win = newStore();
     const turn = aTurn(0, {
       toolCalls: [{ name: 'shell', args: { cmd: 'ls' }, result: { stdout: 'a\nb' } }],
-      usage: { input: 10, output: 5, cached: 2 },
+      usage: { input: 10, output: 5, cacheRead: 2 },
       hadError: true,
       sessionId: 'conv-1',
     });

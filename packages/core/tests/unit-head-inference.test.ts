@@ -68,7 +68,7 @@ describe('runHeadInference — report assembly', () => {
     const report = await runHeadInference(headInput(), deps(fakeHeadModel('The lexer handles UTF-8 correctly.')));
     expect(report.status).toBe('completed');
     expect(report.summary).toBe('The lexer handles UTF-8 correctly.');
-    expect(report.tokenUsage).toEqual({ input: 10, output: 20, total: 30 });
+    expect(report.usage).toEqual({ input: 10, output: 20 });
     expect(report.stepCount).toBeGreaterThanOrEqual(1);
     expect(report.id).toBe('h1');
   });

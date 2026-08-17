@@ -216,7 +216,8 @@ describe('RunEventRecorder.readRecentByType', () => {
     recorder.emit('run-1', {
       type: 'step_finish',
       stepIndex: 1,
-      usage: { input: 900, cached: 700, output: 40, reasoning: 0, usd: 0.001 },
+      usage: { input: 900, cacheRead: 700, output: 40 },
+      usd: 0.001,
       context: {
         segments: [{ plane: 'system', label: 'Soul', chars: 400, items: 1 }],
         measuredChars: 400,
@@ -225,7 +226,7 @@ describe('RunEventRecorder.readRecentByType', () => {
       },
     });
     const [step] = recorder.readRecentByType('step_finish');
-    expect(step?.type === 'step_finish' && step.usage?.cached).toBe(700);
+    expect(step?.type === 'step_finish' && step.usage?.cacheRead).toBe(700);
     expect(step?.type === 'step_finish' && step.context?.measuredChars).toBe(400);
   });
 });

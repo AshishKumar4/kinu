@@ -3,7 +3,7 @@
  */
 
 import type {
-	ActivityLogEntry, ContextComposition, MissionBudgetSnapshot, StepTelemetry, StepUsage,
+	ActivityLogEntry, ContextComposition, MissionBudgetSnapshot, StepTelemetry, Usage,
 } from "@proteus/core";
 
 /**
@@ -267,7 +267,12 @@ export interface ActivitySnapshot {
 		at: number;
 		runId: string;
 		stepIndex: number;
-		usage: StepUsage;
+		/** What the provider said this step cost. Only the fields it actually
+		 *  reported are present, and a surface must render an absent one as
+		 *  unreported rather than showing an invented default — the same rule
+		 *  `context` below follows. `latest` is null when no step in the
+		 *  workspace's life reported anything, so this is never an empty report. */
+		usage: Usage;
 		/** Absent for steps recorded before the meter existed, or when the
 		 *  turn driver never measured. */
 		context: ContextComposition | null;

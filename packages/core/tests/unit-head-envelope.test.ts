@@ -20,6 +20,7 @@ import {
   budgetExhausted, deriveChildBudget, DEFAULT_HEAD_BUDGET, type HeadBudget, type HeadInput,
 } from '../src/heads/types.js';
 import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference.js';
+import { usageTotal } from '../src/usage.js';
 
 describe('budgetExhausted — depth, and a deadline only if one was requested', () => {
   test('a default head is never exhausted by time or spend', () => {
@@ -164,8 +165,8 @@ describe('runHeadInference — a fork works until the work is done', () => {
     });
     expect(report.status).toBe('completed');
     expect(report.stepCount).toBe(61);
-    expect(report.tokenUsage.output).toBe(5_000 * 61);
-    expect(report.tokenUsage.total).toBeGreaterThan(19_200);
+    expect(report.usage.output).toBe(5_000 * 61);
+    expect(usageTotal(report.usage)).toBeGreaterThan(19_200);
     expect(report.summary).toBe('Here is what I found.');
   });
 
@@ -180,7 +181,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
       maxSteps: DEFAULT_MAX_STEPS, isAborted: () => false,
     });
     expect(report.status).toBe('completed');
-    expect(report.tokenUsage.output).toBe(3_200 * 9);
+    expect(report.usage.output).toBe(3_200 * 9);
   });
 
   test('a head spawned an hour into a long parent turn is not already out of time', async () => {
@@ -205,9 +206,9 @@ describe('runHeadInference — a fork works until the work is done', () => {
       workspaceLayout: 'shared-workspace',
       maxSteps: DEFAULT_MAX_STEPS, isAborted: () => false,
     });
-    expect(report.tokenUsage.input).toBe(20_000 * 10);
-    expect(report.tokenUsage.output).toBe(400 * 10);
-    expect(report.tokenUsage.total).toBe(20_400 * 10);
+    expect(report.usage.input).toBe(20_000 * 10);
+    expect(report.usage.output).toBe(400 * 10);
+    expect(usageTotal(report.usage)).toBe(20_400 * 10);
   });
 
   test('the turn step envelope is the backstop, and it reports itself honestly', async () => {

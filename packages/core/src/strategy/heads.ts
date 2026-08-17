@@ -105,6 +105,8 @@ export function createHeadsStrategy(): ExplorationStrategy {
         : NEUTRAL;
 
       const cost: StrategyResult['cost'] = {
+        // Absent when no head's provider reported usage. Propagated as absence
+        // so the spawn seam can decline to charge rather than bill a zero.
         tokens: merge.costSummary.totalTokens,
         durationMs: Date.now() - t0,
         iterations: merge.costSummary.headCount,
@@ -181,10 +183,12 @@ function formatMergeResult(result: MergeResult, strategy: MergeStrategy): string
     lines.push(`_${HEAD_FILE_CHANGE_PROVENANCE}_`);
   }
   lines.push('');
+  // `tokens` is stated as unreported rather than rendered as `undefined` — and
+  // never as a `0`, which would read to the model as a free delegation.
   lines.push(
     `_(merge=${strategy}, ` +
     `heads=${result.costSummary.headCount} (${result.costSummary.headsWithFindings} with findings), ` +
-    `tokens=${result.costSummary.totalTokens}, ` +
+    `tokens=${result.costSummary.totalTokens ?? 'unreported'}, ` +
     `wall=${Math.round(result.costSummary.totalWallClockMs / 100) / 10}s, ` +
     `depth=${result.costSummary.maxDepth})_`,
   );

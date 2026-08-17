@@ -38,7 +38,7 @@
 import { Agent, callable, type AgentContext } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { generateText } from "ai";
-import { explorePrompt, formatInheritedContext, generateJson, isWorkMode, missionCallUsage, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
+import { explorePrompt, formatInheritedContext, generateJson, isWorkMode, normalizeUsage, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import {
   type CraftedTool,
@@ -208,7 +208,7 @@ export class ExplorationAgent extends Agent<Env> {
 
     const trimmed = text.trim();
     void this.sql`INSERT INTO traces (step, text) VALUES (1, ${trimmed})`;
-    return { text: trimmed, usage: missionCallUsage(usage) };
+    return { text: trimmed, usage: normalizeUsage(usage) };
   }
 
   @callable()
@@ -224,7 +224,7 @@ export class ExplorationAgent extends Agent<Env> {
     };
     if (providerOptions) request.providerOptions = providerOptions;
     const { text, usage } = await generateText(request);
-    return { text: text.trim(), usage: missionCallUsage(usage) };
+    return { text: text.trim(), usage: normalizeUsage(usage) };
   }
 
   // ── Head mode @callables  ───────────────────────────────────

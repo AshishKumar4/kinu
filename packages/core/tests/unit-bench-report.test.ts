@@ -125,6 +125,31 @@ describe('buildBenchReport', () => {
     expect(report.dev.stats.passAllB).toBe(0.5);
   });
 
+  test('an attempt nobody metered folds to null, never to a cheaper number', () => {
+    const config = { ...CONFIG, repeats: 2 };
+    const report = buildBenchReport({
+      runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
+      devAttempts: [
+        attempt('t1', 'baseline', true, { repeat: 0, tokens: 400, peakPromptTokens: 4000 }),
+        // The crashed attempt: its worker died before the meter reported, so it
+        // carries no token figures at all. Averaged in as a zero it would have
+        // halved this variant's apparent cost.
+        attempt('t1', 'baseline', false, {
+          repeat: 1, tokens: undefined, peakPromptTokens: undefined, error: 'worker died',
+        }),
+        ...repeats('t1', 'candidate', [true, true]),
+      ],
+    });
+    const [t1] = report.dev.cases;
+    expect(t1!.tokensA).toBeNull();
+    expect(t1!.peakPromptTokensA).toBeNull();
+    // The measured arm is untouched, so one row distinguishes unmeasured from
+    // genuinely cheap.
+    expect(t1!.tokensB).toBe(100);
+    expect(renderBenchSummary(report)).toContain('tokens/task A=unreported  B=100');
+    expect(renderBenchSummary(report)).toContain('peak prompt tokens A=unreported  B=1000');
+  });
+
   test('an attempt from an unknown variant is refused', () => {
     expect(() => buildBenchReport({
       runId: 'r1', config: CONFIG, sealed: null, sealAccessOrdinal: null,
@@ -355,6 +380,23 @@ describe('gain report', () => {
       .toContain('model calls/attempt stateless=unreported  stateful=0.0');
   });
 
+  test('an arm holding an unmeasured attempt reports no spend rather than a discount', () => {
+    const report = buildGainReport({
+      runId: 'g1', config: CONFIG,
+      perTask: [{ taskId: 't1', index: 0, stateful: 1, stateless: 0 }],
+      attempts: [
+        attempt('t1', CONFIG.variantA, false, { tokens: undefined, peakPromptTokens: undefined }),
+        attempt('t1', CONFIG.variantB, true, { tokens: 80 }),
+      ],
+    });
+    expect(report.cost.stateless).toMatchObject({
+      attempts: 1, totalTokens: null, meanTokens: null, peakPromptTokens: null,
+    });
+    expect(report.cost.stateful).toMatchObject({ totalTokens: 80, meanTokens: 80 });
+    expect(renderGainSummary(report))
+      .toContain('tokens/attempt stateless=unreported  stateful=80');
+  });
+
   test('refuses a gain report with missing accounting attempts', () => {
     expect(() => buildGainReport({
       runId: 'g1', config: CONFIG,
@@ -371,7 +413,7 @@ describe('run mechanics', () => {
     expect(orders).toEqual(new Set(['ab', 'ba']));
   });
 
-  test('usageTokens reads the ai-v6 LanguageModelV2 shape', () => {
+  test('usageTokens reads the provider-level nested LanguageModelV3 shape', () => {
     // Captured verbatim from a real doStream finish part — inputTokens and
     // outputTokens are OBJECTS here, and summing them directly yields a string.
     const usage = {
@@ -387,11 +429,17 @@ describe('run mechanics', () => {
   });
 
   test('usageTokens never returns a non-number, whatever a provider sends', () => {
-    for (const bad of [undefined, null, 'nonsense', 42, {}, { inputTokens: {} }, { inputTokens: NaN, outputTokens: 3 }]) {
-      const result = usageTokens(bad);
-      expect(Number.isFinite(result)).toBe(true);
+    // Unreadable is UNMEASURED, not free: undefined travels to the budget caller,
+    // which declines to judge it, where a 0 would have read as inside the cap.
+    for (const bad of [undefined, null, 'nonsense', 42, {}, { inputTokens: {} }]) {
+      expect(usageTokens(bad)).toBeUndefined();
     }
+    // A non-finite figure is discarded, not propagated: the readable half still
+    // counts and NaN never reaches an arithmetic comparison.
     expect(usageTokens({ inputTokens: NaN, outputTokens: 3 })).toBe(3);
+    expect(usageTokens({ inputTokens: Number.POSITIVE_INFINITY, outputTokens: 3 })).toBe(3);
+    // A provider that reported zeros reported something, and that is not absence.
+    expect(usageTokens({ inputTokens: 0, outputTokens: 0 })).toBe(0);
   });
 
   test('attemptPassed requires every check, and no checks is not a pass', () => {

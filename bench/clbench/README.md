@@ -150,3 +150,8 @@ a `UsageEvent` per turn, which prices it through litellm. When litellm has no
 rate for the model, CL-Bench records `pricing_error` and leaves `cost_usd` null;
 the token counts are still exact. The Cloudflare dashboard remains authoritative
 for the account's Workers AI entitlement and billing.
+
+The `turn_end` payload is sparse: a field is present only when the provider
+reported it, and the whole `usage` object is absent when the provider reported
+nothing. A turn like that records NO `UsageEvent` rather than a row of zeros, so
+"nobody metered this turn" stays visible instead of being priced as free.

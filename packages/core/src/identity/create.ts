@@ -9,7 +9,7 @@
  * - The workspace identity (stable UUID) — the ownership root
  */
 
-import type { AgentRuntime, BranchHandle } from '../types/agent-runtime.js';
+import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import type { LLMProviderConfig } from '../llm.js';
 import { initAllTables } from './schema.js';
@@ -54,16 +54,39 @@ function buildComponents(
   const judgeModel = config.judge ? createVercelAILLM(config.judge) : undefined;
   const schedule = createInlineSchedule(sql);
 
-  const mockBranch: BranchHandle = {
-    explore: async () => ({ text: 'exploration result' }),
-    generateReflection: async () => ({ text: 'no reflection available' }),
-  };
-
   return buildRuntime({
     sql, execRaw, vfs, llm, executor, schedule, shell: workspace.shell,
     agentId: config.agentId, agentName: config.agentName,
     memory, craftStore, judgeModel,
-    spawnBranch: async () => mockBranch,
+    /**
+     * This runtime does not implement branch spawning, and says so instead of
+     * pretending to.
+     *
+     * It used to return a handle whose `explore` answered the literal
+     * `'exploration result'` and whose `generateReflection` answered
+     * `'no reflection available'`. No consumer can tell either from a real
+     * result, so every MCTS-shaped measurement taken on this runtime scored a
+     * fabricated string — and two full behavioural eval runs did exactly that
+     * before anyone noticed, because a plausible fake corrupts silently while an
+     * absent implementation is found in seconds.
+     *
+     * `createWorkspace` exists to BIRTH a workspace (cli/src/agent-create.ts
+     * calls it once and closes the database); every running surface opens through
+     * `openWorkspaceCLI` -> `createCLIRuntime`, which registers the real branch
+     * spawner. Reaching this is a misconfiguration, so it fails loudly here
+     * rather than quietly downstream.
+     */
+    spawnBranch: () => {
+      throw new Error(
+        'createWorkspace\'s birth runtime does not implement spawnBranch — it is for creating a '
+        + 'workspace, not for running one. Open the workspace with openWorkspaceCLI (which builds '
+        + 'createCLIRuntime) to get a real branch spawner. Returning a stub result here would be '
+        + 'indistinguishable from a real exploration to every consumer.',
+      );
+    },
+    // No branch can exist on this runtime, since spawning throws. These stay
+    // no-ops rather than throwing because they return nothing and so fabricate
+    // nothing, and an unconditional teardown path must stay safe to call.
     abortBranch: async () => {},
     releaseBranch: async () => {},
   });

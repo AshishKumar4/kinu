@@ -37,6 +37,7 @@ import { describeProviderError } from './providers/util.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window.js';
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from './utils/json.js';
+import { normalizeUsage, usageReported, type Usage } from './usage.js';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -50,10 +51,13 @@ export type ChatEvent =
    *  evolution signal reads (hadError, outcome review) — matching the cf
    *  backend's afterToolCall. */
   | { type: 'tool-result'; toolName: string; toolCallId: string; result: string; success: boolean; error?: string }
-  /** `inputTokens`/`outputTokens`/`cachedInputTokens` = the step request's
-   *  provider-reported totals, when reported — inputTokens doubles as the
-   *  caller's measured compaction signal, cachedInputTokens feeds cache
-   *  telemetry.
+  /** `usage` is what the provider reported for THIS step's request, and only
+   *  that: a field it did not mention stays absent, a zero it did report stays
+   *  a zero. `usage.input` doubles as the caller's measured compaction signal
+   *  and `usage.cacheRead` feeds cache telemetry, both of which need the
+   *  distinction — "every step reported a zero cache read" is a working cache
+   *  plan with a cold prefix, "no step mentioned caching" is a provider that
+   *  does not report cache reads at all.
    *
    *  `responseMessages` is the SDK's CUMULATIVE response array as of this step:
    *  every assistant message and paired tool message the turn has produced so
@@ -62,8 +66,7 @@ export type ChatEvent =
    *  delta and appends it to the run's durable log. Carried by reference and
    *  never copied: a 40-step turn must not re-serialize its transcript 40
    *  times. */
-  | { type: 'step-finish'; stepIndex: number; responseMessages: readonly ModelMessage[];
-      inputTokens?: number; outputTokens?: number; cachedInputTokens?: number }
+  | { type: 'step-finish'; stepIndex: number; responseMessages: readonly ModelMessage[]; usage?: Usage }
   /** A failure the turn survived. `runChat` itself never yields this — it
    *  throws, and the caller owns the turn-failure policy. The scaffold seam
    *  (scaffold/chat-transform.ts) does: an evolved scaffold reports a failed
@@ -99,7 +102,7 @@ export interface ChatOptions {
   /** Provider-reported prompt tokens of the previous turn's final request —
    *  the measured trigger signal handed to transformContext (chars/4
    *  estimates lie). Callers persist it from the last turn's step-finish
-   *  `inputTokens`. */
+   *  `usage.input`. */
   providerReportedTokens?: number;
   /** Context-transform trigger: 'force' when the caller consumed an armed
    *  force-compaction flag (overflow recovery — the previous turn's request
@@ -175,9 +178,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   interface PendingStepEvent {
     stepIndex: number;
     responseMessages: readonly ModelMessage[];
-    inputTokens?: number;
-    outputTokens?: number;
-    cachedInputTokens?: number;
+    usage?: Usage;
   }
   const pendingStepEvents: PendingStepEvent[] = [];
   let stepCount = 0;
@@ -294,22 +295,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }, { stepNumber, messages }),
     onStepFinish: (step) => {
       stepCount++;
-      const inputTokens = step.usage?.inputTokens;
-      const outputTokens = step.usage?.outputTokens;
-      // Cached prefix tokens: the OpenAI/Workers-AI family reports them on
-      // usage.cachedInputTokens, Anthropic in providerMetadata — combine both
-      // into the one flat number the ChatEvent carries (the accumulator reads
-      // both sources too, so a CLI consumer passing only cachedInputTokens is
-      // faithful and never double-counts).
-      const parsedCacheRead = v.safeParse(v.number(), step.providerMetadata?.anthropic?.cacheReadInputTokens);
-      const anthropicCacheRead = parsedCacheRead.success ? parsedCacheRead.output : 0;
-      const cachedInputTokens = (step.usage?.cachedInputTokens ?? 0)
-        + anthropicCacheRead;
+      const usage = normalizeUsage(step.usage);
       responseSoFar = step.response.messages;
       const event: PendingStepEvent = { stepIndex: stepCount, responseMessages: responseSoFar };
-      if (inputTokens !== undefined && inputTokens > 0) event.inputTokens = inputTokens;
-      if (outputTokens !== undefined && outputTokens > 0) event.outputTokens = outputTokens;
-      if (cachedInputTokens > 0) event.cachedInputTokens = cachedInputTokens;
+      if (usageReported(usage)) event.usage = usage;
       pendingStepEvents.push(event);
     },
   });

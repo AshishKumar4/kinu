@@ -19,7 +19,24 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-EMPTY_USAGE: dict[str, int] = {"input": 0, "output": 0, "cached": 0}
+#: Every field the CLI's usage payload can carry, mirroring ``USAGE_FIELDS`` in
+#: packages/core/src/usage.ts. Read through this list rather than a hardcoded
+#: three-key dict so a field the emitter learns to report is not dropped here.
+USAGE_FIELDS: tuple[str, ...] = (
+    "input",
+    "output",
+    "cacheRead",
+    "cacheWrite",
+    "cacheWrite1h",
+    "reasoning",
+    "neurons",
+)
+
+#: One turn's token usage. SPARSE on purpose: a field that is absent means the
+#: provider did not report it, and a field that is 0 means the provider reported
+#: zero. Zero-filling the two together is how a run nobody metered came out
+#: looking free.
+Usage = dict[str, int]
 
 Event = dict[str, Any]
 
@@ -153,29 +170,85 @@ def session_id(events: list[Event]) -> str | None:
     return None
 
 
-def turn_usage(events: list[Event]) -> dict[str, int]:
+def usage_reported(usage: Usage) -> bool:
+    """Whether the provider reported anything at all — the gate for pricing a
+    row. A turn served by a provider that says nothing carries no usage rather
+    than a fabricated set of zeros."""
+    return any(field in usage for field in USAGE_FIELDS)
+
+
+def usage_total(usage: Usage) -> int | None:
+    """Billable tokens, or None when neither half was reported.
+
+    Derived rather than stored, exactly as ``usageTotal`` derives it: cacheRead
+    and cacheWrite are SUBSETS of ``input`` and reasoning is a subset of
+    ``output``, so ``input + output`` is the total.
+    """
+    if "input" not in usage and "output" not in usage:
+        return None
+    return usage.get("input", 0) + usage.get("output", 0)
+
+
+def add_usage(first: Usage, second: Usage) -> Usage:
+    """Accumulate, preserving absence — the Python half of ``addUsage``.
+
+    A field neither side reported stays absent; a field only one side reported
+    carries that one's number. This is what keeps "every turn reported a zero
+    cache read" distinguishable from "no turn mentioned caching".
+    """
+    total: Usage = {}
+    for field in USAGE_FIELDS:
+        left = first.get(field)
+        right = second.get(field)
+        if left is None and right is None:
+            continue
+        total[field] = (0 if left is None else left) + (0 if right is None else right)
+    return total
+
+
+def _reported_fields(usage: dict[str, Any]) -> Usage:
+    """The counts a `turn_end` payload actually carries. The parse boundary: an
+    absent key stays absent, and a value that is not a number is not a count
+    (``bool`` is an ``int`` in Python, so it is excluded explicitly)."""
+    reported: Usage = {}
+    for field in USAGE_FIELDS:
+        value = usage.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        reported[field] = int(value)
+    return reported
+
+
+def turn_usage(events: list[Event]) -> Usage:
     """Token usage, summed over every `turn_end` in the stream.
 
     Proteus reports per turn rather than cumulatively, so these add rather than
-    delta. ``input`` is cache-inclusive and ``cached`` is its cache-read share,
-    which is the convention CL-Bench's ``build_usage_event`` prices against. A
-    provider that reports nothing omits the field, and that reads as zero.
+    delta. ``input`` is cache-inclusive and ``cacheRead`` is its cache-read
+    share, which is the convention CL-Bench's ``build_usage_event`` prices
+    against.
+
+    A field the provider did not report is ABSENT from the result, because the
+    emitter omits the key (`jsonEvents` in packages/cli/src/commands/run.ts) and
+    nothing here puts it back as a zero. An empty dict therefore means "nobody
+    metered this run", which is what ``usage_reported`` answers.
     """
-    total = dict(EMPTY_USAGE)
+    total: Usage = {}
     for event in events:
         if event.get("type") != "turn_end":
             continue
         usage = event.get("usage")
         if not isinstance(usage, dict):
             continue
-        for key in total:
-            total[key] += int(usage.get(key, 0) or 0)
+        total = add_usage(total, _reported_fields(usage))
     return total
 
 
-def sum_usages(usages: list[dict[str, int]]) -> dict[str, int]:
+def sum_usages(usages: list[Usage]) -> Usage:
     """Combine the usage of several exec invocations in one benchmark turn."""
-    return {key: sum(usage.get(key, 0) for usage in usages) for key in EMPTY_USAGE}
+    total: Usage = {}
+    for usage in usages:
+        total = add_usage(total, usage)
+    return total
 
 
 def had_error(events: list[Event]) -> bool:

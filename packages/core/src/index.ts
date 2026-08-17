@@ -68,7 +68,7 @@ export {
 export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
-  type CompletedTurn, type CompletedSession, type ToolCallRecord, type TurnUsage,
+  type CompletedTurn, type CompletedSession, type ToolCallRecord,
   type ShadowTrialDrain, type ShadowTrialTurn,
 } from './evolution/types.js';
 export {
@@ -339,6 +339,17 @@ export {
 // LLM (Vercel AI SDK wrapper — shared across backends)
 export { createVercelAILLM, collectStepText, createChatModel, createCompletionLLM, estimateTokens } from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig, LLMUsage } from './llm.js';
+// The ONE normalized provider usage report, and the absence-preserving
+// arithmetic over it. Every surface that counts tokens speaks this.
+export {
+  USAGE_FIELDS,
+  UsageSchema,
+  addUsage,
+  normalizeUsage,
+  usageReported,
+  usageTotal,
+} from './usage.js';
+export type { Usage } from './usage.js';
 export { contextWindowForModel } from './context-window.js';
 // The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.
 export {
@@ -361,13 +372,11 @@ export {
   readMissionLimits,
   localMissionPort,
   localMissionScope,
-  missionCallUsage,
   type MissionBudgetPort,
   type MissionScope,
   type MissionBudgetLimits,
   type MissionBudgetRefusal,
   type MissionBudgetSnapshot,
-  type MissionCallUsage,
   type MissionGovernorDeps,
   type MissionSeam,
   type MissionSpendProvenance,
@@ -899,7 +908,7 @@ export {
 // phases, reactor decisions); the two coexist rather than one fronting the
 // other, and the per-step telemetry sample reads this one.
 export type {
-  RunEvent, RunEventBase, RunEventInput, RunEventType, StepUsage,
+  RunEvent, RunEventBase, RunEventInput, RunEventType, StepCost,
   CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger, CraftCycleRecord,
   ExecutionRecoveryRecord,
   CacheHitStats, StepTelemetry,

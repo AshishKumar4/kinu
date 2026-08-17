@@ -9,10 +9,10 @@
 //
 // This lives in cli-backend (the local backend). The cloud server must never
 // drive subscription calls, so nothing here is reachable from cf-backend.
-import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart } from '@ai-sdk/provider';
-import { JsonObjectSchema } from '@proteus/core';
+import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
+import { JsonObjectSchema, usageTotal } from '@proteus/core';
 import { tolerate } from '@proteus/core/obs';
-import type { JsonObject, ModelProvider, ModelInfo, ProviderDeps } from '@proteus/core';
+import type { JsonObject, ModelProvider, ModelInfo, ProviderDeps, Usage } from '@proteus/core';
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as v from 'valibot';
 
@@ -300,7 +300,7 @@ function runClaudeStream(
       controller.enqueue({ type: 'stream-start', warnings: [] });
       const textId = 'claude-text';
       let textOpen = false;
-      let usage: ClaudeUsage | undefined;
+      let usage: Usage | undefined;
       let finishReason: FinishReason = 'stop';
       let stderr = '';
       // A stderr that cannot be read becomes part of the exit message below —
@@ -356,23 +356,31 @@ function runClaudeStream(
   });
 }
 
-function finishPart(reason: FinishReason, usage: ClaudeUsage | undefined): LanguageModelV2StreamPart {
+/**
+ * The turn's usage in the SDK's own dialect.
+ *
+ * `totalTokens` comes from `usageTotal`, so a result event that carried no
+ * usage at all reports NO total rather than a synthesized `0 + 0` — the one
+ * number a caller would have read as "this turn was free".
+ *
+ * `cacheWrite` has no seat on the way out: `LanguageModelV2Usage` models only a
+ * cache READ (@ai-sdk/provider dist/index.d.ts:2673-2696), and ai's v2→v3
+ * bridge hard-codes `cacheWrite: void 0` with no `raw` at all
+ * (node_modules/ai/dist/index.js:828-841). It is not lost, though: it is part
+ * of the cache-inclusive `input` total `resultUsage` folds.
+ */
+function finishPart(reason: FinishReason, reported: Usage | undefined): LanguageModelV2StreamPart {
+  const usage = reported ?? {};
   return {
     type: 'finish',
     finishReason: reason,
     usage: {
-      inputTokens: usage?.inputTokens,
-      outputTokens: usage?.outputTokens,
-      totalTokens: usage ? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) : undefined,
-      cachedInputTokens: usage?.cachedInputTokens,
+      inputTokens: usage.input,
+      outputTokens: usage.output,
+      totalTokens: usageTotal(usage),
+      cachedInputTokens: usage.cacheRead,
     },
   };
-}
-
-interface ClaudeUsage {
-  inputTokens?: number;
-  outputTokens?: number;
-  cachedInputTokens?: number;
 }
 
 // ─── stream-json parsing ────────────────────────────────────────────────────
@@ -435,14 +443,34 @@ function isResult(event: ClaudeEvent): event is ClaudeEvent & { type: 'result' }
   return event.type === 'result';
 }
 
-function resultUsage(event: ClaudeEvent): ClaudeUsage {
-  const usage = jsonObject({ value: event.usage });
-  if (!usage) return {};
-  return {
-    inputTokens: numberOf({ value: usage.input_tokens }),
-    outputTokens: numberOf({ value: usage.output_tokens }),
-    cachedInputTokens: numberOf({ value: usage.cache_read_input_tokens }),
-  };
+/**
+ * What the binary said it spent, as the one usage type.
+ *
+ * Anthropic reports the prompt in three DISJOINT parts — plain input, cache
+ * reads and cache writes — while `Usage.input` is the cache-INCLUSIVE total, so
+ * the three are folded exactly as @ai-sdk/anthropic folds them. Reading only
+ * `input_tokens` under-reported every cached prompt, and Claude Code caches
+ * aggressively.
+ *
+ * The fold is absent unless the binary reported at least one part: `?? 0` on
+ * all three would turn a result event that mentioned no usage into a measured
+ * zero.
+ */
+function resultUsage(event: ClaudeEvent): Usage {
+  const reported = jsonObject({ value: event.usage });
+  if (!reported) return {};
+  const input = numberOf({ value: reported.input_tokens });
+  const output = numberOf({ value: reported.output_tokens });
+  const cacheRead = numberOf({ value: reported.cache_read_input_tokens });
+  const cacheWrite = numberOf({ value: reported.cache_creation_input_tokens });
+  const usage: { -readonly [K in keyof Usage]: number } = {};
+  if (input !== undefined || cacheRead !== undefined || cacheWrite !== undefined) {
+    usage.input = (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+  }
+  if (output !== undefined) usage.output = output;
+  if (cacheRead !== undefined) usage.cacheRead = cacheRead;
+  if (cacheWrite !== undefined) usage.cacheWrite = cacheWrite;
+  return usage;
 }
 
 function mapFinishReason(event: ClaudeEvent): FinishReason {
@@ -500,7 +528,7 @@ async function collectGenerate(
 ): Promise<Awaited<ReturnType<LanguageModelV2['doGenerate']>>> {
   let text = '';
   let finishReason: FinishReason = 'stop';
-  let usage: GeneratedUsage = {
+  let usage: LanguageModelV2Usage = {
     inputTokens: undefined, outputTokens: undefined, totalTokens: undefined,
   };
   let error: unknown;
@@ -519,11 +547,4 @@ async function collectGenerate(
     usage,
     warnings: [],
   };
-}
-
-interface GeneratedUsage {
-  inputTokens: number | undefined;
-  outputTokens: number | undefined;
-  totalTokens: number | undefined;
-  cachedInputTokens?: number;
 }

@@ -175,7 +175,9 @@ The dev comparison and the stateful-gain report publish three cost numbers per
 variant, because a variant that wins by spending twice as much has not won the
 same thing:
 
-- **tokens/task** — mean over tasks of the per-attempt total. What an attempt costs.
+- **tokens/task** — mean over tasks of the per-attempt total. What an attempt
+  costs. Same rule as the call count below: an observed zero is zero, and an
+  attempt nobody metered makes the whole row `unreported`.
 - **model calls/task** — mean observed inference requests per attempt. An
   observed zero is reported as zero; missing evidence is reported as
   `unreported`, never converted to zero.
@@ -187,7 +189,11 @@ A context-discipline change should reduce the peak without increasing total
 tokens. The call count shows whether it traded a few large calls for many small
 ones. The peak is a **maximum** because averaging peaks would report a working
 set no attempt ever reached. All three values are 0 for the deterministic
-controls, which make no model calls.
+controls, which make no model call and report that zero as the measurement it
+is — `unreported` is reserved for an attempt that was never measured, such as a
+worker that crashed before its meter reported. An attempt with no token
+measurement is also never judged against the token budget: it cannot breach, and
+it cannot be declared inside the envelope either.
 
 The token and call totals come from one attempt-local inference proxy, not from
 the root chat session. Every model config Proteus hands to a head, MCTS branch,
@@ -197,7 +203,9 @@ attempt instead of being counted as free compute.
 
 The gain report also retains each arm's exact attempt count, total tokens, total
 model calls, budget breaches, and worker errors. If one attempt lacks call
-evidence, that arm's call total and mean are `null`/`unreported`, not zero.
+evidence, that arm's call total and mean are `null`/`unreported`, not zero — and
+the same holds for its token total, mean and peak, so an arm holding an
+unmeasured attempt cannot look cheaper than the arm it is compared with.
 
 ## How the guarantees are enforced
 

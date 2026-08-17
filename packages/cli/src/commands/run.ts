@@ -4,7 +4,7 @@ import { listConfiguredAgentRefs, requireAuthConfig } from '../config.js';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
 import { createAgentClient, type AgentClientFlags } from '../client-factory.js';
 import type { AgentClient, AgentClientEvent } from '../agent-client.js';
-import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '@proteus/core';
+import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, type JsonObject, type JsonValue } from '@proteus/core';
 import * as v from 'valibot';
 import type { CliSessionOptions } from '../session.js';
 import { chatCommand } from './chat.js';
@@ -568,7 +568,18 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
         durationMs: event.turn.durationMs,
         hadError: event.turn.hadError,
       };
-      if (event.turn.usage) turnEnd.usage = decodeJsonValue({ value: event.turn.usage });
+      // The turn's usage, field-for-field, and only when the provider reported
+      // something: a reader must be able to tell "spent nothing" from "nobody
+      // metered this", so an unreported field is an ABSENT key rather than a 0
+      // (bench/clbench/proteus/events.py is the reader that depends on it).
+      // `projectJsonValue`, not `decodeJsonValue`, for the same reason the
+      // run-event arm below uses it: this is an in-process object on its way
+      // OUT, so a present-and-`undefined` field must be dropped rather than
+      // thrown on — JsonValueSchema rejects `undefined`, which would print a
+      // valibot stack mid-run.
+      if (event.turn.usage && usageReported(event.turn.usage)) {
+        turnEnd.usage = projectJsonValue({ value: event.turn.usage });
+      }
       return [
         { type: 'message_end', role: 'assistant', text: event.turn.text },
         turnEnd,

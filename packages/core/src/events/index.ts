@@ -12,7 +12,7 @@ export type {
   TurnSteeringTrigger,
   CraftCycleRecord,
   ExecutionRecoveryRecord,
-  StepUsage,
+  StepCost,
 } from './types.js';
 
 export {

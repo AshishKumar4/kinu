@@ -3,7 +3,7 @@
 // Production-proven bug (2026-07-13): the {account}/ai/v1 chat-completions
 // stream ends with a platform-appended duplicate usage chunk that, for some
 // models (glm-5.2), zeroes prompt_tokens_details.cached_tokens. The AI SDK
-// keeps the LAST usage chunk, so every streamed run reported tokensCached: 0
+// keeps the LAST usage chunk, so every streamed run reported `cacheRead: 0`
 // while billing showed ~73% of input tokens served from the prefix cache.
 // Fixtures below are verbatim captures from the live endpoint.
 import { describe, test, expect } from 'bun:test';

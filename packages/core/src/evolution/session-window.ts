@@ -29,6 +29,7 @@ import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { CompletedTurn } from './types.js';
 import { JsonObjectSchema, JsonValueSchema, parseJsonValue } from '../utils/json.js';
+import { UsageSchema } from '../usage.js';
 import { tolerate } from '../obs/index.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
@@ -99,7 +100,7 @@ const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
   turnId: v.optional(v.string()),
   sessionId: v.optional(v.string()),
   origin: v.optional(v.picklist(['user', 'programmatic'])),
-  usage: v.optional(v.object({ input: v.number(), output: v.number(), cached: v.number() })),
+  usage: v.optional(UsageSchema),
 });
 
 export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {

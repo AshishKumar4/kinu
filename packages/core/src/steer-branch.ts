@@ -110,7 +110,10 @@ export async function startBranchHead(
       summary: 'Branch was aborted before producing an answer.',
       evidence: [], decisions: [], artifactRefs: [], fileChanges: [],
       childHeadIds: [], toolCalls: [], stepCount: 0,
-      tokenUsage: { input: 0, output: 0, total: 0 },
+      // Aborted before it produced anything, so nothing was reported. `{}`
+      // rather than zeros: the branch may have spent real tokens first, and
+      // recording it as free is a claim nobody measured.
+      usage: {},
       wallClockMs: Date.now() - spawnedAt,
       errorMessage: err instanceof Error ? err.message : String(err),
     }))

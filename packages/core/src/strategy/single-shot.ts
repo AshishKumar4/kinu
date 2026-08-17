@@ -2,6 +2,7 @@
 // Useful as a baseline against MCTS / Heads / ToT in evals.
 import { generateText } from 'ai';
 import type { ExplorationStrategy, StrategyContext, StrategyResult } from './types.js';
+import { normalizeUsage, usageTotal } from '../usage.js';
 
 export function createSingleShotStrategy(): ExplorationStrategy {
   return {
@@ -27,7 +28,9 @@ export function createSingleShotStrategy(): ExplorationStrategy {
         best: { text: text.trim(), score: 1, source: 'single-shot' },
         all: [{ text: text.trim(), score: 1, source: 'single-shot' }],
         cost: {
-          tokens: (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0),
+          // Absent when the provider reported nothing — `cost.tokens` is
+          // optional precisely so a baseline run cannot read as free.
+          tokens: usageTotal(normalizeUsage(usage)),
           durationMs: Date.now() - t0,
           iterations: 1,
         },

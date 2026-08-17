@@ -11,13 +11,14 @@
  * is the same spine `proteus exec` uses, with no subprocess and no stdout
  * parsing.
  *
- * WHY IT SEEDS THE VFS AND NOT THE DISK. `createWorkspace` builds an inline
- * workspace whose files live in the agent's own SQLite (`identity/create.ts:86`,
- * `createInlineWorkspace`), and `WorkspaceBirthConfig` has no `cwd` at all. The
- * `file` tool reads that VFS. Seeding a temp directory on disk would leave the
- * agent looking at an empty workspace and produce exactly the zero-denominator
- * corpus this tier exists to detect — so the tree is written through
- * `rt.storage.vfs`, which is what the tool actually sees.
+ * WHY IT SEEDS THE VFS AND NOT THE DISK. The workspace filesystem is durable
+ * storage, not a directory: `createCLIRuntime` builds the Nimbus workspace
+ * filesystem over the agent's own SQLite (`cli-backend/src/runtime.ts:298`), and
+ * `WorkspaceBirthConfig` has no `cwd` at all. The `file` tool reads that VFS.
+ * Seeding a temp directory on disk would leave the agent looking at an empty
+ * workspace and produce exactly the zero-denominator corpus this tier exists to
+ * detect — so the tree is written through `rt.storage.vfs`, which is what the
+ * tool actually sees, and through the OPENED runtime's copy of it.
  *
  * WHY IT THROWS RATHER THAN RETURNING A ZERO. This is the load-bearing design
  * decision and it is not stylistic. `vitest-evals` writes `task.meta.eval` from
@@ -51,10 +52,11 @@ import type { JsonValue } from '@vitest-evals/core';
 import type {
   AgentRuntime, EvalCase, LLMProviderConfig, RunEvent,
 } from '../../packages/core/src/index.js';
-import { RunEventRecorder } from '../../packages/core/src/index.js';
+import { RunEventRecorder, initWorkspaceSchema } from '../../packages/core/src/index.js';
 import { createWorkspace } from '../../packages/core/src/identity/index.js';
 import { LocalAgentSession } from '../../packages/cli-backend/src/local-session.js';
-import { makeSql } from '../../packages/cli-backend/src/runtime.js';
+import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
+import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
 import { scoreTrajectory, type EvalArmState, type EvalScoreRow } from '@proteus/test-utils';
 
 /**
@@ -173,8 +175,14 @@ function readLedgerTotals(db: Database): LedgerTotals {
   for (const event of events) {
     if (event.type === 'turn_end') {
       turns += 1;
-      tokensIn += event.tokenUsage?.input ?? 0;
-      tokensOut += event.tokenUsage?.output ?? 0;
+      // FIELD RENAME ONLY (turn_end.tokenUsage -> turn_end.usage). The `?? 0`
+      // collapse is EvalsInfra's to remove: it makes "the turn reported no usage"
+      // indistinguishable from "the turn used zero tokens". The agreed
+      // replacement is addUsage/usageReported over a `Usage`, plus a count of
+      // unreported turns. Left in place because these records are theirs and
+      // mid-flight; this edit only keeps the build green.
+      tokensIn += event.usage?.input ?? 0;
+      tokensOut += event.usage?.output ?? 0;
     } else if (event.type === 'tool_call_end') {
       toolCalls += 1;
       toolNames.push(event.name);
@@ -217,11 +225,81 @@ export class DegenerateRunError extends Error {
 }
 
 /**
+ * Thrown when the runtime handed to a task cannot reach an executor at all.
+ *
+ * NOT a {@link DegenerateRunError}, deliberately: that type means the AGENT did
+ * nothing and is recorded as `inert`, and a runtime with no executors is the
+ * HARNESS being broken, which is `errored` (behaviour.eval.ts:281). Conflating
+ * them would file a harness fault as an agent observation.
+ *
+ * This exists because the failure it catches is SILENT by construction.
+ * `execute_tools` is built from `router?.getProviders() ?? []`
+ * (core/src/tools/builtins.ts:373), so a runtime with no router yields a tool
+ * with an empty provider surface and no complaint — every `workspace.*` and
+ * `codemode.*` call then fails with `is not a function`, which the ledger
+ * records as an ordinary tool result. Two full live runs were graded that way
+ * and reported 0.817 and 0.903 tool_outcomes over it.
+ *
+ * It is checked BEFORE the model is driven, so a broken runtime costs nothing
+ * rather than being discovered after a paid episode.
+ */
+export class DegenerateRuntimeError extends Error {
+  constructor(readonly taskId: string, readonly reason: string) {
+    super(`degenerate runtime for ${taskId}: ${reason}. The eval must not run: `
+      + '`execute_tools` would be built with an empty provider surface, so every '
+      + '`workspace.*`/`codemode.*` call fails with "is not a function" and scores '
+      + 'as an ordinary tool result. Open the workspace through `openWorkspaceCLI` '
+      + '(cli-backend/src/open.ts), which registers the inline ExecutorProvider — '
+      + 'the runtime `createWorkspace` returns is the BIRTH runtime and registers none.');
+    this.name = 'DegenerateRuntimeError';
+  }
+}
+
+/**
+ * Refuse a runtime that cannot execute anything.
+ *
+ * The assertion sits upstream of every write path: it throws before a session
+ * exists, so there is no turn, no ledger row and no record to publish. A check
+ * that fails publishes no number.
+ */
+export function requireExecutorSurface(taskId: string, rt: AgentRuntime): void {
+  const router = rt.executionRouter;
+  if (!router) throw new DegenerateRuntimeError(taskId, 'rt.executionRouter is absent');
+  const providers = router.getProviders();
+  if (providers.length === 0) {
+    throw new DegenerateRuntimeError(taskId, 'rt.executionRouter has zero registered providers');
+  }
+}
+
+/**
  * Run `task`, score the ledger, and refuse to return an inert trajectory.
+ *
+ * WHY IT OPENS THE WORKSPACE INSTEAD OF RUNNING THE ONE `createWorkspace`
+ * RETURNS. `createWorkspace` is the BIRTH path — production calls it once, from
+ * `proteus agent create` (cli/src/agent-create.ts:187), and the runtime it hands
+ * back is what `cli-backend/src/open.ts:49-50` calls "degraded inline
+ * VFS/Memory/Executor". Every surface that actually RUNS a turn — the chat
+ * client, the daemon, `evolve` — goes through `openWorkspaceCLI`, which builds
+ * the real one. The difference is not cosmetic: the degraded runtime registers
+ * NO `ExecutorProvider`, so it has no `executionRouter` at all, and every
+ * `execute_tools` block fails with `workspace.createTool is not a function`.
+ * Measured both ways on the same scripted episode — degraded: no `craft_cycle`
+ * row and `craft_reuse` eligible 0; opened: `crafted:["doubleIt"]`,
+ * `reused:["doubleIt"]`, eligible 1. Three flash runs blamed that zero on the
+ * corpus. `initWorkspaceSchema` between the two is what `agent-create.ts:189`
+ * does, and without it the workspace is missing tables (`head_journal`, per
+ * agent-evals.ts:120-122).
+ *
+ * WHY `oneShot: true`. It is the literal contract — this harness hands over one
+ * task and grades what it leaves behind, with nobody reading the answer — and it
+ * is the ONLY thing that arms the completion gate (local-session.ts:1514). An
+ * interactive declaration made `completion_honesty` structurally unscoreable.
  *
  * `session.send` is awaited to completion because every row this reads is
  * written on settle: reading before settle would produce the zero denominator
- * this tier exists to eliminate, from a turn that was merely still running.
+ * this tier exists to eliminate, from a turn that was merely still running. The
+ * gate's confirming turn is enqueued AFTER send resolves and runs on the pump,
+ * so `settleBackgroundWork` is what lets that turn close and write its row.
  */
 export async function runBehaviourTask(
   task: EvalCase, opts: BehaviourHarnessOptions,
@@ -229,16 +307,26 @@ export async function runBehaviourTask(
   const workDir = join(opts.dir, task.id);
   mkdirSync(workDir, { recursive: true });
 
-  const db = new Database(join(workDir, 'agent.db'));
+  const dbPath = join(workDir, 'agent.db');
+  const db = new Database(dbPath);
   db.exec('PRAGMA journal_mode = WAL');
   opts.opened.push(db);
 
-  const rt = await createWorkspace(db, {
+  await createWorkspace(db, {
     name: `behaviour-${task.id}`,
     purpose: 'A senior engineer working in the given workspace. Prefer real tool calls '
       + 'over describing what you would do, and break independent work apart.',
     llm: opts.llm,
   });
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: opts.llm });
+
+  // Before anything is driven or spent: a runtime that cannot execute is not a
+  // measurement of an agent that can.
+  requireExecutorSurface(task.id, rt);
+
+  // Seeded through the OPENED runtime's filesystem: the workspace the agent
+  // reads is the one this runtime owns, not the inline VFS birth returned.
   if (task.tags?.includes('workspace')) await seedWorkspaceTree(rt);
 
   const session = new LocalAgentSession({
@@ -246,8 +334,10 @@ export async function runBehaviourTask(
     // The arm, not a convenience default: a run whose evolution was off is not a
     // measurement of evolution, and the run record says which it was.
     noAutoEvolve: !opts.arm.evolution,
+    oneShot: true,
   });
   await session.send(task.task);
+  await session.settleBackgroundWork();
 
   const totals = readLedgerTotals(db);
 

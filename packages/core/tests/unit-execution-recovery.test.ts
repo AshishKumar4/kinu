@@ -292,11 +292,11 @@ describe('the run event', () => {
     const recorder = { emit: (runId: string, input: RunEventInput) => { emitted.push({ runId, input }); } };
 
     closeTurnRun(recorder, 'run-1', {
-      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
+      turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',
       recoveries: { recoveries: [{ tool: 'run', failures: 3, failedSignature: 'run abc' }] },
     });
     closeTurnRun(recorder, 'run-2', {
-      turnIndex: 1, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
+      turnIndex: 1, usage: { input: 1, output: 1 }, reason: 'completed',
       recoveries: null,
     });
 

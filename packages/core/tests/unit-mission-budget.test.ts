@@ -10,9 +10,10 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeExecRaw, makeSql } from './helpers.js';
 import {
-  MissionGovernor, MissionBudgetExhausted, readMissionLimits,
+  MissionGovernor, MissionBudgetExhausted, priceCall, readMissionLimits,
   type MissionBudgetRefusal,
 } from '../src/mission-budget.js';
+import type { Usage } from '../src/usage.js';
 import { estimateUsdCost } from '../src/llm.js';
 import type { LLM } from '../src/types/primitives.js';
 import type { ModelPricing } from '../src/providers/types.js';
@@ -217,8 +218,8 @@ describe('mission budget — USD at catalog prices', () => {
     const { governor } = makeGovernor({ pricing: () => SONNET });
     governor.declare('mission', {});
     governor.activate(['mission']);
-    // 10k input of which 8k came from the cache, 2k output.
-    governor.debit(12_000, { calls: 1, usage: { input: 10_000, output: 2_000, cached: 8_000 } });
+    // 10k cache-INCLUSIVE input of which 8k came from the cache, 2k output.
+    governor.debit(12_000, { calls: 1, usage: { input: 10_000, output: 2_000, cacheRead: 8_000 } });
 
     const [row] = governor.snapshot();
     // (2k × $3 + 8k × $0.30 + 2k × $15) / 1M
@@ -234,7 +235,7 @@ describe('mission budget — USD at catalog prices', () => {
     const { governor } = makeGovernor({ pricing: () => ({ input: 3, output: 15 }) });
     governor.declare('m', {});
     governor.activate(['m']);
-    governor.debit(1_500, { usage: { input: 1_000, output: 500, cached: 900 } });
+    governor.debit(1_500, { usage: { input: 1_000, output: 500, cacheRead: 900 } });
     expect(governor.snapshot()[0]!.spent.usd).toBeCloseTo((1_000 * 3 + 500 * 15) / 1_000_000, 10);
   });
 
@@ -302,6 +303,61 @@ describe('mission budget — USD at catalog prices', () => {
     expect(row!.pricing).toEqual({ blendedTokens: 400_000, source: 'blended' });
     // $1.20 blended against a $1 cap — still exhausted, as it was before.
     expect(row!.exhausted).toBe(true);
+  });
+
+  test('a usage report the catalog cannot price blends the tokens AND says so', () => {
+    const { governor } = makeGovernor({ pricing: () => SONNET });
+    governor.declare('m', {});
+    governor.activate(['m']);
+    // What a provider that reported nothing now hands back: an EMPTY report,
+    // never a fabricated set of zeros. The caller still knows a token estimate,
+    // so the spend is recorded — at the blended rate, stated as blended.
+    governor.debit(1_000, { calls: 1, usage: {} });
+    const [row] = governor.snapshot();
+    expect(row!.spent.usd).toBeCloseTo(estimateUsdCost(1_000), 10);
+    expect(row!.pricing).toEqual({ blendedTokens: 1_000, source: 'blended' });
+  });
+});
+
+describe('priceCall — the one place tokens are multiplied by a rate', () => {
+  /** The real Anthropic report shape: `input` is cache-INCLUSIVE, so 12 fresh
+   *  prompt tokens + 1024 written into the cache + 2048 read back is 3084. */
+  const ANTHROPIC: Usage = { input: 3_084, output: 500, cacheRead: 2_048, cacheWrite: 1_024 };
+
+  test('a cache WRITE is charged at the catalog cacheWrite rate, not the input rate', () => {
+    const expected = (12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000;
+    expect(priceCall(ANTHROPIC, SONNET)).toBeCloseTo(expected, 12);
+    // Cache writes used to fall into `fresh` and bill at the plain input rate,
+    // which under-charges them by the 25% premium Anthropic publishes.
+    const asPlainInput = (1_036 * 3 + 2_048 * 0.3 + 500 * 15) / 1_000_000;
+    expect(priceCall(ANTHROPIC, SONNET)).toBeGreaterThan(asPlainInput);
+  });
+
+  test('a catalog with no cacheWrite rate charges the write at the input rate', () => {
+    // Every model without a published cache-write price, which is most of them.
+    expect(priceCall({ input: 1_024, output: 0, cacheWrite: 1_024 }, { input: 3, output: 15 }))
+      .toBeCloseTo(1_024 * 3 / 1_000_000, 12);
+  });
+
+  test('cacheWrite1h is a subset of cacheWrite and is never charged twice', () => {
+    // models.dev publishes ONE cache_write rate, so the 1h retention split is
+    // priced by the line that already charged the write it belongs to.
+    const withRetention: Usage = { ...ANTHROPIC, cacheWrite1h: 1_000 };
+    expect(priceCall(withRetention, SONNET)).toBe(priceCall(ANTHROPIC, SONNET));
+  });
+
+  test('nothing token-billable reported means UNPRICED, never free', () => {
+    expect(priceCall({}, SONNET)).toBeUndefined();
+    // Neurons are Cloudflare's own billing unit; no per-token rate can price them.
+    expect(priceCall({ neurons: 42 }, SONNET)).toBeUndefined();
+    // A reported zero, by contrast, IS a measurement — and it costs $0.
+    expect(priceCall({ input: 0, output: 0 }, SONNET)).toBe(0);
+  });
+
+  test('cache parts exceeding the whole cannot drive the fresh remainder negative', () => {
+    // A nonsense provider report has to yield a sane price, never a credit.
+    expect(priceCall({ input: 1_000, output: 0, cacheRead: 900, cacheWrite: 900 }, SONNET))
+      .toBeCloseTo((900 * 0.3 + 100 * 3.75) / 1_000_000, 12);
   });
 });
 

@@ -62,12 +62,20 @@ export const PanelWorkerInputSchema = v.strictObject({
   maxTokens: PositiveIntegerSchema,
 });
 
+/** What one worker process reports back on stdout.
+ *
+ *  The token fields are OPTIONAL because a worker that measured nothing must be
+ *  able to say so: a crash before the meter reported, under a required
+ *  `NonNegativeIntegerSchema`, could only be encoded as a zero — a fabricated
+ *  cost for an attempt that was never measured, which the harness then read as
+ *  comfortably inside its token budget. `strictObject` means both ends move
+ *  together, which is fine: this is one process boundary inside one repo. */
 export const WorkerOutputSchema = v.strictObject({
-  tokens: NonNegativeIntegerSchema,
+  tokens: v.optional(NonNegativeIntegerSchema),
   steps: NonNegativeIntegerSchema,
   hadError: v.boolean(),
   budgetBreach: v.nullable(v.literal('tokens')),
-  peakPromptTokens: NonNegativeIntegerSchema,
+  peakPromptTokens: v.optional(NonNegativeIntegerSchema),
   modelCalls: v.optional(NonNegativeIntegerSchema),
   headScores: v.optional(v.array(v.pipe(v.number(), v.finite(), v.minValue(0), v.maxValue(1)))),
   grounded: v.optional(v.boolean()),

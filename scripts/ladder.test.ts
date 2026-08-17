@@ -26,6 +26,7 @@ import {
   CI_EXEMPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims, deployGates,
   gatesFor, packageScripts, runnableArgv, trackedTestFiles,
 } from './ladder.ts';
+import { isRunnableSuite } from './sources.ts';
 
 const root = resolve(import.meta.dir, '..');
 const tracked = trackedTestFiles();
@@ -106,9 +107,20 @@ describe('the ladder measures something', () => {
     // nothing would make both of them pass over an empty set.
     expect(claims('bun test packages/core/', tracked).length).toBeGreaterThan(100);
     expect(claims('bun test scripts/deploy.test.ts', tracked)).toEqual(['scripts/deploy.test.ts']);
-    // Four e2e lifecycle suites plus the two behavioural eval suites under
-    // tests/evals/ — `./tests/` recurses, which is why `test:eval` names only it.
-    expect(claims('bun test ./tests/', tracked).length).toBe(6);
+    // Derived, not counted. This was `toBe(6)`, and it drifted to 8 the moment
+    // two `tests/evals/*.eval.test.ts` suites landed — the same defect as the
+    // bench glob below, one line apart, blocking every push twice in an hour. A
+    // cardinality assertion over a globbed set is drift by construction.
+    //
+    // Cross-checked rather than tautological: `claims()` resolves COMMAND TEXT,
+    // while `isRunnableSuite` is a FILENAME rule, so agreement between them is a
+    // real assertion about the recursion — and `./tests/` recursing is exactly
+    // why `test:eval` names only that directory.
+    const trackedSuitesUnderTests = tracked
+      .filter((file) => file.startsWith('tests/') && isRunnableSuite(file))
+      .sort();
+    expect(trackedSuitesUnderTests.length).toBeGreaterThan(0);
+    expect(claims('bun test ./tests/', tracked).sort()).toEqual(trackedSuitesUnderTests);
     // Enumerated, not counted: a bare length drifted from 3 to 4 the moment
     // `bench-inference-proxy.test.ts` landed, and a count cannot say WHICH file
     // the glob gained or lost. Naming the set makes a new bench suite a

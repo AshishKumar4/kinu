@@ -88,6 +88,10 @@ export interface StrategyResult {
   trace?: string;
   /** Cost summary — tokens, ms, iterations actually performed. */
   cost: {
+    /** Provider-reported tokens for the whole exploration. ABSENT when nothing
+     *  was reported, which is not the same claim as zero: the spawn seam
+     *  charges an unmeasured fork nothing rather than billing it as free
+     *  (tools/agents-tool.ts). */
     tokens?: number;
     durationMs: number;
     iterations?: number;

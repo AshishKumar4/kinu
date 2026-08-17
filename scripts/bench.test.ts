@@ -70,6 +70,17 @@ describe('bench worker protocol', () => {
     });
   });
 
+  test('accepts a worker that measured nothing, rather than making it claim zero', () => {
+    // What a crashed worker emits: it never reached its meter, so it states no
+    // token figures at all. Under the old required schema the only encodable
+    // answer was 0, which the harness then read as a free, in-budget attempt.
+    const crashed = { steps: 0, hadError: true, budgetBreach: null, error: 'boom' };
+    const parsed = parseWorkerOutput(JSON.stringify(crashed));
+    expect(parsed).toEqual(crashed);
+    expect(parsed.tokens).toBeUndefined();
+    expect(parsed.peakPromptTokens).toBeUndefined();
+  });
+
   test('rejects valid JSON with an invalid result shape', () => {
     expect(() => parseWorkerOutput(JSON.stringify({
       tokens: '23',
@@ -230,10 +241,18 @@ describe('stability pilot gate', () => {
       repeats: 2,
     };
     expect(buildPilotReport({ ...input, outcomes: [outcome(0, 0), outcome(1, 4)] }))
-      .toMatchObject({ totalModelCalls: 4, meanModelCalls: 2, maxObservedModelCalls: 4 });
+      .toMatchObject({
+        totalModelCalls: 4, meanModelCalls: 2, maxObservedModelCalls: 4,
+        meanTokens: 100.5, maxObservedTokens: 101,
+      });
     const { modelCalls: _modelCalls, ...uninstrumented } = outcome(0, 0);
     expect(() => buildPilotReport({ ...input, outcomes: [uninstrumented] }))
       .toThrow(/no model-call evidence/);
+    // Same posture for tokens: a pilot exists to say what a live variant costs,
+    // so an unmeasured attempt is a hole in the measurement, not a cheap sample.
+    const { tokens: _tokens, ...unmetered } = outcome(0, 0);
+    expect(() => buildPilotReport({ ...input, outcomes: [unmetered] }))
+      .toThrow(/no token measurement/);
   });
 
   test('covers both model-backed panel arms', () => {

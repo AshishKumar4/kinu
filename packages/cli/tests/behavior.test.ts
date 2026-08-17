@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  JsonValueSchema,
   parseJsonObject,
+  UsageSchema,
   type JsonObject,
   type JsonValue,
 } from "@proteus/core";
@@ -60,6 +62,16 @@ const ErrorEventSchema = v.object({
   type: v.literal("error"),
   message: v.string(),
   hint: v.string(),
+});
+/** The `--json` turn-end usage payload, parsed by the SAME schema the durable
+ *  ledger uses. Every field is optional there because an absent field means the
+ *  provider did not report it, so the tests below assert on the parsed KEYS. */
+const UsageEnvelopeSchema = v.object({ usage: UsageSchema });
+/** A ledger row on the `--json` stream, kept whole. `RunEventEnvelopeSchema`
+ *  above narrows to two fields, which cannot answer "is this key absent?". */
+const LedgerRowSchema = v.object({
+  type: v.literal("run_event"),
+  event: v.objectWithRest({ type: v.string() }, JsonValueSchema),
 });
 
 afterEach(() => {
@@ -338,6 +350,15 @@ describe("proteus exec (headless)", () => {
       expect(events).toContainEqual(expect.objectContaining({ type: "message_end", role: "assistant", text: "Hello from mock." }));
       const turnEnd = events.find((e) => e.type === "turn_end");
       expect(turnEnd).toMatchObject({ hadError: false });
+      // The turn's cost, field for field, as the external contract emits it.
+      // The mock reports prompt and completion tokens and nothing else, so
+      // exactly those two travel: `cacheRead` is ABSENT rather than 0, even
+      // though the SDK dialect in between fabricates cacheReadTokens: 0
+      // (@ai-sdk/openai-compatible dist/index.js:88). That is what lets a
+      // reader tell "no cache reads happened" from "nobody measured them".
+      const turnUsage = v.parse(UsageEnvelopeSchema, turnEnd).usage;
+      expect(turnUsage).toEqual({ input: 5, output: 7 });
+      expect(Object.keys(turnUsage).sort()).toEqual(["input", "output"]);
 
       // The durable run-event ledger rides the same stream. Without it the log
       // is readable only from inside the agent's own database, which a
@@ -511,9 +532,54 @@ describe("proteus exec --json — the delegation nudge is observable from outsid
   }, 120_000);
 });
 
+// What a turn cost is priced OUTSIDE this repo: bench/clbench/proteus/events.py
+// reads this stream and CL-Bench prices what it says. So "the provider measured
+// nothing" and "the provider measured zero" must not arrive as the same bytes.
+describe("proteus exec --json — the turn-end usage payload", () => {
+  test("carries no usage at all when the provider reported none", async () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-unmetered-"));
+    tempDirs.push(home);
+    // The one difference from the metered smoke above: no `usage` block on the
+    // completion — which @ai-sdk/openai-compatible turns into an all-undefined
+    // report (dist/index.js:68-84) and `normalizeUsage` into {}.
+    const server = startMockLlm("Hello from mock.", null);
+    try {
+      const env = {
+        PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
+        PROTEUS_AUTH: "Bearer mock",
+        PROTEUS_MODEL: "mock-model",
+      };
+      expect((await runCliAsync(["create", "quiet", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
+
+      const proc = await runCliAsync(["exec", "--workspace", "quiet", "--json", "--no-auto-evolve", "Say hello"], { home, env });
+      expect(proc.exitCode).toBe(0);
+      const events = proc.stdout.toString().trim().split("\n").map(parseJsonObject);
+
+      const turnEnd = events.find((e) => e.type === "turn_end");
+      expect(turnEnd).toMatchObject({ hadError: false });
+      // The key is ABSENT — not present-and-zero, not present-and-null. A
+      // reader pricing `usage.input ?? 0` gets nothing to price.
+      expect(turnEnd && "usage" in turnEnd).toBe(false);
+
+      // The enveloped ledger row on the same stream says the same thing, so the
+      // two copies of one fact cannot disagree about a silent turn.
+      const ledger = events.flatMap((event) => {
+        const parsed = v.safeParse(LedgerRowSchema, event);
+        return parsed.success ? [parsed.output.event] : [];
+      });
+      const ledgerTurnEnd = ledger.find((row) => row.type === "turn_end");
+      expect(ledgerTurnEnd).toBeDefined();
+      expect(ledgerTurnEnd && "usage" in ledgerTurnEnd).toBe(false);
+    } finally {
+      server.stop();
+    }
+  }, 120_000);
+});
+
 /** Minimal OpenAI-compatible /chat/completions endpoint: streams SSE chunks
- *  for stream requests and returns a completion object otherwise. */
-function startMockLlm(answer: string) {
+ *  for stream requests and returns a completion object otherwise. `usage: null`
+ *  omits the usage block entirely — the provider that measures nothing. */
+function startMockLlm(answer: string, usage: JsonObject | null = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 }) {
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -522,28 +588,29 @@ function startMockLlm(answer: string) {
         return new Response("not found", { status: 404 });
       }
       const body = v.parse(RequestBodySchema, await request.json());
-      const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
       if (!body.stream) {
-        return Response.json({
+        const completion: JsonObject = {
           id: "chatcmpl-mock",
           object: "chat.completion",
           created: 1,
           model: "mock-model",
           choices: [{ index: 0, message: { role: "assistant", content: answer }, finish_reason: "stop" }],
-          usage,
-        });
+        };
+        if (usage) completion.usage = usage;
+        return Response.json(completion);
       }
       const chunk = (data: JsonValue) => `data: ${JSON.stringify(data)}\n\n`;
+      const finalChunk: JsonObject = {
+        id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      };
+      if (usage) finalChunk.usage = usage;
       const sse = [
         chunk({
           id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
           choices: [{ index: 0, delta: { role: "assistant", content: answer }, finish_reason: null }],
         }),
-        chunk({
-          id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
-          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-          usage,
-        }),
+        chunk(finalChunk),
         "data: [DONE]\n\n",
       ].join("");
       return new Response(sse, { headers: { "content-type": "text/event-stream" } });

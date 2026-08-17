@@ -57,18 +57,22 @@ export function serializeContentForHeads(content: ModelMessage['content']): stri
  * a backend that transcribed the row itself simply would not have it.
  */
 export function headPhaseRunEvent(event: SplitPhaseEvent): RunEventInput {
-  return event.kind === 'split'
-    ? { type: 'head_split', rootId: event.rootId, headIds: [...event.headIds], rationale: event.rationale }
-    : {
-      type: 'head_merge',
-      rootId: event.rootId,
-      headCount: event.cost.headCount,
-      headsWithFindings: event.cost.headsWithFindings,
-      totalTokens: event.cost.totalTokens,
-      mergedNarrative: event.mergedNarrative,
-      fileChanges: [...event.fileChanges],
-      blindSpots: [...event.blindSpots],
-    };
+  if (event.kind === 'split') {
+    return { type: 'head_split', rootId: event.rootId, headIds: [...event.headIds], rationale: event.rationale };
+  }
+  const merge: Extract<RunEventInput, { type: 'head_merge' }> = {
+    type: 'head_merge',
+    rootId: event.rootId,
+    headCount: event.cost.headCount,
+    headsWithFindings: event.cost.headsWithFindings,
+    mergedNarrative: event.mergedNarrative,
+    fileChanges: [...event.fileChanges],
+    blindSpots: [...event.blindSpots],
+  };
+  // Absent when no head in the split reported usage — an unmeasured split is
+  // not a free one.
+  if (event.cost.totalTokens !== undefined) merge.totalTokens = event.cost.totalTokens;
+  return merge;
 }
 
 /** Stored conversation rows as inherited context (the cf backend's source: it

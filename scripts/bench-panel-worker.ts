@@ -162,10 +162,12 @@ async function main(): Promise<void> {
   process.stdout.write(`${JSON.stringify(out)}\n`);
 }
 
+// A crash before the meter reported carries no token figures. The head fields
+// stay explicit: an empty panel outcome IS what this run produced, unlike its
+// cost, which nobody measured.
 main().catch((err) => {
   const out: WorkerOutput = {
-    tokens: 0, steps: 0, hadError: true, budgetBreach: null, peakPromptTokens: 0,
-    modelCalls: 0,
+    steps: 0, hadError: true, budgetBreach: null,
     headScores: [], grounded: false, blindSpots: [],
     error: err instanceof Error ? (err.stack ?? err.message) : String(err),
   };
