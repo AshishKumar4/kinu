@@ -109,7 +109,16 @@ describe('the ladder measures something', () => {
     // Four e2e lifecycle suites plus the two behavioural eval suites under
     // tests/evals/ — `./tests/` recurses, which is why `test:eval` names only it.
     expect(claims('bun test ./tests/', tracked).length).toBe(6);
-    expect(claims('bun test scripts/bench*.test.ts', tracked).length).toBe(3);
+    // Enumerated, not counted: a bare length drifted from 3 to 4 the moment
+    // `bench-inference-proxy.test.ts` landed, and a count cannot say WHICH file
+    // the glob gained or lost. Naming the set makes a new bench suite a
+    // deliberate edit here rather than a silently absorbed number.
+    expect(claims('bun test scripts/bench*.test.ts', tracked).sort()).toEqual([
+      'scripts/bench-external.test.ts',
+      'scripts/bench-inference-proxy.test.ts',
+      'scripts/bench-pi-worker.test.ts',
+      'scripts/bench.test.ts',
+    ]);
     // `bun run test` fans out through package.json into three package suites.
     expect(claims('bun run test', tracked).length).toBeGreaterThan(200);
     // The workerd layer resolves from its own command text, so it is
