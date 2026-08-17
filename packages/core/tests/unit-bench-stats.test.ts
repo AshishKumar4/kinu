@@ -419,6 +419,31 @@ describe('computeGain (stateful vs stateless)', () => {
     expect(g.verdict).toContain('WORSE');
   });
 
+  test('the design floor is 2^(1-k) in DIFFERING pairs, and k>=6 is exact', () => {
+    // Three separate readers got this wrong in one evening, each by taking the
+    // denominator to be total pairs. The sign test drops ties, so the only
+    // denominator that exists is the number of pairs that DIFFERED: floor
+    // two-sided p = 2^(1-k), which is 0.5 at k=2 and 0.0625 at k=5, and
+    // 2^(1-k) <= 0.05 first holds at k=6. Total n bounds k and decides nothing.
+    for (const k of [1, 2, 3, 4, 5, 6, 7, 10]) {
+      expect(floorPValue(k)).toBeCloseTo(2 ** (1 - k), 12);
+    }
+    expect(minimumPairsForSignificance()).toBe(6);
+    expect(floorPValue(5)).toBeGreaterThan(DEFAULT_ALPHA);
+    expect(floorPValue(6)).toBeLessThanOrEqual(DEFAULT_ALPHA);
+
+    // And computeGain divides by that set, not by the set it ran: twenty tasks
+    // where only five differ still cannot decide.
+    const g = computeGain([
+      ...Array.from({ length: 5 }, (_, i) => ({ taskId: `d${i}`, stateful: 1, stateless: 0 })),
+      ...Array.from({ length: 15 }, (_, i) => ({ taskId: `t${i}`, stateful: 1, stateless: 1 })),
+    ], { seed: 4, iterations: 2000 });
+    expect(g.tasks).toBe(20);
+    expect(g.pairsWithDifference).toBe(5);
+    expect(g.canReachSignificance).toBe(false);
+    expect(g.verdict).toContain('UNDECIDABLE');
+  });
+
   test('an unbounded reward scale gets no normalized gain', () => {
     // CL-Bench's poker rewards are signed chip counts. "Fraction of remaining
     // headroom" assumes rewards in [0,1]; on that scale it is not a quantity,
