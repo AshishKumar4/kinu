@@ -9,11 +9,13 @@
  * it, and there never was a second thing this bar did.
  *
  * So it also carries what is workspace-scoped rather than conversation-scoped:
- * connection, the model the agent runs on, its settings, and the altitude
- * switch. Anything about one conversation (which tab, clearing its history)
- * lives on the chat column's tab strip instead.
+ * connection, settings, and the altitude switch. Anything about one
+ * conversation (which tab, clearing its history) lives on the chat column's tab
+ * strip instead — and so does the MODEL, which used to sit here: it describes
+ * the turn you are about to send, so it belongs in the composer beside the mode
+ * control, which is where the subordinate chat already had it.
  */
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { CheckIcon, GearSixIcon, GitBranchIcon, PencilSimpleIcon, XIcon } from "@phosphor-icons/react";
 import { ConnectionIndicator } from "@/components/connection-indicator";
@@ -33,19 +35,16 @@ export interface WorkspaceBarProps {
   settingsHref: string;
   altitude: Altitude;
   onAltitude: (altitude: Altitude) => void;
-  /** The workspace's model picker — passed in because it is a connected
-   *  component, and this bar stays photographable without a socket. */
-  modelPicker?: ReactNode;
 }
 
 export function WorkspaceBar({
   title, onRename, connectionStatus, working, forkParent, settingsHref,
-  altitude, onAltitude, modelPicker,
+  altitude, onAltitude,
 }: WorkspaceBarProps) {
   return (
-    // Wraps below ~30rem: a phone cannot hold a name, a model and a switch on
-    // one line, and the name is what would lose. It takes the first line alone
-    // and the controls drop beneath it.
+    // Wraps below ~30rem: a phone cannot hold a name and a switch on one line,
+    // and the name is what would lose. It takes the first line alone and the
+    // controls drop beneath it.
     <div className="@container flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b p-border px-4 py-2">
       <div className="flex min-w-0 basis-full items-center gap-2.5 @[30rem]:basis-0 @[30rem]:flex-1">
         <ConnectionIndicator status={connectionStatus} />
@@ -59,7 +58,7 @@ export function WorkspaceBar({
         {forkParent && (
           <Link
             to={`/workspace/${forkParent.workspace}`}
-            className="flex shrink-0 items-center gap-1 rounded border p-border px-1.5 py-0.5 text-[10px] p-text-3 transition-colors hover:p-text"
+            className="flex shrink-0 items-center gap-1 rounded-sm border p-border px-1.5 py-0.5 text-[10px] p-text-3 transition-colors hover:p-text"
             title={`Open parent workspace from ${new Date(forkParent.forkedAt).toLocaleString()}`}
           >
             <GitBranchIcon size={10} />
@@ -69,7 +68,6 @@ export function WorkspaceBar({
       </div>
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
-        {modelPicker}
         <Link to={settingsHref} className="p-text-2 transition-colors hover:p-text" title="Settings" aria-label="Workspace settings">
           <GearSixIcon size={14} />
         </Link>
@@ -80,7 +78,7 @@ export function WorkspaceBar({
               type="button"
               onClick={() => onAltitude(value)}
               aria-pressed={altitude === value}
-              className={`rounded px-2.5 py-1 text-[11px] capitalize transition-colors ${altitude === value ? "p-fill p-text font-medium" : "p-text-3 hover:p-text-2"}`}
+              className={`rounded-sm px-2.5 py-1 text-[11px] capitalize transition-colors ${altitude === value ? "p-fill p-text font-medium" : "p-text-3 hover:p-text-2"}`}
             >
               {value}
             </button>
@@ -134,14 +132,14 @@ function InlineWorkspaceTitle({ title, onRename }: {
         <button
           type="submit"
           disabled={!value.trim() || saving}
-          className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover disabled:opacity-40"
+          className="rounded-sm p-1 p-text-3 hover:p-text p-card-hover disabled:opacity-40"
           aria-label="Save workspace name"
         ><CheckIcon size={13} /></button>
         <button
           type="button"
           onClick={() => { setEditing(false); setError(null); }}
           disabled={saving}
-          className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover"
+          className="rounded-sm p-1 p-text-3 hover:p-text p-card-hover"
           aria-label="Cancel rename"
         ><XIcon size={13} /></button>
         {error && <span role="alert" className="text-[10px] p-danger" title={error}>Rename failed</span>}
@@ -155,7 +153,7 @@ function InlineWorkspaceTitle({ title, onRename }: {
       <button
         type="button"
         onClick={() => setEditing(true)}
-        className="shrink-0 rounded p-1 opacity-0 transition-all p-text-3 group-hover/title:opacity-60 hover:!opacity-100 hover:p-text focus-visible:opacity-100"
+        className="shrink-0 rounded-sm p-1 opacity-0 transition-all p-text-3 group-hover/title:opacity-60 hover:!opacity-100 hover:p-text focus-visible:opacity-100"
         title="Rename"
         aria-label={`Rename workspace ${title}`}
       ><PencilSimpleIcon size={12} /></button>

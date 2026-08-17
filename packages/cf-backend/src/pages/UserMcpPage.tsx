@@ -113,16 +113,16 @@ export default function UserMcpPage() {
         </header>
 
         {authResult === 'ok' && (
-          <div className="p-card rounded-lg p-3 text-xs flex items-center gap-2 p-success">
+          <div className="p-card p-3 text-xs flex items-center gap-2 p-success">
             <CheckIcon size={14} /> Authorization complete. Discovering tools…
           </div>
         )}
         {authResult === 'failed' && (
-          <div className="p-card rounded-lg p-3 text-xs flex items-center gap-2 p-danger">
+          <div className="p-card p-3 text-xs flex items-center gap-2 p-danger">
             <WarningIcon size={14} /> Authorization failed{authError ? `: ${authError}` : ''}.
           </div>
         )}
-        {err && <div className="p-card rounded-lg p-3 text-xs p-danger">{err}</div>}
+        {err && <div className="p-card p-3 text-xs p-danger">{err}</div>}
 
         {showAdd && (
           <AddServerCard
@@ -134,7 +134,7 @@ export default function UserMcpPage() {
         {loading ? (
           <div className="flex items-center justify-center py-12"><Loader size="base" /></div>
         ) : servers.length === 0 ? (
-          <section className="p-card rounded-xl p-8 text-center space-y-2">
+          <section className="p-card p-8 text-center space-y-2">
             <PlugIcon size={28} className="p-text-3 mx-auto" />
             <div className="text-sm font-medium">No MCP servers yet</div>
             <p className="text-xs p-text-3 max-w-md mx-auto">
@@ -143,7 +143,7 @@ export default function UserMcpPage() {
             </p>
           </section>
         ) : (
-          <section className="p-card rounded-xl overflow-hidden">
+          <section className="p-card overflow-hidden">
             <table className="w-full text-sm">
               <thead className="text-xs p-text-3 border-b p-border">
                 <tr>
@@ -166,7 +166,7 @@ export default function UserMcpPage() {
                       </td>
                       <td className="px-4 py-3 p-text-2 text-xs">{s.transport}</td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] ${badge.classes}`}>
+                        <span className={`inline-flex items-center gap-1 rounded-sm px-2 py-0.5 text-[11px] ${badge.classes}`}>
                           <badge.Icon size={10} /> {badge.label}
                         </span>
                         {s.error && (
@@ -183,7 +183,7 @@ export default function UserMcpPage() {
                           {s.authUrl && (
                             <a
                               href={s.authUrl} target="_blank" rel="noopener noreferrer"
-                              className="text-xs px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1"
+                              className="text-xs px-2 py-1 rounded-sm p-card p-card-hover flex items-center gap-1"
                             >
                               <ArrowSquareOutIcon size={11} /> Authorize
                             </a>
@@ -245,7 +245,7 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
   }, [name, serverUrl, transport, headersText, allowedTools, onAdded]);
 
   return (
-    <section className="p-card rounded-xl p-5 space-y-3">
+    <section className="p-card p-5 space-y-3">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">Add MCP server</h2>
         <button onClick={onCancel} className="text-xs p-text-3 hover:p-text">Cancel</button>

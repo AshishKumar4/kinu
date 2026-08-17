@@ -54,7 +54,7 @@ export function JobCard({ job, onRefresh, rpc }: JobCardProps) {
   const detail = job.status === "completed" ? job.result : job.error;
 
   return (
-    <div className="p-card rounded-lg p-3">
+    <div className="p-card p-3">
       <div className="flex items-start gap-2">
         <Icon size={15} className={`${m.tone} shrink-0 mt-0.5 ${m.spin ? "animate-spin" : ""}`}
           weight={job.status === "running" ? "bold" : "fill"} />

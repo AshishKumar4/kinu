@@ -534,7 +534,7 @@ function TreeControl({ label, onClick, children }: { label: string; onClick: () 
 	return (
 		<button
 			type="button" onClick={onClick} title={label} aria-label={label}
-			className="p-btn-ghost inline-flex size-6 items-center justify-center rounded"
+			className="p-btn-ghost inline-flex size-6 items-center justify-center rounded-sm"
 		>
 			{children}
 		</button>

@@ -30,7 +30,7 @@ export function Card({ title, icon: Icon, children }: {
   children: React.ReactNode;
 }) {
   return (
-    <section className="p-card rounded-xl p-5 space-y-4">
+    <section className="p-card p-5 space-y-4">
       <h2 className="flex items-center gap-2 text-sm font-semibold">
         <Icon size={16} className="p-accent" />
         <span>{title}</span>

@@ -101,7 +101,7 @@ export default function HomePage() {
           {listFailed && (
             <p className="text-xs p-warning px-1">Couldn't load your recent workspaces.</p>
           )}
-          <div className="rounded-lg border p-border p-card p-4">
+          <div className="border p-border p-card p-4">
             <div className="flex items-center gap-2">
               <GearSixIcon size={16} className="p-accent" />
               <span className="text-sm font-semibold p-text">Setup</span>
@@ -113,7 +113,7 @@ export default function HomePage() {
           </div>
 
           {workspaces.length > 0 && (
-            <div className="rounded-lg border p-border p-card p-4">
+            <div className="border p-border p-card p-4">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-semibold p-text">Recent</span>
                 <span className="text-xs p-text-3">{workspaces.length}</span>
@@ -123,7 +123,7 @@ export default function HomePage() {
                   <Link
                     key={agent.name}
                     to={`/workspace/${agent.name}`}
-                    className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm p-text-2 transition-colors hover:p-card-hover hover:p-text"
+                    className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm p-text-2 transition-colors p-card-hover hover:p-text"
                   >
                     <WrenchIcon size={13} className="shrink-0 p-text-3" />
                     <span className="truncate">{agent.displayName || agent.name}</span>
@@ -149,7 +149,7 @@ function QuickLink({
   label: string;
   external?: boolean;
 }) {
-  const className = "flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-sm p-text-2 transition-colors hover:p-card-hover hover:p-text";
+  const className = "flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-sm p-text-2 transition-colors p-card-hover hover:p-text";
   const content = (
     <>
       <span className="inline-flex items-center gap-2">

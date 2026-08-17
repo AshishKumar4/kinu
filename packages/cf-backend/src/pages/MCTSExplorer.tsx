@@ -100,7 +100,7 @@ function ExplorerBody({
   const { tree, resource, reload } = useForkRunTree(
     run,
     state.rpc,
-    state.mctsTree?.id === run.id ? state.mctsTree : null,
+    state.mctsTrees.get(run.id) ?? null,
     hasActiveWork,
   );
   const stats = tree ? treeStats(tree) : null;

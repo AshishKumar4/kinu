@@ -1,15 +1,15 @@
 import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type DragEvent as ReactDragEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
-import { Button, InputArea, Loader } from "@cloudflare/kumo";
+import { Button, Loader } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import {
-  PaperPlaneRightIcon, StopIcon, WrenchIcon, CaretDownIcon, CaretRightIcon,
+  WrenchIcon, CaretDownIcon, CaretRightIcon,
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
   ClockIcon,
-  WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon, XIcon, FileIcon,
+  WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon,
   ClockCounterClockwiseIcon, UserPlusIcon, LightningIcon,
-  StackIcon, NotePencilIcon, HammerIcon,
+  StackIcon, SparkleIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
@@ -18,7 +18,7 @@ import {
   isPlaceholderMission, planReviewAwaitingDecision, summarizeRestorePlan,
 } from "@proteus/core";
 import type {
-  AlternateTakeSet, FileCheckpointEntry, FileRestoreChange, FileRestorePlan,
+  AlternateTakeSet, FileCheckpointEntry, FileCheckpointListing, FileRestoreChange, FileRestorePlan,
   JsonObject, JsonValue, TakePickOutcome,
 } from "@proteus/core";
 import * as v from "valibot";
@@ -36,6 +36,7 @@ import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
 import { describeToolCall, isToolCallFailed, summarizeToolCall, summarizeToolRun } from "@/components/tool-call-summary";
 import { groupMessageParts, type AnyToolPart } from "@/components/tool-call-grouping";
+import { liveTail } from "@/components/message-live-tail";
 import {
   classifyProgrammaticTurn, eventVariantLabel, messageSignalId, parseDrainedEvents,
   type DrainedEvent, type ProgrammaticTurn, type SignalCard,
@@ -44,6 +45,8 @@ import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
+import { Composer } from "@/components/Composer";
+import { AttachmentChip, dataUrlRawBytes } from "@/components/AttachmentChip";
 import type { PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
@@ -74,23 +77,6 @@ function formatTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-/** The workspace's load/action failure, with the retry it needs. The hook keeps
- *  the message until a load succeeds, so this is the only way back. */
-function WorkspaceErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div className="mb-2 flex items-center gap-2 text-xs p-danger p-card rounded-lg px-3 py-1.5">
-      <span className="min-w-0 flex-1 truncate" title={message}>{message}</span>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="shrink-0 inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 p-text-2 hover:p-text cursor-pointer"
-      >
-        <ArrowsClockwiseIcon size={11} /> Retry
-      </button>
-    </div>
-  );
-}
-
 /** A workspace before its first turn. The mission it was created for is what
  *  the workspace IS, not something it was asked to do — so it is shown here as
  *  the standing brief rather than sent as an opening message that the agent
@@ -111,32 +97,6 @@ export function EmptyConversation({ mission }: { mission: string }) {
   );
 }
 
-/* ── Chat attachments ─────────────────────────────────────────── */
-
-/** Raw bytes a data-URL file part encodes (base64 ≈ 4/3 × raw). */
-function dataUrlRawBytes(url: string): number {
-  return Math.floor(((url.length - url.indexOf(",") - 1) * 3) / 4);
-}
-
-/** A file attachment chip — thumbnail for images, file icon otherwise.
- *  With onRemove it's a pending-composer chip; without, a message chip. */
-function AttachmentChip({ part, onRemove }: { part: FileUIPart; onRemove?: () => void }) {
-  const name = part.filename ?? "file";
-  return (
-    <span className="inline-flex items-center gap-1.5 max-w-56 rounded-md border p-border p-fill pl-1.5 pr-1.5 py-1 text-[11px] p-text-2">
-      {part.mediaType.startsWith("image/")
-        ? <img src={part.url} alt={name} className="size-5 rounded object-cover shrink-0" />
-        : <FileIcon size={13} className="p-text-3 shrink-0" />}
-      <span className="truncate font-mono">{name}</span>
-      {onRemove && (
-        <button onClick={onRemove} className="p-0.5 rounded hover:p-card-hover p-text-3 hover:p-text cursor-pointer" aria-label={`Remove ${name}`}>
-          <XIcon size={11} />
-        </button>
-      )}
-    </span>
-  );
-}
-
 /** Render one file part inside a message: inline preview for images, a
  *  filename chip for everything else. */
 function FilePartView({ part }: { part: FileUIPart }) {
@@ -152,13 +112,34 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
   return <span className="text-[10px] p-text-3 mt-1 block">{formatTime(d)}</span>;
 }
 
-function ReasoningBlock({ text }: { text: string }) {
+/**
+ * The turn's live tail when nothing is arriving — between a settled call and
+ * whatever the model does next, or before its first token.
+ *
+ * Rendered only where `liveTail` says the stream is open with no active part,
+ * so it stops the moment anything lands. The shimmer is the same one the
+ * running tool name carries; live work reads as light moving through text
+ * everywhere in this UI, and a second vocabulary for the same fact would be
+ * decoration.
+ */
+function ThinkingRow() {
+  return (
+    <div className="flex items-center gap-2 animate-fade-in py-1" aria-live="polite">
+      <span className="size-1.5 rounded-full p-dot-accent animate-pulse" aria-hidden />
+      <span className="p-row-text p-shimmer font-medium">Thinking</span>
+    </div>
+  );
+}
+
+function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="my-1.5">
       <button onClick={() => setExpanded(!expanded)} className="group/reason flex items-center gap-2 p-row-text p-text-3 hover:p-text-2 w-full text-left transition-colors cursor-pointer">
-        <BrainIcon size={14} className="shrink-0" />
-        <span className="font-medium">{expanded ? "Thoughts" : "Thinking"}</span>
+        {live
+          ? <span className="size-1.5 mx-[6px] shrink-0 rounded-full p-dot-accent animate-pulse" aria-hidden />
+          : <BrainIcon size={14} className="shrink-0" />}
+        <span className={`font-medium ${live ? "p-shimmer" : ""}`}>{expanded ? "Thoughts" : "Thinking"}</span>
         {!expanded && <span className="min-w-0 truncate p-meta p-text-3 opacity-70">{text.slice(0, 90)}</span>}
         <CaretRightIcon size={11} className={`shrink-0 transition-transform duration-150 ${expanded ? "rotate-90" : ""} opacity-0 group-hover/reason:opacity-100`} />
       </button>
@@ -264,7 +245,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
           <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />
           <div className="space-y-1">
             <div>
-              The agent asked for the <code className="font-mono p-fill px-1 rounded">{provisionErr.runtime}</code> runtime
+              The agent asked for the <code className="font-mono p-fill px-1 rounded-sm">{provisionErr.runtime}</code> runtime
               but it isn't provisioned yet.
             </div>
             <div className="p-text-3">{provisionErr.message}</div>
@@ -414,7 +395,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
           <div className="text-xs p-text">
             This agent wants to use <span className="font-medium">{consent.deviceLabel}</span> for a local action:
           </div>
-          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-fill rounded px-2 py-1">{consent.command || "(command)"}</code>
+          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-fill rounded-sm px-2 py-1">{consent.command || "(command)"}</code>
           <div className="mt-1 text-[10px] p-text-3">
             Always allow grants this agent all future local actions on this device until revoked.
           </div>
@@ -424,7 +405,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
         <button onClick={() => onResolve(consent.consentId, "deny")}
           className="px-2.5 py-1 text-[11px] rounded-md p-text-3 hover:p-text">Deny</button>
         <button onClick={() => onResolve(consent.consentId, "once")}
-          className="px-2.5 py-1 text-[11px] rounded-md p-card hover:p-card-hover p-text-2">Allow once</button>
+          className="px-2.5 py-1 text-[11px] p-card p-card-hover p-text-2">Allow once</button>
         <button onClick={() => onResolve(consent.consentId, "always")}
           className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90">Always allow local</button>
       </div>
@@ -432,9 +413,16 @@ export function DeviceConsentCard({ consent, onResolve }: {
   );
 }
 
-/** Terminal chat error — the turn failed (provider error, stream break) and
- *  produced no visible answer. Shows the honest error body with a retry
- *  affordance; the hook clears it on the next send. */
+/**
+ * Terminal chat error — the turn failed (provider error, stream break) and
+ * produced no visible answer.
+ *
+ * The retry RE-RUNS that turn rather than asking the same thing again: the
+ * label says so, because the button used to append a duplicate user message
+ * on every press and three attempts left three identical turns in the
+ * transcript. The error body is shown verbatim; the hook clears the card on
+ * the next send.
+ */
 export function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
   message: string;
   streaming: boolean;
@@ -446,8 +434,12 @@ export function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
       <div className="flex items-start gap-2">
         <WarningCircleIcon size={16} className="p-danger shrink-0 mt-0.5" weight="fill" />
         <div className="min-w-0 flex-1">
-          <div className="text-xs p-text font-medium">The last turn failed</div>
-          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-card rounded px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
+          <div className="text-xs p-text font-medium">The last turn failed and produced no answer</div>
+          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-card rounded-sm px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
+          <div className="text-[10px] p-text-3 mt-1.5">
+            Retrying runs the same turn again against the same conversation. It does not send your
+            message a second time.
+          </div>
         </div>
       </div>
       <div className="flex items-center gap-2 mt-2.5 justify-end">
@@ -455,7 +447,7 @@ export function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
           className="px-2.5 py-1 text-[11px] rounded-md p-text-3 hover:p-text cursor-pointer">Dismiss</button>
         <button onClick={onRetry} disabled={streaming}
           className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-40 cursor-pointer flex items-center gap-1">
-          <ArrowsClockwiseIcon size={11} />Retry last message
+          <ArrowsClockwiseIcon size={11} />Retry this turn
         </button>
       </div>
     </div>
@@ -503,13 +495,13 @@ function DrainedEventRow({ event }: { event: DrainedEvent }) {
     <button
       type="button"
       onClick={() => setExpanded(!expanded)}
-      className="w-full text-left rounded-lg p-card hover:p-card-hover transition-colors px-2 py-1.5"
+      className="w-full text-left p-card p-card-hover transition-colors px-2 py-1.5"
     >
       <div className="flex items-center gap-1.5 text-[10px]">
         <span className="shrink-0 font-medium p-text-2">{eventVariantLabel(event.variant)}</span>
         <span className="min-w-0 truncate p-text-3">{event.source}</span>
         {event.replyExpected && (
-          <span className="shrink-0 rounded px-1 py-0.5 p-badge-warning" title="The sender is waiting on the agent's reply">
+          <span className="shrink-0 rounded-sm px-1 py-0.5 p-badge-warning" title="The sender is waiting on the agent's reply">
             reply expected
           </span>
         )}
@@ -573,6 +565,21 @@ function DeferredApprovalCard({ decision, count, state }: {
   );
 }
 
+/** The workspace opening itself. The owner gave a MISSION in the New workspace
+ *  dialog, not a message — so the first thing in the transcript is the agent
+ *  being handed its own workspace, not the owner speaking. */
+function WorkspaceCreatedCard({ state }: { state: CardState }) {
+  return (
+    <div className="flex justify-center animate-fade-in py-1">
+      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
+        <SparkleIcon size={13} className="p-accent" weight="fill" />
+        <span>Workspace created — acting on its mission</span>
+        <span className="flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
+      </div>
+    </div>
+  );
+}
+
 /** One programmatic turn as the chat shows it — the durable message a queued
  *  signal became, or the live card of one spliced into a running turn. Same
  *  classifier, same cards, one rendering. */
@@ -581,6 +588,9 @@ function ProgrammaticTurnCard({ turn, text, state }: {
 }) {
   if (turn.kind === "background_job") {
     return <BackgroundEventCard kind={turn.jobKind} status={turn.status} state={state} />;
+  }
+  if (turn.kind === "workspace_created") {
+    return <WorkspaceCreatedCard state={state} />;
   }
   if (turn.kind === "deferred_approval") {
     return <DeferredApprovalCard decision={turn.decision} count={turn.count} state={state} />;
@@ -602,7 +612,7 @@ function SubordinateEventCard({ event, workspace }: { event: SubordinateActivity
       <Link
         to={`/workspace/${workspace}/agents/${event.subordinate}`}
         title={detail}
-        className="inline-flex max-w-[80%] items-center gap-2 rounded-full border p-border p-elevated px-3 py-1.5 text-[11px] p-text-2 hover:p-card-hover transition-colors"
+        className="inline-flex max-w-[80%] items-center gap-2 rounded-full border p-border p-elevated px-3 py-1.5 text-[11px] p-text-2 p-card-hover transition-colors"
       >
         <Icon size={13} className={`${tone} shrink-0`} weight="fill" />
         <span className="truncate"><span className="font-medium p-text">{event.subordinate}</span> {verb}: {detail}</span>
@@ -661,7 +671,7 @@ export const MessageView = memo(function MessageView({
     const fileParts = message.parts.filter((p): p is FileUIPart => p.type === "file");
     return (
       <div className="flex flex-col items-end animate-fade-in group">
-        <div className="relative max-w-[75%] px-4 py-2.5 rounded-[14px] rounded-br-md p-user-bubble p-body whitespace-pre-wrap">
+        <div className="relative max-w-[75%] px-4 py-2.5 rounded-xl rounded-br-md p-user-bubble p-body whitespace-pre-wrap">
           {fileParts.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-1.5">
               {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}
@@ -671,7 +681,7 @@ export const MessageView = memo(function MessageView({
           {canFork && (
             <button
               onClick={() => onFork!(message.id)}
-              className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded"
+              className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
               title="Fork from here"
             >
               <GitBranchIcon size={12} />
@@ -680,7 +690,7 @@ export const MessageView = memo(function MessageView({
           {!isLive && onRestoreFiles && message.id && (
             <button
               onClick={() => onRestoreFiles(message.id)}
-              className="absolute -left-9 top-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded"
+              className="absolute -left-9 top-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
               title="Restore files to before this turn"
             >
               <ClockCounterClockwiseIcon size={12} />
@@ -692,28 +702,16 @@ export const MessageView = memo(function MessageView({
     );
   }
 
-  const hasContent = message.parts.some(p =>
-    (p.type === "text" && p.text) ||
-    (p.type === "reasoning" && p.text) ||
-    p.type === "file" ||
-    isToolUIPart(p)
-  );
-
-  if (isLive && !hasContent) {
-    return (
-      <div className="flex items-center gap-2 animate-fade-in py-2">
-        <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
-        <span className="p-row-text p-shimmer font-medium">Thinking</span>
-      </div>
-    );
-  }
+  // The one live affordance, and where it goes — read from the stream's own
+  // part states rather than inferred from part order. See message-live-tail.ts.
+  const tail = isLive ? liveTail(message.parts) : null;
 
   return (
     <div className="group relative max-w-[85%] space-y-1 animate-fade-in">
       {canFork && (
         <button
           onClick={() => onFork!(message.id)}
-          className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded"
+          className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
           title="Fork from here"
         >
           <GitBranchIcon size={12} />
@@ -725,9 +723,10 @@ export const MessageView = memo(function MessageView({
           return first ? <ToolCallGroup key={first.toolCallId} parts={block.parts} /> : null;
         }
         const part = block.part;
+        const isTailPart = (tail?.kind === "text" || tail?.kind === "reasoning") && tail.part === part;
         if (part.type === "reasoning") {
           const t = part.text;
-          return t ? <ReasoningBlock key={i} text={t} /> : null;
+          return t ? <ReasoningBlock key={i} text={t} live={isTailPart} /> : null;
         }
         if (part.type === "file") {
           return <div key={i} className="my-1.5"><FilePartView part={part} /></div>;
@@ -735,17 +734,19 @@ export const MessageView = memo(function MessageView({
         if (part.type === "text") {
           const t = part.text;
           if (!t) return null;
-          const isLastText = message.parts.slice(message.parts.indexOf(part) + 1).every(p => p.type !== "text");
+          // `p-streaming` draws the caret inside the last block the markdown
+          // emitted. As a sibling element it landed on a line of its own below
+          // the paragraph, which is the misplacement that was reported.
           return (
-            <div key={i} className="prose-chat p-text">
+            <div key={i} className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
               <MarkdownContent content={t} />
-              {isLive && isLastText && <span className="inline-block w-0.5 h-[1em] ml-0.5 align-text-bottom animate-blink-cursor" style={{ background: "var(--c-accent)" }} />}
             </div>
           );
         }
         if (isToolUIPart(part)) return <ToolCallPart key={part.toolCallId} part={part} />;
         return null;
       })}
+      {tail?.kind === "thinking" && <ThinkingRow />}
       {!isLive && (
         <div className="flex items-center gap-2">
           <MessageTimestamp createdAt={messageCreatedAt(message)} />
@@ -795,7 +796,7 @@ function MessageFeedback({
         type="button"
         onClick={() => toggle('positive')}
         disabled={busy}
-        className={`text-[11px] p-1 rounded hover:p-card-hover transition-colors ${
+        className={`text-[11px] p-1 rounded-sm p-card-hover transition-colors ${
           current === 'positive' ? 'p-text' : 'p-text-3'
         }`}
         title="Mark this response as helpful (feeds evolution scoring)"
@@ -804,7 +805,7 @@ function MessageFeedback({
         type="button"
         onClick={() => toggle('negative')}
         disabled={busy}
-        className={`text-[11px] p-1 rounded hover:p-card-hover transition-colors ${
+        className={`text-[11px] p-1 rounded-sm p-card-hover transition-colors ${
           current === 'negative' ? 'p-text' : 'p-text-3'
         }`}
         title="Mark this response as poor (feeds evolution scoring)"
@@ -872,7 +873,7 @@ function ForkModal({
           onChange={(e) => setName(e.target.value)}
           placeholder={`${sourceName}-fork-<6-char-id>`}
           disabled={busy}
-          className="w-full px-3 py-1.5 rounded-md border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]"
+          className="w-full px-3 py-1.5 border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]"
         />
         <p className="text-[10px] p-text-3">Allowed: A-Z, a-z, 0-9, _, -</p>
       </div>
@@ -945,7 +946,6 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
             {as?.purpose && <span className="block text-[11px] p-text-3 truncate">{as.purpose}</span>}
           </div>
         </div>
-        <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="shrink-0 w-28 @[30rem]:w-36 @[42rem]:w-44" />
       </div>
 
       <ErrorBoundary label="Subordinate chat">
@@ -976,17 +976,22 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
         </div>
       </ErrorBoundary>
 
-      <div className="px-5 py-3 border-t p-border lg:px-7">
-        {state.error && <WorkspaceErrorBanner message={state.error} onRetry={state.retryLoad} />}
-        <div className="flex items-end gap-2.5 p-composer p-2.5">
-          <InputArea ref={inputRef} value={input} onValueChange={setInput}
-            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder={`Message ${as?.displayName || subName}…`} disabled={state.connectionStatus !== "connected"} rows={1}
-            className="flex-1 resize-none max-h-40 overflow-y-auto !ring-0 focus:!ring-0 !shadow-none !bg-transparent !outline-none" />
-          {state.isStreaming
-            ? <Button variant="secondary" {...SQUARE_BUTTON_PROPS} onClick={state.abortChat} icon={<StopIcon size={16} weight="fill" />} aria-label="Stop" className="mb-0.5" />
-            : <button onClick={send} disabled={!input.trim() || state.connectionStatus !== "connected"} className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>}
-        </div>
+      <div className="border-t p-border">
+        <Composer
+          textareaRef={inputRef}
+          value={input}
+          onValueChange={setInput}
+          onSend={send}
+          placeholder={`Message ${as?.displayName || subName}…`}
+          disabled={state.connectionStatus !== "connected"}
+          streaming={state.isStreaming}
+          onStop={state.abortChat}
+          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="min-w-0 flex-1 basis-32 max-w-44" />}
+          notices={state.error
+            ? [{ id: "load", tone: "danger", text: state.error,
+                 action: { label: "Retry", icon: <ArrowsClockwiseIcon size={11} />, onClick: state.retryLoad } }]
+            : []}
+        />
       </div>
     </div>
   );
@@ -1025,7 +1030,6 @@ export default function WorkspacePage() {
   const [pendingAttachments, setPendingAttachments] = useState<FileUIPart[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addFiles = useCallback(async (files: FileList | null | undefined) => {
     if (!files || files.length === 0) return;
@@ -1214,10 +1218,23 @@ export default function WorkspacePage() {
     setRestoreNotice(null);
     setPlanning(true);
     try {
-      const entries = await state.rpc<FileCheckpointEntry[]>('listFileCheckpoints', [200]);
+      const { availability, entries } =
+        await state.rpc<FileCheckpointListing>('listFileCheckpoints', [200]);
+      if (!availability.available) {
+        // The store is not reachable. Saying anything about what the turn
+        // changed would be a guess: this is where "It changed no device files."
+        // came from on a turn that had written plenty.
+        setRestoreNotice(
+          `File history is unavailable: ${availability.reason ?? 'the checkpoint store cannot be reached'}.`,
+        );
+        return;
+      }
       const matches = entries.filter((e) => e.turnId === mid);
       if (matches.length === 0) {
-        setRestoreNotice('No file checkpoint for this turn. It changed no device files.');
+        setRestoreNotice(
+          'This turn changed no files on your machine. File history covers your own device only — '
+          + 'changes the agent made in its workspace or in a sandbox are not restorable here.',
+        );
         return;
       }
       const plans: FileRestorePlan[] = [];
@@ -1295,7 +1312,6 @@ export default function WorkspacePage() {
         settingsHref={`/settings/${agentId}`}
         altitude={altitude}
         onAltitude={setAltitude}
-        modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="shrink-0 w-32 @[34rem]:w-36 @[46rem]:w-44" />}
       />
 
       {altitude === "supervise" ? (
@@ -1397,80 +1413,39 @@ export default function WorkspacePage() {
               </div>
             )}
 
-            {/* Input — paste handled on the wrapper so clipboard files attach
-                regardless of which composer child holds focus. */}
-            <div className="px-5 py-3 border-t p-border lg:px-7"
-              onPaste={e => { if (e.clipboardData.files.length > 0) { e.preventDefault(); void addFiles(e.clipboardData.files); } }}>
-              {state.error && <WorkspaceErrorBanner message={state.error} onRetry={state.retryLoad} />}
-              {attachError && <div className="mb-2 text-xs p-warning p-card rounded-lg px-3 py-1.5">{attachError}</div>}
-              {branchNotice && (
-                <div className="mb-2 flex items-center justify-between gap-2 text-xs p-warning p-card rounded-lg px-3 py-1.5">
-                  <span className="truncate">Branch unavailable: {branchNotice}</span>
-                  <button onClick={() => setBranchNotice(null)} className="p-text-3 hover:p-text cursor-pointer shrink-0" aria-label="Dismiss"><XIcon size={11} /></button>
-                </div>
-              )}
-              {planning && (
-                <div className="mb-2 flex items-center gap-1.5 text-xs p-text-3 p-card rounded-lg px-3 py-1.5">
-                  <Loader size="sm" /><span>Checking what this turn changed on your device…</span>
-                </div>
-              )}
-              {restoreNotice && (
-                <div className="mb-2 flex items-center justify-between gap-2 text-xs p-text-2 p-card rounded-lg px-3 py-1.5">
-                  <span className="flex items-center gap-1.5 min-w-0"><ClockCounterClockwiseIcon size={12} className="shrink-0" /><span className="truncate">{restoreNotice}</span></span>
-                  <button onClick={() => setRestoreNotice(null)} className="p-text-3 hover:p-text cursor-pointer shrink-0" aria-label="Dismiss"><XIcon size={11} /></button>
-                </div>
-              )}
-              {pendingAttachments.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {pendingAttachments.map((p, i) => (
-                    <AttachmentChip key={`${p.filename ?? "file"}-${i}`} part={p}
-                      onRemove={() => setPendingAttachments(prev => prev.filter((_, j) => j !== i))} />
-                  ))}
-                </div>
-              )}
-              <div className="mb-2 flex items-center gap-2">
-                <div className="flex items-center rounded-lg border p-border p-fill p-0.5" role="group" aria-label="Turn mode">
-                  <button type="button" onClick={() => setChatMode("build")} disabled={state.isStreaming || planAwaitingDecision}
-                    aria-pressed={effectiveChatMode === "build"}
-                    title={planAwaitingDecision ? "Approve the active plan before starting a Build turn." : undefined}
-                    className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${effectiveChatMode === "build" ? "p-card p-text" : "p-text-3 hover:p-text-2"}`}>
-                    <HammerIcon size={12} />Build
-                  </button>
-                  <button type="button" onClick={() => setChatMode("plan")} disabled={state.isStreaming}
-                    aria-pressed={effectiveChatMode === "plan"}
-                    className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${effectiveChatMode === "plan" ? "p-accent-subtle p-accent" : "p-text-3 hover:p-text-2"}`}>
-                    <NotePencilIcon size={12} />Plan
-                  </button>
-                </div>
-                <span className="hidden text-[11px] p-text-3 lg:inline">
-                  {effectiveChatMode === "plan" ? "Review a plan before anything changes." : "The agent can implement and verify changes."}
-                </span>
-              </div>
-              <div className="flex items-end gap-2.5 p-composer p-2.5">
-                <input ref={fileInputRef} type="file" multiple className="hidden"
-                  onChange={e => { void addFiles(e.currentTarget.files); e.currentTarget.value = ""; }} />
-                <button onClick={() => fileInputRef.current?.click()} disabled={state.connectionStatus !== "connected"}
-                  className="p-text-3 hover:p-text transition-colors p-1.5 mb-0.5 cursor-pointer" aria-label="Attach files" title="Attach files">
-                  <PaperclipIcon size={16} />
-                </button>
-                <InputArea ref={chatInputRef} value={chatInput} onValueChange={setChatInput}
-                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-                  placeholder="Send a message..." disabled={state.connectionStatus !== "connected"} rows={1}
-                  className="flex-1 resize-none max-h-40 overflow-y-auto !ring-0 focus:!ring-0 !shadow-none !bg-transparent !outline-none" />
-                {state.isStreaming
-                  ? <>
-                      {chatInput.trim() !== "" && effectiveChatMode !== "plan" && (
-                        <button onClick={handleBranch}
-                          className="p-text-2 hover:p-text transition-colors p-2 mb-0.5 rounded-lg border p-border cursor-pointer"
-                          aria-label="Run as a parallel branch"
-                          title="Branch: run this as a parallel take without interrupting the live turn. Compare answers when both finish.">
-                          <GitBranchIcon size={16} />
-                        </button>
-                      )}
-                      <Button variant="secondary" {...SQUARE_BUTTON_PROPS} onClick={state.abortChat} icon={<StopIcon size={16} weight="fill" />} aria-label="Stop" className="mb-0.5" />
-                    </>
-                  : <button onClick={handleSend} disabled={(!chatInput.trim() && pendingAttachments.length === 0) || state.connectionStatus !== "connected"} className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>}
-              </div>
+            {/* Input. Everything the composer needs to say goes through
+                `notices`, so a failure, a warning and a progress line all read
+                as the same kind of object instead of five improvised rows. */}
+            <div className="border-t p-border">
+              <Composer
+                textareaRef={chatInputRef}
+                value={chatInput}
+                onValueChange={setChatInput}
+                onSend={handleSend}
+                placeholder="Send a message..."
+                disabled={state.connectionStatus !== "connected"}
+                streaming={state.isStreaming}
+                onStop={state.abortChat}
+                onBranch={handleBranch}
+                mode={{ value: effectiveChatMode, onChange: setChatMode, locked: planAwaitingDecision }}
+                attachments={{
+                  parts: pendingAttachments,
+                  onAdd: (files) => { void addFiles(files); },
+                  onRemove: (i) => setPendingAttachments(prev => prev.filter((_, j) => j !== i)),
+                }}
+                modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="min-w-0 flex-1 basis-32 max-w-44" />}
+                notices={[
+                  ...(state.error ? [{ id: "load", tone: "danger" as const, text: state.error,
+                    action: { label: "Retry", icon: <ArrowsClockwiseIcon size={11} />, onClick: state.retryLoad } }] : []),
+                  ...(attachError ? [{ id: "attach", tone: "warning" as const, text: attachError }] : []),
+                  ...(branchNotice ? [{ id: "branch", tone: "warning" as const,
+                    text: `Branch unavailable: ${branchNotice}`, onDismiss: () => setBranchNotice(null) }] : []),
+                  ...(planning ? [{ id: "planning", tone: "progress" as const,
+                    text: "Checking what this turn changed on your device…" }] : []),
+                  ...(restoreNotice ? [{ id: "restore", tone: "neutral" as const, text: restoreNotice,
+                    onDismiss: () => setRestoreNotice(null) }] : []),
+                ]}
+              />
             </div>
             </div>
             )}
@@ -1493,7 +1468,7 @@ export default function WorkspacePage() {
             memory={state.memory}
             memoryContent={state.memoryContent}
             onSearchMemory={state.searchMemory}
-            mctsTree={state.mctsTree}
+            mctsTrees={state.mctsTrees}
             isStreaming={state.isStreaming}
             executors={state.executors}
             executorOutputs={state.executorOutputs}

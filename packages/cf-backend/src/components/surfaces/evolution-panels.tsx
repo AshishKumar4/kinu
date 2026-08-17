@@ -54,7 +54,7 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
       <div className="space-y-1">
         {runs.map((r) => (
           <button key={r.runId} onClick={() => open(r.runId)}
-            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-fill" : "hover:p-card"}`}>
+            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-fill" : "p-card-hover"}`}>
             <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "running" ? "p-dot-warning" : "p-dot-neutral"}`} />
             <span className="text-[11px] p-text-2 flex-1 truncate">{r.target} · {r.iterations} iters · {r.metricCalls} evals</span>
             <span className="text-[10px] p-text-3 shrink-0">{new Date(r.startedAt).toLocaleDateString()}</span>

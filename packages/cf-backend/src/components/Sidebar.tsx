@@ -80,7 +80,7 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
   };
 
   return (
-    <form onSubmit={save} className="p-card rounded-md px-1.5 py-1">
+    <form onSubmit={save} className="p-card px-1.5 py-1">
       <div className="flex items-center gap-1">
         <input
           autoFocus
@@ -89,20 +89,20 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Escape" && !saving) onCancel(); }}
-          className="min-w-0 flex-1 rounded px-1.5 py-1 text-xs p-elevated p-text border p-border focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
+          className="min-w-0 flex-1 rounded-sm px-1.5 py-1 text-xs p-elevated p-text border p-border focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
           aria-label={`Rename ${workspace.displayName}`}
         />
         <button
           type="submit"
           disabled={!value.trim() || saving || connectionStatus !== "connected"}
-          className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover disabled:opacity-40"
+          className="rounded-sm p-1 p-text-3 hover:p-text p-card-hover disabled:opacity-40"
           aria-label="Save workspace name"
         ><CheckIcon size={12} /></button>
         <button
           type="button"
           onClick={onCancel}
           disabled={saving}
-          className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover"
+          className="rounded-sm p-1 p-text-3 hover:p-text p-card-hover"
           aria-label="Cancel rename"
         ><XIcon size={12} /></button>
       </div>
@@ -210,14 +210,14 @@ export default function Sidebar() {
       {/* Logo + new workspace */}
       <div className="px-3 pt-4 pb-2 flex flex-col gap-2">
         <div className="flex items-center justify-between">
-          <Link to="/" className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:p-card transition-colors">
+          <Link to="/" className="flex items-center gap-2 px-2 py-1.5 rounded-lg p-card-hover transition-colors">
             <BrainIcon size={22} weight="duotone" className="p-accent" />
             <span className="font-medium tracking-tight">Proteus</span>
           </Link>
           <a
             href="https://github.com/AshishKumar4/Proteus"
             target="_blank" rel="noopener noreferrer" aria-label="GitHub repository"
-            className="flex size-8 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text transition-colors"
+            className="flex size-8 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text transition-colors"
           >
             <GithubLogoIcon size={17} />
           </a>
@@ -240,7 +240,7 @@ export default function Sidebar() {
         {listError && (
           <button
             onClick={() => refreshWorkspaces()}
-            className="w-full text-left px-2 py-2 text-xs p-warning rounded-md hover:p-card-hover transition-colors"
+            className="w-full text-left px-2 py-2 text-xs p-warning rounded-md p-card-hover transition-colors"
           >Couldn't load workspaces. Tap to retry.</button>
         )}
         <ul className="space-y-0.5">
@@ -303,7 +303,7 @@ export default function Sidebar() {
         <div className="flex items-center gap-1">
           <button
             onClick={() => setShowUserMenu((v) => !v)}
-            className="min-w-0 flex-1 flex items-center justify-between gap-2 px-2 py-2 rounded-lg hover:p-card transition-colors text-left"
+            className="min-w-0 flex-1 flex items-center justify-between gap-2 px-2 py-2 rounded-lg p-card-hover transition-colors text-left"
           >
             <div className="flex items-center gap-2 min-w-0">
               <div className="w-7 h-7 rounded-full p-accent-bg flex items-center justify-center text-xs font-medium p-accent shrink-0">
@@ -316,7 +316,7 @@ export default function Sidebar() {
           <button
             type="button"
             onClick={toggleTheme}
-            className="shrink-0 flex size-9 items-center justify-center rounded-lg p-text-3 hover:p-card hover:p-text transition-colors"
+            className="shrink-0 flex size-9 items-center justify-center rounded-lg p-text-3 p-card-hover hover:p-text transition-colors"
             title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
             aria-label={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
           >
@@ -324,16 +324,16 @@ export default function Sidebar() {
           </button>
         </div>
         {showUserMenu && (
-          <div className="absolute bottom-full left-2 right-2 mb-1 p-card rounded-lg p-1.5 p-shadow-menu border p-border">
+          <div className="absolute bottom-full left-2 right-2 mb-1 p-card p-1.5 p-shadow-menu border p-border">
             <Link to="/user/settings" onClick={() => setShowUserMenu(false)}
-              className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:p-card-hover">
+              className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover">
               <GearIcon size={14} />
               <span>Account settings</span>
             </Link>
             <ModeToggle />
             <a
               href="/logout"
-              className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:p-card-hover"
+              className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover"
             >
               <SignOutIcon size={14} />
               <span>Sign out</span>

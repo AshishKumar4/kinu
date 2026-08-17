@@ -29,7 +29,7 @@ export function TakesChip({ set, onPick }: {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded border p-border hover:p-card-hover transition-colors"
+        className="inline-flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm border p-border p-card-hover transition-colors"
         title="The agent explored near-tied approaches for this answer. Compare and pick."
       >
         <GitBranchIcon size={11} />
@@ -113,7 +113,7 @@ function TakesComparison({ set, onPick, onClose }: {
 
       <div className="flex items-center justify-between">
         <button type="button" onClick={() => step(-1)} aria-label="Previous take"
-          className="p-1.5 rounded p-text-3 hover:p-text hover:p-card-hover transition-colors cursor-pointer">
+          className="p-1.5 rounded-sm p-text-3 hover:p-text p-card-hover transition-colors cursor-pointer">
           <ArrowLeftIcon size={14} />
         </button>
         <div className="flex items-center gap-2 text-xs p-text-2">
@@ -125,12 +125,12 @@ function TakesComparison({ set, onPick, onClose }: {
           )}
         </div>
         <button type="button" onClick={() => step(1)} aria-label="Next take"
-          className="p-1.5 rounded p-text-3 hover:p-text hover:p-card-hover transition-colors cursor-pointer">
+          className="p-1.5 rounded-sm p-text-3 hover:p-text p-card-hover transition-colors cursor-pointer">
           <ArrowRightIcon size={14} />
         </button>
       </div>
 
-      <div className="rounded-lg border p-border p-card px-3 py-2.5 max-h-64 overflow-y-auto">
+      <div className="border p-border p-card px-3 py-2.5 max-h-64 overflow-y-auto">
         <div className="prose-chat p-text text-sm">
           <MarkdownContent content={candidate.text} />
         </div>

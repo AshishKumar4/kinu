@@ -29,6 +29,7 @@ import * as v from 'valibot';
 /** A turn the backend enqueued, never typed by the operator. */
 export type ProgrammaticTurn =
   | { kind: "event_drain" }
+  | { kind: "workspace_created" }
   | { kind: "background_job"; jobKind: string; status: string }
   | { kind: "deferred_approval"; decision: string; count: number };
 
@@ -59,6 +60,11 @@ const SignalCardEventSchema = v.variant('state', [
  * But the words in the turn are the harness's, not theirs, and rendering them
  * as something the owner typed would be the same misattribution the other
  * cards exist to prevent.
+ *
+ * `workspace_created` is the workspace's own first turn. The owner typed a
+ * MISSION in the New workspace dialog, not a message — the mission is the soul
+ * and reaches the agent through the system prompt. What lands in the transcript
+ * is the harness telling the agent it is open, so it wears a card too.
  */
 export function classifyProgrammaticTurn<Metadata>(metadata: Metadata): ProgrammaticTurn | null {
   const parsed = v.safeParse(ProgrammaticMetadataSchema, metadata);
@@ -67,6 +73,8 @@ export function classifyProgrammaticTurn<Metadata>(metadata: Metadata): Programm
   switch (turn.proteusEvent) {
     case "event_drain":
       return { kind: "event_drain" };
+    case "workspace_created":
+      return { kind: "workspace_created" };
     case "background_job":
       return {
         kind: "background_job",

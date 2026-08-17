@@ -36,10 +36,40 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-surface-1: var(--surface-1);
   --color-annotation-comment: var(--annotation-comment);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  /* The radius scale is NOT declared here on purpose — see the `@theme` block
+     below. `@theme inline` inlines a value into the utility and emits no custom
+     property, and the `--r-*` roles need one to read. */
+}
+
+/* ── The radius scale ────────────────────────────────────────────────
+   Four rungs, stated as literals. This is the one scale in the product; the
+   `--r-*` role names below are aliases of it, so a `.p-*` class and a
+   `rounded-*` utility written beside it cannot disagree.
+
+   The values are the ones the owner set himself in the closest comparable
+   product (OpenSeal's `@theme`), because that is the only direct evidence of
+   intent available: Tailwind's defaults are 4/6/8/12, and the signed-out
+   landing page draws no radius at all. Rationale for following his over
+   either: the landing page is an editorial grid with two controls on it, where
+   square is a typographic choice; this is a workspace with hundreds, and the
+   one element he described as acceptable ("the prompt box") measured 14px, so
+   a scale topping out at 12 would have made the composer LESS round than the
+   thing he was already happy with. 16px composer / 12px card / 8px button
+   reproduces his own usage exactly.
+
+   Kumo's compiled components are drawn against Tailwind's 4/6/8/12 and will
+   render one rung rounder here. That is deliberate: matching the product's own
+   scale matters more than matching the library's internal one, and it is
+   uniform rather than mixed. ── */
+@theme {
+  /* `xs` is for marks smaller than a control — an 8px colour swatch, an
+     annotation highlight — where 6px reads as a circle. Two call sites need it,
+     and both had reached for a hardcoded 2px instead. */
+  --radius-xs: 0.125rem;  /*  2px */
+  --radius-sm: 0.375rem;  /*  6px */
+  --radius-md: 0.5rem;    /*  8px */
+  --radius-lg: 0.75rem;   /* 12px */
+  --radius-xl: 1rem;      /* 16px */
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -95,11 +125,21 @@ html, body, #root {
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 
-  /* radii — one grammar: control 6, row/field 8, card 10, overlay 14, pill 999 */
-  --r-control: 6px;
-  --r-row: 8px;
-  --r-card: 10px;
-  --r-overlay: 14px;
+  /* Radii — role names over the four rungs declared in the `@theme` block at
+     the top of this file. Kept as roles because the role is what a call site
+     means; the rung is just how round it happens to be.
+
+     This block used to carry 6/8/10/14px literals while `@theme inline` mapped
+     Tailwind's scale onto `calc(var(--radius) …)` — and `--radius` is defined
+     nowhere but `[data-proteus-plan-review]`. So every `rounded-sm/md/lg/xl` in
+     the app, Kumo's own included, computed to 0px, while `.p-composer` used its
+     literal and stayed round. That is the "some borders are sharp while the
+     prompt box is round" inconsistency, and it was a missing token, not a
+     styling choice. Locked by unit-radius-scale.test.ts. */
+  --r-control: var(--radius-sm);   /*  6px — chips, inline code, segment items */
+  --r-row:     var(--radius-md);   /*  8px — buttons, fields, rows */
+  --r-card:    var(--radius-lg);   /* 12px — cards, panels, notices */
+  --r-overlay: var(--radius-xl);   /* 16px — dialogs, menus, the composer */
 
   /* motion */
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
@@ -278,9 +318,11 @@ html, body, #root {
                    GitHub-strength; the old rule was 1.19:1 and vanished)
        lift        cards cast a shadow, which dark deliberately forbids
 
-     The measured steps, as luminance ratios:
-       paper : canvas   1.147     canvas : chrome   1.124
-       paper : fill     1.22      canvas : recessed 1.19
+     The measured steps, as WCAG luminance ratios, recomputed from the hexes
+     below (`paper : fill` and `canvas : recessed` had drifted from the numbers
+     originally written here, 1.22 and 1.19):
+       paper : canvas   1.148     canvas : chrome   1.124
+       paper : fill     1.211     canvas : recessed 1.147
      Every one of those is a step you can see without hunting; the old
      canvas : chrome was 1.07, which is why the rail and the canvas read
      as one surface.
@@ -375,6 +417,32 @@ body { background: var(--c-bg); color: var(--c-text); }
 
    Two rules stay out of the layer on purpose; each says why.
    ════════════════════════════════════════════════════════════════════ */
+/* ── Single-property roles, as real utilities ─────────────────────────
+   These are `@utility` rather than plain rules inside `@layer components`
+   for one reason: variants. Tailwind only generates `hover:`/`focus:`
+   forms for utilities it knows about, and these were plain classes — so
+   every `hover:p-text`, `hover:p-danger` and `hover:p-elevated` in the app
+   emitted no CSS whatsoever and silently did nothing. Each sets exactly one
+   property, so promoting them out of the components layer cannot re-draw a
+   border or a radius the way `.p-card` would. Locked by unit-p-utility-
+   variants.test.ts. ── */
+@utility p-bg       { background: var(--c-bg); }
+@utility p-recessed { background: var(--c-recessed); }
+@utility p-sidebar  { background: var(--c-sidebar); }
+@utility p-surface  { background: var(--c-surface); }
+@utility p-elevated { background: var(--c-elevated); }
+@utility p-fill     { background: var(--c-fill); }
+
+@utility p-text   { color: var(--c-text); }
+@utility p-text-2 { color: var(--c-text-2); }
+@utility p-text-3 { color: var(--c-text-3); }
+@utility p-accent { color: var(--c-accent-fg); }
+
+@utility p-success { color: var(--c-success); }
+@utility p-warning { color: var(--c-warning); }
+@utility p-danger  { color: var(--c-danger); }
+@utility p-info    { color: var(--c-info); }
+
 @layer components {
 
 /* ── Chat markdown ─────────────────────────────────────────────────── */
@@ -403,12 +471,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-num      { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
 
 /* ── Surfaces ──────────────────────────────────────────────────────── */
-.p-bg       { background: var(--c-bg); }
-.p-recessed { background: var(--c-recessed); }
-.p-sidebar  { background: var(--c-sidebar); }
-.p-surface  { background: var(--c-surface); }
-.p-elevated { background: var(--c-elevated); }
-.p-fill     { background: var(--c-fill); }
 .p-overlay  { background: var(--c-overlay); box-shadow: var(--shadow-overlay); border-radius: var(--r-overlay); }
 /* For overlays that own their own background (a drawer is a full-height
    panel, not a dialog) but still need the dialog's lift. */
@@ -417,20 +479,10 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-scrim { background: var(--c-scrim); backdrop-filter: blur(2px); }
 .p-border   { border-color: var(--c-border); }
 
-/* ── Text ──────────────────────────────────────────────────────────── */
-.p-text   { color: var(--c-text); }
-.p-text-2 { color: var(--c-text-2); }
-.p-text-3 { color: var(--c-text-3); }
-.p-accent { color: var(--c-accent-fg); }
-
 .p-accent-bg      { background: var(--c-accent-subtle); }
 .p-accent-subtle  { background: var(--c-accent-subtle); }
 
 /* ── Status ────────────────────────────────────────────────────────── */
-.p-success { color: var(--c-success); }
-.p-warning { color: var(--c-warning); }
-.p-danger  { color: var(--c-danger); }
-.p-info    { color: var(--c-info); }
 
 .p-dot-success { background: var(--c-success); }
 .p-dot-warning { background: var(--c-warning); }
@@ -451,6 +503,15 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 .p-tint-warning { background: var(--c-warning-tint); border-color: color-mix(in srgb, var(--c-warning) 30%, transparent); }
 
+/* Inline status notices. A notice is an object on the surface it interrupts, so
+   it carries the card's radius; the tone supplies tint, ink and edge. `neutral`
+   is the quiet rung — progress and "here is what just happened" — and exists so
+   a status row never has to be improvised out of `p-card` plus a text colour,
+   which is how the composer ended up with five differently-shaped ones. */
+.p-notice-success, .p-notice-warning, .p-notice-danger, .p-notice-info, .p-notice-neutral {
+  border-radius: var(--r-card);
+}
+.p-notice-neutral { background: var(--c-neutral-tint); color: var(--c-text-2); border: 1px solid var(--c-border); }
 .p-notice-success { background: var(--c-success-tint); color: var(--c-success); border: 1px solid color-mix(in srgb, var(--c-success) 30%, transparent); }
 .p-notice-warning { background: var(--c-warning-tint); color: var(--c-warning); border: 1px solid color-mix(in srgb, var(--c-warning) 30%, transparent); }
 .p-notice-danger  { background: var(--c-danger-tint);  color: var(--c-danger);  border: 1px solid color-mix(in srgb, var(--c-danger) 30%, transparent); }
@@ -696,6 +757,25 @@ body { background: var(--c-bg); color: var(--c-text); }
   color: transparent;
   animation: p-shimmer 1.8s linear infinite;
 }
+
+/* The streaming caret, drawn INSIDE the last block the markdown emitted.
+
+   It used to be a sibling <span> after the rendered markdown. Markdown emits
+   block-level elements, so a span placed after one starts a new line: the
+   caret sat under the paragraph instead of trailing the word being written,
+   which is what the bug report shows. As `::after` on the last block it is
+   part of that block's inline flow and lands after the final character —
+   including inside a code fence, where the last block is the <pre>. */
+.p-streaming > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--c-accent);
+  animation: blink-cursor 1s step-end infinite;
+}
 } /* end @layer components */
 
 @keyframes p-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
@@ -730,12 +810,13 @@ body { background: var(--c-bg); color: var(--c-text); }
 @layer utilities {
   .animate-fade-in { animation: fade-in var(--dur-enter) var(--ease-out-strong); }
   .animate-scale-in { animation: scale-in var(--dur-fast) ease-out; }
-  .animate-blink-cursor { animation: blink-cursor 1s step-end infinite; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .p-shimmer { animation: none; color: var(--c-text-2); -webkit-text-fill-color: currentColor; }
   .animate-fade-in, .animate-scale-in { animation: none; }
+  /* The caret still marks where the text is being written; it just holds. */
+  .p-streaming > :last-child::after { animation: none; }
   .p-btn:active, .p-btn-quiet:active { transform: none; }
 }
 
@@ -777,7 +858,7 @@ body > .annotation-toolbar {
 }
 
 @layer components {
-  [data-proteus-plan-review] .annotation-highlight { border-radius: 2px; padding: 0 2px; margin: 0 -2px; }
+  [data-proteus-plan-review] .annotation-highlight { border-radius: var(--radius-xs); padding: 0 2px; margin: 0 -2px; }
   [data-proteus-plan-review] .annotation-highlight.math-inline-annotation { display: inline-flex; align-items: center; line-height: 1; }
   [data-proteus-plan-review] .annotation-highlight.math-block-annotation { display: block; }
   [data-proteus-plan-review] .annotation-highlight.deletion {

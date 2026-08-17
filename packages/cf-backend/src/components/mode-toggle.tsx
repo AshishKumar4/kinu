@@ -11,7 +11,7 @@ export function ModeToggle() {
     <button
       type="button"
       onClick={toggleTheme}
-      className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:p-card-hover text-left"
+      className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover text-left"
     >
       {mode === "light" ? <MoonIcon size={14} /> : <SunIcon size={14} />}
       <span>{mode === "light" ? "Dark mode" : "Light mode"}</span>

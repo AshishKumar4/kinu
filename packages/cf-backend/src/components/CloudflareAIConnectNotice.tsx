@@ -18,7 +18,7 @@ export function CloudflareAIConnectNotice({
           <p>{message}</p>
           <a
             href={cloudflareReconnectPath(returnTo)}
-            className="inline-flex items-center rounded-md border p-border px-2 py-1 text-[11px] font-medium p-warning hover:p-card-hover"
+            className="inline-flex items-center rounded-md border p-border px-2 py-1 text-[11px] font-medium p-warning p-card-hover"
           >
             Connect Cloudflare Workers AI
           </a>

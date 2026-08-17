@@ -255,7 +255,7 @@ function DiffView({ executors, lastActiveExecutor, rpc }: {
             const open = expanded.has(f.path);
             return (
               <div key={f.path} className="rounded-md border p-border overflow-hidden">
-                <button onClick={() => toggle(f.path)} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:p-card transition-colors">
+                <button onClick={() => toggle(f.path)} className="w-full flex items-center gap-2 px-3 py-1.5 text-left p-card-hover transition-colors">
                   {open ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />}
                   <span className={`text-[10px] uppercase font-mono shrink-0 ${STATUS_TONE[f.status]}`}>{f.status[0]}</span>
                   <span className="text-xs font-mono p-text truncate flex-1">{f.path}</span>

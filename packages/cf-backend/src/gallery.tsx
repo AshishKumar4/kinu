@@ -35,18 +35,19 @@
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
  */
-import { StrictMode, useEffect } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
-import { Button, InputArea } from "@cloudflare/kumo";
+import { Button } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import {
-  PaperPlaneRightIcon, PaperclipIcon, TrashIcon, BrainIcon,
+  TrashIcon, BrainIcon,
 } from "@phosphor-icons/react";
 import "./index.css";
 import Sidebar from "@/components/Sidebar";
 import { ModelPicker } from "@/components/ModelPicker";
+import { Composer, type ChatMode, type ComposerNotice } from "@/components/Composer";
 import { WorkspaceBar } from "@/components/WorkspaceBar";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
@@ -57,12 +58,13 @@ import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { MessageView, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { SupervisePage } from "@/pages/SupervisePage";
-import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, JsonObjectSchema, JsonValueSchema, type JsonValue } from "@proteus/core";
+import { StandingApprovalsCard } from "@/pages/SettingsPage";
+import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, type JsonValue } from "@proteus/core";
 import type { BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ExecutorInfo } from "@/lib/executors";
-import type { DirEntry, ForkRunSummary, HeadRunView, MountInfo, PendingAction } from "@proteus/core";
+import type { DirEntry, ForkRunParams, ForkRunSummary, HeadRunView, MountInfo, PendingAction } from "@proteus/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
 import * as v from "valibot";
 
@@ -227,6 +229,9 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
  *  asserts. */
 const MCTS_ROWS = frame === "forkbig" ? mctsSearchRows(520, 9) : mctsSearchRows(106, 6);
 const MCTS_TREE = buildTree(MCTS_ROWS);
+/** The frames render at most one tree; the surface keys them by search. */
+const MCTS_TREES: ReadonlyMap<string, ForkNode> = new Map([[MCTS_TREE.id, MCTS_TREE]]);
+const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
 
 /* ── Agent socket stub ──────────────────────────────────────────── */
 
@@ -272,7 +277,7 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
   readonly OPEN = 1;
   readonly CLOSING = 2;
   readonly CLOSED = 3;
-  readyState = 0;
+  readyState: WebSocket['readyState'] = GalleryAgentSocket.CONNECTING;
   binaryType: BinaryType = "blob";
   bufferedAmount = 0;
   extensions = "";
@@ -348,6 +353,14 @@ function rpcResult<Value>(value: Value): Response {
 }
 
 const MESSAGES: UIMessage[] = [
+  // The first thing in every workspace's transcript: the agent being handed its
+  // own workspace. The owner typed a MISSION in the New workspace dialog, not a
+  // message, so this must never wear their bubble.
+  msg({
+    id: "g1", role: "user", createdAt: NOW - 7 * 60e3,
+    metadata: { proteusEvent: "workspace_created", signalId: "sig-genesis" },
+    parts: [{ type: "text", text: "This workspace has just been created. This is its first turn and nobody has typed anything yet." }],
+  }),
   msg({
     id: "u1", role: "user", createdAt: NOW - 6 * 60e3,
     parts: [{ type: "text", text: "Audit the checkout flow, find why the SAVE20 coupon 500s, and fix it. Deploy to staging when green." }],
@@ -464,26 +477,26 @@ const MERGED_RUN: HeadRunView = {
       id: "root-merge-1-h0", task: "packages/checkout/src/apply-coupon.ts", rationale: "the reported 500",
       status: "completed", summary: "Two more reads of rules[kind]; both guarded by the same ?? inferKind fix.",
       errorMessage: null, tokenInput: 8_420, tokenOutput: 610, wallClockMs: 14_200,
-      toolCalls: [{ name: "file", status: "ok" }, { name: "run", status: "exit=0" }],
+      spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5,
       decisions: [{ question: "Guard at the edge or at the reader?", choice: "at the reader", rationale: "the edge would still let a null through the cart serializer" }],
       steps: [
         { text: "Reading the handler and its two callers.", reasoning: "The 500 is a deref, so the fix has to be where the deref is.", toolCalls: [{ name: "file", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" }] },
-        { text: "Both call sites take the same shape. One guard covers them.", toolCalls: [] },
+        { text: "Both call sites take the same shape. One guard covers them.", toolCalls: [{ name: "run", input: { command: "bun test packages/checkout" }, output: "exit=0" }] },
       ],
     },
     {
       id: "root-merge-1-h1", task: "packages/cart/src/serializer.ts", rationale: "the lazy path",
       status: "completed", summary: "One read, already null-safe — no change needed here.",
       errorMessage: null, tokenInput: 5_110, tokenOutput: 240, wallClockMs: 9_800,
-      toolCalls: [{ name: "file", status: "ok" }], decisions: [],
-      steps: [{ text: "Already uses the optional chain.", toolCalls: [] }],
+      spawnedAt: NOW - 52e5, lastStepAt: NOW - 515e4, decisions: [],
+      steps: [{ text: "Already uses the optional chain.", toolCalls: [{ name: "file", input: { action: "read", path: "packages/cart/src/serializer.ts" }, output: "…" }] }],
     },
     {
       id: "root-merge-1-h2", task: "packages/admin/src/coupon-report.ts", rationale: "the reporting path",
       status: "errored", summary: null,
       errorMessage: "the admin package is not checked out in this sandbox",
       tokenInput: 1_020, tokenOutput: 0, wallClockMs: 2_100,
-      toolCalls: [{ name: "file", status: "error: ENOENT" }], decisions: [], steps: [],
+      spawnedAt: NOW - 52e5, lastStepAt: null, decisions: [], steps: [],
     },
   ],
   merge: {
@@ -546,7 +559,30 @@ const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
   return stubRpc<T>(method, args);
 };
 
+/**
+ * The canvas projection, as the server composes it: the run list, each run's
+ * dispatch parameters, and the search rows for every competed tree — one read.
+ *
+ * Two runs of the SAME task under different policies are in here on purpose:
+ * that is the pair the owner could not tell apart, and the frame is where the
+ * claim that they now read differently is checked.
+ */
+const FORK_PARAMS: ForkRunParams[] = [
+  {
+    rootId: "n000", policy: "mcts", budget: 24, branches: 4,
+    maxDepth: 6, explorationWeight: 1.41, judgeSamples: 3, mode: "build",
+  },
+  { rootId: "root-merge-1", policy: "merge", mergeStrategy: "synthesize", branches: 3 },
+  { rootId: "root-merge-0", policy: "merge", mergeStrategy: "best_of", branches: 2 },
+];
+
+/** Search rows for the canvas, carrying the root each belongs to. */
+const CANVAS_SEARCH = MCTS_ROWS.map((row) => ({ ...row, root_id: "n000" }));
+
+const EXPLORATION_CANVAS = { runs: FORK_RUNS, params: FORK_PARAMS, search: CANVAS_SEARCH };
+
 const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getExplorationCanvas") return rpcResult(EXPLORATION_CANVAS).json<T>();
   if (method === "listForkRuns") return rpcResult(FORK_RUNS).json<T>();
   if (method === "getForkRun") return rpcResult(FORK_RUNS.find((run) => run.id === args?.[0]) ?? null).json<T>();
   if (method === "getSearchTree") return rpcResult(MCTS_ROWS).json<T>();
@@ -560,6 +596,9 @@ const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
  *  and every score encoding has to be absent rather than drawn from a zero no
  *  branch earned. This frame is where that claim is checked. */
 const mergeFirstRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getExplorationCanvas") {
+    return rpcResult({ ...EXPLORATION_CANVAS, runs: FORK_RUNS.slice(1), search: [] }).json<T>();
+  }
   if (method === "listForkRuns") return rpcResult(FORK_RUNS.slice(1)).json<T>();
   return forkRpc<T>(method, args);
 };
@@ -578,7 +617,6 @@ function GalleryWorkspaceBar() {
       settingsHref="/settings/checkout-fixes"
       altitude="run"
       onAltitude={() => {}}
-      modelPicker={<ModelPicker models={MODEL_STUBS()} value="anthropic/claude-opus-4" onChange={() => {}} size="xs" className="shrink-0 w-32 @[34rem]:w-36 @[46rem]:w-44" />}
     />
   );
 }
@@ -596,15 +634,42 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
   );
 }
 
-function Composer() {
+/* The live-data failure the owner reported, as a status row. Shared so the wide
+   and narrow frames photograph the same affordance rather than two of them. */
+const MCTS_NOTICE: readonly ComposerNotice[] = [{
+  id: "mcts",
+  tone: "danger",
+  text: "Couldn't refresh live data for MCTS.",
+  action: { label: "Retry", onClick: () => {} },
+}];
+
+/* The composer, as the app renders it — the real component. This was a
+   hand-copy, and it had drifted: no mode control, no model selector and no
+   status row, so the gallery photographed a composer the product does not have.
+   `notices` is a parameter because the status treatment is a thing to review.
+
+   The draft, the mode and the model are real state rather than no-op handlers:
+   a gallery whose controls do not move cannot tell you whether they work, which
+   is the whole failure this harness exists to catch. */
+function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[] }) {
+  const [value, setValue] = useState("");
+  const [mode, setMode] = useState<ChatMode>("build");
+  const [model, setModel] = useState("anthropic/claude-opus-4");
   return (
-    <div className="px-5 py-3 border-t p-border lg:px-7">
-      <div className="flex items-end gap-2.5 p-composer p-2.5">
-        <button className="p-text-3 hover:p-text transition-colors p-1.5 mb-0.5 cursor-pointer" aria-label="Attach files"><PaperclipIcon size={16} /></button>
-        <InputArea value="" onValueChange={() => {}} placeholder="Send a message..." rows={1}
-          className="flex-1 resize-none max-h-40 overflow-y-auto !ring-0 focus:!ring-0 !shadow-none !bg-transparent !outline-none" />
-        <button className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>
-      </div>
+    <div className="border-t p-border">
+      <Composer
+        value={value}
+        onValueChange={setValue}
+        onSend={() => setValue("")}
+        onStop={() => {}}
+        placeholder="Send a message..."
+        disabled={false}
+        streaming={false}
+        mode={{ value: mode, onChange: setMode, locked: false }}
+        attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
+        modelPicker={<ModelPicker models={MODEL_STUBS()} value={model} onChange={setModel} size="xs" className="min-w-0 flex-1 basis-32 max-w-44" />}
+        notices={notices}
+      />
     </div>
   );
 }
@@ -628,8 +693,8 @@ function ChatMessages() {
 }
 
 function Shell(
-  { surface = "Output", mctsTree = null, rpc = stubRpc, pendingActions = [] }:
-  { surface?: SurfaceKind; mctsTree?: ForkNode | null; rpc?: Rpc; pendingActions?: PendingAction[] },
+  { surface = "Output", mctsTrees = EMPTY_TREES, rpc = stubRpc, pendingActions = [] }:
+  { surface?: SurfaceKind; mctsTrees?: ReadonlyMap<string, ForkNode>; rpc?: Rpc; pendingActions?: PendingAction[] },
 ) {
   return (
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
@@ -643,12 +708,12 @@ function Shell(
             <div className="@container flex flex-col h-full border-r p-border" style={{ width: "42%" }}>
               <GalleryChatTabs />
               <ChatMessages />
-              <Composer />
+              <GalleryComposer notices={MCTS_NOTICE} />
             </div>
             <div className="flex-1 min-w-0">
               <WorkSurface
                 surface={surface} onSurface={() => {}} pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]}
-                memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTree={mctsTree} isStreaming={false}
+                memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTrees={mctsTrees} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
                 backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={pendingActions}
                 rpc={rpc}
@@ -688,10 +753,10 @@ function Controls() {
         <button className="p-btn inline-flex h-9 items-center gap-2 px-3 text-sm font-medium">p-btn at 36px</button>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono p-badge-neutral">workspace</span>
-        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono p-badge-success">sandbox</span>
-        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono p-badge-warning">laptop</span>
-        <span className="px-1.5 py-0.5 rounded text-[10px] p-badge-danger">failed</span>
+        <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-neutral">workspace</span>
+        <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-success">sandbox</span>
+        <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-warning">laptop</span>
+        <span className="px-1.5 py-0.5 rounded-sm text-[10px] p-badge-danger">failed</span>
         <span className="size-1.5 rounded-full p-dot-success animate-pulse" title="working" />
         <span className="size-1.5 rounded-full p-dot-accent" title="unseen" />
       </div>
@@ -702,7 +767,7 @@ function Controls() {
         <div className="p-notice-info text-xs rounded-md px-3 py-2">Evolution changelog has 3 unseen entries.</div>
       </div>
       <div className="max-w-md space-y-2">
-        <input className="w-full px-3 py-1.5 rounded-md border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]" placeholder="raw input (fork modal style)" />
+        <input className="w-full px-3 py-1.5 border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]" placeholder="raw input (fork modal style)" />
         <textarea rows={2} className="block w-full resize-y rounded-md border p-border p-bg px-3 py-3 text-sm leading-7 p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-accent-subtle)]" placeholder="mission textarea (home page style)" />
       </div>
       <EmptyState icon={<BrainIcon size={32} />} title="No exploration trees yet" hint="Exploration trees appear when the agent forks with settle:'mcts' to investigate subproblems." />
@@ -719,7 +784,7 @@ function ChatFrame() {
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
         <GalleryChatTabs />
         <ChatMessages />
-        <Composer />
+        <GalleryComposer notices={MCTS_NOTICE} />
       </div>
     </div>
   );
@@ -736,7 +801,7 @@ function ChatEmptyFrame() {
         <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
           <EmptyConversation mission={BRAIN_STATUS.purpose} />
         </div>
-        <Composer />
+        <GalleryComposer />
       </div>
     </div>
   );
@@ -745,7 +810,7 @@ function ChatEmptyFrame() {
 function All() {
   return (
     <div className="p-bg p-text min-h-screen">
-      <Section title="Chat column"><div className="@container max-w-3xl border p-border rounded-lg overflow-hidden"><GalleryWorkspaceBar /><GalleryChatTabs /><ChatMessages /><Composer /></div></Section>
+      <Section title="Chat column"><div className="@container max-w-3xl border p-border rounded-lg overflow-hidden"><GalleryWorkspaceBar /><GalleryChatTabs /><ChatMessages /><GalleryComposer /></div></Section>
       <Section title="Controls">{<Controls />}</Section>
     </div>
   );
@@ -889,7 +954,7 @@ function Palette() {
       </div>
       <div>
         <div className="p-eyebrow mb-2">Surfaces — six warm steps</div>
-        <div className="flex rounded-[10px] overflow-hidden border p-border">
+        <div className="flex rounded-lg overflow-hidden border p-border">
           {SURFACE_STEPS.map(([name, v]) => (
             <div key={name} className="flex-1 h-24 flex items-end p-2" style={{ background: `var(${v})` }}>
               <span className="p-meta p-text-3">{name}</span>
@@ -961,7 +1026,7 @@ function LandingV2() {
           <button className="p-btn-quiet px-4 h-10 p-body inline-flex items-center">Install CLI</button>
         </div>
         {/* The product's signature — a run timeline as brand motif */}
-        <div className="mt-14 border p-border rounded-[10px] p-surface p-4 max-w-xl">
+        <div className="mt-14 border p-border rounded-lg p-surface p-4 max-w-xl">
           <div className="p-eyebrow mb-2.5">A live run, right now</div>
           {[
             ["p-dot-accent", "Turn: fix SAVE20 coupon", "48.0s"],
@@ -991,10 +1056,18 @@ function LandingV2() {
    Mocking short ones is how the Tools list shipped as a wall of prose without
    anyone seeing it: eight builtins carry real contract text between them, and
    a harness that photographs one-liners photographs a surface the app does
-   not have. `release` (and `agent.*` self-steering, `skills` CRUD) left
-   BUILTIN_TOOLS for codemode-only reach — getToolDescriptions() only lists
-   BUILTIN_TOOLS, the same reason `agent.*` has never appeared here either, so
-   this row is illustrative mock, not a live readout. */
+   not have. `release` (and `agent.*` self-steering) is codemode-only reach —
+   getToolDescriptions() only lists BUILTIN_TOOLS, the same reason `agent.*` has
+   never appeared here either, so that row is illustrative mock, not a live
+   readout.
+
+   `exposure` here is the registry's DECLARED reach (TOOL_REACH), so the eight
+   builtins are "both" — every one of them is also a codemode namespace or, for
+   run/file, reachable through `workspace.*`; only execute_tools is native-only,
+   because it IS the sandbox. `wired` is the second, separate fact: whether this
+   agent has the capability at all. `report` is photographed at wired:false
+   because that is what an orchestrator looks like — it IS the report sink — and
+   that state is exactly what used to render as the false label "code mode". */
 function galleryTool(info: ToolInfo): ToolInfo { return info; }
 
 const BRAIN_TOOLS: ToolInfo[] = [
@@ -1003,17 +1076,18 @@ const BRAIN_TOOLS: ToolInfo[] = [
     summary: BUILTIN_TOOL_SPECS[name].summary,
     description: BUILTIN_TOOL_DESCRIPTIONS[name],
     learned: false,
-    exposure: "native",
+    exposure: TOOL_REACH[name].codemode ? "both" : "native",
+    wired: name !== "report",
     qualityScore: 1,
     usageCount: 0,
   })),
-  galleryTool({ name: "release", summary: "Governed release pipeline over a bound source repo.", description: "Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.", learned: false, exposure: "codemode", qualityScore: 1, usageCount: 0 }),
-  galleryTool({ name: "bisect_migration", summary: "Walk a migration's revisions to find the one that changed a column's shape.", description: "Walk a migration's revisions to find the one that changed a column's shape.", learned: true, exposure: "codemode", qualityScore: 0.82, usageCount: 14 }),
-  galleryTool({ name: "coupon_replay", summary: "Replay a checkout against a coupon code and diff the response.", description: "Replay a checkout against a coupon code and diff the response.", learned: true, exposure: "codemode", qualityScore: 0.61, usageCount: 3 }),
+  galleryTool({ name: "release", summary: "Governed release pipeline over a bound source repo.", description: "Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.", learned: false, exposure: "codemode", wired: true, qualityScore: 1, usageCount: 0 }),
+  galleryTool({ name: "bisect_migration", summary: "Walk a migration's revisions to find the one that changed a column's shape.", description: "Walk a migration's revisions to find the one that changed a column's shape.", learned: true, exposure: "codemode", wired: true, qualityScore: 0.82, usageCount: 14 }),
+  galleryTool({ name: "coupon_replay", summary: "Replay a checkout against a coupon code and diff the response.", description: "Replay a checkout against a coupon code and diff the response.", learned: true, exposure: "codemode", wired: true, qualityScore: 0.61, usageCount: 3 }),
 ];
 
 const BRAIN_STATUS = {
-  id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3", displayName: "Checkout coupon bug",
+  name: "checkout-coupon-bug-9935d3", displayName: "Checkout coupon bug",
   purpose: "Find why the SAVE20 coupon 500s and fix it.", model: "anthropic/claude-opus-4",
   scaffoldVersion: 7, searchNodeCount: 12, craftedToolCount: 2, messageCount: 48,
   soul: "# Checkout coupon bug", forkLineage: null, createdAt: NOW - 7 * 864e5,
@@ -1099,7 +1173,7 @@ function ViewsFrame() {
           surface="view:deploy-health" onSurface={() => {}}
           agentViews={VIEW_TABS}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
-          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} isStreaming={false}
           executors={[]} executorOutputs={new Map()}
           onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
@@ -1275,6 +1349,20 @@ const CHANGELOG = {
 /** The queue that closes the badge gap: a release approval used to light
  *  nothing at all while a running job — which needs nobody — carried a digit. */
 const PENDING_ACTIONS: PendingAction[] = [
+  // A parked command — the ONE kind decided in the queue itself, and the one
+  // this frame never held, so its Approve/Always/Deny controls had never been
+  // photographed at all. Two of them, because deciding a night's worth in one
+  // sitting is the whole point of the card.
+  {
+    id: "defer-9y2n8ixor8", kind: "deferred_action", at: NOW - 40 * 60e3,
+    title: "Approve: a command the agent wants to run on laptop",
+    detail: "cd ~/Proteus && rm -rf node_modules && bun install",
+  },
+  {
+    id: "defer-4k1m2pqw7z", kind: "deferred_action", at: NOW - 36 * 60e3,
+    title: "Approve: a command the agent wants to run on laptop",
+    detail: "sudo launchctl kickstart -k system/com.docker.dockerd",
+  },
   {
     id: "apr_1", kind: "release_approval", at: NOW - 12e5,
     title: "Approve: deploy to production",
@@ -1310,7 +1398,7 @@ function WorkFrame() {
         <WorkSurface
           surface="Work" onSurface={() => {}}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
-          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={PENDING_ACTIONS}
           rpc={workRpc}
@@ -1319,6 +1407,52 @@ function WorkFrame() {
     </div>
   );
 }
+
+/**
+ * The two halves of a shell approval, in one frame: the queue that hands a
+ * standing permission out, and the list that is the only place to take one
+ * back.
+ *
+ * A frame of its own because the Settings page cannot be photographed here at
+ * all — it builds its RPC from a live agent socket and the gallery has no
+ * worker, so `?frame=settings` renders blank (and did before this change too).
+ * The grants card takes nothing but an `rpc`, so it can be fed directly, and
+ * `getShellApprovalGrants`/`revokeShellApprovalGrants` having had no caller at
+ * all is exactly the kind of gap a photograph closes.
+ */
+const SHELL_GRANTS = [
+  { rule: "rm-recursive", executor: "laptop" },
+  { rule: "sudo", executor: "laptop" },
+  { rule: "docker-destructive", executor: "sandbox" },
+];
+
+const approvalsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getShellApprovalGrants") return rpcResult({ grants: SHELL_GRANTS }).json<T>();
+  if (method === "revokeShellApprovalGrants") return rpcResult({ ok: true, grants: SHELL_GRANTS }).json<T>();
+  return workRpc<T>(method, args);
+};
+
+function ApprovalsFrame() {
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[720px] min-h-screen border-x p-border p-5 space-y-5">
+        <WorkSurface
+          surface="Work" onSurface={() => {}}
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} isStreaming={false}
+          executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
+          backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={PARKED_ONLY}
+          rpc={approvalsRpc}
+        />
+        <StandingApprovalsCard rpc={approvalsRpc} />
+      </div>
+    </div>
+  );
+}
+
+/** Only the parked commands: the rest of the queue is photographed by `work`,
+ *  and this frame is about one card. */
+const PARKED_ONLY: PendingAction[] = PENDING_ACTIONS.filter((a) => a.kind === "deferred_action");
 
 /** The same column before anything has happened — the state a fresh workspace
  *  opens on, which is the one an empty-state has to earn its copy in. */
@@ -1334,7 +1468,7 @@ function WorkEmptyFrame() {
         <WorkSurface
           surface="Work" onSurface={() => {}}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
-          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
           rpc={emptyRpc}
@@ -1374,21 +1508,31 @@ const ENVIRONMENT_MOUNTS: MountInfo[] = ENVIRONMENT_EXECUTORS.map((exec) => ({
   live: true,
   policy: {
     readOnly: false,
-    rootPath: "/",
     consistency: exec.name === "workspace" ? "durable"
       : exec.name === "laptop" ? "live-shared" : "ephemeral",
   },
-  cwd: ".",
   reason: null,
 }));
 
-const ENVIRONMENT_FILES: DirEntry[] = [
-  { name: "memory", type: "dir" },
-  { name: "skills", type: "dir" },
-  { name: "AGENTS.md", type: "file", size: 2_148 },
-  { name: "SOUL.md", type: "file", size: 913 },
-  { name: "notes.md", type: "file", size: 4_402 },
-];
+/** The workspace's real shape: a home under a real root, so the frame
+ *  photographs the breadcrumb and the walk-up affordances with something to
+ *  walk up TO. A frame that only ever shows one directory cannot show that
+ *  the parent button is broken — which is how it stayed broken. */
+const ENVIRONMENT_HOME = "/home/user";
+const ENVIRONMENT_TREE = {
+  "/": [{ name: "home", type: "dir" }, { name: "etc", type: "dir" }, { name: "tmp", type: "dir" }],
+  "/home": [{ name: "user", type: "dir" }],
+  "/home/user": [
+    { name: "head-3-scratch", type: "dir" },
+    { name: "head-4-scratch", type: "dir" },
+    { name: "memory", type: "dir" },
+    { name: "skills", type: "dir" },
+    { name: "AGENTS.md", type: "file", size: 2_148 },
+    { name: "SOUL.md", type: "file", size: 913 },
+    { name: "notes.md", type: "file", size: 4_402 },
+    { name: "ranked.txt", type: "file", size: 4_089_446 },
+  ],
+} satisfies Record<string, DirEntry[]>;
 
 function EnvironmentFrame() {
   // Answers only for the executor that actually owns these files. A stub that
@@ -1399,9 +1543,16 @@ function EnvironmentFrame() {
     if (method === "getExecutorFiles") {
       const parsedArgs = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
       const [execName, path] = parsedArgs;
-      return rpcResult(execName === "workspace"
-        ? { entries: ENVIRONMENT_FILES }
-        : { error: `Executor "${execName}" has no listing for ${path} in this frame` }).json<T>();
+      if (execName !== "workspace") {
+        return rpcResult({ error: `Executor "${execName}" has no listing for ${path} in this frame` }).json<T>();
+      }
+      // The environment resolves an empty path to its own home and names what
+      // it listed — the real contract, so navigation is exercised here.
+      const dir = path === "" ? ENVIRONMENT_HOME : path;
+      const entries = Object.entries(ENVIRONMENT_TREE).find(([key]) => key === dir)?.[1];
+      return rpcResult(entries === undefined
+        ? { error: `ENOENT: ${dir}` }
+        : { path: dir, entries }).json<T>();
     }
     return stubRpc<T>(method, args);
   };
@@ -1411,7 +1562,7 @@ function EnvironmentFrame() {
         <WorkSurface
           surface="Environment" onSurface={() => {}}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
-          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} isStreaming={false}
           executors={ENVIRONMENT_EXECUTORS} executorOutputs={new Map()}
           onExecute={async () => ({})} lastActiveExecutor="workspace"
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
@@ -1576,6 +1727,67 @@ function useAutoExpandToolCalls(): void {
   }, []);
 }
 
+/**
+ * A turn IN FLIGHT, in each state its tail can be in.
+ *
+ * Every other chat frame passes `isStreaming={false}`, so the gallery had
+ * never once photographed a live turn — which is why a caret rendered on a
+ * line of its own below the paragraph, and a turn that went quiet between
+ * steps showed nothing at all, both survived to production. The part `state`
+ * fields are the real ones the AI SDK's stream reducer writes; the frame is a
+ * still of a stream, not a mock of one.
+ */
+const STREAMING_MESSAGES: UIMessage[] = [
+  msg({
+    id: "st-text", role: "assistant",
+    parts: [
+      { type: "text", state: "streaming", text: "The 500 is a deref on `rules[kind]`, and after Tuesday's migration percentage coupons carry `kind: null`. The caret belongs at the end of this sentence" },
+    ],
+  }),
+  msg({
+    id: "st-after-tools", role: "assistant",
+    parts: [
+      { type: "text", state: "done", text: "Reading the handler and the migration that landed Tuesday." },
+      { type: "tool-file", toolCallId: "st1", state: "output-available", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" },
+      { type: "tool-file", toolCallId: "st2", state: "output-available", input: { action: "read", path: "packages/checkout/migrations/0042_coupon_kind.sql" }, output: "…" },
+    ],
+  }),
+  msg({
+    id: "st-tool", role: "assistant",
+    parts: [
+      { type: "text", state: "done", text: "Running the regression suite before I touch anything else." },
+      { type: "tool-run", toolCallId: "st3", state: "input-available", input: { runtime: "sandbox", command: "bun test packages/checkout" } },
+    ],
+  }),
+  msg({
+    id: "st-reasoning", role: "assistant",
+    parts: [
+      { type: "reasoning", state: "streaming", text: "SAVE20 fails and SAVE10 does not, so the branch is percentage-vs-fixed rather than the lookup. Before I patch it I want the migration in front of me" },
+    ],
+  }),
+  msg({
+    id: "st-fence", role: "assistant",
+    parts: [
+      { type: "text", state: "streaming", text: "Here is the guard, mid-fence:\n\n```ts\nconst rule = rules[kind] ?? inferKind(coupon);\nif (rule === undefined) return notApplicable(coupon);\n```" },
+    ],
+  }),
+  msg({ id: "st-empty", role: "assistant", parts: [] }),
+];
+
+/** Each message is rendered as the LAST one of an open stream, which is the
+ *  only condition under which a live tail is drawn at all. */
+function StreamingFrame() {
+  return (
+    <div className="flex justify-center p-bg p-text min-h-screen">
+      <div data-gallery-stream className="@container flex w-full max-w-[640px] flex-col gap-8 border-x p-border px-6 py-6">
+        {STREAMING_MESSAGES.map((m) => (
+          <MessageView key={m.id} message={m} isLast isStreaming onFork={() => {}} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ToolCallsFrame() {
   useAutoExpandToolCalls();
   return (
@@ -1607,7 +1819,7 @@ async function mount() {
   let node: React.ReactNode;
   let entries = ["/"];
   if (frame === "shell") node = <Shell />;
-  else if (frame === "forks") node = <Shell surface="Exploration" mctsTree={MCTS_TREE} rpc={forkRpc} />;
+  else if (frame === "forks") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
   else if (frame === "forkmerge") node = <Shell surface="Exploration" rpc={mergeFirstRpc} />;
   else if (frame === "forkfull" || frame === "forkbig") {
     const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
@@ -1622,6 +1834,7 @@ async function mount() {
   else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "chatempty") node = <ChatEmptyFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
+  else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "views") node = <ViewsFrame />;
   else if (frame === "viewblocks") node = <ViewBlocksFrame />;
@@ -1630,6 +1843,7 @@ async function mount() {
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
   else if (frame === "work") node = <WorkFrame />;
   else if (frame === "workempty") node = <WorkEmptyFrame />;
+  else if (frame === "approvals") node = <ApprovalsFrame />;
   else if (frame === "environment") node = <EnvironmentFrame />;
   else if (frame === "supervise") node = <SuperviseFrame />;
   else if (frame === "settings") {

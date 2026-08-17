@@ -42,25 +42,48 @@ export interface AgentSurfaceProps {
 }
 
 /**
- * Says how the model reaches a capability. `native` means the turn hands it to
- * the model as a tool definition; `codemode` means it exists only as a
- * namespace inside an `execute_tools` program, which is a real difference in
- * how the agent has to call it and therefore worth a word on screen.
+ * Says how the model reaches a capability, and whether this agent has it.
  *
- * The value is derived by the orchestrator from the assembled tool surface —
- * this renders it, it does not decide it.
+ * `exposure` is the registry's DECLARED reach (`TOOL_REACH`): `native` = the
+ * turn hands it to the model as a tool definition, `codemode` = it exists only
+ * as a namespace inside an `execute_tools` program, `both` = both, over one
+ * dispatcher. That is a real difference in how the agent has to call it and
+ * therefore worth a word on screen.
+ *
+ * It used to be a two-valued guess the orchestrator made from the assembled
+ * ToolSet — `native` if present, `codemode` otherwise — which had no way to say
+ * "this agent has it on neither surface". `report` is the one deps-gated
+ * builtin, so on an orchestrator it fell into the else-branch and this badge
+ * read "code mode": false twice over, because `report` is native wherever it
+ * exists and its `report.*` namespace is wired only on subordinates. Absence is
+ * now its own signal (`wired`), so neither word has to carry it.
  */
-function ExposureBadge({ exposure }: { exposure: ToolInfo["exposure"] }) {
-  const native = exposure === "native";
+function ExposureBadge({ exposure, wired }: { exposure: ToolInfo["exposure"]; wired: boolean }) {
+  const label = exposure === "both" ? "native · code mode" : exposure === "native" ? "native" : "code mode";
+  const reach = exposure === "both"
+    ? "Passed to the model as a tool definition, and reachable inside an execute_tools program."
+    : exposure === "native"
+      ? "Passed to the model as a tool definition."
+      : "Reachable only from inside an execute_tools program.";
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-mono ${native ? "p-badge-neutral" : "p-accent-subtle p-accent"}`}
-      title={native
-        ? "Passed to the model as a tool definition."
-        : "Reachable only from inside an execute_tools program."}
-    >
-      {native ? "native" : "code mode"}
-    </span>
+    <>
+      <span
+        className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-mono ${
+          wired ? (exposure === "native" ? "p-badge-neutral" : "p-accent-subtle p-accent") : "p-badge-neutral p-text-3"
+        }`}
+        title={reach}
+      >
+        {label}
+      </span>
+      {!wired && (
+        <span
+          className="p-meta p-text-3"
+          title="This capability exists, but this agent does not wire it — so it is on none of its surfaces this turn."
+        >
+          not on this agent
+        </span>
+      )}
+    </>
   );
 }
 
@@ -80,7 +103,7 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
   const hasDetail = tool.description.trim() !== tool.summary.trim();
 
   return (
-    <div className="p-card rounded-lg">
+    <div className="p-card">
       <button
         type="button"
         onClick={() => hasDetail && setOpen(!open)}
@@ -91,7 +114,7 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
           <PackageIcon size={13} className="p-accent shrink-0" />
           <span className="p-title font-mono p-text">{tool.name}</span>
           <Badge variant="secondary">{tool.learned ? "Learned" : "Built-in"}</Badge>
-          <ExposureBadge exposure={tool.exposure} />
+          <ExposureBadge exposure={tool.exposure} wired={tool.wired} />
           {tool.usageCount > 0 && <span className="p-meta p-text-3 ml-auto">{tool.usageCount} uses</span>}
           {hasDetail && (
             <CaretRightIcon
@@ -129,14 +152,14 @@ export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, on
             </div>
             {/* The heading is the agent's NAME as everything else in the app
                 shows it — the mission-derived title the sidebar, the chat
-                header and the tab all carry. `as.name` is the URL slug
-                (`my-personal-for-helping-9935d3`), which is addressing, not
-                identity; it belongs beside the id. */}
+                header and the tab all carry. Beneath it, ONE identifier: the
+                slug, which is the workspace's address and its id. There is no
+                second one to show: `workspace_identity.id` is
+                `idFromName(slug)` on this backend, so it restated the line
+                above it in hex. */}
             <div className="min-w-0">
               <div className="p-title p-text truncate" title={as.displayName}>{as.displayName}</div>
-              <div className="p-meta p-text-3 font-mono truncate" title={`${as.name} · ${as.id}`}>
-                {as.name} · {as.id.slice(0, 12)}…
-              </div>
+              <div className="p-meta p-text-3 font-mono truncate" title={as.name}>{as.name}</div>
             </div>
           </div>
           <div className="space-y-0">
@@ -167,7 +190,7 @@ export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, on
               placeholder="Search memory…" className="w-full rounded-lg border p-border p-elevated pl-9 pr-3 py-2 text-sm p-text focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)] placeholder:p-text-3 transition-all" />
           </div>
           {!memorySearch && memoryContent ? (
-            <div className="p-card rounded-lg p-4">
+            <div className="p-card p-4">
               <div className="flex items-center gap-2 mb-3">
                 <DatabaseIcon size={13} className="p-accent" />
                 <span className="text-xs font-mono p-accent">memory/MEMORY.md</span>
@@ -182,7 +205,7 @@ export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, on
           ) : memory.length === 0 ? (
             <EmptyState icon={<MagnifyingGlassIcon size={28} />} title="No results" />
           ) : memory.map((entry, i) => (
-            <div key={i} className="p-card rounded-lg p-3">
+            <div key={i} className="p-card p-3">
               <span className="text-[11px] font-mono p-accent">{entry.updatedAt}</span>
               <p className="text-xs p-text-2 line-clamp-4 whitespace-pre-wrap mt-1 leading-relaxed">{entry.content}</p>
             </div>
