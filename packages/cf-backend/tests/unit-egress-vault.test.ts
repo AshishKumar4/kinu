@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder } from '@proteus/core';
 import { createCredentialCipher } from '../src/user/credential-envelope.js';
 import {
-  initEgressVaultTables, listEgressBindings, listEgressSecrets, putEgressSecret,
+  initEgressVaultTables, listEgressSecrets, putEgressSecret,
   resolveEgressInjection, revokeEgressSecret, rewrapEgressSecrets,
   type EgressVaultDeps,
 } from '../src/user/egress-vault.js';
@@ -47,7 +47,7 @@ describe('the vault stores a secret without ever handing it back', () => {
   test('the listing surfaces carry no secret material at all', async () => {
     const deps = await vault();
     await putEgressSecret(deps, STRIPE);
-    const serialized = JSON.stringify([listEgressSecrets(deps.sql), listEgressBindings(deps.sql)]);
+    const serialized = JSON.stringify(listEgressSecrets(deps.sql));
     expect(serialized).not.toContain(SECRET);
     expect(serialized).toContain('api.stripe.com');
   });

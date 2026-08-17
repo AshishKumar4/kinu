@@ -138,13 +138,6 @@ export function listEgressSecrets(sql: SqlExec): EgressSecretSummary[] {
   }));
 }
 
-/** The no-secret view an outbound handler is configured with. */
-export function listEgressBindings(sql: SqlExec): EgressSecretBinding[] {
-  return listEgressSecrets(sql).map(({ id, label, host, placeholder }) => (
-    { id, label, host, placeholder }
-  ));
-}
-
 /**
  * Add or replace a secret.
  *
