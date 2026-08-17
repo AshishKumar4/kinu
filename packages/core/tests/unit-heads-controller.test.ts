@@ -49,10 +49,10 @@ function fakeReport(id: string, overrides: Partial<HeadReport> = {}): HeadReport
     fileChanges: [],
     childHeadIds: [],
     toolCalls: [],
-    steps: [],
     tokenUsage: { input: 100, output: 80, total: 180 },
     wallClockMs: 250,
     ...overrides,
+    stepCount: overrides.stepCount ?? 0,
   };
 }
 
@@ -334,12 +334,7 @@ describe('HeadController.run', () => {
         return {
           id: input.id,
           async run() {
-            return fakeReport(input.id, {
-              steps: [
-                { text: 'Reading the spec.', reasoning: 'start here', toolCalls: [] },
-                { text: '', toolCalls: [{ name: 'sandbox_read', input: { path: '/x' }, output: 'contents' }] },
-              ],
-            });
+            return fakeReport(input.id, { stepCount: 2 });
           },
           async abort() {},
         };
@@ -357,8 +352,11 @@ describe('HeadController.run', () => {
     const run = journal.listRuns(10).find((r) => r.rootId === 'r-steps');
     expect(run).toBeDefined();
     expect(run!.heads).toHaveLength(1);
-    expect(run!.heads[0].steps).toHaveLength(2);
-    expect(run!.heads[0].steps[1].toolCalls[0]).toEqual({ name: 'sandbox_read', input: { path: '/x' }, output: 'contents' });
+    // The trace reaches the journal per step while the head is still running
+    // (HeadInferenceDeps.reportStep), never from the finished report — so a
+    // report claiming two steps must NOT materialize a trace here, or a late
+    // report could overwrite the live rows already written.
+    expect(run!.heads[0].steps).toHaveLength(0);
   });
 });
 

@@ -569,6 +569,6 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
         toolName: 'run', args: { command: `x${i}` }, result: `Error: no ${i}`, success: false,
       });
     }
-    expect(orch.steering.steerFor(4)).not.toBeNull();
+    expect(orch.steering.steerFor({ stepNumber: 4, messages: [] })).not.toBeNull();
   });
 });

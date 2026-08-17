@@ -7,17 +7,19 @@ import { createTestRuntime, toolExecute } from '@proteus/test-utils';
 import * as v from 'valibot';
 import {
   buildBuiltinTools, initAllTables, initTaskListTable, BUILTIN_TOOL_SPECS,
-  createTasksCodemodeProvider, TaskListStore,
+  createTasksCodemodeProvider, TaskListStore, initAgentConfigTable,
+  buildSystemPromptSync, createAgentConfigStore, AGENT_STANCES,
   type AgentRuntime, type CodemodeProvider, type JsonValue,
 } from '../src/index.ts';
 
 type TasksResult = object | string | number | boolean | null | undefined;
 interface TasksTestInput {
   action: string;
-  titles?: string[];
+  titles?: (string | number)[];
   parent?: string;
   id?: string;
   status?: string;
+  stance?: string;
 }
 type Exec = (args: TasksTestInput) => Promise<TasksResult>;
 
@@ -100,7 +102,13 @@ describe('tasks tool', () => {
       error: 'tasks.update requires `status` — one of open, active, done, dropped',
     });
     expect(await tasks({ action: 'update', id: 't9', status: 'done' })).toEqual({ error: 'no task t9' });
-    expect(await tasks({ action: 'sort' })).toEqual({ error: "unknown tasks action 'sort'" });
+    // This assertion used to pin `unknown tasks action 'sort'` — a refusal that
+    // named nothing the model could use next. The gate existed and asserted the
+    // defect. It now names the vocabulary AND echoes what arrived, which is the
+    // one wording every native dispatcher shares (registry.unknownActionError).
+    expect(await tasks({ action: 'sort' })).toEqual({
+      error: 'tasks requires `action` — one of add, update, list, mode; got "sort"',
+    });
   });
 
   test('a refused title is reported beside the ones that landed', async () => {
@@ -139,6 +147,47 @@ describe('tasks tool', () => {
     const res = v.parse(AddedSchema, await tasks(args));
     expect(res.added.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
   });
+
+  // The AI SDK does not validate a jsonSchema-declared tool input: `jsonSchema`
+  // leaves `Schema.validate` undefined and `safeValidateTypes` then returns the
+  // raw JSON untouched. So `action` is whatever the model emitted, and the
+  // declared literal union is a claim about it — which is how
+  // `{"action":"list\">"}` reached the dispatcher in production and was answered
+  // `unknown tasks action 'list">'`: true, and useless.
+  describe('a model-supplied action outside the vocabulary is answered WITH the vocabulary', () => {
+    test('the exact production payload is refused by naming all four actions', async () => {
+      const tasks = setup();
+      const error = v.parse(v.object({ error: v.string() }), await tasks({ action: 'list">' })).error;
+      for (const action of ['add', 'update', 'list', 'mode']) expect(error).toContain(action);
+      // The old answer named none of them. A refusal the model cannot act on is
+      // how a single malformed call becomes a loop.
+      expect(error).not.toContain('unknown tasks action');
+    });
+
+    test('every wrong shape of action is refused the same way, not crashed on', async () => {
+      const tasks = setup();
+      for (const action of ['', 'LIST', 'listen', 'add ', '{"action":"list"}']) {
+        const result = v.parse(v.object({ error: v.string() }), await tasks({ action }));
+        expect(result.error).toContain('one of add, update, list, mode');
+      }
+    });
+
+    test('a valid action still works, and the list is untouched by a refused call', async () => {
+      const tasks = setup();
+      await tasks({ action: 'add', titles: ['ship it'] });
+      await tasks({ action: 'list">' });
+      const listed = v.parse(TaskListSchema, await tasks({ action: 'list' }));
+      expect(listed.tasks.map((t) => t.id)).toEqual(['t1']);
+    });
+
+    test('titles of the wrong type are refused, not fed to `raw.trim()`', async () => {
+      // TaskListStore.add trims each title, so a non-string element threw a
+      // TypeError out of the tool instead of answering the model.
+      const tasks = setup();
+      const bad = await tasks({ action: 'add', titles: [1, 2] });
+      expect(v.parse(v.object({ error: v.string() }), bad).error).toContain('array of task titles');
+    });
+  });
 });
 
 describe('tasks.* codemode — the SAME dispatcher and store the native tool uses', () => {
@@ -147,7 +196,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
     initAllTables(testSql.execRaw);
     initTaskListTable(testSql.execRaw);
     const taskList = new TaskListStore(rt.storage.sql);
-    const provider = createTasksCodemodeProvider(taskList);
+    const provider = createTasksCodemodeProvider(taskList, createAgentConfigStore(rt.storage.sql));
 
     const added = v.parse(
       AddedSchema,
@@ -172,12 +221,85 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
     initAllTables(testSql.execRaw);
     initTaskListTable(testSql.execRaw);
     const taskList = new TaskListStore(rt.storage.sql);
-    const provider = createTasksCodemodeProvider(taskList);
+    const provider = createTasksCodemodeProvider(taskList, createAgentConfigStore(rt.storage.sql));
     await codemodeExecute(provider, 'add')(['Parent task']);
     await codemodeExecute(provider, 'add')(['Child task'], 't1');
     await codemodeExecute(provider, 'update')('t2', 'dropped');
     const result = v.parse(TaskListSchema, await codemodeExecute(provider, 'list')());
     expect(result.tasks.length).toBe(1);
     expect(result.tasks[0]?.subtasks).toEqual([{ id: 't2', title: 'Child task', status: 'dropped' }]);
+  });
+});
+
+// The wiring this whole axis stands on: what the agent SETS through the tool
+// has to be what the next turn's system prompt CARRIES. Cut any link — the
+// dispatcher's write, the config accessor, the prompt's stance option, or the
+// render loop — and these fail.
+describe('tasks action=mode — the agent\'s own working stance', () => {
+  function stanceSetup() {
+    const { rt, testSql } = createTestRuntime();
+    initAllTables(testSql.execRaw);
+    initTaskListTable(testSql.execRaw);
+    initAgentConfigTable(testSql.execRaw);
+    return { tasks: nativeTasks(rt), rt, config: createAgentConfigStore(rt.storage.sql) };
+  }
+
+  test('a stance the agent sets reaches the system prompt it is built with next', async () => {
+    const { tasks, rt, config } = stanceSetup();
+    // Before: nothing.
+    expect(buildSystemPromptSync(rt, { stance: config.getStance() }))
+      .not.toContain('Research stance:');
+
+    expect(await tasks({ action: 'mode', stance: 'research' })).toEqual({ stance: 'research' });
+
+    // The backend reads exactly this on the next turn (actor-agent.ts
+    // `stance: this.config.getStance()`, local-session.ts likewise).
+    const prompt = buildSystemPromptSync(rt, { stance: config.getStance() });
+    expect(prompt).toContain('Research stance:');
+    expect(prompt).toContain('name the file and line each claim rests on');
+  });
+
+  test('mode with no stance reads the current one back, and it is general until set', async () => {
+    const { tasks } = stanceSetup();
+    expect(await tasks({ action: 'mode' })).toEqual({ stance: 'general' });
+    await tasks({ action: 'mode', stance: 'audit' });
+    expect(await tasks({ action: 'mode' })).toEqual({ stance: 'audit' });
+  });
+
+  test('an unknown stance is refused with the vocabulary, and changes nothing', async () => {
+    const { tasks } = stanceSetup();
+    await tasks({ action: 'mode', stance: 'audit' });
+    expect(await tasks({ action: 'mode', stance: 'yolo' }))
+      .toEqual({ error: `tasks.mode requires \`stance\` — one of ${AGENT_STANCES.join(', ')}` });
+    expect(await tasks({ action: 'mode' })).toEqual({ stance: 'audit' });
+  });
+
+  test('setting a stance mid-Plan-turn does not lift the Plan bar', async () => {
+    // The permission axis is the only thing that decides this, and `build` is
+    // the hostile stance name to try it with.
+    const { tasks, rt, config } = stanceSetup();
+    expect(await tasks({ action: 'mode', stance: 'build' })).toEqual({ stance: 'build' });
+
+    const plan = buildSystemPromptSync(rt, {
+      workMode: 'plan', planSubmissionAvailable: true, stance: config.getStance(),
+    });
+    expect(plan).toContain('Build stance:');
+    expect(plan).toContain('Do not change files, system state, releases, or deployments');
+    expect(plan).toContain('Do not begin implementation until the plan is approved');
+
+    // And the structural half is untouched: submit_plan's presence is decided
+    // by the Plan deps, and the stance is not an input to tool construction.
+    expect(Object.keys(buildBuiltinTools({ rt }))).not.toContain('submit_plan');
+  });
+
+  test('the model can discover the action and its values from the schema alone', async () => {
+    // A self-selected stance the agent is never told about is unreachable by
+    // construction, so the vocabulary has to be in what the provider reads.
+    const { rt } = createTestRuntime();
+    const entry = buildBuiltinTools({ rt }).tasks;
+    const description = entry?.description ?? '';
+    expect(description).toContain('mode sets the stance you work in');
+    for (const stance of AGENT_STANCES) expect(description).toContain(`${stance} = `);
+    expect(BUILTIN_TOOL_SPECS.tasks.whenToUse).toContain('mode sets the stance you work in');
   });
 });

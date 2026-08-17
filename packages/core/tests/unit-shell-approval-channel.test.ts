@@ -19,8 +19,9 @@ import {
 
 type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 
-/** `sudo` is a 'gate' rule; plain `ls` is 'allow'. */
-const GATED = 'sudo systemctl restart nginx';
+/** Gated on every executor including the agent's own workspace, which is what
+ *  this harness's shell is: the harm of a force-push lands on a remote. */
+const GATED = 'git push --force origin main';
 
 function harness(opts: {
   mode?: 'strict' | 'allow_all' | 'deny_all';
@@ -74,7 +75,7 @@ describe('run tool — interactive shell approval channel', () => {
 
     const out = await run.execute({ command: GATED });
 
-    expect(out).toContain('Denied by the user');
+    expect(out).toContain('Denied by the owner');
     expect(executed).toEqual([]);
   });
 
@@ -93,7 +94,7 @@ describe('run tool — interactive shell approval channel', () => {
 
     const out = await run.execute({ command: GATED });
 
-    expect(out).toContain('Requires user approval (mode=strict)');
+    expect(out).toContain('needs owner approval, nobody to ask');
     expect(executed).toEqual([]);
   });
 
@@ -102,7 +103,7 @@ describe('run tool — interactive shell approval channel', () => {
 
     const out = await run.execute({ command: GATED });
 
-    expect(out).toContain('Requires user approval (mode=strict)');
+    expect(out).toContain('needs owner approval, nobody to ask');
     expect(executed).toEqual([]);
   });
 
@@ -111,7 +112,7 @@ describe('run tool — interactive shell approval channel', () => {
 
     const out = await run.execute({ command: GATED });
 
-    expect(out).toContain('Requires user approval (mode=deny_all)');
+    expect(out).toContain('refused by standing policy (deny_all)');
     expect(executed).toEqual([]);
     expect(asked).toEqual([]);
   });

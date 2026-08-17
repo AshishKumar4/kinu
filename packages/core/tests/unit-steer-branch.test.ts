@@ -35,7 +35,7 @@ function setup() {
 function completedReport(id: string, summary: string, status: HeadReport['status'] = 'completed'): HeadReport {
   return {
     id, status, summary,
-    evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], steps: [],
+    evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], stepCount: 0,
     tokenUsage: { input: 10, output: 20, total: 30 },
     wallClockMs: 5,
   };

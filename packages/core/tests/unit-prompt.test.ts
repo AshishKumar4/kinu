@@ -12,8 +12,9 @@ import {
   currentDateForPrompt,
   DELEGATION_RUNGS,
   modelSupportsTools,
-  promptModeForTurnEvent,
-  promptModeForTurnMetadata,
+  AGENT_STANCE_SPECS,
+  turnProvenanceForMetadata,
+  workModeForTurnMetadata,
   splitPromptSections,
   type ParsedSkill,
 } from '../src/index.ts';
@@ -37,8 +38,18 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/## Delegation/);
     expect(prompt).toMatch(/one tool — `agents`/);
     expect(prompt).toMatch(/how long does the helper need to live/);
-    // The two rungs, plus "do it yourself" as the zero rung.
-    expect(prompt).toMatch(/- Do it yourself — a single short coherent change\./);
+    // The DEFAULT, where the zeroth rung used to be a bullet. A first bullet
+    // reading "- Do it yourself" made rung 0 the visually first choice and the
+    // section a classification; the exemptions now come last, and as things to
+    // DO, so an unrecognised shape falls toward the ladder instead of away.
+    expect(prompt).toMatch(/Delegate once the shape of the work is settled/);
+    expect(prompt).toMatch(/naming the parts is yours, running them is theirs/);
+    expect(prompt).toMatch(/Work alone on a single coherent change in one file/);
+    expect(prompt).toMatch(/two or more independent parts goes to the ladder/);
+    expect(prompt).not.toContain('- Do it yourself');
+    // …and the default is read BEFORE any rung, which is the whole point.
+    expect(prompt.indexOf('Delegate once the shape'))
+      .toBeLessThan(prompt.indexOf('- Ephemeral fork'));
     expect(prompt).toMatch(/- Ephemeral fork \(action=fork\) — /);
     expect(prompt).toMatch(/- Persistent subordinate \(action=staff\) — /);
     // The old split surface is gone entirely.
@@ -200,7 +211,14 @@ describe('buildSystemPromptSync', () => {
     // approaches plausible, can't check its own output — so 0/10 tasks ever
     // reached for a lift lever. Both triggers are now named, in the registry
     // single source, so the schema and the prompt carry them together.
-    expect(DELEGATION_RUNGS.fork).toMatch(/on two triggers/);
+    // Opens on the payoff in the caller's own currency — nothing in the
+    // delegation surface bought the model anything before, and the section's
+    // one use of "cheapest" argued for NOT reaching for the ladder.
+    expect(DELEGATION_RUNGS.fork).toMatch(/^Fork \(action=fork\) to spend someone else's context instead of your own/);
+    expect(DELEGATION_RUNGS.fork).toMatch(/hands you back only the answer/);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain('spend someone else\'s context instead of your own');
+    expect(buildSystemPromptSync(createTestRuntime().rt)).not.toContain('spend someone else\'s context');
+    expect(DELEGATION_RUNGS.fork).toMatch(/Two triggers\./);
     expect(DELEGATION_RUNGS.fork).toMatch(/Breadth: work splits into 2\+ independent angles/);
     expect(DELEGATION_RUNGS.fork).toMatch(/Doubt: your first attempt failed/);
     expect(DELEGATION_RUNGS.fork).toMatch(/you cannot check your own output/);
@@ -441,17 +459,19 @@ describe('buildSystemPromptSync', () => {
     expect(memory).toMatch(/sessions reads what past sessions said, before re-deriving/);
   });
 
-  test('the release mode overlay points at release.* (codemode, not a native tool)', () => {
-    // `release` left the native surface for the release.* codemode
-    // namespace (tools/release-codemode.ts); the mode overlay's wording
-    // follows it there, and there is no standalone `## Proteus release
-    // changes` section duplicating the flow.
+  test('no release overlay survives: nothing could ever stamp it', () => {
+    // `release` was a PromptMode value with no producer. `proteusMode` is
+    // written in exactly three places (the composer's Plan/Build choice, the
+    // plan-approval turn, and jobs/runner.ts from `background_jobs.work_mode`,
+    // which store.ts coerces to plan|build), and no event name maps to it.
+    // So the guidance keyed on it had never reached a model, and it is gone
+    // rather than kept as an unreachable branch. `release.*` remains reachable
+    // exactly where it always was: the codemode namespace.
     const { rt } = createTestRuntime();
-    expect(buildSystemPromptSync(rt)).not.toContain('## Proteus release changes');
-    expect(buildSystemPromptSync(rt, { mode: 'release' }))
-      .toContain('`release.*` inside execute_tools');
-    expect(buildSystemPromptSync(rt, { mode: 'release' }))
-      .toContain('Never deploy Proteus release changes without an explicit approval record');
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).not.toContain('## Proteus release changes');
+    expect(prompt).not.toContain('Release mode:');
+    expect(prompt).not.toContain('Never deploy Proteus release changes');
   });
 
   test('the ambient skills index renders name + description for every available skill, active or not', () => {
@@ -543,6 +563,42 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('laptop');
     expect(prompt).not.toContain('sandbox.*');
     expect(prompt).not.toMatch(/Showing a running app/);
+  });
+
+  test('the hosted workspace names its memory ceiling and the sandbox names where oversized work goes', () => {
+    // The escalation that did not happen: `git clone` in the Nimbus workspace
+    // died with "Worker exceeded memory limit", and the agent retried the same
+    // clone three more ways rather than moving to the container. Both halves
+    // are doctrine in the cacheable prefix, and neither is inferable from the
+    // other — the ceiling only the workspace line can state, the destination
+    // only the sandbox line can offer.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cf',
+      executors: [
+        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
+        { name: 'sandbox', kind: 'sandbox', available: true, configured: true, active: false, status: 'idle' },
+      ],
+    });
+    expect(prompt).toContain('runs inside a Worker isolate');
+    expect(prompt).toContain('~128 MB');
+    expect(prompt).toContain('large clones and builds');
+    expect(prompt).toContain('the moment it outgrows the workspace');
+  });
+
+  test('the isolate ceiling is claimed only where it holds — never on cli-local', () => {
+    // cli-local's workspace is the inline executor on the user's own machine
+    // (cli-backend/runtime.ts registers createInlineExecutor), which carries no
+    // isolate limit and reports a measured cgroup instead when it has one.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cli-local',
+      executors: [
+        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
+      ],
+    });
+    expect(prompt).toContain('workspace.*');
+    expect(prompt).not.toContain('Worker isolate');
   });
 
   test('a registered-but-offline laptop stays visible with the reconnect instruction', () => {
@@ -775,41 +831,123 @@ describe('buildSystemPromptSync', () => {
   test('adds mode overlays only when requested', () => {
     const { rt } = createTestRuntime();
     expect(buildSystemPromptSync(rt)).not.toContain('Background-resume mode');
-    expect(buildSystemPromptSync(rt, { mode: 'background_resume' })).toContain('Background-resume mode');
-    expect(buildSystemPromptSync(rt, { mode: 'cron' })).toContain('Scheduled wake mode');
-    expect(buildSystemPromptSync(rt, { mode: 'release' })).toContain('Never deploy Proteus release changes');
-    const plan = buildSystemPromptSync(rt, { mode: 'plan', planSubmissionAvailable: true });
+    expect(buildSystemPromptSync(rt, { provenance: 'background_resume' }))
+      .toContain('Background-resume mode');
+    const plan = buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: true });
     expect(plan).toContain('submit_plan');
     expect(plan).toContain('Do not change files, system state, releases, or deployments');
     expect(plan).toContain('Do not expose ports or produce preview or output links');
     expect(plan).toContain('Do not begin implementation until the plan is approved');
 
-    const delegatedPlan = buildSystemPromptSync(rt, { mode: 'plan', planSubmissionAvailable: false });
+    const delegatedPlan = buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: false });
     expect(delegatedPlan).toContain('report concrete findings to the parent Plan turn');
     expect(delegatedPlan).not.toContain('End by calling `submit_plan`');
   });
 
-  test('turn-mode classification is one shared rule for both backends', () => {
-    // Both backends stamp `metadata.proteusEvent` on programmatic turns and
-    // must derive the SAME prompt mode from it — the cf backend used to pass
-    // no mode at all, so a hosted agent woken to collect a background job
-    // never saw the background-resume guidance the CLI agent got.
-    expect(promptModeForTurnEvent('background_job')).toBe('background_resume');
-    expect(promptModeForTurnEvent('timer_cron')).toBe('cron');
-    expect(promptModeForTurnEvent('event_drain')).toBe('chat');
-    expect(promptModeForTurnEvent(null)).toBe('chat');
-    expect(promptModeForTurnEvent(undefined)).toBe('chat');
-    expect(promptModeForTurnMetadata({ proteusMode: 'plan' })).toBe('plan');
-    expect(promptModeForTurnMetadata({ proteusMode: 'build' })).toBe('build');
-    expect(promptModeForTurnMetadata({ proteusMode: 'invalid', proteusEvent: 'background_job' }))
-      .toBe('background_resume');
-    expect(promptModeForTurnMetadata(null)).toBe('chat');
+  test('a background-job wake reaches the resume guidance even though it also carries a work mode', () => {
+    // The regression this pins. jobs/runner.ts stamps BOTH
+    // `proteusEvent: 'background_job'` and `proteusMode: job.workMode` on the
+    // wake, and `background_jobs.work_mode` is NOT NULL — so under the old
+    // single-`mode` precedence the work mode always won and this guidance,
+    // written to stop the agent re-doing or polling settled work, never
+    // reached a model on the real wake path. Provenance is now read from the
+    // event alone, so the wake carries the overlay AND its permission.
+    const wake = { proteusEvent: 'background_job', proteusMode: 'build' };
+    expect(turnProvenanceForMetadata(wake)).toBe('background_resume');
+    expect(workModeForTurnMetadata(wake)).toBe('build');
 
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
-      backend: 'cf', mode: promptModeForTurnEvent('background_job'),
+      backend: 'cf',
+      provenance: turnProvenanceForMetadata(wake),
+      workMode: workModeForTurnMetadata(wake),
     });
-    expect(prompt).toContain('Background-resume mode');
+    expect(prompt).toContain('fetch the referenced job result first');
+
+    // A Plan job's wake keeps BOTH: the resume overlay and the read-only bar.
+    const planWake = { proteusEvent: 'background_job', proteusMode: 'plan' };
+    const planPrompt = buildSystemPromptSync(rt, {
+      provenance: turnProvenanceForMetadata(planWake),
+      workMode: workModeForTurnMetadata(planWake),
+    });
+    expect(planPrompt).toContain('fetch the referenced job result first');
+    expect(planPrompt).toContain('Do not change files, system state, releases, or deployments');
+  });
+
+  test('the two axes are read from different metadata keys and neither can suppress the other', () => {
+    expect(turnProvenanceForMetadata({ proteusEvent: 'event_drain' })).toBe('chat');
+    expect(turnProvenanceForMetadata(null)).toBe('chat');
+    expect(turnProvenanceForMetadata({})).toBe('chat');
+    // A timer fire is published as an EVENT and drains as `event_drain`; no
+    // timer- or cron-named proteusEvent exists, which is why the cron overlay
+    // is gone rather than kept as a branch nothing can enter.
+    expect(turnProvenanceForMetadata({ proteusEvent: 'timer_cron' })).toBe('chat');
+
+    expect(workModeForTurnMetadata({ proteusMode: 'plan' })).toBe('plan');
+    expect(workModeForTurnMetadata({ proteusMode: 'build' })).toBe('build');
+    // Only the exact 'plan' string raises the bar — an old or foreign client
+    // cannot invent a mode, and cannot lower one either.
+    expect(workModeForTurnMetadata({ proteusMode: 'invalid' })).toBe('build');
+    expect(workModeForTurnMetadata(null)).toBe('build');
+  });
+
+  test('Auto (the build work mode) adds nothing at all, byte for byte', () => {
+    // `- Turn mode: build` used to be inserted ~350 bytes into the CACHEABLE
+    // prefix, announcing a mode with no guidance branch, so an Auto turn and
+    // an otherwise identical chat turn could not share a provider prefix
+    // cache. Auto IS the absence of constraint; it renders nothing.
+    const { rt } = createTestRuntime();
+    const base = { backend: 'cf' as const, model: { id: 'x' }, currentDate: '2026-01-01' };
+    expect(buildSystemPromptSync(rt, { ...base, workMode: 'build' }))
+      .toBe(buildSystemPromptSync(rt, base));
+    expect(buildSystemPromptSync(rt, base)).not.toContain('Turn mode');
+  });
+
+  test('a selected stance renders its guidance verbatim into the operating guidance', () => {
+    // The wiring proof: the text comes from AGENT_STANCE_SPECS, so cutting the
+    // render loop in renderOperatingGuidance fails this, and editing the
+    // doctrine without touching the prompt cannot make it pass vacuously.
+    const { rt } = createTestRuntime();
+    for (const stance of ['research', 'build', 'audit'] as const) {
+      const prompt = buildSystemPromptSync(rt, { stance });
+      const guidance = AGENT_STANCE_SPECS[stance].guidance;
+      expect(guidance.length).toBeGreaterThan(0);
+      for (const line of guidance) expect(prompt).toContain(line);
+      // In the guidance section, not loose somewhere else in the prefix.
+      expect(prompt.indexOf(guidance[0]!)).toBeGreaterThan(prompt.indexOf('## Operating guidance'));
+    }
+  });
+
+  test('the general stance adds nothing at all, byte for byte', () => {
+    // Same contract as Auto above: the default is the absence of constraint,
+    // and spending prefix bytes to announce it would be the thing this whole
+    // axis exists to avoid.
+    const { rt } = createTestRuntime();
+    const base = { backend: 'cf' as const, model: { id: 'x' } };
+    expect(AGENT_STANCE_SPECS.general.guidance).toEqual([]);
+    expect(buildSystemPromptSync(rt, { ...base, stance: 'general' }))
+      .toBe(buildSystemPromptSync(rt, base));
+  });
+
+  test('a stance never widens what a turn may do: Plan keeps its bar under every stance', () => {
+    // Stance is guidance; permission is workMode, and Plan is enforced
+    // structurally on top of it (submit_plan only exists on a Plan turn,
+    // release.* is mechanically absent). `build` is deliberately the hostile
+    // case: it is the stance whose NAME matches the permissive work mode.
+    const { rt } = createTestRuntime();
+    const planOnly = buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: true });
+    for (const stance of ['general', 'research', 'build', 'audit'] as const) {
+      const prompt = buildSystemPromptSync(rt, {
+        workMode: 'plan', planSubmissionAvailable: true, stance,
+      });
+      expect(prompt).toContain('Do not change files, system state, releases, or deployments');
+      expect(prompt).toContain('Do not begin implementation until the plan is approved');
+      expect(prompt).toContain('Do not expose ports or produce preview or output links');
+      // The stance ADDS lines and removes none: the Plan prompt is a subset.
+      for (const line of planOnly.split('\n')) expect(prompt).toContain(line);
+    }
+    // And no stance can turn a Plan turn into an unconstrained one.
+    expect(compilePromptSurface({ workMode: 'plan', stance: 'build' }).workMode).toBe('plan');
   });
 
   test('renders the date-only current date in runtime context', () => {
@@ -864,7 +1002,20 @@ describe('buildSystemPromptSync', () => {
       // it is, and every other environment is a separate machine in its own
       // native paths — stated once here for all of them, which is why the
       // per-executor lines never repeat it — deliberate (2026-07).
-      'Execution environments': 2450,
+      // 2026-08-16: RE-PINNED 2450 → 2700 for TWO additions, measured 2657.
+      //   +374 — the workspace line carries the Worker isolate's ~128 MB
+      //     ceiling and the sandbox line the work that belongs there. A clone
+      //     that died on that ceiling was retried three ways instead of moved,
+      //     and neither flag it tried could have helped: Nimbus already
+      //     defaults --depth to 1, and its bundled git has no blob:none.
+      //   +472 — the Approvals block, which REPLACES a ~222-token paragraph
+      //     that was repeated on every parked tool call; stated once here, the
+      //     per-call result is 31 tokens.
+      // The margin is 43 chars, not the ~10% this table opens with. That note
+      // dates from when sections were rewritten wholesale; 2450 sat 638 chars
+      // above the measured section and would have passed both of these unread,
+      // which is the one thing this gate exists to stop.
+      'Execution environments': 2700,
       'Persistence': 700,
       // 2026-08: −1 line. `execute_tools runs JavaScript against the active
       // executor/codemode namespaces` was the tool's own summary, restated.
@@ -905,7 +1056,15 @@ describe('buildSystemPromptSync', () => {
       // duplicates this pass created: the merge clause's restatement of the
       // rung's own 2+-angles trigger, and `workspace.createTool`'s output,
       // which the Code-execution section already describes.
-      'Delegation': 2250,
+      // 2026-08-17: RAISED 2250 → 2450 (+251 chars measured, ~58 o200k tokens).
+      // The polarity flip: the first bullet was "- Do it yourself" (49 chars),
+      // which put rung 0 first and made the section a classification the model
+      // passes by doing nothing — doctrine converted 0% of eligible turns, a
+      // mechanical splice 24%. It is replaced by a default sentence (300 chars)
+      // that states delegation as the default and the three exemptions last, as
+      // things to DO. This is the only increase in the section and it buys the
+      // one property the 506 tokens above it never had: a direction.
+      'Delegation': 2450,
       // 2026-08-12: RAISED 260 → 680. Defect-B fix (background polling): the
       // section used to say only "stop the turn; the backend will wake you" —
       // one clause the owner's bench evidence shows the model reads as

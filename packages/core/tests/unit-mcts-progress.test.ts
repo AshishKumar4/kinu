@@ -83,8 +83,8 @@ describe('the fork substrate carries the MCTS progress sink', () => {
     // Firing events does not re-invoke the factory — the closure resolved at
     // dispatch serves the whole search, however long it detaches for.
     if (!first) throw new Error('expected progress sink');
-    first({ type: 'phase', phase: 'explore', iteration: 1, remainingBudget: 3, branches: 2 });
-    first({ type: 'iteration-complete', iteration: 1, remainingBudget: 2, scores: [0.5] });
+    first({ rootId: 'r1', type: 'phase', phase: 'explore', iteration: 1, remainingBudget: 3, branches: 2 });
+    first({ rootId: 'r1', type: 'iteration-complete', iteration: 1, remainingBudget: 2, scores: [0.5] });
     expect(factoryCalls).toBe(1);
 
     defaultMctsOptions(deps);
@@ -108,9 +108,9 @@ describe('the fork substrate carries the MCTS progress sink', () => {
     const onProgress = progressSink(deps);
     if (!onProgress) throw new Error('expected progress sink');
 
-    onProgress({ type: 'phase', phase: 'explore', iteration: 1, remainingBudget: 2, branches: 1 });
+    onProgress({ rootId: 'r1', type: 'phase', phase: 'explore', iteration: 1, remainingBudget: 2, branches: 1 });
     liveRun = null; // the calling turn closed while the detached search ran on
-    onProgress({ type: 'iteration-complete', iteration: 1, remainingBudget: 1, scores: [0.5] });
+    onProgress({ rootId: 'r1', type: 'iteration-complete', iteration: 1, remainingBudget: 1, scores: [0.5] });
 
     expect(seen).toEqual(['run-A', 'run-A']);
   });

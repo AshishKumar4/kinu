@@ -9,28 +9,85 @@ import {
   renderSoulMarkdown,
   summarizeSoul,
   workspaceSlug,
+  workspaceTitleFromMission,
   type WorkspaceTitleState,
 } from '../src/index.ts';
 
 // The slug is the workspace's PERMANENT address (its URL, and the Durable
 // Object name on the cloud backend); the display name is what anyone reads and
-// can be regenerated or renamed at will. So they come from different places:
-// the slug from the id alone, the title from the mission.
+// can be regenerated or renamed at will. Both start from the SAME deterministic
+// reading of the mission, so the address says what the workspace is for from its
+// first millisecond, and the id suffix is what keeps it unique and stable when
+// the title is later regenerated or the owner renames the workspace.
+//
+// The previous contract here was the inverse — "a mission cannot leak into it" —
+// and that assertion is why the owner reported `sunlit-stone-4a20` four times
+// over five weeks and got a title fix each time: the gate said the address was
+// supposed to be meaningless, so every pass believed the address was fine.
 describe('the permanent slug', () => {
   const JARVIS = 'My personal assistant, Jarvis';
 
-  test('is a memorable pair fixed by the id alone', () => {
-    expect(workspaceSlug('abcdef123456')).toBe('evergreen-birch-abcd');
-    expect(workspaceSlug('7f159a00-1234-4567-89ab-cdef01234567')).toBe('brisk-heron-7f15');
+  test('carries the mission words and an id suffix', () => {
+    expect(workspaceSlug('You are Jarvis, my personal assistant', 'abcdef123456'))
+      .toBe('jarvis-ef123456');
+    expect(workspaceSlug('Build a durable benchmark runner', '7f159a00-1234-4567-89ab-cdef01234567'))
+      .toBe('build-a-durable-9a001234');
+    // No "you are"/"named" phrasing, so there is no persona to lift: the
+    // address is the mission's own opening words, same as the provisional title.
+    expect(workspaceSlug(JARVIS, 'abcdef123456')).toBe('my-personal-assistant-ef123456');
   });
 
-  test('a mission cannot leak into it, however it is worded', () => {
-    for (const mission of [JARVIS, 'You are Jarvis, my personal assistant', 'Build a durable benchmark runner', '']) {
-      const { name } = fallbackWorkspaceIdentity(mission, 'abcdef123456');
-      expect(name).toBe(workspaceSlug('abcdef123456'));
-      expect(name).not.toContain('jarvis');
-      expect(name).not.toContain('personal');
-      expect(name).not.toContain('benchmark');
+  test('is whole words only — a shared address never ends mid-word', () => {
+    // "Reconcile the quarterly reconciliation ledger" would cut inside
+    // `reconciliation` at any pure character cap.
+    const slug = workspaceSlug('Reconcile the quarterly reconciliation ledger', 'abcdef123456');
+    expect(slug).toBe('reconcile-the-quarterly-ef123456');
+    for (const word of slug.split('-').slice(0, -1)) {
+      expect('Reconcile the quarterly reconciliation ledger'.toLowerCase().split(/[^a-z0-9]+/)).toContain(word);
+    }
+  });
+
+  test('the memorable pair is reached only when the mission has no words', () => {
+    expect(workspaceSlug('', 'abcdef123456')).toBe('evergreen-birch-ef123456');
+    expect(workspaceSlug('日本語のみ', 'abcdef123456')).toBe('evergreen-birch-ef123456');
+  });
+
+  test('is a valid workspace name whatever the mission contains', () => {
+    for (const mission of [JARVIS, '  ', '###', 'a'.repeat(400), 'Ship it!! 🚀 now/then?']) {
+      const slug = workspaceSlug(mission, '7f159a00-1234-4567-89ab-cdef01234567');
+      // The same guard user-do.ts applies before it becomes a DO name.
+      expect(slug).toMatch(/^[a-zA-Z0-9._-]{1,64}$/);
+    }
+  });
+
+  test('the suffix reads id digits the memorable words do not', () => {
+    // Sharing them made the whole slug a function of the first four hex digits:
+    // 65,536 addresses across a GLOBAL Durable Object namespace, where a
+    // collision fails the second owner's create in claimOwner.
+    const a = workspaceSlug('', 'abcd0000ffff');
+    const b = workspaceSlug('', 'abcd1111eeee');
+    expect(a.startsWith('evergreen-birch-')).toBe(true);
+    expect(b.startsWith('evergreen-birch-')).toBe(true);
+    expect(a).not.toBe(b);
+  });
+
+  // THE GATE for this whole class. Four "naming fixes" between 2026-07-13 and
+  // 2026-08-16 each improved mission→title and left mission→slug alone, because
+  // nothing tied them together. They are one reading now, and any future change
+  // to one that does not reach the other fails right here.
+  test('the address and the title are one reading of the mission', () => {
+    const id = '7f159a00-1234-4567-89ab-cdef01234567';
+    for (const mission of [
+      'You are Jarvis, my personal assistant',
+      'Build a durable benchmark runner',
+      'Audit the OAuth callback flow for anything an attacker reaches',
+      'Ship it!! 🚀 now/then?',
+    ]) {
+      const titleWords = workspaceTitleFromMission(mission)
+        .toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+      const slugWords = workspaceSlug(mission, id).split('-').slice(0, -1);
+      expect(slugWords.length).toBeGreaterThan(0);
+      expect(slugWords).toEqual(titleWords.slice(0, slugWords.length));
     }
   });
 });
@@ -38,7 +95,7 @@ describe('the permanent slug', () => {
 describe('the mission-derived title', () => {
   test('prefers a stated persona over copying the whole prompt', () => {
     expect(fallbackWorkspaceIdentity('You are Jarvis, my personal assistant', 'abcdef123456')).toEqual({
-      name: workspaceSlug('abcdef123456'),
+      name: 'jarvis-ef123456',
       displayName: 'Jarvis',
       nameOrigin: 'auto',
     });
@@ -50,7 +107,7 @@ describe('the mission-derived title', () => {
     expect(fallbackWorkspaceIdentity('Build a durable benchmark runner', id).displayName)
       .toBe('Build a durable benchmark runner');
     expect(fallbackWorkspaceIdentity('', id)).toEqual({
-      name: 'brisk-heron-7f15',
+      name: 'brisk-heron-9a001234',
       displayName: 'Brisk Heron',
       nameOrigin: 'auto',
     });

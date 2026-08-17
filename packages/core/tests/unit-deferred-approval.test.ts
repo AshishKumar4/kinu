@@ -13,6 +13,7 @@ import { toolExecute } from '@proteus/test-utils';
 import {
   DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, withApprovalGatedShell, buildBuiltinTools,
+  formatApprovalGrant,
   type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome,
   type AgentRuntime, type AgentSignal, type Shell,
 } from '../src/index.js';
@@ -20,8 +21,11 @@ import { buildPendingActions } from '../src/read-models/pending-actions.js';
 import { createTestRuntime } from './helpers.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
-/** `sudo` is a 'gate' rule; plain `ls` is 'allow'. */
-const GATED = 'sudo systemctl restart nginx';
+/** Gated on EVERY executor, including the agent's own workspace, because a
+ *  force-push rewrites history on a remote nobody here owns — the harm leaves
+ *  the machine. `sudo` would not do: on the workspace that is the agent's own
+ *  box and no longer the owner's decision. */
+const GATED = 'git push --force origin main';
 
 type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 
@@ -36,10 +40,14 @@ function setup(opts: {
   const store = new DeferredApprovalStore(makeSql(db));
 
   const delivered: AgentSignal[] = [];
+  /** Everything the owner's 'always' answers have bought, as the config store
+   *  would hold it. */
+  const granted: string[] = [];
   let seq = 0;
   const queue = new DeferredApprovalQueue({
     store,
     signals: { deliver: async (signal) => { delivered.push(signal); return 'queued'; } },
+    remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
     newId: () => `defer-${++seq}`,
     now: () => 1_000 + seq,
   });
@@ -53,6 +61,7 @@ function setup(opts: {
   };
   const policy: ShellApprovalPolicy = {
     mode: () => opts.mode ?? 'strict',
+    granted: (grant) => granted.includes(formatApprovalGrant(grant)),
   };
   if (opts.approve) policy.requestApproval = opts.approve;
   if (!opts.noQueue) policy.deferrals = queue.channel;
@@ -63,24 +72,25 @@ function setup(opts: {
   const run: RunTool = {
     execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run),
   };
-  return { queue, store, shell, executed, delivered, run };
+  return { queue, store, shell, executed, delivered, granted, run };
 }
 
 describe('a gated action nobody is there to approve', () => {
-  test('is parked, and the model is told it did NOT run', async () => {
+  test('is parked, and the model is told it did NOT run — in one line', async () => {
     const { run, executed, queue } = setup();
 
     const out = await run.execute({ command: GATED });
 
     expect(executed).toEqual([]);
-    expect(out).toContain("Queued for the owner's approval — NOT RUN");
-    expect(out).toContain('defer-1');
-    expect(out).toContain(GATED);
-    // The two options the owner's design promises, and the wake that makes
-    // them safe to take.
-    expect(out).toContain('carry on with work that does not depend on this action');
-    expect(out).toContain('end your turn now');
-    expect(out).toContain('You will be woken with their decision either way');
+    // What only this call site knows: nothing ran, which rule, which machine,
+    // the id, and that a decision is coming. The doctrine around it — carry on
+    // or stop, re-issuing returns the same answer — is true of every parked
+    // action on every turn, so it lives in the system prompt, not here.
+    // `run` renders a failing exec as `Error (exit 1)` + stderr, so the one
+    // line the model reads is the whole of what the gate contributed.
+    expect(out).toContain(
+      'NOT RUN — queued for owner approval (defer-1): git-force-push on workspace. A decision will wake you.',
+    );
     expect(queue.list().map((a) => a.command)).toEqual([GATED]);
   });
 
@@ -100,8 +110,8 @@ describe('a gated action nobody is there to approve', () => {
     expect(queued.exitCode).not.toBe(ran.exitCode);
     expect(queued.stdout).toBe('');
     // …and it leads with what did not happen, before anything else.
-    expect(queued.stderr.split('\n')[0]).toBe(
-      "Queued for the owner's approval — NOT RUN. Request id: defer-1.",
+    expect(queued.stderr).toBe(
+      'NOT RUN — queued for owner approval (defer-1): git-force-push on workspace. A decision will wake you.',
     );
   });
 
@@ -120,7 +130,7 @@ describe('a gated action nobody is there to approve', () => {
   test('a different gated command is its own row', async () => {
     const { run, queue } = setup();
     await run.execute({ command: GATED });
-    await run.execute({ command: 'git push --force origin main' });
+    await run.execute({ command: 'npm publish' });
     expect(queue.list().map((a) => a.id)).toEqual(['defer-1', 'defer-2']);
   });
 
@@ -145,7 +155,7 @@ describe('the standing modes still decide first', () => {
     // instructions about.
     const { run, executed, queue } = setup({ mode: 'deny_all' });
     const out = await run.execute({ command: GATED });
-    expect(out).toContain('Requires user approval (mode=deny_all)');
+    expect(out).toContain('refused by standing policy (deny_all)');
     expect(executed).toEqual([]);
     expect(queue.list()).toEqual([]);
   });
@@ -159,7 +169,7 @@ describe('the standing modes still decide first', () => {
 
   test('a channel that says deny is a decision, not an absence', async () => {
     const { run, queue } = setup({ approve: async () => 'deny' });
-    expect(await run.execute({ command: GATED })).toContain('Denied by the user');
+    expect(await run.execute({ command: GATED })).toContain('Denied by the owner');
     expect(queue.list()).toEqual([]);
   });
 
@@ -174,7 +184,7 @@ describe('the standing modes still decide first', () => {
 
   test('with no queue wired at all, strict keeps its old explanatory refusal', async () => {
     const { run, executed } = setup({ noQueue: true });
-    expect(await run.execute({ command: GATED })).toContain('Requires user approval (mode=strict)');
+    expect(await run.execute({ command: GATED })).toContain('needs owner approval, nobody to ask');
     expect(executed).toEqual([]);
   });
 });
@@ -189,9 +199,7 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
     expect(decided.map((a) => a.status)).toEqual(['approved']);
     expect(delivered).toHaveLength(1);
     expect(delivered[0]!.kind).toBe(DEFERRED_APPROVAL_SIGNAL);
-    expect(delivered[0]!.text).toContain('APPROVED');
-    expect(delivered[0]!.text).toContain('still NOT RUN');
-    expect(delivered[0]!.text).toContain('Approval is permission, not an effect');
+    expect(delivered[0]!.text).toContain('APPROVED, still not run');
     expect(delivered[0]!.text).toContain(GATED);
     // The approval is a grant, not an execution: nothing ran on the owner's
     // click, and the needs-you queue has stopped asking.
@@ -206,15 +214,14 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
     await queue.decide(['defer-1'], 'denied');
 
     expect(delivered).toHaveLength(1);
-    expect(delivered[0]!.text).toContain('DENIED');
-    expect(delivered[0]!.text).toContain('Do not re-issue them');
+    expect(delivered[0]!.text).toContain('DENIED — do not re-issue');
   });
 
   test('a night of parked actions is ONE decision and ONE wake', async () => {
     // The point of bulk: five queued commands decided in one sitting must not
     // cost the agent five separate turns of being told about them.
     const { run, queue, delivered } = setup();
-    for (const command of ['sudo a', 'sudo b', 'sudo c', 'sudo d', 'sudo e']) {
+    for (const command of ['npm publish a', 'npm publish b', 'npm publish c', 'npm publish d', 'npm publish e']) {
       await run.execute({ command });
     }
     expect(queue.list()).toHaveLength(5);
@@ -224,14 +231,14 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
     expect(decided).toHaveLength(5);
     expect(delivered).toHaveLength(1);
     expect(delivered[0]!.metadata).toMatchObject({ decision: 'approved', count: 5 });
-    for (const command of ['sudo a', 'sudo e']) expect(delivered[0]!.text).toContain(command);
+    for (const command of ['npm publish a', 'npm publish e']) expect(delivered[0]!.text).toContain(command);
     expect(queue.list()).toEqual([]);
   });
 
   test('a mixed batch names which are which', async () => {
     const { run, queue, delivered } = setup();
-    await run.execute({ command: 'sudo a' });
-    await run.execute({ command: 'sudo b' });
+    await run.execute({ command: 'npm publish a' });
+    await run.execute({ command: 'npm publish b' });
 
     await queue.decide(['defer-1'], 'approved');
     await queue.decide(['defer-2'], 'denied');
@@ -293,10 +300,10 @@ describe('what an approval actually buys', () => {
 
   test('an approval never travels to a different command', async () => {
     const { run, queue, executed } = setup();
-    await run.execute({ command: 'sudo a' });
+    await run.execute({ command: 'npm publish a' });
     await queue.decide(['defer-1'], 'approved');
 
-    expect(await run.execute({ command: 'sudo b' })).toContain('NOT RUN');
+    expect(await run.execute({ command: 'npm publish b' })).toContain('NOT RUN');
     expect(executed).toEqual([]);
   });
 
@@ -310,10 +317,40 @@ describe('what an approval actually buys', () => {
     const out = await run.execute({ command: GATED });
 
     expect(executed).toEqual([]);
-    expect(out).toContain('The owner refused this command');
-    expect(out).toContain('NOT RUN');
-    expect(out).toContain('change the shell approval mode');
+    expect(out).toContain('NOT RUN — the owner refused this (defer-1). Not a timeout; find another way.');
     expect(queue.list()).toEqual([]);
+  });
+
+  test('"always" runs this command AND stops the queue asking about that rule again', async () => {
+    // The owner's ask: mark auto-approval for similar commands, not this exact
+    // string. A second, DIFFERENT command of the same kind never reaches the
+    // queue — which is the whole difference between a grant and an approval.
+    const { run, queue, executed, granted, delivered } = setup();
+    await run.execute({ command: GATED });
+
+    await queue.decide(['defer-1'], 'always');
+
+    expect(granted).toEqual(['git-force-push@workspace']);
+    // Still permission, not an effect: the agent re-issues, and it runs.
+    expect(executed).toEqual([]);
+    expect(await run.execute({ command: GATED })).toBe('ran');
+
+    const different = 'git push --force origin release';
+    expect(await run.execute({ command: different })).toBe('ran');
+    expect(executed).toEqual([GATED, different]);
+    expect(queue.list()).toEqual([]);
+    // One decision, one wake — the grant did not manufacture a second.
+    expect(delivered).toHaveLength(1);
+  });
+
+  test('an "always" grant does not travel to another rule', async () => {
+    const { run, queue, executed, granted } = setup();
+    await run.execute({ command: GATED });
+    await queue.decide(['defer-1'], 'always');
+
+    expect(granted).toEqual(['git-force-push@workspace']);
+    expect(await run.execute({ command: 'npm publish' })).toContain('NOT RUN');
+    expect(executed).toEqual([]);
   });
 });
 
@@ -323,7 +360,7 @@ describe('the parked action stays visible until it is decided', () => {
     // that the effect is missing, because the per-step dynamic-context block
     // carries it until the owner answers.
     const { queue, store } = setup();
-    store.create({ id: 'defer-x', command: GATED, reason: 'gate', requestedAt: 10 });
+    store.create({ id: 'defer-x', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 10 });
 
     expect(queue.approvals()).toEqual([
       { id: 'defer-x', kind: 'queued command (NOT run)', detail: GATED },
@@ -362,13 +399,13 @@ describe('durability — the wait is a night, not a prompt window', () => {
     const db = new Database(':memory:');
     initDeferredApprovalsTable(makeExecRaw(db));
     const first = new DeferredApprovalStore(makeSql(db));
-    first.create({ id: 'defer-9', command: GATED, reason: 'gate', requestedAt: 5 });
+    first.create({ id: 'defer-9', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
 
     const reopened = new DeferredApprovalStore(makeSql(db));
     const parked = reopened.listQueued();
 
     expect(parked.map((a: DeferredApproval) => a.id)).toEqual(['defer-9']);
-    expect(reopened.standing(GATED)?.status).toBe('queued');
+    expect(reopened.standing(GATED, 'workspace')?.status).toBe('queued');
   });
 
   test('the decision is durable before the wake is attempted', async () => {
@@ -377,10 +414,11 @@ describe('durability — the wait is a night, not a prompt window', () => {
     const db = new Database(':memory:');
     initDeferredApprovalsTable(makeExecRaw(db));
     const store = new DeferredApprovalStore(makeSql(db));
-    store.create({ id: 'defer-7', command: GATED, reason: 'gate', requestedAt: 5 });
+    store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
     const queue = new DeferredApprovalQueue({
       store,
       signals: { deliver: () => Promise.reject(new Error('no host')) },
+      remember: () => { throw new Error('not an always answer'); },
     });
 
     await expect(queue.decide(['defer-7'], 'approved')).rejects.toThrow('no host');

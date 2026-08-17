@@ -1,0 +1,197 @@
+// A cancelled fork must stop being reported as running — end to end, over the
+// real stores, the real signal seam, and the real per-step ledger.
+//
+// The defect this locks: `head_journal.status` had exactly ONE writer that
+// cleared 'running' (HeadJournal.recordReport, the happy path). An operator
+// cancel settled the fork's background job and a process exit killed its
+// executor, but nothing ever wrote the head rows — so `listLive()`'s
+// `HAVING running > 0` stayed true forever, and every model step carried
+//
+//   ## Delegates working for you
+//   - <root> (fork) — 4 of 4 heads running: <rationale>
+//
+// while `background_jobs` said `cancelled by operator`. The agent was not
+// reasoning from a stale transcript; the runtime was asserting the falsehood.
+import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { HeadJournal, initHeadsTables } from '../src/heads/index.js';
+import { reconcileInterruptedForks, FORK_INTERRUPTED_SIGNAL } from '../src/heads/reconcile.js';
+import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store.js';
+import { SignalDelivery } from '../src/orchestrator/signals.js';
+import {
+  agentDynamicContext, renderDynamicContextBlock, DynamicContextLedger,
+} from '../src/prompting/volatile-context.js';
+import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host.js';
+import type { ModelMessage } from 'ai';
+import { makeSql, makeExecRaw } from './helpers.js';
+
+const HEADS = 4;
+const ROOT = 'root-research';
+const RATIONALE = 'four angles on the research question';
+
+/** The workspace as it stood when the operator cancelled: a detached 4-head
+ *  fork, journalled by the real controller's writes. */
+function workspace() {
+  const db = new Database(':memory:');
+  const sql = makeSql(db);
+  const execRaw = makeExecRaw(db);
+  initHeadsTables(execRaw);
+  initBackgroundJobsTable(execRaw);
+  const journal = new HeadJournal(sql);
+  const jobs = new BackgroundJobStore(sql);
+
+  const now = Date.now();
+  jobs.create({
+    id: 'bgjob-fork', kind: 'agents', workMode: 'build', now,
+    label: 'fork(settle=merge): survey the prior art',
+  });
+  journal.recordSplit(ROOT, RATIONALE, now);
+  for (let i = 1; i <= HEADS; i++) {
+    journal.insertSpawn({
+      id: `h${i}`, parentId: null, rootId: ROOT, depth: 1,
+      task: `angle ${i}`, rationale: 'why', mode: 'build',
+      inheritedContext: [], mergeStrategy: 'synthesize',
+      budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: now },
+    });
+  }
+  // The operator cancel, as `proteus stop` / the repair path writes it: the job
+  // registry only. Nothing reaches the heads, because the process that owned
+  // them is gone.
+  jobs.cancel('bgjob-fork', 0, now + 1_000);
+  return { db, journal, jobs };
+}
+
+/** The dynamic-context block the NEXT model step would carry, assembled from
+ *  the same sources both backends read (actor-agent.ts / local-session.ts). */
+function nextStepBlock(w: ReturnType<typeof workspace>): string | null {
+  return renderDynamicContextBlock(agentDynamicContext({
+    factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
+    runningJobs: w.jobs.listRunning(),
+    openTasks: [],
+    liveHeadRuns: w.journal.listLive(),
+    missingCapabilities: [],
+  }));
+}
+
+/** An idle agent: `deliver` therefore routes through enqueueTurn, which is what
+ *  "the agent learns at its next step" means when no turn is running. */
+function idleAgent() {
+  const enqueued: ProgrammaticTurn[] = [];
+  const host: BackendHost = {
+    broadcast: () => {},
+    enqueueTurn: async (turn) => { enqueued.push(turn); return { status: 'queued' }; },
+    turnInFlight: () => false,
+    setTimer: () => {},
+  };
+  return { enqueued, signals: new SignalDelivery(host) };
+}
+
+describe('an operator-cancelled fork is not reported as running', () => {
+  test('the two stores disagreed, and the disagreement is what the model read', () => {
+    const w = workspace();
+
+    // The registry is right.
+    expect(w.jobs.get('bgjob-fork')?.status).toBe('cancelled');
+    expect(w.jobs.get('bgjob-fork')?.error).toBe('cancelled by operator');
+    expect(w.jobs.listRunning()).toEqual([]);
+
+    // The journal is wrong, and the roster it feeds says so out loud.
+    expect(w.journal.listLive()).toEqual([
+      { rootId: ROOT, rationale: RATIONALE, running: HEADS, total: HEADS },
+    ]);
+    expect(nextStepBlock(w)).toContain(`${HEADS} of ${HEADS} heads running`);
+  });
+
+  test('reconciliation settles the journal, so the next step no longer claims it is running', async () => {
+    const w = workspace();
+    const agent = idleAgent();
+
+    const settled = await reconcileInterruptedForks({ journal: w.journal, signals: agent.signals });
+
+    expect(settled).toEqual([
+      { rootId: ROOT, rationale: RATIONALE, abandoned: HEADS, total: HEADS },
+    ]);
+    expect(w.journal.listLive()).toEqual([]);
+    // Nothing left to say: the roster is the only plane this workspace had.
+    expect(nextStepBlock(w)).toBeNull();
+    // And the run stops reading as in-flight on the Exploration surface, which
+    // infers run status from its heads. ('partial' — heads finished, no merge
+    // synthesis — is that surface's own wording; the invariant here is only
+    // that it is no longer 'running'.)
+    expect(w.journal.readRun(ROOT)?.status).not.toBe('running');
+    for (const head of w.journal.readTree(ROOT)) {
+      expect(head.status).toBe('aborted');
+      expect(head.error_message).toContain('no executor');
+      expect(head.completed_at).not.toBeNull();
+    }
+  });
+
+  test('the agent is TOLD, on the one signal seam, naming the run and its head count', async () => {
+    const w = workspace();
+    const agent = idleAgent();
+
+    await reconcileInterruptedForks({ journal: w.journal, signals: agent.signals });
+
+    // A fork vanishing from the roster retracts nothing: the agent had already
+    // read that it was in flight. It gets a turn, not a silence.
+    expect(agent.enqueued).toHaveLength(1);
+    const turn = agent.enqueued[0]!;
+    expect(turn.metadata?.proteusEvent).toBe(FORK_INTERRUPTED_SIGNAL);
+    expect(turn.text).toContain(ROOT);
+    expect(turn.text).toContain(RATIONALE);
+    expect(turn.text).toContain(`${HEADS} of ${HEADS} heads`);
+    expect(turn.text).toContain('nothing is executing them');
+    expect(turn.text).toContain('no longer true');
+  });
+
+  test('a clean start reconciles nothing and wakes nobody', async () => {
+    const w = workspace();
+    const agent = idleAgent();
+    await reconcileInterruptedForks({ journal: w.journal, signals: agent.signals });
+
+    const second = idleAgent();
+    expect(await reconcileInterruptedForks({ journal: w.journal, signals: second.signals })).toEqual([]);
+    expect(second.enqueued).toHaveLength(0);
+  });
+
+  test('the ledger supersedes the stale block at the tip rather than editing it', async () => {
+    const w = workspace();
+    const ledger = new DynamicContextLedger();
+    const history: ModelMessage[] = [{ role: 'user', content: 'research this' }];
+
+    // The step that read the lie.
+    const before = ledger.weave(history, agentDynamicContext({
+      factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
+      runningJobs: [], openTasks: [], liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
+    }));
+    expect(String(before.at(-1)?.content)).toContain(`${HEADS} of ${HEADS} heads running`);
+
+    await reconcileInterruptedForks({ journal: w.journal, signals: idleAgent().signals });
+
+    // The next step: one more block at the tail (a superseding one), and the
+    // frozen bytes before it untouched — the prefix-cache contract.
+    const after = ledger.weave([...history, { role: 'assistant', content: 'working' }], agentDynamicContext({
+      factsBlock: 'workspace = proteus', memoryTail: undefined, recoveryFindings: [], executors: [],
+      runningJobs: [], openTasks: [], liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
+    }));
+    expect(ledger.size).toBe(2);
+    expect(after[1]).toEqual(before.at(-1)!);
+    expect(String(after.at(-1)?.content)).not.toContain('heads running');
+  });
+});
+
+describe('the operator cancel of ONE job reaches the agent', () => {
+  // The other half: a cancel issued while the agent keeps working. The runner's
+  // lifecycle test (unit-background-job-runner) pins the wake itself; this pins
+  // the reason it must exist — the roster the agent reads goes quiet, and a
+  // quiet roster does not retract a promise the runtime already made.
+  test('a cancelled job leaves the roster with nothing to correct the record', () => {
+    const w = workspace();
+    expect(w.jobs.listRunning()).toEqual([]);
+    const block = renderDynamicContextBlock(agentDynamicContext({
+      factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
+      runningJobs: w.jobs.listRunning(), openTasks: [], liveHeadRuns: [], missingCapabilities: [],
+    }));
+    expect(block).toBeNull();
+  });
+});

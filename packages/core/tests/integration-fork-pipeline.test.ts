@@ -23,23 +23,47 @@ import {
   snapshotWorkspaceForFork, writeForkSnapshot, SOUL_PATH,
 } from '../src/index.js';
 import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers.js';
+import type { RawSqlExec, SqlExecutor, VFS } from '../src/types/primitives.js';
 
-function fresh() {
+/** One in-memory workspace: production schema, filesystem, and the SDK's own
+ *  message store — the shape a hosted workspace actually has. */
+interface WorkspaceFixture {
+  db: Database;
+  sql: SqlExecutor;
+  execRaw: RawSqlExec;
+  vfs: VFS;
+}
+
+function fresh(): WorkspaceFixture {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initAllTables(execRaw);
+  execRaw(`CREATE TABLE IF NOT EXISTS assistant_messages (
+    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
+    role TEXT NOT NULL, content TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
   return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs };
 }
 
-async function seedSource(src: ReturnType<typeof fresh>) {
+async function seedSource(src: WorkspaceFixture) {
   void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC-1'}, ${'source-agent'}, ${100})`;
   await writeSoul(src.vfs, src.sql, 'help with testing');
-  void src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m1'}, ${null}, ${'user'}, ${'hello'}, ${1000})`;
-  void src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m2'}, ${'m1'}, ${'assistant'}, ${'hi there'}, ${1100})`;
-  void src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m3'}, ${'m2'}, ${'user'}, ${'post-fork-point'}, ${1500})`;
-  void src.sql`INSERT INTO conversation_history (session_id, role, message, created_at) VALUES (${'default'}, ${'user'}, ${JSON.stringify({ content: 'hello' })}, ${1000})`;
-  void src.sql`INSERT INTO conversation_history (session_id, role, message, created_at) VALUES (${'default'}, ${'assistant'}, ${JSON.stringify({ content: 'hi there' })}, ${1100})`;
+  // Both stores, same ids and same edges — which is what the projection
+  // maintains in production. `m3` is past the cut and must not come across.
+  const chain = [
+    { id: 'm1', parent: null, role: 'user', text: 'hello', at: '1970-01-01 00:00:01' },
+    { id: 'm2', parent: 'm1', role: 'assistant', text: 'hi there', at: '1970-01-01 00:00:02' },
+    { id: 'm3', parent: 'm2', role: 'user', text: 'post-fork-point', at: '1970-01-01 00:00:03' },
+  ] as const;
+  for (const m of chain) {
+    void src.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
+      VALUES (${m.id}, ${m.parent}, ${m.role}, ${m.text}, ${Date.parse(`${m.at.replace(' ', 'T')}Z`)})`;
+    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${m.id}, ${''}, ${m.parent}, ${m.role},
+              ${JSON.stringify({ id: m.id, role: m.role, parts: [{ type: 'text', text: m.text }] })},
+              ${m.at})`;
+  }
   void src.sql`INSERT INTO crafted_tools (name, description, code, scope, created_at, updated_at) VALUES (${'helper'}, ${'utility'}, ${'async (x) => x + 1'}, ${'local'}, ${500}, ${500})`;
   await src.vfs.mkdir('memory', { recursive: true });
   await src.vfs.writeFile('memory/MEMORY.md', 'key insight');
@@ -77,8 +101,9 @@ describe('fork pipeline (end-to-end)', () => {
 
     expect(await readSoul(tgt.vfs)).toBe('help with testing');
 
-    const msgs = tgt.sql<{ id: string }>`SELECT id FROM messages ORDER BY created_at ASC`;
-    expect(msgs.map(m => m.id)).toEqual(['m1', 'm2']);  // m3 was after fork point
+    const msgs = tgt.sql<{ id: string }>`
+      SELECT id FROM messages WHERE role != 'system' ORDER BY created_at ASC`;
+    expect(msgs.map(m => m.id)).toEqual(['m1', 'm2']);  // m3 is not an ancestor of m2
 
     const tools = tgt.sql<{ name: string }>`SELECT name FROM crafted_tools`;
     expect(tools.map(t => t.name)).toEqual(['helper']);
@@ -93,15 +118,16 @@ describe('fork pipeline (end-to-end)', () => {
     expect(lineage!.sourceMessageId).toBe('m2');
     expect(lineage!.forkedAt).toBe(88888);
 
-    // Synthetic system message appended at forkPointMs + 1
-    const conv = tgt.sql<{ role: string; message: string; created_at: number }>`
-      SELECT role, message, created_at FROM conversation_history ORDER BY created_at ASC, id ASC
+    // The fork marker is a message in the tree, parented on the cut point, so
+    // an ancestry walk from it reaches the whole inherited chain.
+    const marker = tgt.sql<{ id: string; parent_id: string | null; content: string; created_at: number }>`
+      SELECT id, parent_id, content, created_at FROM messages WHERE role = 'system'
     `;
-    expect(conv.length).toBe(3);
-    expect(conv[2]!.role).toBe('system');
-    expect(conv[2]!.created_at).toBe(1101);
-    expect(conv[2]!.message).toContain('forked from workspace');
-    expect(conv[2]!.message).toContain('source-agent');
+    expect(marker.length).toBe(1);
+    expect(marker[0]!.parent_id).toBe('m2');
+    expect(marker[0]!.created_at).toBe(snapshot.cut.createdAtMs + 1);
+    expect(marker[0]!.content).toContain('forked from workspace');
+    expect(marker[0]!.content).toContain('source-agent');
 
     // agent_config — model copied, display_name overwritten
     const cfg = new Map(tgt.sql<{ key: string; value: string }>`SELECT key, value FROM agent_config`.map(r => [r.key, r.value]));
@@ -189,10 +215,9 @@ describe('fork pipeline (end-to-end)', () => {
     expect(l!.forkedAt).toBe(99999);
 
     const messages = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`;
-    const history = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_history`;
     const assistant = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM assistant_messages`;
-    expect(messages[0]!.c).toBe(snapshot.messages.length);
-    expect(history[0]!.c).toBe(snapshot.conversationHistory.length + 1);
+    // +1 for the fork marker, which lands in both stores exactly once.
+    expect(messages[0]!.c).toBe(snapshot.messages.length + 1);
     expect(assistant[0]!.c).toBe(snapshot.assistantMessages.length + 1);
   });
 });

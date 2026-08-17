@@ -90,7 +90,7 @@ function defaultTurn(events: ChatEvent[]) {
 const DEFAULT_EVENTS: ChatEvent[] = [
   { type: 'text-delta', delta: 'default ' },
   { type: 'text-delta', delta: 'answer' },
-  { type: 'step-finish', stepIndex: 0, inputTokens: 12 },
+  { type: 'step-finish', stepIndex: 0, responseMessages: [{ role: 'assistant', content: 'default answer' }], inputTokens: 12 },
   { type: 'done', text: 'default answer', responseMessages: [{ role: 'assistant', content: 'default answer' }] },
 ];
 
@@ -157,6 +157,7 @@ describe('scaffoldChatTransform', () => {
       {
         type: 'step-finish',
         stepIndex: 1,
+        responseMessages: [responseMessage],
         inputTokens: undefined,
         outputTokens: undefined,
         cachedInputTokens: undefined,
@@ -171,7 +172,7 @@ describe('scaffoldChatTransform', () => {
     }));
 
     expect(events).toEqual([
-      { type: 'step-finish', stepIndex: 1 },
+      { type: 'step-finish', stepIndex: 1, responseMessages: [{ role: 'assistant', content: 'default answer' }] },
       {
         type: 'done',
         text: 'default answer',

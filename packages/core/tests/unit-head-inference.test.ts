@@ -65,7 +65,7 @@ describe('runHeadInference — report assembly', () => {
     expect(report.status).toBe('completed');
     expect(report.summary).toBe('The lexer handles UTF-8 correctly.');
     expect(report.tokenUsage).toEqual({ input: 10, output: 20, total: 30 });
-    expect(report.steps.length).toBeGreaterThanOrEqual(1);
+    expect(report.stepCount).toBeGreaterThanOrEqual(1);
     expect(report.id).toBe('h1');
   });
 
@@ -88,7 +88,7 @@ describe('runHeadInference — report assembly', () => {
     const report = await runHeadInference(headInput(), deps(fakeHeadModel('', { throwError: 'model exploded' })));
     expect(report.status).toBe('errored');
     expect(report.errorMessage).toContain('model exploded');
-    expect(report.steps).toEqual([]);
+    expect(report.stepCount).toBe(0);
   });
 
   test('no prose + recorded evidence → summary synthesized from findings', async () => {

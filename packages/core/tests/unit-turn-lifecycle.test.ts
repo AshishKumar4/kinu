@@ -107,7 +107,7 @@ describe('openTurnRun / closeTurnRun', () => {
     for (const boom of ['boom a', 'boom b', 'boom c']) {
       steering.onToolResult({ toolName: 'run', args: { command: boom }, result: `Error (exit 2): ${boom}`, success: true });
     }
-    steering.steerFor(4);
+    steering.steerFor({ stepNumber: 4, messages: [] });
     steering.onToolCall({ toolName: 'agents', args: { action: 'fork' } });
 
     closeTurnRun(rec, 'run-n', {
