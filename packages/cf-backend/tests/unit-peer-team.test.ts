@@ -84,7 +84,7 @@ function makeNetwork() {
         if (!agent) throw new Error('agent network fixture not initialized');
         return agent.grants.has(`${senderUserId}:${senderAgent}`);
       },
-      scheduleDispatch: (at) => {
+      scheduleDispatch: async (at) => {
         if (!agent) throw new Error('agent network fixture not initialized');
         agent.retries.push(at);
       },

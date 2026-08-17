@@ -6,13 +6,25 @@
   "commitSubject": "Ignore agent tooling when installing anti-slop",
   "upstreamSourceRoot": "skills/install-anti-slop/assets/anti-slop",
   "upstreamTestRoot": "src/rules",
-  "$proteusComment": "Rules authored here, not vendored: they encode Proteus's no-swallow policy and have no upstream counterpart. Named explicitly rather than inferred from `proteusOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list.",
+  "$proteusComment": "Rules authored here, not vendored: they encode Proteus policy and have no upstream counterpart. Named explicitly rather than inferred from `proteusOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list. `proteusRuleGates` partitions them across the *.gate.test.ts files that prove each one red->green through the real oxlint binary; drift.test.ts asserts the partition is exact, so adding a rule without a gate fails.",
   "proteusRules": [
     "no-ddl-in-catch",
     "no-empty-catch",
     "no-sentinel-catch",
+    "no-wait-until-in-durable-object",
     "require-cause-on-rethrow"
   ],
+  "proteusRuleGates": {
+    "no-swallow.gate.test.ts": [
+      "no-ddl-in-catch",
+      "no-empty-catch",
+      "no-sentinel-catch",
+      "require-cause-on-rethrow"
+    ],
+    "no-wait-until.gate.test.ts": [
+      "no-wait-until-in-durable-object"
+    ]
+  },
   "vendored": {
     "drift.test.ts": {
       "proteusOnly": true
@@ -22,10 +34,13 @@
     },
     "index.ts": {
       "upstream": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f",
-      "local": "3b47a06216c540f68b8c7c0ead802ecb2a820c662257a7d73250ad282db5aa9a",
-      "reason": "Registers the four Proteus-authored no-swallow rules (see proteusRules) alongside the vendored ones. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
+      "local": "8a08706f6efae405706d50cf89efab237a7367831fb3a369fda770d5af5100dd",
+      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the four no-swallow rules and no-wait-until-in-durable-object. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
     },
     "no-swallow.gate.test.ts": {
+      "proteusOnly": true
+    },
+    "no-wait-until.gate.test.ts": {
       "proteusOnly": true
     },
     "package.json": {
@@ -139,6 +154,12 @@
     },
     "rules/no-unsafe-dictionary-type.ts": {
       "upstream": "bec8e540e05a749e06474b1c7bd93879747b3330f0b9c87fd1a3ffe959ace075"
+    },
+    "rules/no-wait-until-in-durable-object.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-wait-until-in-durable-object.ts": {
+      "proteusOnly": true
     },
     "rules/no-widen-then-assert.test.ts": {
       "upstream": "02de3e9fffc63e32a742420e9e614a6808f68fdf7f76828474107b4d90033bc5"

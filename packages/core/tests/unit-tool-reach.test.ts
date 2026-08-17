@@ -52,7 +52,7 @@ function agentSelfHost(storage: AgentRuntime['storage']): AgentSelfHost {
     setCurriculumTaskStatus: async () => ({ ok: true }),
     proposeScaffold: async () => ({ ok: false, reason: 'not in this test' }),
     listScaffoldVersions: () => [],
-    createTimerTrigger: () => ({ id: 't1', kind: 'timer_oneshot', nextFireAt: null }),
+    createTimerTrigger: async () => ({ id: 't1', kind: 'timer_oneshot', nextFireAt: null }),
     budget: new MissionGovernor({ storage }),
     cancelTrigger: () => ({ ok: true, changed: false }),
     jobResult: async () => null,

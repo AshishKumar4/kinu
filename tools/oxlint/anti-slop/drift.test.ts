@@ -21,6 +21,9 @@ type Manifest = {
   readonly upstreamTestRoot: string;
   /** Rules authored here rather than vendored. Exact complement of the upstream-pinned rules. */
   readonly proteusRules: readonly string[];
+  /** Which `*.gate.test.ts` proves each Proteus-authored rule red->green through the real oxlint
+   *  binary. An exact partition of `proteusRules`, asserted below. */
+  readonly proteusRuleGates: Readonly<Record<string, readonly string[]>>;
   readonly vendored: Readonly<Record<string, VendoredFile>>;
 };
 
@@ -175,6 +178,32 @@ assert.ok(
 assert.ok(
   proteusRules.length < registeredRules.length,
   `proteusRules claims ${proteusRules.length} of ${registeredRules.length} rules; declaring the whole plugin Proteus-authored would disable drift comparison entirely`,
+);
+
+// The rule -> gate partition. A per-rule RuleTester suite proves the rule function behaves; only a
+// `*.gate.test.ts` proves it fires through `bun run lint`. Asserting a PARTITION (every rule proven
+// exactly once, every gate file present, no gate empty) is what stops a rule being added with a
+// suite and no red->green proof — the shape that has produced nine gates in this repo that existed
+// and never ran.
+const gateEntries = Object.entries(manifest.proteusRuleGates);
+assert.ok(gateEntries.length > 0, "proteusRuleGates is empty; no Proteus rule would be proven to fire at all");
+for (const [gate, rules] of gateEntries) {
+  assert.ok(
+    onDisk.includes(gate),
+    `proteusRuleGates names ${gate}, which is not a file in this plugin`,
+  );
+  assert.ok(rules.length > 0, `${gate} is assigned no rules; a gate that proves nothing must not be listed`);
+}
+const gatedRules = gateEntries.flatMap(([, rules]) => rules);
+assert.equal(
+  gatedRules.length,
+  new Set(gatedRules).size,
+  `a rule is assigned to two gates: ${gatedRules.join(", ")}`,
+);
+assert.deepEqual(
+  [...gatedRules].sort(),
+  proteusRules,
+  "every Proteus-authored rule must be proven red->green by exactly one gate, and only those",
 );
 
 assert.ok(

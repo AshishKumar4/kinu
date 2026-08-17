@@ -227,9 +227,9 @@ describe('CHECK-widening rebuild for live DOs', () => {
       fire_count          INTEGER NOT NULL DEFAULT 0
     )`;
 
-  const noAlarm: AlarmScheduler = { scheduleAt() {}, currentAlarm: () => null };
+  const noAlarm: AlarmScheduler = { async scheduleAt() {}, currentAlarm: () => null };
 
-  test('existing rows survive the rebuild and the new enum members insert', () => {
+  test('existing rows survive the rebuild and the new enum members insert', async () => {
     const sql = makeSql();
     // Simulate a live DO: old-CHECK tables with data already in them.
     sql.exec(OLD_REPLY_CHANNELS_DDL);
@@ -239,7 +239,7 @@ describe('CHECK-widening rebuild for live DOs', () => {
       event_id: 'evt-old', kind: 'peer_back', holder_addr: 'peer:x', payload_policy: 'full',
     }, 500)!;
     const preReg = new TriggerRegistry(sql, noAlarm);
-    const preTrigger = preReg.register({
+    const preTrigger = await preReg.register({
       kind: 'timer_cron', spec: { cron: '* * * * *' }, creator_trust: 'owner',
     }, 500);
 
@@ -257,7 +257,7 @@ describe('CHECK-widening rebuild for live DOs', () => {
       event_id: 'evt-new', kind: 'email_thread', holder_addr: '{}', payload_policy: 'full',
     }, 1000);
     expect(emailChannel).not.toBeNull();
-    const emailTrigger = reg.register({
+    const emailTrigger = await reg.register({
       kind: 'email_route', spec: { allow: ['friend@example.com'] }, creator_trust: 'owner',
     }, 1000);
     expect(reg.get(emailTrigger)?.kind).toBe('email_route');
@@ -281,7 +281,7 @@ describe('the agent inbox', () => {
     initEventsHubTables(sql);
     initWebhookRateLimitTables(sql);
     const log = new EventLog(sql);
-    const triggers = new TriggerRegistry(sql, { scheduleAt: () => {}, currentAlarm: () => null });
+    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
     const { vfs } = createMemoryVfs();
     let drains = 0;
     return {
@@ -311,7 +311,7 @@ describe('the agent inbox', () => {
     expect(await scene.inbox.accept(mail('stranger@example.com', 2)))
       .toEqual({ admitted: false, reason: 'sender not authorized for this agent' });
 
-    setEmailAllowlist(scene.triggers, ['Ally <ally@example.com>'], NOW);
+    await setEmailAllowlist(scene.triggers, ['Ally <ally@example.com>'], NOW);
     expect(await scene.inbox.accept(mail('ally@example.com', 3))).toMatchObject({ admitted: true });
 
     expect(scene.log.pending({ variant: 'email' })).toHaveLength(2);

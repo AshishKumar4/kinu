@@ -481,7 +481,7 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
       return decodeJsonValue({ value: getLocalReleaseBoard(name, numberField(cmd, 'limit') ?? 20) });
     case 'stop':
       client.stop();
-      return { interrupted: true, cancelledBackgroundJobs: markLocalBackgroundJobsCancelled(name) };
+      return { interrupted: true, cancelledBackgroundJobs: await markLocalBackgroundJobsCancelled(name) };
     default:
       throw new Error('Unsupported command');
   }

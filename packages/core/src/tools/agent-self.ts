@@ -50,7 +50,7 @@ export interface AgentSelfHost {
   createTimerTrigger(opts: {
     cron?: string; atMs?: number; label?: string; payload?: JsonObject;
     missionLabel?: string;
-  }): TimerTrigger;
+  }): Promise<TimerTrigger>;
   /** The cumulative spend governor — a schedule declares its mission budget
    *  here, and `agent.budget` reads it back. */
   readonly budget: MissionGovernor;
@@ -273,7 +273,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
             : undefined;
           try {
             const budget = limits && missionLabel ? host.budget.declare(missionLabel, limits) : undefined;
-            const result: TimerTrigger & { budget?: JsonValue } = host.createTimerTrigger({
+            const result: TimerTrigger & { budget?: JsonValue } = await host.createTimerTrigger({
                 cron, atMs, missionLabel,
                 label: opts.label,
                 payload: opts.payload,

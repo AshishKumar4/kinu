@@ -338,7 +338,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  replies and owner notifications (SPEC §7.4). */
   private get emailOutbox(): EmailOutbox {
     if (!this._emailOutbox) {
-      this._emailOutbox = new EmailOutbox(this.ctx.storage.sql, (at) => this.scheduleTimerAt(at));
+      this._emailOutbox = new EmailOutbox(this.ctx.storage.sql, (at) => this.armTimer(at));
       this._emailOutbox.ensureSchema();
     }
     return this._emailOutbox;
@@ -417,7 +417,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this._triggerRegistry) {
       const alarmScheduler: AlarmScheduler = {
         // Idempotent: pick the soonest of (existing alarm, new ts).
-        scheduleAt: (ts: number) => this.scheduleTimerAt(ts),
+        scheduleAt: (ts: number) => this.armTimer(ts),
         currentAlarm: (): number | null => null,
       };
       this._triggerRegistry = new TriggerRegistry(this.ctx.storage.sql, alarmScheduler);
@@ -512,7 +512,7 @@ export class OrchestratorAgent extends ActorAgent {
             return false;   // default deny on lookup failure
           }
         },
-        scheduleDispatch: (at) => this.scheduleTimerAt(at),
+        scheduleDispatch: (at) => this.armTimer(at),
         onAdmitted: () => { this.orch.scheduleDrain(); },
       });
     }
@@ -523,16 +523,18 @@ export class OrchestratorAgent extends ActorAgent {
    *  agents-SDK schedule row `PROTEUS_TIMER_CALLBACK`. A Durable Object has a
    *  single alarm slot and the SDK owns it (`_scheduleNextAlarm` deletes any
    *  alarm it does not recognise), so this must never call `setAlarm` itself.
-   *  Fire-and-forget by interface (`AlarmScheduler.scheduleAt`); the storage
-   *  write is held open with `waitUntil` so it lands even if the caller's
-   *  invocation ends first. */
-  private scheduleTimerAt(ts: number): void {
-    this.ctx.waitUntil(this.armTimer(ts).catch((err) => {
-      console.error('[proteus] timer arm failed:', err instanceof Error ? err.message : String(err));
-    }));
-  }
-
-  /** Reconcile the timer row to fire at or before `atMs`, collapsing onto
+   *
+   *  Every consumer awaits this directly. There is no void-returning wrapper:
+   *  one existed, handed the promise to `ctx.waitUntil`, and claimed the write
+   *  "lands even if the caller's invocation ends first" — false in a Durable
+   *  Object, where `waitUntil` is a no-op (`do.wait_until.no_op`) and an
+   *  in-flight promise is cancelled with no signal on reset or eviction
+   *  (`do.background_task.cancelled_on_reset`). Awaiting inside the invocation
+   *  is the only retention this object has: the output gate then holds the
+   *  response until the schedule row commits, and a failure reaches the caller
+   *  instead of a console line.
+   *
+   *  Reconcile the timer row to fire at or before `atMs`, collapsing onto
    *  exactly one pending row. Rows already due are excluded: they belong to
    *  the tick that is running (or about to), which re-arms from
    *  `nextAlarmTime` when it finishes — counting them as "armed" would make
@@ -1644,7 +1646,7 @@ export class OrchestratorAgent extends ActorAgent {
       // Wake the agent to act on the freshly-published timer events (and any
       // other pending events) — an autonomous turn, debounced so events
       // arriving alongside the alarm coalesce into it.
-      const { fired } = fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
+      const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
       if (fired > 0) this.orch.scheduleDrain();
     } catch (err) {
       console.error('[proteus] alarm handler failed:', err instanceof Error ? err.message : String(err));
@@ -3230,7 +3232,7 @@ export class OrchestratorAgent extends ActorAgent {
     rate_limit_per_min?: number;
   }) {
     const now = Date.now();
-    const webhook = registerDurableWebhook(this.triggerRegistry, opts, now);
+    const webhook = await registerDurableWebhook(this.triggerRegistry, opts, now);
     if (opts.secret) this.webhookSecrets.put(webhook.secret_id, webhook.trigger_id, opts.secret, now);
     return {
       trigger_id: webhook.trigger_id,
@@ -3249,10 +3251,10 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Register a timer trigger — the `agent.schedule` tool's and the auto-GEPA
    *  scheduler's one way to create one. */
-  createTimerTrigger(opts: Parameters<typeof createTimerTrigger>[1]): {
+  async createTimerTrigger(opts: Parameters<typeof createTimerTrigger>[1]): Promise<{
     id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null;
-  } {
-    return createTimerTrigger(this.triggerRegistry, opts, Date.now());
+  }> {
+    return await createTimerTrigger(this.triggerRegistry, opts, Date.now());
   }
 
   /**

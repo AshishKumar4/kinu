@@ -161,15 +161,18 @@ export class Corrected {
   },
 ];
 
-/** Ensures the four rules are exactly the ones this gate proves. */
+/** Ensures the four rules are exactly the ones this gate is assigned. `proteusRuleGates` is the
+ *  source of truth rather than a list here, and drift.test.ts asserts those slices partition
+ *  `proteusRules` exactly — so a Proteus rule with no gate still fails, and this gate still cannot
+ *  quietly stop covering one of its own. */
 const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8"));
 const manifest = JSON.parse(
   readFileSync(join(repoRoot, "tools/oxlint/anti-slop/upstream.json"), "utf8"),
 );
 assert.deepEqual(
   cases.map((entry) => entry.rule).sort(),
-  [...manifest.proteusRules].sort(),
-  "every Proteus-authored rule must be proven red->green here, and only those",
+  [...manifest.proteusRuleGates["no-swallow.gate.test.ts"]].sort(),
+  "this gate must prove exactly the rules upstream.json assigns to it, and only those",
 );
 for (const { rule } of cases) {
   assert.equal(

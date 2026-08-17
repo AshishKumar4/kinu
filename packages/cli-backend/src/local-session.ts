@@ -514,7 +514,11 @@ export class LocalAgentSession implements BackendHost {
     });
     this.eventLog = new EventLog(hubSql);
     const alarmScheduler: AlarmScheduler = {
-      scheduleAt: (ts) => this.scheduleLocalAlarm(ts),
+      // Synchronous here: the local host's wake-up is a process timer, not a
+      // storage write, so there is nothing to await. The seam returns a promise
+      // because the cloud host's arm is a Durable Object write that must land
+      // inside its invocation (`do.wait_until.no_op`).
+      scheduleAt: async (ts) => { this.scheduleLocalAlarm(ts); },
       currentAlarm: () => this.scheduledAlarmAt,
     };
     this.triggerRegistry = new TriggerRegistry(hubSql, alarmScheduler);
@@ -763,8 +767,8 @@ export class LocalAgentSession implements BackendHost {
     return result;
   }
 
-  createTimerTrigger(opts: TimerTriggerOpts): TimerTrigger {
-    return createTimerTrigger(this.triggerRegistry, opts, Date.now());
+  async createTimerTrigger(opts: TimerTriggerOpts): Promise<TimerTrigger> {
+    return await createTimerTrigger(this.triggerRegistry, opts, Date.now());
   }
 
   /** The local clock's half of timer ingress: fire what is due, then re-arm
@@ -772,7 +776,7 @@ export class LocalAgentSession implements BackendHost {
   async fireDueTriggers(now = Date.now()): Promise<{ fired: number; nextAlarmAt: number | null }> {
     if (this.ended) return { fired: 0, nextAlarmAt: null };
     if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt <= now) this.clearLocalAlarm();
-    const { fired } = fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
+    const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
     if (fired > 0) this.orch.scheduleDrain();
     this.rearmLocalAlarm();
     return { fired, nextAlarmAt: this.scheduledAlarmAt };
@@ -785,15 +789,15 @@ export class LocalAgentSession implements BackendHost {
    * this creates is the trigger and its secret, and {@link acceptWebhookDelivery}
    * is the door a transport in front of it delivers through.
    */
-  createDurableWebhook(opts: {
+  async createDurableWebhook(opts: {
     label: string;
     auth_mode: 'hmac' | 'bearer' | 'mtls';
     secret?: string;
     accepted_content_type?: string;
     rate_limit_per_min?: number;
-  }): LocalDurableWebhook {
+  }): Promise<LocalDurableWebhook> {
     const now = Date.now();
-    const webhook = registerDurableWebhook(this.triggerRegistry, opts, now);
+    const webhook = await registerDurableWebhook(this.triggerRegistry, opts, now);
     if (opts.secret) this.webhookSecrets.put(webhook.secret_id, webhook.trigger_id, opts.secret, now);
     return {
       trigger_id: webhook.trigger_id,

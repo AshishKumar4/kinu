@@ -1911,12 +1911,14 @@ export class UserDO extends Agent<Env> {
       if (result.state === 'authenticating') {
         authUrl = result.authUrl ?? null;
       } else {
-        // Discovery is async; fire-and-forget so the response returns quickly.
-        // The next userMcp_list() poll surfaces the discovered tool count.
-        // Held open by waitUntil rather than a dropped rejection: a server that
-        // fails discovery reports it in its own state, and anything else is a
-        // fault the runtime must see.
-        this.ctx.waitUntil(mgr.discoverIfConnected(id));
+        // Awaited, not detached. This ran under `ctx.waitUntil` with a comment
+        // claiming the promise was "held open"; in a Durable Object waitUntil is
+        // a no-op (`do.wait_until.no_op`) and an in-flight promise is cancelled
+        // silently when the object is reset (`do.background_task.cancelled_on_reset`),
+        // so the tool count could simply never appear and nothing would say why.
+        // `userMcp_add` already awaits registerServer and connectToServer, so one
+        // more round-trip buys a return value that is true when it returns.
+        await mgr.discoverIfConnected(id);
       }
     } catch (err) {
       // Rollback both our row AND the SDK's storage entry so the user can
@@ -2036,7 +2038,11 @@ export class UserDO extends Agent<Env> {
       callbackUrl,
       transport,
     });
-    this.ctx.waitUntil(mgr.establishConnection(id));
+    // Awaited: the point of a re-register is that the rotated credential is live
+    // when the caller is told the update applied. `ctx.waitUntil` cannot hold this
+    // open (`do.wait_until.no_op`), so detaching it meant the header patch could
+    // report success against a connection that never came back.
+    await mgr.establishConnection(id);
   }
 
   /** Monotonic watermark — the orchestrator caches by this value. */
@@ -2155,8 +2161,14 @@ export class UserDO extends Agent<Env> {
       const result = await this.userMcp().handleCallbackRequest(req);
       this._userMcpUpdatedAt = Date.now();
       if (result.authSuccess) {
-        // Background-establish the connection now that tokens are saved.
-        void this.userMcp().establishConnection(result.serverId);
+        // Awaited, and in its own try: the tokens ARE saved by this point, so a
+        // connect failure must not be reported as an auth failure. Detaching it
+        // was the same mistake as the two `ctx.waitUntil` calls above — a Durable
+        // Object cannot retain an unawaited promise (`do.wait_until.no_op`), so
+        // the connection could silently never be established after a successful
+        // sign-in.
+        try { await this.userMcp().establishConnection(result.serverId); }
+        catch (err) { return { ok: true, serverId: result.serverId, error: `connected but not established: ${errorMessage(err)}` }; }
         return { ok: true, serverId: result.serverId, error: null };
       }
       return { ok: false, serverId: result.serverId ?? null, error: result.authError };

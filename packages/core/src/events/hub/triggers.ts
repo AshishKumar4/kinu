@@ -82,9 +82,17 @@ const OptionalNextFireRowSchema = v.object({ next_fire_at: v.nullable(v.number()
 const NextFireRowSchema = v.object({ next_fire_at: v.number() });
 
 export interface AlarmScheduler {
-  /** Ask the DO to wake at this time (or earlier). Idempotent — multiple
-   *  calls converge on the soonest pending time. */
-  scheduleAt(ts: number): void;
+  /** Ask the host to wake at this time (or earlier). Idempotent — multiple calls
+   *  converge on the soonest pending time.
+   *
+   *  AWAITED, NOT FIRE-AND-FORGET. On the cloud backend the host is a Durable
+   *  Object and arming means a storage write through the agents-SDK scheduler;
+   *  `ctx.waitUntil` cannot hold that write open (`do.wait_until.no_op`) and a
+   *  promise still in flight when the object is reset is cancelled with no
+   *  signal (`do.background_task.cancelled_on_reset`). The only retention a
+   *  Durable Object has is an await inside the invocation that asked for the
+   *  wake, so this returns the promise instead of discarding it. */
+  scheduleAt(ts: number): Promise<void>;
   /** Current scheduled alarm time, or null if none. */
   currentAlarm(): number | null;
 }
@@ -96,7 +104,7 @@ export class TriggerRegistry {
   ) {}
 
   /** Create a new trigger. Returns the trigger id. */
-  register(spec: RegisterSpec, now: number): TriggerId {
+  async register(spec: RegisterSpec, now: number): Promise<TriggerId> {
     const id = ulid();
     const fp = spec.fork_policy ?? null;
     this.sql.exec(
@@ -107,7 +115,7 @@ export class TriggerRegistry {
       id, spec.kind, JSON.stringify(spec.spec), spec.creator_trust, fp,
       spec.rate_limit_per_min ?? 60, now, spec.next_fire_at ?? null,
     );
-    if (spec.next_fire_at) this.alarm.scheduleAt(spec.next_fire_at);
+    if (spec.next_fire_at) await this.alarm.scheduleAt(spec.next_fire_at);
     return id;
   }
 
@@ -149,7 +157,7 @@ export class TriggerRegistry {
 
   /** Resume a paused trigger. Does NOT backfill missed alarm firings —
    *  `paused_at` defines the "missed window" that's gone. */
-  resume(id: TriggerId, now: number): boolean {
+  async resume(id: TriggerId, now: number): Promise<boolean> {
     const before = this.get(id);
     if (!before || before.state !== 'paused') return false;
     this.sql.exec(
@@ -160,7 +168,7 @@ export class TriggerRegistry {
       `SELECT next_fire_at FROM triggers WHERE id = ?`, id,
     ).toArray().map((row) => v.parse(OptionalNextFireRowSchema, row));
     if (fire[0]?.next_fire_at && fire[0].next_fire_at > now) {
-      this.alarm.scheduleAt(fire[0].next_fire_at);
+      await this.alarm.scheduleAt(fire[0].next_fire_at);
     }
     return true;
   }
@@ -175,7 +183,7 @@ export class TriggerRegistry {
   }
 
   /** Resume every paused trigger (agent unarchive). */
-  resumeAll(now: number): number {
+  async resumeAll(now: number): Promise<number> {
     const candidates = this.list({ state: 'paused' });
     this.sql.exec(
       `UPDATE triggers SET state = 'active', paused_at = NULL WHERE state = 'paused'`,
@@ -187,7 +195,7 @@ export class TriggerRegistry {
     ).toArray().map((row) => v.parse(NextFireRowSchema, row));
     if (fireRows.length > 0) {
       const soonest = Math.min(...fireRows.map(r => r.next_fire_at));
-      this.alarm.scheduleAt(soonest);
+      await this.alarm.scheduleAt(soonest);
     }
     return candidates.length;
   }
@@ -233,7 +241,7 @@ export class TriggerRegistry {
 
   /** Record that a trigger fired. Recomputes `next_fire_at` for cron;
    *  clears it for one-shot. */
-  markFired(id: TriggerId, now: number, nextFireAt: number | null): void {
+  async markFired(id: TriggerId, now: number, nextFireAt: number | null): Promise<void> {
     this.sql.exec(
       `UPDATE triggers
          SET fire_count = fire_count + 1,
@@ -242,7 +250,7 @@ export class TriggerRegistry {
        WHERE id = ?`,
       now, nextFireAt, id,
     );
-    if (nextFireAt) this.alarm.scheduleAt(nextFireAt);
+    if (nextFireAt) await this.alarm.scheduleAt(nextFireAt);
   }
 
   // ── fork ───────────────────────────────────────────────────────

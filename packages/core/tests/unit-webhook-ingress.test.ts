@@ -29,7 +29,7 @@ function hub() {
   initEventsHubTables(sql);
   initWebhookRateLimitTables(sql);
   const log = new EventLog(sql);
-  const triggers = new TriggerRegistry(sql, { scheduleAt: () => {}, currentAlarm: () => null });
+  const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
   const secrets = createWebhookSecretStore(sql);
   const { vfs, files } = createMemoryVfs();
   let drains = 0;
@@ -40,10 +40,10 @@ function hub() {
   };
 
   /** Register a webhook exactly as a backend's create route does. */
-  const register = (
+  const register = async (
     opts: Parameters<typeof registerDurableWebhook>[1] & { secret?: string },
-  ): string => {
-    const webhook = registerDurableWebhook(triggers, opts, NOW);
+  ): Promise<string> => {
+    const webhook = await registerDurableWebhook(triggers, opts, NOW);
     if (opts.secret) secrets.put(webhook.secret_id, webhook.trigger_id, opts.secret, NOW);
     return webhook.trigger_id;
   };
@@ -69,7 +69,7 @@ function hub() {
 describe('webhook ingress admits a verified delivery', () => {
   test('bearer: the delivery becomes a pending event that wakes the agent', async () => {
     const h = hub();
-    const trigger_id = h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
 
     const result = await h.deliver({ trigger_id, bearer_header: 'Bearer shhh' });
 
@@ -84,7 +84,7 @@ describe('webhook ingress admits a verified delivery', () => {
 
   test('hmac: the signature covers `<timestamp>.<body>`, and the body is parsed once', async () => {
     const h = hub();
-    const trigger_id = h.register({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
     const body_text = '{"n":41}';
 
     const result = await h.deliver({
@@ -101,7 +101,7 @@ describe('webhook ingress admits a verified delivery', () => {
 
   test('mtls: the edge’s verdict is the whole check, and no secret is read', async () => {
     const h = hub();
-    const trigger_id = h.register({ label: 'partner', auth_mode: 'mtls' });
+    const trigger_id = await h.register({ label: 'partner', auth_mode: 'mtls' });
 
     expect(await h.deliver({ trigger_id, cf_mtls_verified: true })).toMatchObject({ status: 'admitted' });
     expect(h.log.pending({ variant: 'webhook' })[0].ingress).toBe('webhook_mtls');
@@ -109,18 +109,18 @@ describe('webhook ingress admits a verified delivery', () => {
 
   test('a non-JSON body is carried verbatim, and a malformed JSON body is not lost', async () => {
     const h = hub();
-    const text = h.register({ label: 'text', auth_mode: 'mtls', accepted_content_type: 'text/plain' });
+    const text = await h.register({ label: 'text', auth_mode: 'mtls', accepted_content_type: 'text/plain' });
     await h.deliver({ trigger_id: text, cf_mtls_verified: true, content_type: 'text/plain', body_text: 'ping' });
     expect(h.log.pending({ variant: 'webhook' })[0].payload).toMatchObject({ body: 'ping' });
 
-    const json = h.register({ label: 'json', auth_mode: 'mtls' });
+    const json = await h.register({ label: 'json', auth_mode: 'mtls' });
     await h.deliver({ trigger_id: json, cf_mtls_verified: true, body_text: '{oops' });
     expect(h.log.pending({ variant: 'webhook' })[1].payload).toMatchObject({ body: '{oops' });
   });
 
   test('a redelivery of the same delivery_id dedupes instead of waking a second turn', async () => {
     const h = hub();
-    const trigger_id = h.register({ label: 'ci', auth_mode: 'mtls' });
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'mtls' });
     const first = await h.deliver({ trigger_id, cf_mtls_verified: true, delivery_id: 'd-1' });
     const second = await h.deliver({ trigger_id, cf_mtls_verified: true, delivery_id: 'd-1' });
 
@@ -131,7 +131,7 @@ describe('webhook ingress admits a verified delivery', () => {
 
   test('a body past the brief budget is spilled to the agent’s own file plane', async () => {
     const h = hub();
-    const trigger_id = h.register({ label: 'big', auth_mode: 'mtls' });
+    const trigger_id = await h.register({ label: 'big', auth_mode: 'mtls' });
     await h.deliver({
       trigger_id, cf_mtls_verified: true, body_text: JSON.stringify({ blob: 'x'.repeat(4000) }),
     });
@@ -154,19 +154,19 @@ describe('webhook ingress refuses everything else', () => {
     expect(await h.deliver({ trigger_id: 'nope' }))
       .toEqual({ status: 'rejected', http_status: 404, reason: 'trigger not found' });
 
-    const revoked = h.register({ label: 'ci', auth_mode: 'mtls' });
+    const revoked = await h.register({ label: 'ci', auth_mode: 'mtls' });
     h.triggers.revoke(revoked, NOW);
     expect(await h.deliver({ trigger_id: revoked, cf_mtls_verified: true }))
       .toEqual({ status: 'rejected', http_status: 503, reason: 'trigger revoked' });
 
-    const timer = h.triggers.register({ kind: 'timer_cron', spec: {}, creator_trust: 'owner' }, NOW);
+    const timer = await h.triggers.register({ kind: 'timer_cron', spec: {}, creator_trust: 'owner' }, NOW);
     expect(await h.deliver({ trigger_id: timer }))
       .toEqual({ status: 'rejected', http_status: 400, reason: 'not a webhook trigger' });
   });
 
   test('the content-type pin is exact, and parameters after `;` do not defeat it', async () => {
     const h = hub();
-    const trigger_id = h.register({ label: 'ci', auth_mode: 'mtls' });
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'mtls' });
 
     expect(await h.deliver({ trigger_id, cf_mtls_verified: true, content_type: 'text/plain' }))
       .toEqual({ status: 'rejected', http_status: 415, reason: 'expected application/json' });
@@ -177,7 +177,7 @@ describe('webhook ingress refuses everything else', () => {
 
   test('bearer: absent, malformed, wrong, and unstored secrets are all 401', async () => {
     const h = hub();
-    const trigger_id = h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
     const rejected = (reason: string) => ({ status: 'rejected' as const, http_status: 401, reason });
 
     expect(await h.deliver({ trigger_id })).toEqual(rejected('missing bearer'));
@@ -187,7 +187,7 @@ describe('webhook ingress refuses everything else', () => {
     // mismatch, not a partial match.
     expect(await h.deliver({ trigger_id, bearer_header: 'Bearer shh' })).toEqual(rejected('bearer mismatch'));
 
-    const unstored = h.register({ label: 'no-secret', auth_mode: 'bearer' });
+    const unstored = await h.register({ label: 'no-secret', auth_mode: 'bearer' });
     expect(await h.deliver({ trigger_id: unstored, bearer_header: 'Bearer shhh' }))
       .toEqual(rejected('secret revoked'));
 
@@ -196,7 +196,7 @@ describe('webhook ingress refuses everything else', () => {
 
   test('hmac: missing headers, a stale timestamp, and a wrong signature are all 401', async () => {
     const h = hub();
-    const trigger_id = h.register({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
     const body_text = '{"n":41}';
     const sign = (ts: number) => hmacSha256Hex('k', `${ts}.${body_text}`);
     const rejected = (reason: string) => ({ status: 'rejected' as const, http_status: 401, reason });
@@ -236,7 +236,7 @@ describe('webhook ingress refuses everything else', () => {
       trigger_id, body_text, hmac_timestamp: String(NOW), hmac_signature: await hmacSha256Hex('other', `${NOW}.${body_text}`),
     })).toEqual(rejected('signature mismatch'));
 
-    const unstored = h.register({ label: 'no-secret', auth_mode: 'hmac' });
+    const unstored = await h.register({ label: 'no-secret', auth_mode: 'hmac' });
     expect(await h.deliver({
       trigger_id: unstored, body_text, hmac_timestamp: String(NOW), hmac_signature: await sign(NOW),
     })).toEqual(rejected('secret revoked'));
@@ -244,15 +244,15 @@ describe('webhook ingress refuses everything else', () => {
 
   test('mtls: an unverified client certificate is 401', async () => {
     const h = hub();
-    const trigger_id = h.register({ label: 'partner', auth_mode: 'mtls' });
+    const trigger_id = await h.register({ label: 'partner', auth_mode: 'mtls' });
     expect(await h.deliver({ trigger_id, cf_mtls_verified: false }))
       .toEqual({ status: 'rejected', http_status: 401, reason: 'client cert not verified' });
   });
 
   test('the rate limit is per trigger per minute, and refuses with the configured limit', async () => {
     const h = hub();
-    const a = h.register({ label: 'a', auth_mode: 'mtls', rate_limit_per_min: 2 });
-    const b = h.register({ label: 'b', auth_mode: 'mtls', rate_limit_per_min: 2 });
+    const a = await h.register({ label: 'a', auth_mode: 'mtls', rate_limit_per_min: 2 });
+    const b = await h.register({ label: 'b', auth_mode: 'mtls', rate_limit_per_min: 2 });
     const send = (trigger_id: string, now: number) =>
       h.deliver({ trigger_id, cf_mtls_verified: true, now, delivery_id: `d-${trigger_id}-${now}` });
 
@@ -267,7 +267,7 @@ describe('webhook ingress refuses everything else', () => {
 
   test('a refused delivery writes nothing at all — no event, no file, no wake', async () => {
     const h = hub();
-    const trigger_id = h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
     const big = JSON.stringify({ blob: 'x'.repeat(4000) });
 
     expect(await h.deliver({ trigger_id, bearer_header: 'Bearer nope', body_text: big }))
@@ -280,14 +280,14 @@ describe('webhook ingress refuses everything else', () => {
 });
 
 describe('webhook registration', () => {
-  test('the secret never reaches the trigger row, only its opaque handle', () => {
+  test('the secret never reaches the trigger row, only its opaque handle', async () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     initEventsHubTables(sql);
-    const triggers = new TriggerRegistry(sql, { scheduleAt: () => {}, currentAlarm: () => null });
+    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
     const secrets = createWebhookSecretStore(sql);
 
-    const webhook = registerDurableWebhook(triggers, { label: 'ci', auth_mode: 'bearer' }, NOW);
+    const webhook = await registerDurableWebhook(triggers, { label: 'ci', auth_mode: 'bearer' }, NOW);
     secrets.put(webhook.secret_id, webhook.trigger_id, 'shhh', NOW);
 
     const row = triggers.get(webhook.trigger_id)!;
@@ -300,15 +300,15 @@ describe('webhook registration', () => {
     expect(row.creator_trust).toBe('owner');
   });
 
-  test('an out-of-range rate limit is refused before a trigger row exists', () => {
+  test('an out-of-range rate limit is refused before a trigger row exists', async () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     initEventsHubTables(sql);
-    const triggers = new TriggerRegistry(sql, { scheduleAt: () => {}, currentAlarm: () => null });
+    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
 
-    expect(() => registerDurableWebhook(
+    await expect(registerDurableWebhook(
       triggers, { label: 'ci', auth_mode: 'bearer', rate_limit_per_min: 0 }, NOW,
-    )).toThrow(/rate_limit_per_min/);
+    )).rejects.toThrow(/rate_limit_per_min/);
     expect(triggers.list()).toEqual([]);
   });
 

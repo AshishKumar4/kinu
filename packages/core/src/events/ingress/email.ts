@@ -208,7 +208,7 @@ export function readEmailAllowlist(registry: TriggerRegistry): string[] {
  * (creator_trust recorded like every ingress) holds the extra senders, and an
  * empty list just revokes it.
  */
-export function setEmailAllowlist(
+export async function setEmailAllowlist(
   registry: TriggerRegistry, allow: string[], now: number,
 ) {
   const cleaned = [...new Set(
@@ -218,7 +218,7 @@ export function setEmailAllowlist(
     if (t.state !== 'revoked') registry.revoke(t.id, now);
   }
   if (cleaned.length > 0) {
-    registry.register({ kind: 'email_route', spec: { allow: cleaned }, creator_trust: 'owner' }, now);
+    await registry.register({ kind: 'email_route', spec: { allow: cleaned }, creator_trust: 'owner' }, now);
   }
   return { allowlist: cleaned };
 }

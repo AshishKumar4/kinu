@@ -10,6 +10,7 @@ import {
   MctsSearchStore,
   RunEventRecorder,
   TriggerRegistry,
+  type AlarmScheduler,
   createAgentConfigStore,
   createFactsStore,
   initAgentConfigTable,
@@ -486,10 +487,10 @@ export function sampleLocalLabeling(name: string, size: number): LabelingItem[] 
 
 /** Store a labeling pass. The ledger's tables are ensured first: a workspace
  *  can predate the label table without ever having run a turn since. */
-export function recordLocalOutcomeLabels(
+export async function recordLocalOutcomeLabels(
   name: string,
   input: { labeler: string; labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }> },
-): LabelIngestResult {
+): Promise<LabelIngestResult> {
   return withLocalWritableDb(name, (db) => {
     const sql = makeSql(db);
     initTurnOutcomeTables((ddl) => { db.exec(ddl); }, sql);
@@ -634,7 +635,7 @@ export function getLocalStoredModel(name: string): { spec: string | null } {
   }));
 }
 
-export function setLocalStoredModel(name: string, spec: string): { ok: true; spec: string } {
+export async function setLocalStoredModel(name: string, spec: string): Promise<{ ok: true; spec: string }> {
   if (!spec.trim()) throw new Error('model spec required');
   // One normalizer: the same provider-registry resolution the live session uses.
   const normalized = createConfiguredLocalModelResolver().resolver.normalizeSpecSync(spec);
@@ -649,7 +650,7 @@ export function getLocalReasoningEffort(name: string): { effort: ReasoningEffort
   return withLocalDb(name, (db) => ({ effort: createAgentConfigStore(makeSql(db)).getReasoningEffort() }));
 }
 
-export function setLocalReasoningEffort(name: string, effort: ReasoningEffort): { ok: true; effort: ReasoningEffort } {
+export async function setLocalReasoningEffort(name: string, effort: ReasoningEffort): Promise<{ ok: true; effort: ReasoningEffort }> {
   return withLocalWritableDb(name, (db) => {
     initAgentConfigTable((ddl) => db.exec(ddl));
     createAgentConfigStore(makeSql(db)).setReasoningEffort(effort);
@@ -664,15 +665,15 @@ export function listLocalTriggers(name: string): { triggers: TriggerRow[] } {
   });
 }
 
-export function cancelLocalTrigger(name: string, id: string): { changed: boolean } {
+export async function cancelLocalTrigger(name: string, id: string): Promise<{ changed: boolean }> {
   return withLocalWritableDb(name, (db) => {
     if (!tableExists(db, 'triggers')) return { changed: false };
     return { changed: new TriggerRegistry(hubSql(db), NOOP_ALARM).revoke(id, Date.now()) };
   });
 }
 
-export function createLocalTimerTrigger(name: string, input: { cron?: string; atMs?: number; label?: string }): TriggerRow | null {
-  return withLocalWritableDb(name, (db) => {
+export async function createLocalTimerTrigger(name: string, input: { cron?: string; atMs?: number; label?: string }): Promise<TriggerRow | null> {
+  return withLocalWritableDb(name, async (db) => {
     initEventsHubTables(hubSql(db));
     const now = Date.now();
     const registry = new TriggerRegistry(hubSql(db), NOOP_ALARM);
@@ -685,7 +686,7 @@ export function createLocalTimerTrigger(name: string, input: { cron?: string; at
     if (input.cron) spec.cron = input.cron;
     else spec.atMs = nextFireAt;
     if (input.label) spec.label = input.label;
-    const id = registry.register({
+    const id = await registry.register({
       kind: input.cron ? 'timer_cron' : 'timer_oneshot',
       spec,
       creator_trust: 'owner',
@@ -702,7 +703,7 @@ export function listLocalJobs(name: string, limit = 20): BackgroundJob[] {
   });
 }
 
-export function cancelLocalJob(name: string, id: string): { ok: boolean } {
+export async function cancelLocalJob(name: string, id: string): Promise<{ ok: boolean }> {
   return withLocalWritableDb(name, (db) => {
     if (!tableExists(db, 'background_jobs')) return { ok: false };
     const store = new BackgroundJobStore(makeSql(db));
@@ -736,7 +737,7 @@ export function getLocalReleaseBoard(name: string, limit = 20): ReleaseBoard {
   });
 }
 
-export function markLocalBackgroundJobsCancelled(name: string): string[] {
+export async function markLocalBackgroundJobsCancelled(name: string): Promise<string[]> {
   return withLocalWritableDb(name, (db) => {
     if (!tableExists(db, 'background_jobs')) return [];
     const rows = all<{ id: string }>(
@@ -764,12 +765,16 @@ function withLocalDb<T>(name: string, fn: (db: SqliteDb) => T): T {
   }
 }
 
-function withLocalWritableDb<T>(name: string, fn: (db: SqliteDb) => T): T {
+/** Writable handle, closed only once the callback's result has settled. The
+ *  callback may be async: `TriggerRegistry`'s mutators await the host's alarm
+ *  seam, and a `finally { db.close() }` that fired at the first suspension
+ *  point would hand the rest of the callback a closed database. */
+async function withLocalWritableDb<T>(name: string, fn: (db: SqliteDb) => T | Promise<T>): Promise<T> {
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found. Create it with: proteus create ${name}`);
   const db = new Database(dbPath);
   try {
-    return fn(db);
+    return await fn(db);
   } finally {
     db.close();
   }
@@ -893,8 +898,10 @@ function getLocalToolSummary(db: SqliteDb): LocalToolSummary {
 }
 
 
-const NOOP_ALARM = {
-  scheduleAt() {},
+/** Inspection reads and writes a workspace's database with no session behind it,
+ *  so there is no host to wake and nothing to arm. */
+const NOOP_ALARM: AlarmScheduler = {
+  async scheduleAt() {},
   currentAlarm() { return null; },
 };
 

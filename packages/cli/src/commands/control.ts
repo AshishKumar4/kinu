@@ -86,7 +86,7 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
     const catalog = await loadModelCatalog(() => configured.resolver.listModels());
     validateModelSelection(catalog, resolvedSpec, spec, name);
   }
-  const result = resolvedSpec ? setLocalStoredModel(target.localName, resolvedSpec) : getLocalStoredModel(target.localName);
+  const result = resolvedSpec ? await setLocalStoredModel(target.localName, resolvedSpec) : getLocalStoredModel(target.localName);
   console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
   if (spec && result.spec) setDefaultModel(result.spec);
 }
@@ -104,7 +104,7 @@ export async function effortCommand(name: string, level: string | undefined): Pr
       : await callAgentRpc(auth.origin, auth.token, target.cloudName, 'getReasoningEffort', StoredEffortSchema);
   } else {
     result = level
-      ? setLocalReasoningEffort(target.localName, level)
+      ? await setLocalReasoningEffort(target.localName, level)
       : getLocalReasoningEffort(target.localName);
   }
   if (level && result.effort) setDefaultReasoningEffort(result.effort);
@@ -253,12 +253,12 @@ export async function triggersCommand(
   }
   if (normalized === 'cancel') {
     if (!value) throw new Error('trigger id required');
-    const cancelled = cancelLocalTrigger(target.localName, value);
+    const cancelled = await cancelLocalTrigger(target.localName, value);
     present({ id: value, ...cancelled }, opts, () =>
       console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
     return;
   }
-  const created = createLocalTimerTrigger(target.localName, timerInput(normalized, value));
+  const created = await createLocalTimerTrigger(target.localName, timerInput(normalized, value));
   if (!created) throw new Error('Trigger was registered but could not be read back.');
   present(created, opts, () =>
     console.log(`${OK('scheduled')} ${created.id} ${DIM(created.kind)} ${formatTime(created.next_fire_at)}`));
@@ -283,7 +283,7 @@ export async function jobsCommand(name: string, action: string | undefined, id: 
 
   if (normalized === 'cancel') {
     if (!id) throw new Error('job id required');
-    const cancelled = cancelLocalJob(target.localName, id);
+    const cancelled = await cancelLocalJob(target.localName, id);
     present({ id, ...cancelled }, opts, () =>
       console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`));
     return;

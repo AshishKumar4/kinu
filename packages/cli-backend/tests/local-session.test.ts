@@ -1069,7 +1069,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('one-shot timer triggers publish timer events and wake a programmatic turn', async () => {
     const { session, events } = setup('handled timer');
     const fireAt = Date.now() + 60_000;
-    const created = session.createTimerTrigger({
+    const created = await session.createTimerTrigger({
       atMs: fireAt,
       label: 'follow-up',
       payload: { reason: 'test' },
@@ -1108,7 +1108,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // autonomous turn was silently dropped. The daemon now flushes before end.
     const { session, events } = setup('handled timer');
     const fireAt = Date.now() + 60_000;
-    session.createTimerTrigger({ atMs: fireAt, label: 'wake', trust: 'owner' });
+    await session.createTimerTrigger({ atMs: fireAt, label: 'wake', trust: 'owner' });
 
     const outcome = await session.fireDueTriggers(fireAt);
     expect(outcome.fired).toBe(1);
@@ -1126,7 +1126,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('flushPendingDrains is a no-op once the session has ended', async () => {
     const { session, events } = setup('handled timer');
-    session.createTimerTrigger({ atMs: Date.now() + 60_000, label: 'wake', trust: 'owner' });
+    await session.createTimerTrigger({ atMs: Date.now() + 60_000, label: 'wake', trust: 'owner' });
     await session.fireDueTriggers(Date.now() + 60_000);
     await session.end();
     events.length = 0;
@@ -1136,7 +1136,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('cron timer triggers reschedule after firing', async () => {
     const { session, events } = setup('handled cron');
-    const created = session.createTimerTrigger({ cron: '*/5 * * * *', label: 'heartbeat' });
+    const created = await session.createTimerTrigger({ cron: '*/5 * * * *', label: 'heartbeat' });
     expect(created.kind).toBe('timer_cron');
     expect(created.nextFireAt).toBeGreaterThan(Date.now());
 
@@ -1159,7 +1159,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
         setCurriculumTaskStatus: async () => ({ ok: true }),
-        createTimerTrigger: (opts) => {
+        createTimerTrigger: async (opts) => {
           received.push({ atMs: opts.atMs, label: opts.label });
           return { id: 'trg-local', kind: opts.cron ? 'timer_cron' : 'timer_oneshot', nextFireAt: opts.atMs ?? 123 };
         },
@@ -1185,7 +1185,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
         setCurriculumTaskStatus: async () => ({ ok: true }),
-        createTimerTrigger: () => ({ id: 'trg-local', kind: 'timer_oneshot', nextFireAt: 1 }),
+        createTimerTrigger: async () => ({ id: 'trg-local', kind: 'timer_oneshot', nextFireAt: 1 }),
         cancelTrigger: async () => ({ ok: true, changed: true }),
         jobResult: async () => null,
         listBackgroundJobs: async () => [],
@@ -2675,8 +2675,13 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(runs[0]!.eventCount).toBeGreaterThan(0);
 
     const events = session.getRunEvents(runs[0]!.runId);
+    // `turn_steering` belongs here: this is the session's FIRST turn, so the
+    // step-0 delegation hint fires (turn-steering.ts's freshAsk — no assistant
+    // message yet, and the ask is not a question), and the settle spine records
+    // every hint it spliced. A first turn with no steering row would mean the
+    // hint never reached the model.
     expect(events.map((e) => e.type)).toEqual([
-      'run_start', 'turn_start', 'step_finish', 'turn_end', 'run_end',
+      'run_start', 'turn_start', 'step_finish', 'turn_steering', 'turn_end', 'run_end',
     ]);
 
     const start = events[0];
@@ -2690,10 +2695,10 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(end.error).toBeUndefined();
 
     // Monotonic indices are what makes a resume possible at all.
-    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4]);
+    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5]);
     // …and `since` replays the tail, exactly as an SSE Last-Event-ID does.
     expect(session.getRunEvents(runs[0]!.runId, { since: 3 }).map((e) => e.type))
-      .toEqual(['turn_end', 'run_end']);
+      .toEqual(['turn_steering', 'turn_end', 'run_end']);
 
     await session.end();
   });

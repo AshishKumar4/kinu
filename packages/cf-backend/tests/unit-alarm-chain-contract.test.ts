@@ -98,10 +98,17 @@ describe('the Proteus timer rides the SDK scheduler', () => {
     orchestrator.indexOf('private sweepUnrunnableSchedules('),
   );
 
-  test('trigger, peer-outbox and email-outbox wakes all arm the one timer row', () => {
-    expect(orchestrator).toContain('scheduleAt: (ts: number) => this.scheduleTimerAt(ts)');
-    expect(orchestrator).toContain('scheduleDispatch: (at) => this.scheduleTimerAt(at)');
-    expect(orchestrator).toContain('new EmailOutbox(this.ctx.storage.sql, (at) => this.scheduleTimerAt(at))');
+  test('trigger, peer-outbox and email-outbox wakes all arm the one timer row, awaited', () => {
+    // The three seams hand `armTimer` straight to their consumer, which awaits it.
+    // They used to go through a void-returning `scheduleTimerAt` that passed the
+    // promise to `ctx.waitUntil` — a no-op in a Durable Object, so the arm of the
+    // object's OWN wake-up could be cancelled by an eviction and nothing would say
+    // so. A void-returning wrapper here is the defect, hence the negative assertion.
+    expect(orchestrator).toContain('scheduleAt: (ts: number) => this.armTimer(ts)');
+    expect(orchestrator).toContain('scheduleDispatch: (at) => this.armTimer(at)');
+    expect(orchestrator).toContain('new EmailOutbox(this.ctx.storage.sql, (at) => this.armTimer(at))');
+    expect(orchestrator).not.toContain('scheduleTimerAt');
+    expect(orchestrator).not.toContain('this.ctx.waitUntil(');
     expect(orchestrator).toContain('await this.schedule(new Date(desired * 1000), PROTEUS_TIMER_CALLBACK)');
     expect(orchestrator).toContain("const PROTEUS_TIMER_CALLBACK = '_proteusTimerTick'");
     expect(orchestrator).toContain('async _proteusTimerTick(): Promise<void>');

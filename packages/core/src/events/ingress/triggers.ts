@@ -48,11 +48,11 @@ type TimerSpec = v.InferOutput<typeof TimerSpecSchema>;
  * one home (not inlined SQL). `trust` defaults to 'authenticated' so
  * agent-created schedules are distinguishable from operator ones.
  */
-export function createTimerTrigger(
+export async function createTimerTrigger(
   registry: TriggerRegistry,
   opts: TimerTriggerOpts,
   now: number,
-): TimerTrigger {
+): Promise<TimerTrigger> {
   const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
   const nextFireAt = opts.cron ? nextCronFire(opts.cron, now) : (opts.atMs ?? null);
   if (opts.cron && nextFireAt === null) throw new Error(`Unsupported cron expression: ${opts.cron}`);
@@ -62,7 +62,7 @@ export function createTimerTrigger(
   if (opts.label !== undefined) Object.assign(triggerSpec, { label: opts.label });
   if (opts.payload !== undefined) Object.assign(triggerSpec, { payload: opts.payload });
   if (opts.missionLabel !== undefined) Object.assign(triggerSpec, { mission_label: opts.missionLabel });
-  const id = registry.register({
+  const id = await registry.register({
     kind,
     spec: triggerSpec satisfies TimerSpec,
     creator_trust: opts.trust ?? 'authenticated',
@@ -126,7 +126,7 @@ export interface TimerFireDeps {
  * Crash-safe: hub dedupe on `(trigger_id, scheduled_fire_at)` makes a re-fire
  * after eviction a no-op publish.
  */
-export function fireDueTriggers(deps: TimerFireDeps, now: number) {
+export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
   let fired = 0;
   for (const trigger of deps.registry.due(now)) {
     // Only timers produce timer events. No other kind carries a next_fire_at
@@ -152,9 +152,9 @@ export function fireDueTriggers(deps: TimerFireDeps, now: number) {
     });
 
     if (trigger.kind === 'timer_cron') {
-      deps.registry.markFired(trigger.id, now, spec.cron ? nextCronFire(spec.cron, now) : null);
+      await deps.registry.markFired(trigger.id, now, spec.cron ? nextCronFire(spec.cron, now) : null);
     } else {
-      deps.registry.markFired(trigger.id, now, null);
+      await deps.registry.markFired(trigger.id, now, null);
       deps.registry.revoke(trigger.id, now);
     }
   }

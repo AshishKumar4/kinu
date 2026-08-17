@@ -55,7 +55,7 @@ function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: s
         parent_version: null, trials: 0, wins: 0, losses: 0, ties: 0, win_rate: null,
       }];
     },
-    createTimerTrigger: (opts) => { calls.push(`timer:${opts.cron ?? opts.atMs}:${opts.missionLabel ?? "uncapped"}`); return { id: "trg1", kind: opts.cron ? "timer_cron" : "timer_oneshot", nextFireAt: 123 }; },
+    createTimerTrigger: async (opts) => { calls.push(`timer:${opts.cron ?? opts.atMs}:${opts.missionLabel ?? "uncapped"}`); return { id: "trg1", kind: opts.cron ? "timer_cron" : "timer_oneshot", nextFireAt: 123 }; },
     budget: realGovernor(),
     cancelTrigger: async (id) => { calls.push(`cancel:${id}`); return { ok: true, changed: true }; },
     getReplayEvals: async (limit) => {
