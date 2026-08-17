@@ -63,7 +63,6 @@
   "durable_objects": {
     "bindings": [
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
-      { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
       // Per-user DO: profile + agent registry + credentials + defaults.
       // Keyed by stable Proteus userId assigned by AUTH_DB.
       { "class_name": "UserDO", "name": "UserDO" },
@@ -270,7 +269,6 @@
       "durable_objects": {
         "bindings": [
           { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
-          { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
           { "class_name": "UserDO", "name": "UserDO" },
           { "class_name": "MonitorDO", "name": "MonitorDO" },
           { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },

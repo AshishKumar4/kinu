@@ -69,6 +69,7 @@ function createFullCLIRuntime() {
       generateReflection: async () => ({ text: 'cli branch reflection' }),
     }),
     abortBranch: async () => {},
+    releaseBranch: async () => {},
   };
 
   return { rt, db };

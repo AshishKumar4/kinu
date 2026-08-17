@@ -315,6 +315,39 @@ describe('the agent surfaces cannot drift from their classes', () => {
   });
 });
 
+/**
+ * The seal is fail-closed, which is right — and it means a facet calling a
+ * parent method nobody added to the surface fails at RUNTIME, with workerd's
+ * "does not implement the method", inside a background head where nothing but a
+ * console line sees it. That is how the four `headJournal*` routing calls and
+ * `recordHeadStep` came to be declared, called, typechecked and unreachable at
+ * once: `head_steps` stayed empty and a depth-2 head stayed unreadable while
+ * every test passed.
+ *
+ * So the calls are derived from the source rather than listed: a new
+ * `parent.foo(...)` in the facet is either on the surface or this is red.
+ */
+describe('a facet reaches its root only through the sealed surface', () => {
+  /** `const parent = this.getSharedParentStub()` is the only way a head obtains
+   *  its root's stub, so every `parent.x(` in the file is a cross-DO call. */
+  const parentCalls = [...source('exploration.ts').matchAll(/\bparent\.(\w+)\(/g)]
+    .map(([, name]) => name!)
+    .filter((name, i, all) => all.indexOf(name) === i)
+    .sort();
+
+  test('the scan found the calls it exists to check (denominator)', () => {
+    // Without this the filter below is green on an empty list, which is exactly
+    // what a renamed accessor or a refactored stub would produce.
+    expect(parentCalls.length).toBeGreaterThan(0);
+    expect(parentCalls).toContain('recordHeadStep');
+    expect(parentCalls).toContain('headJournalRecordSplit');
+  });
+
+  test('every one of them is reachable on an OrchestratorAgent stub', () => {
+    expect(parentCalls.filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name))).toEqual([]);
+  });
+});
+
 // ── The mechanism ───────────────────────────────────────────────────────────
 // `UserDO`'s base classes are stubbed under bun, so the inherited half of the
 // surface — the half that carries the agents SDK's `sql` — is exercised here on

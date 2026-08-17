@@ -79,6 +79,7 @@ import {
   nanoid,
   // Branching heads
   HeadController, HeadJournal,
+  type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
   type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type MergeResult,
   // Canonical memory-note read (the dynamic-context MEMORY.md tail)
   readMemoryTail,
@@ -781,6 +782,31 @@ export abstract class ActorAgent extends Think<Env> {
     labels: readonly string[]; calls?: number; spawns?: number; usage?: MissionCallUsage;
   }): Promise<void> {
     this.budget.debit(tokens, opts);
+  }
+
+  // ── The subtree's head journal, over this actor's control plane ──────
+  //
+  // A recursive split runs on a facet with its own SQLite, so a journal it
+  // wrote locally would strand its rows one DO away from the head_steps they
+  // must join against — the C2 defect that made a depth-2 head unreadable.
+  // These four are the writes HeadController performs, exposed as the same kind
+  // of cross-DO port missionGuard/missionDebit use: worker-side DO RPC reachable
+  // on a stub and nowhere else, never `@callable`, allowlisted in rpc-surface.ts.
+
+  async headJournalRecordSplit(rootId: HeadId, rationale: string, spawnedAt: number): Promise<void> {
+    this.headJournal.recordSplit(rootId, rationale, spawnedAt);
+  }
+
+  async headJournalInsertSpawn(input: HeadInput): Promise<void> {
+    this.headJournal.insertSpawn(input);
+  }
+
+  async headJournalRecordReport(report: HeadReport): Promise<void> {
+    this.headJournal.recordReport(report);
+  }
+
+  async headJournalCacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): Promise<void> {
+    this.headJournal.cacheMerge(rootId, result, strategy);
   }
 
   /** True while a keepAlive heartbeat is holding the DO open for evolution. */
@@ -1634,17 +1660,12 @@ export abstract class ActorAgent extends Think<Env> {
 
   // ── Think lifecycle overrides ──────────────────────────────────
 
-  /** Think calls `getModel()` synchronously per turn — cache to avoid
-   *  reconstructing on every turn when the stored spec hasn't changed. */
-  private _cachedModel: LanguageModel | null = null;
-  private _cachedModelSpec: string | null = null;
+  /** Think calls `getModel()` synchronously per turn. The memo lives in
+   *  OwnedModelServices, which every actor shares, so there is one cache and one
+   *  invalidation rather than a per-class copy. */
   getModel(): LanguageModel {
     this.logActivity("getmodel");
-    const stored = this.getStoredModelId();
-    if (this._cachedModel && this._cachedModelSpec === stored) return this._cachedModel;
-    const model = this.ownedModelServices.resolveModel(stored);
-    this._cachedModel = model; this._cachedModelSpec = stored;
-    return model;
+    return this.ownedModelServices.resolveModel(this.getStoredModelId());
   }
 
   /**
@@ -2593,10 +2614,9 @@ export abstract class ActorAgent extends Think<Env> {
   /** Invalidate every cache that depends on the resolved model so the next
    *  getModel() / providerRegistry() call rebuilds. */
   protected invalidateModelCaches(): void {
-    this._cachedModel = null;
-    this._cachedModelSpec = null;
-    // Provider registry caches per-agent OAuth refreshers; rebuild so a
-    // disconnected provider stops being marked available.
+    // Drops the resolved model AND the provider registry, which caches
+    // per-agent OAuth refreshers — rebuilt so a disconnected provider stops
+    // being marked available.
     this.ownedModelServices.invalidate();
   }
 

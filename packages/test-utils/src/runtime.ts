@@ -121,6 +121,7 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
     craftStore: opts.craftStore ?? emptyCraftStore(),
     spawnBranch: async () => emptyBranchHandle(),
     abortBranch: async () => {},
+    releaseBranch: async () => {},
     executionRouter: opts.executionRouter ?? emptyRouter(),
   };
   return { rt, testSql, llm };

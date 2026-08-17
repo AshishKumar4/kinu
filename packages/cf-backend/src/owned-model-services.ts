@@ -1,5 +1,8 @@
 import type { LanguageModel } from 'ai';
-import { agentAffinityKey, type WebSearchProvider } from '@proteus/core';
+import {
+  agentAffinityKey, parseModelSpec, reasoningEffortOptions,
+  type ReasoningEffort, type WebSearchProvider,
+} from '@proteus/core';
 import { buildCfWebSearchProvider } from './lib/web-provider.js';
 import {
   createAgentProviderRegistry,
@@ -28,6 +31,7 @@ export class OwnedModelServices {
   private providerRegistryCache: AgentProviderRegistry | null = null;
   private webSearchProviderCache: WebSearchProvider | null = null;
   private judgeSpecCache: { key: string; spec: string } | null = null;
+  private modelCache: { spec: string; model: LanguageModel } | null = null;
 
   constructor(private readonly options: OwnedModelServicesOptions) {}
 
@@ -58,9 +62,30 @@ export class OwnedModelServices {
     return this.providerRegistryCache;
   }
 
+  /** The resolved model for `spec`, memoized on the NORMALIZED spec.
+   *
+   *  Cached here rather than in each caller: Think asks for the model once per
+   *  turn and a head asked for it once per STEP, rebuilding the registry lookup
+   *  every time. `invalidate()` drops it with the rest of the owner-bound state. */
   resolveModel(spec?: string | null): LanguageModel {
     const registry = this.providerRegistry();
-    return registry.resolveModel(registry.normalizeSpecSync(spec));
+    const normalized = registry.normalizeSpecSync(spec);
+    if (this.modelCache?.spec === normalized) return this.modelCache.model;
+    const model = registry.resolveModel(normalized);
+    this.modelCache = { spec: normalized, model };
+    return model;
+  }
+
+  /** The same memoized model plus the reasoning-effort provider options for it.
+   *  One implementation of "normalize the spec, resolve it, derive its effort
+   *  options" — the head path needs the pair and used to rebuild both per call. */
+  resolveModelWithEffort(spec: string | null | undefined, effort: ReasoningEffort) {
+    const registry = this.providerRegistry();
+    const normalized = registry.normalizeSpecSync(spec);
+    return {
+      model: this.resolveModel(normalized),
+      providerOptions: reasoningEffortOptions(effort, parseModelSpec(normalized).provider),
+    };
   }
 
   /**
@@ -93,5 +118,6 @@ export class OwnedModelServices {
   invalidate(): void {
     this.providerRegistryCache = null;
     this.judgeSpecCache = null;
+    this.modelCache = null;
   }
 }

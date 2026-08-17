@@ -11,7 +11,7 @@ import { mockAgentsSdk } from './helpers/agents-sdk.js';
 
 mockAgentsSdk();
 const { ExplorationAgent } = await import('../src/exploration.ts');
-const { abortExplorationFacet, spawnBranchFacet, spawnHeadFacet } =
+const { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet, spawnHeadFacet } =
   await import('../src/facet-spawn.ts');
 
 interface Call { method: string; args: unknown[] }
@@ -48,8 +48,19 @@ function headInput(): HeadInput {
 }
 
 /** A facet host whose stub records every RPC, in order. `failing` names the one
- *  bootstrap RPC that should reject, to exercise the discard path. */
-function makeHost(options: { failing?: string; abortSubAgentThrows?: boolean } = {}) {
+ *  bootstrap RPC that should reject, to exercise the discard path.
+ *
+ *  `abortSubAgent` and `deleteSubAgent` record under DISTINCT names on purpose:
+ *  the first only evicts the instance, the second also wipes its SQLite, and a
+ *  test that cannot tell them apart cannot tell reclamation from a leak. */
+function makeHost(
+  options: {
+    failing?: string;
+    abortSubAgentThrows?: boolean;
+    deleteSubAgentThrows?: boolean;
+    runAsHeadRejects?: boolean;
+  } = {},
+) {
   const calls: Call[] = [];
   const record = (method: string, args: unknown[]) => {
     calls.push({ method, args });
@@ -61,7 +72,11 @@ function makeHost(options: { failing?: string; abortSubAgentThrows?: boolean } =
     setSharedParent: (name: string) => record('setSharedParent', [name]),
     initHead: (input: HeadInput) => record('initHead', [input]),
     abortHead: (reason: string) => record('abortHead', [reason]),
-    runAsHead: async () => { calls.push({ method: 'runAsHead', args: [] }); return headReport; },
+    runAsHead: async () => {
+      calls.push({ method: 'runAsHead', args: [] });
+      if (options.runAsHeadRejects) throw new Error('the head crashed mid-run');
+      return headReport;
+    },
     explore: async (...args: unknown[]) => {
       calls.push({ method: 'explore', args });
       return { text: 'an approach' };
@@ -80,8 +95,12 @@ function makeHost(options: { failing?: string; abortSubAgentThrows?: boolean } =
       calls.push({ method: 'abortSubAgent', args: [cls, name] });
       if (options.abortSubAgentThrows) throw new Error('facet registry gone');
     },
+    deleteSubAgent: async (cls: { name: string }, name: string) => {
+      calls.push({ method: 'deleteSubAgent', args: [cls, name] });
+      if (options.deleteSubAgentThrows) throw new Error('facet storage is unreachable');
+    },
   };
-  // SAFETY: this locally constructed host implements both members FacetHost
+  // SAFETY: this locally constructed host implements all three members FacetHost
   // owns; every returned exploration stub method is present and records its
   // exact argument list before returning the owner-shaped result above.
   return { host: host as FacetHost, calls };
@@ -114,7 +133,7 @@ describe('exploration-facet spawn seam', () => {
     expect(head.id).toBe('head-1');
   });
 
-  test('the head handle runs and tears down the facet it spawned', async () => {
+  test('a head RECLAIMS its facet when run() settles, and only EVICTS on abort()', async () => {
     const { host, calls } = makeHost();
     const head = await spawnHeadFacet(host, headInput(), {
       ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
@@ -124,12 +143,44 @@ describe('exploration-facet spawn seam', () => {
     expect(await head.run()).toEqual(headReport);
     await head.abort('wall-clock timeout');
 
-    expect(methods(calls)).toEqual(['runAsHead', 'abortHead', 'abortSubAgent']);
-    expect(calls[1]?.args).toEqual(['wall-clock timeout']);
-    expect(calls[2]?.args).toEqual([ExplorationAgent, 'head-1']);
+    // run() is the TERMINAL point, so it wipes the facet's storage; abort() is
+    // mid-flight and must only evict the instance. Collapsing either into the
+    // other is a leak one way and data loss the other.
+    expect(methods(calls)).toEqual(['runAsHead', 'deleteSubAgent', 'abortHead', 'abortSubAgent']);
+    expect(calls[1]?.args).toEqual([ExplorationAgent, 'head-1']);
+    expect(calls[2]?.args).toEqual(['wall-clock timeout']);
+    expect(calls[3]?.args).toEqual([ExplorationAgent, 'head-1']);
   });
 
-  test('a head still evicts its facet when the in-facet abort fails', async () => {
+  test('run() reclaims the facet even when runAsHead rejects, and the original error propagates', async () => {
+    const { host, calls } = makeHost({ runAsHeadRejects: true });
+    const head = await spawnHeadFacet(host, headInput(), {
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
+    });
+    calls.length = 0;
+
+    // A head that dies still holds a database; the `finally` is the only thing
+    // that hands it back, and it must not mask why the head died.
+    await expect(head.run()).rejects.toThrow('the head crashed mid-run');
+
+    expect(methods(calls)).toEqual(['runAsHead', 'deleteSubAgent']);
+    expect(calls[1]?.args).toEqual([ExplorationAgent, 'head-1']);
+  });
+
+  test('abort() on a live head never deletes — releasing there would wipe a head still writing', async () => {
+    const { host, calls } = makeHost();
+    const head = await spawnHeadFacet(host, headInput(), {
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
+    });
+    calls.length = 0;
+
+    await head.abort('superseded');
+
+    expect(methods(calls)).toEqual(['abortHead', 'abortSubAgent']);
+    expect(methods(calls)).not.toContain('deleteSubAgent');
+  });
+
+  test('a failing in-facet abort still evicts, and the failure is not discarded', async () => {
     const { host, calls } = makeHost({ failing: 'abortHead' });
     const head = await spawnHeadFacet(host, headInput(), {
       ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
@@ -152,8 +203,10 @@ describe('exploration-facet spawn seam', () => {
       ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
     })).rejects.toThrow('initHead exploded');
 
+    // The half-seeded facet is WIPED, not merely evicted: nothing will ever
+    // read it, so leaving it behind is a pure leak into the root's quota.
     expect(methods(calls)).toEqual([
-      'subAgent', 'setOwner', 'setSharedParent', 'initHead', 'abortSubAgent',
+      'subAgent', 'setOwner', 'setSharedParent', 'initHead', 'deleteSubAgent',
     ]);
     expect(calls.at(-1)?.args).toEqual([ExplorationAgent, 'head-1']);
   });
@@ -192,7 +245,7 @@ describe('exploration-facet spawn seam', () => {
     await expect(spawnBranchFacet(host, 'branch-7', { ownerUserId: 'user-1', capabilityToken: 'pwc_parent' }))
       .rejects.toThrow('setOwner exploded');
 
-    expect(methods(calls)).toEqual(['subAgent', 'setOwner', 'abortSubAgent']);
+    expect(methods(calls)).toEqual(['subAgent', 'setOwner', 'deleteSubAgent']);
   });
 
   test('aborting a facet that is already gone is not an error', () => {
@@ -209,5 +262,32 @@ describe('exploration-facet spawn seam', () => {
     // live, so it has to surface.
     const unsupported = makeHost({ abortSubAgentThrows: true });
     expect(() => abortExplorationFacet(unsupported.host, 'branch-7')).toThrow('facet registry gone');
+  });
+
+  test('deleting a facet targets the exploration class and that id', async () => {
+    const { host, calls } = makeHost();
+
+    await deleteExplorationFacet(host, 'branch-7');
+
+    expect(methods(calls)).toEqual(['deleteSubAgent']);
+    expect(calls[0]?.args).toEqual([ExplorationAgent, 'branch-7']);
+  });
+
+  test('a bootstrap failure whose cleanup also fails names the leak and keeps the original cause', async () => {
+    const { host, calls } = makeHost({ failing: 'setOwner', deleteSubAgentThrows: true });
+
+    // Both facts matter and neither may hide the other: the spawn failed, AND
+    // a database was stranded in the root's quota because of it.
+    const thrown = await spawnBranchFacet(host, 'branch-7', {
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent',
+    }).then(() => null, (err: Error) => err);
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown?.message).toContain('branch-7');
+    expect(thrown?.message).toContain('could not be reclaimed');
+    expect(thrown?.message).toContain('facet storage is unreachable');
+    // The bootstrap error survives as the cause rather than being replaced.
+    expect(thrown?.cause).toMatchObject({ message: 'setOwner exploded' });
+    expect(methods(calls)).toEqual(['subAgent', 'setOwner', 'deleteSubAgent']);
   });
 });

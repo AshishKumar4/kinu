@@ -115,6 +115,7 @@ export async function openWorkspace(db: AgentDatabase, config: WorkspaceResumeCo
       generateReflection: async () => ({ text: 'reflection' }),
     }),
     abortBranch: async () => {},
+    releaseBranch: async () => {},
   });
 
   return {

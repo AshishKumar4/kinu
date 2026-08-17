@@ -269,13 +269,17 @@ describe('agents.fork called back from an in-flight sandbox call', () => {
 
   interface FacetHostProbe {
     subAgent(cls: typeof ExplorationAgent, name: string): Promise<FacetStub>;
+    /** Mid-flight eviction — keeps the facet's storage. */
     abortSubAgent(): void;
+    /** Terminal reclamation — WIPES the facet's storage. Recorded separately
+     *  from abortSubAgent so a leak can never read as a reclamation. */
+    deleteSubAgent(): Promise<void>;
   }
 
   function facetHost(probe: FacetHostProbe): FacetHost {
     const host: Partial<FacetHost> = {};
     Object.assign(host, probe);
-    // SAFETY: the constructed probe implements the two methods spawnHeadFacet
+    // SAFETY: the constructed probe implements the three methods spawnHeadFacet
     // invokes; every returned facet method is explicitly typed above.
     return host as FacetHost;
   }
@@ -293,6 +297,7 @@ describe('agents.fork called back from an in-flight sandbox call', () => {
     const host: FacetHostProbe = {
       subAgent: async (_cls, name) => { calls.push(`subAgent:${name}`); return stub; },
       abortSubAgent: () => { calls.push('abortSubAgent'); },
+      deleteSubAgent: async () => { calls.push('deleteSubAgent'); },
     };
     return { host: facetHost(host), calls };
   }
@@ -349,7 +354,10 @@ describe('agents.fork called back from an in-flight sandbox call', () => {
 
     const result = v.parse(ForkResultSchema, await outer);
     expect(parseJsonValue(result.text)).toBe('done');
-    expect(calls).toEqual(['subAgent:head-1', 'runAsHead', 'abortSubAgent']);
+    // run() RECLAIMS the facet (deleteSubAgent) before the later abort merely
+    // evicts an already-wiped id. Before the C3 fix this sequence ended at a
+    // lone 'abortSubAgent' and the head's database was stranded in the root.
+    expect(calls).toEqual(['subAgent:head-1', 'runAsHead', 'deleteSubAgent', 'abortSubAgent']);
   });
 
   test('two forks scripted in parallel each get their own facet', async () => {
@@ -367,6 +375,8 @@ describe('agents.fork called back from an in-flight sandbox call', () => {
       sandboxFork(deps, { task: 'b' }),
     ]);
     expect(calls.filter((c) => c.startsWith('subAgent:')).sort()).toEqual(['subAgent:a', 'subAgent:b']);
+    // One terminal delete per head's run(), plus one evict per explicit abort.
+    expect(calls.filter((c) => c === 'deleteSubAgent')).toHaveLength(2);
     expect(calls.filter((c) => c === 'abortSubAgent')).toHaveLength(2);
   });
 
@@ -384,6 +394,7 @@ describe('agents.fork called back from an in-flight sandbox call', () => {
         };
       },
       abortSubAgent: () => {},
+      deleteSubAgent: async () => {},
     };
     const deps = forkOnlyDeps(async () => {
       await spawnHeadFacet(facetHost(host), headInput(), {

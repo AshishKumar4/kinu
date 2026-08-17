@@ -291,12 +291,23 @@ export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, 
  * spend ledger. They are inert without labels either way — both return
  * immediately on an empty label set, so reaching them cannot create a cap.
  *
+ * The four `headJournal*` names are the same shape and the same reason: a
+ * recursive split writes the WHOLE subtree's journal to the run's root, so an
+ * intermediate facet reaches them on its parent stub. They were declared on
+ * `ActorAgent` and left off this list, and the seal is fail-closed — so every
+ * one of those calls rejected with "does not implement the method", which is
+ * the same silence a depth-2 head had before the routing was fixed at all.
+ *
  * Everything else this class declares — including every `protected` member a
  * subclass relies on — stays an ordinary method and stays unreachable, because
  * the seal shadows rather than removes.
  */
 const ACTOR_AGENT_RPC_SURFACE = [
   'deleteWorkspaceFile',
+  'headJournalCacheMerge',
+  'headJournalInsertSpawn',
+  'headJournalRecordReport',
+  'headJournalRecordSplit',
   'installWorkspaceCapability',
   'listWorkspaceFiles',
   'missionDebit',
@@ -344,6 +355,7 @@ const ORCHESTRATOR_METHODS = [
   'rawCopyFromFork',
   'receivePeerMessage',
   'receiveSubordinateEvent',
+  'recordHeadStep',
   'runScaffoldOnce',
   'runScaffoldOnceWire',
   'runTaskFromMcp',

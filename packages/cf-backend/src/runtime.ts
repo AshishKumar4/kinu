@@ -46,7 +46,7 @@ import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores"
 import { generateText } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
-import { abortExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
+import { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
 import {
   createHubDeviceTransport,
   type DeviceHubClient,
@@ -81,7 +81,7 @@ import * as v from 'valibot';
  * legitimately needs them. A subclass (which DOES have access) passes `this`
  * cast to this view — so the access is sound, just opened to these helpers.
  */
-type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'abortSubAgent'>;
+type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'abortSubAgent' | 'deleteSubAgent'>;
 
 export interface CFRuntimeAccess {
   readonly env: Env;
@@ -420,6 +420,7 @@ export function createCFRuntime(
     fastLlm: createFastLLM(agent, env, actor, sql),
     spawnBranch: createFacetSpawner(agent, env, actor),
     abortBranch: createFacetAborter(agent),
+    releaseBranch: createFacetReleaser(agent),
     executionRouter,
     shell,
     localVfs: workspaceVfs,
@@ -864,6 +865,38 @@ function createFacetSpawner(agent: AgentHost, env: Env, actor: ActorRuntimeIdent
 
 function createFacetAborter(agent: AgentHost): (branchId: string) => Promise<void> {
   return async (branchId: string) => { abortExplorationFacet(agent, branchId); };
+}
+
+/**
+ * TERMINAL release, and the reason this is a separate factory from the aborter
+ * above rather than a rename of it: `deleteSubAgent` WIPES the facet's SQLite,
+ * which is charged to the ROOT DO's shared ~10 GB quota whose overflow is an
+ * uncatchable reset. Merely aborting a branch leaves that database behind
+ * forever, because branch ids are never reused.
+ *
+ * Safe to wipe only because the MCTS engine calls this in the terminal
+ * `finally` of an iteration — strictly after that iteration's reflection has
+ * already read the branch's own `traces` table. Anything earlier is data loss,
+ * which is why mid-flight cancellation still goes through `createFacetAborter`.
+ *
+ * A branch that fell back to `createInlineBranch` has no facet at all, so
+ * releasing one must be harmless: `ctx.facets.delete` does not raise for an
+ * absent facet, and the catch below covers the remaining case anyway.
+ *
+ * Reported rather than thrown, and this is the one place in the module where
+ * that is the LOUDER choice: `mcts/engine.ts` releases through
+ * `Promise.allSettled`, which discards rejections, so throwing here would
+ * produce silence at exactly the moment a database was stranded. `error`, not
+ * `warn` — the quota this leaks into resets the whole workspace on overflow.
+ */
+function createFacetReleaser(agent: AgentHost): (branchId: string) => Promise<void> {
+  return async (branchId: string) => {
+    try {
+      await deleteExplorationFacet(agent, branchId);
+    } catch (err) {
+      console.error(`[proteus] branch facet ${branchId} storage was not reclaimed: ${errorMessage(err)}`);
+    }
+  };
 }
 
 /**

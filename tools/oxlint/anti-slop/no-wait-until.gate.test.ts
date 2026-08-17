@@ -128,15 +128,22 @@ for (const { rule } of cases) {
 /**
  * The live denominator, in three parts, because each can silently go to zero on its own.
  *
- * `wrangler.jsonc` is the deploy configuration and therefore the authority on what a Durable Object
- * is here — not a list in this file, which would stop covering a class the moment one was added. Of
- * the bound classes, the ones declared in our own sources are the corpus this rule can act on, and
+ * `wrangler.jsonc` is the deploy configuration and therefore the authority on what a bound Durable
+ * Object is here — not a list in this file, which would stop covering a class the moment one was
+ * added. It is not the whole set though: a FACET is a Durable Object surface with its own
+ * `ctx.storage` and the same eviction semantics, and it carries no binding at all, so
+ * `SubordinateAgent` and `ExplorationAgent` were outside this count while being exactly the classes
+ * a head's background work runs in. They are read from the `subAgent`/`abortSubAgent`/
+ * `deleteSubAgent` call sites, which is where the deployment actually names them.
+ *
+ * Of those classes, the ones declared in our own sources are the corpus this rule can act on, and
  * `this.ctx` / `this.state` usage inside those sources is the construct it matches. A moved source
  * root, a renamed binding or a refactor that stopped holding state on `this` all take one of the
  * three to zero, and a rule gating nothing must say so rather than report a clean lint.
  */
 function durableObjectCorpus(): {
   readonly bound: readonly string[];
+  readonly facets: readonly string[];
   readonly declaredHere: readonly string[];
   readonly stateHandleUses: number;
 } {
@@ -166,14 +173,25 @@ function durableObjectCorpus(): {
   };
   walk(join(repoRoot, "packages/cf-backend/src"));
 
-  const declaredHere = bound.filter((name) =>
+  // Facet classes, named where they are instantiated. Deliberately the call sites and not an
+  // `extends Agent` scan: a base class or a test double also matches that shape, while a name passed
+  // to the SDK's facet API is a class the deployment really activates.
+  const facets = [
+    ...new Set(
+      sources.flatMap((text) => [
+        ...text.matchAll(/\b(?:sub|abort|delete)SubAgent\(\s*([A-Z][A-Za-z0-9_$]*)/gu),
+      ].map((m) => m[1]!)),
+    ),
+  ];
+
+  const declaredHere = [...new Set([...bound, ...facets])].filter((name) =>
     sources.some((text) => new RegExp(`\\bclass\\s+${name}\\b[^{]*\\bextends\\b`, "u").test(text)),
   );
   const stateHandleUses = sources.reduce(
     (total, text) => total + (text.match(/\bthis\.(?:ctx|state)\s*\./gu)?.length ?? 0),
     0,
   );
-  return { bound, declaredHere, stateHandleUses };
+  return { bound, facets, declaredHere, stateHandleUses };
 }
 
 const corpus = durableObjectCorpus();
@@ -182,8 +200,12 @@ assert.ok(
   "packages/cf-backend/wrangler.jsonc declares no durable_objects bindings; there is then no Durable Object for this rule to gate",
 );
 assert.ok(
+  corpus.facets.length > 0,
+  "no subAgent/abortSubAgent/deleteSubAgent call site under packages/cf-backend/src names a facet class; the facet half of the corpus — where a head's background work runs — would then be uncounted",
+);
+assert.ok(
   corpus.declaredHere.length > 0,
-  `none of the ${corpus.bound.length} bound Durable Object classes (${corpus.bound.join(", ")}) is declared under packages/cf-backend/src; this rule would then inspect no Durable Object of ours`,
+  `none of the ${corpus.bound.length} bound and ${corpus.facets.length} facet Durable Object classes (${[...corpus.bound, ...corpus.facets].join(", ")}) is declared under packages/cf-backend/src; this rule would then inspect no Durable Object of ours`,
 );
 assert.ok(
   corpus.stateHandleUses > 0,
@@ -251,7 +273,7 @@ try {
   }
 
   process.stdout.write(
-    `no-wait-until: ${cases.length} rule proven red->green through oxlint over ${corpus.declaredHere.length} bound Durable Object classes (${corpus.declaredHere.join(", ")}) and ${corpus.stateHandleUses} state-handle uses\n`,
+    `no-wait-until: ${cases.length} rule proven red->green through oxlint over ${corpus.declaredHere.length} Durable Object classes — ${corpus.bound.length} bound, ${corpus.facets.length} facet — (${corpus.declaredHere.join(", ")}) and ${corpus.stateHandleUses} state-handle uses\n`,
   );
 } finally {
   rmSync(fixtures, { recursive: true, force: true });

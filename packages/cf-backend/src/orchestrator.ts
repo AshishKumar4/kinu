@@ -719,18 +719,19 @@ export class OrchestratorAgent extends ActorAgent {
             };
             await stub.setSubordinateIdentity(identity);
           } catch (error) {
-            // Roll the half-created subordinate back. A failed rollback leaves a
-            // Durable Object holding its own SQLite with nothing pointing at it,
-            // so it has to surface rather than be dropped in favour of the error
-            // that triggered it.
+            // A cleanup path that discards its own failure cannot be trusted to
+            // have cleaned up. `deleteSubAgent` is what WIPES the half-seeded
+            // facet's storage, so a swallowed failure here leaves a permanent
+            // database inside this DO charged against the quota every facet
+            // shares — reported with the seeding failure as its cause, never
+            // hidden behind it.
             try {
               await this.deleteSubAgent(SubordinateAgent, input.name);
-            } catch (rollbackError) {
+            } catch (cleanupError) {
               throw new Error(
-                `subordinate ${input.name} could not be given its identity `
-                + `(${error instanceof Error ? error.message : String(error)}) `
-                + `and rolling it back failed too — its storage is orphaned`,
-                { cause: rollbackError },
+                `Subordinate ${input.name} failed to seed and its storage could not be reclaimed: `
+                + `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+                { cause: error },
               );
             }
             throw error;

@@ -32,7 +32,6 @@ import {
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
 } from './types.js';
-import { HeadJournal } from './journal.js';
 import { headProducedFindings } from './head-summary.js';
 import { MergeOutputSchema, type MergeOutput } from './merge-schema.js';
 import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation.js';
@@ -69,6 +68,46 @@ export interface HeadGrounding {
   /** Independent merge synthesis samples; median-scored one wins. Default
    *  DEFAULT_CONFIG.heads.mergeSamples. */
   readonly mergeSamples?: number;
+}
+
+/**
+ * Where a split's journal rows land.
+ *
+ * A port rather than the concrete `HeadJournal` because a RECURSIVE split
+ * runs on a facet that must not keep a journal of its own. When a depth-1 head
+ * journalled locally, its children's spawn/report rows lived on that
+ * intermediate facet while their step rows were written to the root, so the
+ * surface's `head_journal` -> `head_steps` join could never match and a depth-2
+ * head was unreadable from anywhere. Both halves now go to the same place.
+ *
+ * `HeadJournal` satisfies this structurally; the CF facet supplies an
+ * RPC-backed implementation pointed at its root orchestrator. Each method may
+ * be async for that reason.
+ */
+export interface HeadJournalPort {
+  recordSplit(rootId: HeadId, rationale: string, spawnedAt: number): void | Promise<void>;
+  insertSpawn(input: HeadInput): void | Promise<void>;
+  recordReport(report: HeadReport): void | Promise<void>;
+  cacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): void | Promise<void>;
+}
+
+/**
+ * The ROOT's journal: the port plus the two reads only a run's root can serve.
+ *
+ * Run reclamation resolves a top-level split's identity against every unfinished
+ * run in the store, and retires the heads of the attempt it reclaims. Both are
+ * whole-store operations, so a facet holding an RPC port aimed at its root
+ * cannot answer them and must not pretend to — it never needs to, because a
+ * recursive split always carries a `parentHeadId` and so never resolves a
+ * top-level run. `HeadJournal` satisfies this structurally.
+ */
+export interface HeadRootJournal extends HeadJournalPort {
+  findResumableRun(task: string): HeadId | null;
+  abandonRunning(reason: string, scope: { readonly rootId: HeadId }): void;
+}
+
+function isRootJournal(journal: HeadJournalPort): journal is HeadRootJournal {
+  return 'findResumableRun' in journal && 'abandonRunning' in journal;
 }
 
 /** What the controller asks the runtime to do per child head. */
@@ -123,7 +162,7 @@ const NO_GROUNDED_SIGNAL = 0.5;
 export class HeadController {
   constructor(
     private readonly runtime: HeadRuntime,
-    private readonly journal: HeadJournal,
+    private readonly journal: HeadJournalPort,
   ) {}
 
   /**
@@ -144,9 +183,18 @@ export class HeadController {
    * branches that died with it.
    */
   private resolveTopLevelRun(task: string): HeadId {
-    const resumed = this.journal.findResumableRun(task);
+    const journal = this.journal;
+    if (!isRootJournal(journal)) {
+      // Not a degrade: minting a fresh id here is exactly the defect above, so a
+      // facet's port reaching this is a wiring error and says so.
+      throw new Error(
+        'A top-level split must run against the ROOT workspace journal — run reclamation reads every '
+        + 'unfinished run in the store. A recursive split has to pass parentHeadId.',
+      );
+    }
+    const resumed = journal.findResumableRun(task);
     if (!resumed) return nanoid();
-    this.journal.abandonRunning(RECLAIMED_RUN_REASON, { rootId: resumed });
+    journal.abandonRunning(RECLAIMED_RUN_REASON, { rootId: resumed });
     return resumed;
   }
 
@@ -192,7 +240,16 @@ export class HeadController {
     // Anchor the run identity before spawning so its heads group under one root
     // (top-level splits have a synthetic root with no head row of its own). On a
     // reclaimed run this rewrites nothing: the row already carries this task.
-    this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
+    //
+    // Awaited only when there IS something to await. The journal is a port now —
+    // a depth-2 split's rows cross an RPC to the root — but a local HeadJournal
+    // returns void, and `await`ing void still yields to the microtask queue.
+    // That reordering is load-bearing: a re-drive of the same fork resolves its
+    // run identity and retires the previous attempt's heads, so if this call
+    // yields before those heads are recorded, the reclamation finds nothing to
+    // retire and the interrupted attempt stays `running` forever.
+    const splitRecorded = this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
+    if (splitRecorded !== undefined) await splitRecorded;
 
     // Spawn all children concurrently.
     const spawnPromises = opts.request.heads.map(async (h, idx) => {
@@ -214,7 +271,10 @@ export class HeadController {
         mergeStrategy: strategy,
       };
       if (opts.missionLabels?.length) Object.assign(input, { missionLabels: opts.missionLabels });
-      this.journal.insertSpawn(input);
+      // Same as recordSplit above: a local journal writes the row before this
+      // returns, and nothing may push that write behind a microtask.
+      const spawnRecorded = this.journal.insertSpawn(input);
+      if (spawnRecorded !== undefined) await spawnRecorded;
       return this.runtime.spawnHead(input);
     });
 
@@ -241,7 +301,7 @@ export class HeadController {
           : parentBudget.maxWallClockMs - (Date.now() - startedAt);
         try {
           const report = await raceWithTimeout(h, remainingMs);
-          this.journal.recordReport(report);
+          await this.journal.recordReport(report);
           return report;
         } catch (err) {
           // Either the abort failed or a requested deadline blew.
@@ -259,7 +319,7 @@ export class HeadController {
             wallClockMs: Date.now() - startedAt,
             errorMessage: err instanceof Error ? err.message : String(err),
           };
-          this.journal.recordReport(failed);
+          await this.journal.recordReport(failed);
           return failed;
         }
       }),
@@ -281,7 +341,7 @@ export class HeadController {
       handles.map((h) => h.id),
       headScores,
     );
-    this.journal.cacheMerge(rootId, mergeResult, strategy);
+    await this.journal.cacheMerge(rootId, mergeResult, strategy);
     opts.onPhase?.({
       kind: 'merge',
       rootId,

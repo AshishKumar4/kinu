@@ -65,6 +65,7 @@ function buildComponents(
     memory, craftStore, judgeModel,
     spawnBranch: async () => mockBranch,
     abortBranch: async () => {},
+    releaseBranch: async () => {},
   });
 }
 

@@ -88,8 +88,27 @@ export interface BranchHandle {
 
 /** Factory for creating isolated branch agents — injected by the backend */
 export type SpawnBranch = (branchId: string) => Promise<BranchHandle>;
-/** Factory for aborting a branch agent */
+/**
+ * MID-FLIGHT eviction of a branch agent: stop it, but KEEP whatever it has
+ * recorded. Used while the branch may still be read — the search prunes a node
+ * it has stopped selecting, or a cancellation cuts an in-flight expansion
+ * short — so it must not destroy state.
+ */
 export type AbortBranch = (branchId: string, reason?: string) => Promise<void>;
+/**
+ * TERMINAL release of a branch agent: it will never be read again, so the
+ * backend gives its resources back (CF wipes the facet's SQLite; the CLI reaps
+ * the child process).
+ *
+ * Deliberately separate from {@link AbortBranch}. A branch's recorded traces are
+ * wanted right up to the end of its iteration, because that is where
+ * `generateReflection` reads them, so the only safe release point is the
+ * expansion's `finally` — after exploring, scoring and reflecting are all done.
+ * Collapsing the two verbs destroys a branch that is still being reflected on in
+ * one direction and leaks its storage forever in the other; the CF backend did
+ * the latter for every branch of every search.
+ */
+export type ReleaseBranch = (branchId: string) => Promise<void>;
 
 export interface AgentRuntime {
   storage: Storage;
@@ -116,6 +135,7 @@ export interface AgentRuntime {
   /** Platform-specific branch spawning — injected by CF or CLI backend */
   spawnBranch: SpawnBranch;
   abortBranch: AbortBranch;
+  releaseBranch: ReleaseBranch;
   /**
    * Multi-executor routing. Manages named executor providers (workspace,
    * nimbus, sandbox, laptop) for the codemode sandbox. Optional — core

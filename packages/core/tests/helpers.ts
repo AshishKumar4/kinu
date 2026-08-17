@@ -441,6 +441,7 @@ export function createTestRuntime(opts?: {
     shell: workspace.shell,
     spawnBranch: async () => mockBranch,
     abortBranch: async () => {},
+    releaseBranch: async () => {},
   };
 
   return { rt, db };

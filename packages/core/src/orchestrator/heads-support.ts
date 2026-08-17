@@ -1,9 +1,16 @@
 /**
  * The facet inherited-context digest — what a spawned head (or a steer
- * branch) sees of its parent conversation. Shared by both backends. Kept
- * dependency-pure (types only) so the layer gate can own it as a subject
- * module; the Alternate-Takes capture lives with the takes store
- * (mcts/takes.ts recordGroundedHeadsTake).
+ * branch) sees of its parent conversation. Shared by both backends; the
+ * Alternate-Takes capture lives with the takes store (mcts/takes.ts
+ * recordGroundedHeadsTake).
+ *
+ * The per-message window is applied HERE, at read time, as the digest is
+ * built — not later at render time. A root materialises up to
+ * INHERITED_CONTEXT_CAP stored bodies, each of which may run to
+ * EVIDENCE_BUDGETS.storedAssistantResponse (16,000 chars), and that array is
+ * copied into every spawned head's HeadInput and crosses a Durable Object RPC
+ * boundary once per head. Windowing after those copies exist bounds the prompt
+ * but not the memory, so the cap lives at the read and nowhere else.
  */
 
 import type { ModelMessage } from 'ai';
@@ -11,6 +18,7 @@ import * as v from 'valibot';
 import type { SerializedMessage } from '../heads/types.js';
 import type { SplitPhaseEvent } from '../heads/controller.js';
 import type { RunEventInput } from '../events/types.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 
 /** The parent-conversation cap handed to each spawned head — bounds head LLM
  *  context over long sessions. */
@@ -74,7 +82,7 @@ export function inheritedContextFromRows(
     ...rows.map((r) => ({
       id: r.id,
       role: narrowInheritedRole(r.role),
-      content: r.content,
+      content: evidenceWindow(r.content, EVIDENCE_BUDGETS.inheritedMessage),
       createdAt: r.createdAt,
     })),
   ];
@@ -89,7 +97,7 @@ export function inheritedContextFromHistory(
   const kept = history.slice(-cap).map((m, i) => ({
     id: `ctx-${i}`,
     role: narrowInheritedRole(m.role),
-    content: serializeContentForHeads(m.content),
+    content: evidenceWindow(serializeContentForHeads(m.content), EVIDENCE_BUDGETS.inheritedMessage),
     createdAt: i,
   }));
   return [...inheritedContextOmissionNote(history.length, kept.length), ...kept];

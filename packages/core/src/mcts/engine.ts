@@ -417,7 +417,7 @@ export async function runMCTS(
           iteration: phase.iteration, remainingBudget: phase.budget, scores,
         });
       } finally {
-        await abortBranches();
+        await Promise.allSettled(branchIds.map((id) => rt.releaseBranch(id)));
       }
     }
 

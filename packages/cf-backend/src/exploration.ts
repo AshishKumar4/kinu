@@ -38,7 +38,7 @@
 import { Agent, callable, type AgentContext } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { generateText } from "ai";
-import { explorePrompt, formatInheritedContext, generateJson, isWorkMode, missionCallUsage, parseModelSpec, reasoningEffortOptions, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
+import { explorePrompt, formatInheritedContext, generateJson, isWorkMode, missionCallUsage, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import {
   type CraftedTool,
@@ -52,9 +52,8 @@ import {
   type HeadBudget,
   type MergeResult,
   type SqlExecutor,
-  initHeadsTables,
   HeadController,
-  HeadJournal,
+  type HeadJournalPort,
   MergeOutputSchema,
   type MergeOutput,
   type BranchExploration,
@@ -65,6 +64,7 @@ import {
   type WorkMode,
 } from "@proteus/core";
 import { OwnedModelServices } from "./owned-model-services.js";
+import { FacetIdentity } from "./facet-identity.js";
 import { spawnHeadFacet } from "./facet-spawn.js";
 import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime.js";
 import { createExecuteToolsTool } from "./execute-tools.js";
@@ -81,30 +81,31 @@ export class ExplorationAgent extends Agent<Env> {
   private headAborted = false;
   private headAbortReason: string | null = null;
 
+  /** Owner, capability token and parent workspace — one store, one schema.
+   *  Every accessor below is a THUNK, never a construction-time value: a facet's
+   *  logical `name` and its seeded identity are both set by the async
+   *  `_cf_initAsFacet` AFTER this field initializes. */
+  private readonly identity = new FacetIdentity(this.ctx.storage.sql);
+
   private readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
     agentName: () => this.name,
     appTitle: 'Proteus (exploration)',
     ownerRequired: false,
-    getOwnerUserId: () => this.getOwnerUserId(),
+    getOwnerUserId: () => this.identity.ownerUserId(),
     getUserCaller: async () => {
-      const workspaceToken = this.getCapabilityToken();
+      const workspaceToken = this.identity.capabilityToken();
       if (!workspaceToken) throw new Error('This exploration facet was seeded without a workspace capability token.');
       return { workspaceToken };
     },
   });
 
-  private resolveLowEffortModel(spec?: string | null) {
-    const registry = this.ownedModelServices.providerRegistry();
-    const normalizedSpec = registry.normalizeSpecSync(spec);
-    return {
-      model: registry.resolveModel(normalizedSpec),
-      providerOptions: reasoningEffortOptions('low', parseModelSpec(normalizedSpec).provider),
-    };
-  }
-
+  /** Memoized, like every other actor's. Rebuilding the binding per call cost a
+   *  head one allocation per SQL statement it ran. */
+  private _boundSql: SqlExecutor | null = null;
   private get boundSql(): SqlExecutor {
-    return bindAgentSql(this);
+    if (!this._boundSql) this._boundSql = bindAgentSql(this);
+    return this._boundSql;
   }
 
   /** A head has private SQL ledgers and shell state, but not another workspace.
@@ -112,16 +113,16 @@ export class ExplorationAgent extends Agent<Env> {
    * are built, so writes are attributable without another executor or VFS. */
   private headRuntime(capture: HeadCapture): CFRuntime {
     const parent = this.getSharedParentStub();
-    const workspaceName = this.getSharedParent();
+    const workspaceName = this.identity.parentWorkspace();
     if (!parent || !workspaceName) {
       throw new Error('This head was spawned without a parent workspace; setSharedParent must run before runAsHead.');
     }
     return createCFRuntime(this, { env: this.env, ctx: this.ctx }, {
-      ownerUserId: () => this.getOwnerUserId(),
+      ownerUserId: () => this.identity.ownerUserId(),
       workspaceName,
       shellId: `head:${this.name}`,
       scaffoldPath: `.proteus/heads/${encodeURIComponent(this.name)}/scaffold/agent.js`,
-      capabilityToken: async () => this.getCapabilityToken(),
+      capabilityToken: async () => this.identity.capabilityToken(),
     }, { workspaceObserver: capture.files });
   }
 
@@ -134,29 +135,38 @@ export class ExplorationAgent extends Agent<Env> {
   @callable()
   async setOwner(userId: string, capabilityToken: string | null): Promise<{ ok: true }> {
     if (!userId) throw new Error('userId required');
-    this.ctx.storage.sql.exec(
-      `INSERT INTO facet_owner (id, user_id, capability_token) VALUES (1, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id, capability_token = excluded.capability_token`,
-      userId, capabilityToken,
-    );
+    this.identity.setOwner(userId, capabilityToken);
     this.ownedModelServices.invalidate();
     return { ok: true };
   }
 
-  /** Every table this facet owns. Called from `onStart`, which the SDK runs
-   *  before any @callable can be dispatched — the first `subAgent()` for a
-   *  name awaits it — so the reads below may assume their table exists and
-   *  need no tolerance: a failing read is a real fault, never an unseeded
-   *  facet. `traces` already depended on exactly this guarantee.
-   *
-   *  The PRAGMA-guarded ALTER migrates a facet seeded before
-   *  `capability_token` existed. It asks which columns are present instead of
-   *  reading a duplicate-column error as "already there", so a locked or
-   *  read-only database still fails loudly. */
-  private initFacetSchema(): void {
-    const sql = this.ctx.storage.sql;
-    // MCTS mode trace table.
-    sql.exec(`
+  /** The ROOT workspace this head forks: whose canonical Nimbus session and
+   *  execution planes it shares, where the whole split's findings accumulate,
+   *  and — since C2 — where every journal row the subtree writes lands. Set by
+   *  the spawner right after subAgent() and propagated UNCHANGED to recursive
+   *  sub-heads, so an intermediate head never becomes the tree's workspace.
+   *  Persisted for hibernation. */
+  @callable()
+  async setSharedParent(agentName: string): Promise<{ ok: true }> {
+    if (!agentName) throw new Error('agentName required');
+    this.identity.setParentWorkspace(agentName);
+    return { ok: true };
+  }
+
+  /** Stub to the root workspace orchestrator — the head's parent — or null if
+   *  unset (an MCTS branch never has one). */
+  private getSharedParentStub(): DurableObjectStub<OrchestratorAgent> | null {
+    const name = this.identity.parentWorkspace();
+    if (!name) return null;
+    return this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
+  }
+
+  /** Activation init, synchronous by contract — see `OrchestratorAgent.onStart`
+   *  and `scripts/do-init-gate.ts`, which refuses the widening. Only the MCTS
+   *  trace table: `FacetIdentity` creates its own on first touch, so a branch
+   *  that never carries an identity never pays for the table. */
+  onStart(): void {
+    this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS traces (
         id         TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
         step       INTEGER NOT NULL,
@@ -164,73 +174,6 @@ export class ExplorationAgent extends Agent<Env> {
         created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
       )
     `);
-    sql.exec(
-      `CREATE TABLE IF NOT EXISTS facet_owner (
-         id INTEGER PRIMARY KEY CHECK (id = 1),
-         user_id TEXT NOT NULL,
-         capability_token TEXT
-       )`,
-    );
-    const columns = sql.exec(`PRAGMA table_info(facet_owner)`).toArray();
-    if (!columns.some((c) => c.name === 'capability_token')) {
-      sql.exec(`ALTER TABLE facet_owner ADD COLUMN capability_token TEXT`);
-    }
-    sql.exec(
-      `CREATE TABLE IF NOT EXISTS facet_parent (
-         id INTEGER PRIMARY KEY CHECK (id = 1),
-         agent_name TEXT NOT NULL
-       )`,
-    );
-  }
-
-  private facetOwnerRow(): { user_id: string; capability_token: string | null } | null {
-    const rows = this.ctx.storage.sql.exec<{ user_id: string; capability_token: string | null }>(
-      `SELECT user_id, capability_token FROM facet_owner WHERE id = 1`,
-    ).toArray();
-    return rows[0] ?? null;
-  }
-
-  private getOwnerUserId(): string | null {
-    return this.facetOwnerRow()?.user_id ?? null;
-  }
-
-  private getCapabilityToken(): string | null {
-    return this.facetOwnerRow()?.capability_token ?? null;
-  }
-
-  /** The ROOT workspace this head forks: whose canonical Nimbus session and
-   *  execution planes it shares, and where the whole split's findings accumulate.
-   *  Set by the spawner right after subAgent() and propagated UNCHANGED to
-   *  recursive sub-heads, so an intermediate head never becomes the tree's
-   *  workspace. Persisted for hibernation. */
-  @callable()
-  async setSharedParent(agentName: string): Promise<{ ok: true }> {
-    if (!agentName) throw new Error('agentName required');
-    this.ctx.storage.sql.exec(
-      `INSERT INTO facet_parent (id, agent_name) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET agent_name = excluded.agent_name`,
-      agentName,
-    );
-    return { ok: true };
-  }
-
-  private getSharedParent(): string | null {
-    const rows = this.ctx.storage.sql.exec<{ agent_name: string }>(
-      `SELECT agent_name FROM facet_parent WHERE id = 1`,
-    ).toArray();
-    return rows[0]?.agent_name ?? null;
-  }
-
-  /** Stub to the root workspace orchestrator — the head's parent — or null if
-   *  unset (an MCTS branch never has one). */
-  private getSharedParentStub(): DurableObjectStub<OrchestratorAgent> | null {
-    const name = this.getSharedParent();
-    if (!name) return null;
-    return this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
-  }
-
-  /** Synchronous by contract — see `OrchestratorAgent.onStart`. */
-  onStart(): void {
-    this.initFacetSchema();
   }
 
   // ── MCTS mode @callables ────────────────────────────────────────
@@ -246,7 +189,7 @@ export class ExplorationAgent extends Agent<Env> {
     siblings: readonly string[] = [],
   ): Promise<BranchExploration> {
     if (!isWorkMode(mode)) throw new Error('Branch exploration requires a trusted work mode');
-    const { model, providerOptions } = this.resolveLowEffortModel();
+    const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(null, 'low');
     const { system, user } = explorePrompt({
       mode,
       context: formatInheritedContext(priorHistory),
@@ -271,7 +214,7 @@ export class ExplorationAgent extends Agent<Env> {
   @callable()
   async generateReflection(task: string): Promise<BranchReflection> {
     const traces = this.sql<{ text: string }>`SELECT text FROM traces ORDER BY step`;
-    const { model, providerOptions } = this.resolveLowEffortModel();
+    const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(null, 'low');
     const request: Parameters<typeof generateText>[0] = {
       model,
       messages: [{
@@ -411,24 +354,39 @@ export class ExplorationAgent extends Agent<Env> {
     childHeadIds: readonly HeadId[];
     headCount: number;
   }> {
-    // Ensure the journal tables exist on THIS facet's storage so recursive
-    // splits can persist locally without competing with the orchestrator. Single
-    // source of truth — same schema the orchestrator initializes.
-    initHeadsTables((ddl: string) => { this.ctx.storage.sql.exec(ddl); }, this.boundSql);
-
-    const journal = new HeadJournal(this.boundSql);
+    // The subtree's journal belongs to the ROOT, never to this intermediate
+    // facet. Journalling locally is the C2 defect: a depth-1 head wrote its
+    // children's spawn/report rows into its OWN SQLite while their step rows
+    // were recorded on the root, so the surface's head_journal -> head_steps
+    // join could never match and a depth-2 head was unreadable from anywhere.
+    // One place for both halves, reached over the same cross-DO port the
+    // mission ledger uses.
+    const parent = this.getSharedParentStub();
+    if (!parent) {
+      throw new Error(
+        'A recursive split needs its root workspace; setSharedParent must run before split_subheads.',
+      );
+    }
+    const journal: HeadJournalPort = {
+      recordSplit: (rootId, rationale, spawnedAt) =>
+        parent.headJournalRecordSplit(rootId, rationale, spawnedAt),
+      insertSpawn: (childInput) => parent.headJournalInsertSpawn(childInput),
+      recordReport: (report) => parent.headJournalRecordReport(report),
+      cacheMerge: (rootId, result, strategy) =>
+        parent.headJournalCacheMerge(rootId, result, strategy),
+    };
     const runtime: HeadRuntime = {
       spawnHead: (childInput: HeadInput) => {
         return spawnHeadFacet(this, childInput, {
-          ownerUserId: this.getOwnerUserId(),
-          capabilityToken: this.getCapabilityToken(),
+          ownerUserId: this.identity.ownerUserId(),
+          capabilityToken: this.identity.capabilityToken(),
           // The ROOT orchestrator, propagated unchanged so the whole subtree
           // shares one findings scratch (not this intermediate head).
-          sharedParent: this.getSharedParent(),
+          sharedParent: this.identity.parentWorkspace(),
         });
       },
       mergeLLM: async (prompt: string): Promise<MergeOutput> => {
-        const { model, providerOptions } = this.resolveLowEffortModel(parentInput.model);
+        const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(parentInput.model, 'low');
         const options: Parameters<typeof generateJson<MergeOutput>>[0] = {
           model,
           schema: MergeOutputSchema,

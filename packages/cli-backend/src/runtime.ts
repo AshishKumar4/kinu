@@ -364,6 +364,14 @@ export function createCLIRuntime(
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
     agentId, agentName, memory, craftStore, judgeModel, fastLlm,
     spawnBranch: spawn, abortBranch: abort,
+    // A CLI branch is a forked child process with its own SQLite FILE, not a
+    // facet inside a shared durable object. `abort` already does the whole
+    // reap — SIGTERM the child and drop it from `activeBranches` — so there is
+    // no further resource for a terminal release to hand back and the two
+    // verbs are genuinely the same operation here. The distinction is real on
+    // CF, where release additionally WIPES the facet's SQLite out of the root
+    // DO's shared quota; it is degenerate on this backend, not overlooked.
+    releaseBranch: abort,
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
@@ -469,6 +477,7 @@ export function buildCLIHeadRuntime(
     sql, execRaw, vfs, llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     agentId: opts.agentId, agentName: opts.agentName, memory, craftStore, judgeModel: parent.judgeModel,
     spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
+    releaseBranch: parent.releaseBranch,
     executionRouter, shell,
   };
   if (checkpoints) runtimeOptions.checkpoints = checkpoints;

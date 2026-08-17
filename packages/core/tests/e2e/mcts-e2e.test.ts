@@ -77,6 +77,7 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
     judgeModel: judgeLlm,
     spawnBranch: async () => createRealBranch(llm),
     abortBranch: async () => {},
+    releaseBranch: async () => {},
   };
 
   return { rt, db };
