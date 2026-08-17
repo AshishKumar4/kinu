@@ -131,9 +131,20 @@ short list and each entry is structural rather than a matter of degree:
 - **Real parallelism.** Nimbus's threads are cooperative and correct, and not
   parallel. Work whose point is using more than one core — sharded test runs — 
   gets nothing from the workspace. The container is 2 vCPU.
-- **More memory or disk than an isolate has.** The container is 6185 MiB and
-  7.3G of disk. The workspace runs in the isolate, whose published ceiling is
-  `worker.isolate.memory` — read that entry rather than quoting a number here,
+- **More memory or disk than an isolate has.** Measured INSIDE the deployed
+  container, not read off the isolate family: `free -m` reports 6185 MiB total,
+  `df -h /` reports 7.3G, `nproc` reports 2 — which agrees with the binding's
+  declared `vcpu 2 / memory_mib 6144 / disk_mb 8000` (6185 observed against 6144
+  declared is the usual total-versus-usable gap). Unlike the isolate limits this
+  is a static allocation and is not rate-confounded. Treat 6185 MiB as the
+  REPORTED TOTAL, never as a proven OOM threshold; nobody has run that probe.
+  So the usable rule: escalate when the work genuinely needs more than a couple
+  of GB of RAM, or two dedicated cores.
+
+  The workspace side of the comparison is a DIFFERENT substrate — the container
+  is a Firecracker VM, the workspace is a Worker isolate — so quoting one figure
+  for both would be a category error. The workspace ceiling is
+  `worker.isolate.memory`: read that entry rather than any number written here,
   because it conflicts with two probed entries beside it and the catalog says so.
   Its filesystem is capped at 10 GB shared with everything else the object keeps.
 - **Work that must not share the workspace's fate.** A container is disposable
