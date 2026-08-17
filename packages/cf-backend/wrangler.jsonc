@@ -240,8 +240,17 @@
   //    to `vars` below. ProteusSandbox picks the mode up from their presence —
   //    no flag — and the mode is recorded per snapshot, so handles taken in one
   //    mode keep restoring in that mode.
+  // NIMBUS_RUNTIME_CACHE is the artifact store a HOSTED workspace installs its
+  // toolchain from: `catalog/v1.json`, `manifests/<name>-<version>.json` and
+  // content-addressed blobs under `blobs/<name>-<version>/<file>`
+  // (external/nimbus/packages/worker/src/runtime/runtime-catalog.ts:111-150).
+  // Measured 2026-08-17: this bucket exists on this account and IS seeded —
+  // clang, python, ruby, bash, cpython. Without the binding the Worker throws
+  // `NIMBUS_RUNTIME_CACHE binding missing`, which is why a hosted `python3` was
+  // 127 while the local CLI (which ships the runtimes as npm packages) worked.
   "r2_buckets": [
-    { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }
+    { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" },
+    { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" }
   ],
   // D1 auth/session store. Browser auth reads use D1 Sessions API so Cloudflare
   // can route read-only verification queries to read replicas when replication
@@ -324,8 +333,12 @@
       // Inbox stays off (no routing rule points here; outbound sends skip).
       "send_email": [{ "name": "EMAIL" }],
       "ai": { "binding": "AI" },
+      // Same seeded bucket as production: a runtime artifact is content-addressed
+      // and immutable, so there is nothing to keep separate per environment, and
+      // parity here is what makes a staging `python3` prove the hosted path.
       "r2_buckets": [
-        { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }
+        { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" },
+        { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" }
       ],
       "d1_databases": [
         {
