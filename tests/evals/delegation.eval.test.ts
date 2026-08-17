@@ -42,10 +42,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { LanguageModel } from 'ai';
 
-import type { LLMProviderConfig } from '../../packages/core/src/index.js';
+import { initWorkspaceSchema, type LLMProviderConfig } from '../../packages/core/src/index.js';
 import { createWorkspace } from '../../packages/core/src/identity/index.js';
 import { LocalAgentSession } from '../../packages/cli-backend/src/local-session.js';
-import { makeSql } from '../../packages/cli-backend/src/runtime.js';
+import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
+import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
 import {
   liveChatModel, liveModelTarget, reportLiveModelSpend, scoreDelegation, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
@@ -95,11 +96,20 @@ describe('Delegation evals — conversion over eligible turns', () => {
       const dbPath = join(TEST_DIR, `ask-${String(index)}.db`);
       const db = new Database(dbPath);
       db.exec('PRAGMA journal_mode = WAL');
-      const rt = await createWorkspace(db, {
+      // Birth, then OPEN, as production does. `createWorkspace`'s runtime is
+      // the degraded one (open.ts:49-50) whose `spawnBranch` is a hardcoded
+      // mock returning the literal 'exploration result'
+      // (identity/create.ts:57-68) — so a fork this suite measures would settle
+      // against a stub. Conversion latches before the spawner is reached, so
+      // this does not move the rate for a turn that never called `agents`; it
+      // makes the forks that DO happen real.
+      await createWorkspace(db, {
         name: `delegation-eval-${String(index)}`,
         purpose: 'A senior engineer who breaks independent work apart before starting it.',
         llm: LLM_CONFIG,
       });
+      initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+      const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM_CONFIG });
       const session = new LocalAgentSession({
         rt, db, model, onEvent: () => {}, noAutoEvolve: true,
       });
