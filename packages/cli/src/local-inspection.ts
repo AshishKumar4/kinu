@@ -866,7 +866,14 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
   // directories and advances the process-generation counter on every open). A
   // listing that mutated every workspace it walked past would be wrong twice
   // over, so `writeSoul` keeps this one line current instead (identity/soul.ts).
-  const mission = identityTable
+  // `mission` was added to this table AFTER it shipped, so an older workspace
+  // does not have the column. `reconcileColumns` (identity/schema.ts:163) adds
+  // it — but only on the OPEN path, and this inspection is deliberately
+  // read-only per the note above, so it can never have run here. Ask, do not
+  // assume: three of the owner's real local workspaces reported
+  // `(error reading)` in `proteus list` because this line selected a column
+  // that only a write would have created, and the caller discarded the cause.
+  const mission = identityTable && columnSet(db, identityTable).has('mission')
     ? get<{ mission: string | null }>(db, `SELECT mission FROM ${safeIdentifier(identityTable)} LIMIT 1`)?.mission?.trim() || null
     : null;
   return {

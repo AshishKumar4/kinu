@@ -40,8 +40,14 @@ export async function listCommand(): Promise<void> {
         toolCount: info.craftedToolCount,
         dbSize: statSync(agentDbPath(name)).size,
       };
-    } catch {
-      return { name, mode: agent.mode, purpose: '(error reading)', scaffoldVersion: 0, toolCount: 0 };
+    } catch (caught) {
+      // Handled, and said so: one unopenable workspace must not hide the other
+      // nine, but a bare `catch {}` here is how three of the owner's real
+      // workspaces read `(error reading)` for months while the actual cause was
+      // `no such column: mission`. The reason travels with the row.
+      const reason = caught instanceof Error ? caught.message : String(caught);
+      console.error(`[proteus] workspace.read_failed ${name}: ${reason}`);
+      return { name, mode: agent.mode, purpose: `(unreadable: ${reason})`, scaffoldVersion: 0, toolCount: 0 };
     }
   });
 
