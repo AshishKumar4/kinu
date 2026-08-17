@@ -41,6 +41,16 @@
  * `cli-backend/src/branch-worker.ts` is spawned by path via `child_process.fork`
  * from `branch-process.ts`. Those are entry points, not exemptions.
  *
+ * The cf-backend test glob is declared there too, for a different and
+ * sharper reason: that workspace has TWO test runners. knip auto-detects
+ * `vitest.config.ts` and adopts its `include` — `tests/workerd` only — as the
+ * whole test entry set, which drops the 113 bun suites from the dev-mode run.
+ * Every export whose sole reference is one of those suites then moves from
+ * `test-only` to `unreferenced`. Measured: adding the vitest config and nothing
+ * else turned this gate red on `isSealedCredential` and `setWorkspaceTier`,
+ * while ALSO reporting the recorded `(test-only)` entries for the same two
+ * symbols as no longer reproducing — a classification flip, not a real finding.
+ *
  * The blind spot, worth knowing before trusting a green run: reachability is a
  * whole-repo union, so a symbol still referenced by ONE backend reads as live
  * even when the other backend dropped the wire. That is the "X never worked on

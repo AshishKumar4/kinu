@@ -196,11 +196,20 @@ export const LADDER: readonly Gate[] = [
     tier: 'push',
     seconds: 24,
     catches: 'behavioural regressions in agent-utils, core and compaction: 3,105 tests, '
-      + 'the whole shared spine both backends run on.',
-    blind: 'both backend composition roots, and every subprocess path.',
+      + 'the whole shared spine both backends run on. Every gate on this list spells '
+      + 'its suite ROOT-RELATIVE (`bun test packages/x/`) rather than `--cwd packages/x`: '
+      + 'measured 2026-08-17, `--cwd` makes bun read a bunfig.toml from THAT directory, '
+      + 'so the root one is not loaded and both `preload` and `pathIgnorePatterns` are '
+      + 'silently dropped. A probe printed `PROTEUS_HOME= undefined` under `--cwd` and a '
+      + 'real temp home root-relative — meaning the throwaway home that exists because '
+      + 'cli-backend once wrote ~580 checkpoint stores into a developer\'s real ~/.proteus '
+      + 'was reaching NO per-package gate.',
+    blind: 'both backend composition roots, and every subprocess path. It also covers '
+      + 'only 3 of the 8 workspace packages — see ROOT_TEST_OMISSIONS in ladder.test.ts, '
+      + 'which pins the other 5 by equality with the gate that does run each.',
   },
   {
-    run: 'bun test --cwd packages/test-utils',
+    run: 'bun test packages/test-utils/',
     tier: 'push',
     seconds: 0.2,
     catches: 'a broken source-slicing helper. Three wiring suites once asserted against '
@@ -208,16 +217,18 @@ export const LADDER: readonly Gate[] = [
     blind: 'the suites that use it.',
   },
   {
-    run: 'bun test --cwd packages/cf-backend',
+    run: 'bun test packages/cf-backend/',
     tier: 'push',
     seconds: 13,
     catches: 'the Cloudflare composition root observed against the capability manifest '
       + '— the conformance gate.',
-    blind: 'anything needing a Workers runtime rather than a composition root.',
+    blind: 'anything needing a Workers runtime rather than a composition root — every '
+      + 'test here mocks the Agent SDK (`tests/helpers/agents-sdk.ts`) and runs under '
+      + 'bun, which is why `bun run test:workerd` exists below.',
   },
 
   {
-    run: 'bun test --cwd packages/cli-backend',
+    run: 'bun test packages/cli-backend/',
     tier: 'ci',
     seconds: 41,
     catches: 'the local composition root and its conformance gate, plus the real host '
@@ -225,7 +236,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'the CLI surface above it.',
   },
   {
-    run: 'bun test --cwd packages/cli',
+    run: 'bun test packages/cli/',
     tier: 'ci',
     seconds: 92,
     catches: 'the production CLI end to end, including the PTY and subprocess paths. 41 '
@@ -236,7 +247,7 @@ export const LADDER: readonly Gate[] = [
       + 'wall clock for 7.5% of its tests, which is why it is not earlier.',
   },
   {
-    run: 'bun test --cwd packages/pc-agent',
+    run: 'bun test packages/pc-agent/',
     tier: 'ci',
     seconds: 0.3,
     catches: 'the local-device daemon, 6 tests. Runs in no tier today — `bun run check` '
@@ -337,6 +348,26 @@ export const LADDER: readonly Gate[] = [
       + 'the 62 reported modules, and caught in one second by `tsc -p packages/core` the '
       + 'moment anyone acts on the finding.',
   },
+  {
+    run: 'bun run test:workerd',
+    tier: 'ci',
+    seconds: 7,
+    catches: 'Durable Object semantics no bun test can express, executed inside real '
+      + 'workerd (1.20260811.1) via @cloudflare/vitest-pool-workers. Two of them are '
+      + 'defects we shipped and found only from production: `ctx.waitUntil` retains '
+      + 'nothing in an actor and its write is cancelled on reset with the exception '
+      + 'swallowed, and anything Durable Object init awaits stalls every later request '
+      + 'on that object. Both were guarded before this only by a source-text grep and an '
+      + 'AST walk — correct rules whose STATED REASON nothing re-established. Both '
+      + 'reproduce red here against the historical shape: 2ms instead of a held 700ms '
+      + 'invocation, and 703ms for a `SELECT 1`. Each polarity carries its own control, '
+      + 'so a green cannot come from a write that never happened.',
+    blind: 'everything above the platform. This tier is deliberately NOT a second home '
+      + 'for unit tests: `include` is exactly packages/*/tests/workerd and bunfig excludes '
+      + 'the same path, so the two runners cannot overlap. It also cannot see '
+      + '`ctx.facets.clone`, which needs @cloudflare/workers-types >= 5.20260804.1, nor '
+      + 'tailStream dispatch, which is absent platform-wide and was refuted as a local pin.',
+  },
 ];
 
 /**
@@ -411,6 +442,26 @@ export function packageScripts() {
 }
 
 /**
+ * The paths `bun test` refuses to walk into, read from bunfig.toml rather than
+ * restated here. Without this, `bun test packages/cf-backend/` reads as
+ * claiming `tests/workerd/*.test.ts` — files bun cannot even import, since they
+ * pull `cloudflare:workers`. That is a green ladder over a suite that is not
+ * executing, which is precisely the defect this file exists to make impossible.
+ */
+const BunfigSchema = v.object({ test: v.object({ pathIgnorePatterns: v.array(v.string()) }) });
+
+export function bunIgnoredPatterns(): string[] {
+  const text = readFileSync(resolve(root, 'bunfig.toml'), 'utf8');
+  return v.parse(BunfigSchema, Bun.TOML.parse(text)).test.pathIgnorePatterns;
+}
+
+const bunIgnores = bunIgnoredPatterns().map((pattern) => new Bun.Glob(pattern));
+
+export function bunWouldSkip(path: string): boolean {
+  return bunIgnores.some((glob) => glob.match(path));
+}
+
+/**
  * Which test files a command runs. This is how monotonicity and reachability are
  * decided — comparing command text would call a gate that gained an argument a
  * hole, and would call two spellings of the same suite two different gates.
@@ -431,14 +482,23 @@ export function claims(command: string, tracked: readonly string[]): string[] {
   if (words[0] === 'node') {
     return words.filter((word) => TEST_FILE.test(word) && tracked.includes(word));
   }
-  if (words[0] !== 'bun' || words[1] !== 'test') return [];
-
-  const cwd = words.indexOf('--cwd');
-  if (cwd !== -1) {
-    const dir = words[cwd + 1];
-    if (dir === undefined) return [];
-    return tracked.filter((path) => path.startsWith(`${dir}/`));
+  // `vitest run --root R <dir>/` — the workerd layer. Resolved from the command
+  // text like every other form, so its files are monotonicity- and
+  // reachability-checked rather than exempted. The positional is a filter on
+  // top of the config's own `include`, which is the enforcing half; naming it
+  // here is what lets this resolver answer without parsing a TS config.
+  if (words[0] === 'vitest' && words[1] === 'run') {
+    const rootAt = words.indexOf('--root');
+    const base = rootAt === -1 ? undefined : words[rootAt + 1];
+    const targets = words.slice(2).filter((word, index) => !word.startsWith('-') && index + 2 !== rootAt + 1);
+    if (base === undefined || targets.length === 0) return [];
+    return tracked.filter((path) => targets.some((target) => path.startsWith(`${base}/${target}`)));
   }
+  if (words[0] !== 'bun' || words[1] !== 'test') return [];
+  // Root-relative only. `--cwd` is deliberately NOT understood: it makes bun
+  // load a bunfig.toml from that directory instead of the repo root, dropping
+  // `preload` and `pathIgnorePatterns` silently, so no gate may use it — and a
+  // gate that does claims nothing and fails as an orphan rather than passing.
 
   const targets = words.slice(2).filter((word) => !word.startsWith('-'));
   const claimed: string[] = [];
@@ -455,7 +515,7 @@ export function claims(command: string, tracked: readonly string[]): string[] {
     }
     if (tracked.includes(clean)) claimed.push(clean);
   }
-  return [...new Set(claimed)];
+  return [...new Set(claimed)].filter((path) => !bunWouldSkip(path));
 }
 
 function printMatrix(deploy: readonly string[]): void {
