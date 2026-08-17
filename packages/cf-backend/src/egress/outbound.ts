@@ -1,0 +1,285 @@
+/**
+ * Outbound interception — every HTTP and HTTPS request leaving an agent's
+ * container passes through one of these two handlers, which run in the Workers
+ * runtime, outside the container.
+ *
+ * ── What is intercepted, and what escapes ────────────────────────
+ * Stated up front because a secret-injection design whose interception can be
+ * bypassed is worse than none: it removes the secret from the container while
+ * leaving a path that still needs one.
+ *
+ *   Ports 80 and 443, HTTP and HTTPS   — intercepted. HTTPS by TLS
+ *     termination against an ephemeral CA the container is made to trust; this
+ *     requires `interceptHttps = true`, which the SDK does NOT default to
+ *     despite what its docs say (see {@link ProteusSandbox}).
+ *   Every other TCP port               — NEVER routed through a handler by the
+ *     platform. Denied outright, because `enableInternet = false`.
+ *   DNS                                — leaves, always, even with
+ *     `enableInternet = false`, to Cloudflare's resolvers only. Arbitrary
+ *     DESTINATIONS are impossible; arbitrary NAMES are not, so a container can
+ *     still signal outward through the labels of a query it asks Cloudflare to
+ *     resolve. This is a real residual, it is low-bandwidth, and it cannot
+ *     carry a secret the container does not have.
+ *   A container that distrusts the CA  — fails the handshake. Fails CLOSED: no
+ *     request, no secret, a visible error.
+ *
+ * The consequence of `enableInternet = false` is deliberate and worth saying
+ * plainly: only HTTP/S and DNS leave an agent's container. Anything on another
+ * port — git-over-SSH, a raw database socket — is refused. Total interception
+ * and arbitrary outbound sockets are mutually exclusive, and interception is
+ * the one the owner asked for.
+ *
+ * ── Why the handlers are configured at runtime, not statically ───
+ * A static `outbound` handler receives no parameters, so it would have to
+ * discover which workspace a container belongs to from inside the container's
+ * own traffic — which is exactly the thing untrusted code must not get to
+ * decide. `setOutboundHandler(name, params)` and `setOutboundByHost(host,
+ * name, params)` attach parameters chosen by the Durable Object that owns the
+ * container, carried in `ContainerProxy` props. `ctx.params` is therefore
+ * trusted input and `ctx.containerId` is platform-supplied, while everything
+ * in the request is not.
+ */
+
+import { getAgentByName } from 'agents';
+import * as v from 'valibot';
+import type { OutboundHandlerContext } from '@cloudflare/containers';
+import {
+  createScrubStream,
+  scrubText,
+  JsonValueSchema,
+  type ContainerEventResult,
+  type JsonValue,
+  type EgressRequestFacts,
+  type EgressSecretBinding,
+  type ScrubReplacement,
+} from '@proteus/core';
+import type { OrchestratorAgent } from '../orchestrator.js';
+import { ownerCaller, type UserCaller } from '../user/workspace-capability.js';
+import type { EgressInjection, EgressInjectionResult } from '../user/egress-vault.js';
+
+/**
+ * The virtual host a container posts its own events to.
+ *
+ * `.internal` is reserved and resolves nowhere on the public internet, so a
+ * misconfiguration that stopped intercepting this host would fail to connect
+ * rather than quietly ship the agent's activity to a real server. The port is
+ * plain HTTP because the request never leaves the machine.
+ */
+export const CONTAINER_EVENT_HOST = 'events.proteus.internal';
+
+/** The one path on that host. Anything else is a mistake worth naming. */
+export const CONTAINER_EVENT_PATH = '/v1/events';
+
+/** Named handlers, referenced by these keys from `setOutboundHandler` /
+ *  `setOutboundByHost`. Kept as constants because the string is the contract
+ *  between the class's registry and the DO that configures it — a typo would
+ *  otherwise surface as a runtime "method not found in outboundHandlers". */
+export const EGRESS_HANDLER = 'proteusEgress';
+export const EVENT_HANDLER = 'proteusEvents';
+
+/** What the owning Durable Object tells the handlers. Not readable or
+ *  influenceable from inside the container. */
+export interface ProteusEgressParams {
+  /** The workspace whose container this is — the event channel's addressing. */
+  readonly workspaceName: string;
+  /** Whose vault holds the secrets. */
+  readonly ownerUserId: string;
+  /**
+   * The bindings this workspace has been GRANTED, carrying no secret material.
+   * Computed by the DO as (the owner's vault) ∩ (this workspace's approval
+   * grants), so consent is decided by the approval gate before a request is
+   * ever made, and the hot path needs no approval round trip.
+   */
+  readonly bindings: readonly EgressSecretBinding[];
+}
+
+/** The shape, as a parser. `ctx.params` is trusted — only the owning DO writes
+ *  it — but it arrives `unknown`, and parsing is both cheaper to justify than
+ *  an assertion and honest about the one thing that can go wrong: a container
+ *  configured by an older build, whose params predate a field. */
+const EgressParamsSchema = v.object({
+  workspaceName: v.pipe(v.string(), v.minLength(1)),
+  ownerUserId: v.pipe(v.string(), v.minLength(1)),
+  bindings: v.array(v.object({
+    id: v.pipe(v.string(), v.minLength(1)),
+    label: v.string(),
+    host: v.pipe(v.string(), v.minLength(1)),
+    placeholder: v.pipe(v.string(), v.minLength(1)),
+  })),
+});
+
+/** Trusted-but-unparsed handler parameters, or undefined when this container
+ *  has not been configured yet. Undefined makes both handlers refuse. */
+export function parseEgressParams(ctx: OutboundHandlerContext): ProteusEgressParams | undefined {
+  const parsed = v.safeParse(EgressParamsSchema, ctx.params);
+  return parsed.success ? parsed.output : undefined;
+}
+
+/** The vault call an intercepted request makes. Narrow on purpose, following
+ *  `runtime.ts`'s `RuntimeUserDOClient`: a handler that named the whole UserDO
+ *  surface would instantiate every unrelated RPC signature at this call site. */
+interface EgressVaultClient {
+  resolveEgressInjection(
+    caller: UserCaller,
+    facts: EgressRequestFacts,
+    active: readonly EgressSecretBinding[],
+  ): Promise<EgressInjectionResult>;
+}
+
+/** The one ingress call the event channel makes on the workspace DO.
+ *  `unit-egress-interception.test.ts` asserts this method is both present on
+ *  `OrchestratorAgent.prototype` AND listed on `ORCHESTRATOR_METHODS` — a
+ *  method missing from that allowlist is silently unreachable over a stub,
+ *  which is exactly how five head-journal calls came to write nothing. */
+interface ContainerEventClient {
+  acceptContainerEvent(body: JsonValue): Promise<ContainerEventResult>;
+}
+
+/**
+ * Catch-all: every request to every host except the event channel.
+ *
+ * Ordinary traffic carrying no placeholder is forwarded with one pure,
+ * allocation-light scan and no round trip. Only a request that actually
+ * carries a placeholder costs a call to the vault.
+ */
+export async function handleContainerEgress(
+  request: Request,
+  env: Env,
+  params: ProteusEgressParams | undefined,
+): Promise<Response> {
+  if (!params) {
+    // Interception is live but unconfigured. Refuse rather than forward: an
+    // unconfigured handler cannot tell a placeholder from a secret, and
+    // forwarding would be the one behaviour that leaks.
+    return refusal(503, 'Egress interception is not configured for this container yet.');
+  }
+  const url = new URL(request.url);
+  const facts: EgressRequestFacts = {
+    host: url.hostname,
+    url: request.url,
+    headers: [...request.headers],
+  };
+
+  const vaultView: Partial<EgressVaultClient> = {};
+  Object.assign(vaultView, env.UserDO.get(env.UserDO.idFromName(params.ownerUserId)));
+  // SAFETY: checked by construction and pinned by a test. `resolveEgressInjection`
+  // is declared `public` on UserDO and listed in USER_DO_METHODS, which is
+  // `as const satisfies readonly (keyof UserDO)[]` — so the name cannot be
+  // misspelled without failing the build, and `sealRpcSurface` therefore leaves
+  // it reachable on the stub. `unit-egress-vault.test.ts` asserts the name is on
+  // USER_DO_RPC_SURFACE, so the assertion cannot outlive the method.
+  const vault = vaultView as EgressVaultClient;
+  const resolved = await vault.resolveEgressInjection(
+    await ownerCaller(env), facts, params.bindings,
+  );
+  if (resolved.kind === 'refuse') return refusal(resolved.status, resolved.reason);
+  if (resolved.substitutions.length === 0) return fetch(request);
+
+  return forwardWithSecrets(request, url, resolved.substitutions);
+}
+
+/**
+ * Substitute, forward, and scrub the way back.
+ *
+ * `redirect: 'manual'` is load-bearing. The default follows redirects, which
+ * would replay the injected credential against whatever host the upstream
+ * names — a redirect to an attacker's origin would collect the secret with no
+ * further help. Handing the 3xx back to the container instead means its next
+ * request is re-evaluated against the binding's host like any other.
+ */
+async function forwardWithSecrets(
+  request: Request,
+  url: URL,
+  substitutions: readonly EgressInjection[],
+): Promise<Response> {
+  const injected: ScrubReplacement[] = substitutions.map(
+    (s) => ({ find: s.secret, replaceWith: s.placeholder }),
+  );
+  const reveal: ScrubReplacement[] = substitutions.map(
+    (s) => ({ find: s.placeholder, replaceWith: s.secret }),
+  );
+
+  const headers = new Headers();
+  for (const [name, value] of request.headers) headers.set(name, scrubText(value, reveal));
+  const target = scrubText(url.toString(), reveal);
+
+  const upstream = await fetch(new Request(target, {
+    method: request.method,
+    headers,
+    body: request.body,
+    redirect: 'manual',
+  }));
+
+  // Everything the container can read, scrubbed with the SAME pairs reversed:
+  // an upstream that quotes the request into an error body, or returns a
+  // Location carrying the token as a query parameter, must not become an
+  // oracle for the value we just attached.
+  const responseHeaders = new Headers();
+  for (const [name, value] of upstream.headers) responseHeaders.set(name, scrubText(value, injected));
+  return new Response(
+    upstream.body === null ? null : upstream.body.pipeThrough(createScrubStream(injected)),
+    { status: upstream.status, statusText: scrubText(upstream.statusText, injected), headers: responseHeaders },
+  );
+}
+
+/**
+ * The container→DO event channel.
+ *
+ * Addressing is `ctx.params.workspaceName`, not anything in the request: a
+ * container that could name its own workspace could post into somebody else's.
+ * The handler awaits the DO's answer and returns it — nothing is deferred past
+ * the response, because `waitUntil` is a no-op in a Durable Object and a
+ * floating promise there is cancelled on eviction with the cancellation
+ * swallowed. If the DO is evicted mid-write the container sees a failure and
+ * the retry is the recovery.
+ */
+export async function handleContainerEvent(
+  request: Request,
+  env: Env,
+  params: ProteusEgressParams | undefined,
+): Promise<Response> {
+  if (!params) return refusal(503, 'The event channel is not configured for this container yet.');
+  const url = new URL(request.url);
+  if (request.method !== 'POST') return refusal(405, `Use POST ${CONTAINER_EVENT_PATH}.`);
+  if (url.pathname !== CONTAINER_EVENT_PATH) {
+    return refusal(404, `The only route on ${CONTAINER_EVENT_HOST} is POST ${CONTAINER_EVENT_PATH}.`);
+  }
+
+  let body: JsonValue;
+  try {
+    // `request.json()` is typed `unknown`; JsonValueSchema is the parse that
+    // makes it a named domain type before it crosses into the DO.
+    body = v.parse(JsonValueSchema, await request.json());
+  } catch (error) {
+    return refusal(400, `Body is not JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const agentView: Partial<ContainerEventClient> = {};
+  Object.assign(agentView, await getAgentByName<Env, OrchestratorAgent>(
+    env.OrchestratorAgent, params.workspaceName,
+  ));
+  // SAFETY: checked by construction and pinned by a test. `acceptContainerEvent`
+  // is declared `public` on OrchestratorAgent and listed in ORCHESTRATOR_METHODS,
+  // which is `as const satisfies readonly (keyof OrchestratorAgent)[]`, so the
+  // name cannot drift from the method without failing the build, and
+  // `sealRpcSurface` therefore leaves it reachable. `unit-egress-interception.test.ts`
+  // derives this call from THIS file and asserts the name is on
+  // ORCHESTRATOR_RPC_SURFACE, which is what stops it becoming a sixth
+  // fail-closed RPC rejecting inside a warn-only path.
+  const agent = agentView as ContainerEventClient;
+  const result = await agent.acceptContainerEvent(body);
+  if (result.status === 'rejected') return refusal(result.http_status, result.reason);
+  return Response.json(
+    { accepted: true, event_id: result.event_id, admitted: result.admitted },
+    { status: 202 },
+  );
+}
+
+/** A refusal the container reads. Plain text, no secret, no placeholder it did
+ *  not already hold. */
+function refusal(status: number, reason: string): Response {
+  return new Response(`${reason}\n`, {
+    status,
+    headers: { 'content-type': 'text/plain; charset=utf-8' },
+  });
+}

@@ -27,6 +27,7 @@ import { shellQuote } from '../utils/shell.js';
 import { vfsDirname } from '../utils/vfs-helpers.js';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64.js';
 import type { JsonValue } from '../utils/json.js';
+import { WORKSPACE_BACKUP_DIR } from './workspace-snapshot.js';
 
 interface SandboxExposeOptions {
   hostname: string;
@@ -64,71 +65,6 @@ export interface SandboxHandle {
   /** SDK method is `getExposedPorts(hostname)`; `hostname` builds each row's `url`. */
   getExposedPorts(hostname: string):
     Promise<Array<{ url: string; port: number; name?: string; status?: string }>>;
-  /** Snapshot a directory to R2 (squashfs). Returns a small serializable handle
-   *  to store and later pass to restoreBackup. (SDK createBackup.) */
-  createBackup(opts: BackupOptions): Promise<DirectoryBackup>;
-  /** Restore a previously-created backup into its directory. (SDK restoreBackup.) */
-  restoreBackup(backup: DirectoryBackup): Promise<RestoreBackupResult>;
-}
-
-/** Options for SandboxHandle.createBackup (subset of the SDK's BackupOptions). */
-export interface BackupOptions {
-  /** Absolute directory to back up (e.g. '/workspace'). */
-  dir: string;
-  /** Move bytes via the BACKUP_BUCKET R2 binding directly (no presigned creds). */
-  localBucket?: boolean;
-  /** Honor .gitignore when archiving. */
-  gitignore?: boolean;
-  /** Wildcard excludes passed to mksquashfs (e.g. ['node_modules','*.log']). */
-  excludes?: readonly string[];
-  /** Backup lifetime in seconds (enforced on restore). */
-  ttl?: number;
-  /** Optional label. */
-  name?: string;
-}
-
-/** Serializable backup handle — store it, pass it back to restoreBackup. */
-export interface DirectoryBackup {
-  readonly id: string;
-  readonly dir: string;
-  readonly localBucket?: boolean;
-}
-
-export interface RestoreBackupResult {
-  readonly success: boolean;
-  readonly dir: string;
-  readonly id: string;
-}
-
-// ── /workspace backup policy (pure; the orchestrator owns the I/O) ──
-
-export const WORKSPACE_BACKUP_DIR = '/workspace';
-/** Min gap between /workspace backups — debounces per-turn mksquashfs storms. */
-export const BACKUP_MIN_INTERVAL_MS = 60_000;
-/** Backup lifetime (R2). 30 days — pair with an R2 lifecycle GC rule. */
-export const BACKUP_TTL_SECONDS = 30 * 24 * 60 * 60;
-const WORKSPACE_BACKUP_EXCLUDES = ['node_modules', '.git', '*.log', '.cache'] as const;
-
-/** Back up only when the sandbox was used this turn AND the debounce window has
- *  elapsed since the last successful backup. Pure → unit-testable. */
-export function shouldBackupWorkspace(
-  usedSandbox: boolean,
-  lastBackupAt: number,
-  now: number,
-  minIntervalMs: number = BACKUP_MIN_INTERVAL_MS,
-): boolean {
-  return usedSandbox && now - lastBackupAt >= minIntervalMs;
-}
-
-/** Canonical createBackup options for /workspace (localBucket + excludes). */
-export function workspaceBackupOptions(): BackupOptions {
-  return {
-    dir: WORKSPACE_BACKUP_DIR,
-    localBucket: true,
-    gitignore: true,
-    excludes: WORKSPACE_BACKUP_EXCLUDES,
-    ttl: BACKUP_TTL_SECONDS,
-  };
 }
 
 const NOT_CONFIGURED =
@@ -473,8 +409,9 @@ declare namespace sandbox {
     connect: async () => { /* sandbox starts on first RPC */ },
     disconnect: async () => { /* The sandbox DO persists, but its CONTAINER
       filesystem does NOT — the container sleeps after ~10m idle and /workspace
-      is lost. Durability is provided by the orchestrator's backup/restore of
-      /workspace to R2 (createBackup/restoreBackup), not by this no-op close. */ },
+      is lost. Durability is the container DO's own affair: it snapshots
+      /workspace to R2 periodically and restores in its container-start hook,
+      before any executor can observe the container. Not this no-op close. */ },
     tools,
     types,
     positionalArgs: true,

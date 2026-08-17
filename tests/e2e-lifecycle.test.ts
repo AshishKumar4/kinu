@@ -7,8 +7,7 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateText, stepCountIs, type ToolSet, type StepResult } from 'ai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 import * as v from 'valibot';
 
 import {
@@ -32,26 +31,23 @@ import {
   projectJsonValue,
 } from '../packages/core/src/index.js';
 import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index.js';
-import { liveModelAuth, announceLiveModelSkip } from '@proteus/test-utils';
+import {
+  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
+} from '@proteus/test-utils';
 
-// These suites prove behaviour against a real model. Without a token they
-// cannot run, so they skip loudly instead of failing — see liveModelAuth.
-const LIVE_MODEL = liveModelAuth();
-if (!LIVE_MODEL) announceLiveModelSkip('E2E Lifecycle');
-const liveTest = test.skipIf(!LIVE_MODEL);
+// Proof against a real model, so a target is required. `liveModelTarget` states
+// which target and cost basis this run used, or why it is skipping — and throws
+// on a half-configured environment rather than skipping green.
+const TARGET = liveModelTarget('E2E Lifecycle');
+const liveTest = test.skipIf(!TARGET);
 
-const LLM_CONFIG: LLMProviderConfig = {
-  name: 'workers-ai',
-  baseURL: process.env.PROTEUS_BASE_URL || process.env.AI_GATEWAY_URL || 'https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1',
-  headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || '' },
-  model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
-};
+const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'proteus-e2e-' + Date.now());
 const DB_PATH = join(TEST_DIR, 'agent.db');
 
 async function chatTurn(
-  model: ReturnType<ReturnType<typeof createOpenAICompatible>['chatModel']>,
+  model: LanguageModel,
   rt: AgentRuntime,
   tools: ToolSet,
   userMessage: string,
@@ -91,6 +87,7 @@ async function chatTurn(
     },
   });
 
+  recordLiveModelSpend(result.usage);
   const responseText = collectStepText(result);
   const id = crypto.randomUUID();
   void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${'e2e'}, ${'user'}, ${userMessage})`;
@@ -119,7 +116,6 @@ function makeSessionWriter(): SessionWriter {
       }
       return result;
     },
-    async compact() {},
   };
 }
 
@@ -130,7 +126,7 @@ describe('E2E Lifecycle', () => {
   let engine: EvolutionEngine;
   let events: EvolutionEvent[];
   let turns: CompletedTurn[];
-  let model: ReturnType<ReturnType<typeof createOpenAICompatible>['chatModel']>;
+  let model: LanguageModel;
 
   beforeAll(async () => {
     mkdirSync(TEST_DIR, { recursive: true });
@@ -141,16 +137,19 @@ describe('E2E Lifecycle', () => {
     initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
     initCraftScoreTables(rt.storage.execRaw);
     events = [];
-    engine = new EvolutionEngine(rt, { enabled: true, sessionReflectionInterval: 4 });
-    tools = buildBuiltinTools({ rt, engine });
+    engine = new EvolutionEngine(rt, { enabled: true });
+    tools = buildBuiltinTools({ rt });
     engine.onEvent(e => events.push(e));
     turns = [];
 
-    const provider = createOpenAICompatible({ name: LLM_CONFIG.name, baseURL: LLM_CONFIG.baseURL, headers: LLM_CONFIG.headers });
-    model = provider.chatModel(LLM_CONFIG.model);
+    model = liveChatModel(LLM_CONFIG);
   });
 
-  afterAll(() => { db.close(); rmSync(TEST_DIR, { recursive: true, force: true }); });
+  afterAll(() => {
+    reportLiveModelSpend('E2E Lifecycle');
+    db.close();
+    rmSync(TEST_DIR, { recursive: true, force: true });
+  });
 
   test('agent created with correct tables', async () => {
     const tables = db.query<{ name: string }, []>(
@@ -175,7 +174,7 @@ describe('E2E Lifecycle', () => {
       console.log(`  Turn ${i + 1}: ${message.slice(0, 50)}...`);
       const turn = await chatTurn(model, rt, tools, message);
       turns.push(turn);
-      await engine.onTurnComplete(turn);
+      await engine.reviewTurn(turn, null);
       expect(turn.assistantResponse.length).toBeGreaterThan(0);
       console.log(`    Response: ${turn.assistantResponse.slice(0, 80)}...`);
       if (turn.toolCalls.length > 0) console.log(`    Tools: ${turn.toolCalls.map(t => t.name).join(', ')}`);

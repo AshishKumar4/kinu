@@ -2,7 +2,7 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  decodeJsonValue, parseJsonValue, validateWithRetries,
+  AttemptOutcomeSchema, decodeJsonValue, parseJsonValue, validateWithRetries,
   type AttemptOutcome, type BenchTask, type JsonValue, type SealedSplit, type TaskValidation,
 } from '../packages/core/src/index.js';
 
@@ -10,29 +10,6 @@ export const VALIDATION_DIAGNOSTICS_FILE = 'validation-diagnostics.json';
 
 const NonNegativeIntegerSchema = v.pipe(v.number(), v.finite(), v.integer(), v.minValue(0));
 const PositiveIntegerSchema = v.pipe(NonNegativeIntegerSchema, v.minValue(1));
-
-const CheckOutcomeSchema = v.strictObject({
-  id: v.pipe(v.string(), v.minLength(1)),
-  passed: v.boolean(),
-  exitCode: v.nullable(NonNegativeIntegerSchema),
-  durationMs: NonNegativeIntegerSchema,
-  output: v.string(),
-});
-
-const AttemptOutcomeSchema = v.strictObject({
-  taskId: v.pipe(v.string(), v.minLength(1)),
-  variantId: v.pipe(v.string(), v.minLength(1)),
-  slot: v.picklist(['a', 'b']),
-  repeat: NonNegativeIntegerSchema,
-  passed: v.boolean(),
-  checks: v.array(CheckOutcomeSchema),
-  durationMs: NonNegativeIntegerSchema,
-  tokens: NonNegativeIntegerSchema,
-  modelCalls: v.optional(NonNegativeIntegerSchema),
-  peakPromptTokens: NonNegativeIntegerSchema,
-  budgetBreach: v.nullable(v.picklist(['wall-clock', 'tokens'])),
-  error: v.optional(v.string()),
-});
 
 const ValidationDiagnosticAttemptSchema = v.pipe(
   v.strictObject({
@@ -90,13 +67,13 @@ interface ValidationDiagnosticsRecorder {
 }
 
 function createValidationDiagnosticsRecorder(options: {
-  runRoot: string;
+  diagnosticsDir: string;
   family: 'defect' | 'longhorizon';
   corpusPath: string;
   manifestHash: string;
   validateRetries: number;
 }): ValidationDiagnosticsRecorder {
-  const path = join(options.runRoot, VALIDATION_DIAGNOSTICS_FILE);
+  const path = join(options.diagnosticsDir, VALIDATION_DIAGNOSTICS_FILE);
   let document = validationDiagnostics(decodeJsonValue({ value: {
     schemaVersion: 1,
     kind: 'bench-validation-diagnostics',
@@ -134,11 +111,24 @@ export interface RunValidationOptions {
   corpusPath: string;
   manifestHash: string;
   validateRetries: number;
-  runRoot: string;
+  /** Where the per-attempt diagnostic document lands. This used to be the run
+   *  root — a throwaway outside the repo — so the one record of WHY a task was
+   *  called bad was swept along with the sandboxes. It is now the run's
+   *  retention directory. */
+  diagnosticsDir: string;
   devTasks: readonly BenchTask[];
   sealed: SealedSplit;
   runAttempt: (task: BenchTask, repeat: number) => Promise<WellFormedAttempt>;
   log?: (line: string) => void;
+}
+
+/** The corpus's verdict on itself. Returned as data rather than as an exit code
+ *  so it can be retained next to the trials that produced it. */
+export interface ValidationSummary {
+  total: number;
+  badIds: readonly string[];
+  flakyIds: readonly string[];
+  ok: boolean;
 }
 
 function attemptResult(pair: WellFormedAttempt) {
@@ -152,7 +142,7 @@ function attemptResult(pair: WellFormedAttempt) {
   };
 }
 
-export async function runValidation(options: RunValidationOptions): Promise<number> {
+export async function runValidation(options: RunValidationOptions): Promise<ValidationSummary> {
   const log = options.log ?? console.log;
   const diagnostics = createValidationDiagnosticsRecorder(options);
   const validate = (task: BenchTask, split: ValidationSplit): Promise<TaskValidation> =>
@@ -166,31 +156,31 @@ export async function runValidation(options: RunValidationOptions): Promise<numb
   log('Each task must FAIL with nothing done and PASS under the oracle.');
   log(`A failing task is re-checked up to ${options.validateRetries} more time(s) before it is called BAD.\n`);
 
-  let bad = 0;
+  const badIds: string[] = [];
   const flakyDev: string[] = [];
   log(`dev split (${options.devTasks.length} tasks):`);
   for (const task of options.devTasks) {
     const result = await validate(task, 'dev');
     const onlyOnRetry = result.ok && (result.passedOnAttempt ?? 1) > 1;
-    if (!result.ok) bad++;
+    if (!result.ok) badIds.push(task.id);
     else if (onlyOnRetry) flakyDev.push(task.id);
     log(`  ${!result.ok ? 'BAD ' : onlyOnRetry ? 'FLKY' : 'ok  '} ${task.id.padEnd(28)} ${result.detail}`);
   }
 
   const sealedResult = await options.sealed.validate((task) => validate(task, 'sealed'));
-  bad += sealedResult.invalid.length;
+  badIds.push(...sealedResult.invalid);
   log(`\nsealed split (${sealedResult.checked} tasks): ${sealedResult.checked - sealedResult.invalid.length} valid`);
   for (const id of sealedResult.invalid) log(`  BAD  ${id}`);
   for (const id of sealedResult.flaky) log(`  FLKY ${id}`);
 
   const total = options.devTasks.length + sealedResult.checked;
-  const flaky = flakyDev.length + sealedResult.flaky.length;
-  log(`\n${total - bad}/${total} tasks valid.`);
-  if (flaky > 0) {
-    log(`${flaky} task(s) only passed on a retry — non-deterministic, and a single scored attempt on them can record a false fail:`);
-    for (const id of [...flakyDev, ...sealedResult.flaky]) log(`  ${id}`);
+  const flakyIds = [...flakyDev, ...sealedResult.flaky];
+  log(`\n${total - badIds.length}/${total} tasks valid.`);
+  if (flakyIds.length > 0) {
+    log(`${flakyIds.length} task(s) only passed on a retry — non-deterministic, and a single scored attempt on them can record a false fail:`);
+    for (const id of flakyIds) log(`  ${id}`);
     log('Run compare with --repeats > 1 so these show up as unstable rather than as a score.');
   }
-  if (bad > 0) log('A task that passes with nothing done, or that the oracle cannot pass, is not a task.');
-  return bad === 0 ? 0 : 1;
+  if (badIds.length > 0) log('A task that passes with nothing done, or that the oracle cannot pass, is not a task.');
+  return { total, badIds, flakyIds, ok: badIds.length === 0 };
 }

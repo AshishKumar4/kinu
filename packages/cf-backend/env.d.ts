@@ -42,8 +42,19 @@ declare global {
     Sandbox: DurableObjectNamespace<ProteusSandbox>;
     /** D1 browser OAuth/session store. Reads use D1 Sessions for replicas. */
     AUTH_DB: D1Database;
-    /** R2 bucket for sandbox /workspace backups (SDK localBucket mode). */
+    /** R2 bucket holding sandbox /workspace snapshots. Read directly by
+     *  ProteusSandbox to verify a snapshot before restoring from it. */
     BACKUP_BUCKET?: R2Bucket;
+    /** Presigned-URL credentials for the container↔R2 transfer. Present ⇒ the
+     *  SDK moves snapshot bytes over presigned URLs and restores by MOUNTING the
+     *  archive; absent ⇒ bytes move through the BACKUP_BUCKET binding and the
+     *  restore extracts. Neither path puts a credential in the container: the
+     *  presigned URL is minted in the Durable Object. All four are required
+     *  together — see the BACKUP_BUCKET note in wrangler.jsonc. */
+    R2_ACCESS_KEY_ID?: string;
+    R2_SECRET_ACCESS_KEY?: string;
+    BACKUP_BUCKET_NAME?: string;
+    CLOUDFLARE_R2_ACCOUNT_ID?: string;
     AI_GATEWAY_URL: string;
     AI_GATEWAY_AUTH: string;
     /** Zone isolated previews are served under, one capability hostname per

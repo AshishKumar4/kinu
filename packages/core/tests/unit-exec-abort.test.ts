@@ -64,8 +64,6 @@ describe('remote executor exec abort', () => {
       exposePort: async (port) => ({ url: `https://preview.example.com/${port}`, port }),
       unexposePort: async () => {},
       getExposedPorts: async () => [],
-      createBackup: async ({ dir }) => ({ id: 'backup', dir }),
-      restoreBackup: async ({ id, dir }) => ({ success: true, id, dir }),
     };
     const provider = createSandboxExecutor(handle, 'preview.example.com');
     const controller = new AbortController();

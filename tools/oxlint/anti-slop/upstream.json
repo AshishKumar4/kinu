@@ -8,6 +8,7 @@
   "upstreamTestRoot": "src/rules",
   "$proteusComment": "Rules authored here, not vendored: they encode Proteus policy and have no upstream counterpart. Named explicitly rather than inferred from `proteusOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list. `proteusRuleGates` partitions them across the *.gate.test.ts files that prove each one red->green through the real oxlint binary; drift.test.ts asserts the partition is exact, so adding a rule without a gate fails.",
   "proteusRules": [
+    "no-ambient-git-in-tests",
     "no-ddl-in-catch",
     "no-empty-catch",
     "no-sentinel-catch",
@@ -15,6 +16,9 @@
     "require-cause-on-rethrow"
   ],
   "proteusRuleGates": {
+    "no-ambient-git.gate.test.ts": [
+      "no-ambient-git-in-tests"
+    ],
     "no-swallow.gate.test.ts": [
       "no-ddl-in-catch",
       "no-empty-catch",
@@ -34,8 +38,11 @@
     },
     "index.ts": {
       "upstream": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f",
-      "local": "8a08706f6efae405706d50cf89efab237a7367831fb3a369fda770d5af5100dd",
-      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the four no-swallow rules and no-wait-until-in-durable-object. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
+      "local": "3774b777c89a46cb26b60f4dc104dc9ec3433382dc3adcd71369429c787908b5",
+      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the four no-swallow rules, no-wait-until-in-durable-object, and no-ambient-git-in-tests. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
+    },
+    "no-ambient-git.gate.test.ts": {
+      "proteusOnly": true
     },
     "no-swallow.gate.test.ts": {
       "proteusOnly": true
@@ -47,6 +54,12 @@
       "proteusOnly": true
     },
     "rules.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-ambient-git-in-tests.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-ambient-git-in-tests.ts": {
       "proteusOnly": true
     },
     "rules/no-chained-type-assertions.test.ts": {

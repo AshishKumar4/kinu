@@ -255,7 +255,14 @@ describe('gain report', () => {
     attempt(taskId, CONFIG.variantB, true),
   ]);
 
-  test('reports a zero gain as a real result, with the calibration attached', () => {
+  // A gain of exactly zero has two entirely different meanings and the report
+  // is required to tell them apart. `computeGain` counts DIFFERING pairs, not
+  // tasks, so a corpus on which the arms never disagreed cannot have decided
+  // anything — calling that "no measurable contribution" would publish an
+  // absence of evidence as evidence of absence. Both polarities are asserted
+  // here because the distinction is the whole point: one of these two reports
+  // is allowed to make the claim and the other is not.
+  test('a zero gain with no differing task is UNDECIDABLE, with the calibration attached', () => {
     const report = buildGainReport({
       runId: 'g1', config: CONFIG,
       perTask: [
@@ -266,10 +273,33 @@ describe('gain report', () => {
       attempts: outcomes(['t1', 't2', 't3']),
     });
     expect(report.stats.gain).toBe(0);
+    expect(report.stats.pairsWithDifference).toBe(0);
+    expect(report.stats.canReachSignificance).toBe(false);
     expect(report.calibration).toBe(GAIN_CALIBRATION);
     const text = renderGainSummary(report);
-    expect(text).toContain('no measurable contribution');
+    expect(text).toContain('UNDECIDABLE');
+    expect(text).not.toContain('no measurable contribution');
     expect(text).toContain('CL-Bench reference');
+  });
+
+  test('a zero gain that could have decided IS reported as no measurable contribution', () => {
+    // Three wins against three losses: the arms differed on every task, which
+    // is at the exact test's six-differing-pair floor, so this contrast was
+    // capable of resolving an effect and simply found none.
+    const ids = ['t1', 't2', 't3', 't4', 't5', 't6'];
+    const report = buildGainReport({
+      runId: 'g1', config: CONFIG,
+      perTask: ids.map((taskId, index) => ({
+        taskId, index, stateful: index < 3 ? 1 : 0, stateless: index < 3 ? 0 : 1,
+      })),
+      attempts: outcomes(ids),
+    });
+    expect(report.stats.gain).toBe(0);
+    expect(report.stats.pairsWithDifference).toBe(6);
+    expect(report.stats.canReachSignificance).toBe(true);
+    const text = renderGainSummary(report);
+    expect(text).toContain('no measurable contribution');
+    expect(text).not.toContain('UNDECIDABLE');
   });
 
   test('orders the sequence by index so the learning curve reads left to right', () => {

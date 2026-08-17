@@ -70,6 +70,26 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'credentials.other', name: 'setCredential', run: (u, c) => u.setCredential(c, 'github', { kind: 'bearer', token: 'ghp_x' }) },
   { capability: 'credentials.other', name: 'deleteCredential', run: (u, c) => u.deleteCredential(c, 'github') },
 
+  // The egress secret vault. Binding one of the owner's secrets to a host is
+  // the same class of act as storing a credential, and turning a placeholder
+  // back into the real secret is strictly more privileged than holding it.
+  { capability: 'egress_secrets.manage', name: 'listEgressSecrets', run: (u, c) => u.listEgressSecrets(c) },
+  {
+    capability: 'egress_secrets.manage',
+    name: 'putEgressSecret',
+    run: (u, c) => u.putEgressSecret(c, {
+      id: 'stripe', label: 'Stripe', host: 'api.stripe.com', secret: 'sk_live_probe_value',
+    }),
+  },
+  { capability: 'egress_secrets.manage', name: 'revokeEgressSecret', run: (u, c) => u.revokeEgressSecret(c, 'stripe') },
+  {
+    capability: 'egress_secrets.inject',
+    name: 'resolveEgressInjection',
+    run: (u, c) => u.resolveEgressInjection(
+      c, { host: 'api.stripe.com', url: 'https://api.stripe.com/v1/charges', headers: [] }, [],
+    ),
+  },
+
   { capability: 'ai_gateway.admin', name: 'listAIGateways', run: (u, c) => u.listAIGateways(c) },
   { capability: 'ai_gateway.admin', name: 'selectAIGateway', run: (u, c) => u.selectAIGateway(c, null) },
   { capability: 'ai_gateway.admin', name: 'listCloudflareAccounts', run: (u, c) => u.listCloudflareAccounts(c) },

@@ -364,14 +364,53 @@ const TsconfigSchema = v.object({
   })),
 });
 
-/** A package's own path aliases, read from its tsconfig rather than pinned
- *  here. An alias this gate did not know about would resolve to nothing, and an
- *  unresolvable intra-package import is fatal below — so a stale copy fails
- *  loudly instead of quietly reporting fewer files. */
+/** JSONC to JSON: `//` and block comments removed, string literals left alone.
+ *  Character-wise rather than by regex, because a regex either eats the `//` in
+ *  `"https://…"` or needs a lookbehind that misses an escaped quote. */
+export function withoutComments(text: string): string {
+  let out = '';
+  let mode: 'code' | 'string' | 'line' | 'block' = 'code';
+  for (let i = 0; i < text.length; i += 1) {
+    const pair = text.slice(i, i + 2);
+    if (mode === 'code') {
+      if (pair === '//') { mode = 'line'; i += 1; continue; }
+      if (pair === '/*') { mode = 'block'; i += 1; continue; }
+      if (text[i] === '"') mode = 'string';
+      out += text[i];
+      continue;
+    }
+    if (mode === 'string') {
+      out += text[i];
+      if (text[i] === '\\') { out += text[i + 1] ?? ''; i += 1; continue; }
+      if (text[i] === '"') mode = 'code';
+      continue;
+    }
+    if (mode === 'line') {
+      if (text[i] === '\n') { mode = 'code'; out += '\n'; }
+      continue;
+    }
+    if (pair === '*/') { mode = 'code'; i += 1; }
+  }
+  return out;
+}
+
+/**
+ * A package's own path aliases, read from its tsconfig rather than pinned here.
+ * An alias this gate did not know about would resolve to nothing, and an
+ * unresolvable intra-package import is fatal below — so a stale copy fails
+ * loudly instead of quietly reporting fewer files.
+ *
+ * tsconfig is JSONC, not JSON: `tsc` accepts comments and this repo's own
+ * `wrangler.jsonc` shows the habit is present. `JSON.parse` on a documented
+ * tsconfig throws `Unrecognized token '/'`, and it happened — a peer added one
+ * `//` line explaining an `exclude` and took eight tests down, none of whose
+ * names mentioned tsconfig. Comments are stripped first, string-aware so a `//`
+ * inside a path is not mistaken for one.
+ */
 function aliasesOf(pkg: string): readonly (readonly [string, string])[] {
   const path = `${root}${pkg}/tsconfig.json`;
   if (!existsSync(path)) return [];
-  const { compilerOptions } = v.parse(TsconfigSchema, JSON.parse(readFileSync(path, 'utf8')));
+  const { compilerOptions } = v.parse(TsconfigSchema, JSON.parse(withoutComments(readFileSync(path, 'utf8'))));
   return Object.entries(compilerOptions?.paths ?? {}).flatMap(([pattern, targets]) => {
     const target = targets[0];
     if (!pattern.endsWith('/*') || target === undefined || !target.endsWith('/*')) return [];

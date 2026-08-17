@@ -20,11 +20,11 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { git } from '@proteus/test-utils';
 import * as v from 'valibot';
 import {
-  CI_EXEMPT, HOOKS_DIR, LADDER, TIERS, claims, deployGates, gatesFor, packageScripts,
-  trackedTestFiles,
+  CI_EXEMPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims, deployGates,
+  gatesFor, packageScripts, runnableArgv, trackedTestFiles,
 } from './ladder.ts';
 
 const root = resolve(import.meta.dir, '..');
@@ -51,6 +51,30 @@ const NON_BUN_RUNNERS = {
   'tools/oxlint/anti-slop/':
     'bun run test:anti-slop — oxlint RuleTester requires Node raw transfer and throws under bun',
 };
+
+/**
+ * Workspace packages `bun run test` does NOT run, each naming the gate that
+ * does. Pinned by equality by the test below, so an omission can never be an
+ * omission by accident and can never mean "uncovered".
+ *
+ * The root script stops at three packages because both ways of extending it
+ * were measured and both fail. One process (`bun test packages/`) is 4,839
+ * tests across 412 files in 126.22s but 10 fail and 2 error, because bun keeps
+ * one module mock per specifier for a whole run and the suites were written
+ * against separate processes. Eight sequential processes cost ~170s declared,
+ * against a push budget of 90s that exists so nobody is tempted by
+ * `--no-verify`.
+ */
+const ROOT_TEST_OMISSIONS = {
+  'packages/test-utils': 'bun test packages/test-utils/',
+  'packages/cf-backend': 'bun test packages/cf-backend/',
+  'packages/cli-backend': 'bun test packages/cli-backend/',
+  'packages/cli': 'bun test packages/cli/',
+  'packages/pc-agent': 'bun test packages/pc-agent/',
+} satisfies Record<string, string>;
+
+const omittedGate = (directory: string): string | undefined =>
+  Object.entries(ROOT_TEST_OMISSIONS).find(([name]) => name === directory)?.[1];
 
 describe('the ladder measures something', () => {
   test('deploy.sh parses to a non-empty gate list', () => {
@@ -80,12 +104,20 @@ describe('the ladder measures something', () => {
   test('claims() resolves the invocation forms this repo uses', () => {
     // The resolver decides both assertions below, so a resolver that returns
     // nothing would make both of them pass over an empty set.
-    expect(claims('bun test --cwd packages/core', tracked).length).toBeGreaterThan(100);
+    expect(claims('bun test packages/core/', tracked).length).toBeGreaterThan(100);
     expect(claims('bun test scripts/deploy.test.ts', tracked)).toEqual(['scripts/deploy.test.ts']);
-    expect(claims('bun test ./tests/', tracked).length).toBe(4);
+    // Four e2e lifecycle suites plus the two behavioural eval suites under
+    // tests/evals/ — `./tests/` recurses, which is why `test:eval` names only it.
+    expect(claims('bun test ./tests/', tracked).length).toBe(6);
     expect(claims('bun test scripts/bench*.test.ts', tracked).length).toBe(3);
     // `bun run test` fans out through package.json into three package suites.
     expect(claims('bun run test', tracked).length).toBeGreaterThan(200);
+    // The workerd layer resolves from its own command text, so it is
+    // monotonicity- and reachability-checked like every bun suite.
+    expect(claims('bun run test:workerd', tracked).length).toBeGreaterThan(0);
+    // `--cwd` silently loads a different bunfig, so it claims nothing on
+    // purpose — a gate spelled that way fails as an orphan instead of passing.
+    expect(claims('bun test --cwd packages/core', tracked)).toEqual([]);
     // An unrecognised form claims NOTHING rather than being assumed to claim
     // everything — an optimistic resolver would recreate the defect this file
     // exists to prevent.
@@ -211,15 +243,83 @@ describe('every test file is claimed by some runner', () => {
 
   test('bun does not discover the files it cannot run', () => {
     // The other half of the same contract: tools/oxlint/anti-slop errors under
-    // bun (oxlint's RuleTester needs Node raw transfer), and the gitignored
+    // bun (oxlint's RuleTester needs Node raw transfer), the gitignored
     // external/ reference clones drag 2,521 foreign test files into a bare
-    // `bun test`. Before this, the root command never terminated — 900s+, and
-    // any real root-level regression was buried. So bunfig excludes both, and
-    // the exclusion is asserted rather than assumed.
-    const bunfig = readFileSync(resolve(root, 'bunfig.toml'), 'utf8');
-    expect(bunfig).toContain('pathIgnorePatterns');
-    expect(bunfig).toContain('**/external/**');
-    expect(bunfig).toContain('tools/oxlint/anti-slop/**');
+    // `bun test`, and packages/*/tests/workerd imports `cloudflare:workers`,
+    // which exists only inside the Workers runtime. Before the first two, the
+    // root command never terminated — 900s+, and any real root-level regression
+    // was buried. So bunfig excludes all three, and the exclusion is asserted
+    // rather than assumed. Read from the parsed table, not grepped, so a
+    // pattern that is present but malformed cannot satisfy this.
+    const patterns = bunIgnoredPatterns();
+    expect(patterns).toEqual(['**/external/**', 'tools/oxlint/anti-slop/**', '**/tests/workerd/**']);
+  });
+
+  test('the two runners cannot reach each other', () => {
+    // The parallel-systems objection, answered mechanically rather than by
+    // convention. Vitest exists here for ONE thing — Durable Object semantics
+    // bun cannot express — and the only thing stopping it becoming a second
+    // home for ordinary unit tests is that its `include` and bun's discovery
+    // are disjoint by construction. Both halves are asserted, both with a
+    // denominator, because an empty workerd layer would satisfy disjointness
+    // trivially.
+    const workerd = claims('bun run test:workerd', tracked);
+    expect(workerd.length).toBeGreaterThan(0);
+    expect(workerd.every((path) => bunWouldSkip(path))).toBe(true);
+
+    const bunClaimed = gatesFor('ci', deploy)
+      .filter((gate) => gate.run !== 'bun run test:workerd')
+      .flatMap((gate) => claims(gate.run, tracked));
+    expect(bunClaimed.filter((path) => workerd.includes(path))).toEqual([]);
+    expect(bunClaimed.length).toBeGreaterThan(300);
+
+    // And the vitest side names the same directory the bunfig pattern excludes,
+    // so the two globs cannot drift apart into an overlap or into a gap.
+    const vitestConfig = readFileSync(resolve(root, 'packages/cf-backend/vitest.config.ts'), 'utf8');
+    expect(vitestConfig).toContain("include: ['tests/workerd/**/*.test.ts']");
+  });
+
+  test('the root test script covers every package or names the omission and its gate', () => {
+    // `bun run test` is the most-typed command in the repo and it covers 3 of
+    // the 8 workspace packages. Making it cover all 8 was measured and rejected
+    // twice: as one process, `bun test packages/` is 4,839 tests in 126s with
+    // 10 failures from cross-suite interference (bun keeps ONE module mock per
+    // specifier for a whole run — see mockAgentsSdk's own docstring); as eight
+    // sequential processes it declares ~170s against a 90s push budget. So the
+    // omission stays, and this is what makes it a decision instead of an
+    // accident: every omitted package is pinned by equality together with the
+    // gate that does run it, and that gate must really claim its files.
+    const packages = new Set(
+      tracked.flatMap((path) => path.split('/').slice(0, 2).join('/'))
+        .filter((prefix) => prefix.startsWith('packages/')),
+    );
+    expect(packages.size).toBe(8);
+
+    const byRootScript = new Set(claims('bun run test', tracked));
+    const atCi = gatesFor('ci', deploy);
+    const wrong: string[] = [];
+    for (const directory of packages) {
+      const files = tracked.filter((path) => path.startsWith(`${directory}/`) && !bunWouldSkip(path));
+      if (files.every((path) => byRootScript.has(path))) {
+        if (omittedGate(directory) !== undefined) {
+          wrong.push(`${directory} — declared omitted but \`bun run test\` runs it`);
+        }
+        continue;
+      }
+      const gate = omittedGate(directory);
+      if (gate === undefined) {
+        wrong.push(`${directory} — not in \`bun run test\` and not declared in ROOT_TEST_OMISSIONS`);
+        continue;
+      }
+      const covers = claims(gate, tracked);
+      if (!files.every((path) => covers.includes(path))) {
+        wrong.push(`${directory} — declared omitted, but \`${gate}\` does not claim all ${String(files.length)} of its files`);
+      }
+      if (!atCi.some((entry) => entry.run === gate)) {
+        wrong.push(`${directory} — declared omitted, and \`${gate}\` is not a gate at ci or below`);
+      }
+    }
+    expect(wrong).toEqual([]);
   });
 });
 
@@ -290,9 +390,13 @@ describe('the hooks run the tiers they claim to', () => {
     // tiers never executed. `prepare` now installs the hooks on every `bun
     // install`, in developer checkouts and CI alike, so a wrong value here is
     // unambiguously a fault rather than an artefact of where the gate is running.
-    const configured = execFileSync('git', ['config', '--get', 'core.hooksPath'], {
-      cwd: root, encoding: 'utf8',
-    }).trim();
+    // `git()` gives `-C root` AND a GIT_-free environment, which is what makes
+    // this ask about THIS checkout. `cwd` never did: with GIT_DIR pointing at an
+    // unrelated repository whose core.hooksPath is WRONG-REPO-HOOKS, the `cwd:
+    // root, env: process.env` form returned WRONG-REPO-HOOKS and the GIT_-free
+    // form returned .githooks. A hook exports GIT_DIR, so the test named after
+    // this checkout was answering about whatever the hook pointed at.
+    const configured = git(root, 'config', '--get', 'core.hooksPath').trim();
     expect(configured).toBe(HOOKS_DIR);
   });
 
@@ -306,5 +410,50 @@ describe('the hooks run the tiers they claim to', () => {
       const direct = body.filter((line) => /\b(bun (test|run)|tsc|oxlint)\b/.test(line));
       expect(direct).toEqual([]);
     }
+  });
+});
+
+describe('a gate the runner cannot spawn is a gate that does not exist', () => {
+  // `Bun.spawnSync(gate.run.split(' '))` runs NO shell, so `bun test
+  // scripts/bench*.test.ts` reached bun as a literal filter, matched nothing and
+  // failed — while `claims()` credited that gate with three files and the
+  // assertion above pinning the count at 3 was green throughout. deploy.sh puts
+  // the identical string through bash, which expands it, so one declaration had
+  // two semantics and the ci tier could never have passed while the deploy tier
+  // always did. The previous checks here only bounded what `claims()`
+  // OVER-claims (bunfig-excluded paths); this bounds the inverse.
+  test('every gate resolves to an argv the runner can spawn', () => {
+    const globbed = LADDER.filter((gate) => gate.run.includes('*'));
+    expect(globbed.length).toBeGreaterThan(0);
+    const unspawnable = gatesFor('deploy', deploy)
+      .filter((gate) => runnableArgv(gate.run, tracked).some((word) => word.includes('*')))
+      .map((gate) => gate.run);
+    expect(unspawnable).toEqual([]);
+  });
+
+  test('a glob gate spawns exactly the files it is credited with', () => {
+    for (const gate of LADDER.filter((entry) => entry.run.includes('*'))) {
+      const spawned = runnableArgv(gate.run, tracked).filter((word) => word.includes('/'));
+      expect(spawned).toEqual(claims(gate.run, tracked));
+      expect(spawned.length).toBeGreaterThan(0);
+    }
+  });
+
+  test('a glob that matches no tracked test file fails loudly', () => {
+    // The empty-corpus pass. A filter matching nothing was previously
+    // indistinguishable from a clean run, which is how this defect survived.
+    expect(() => runnableArgv('bun test scripts/no-such-suite*.test.ts', tracked))
+      .toThrow('glob matched no tracked test file');
+  });
+
+  test('no gate is spelled with shell syntax the runner does not implement', () => {
+    // Declaration-time, so the next gate cannot arrive in the quiet mode of the
+    // same defect: `bun test --grep 'foo bar'` splits into a silently wrong
+    // argv, runs, and reports green over the wrong set. `*` is the one
+    // metacharacter the runner resolves, from claims().
+    const shellSyntax = gatesFor('deploy', deploy)
+      .filter((gate) => /['"?$&|<>~`(){}[\]]/.test(gate.run))
+      .map((gate) => gate.run);
+    expect(shellSyntax).toEqual([]);
   });
 });

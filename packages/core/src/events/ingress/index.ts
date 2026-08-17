@@ -13,7 +13,10 @@
  *   email        — inbound mail, gated on the owner + an allowlist
  *   peer         — cross-agent async transport (outbox + retry)
  *   subordinate  — a delegate's report entering its parent's rail
+ *   container    — the agent's own container reporting about itself, over an
+ *                  intercepted virtual host that never leaves the machine
  */
+export * from './container.js';
 export * from './webhook.js';
 export * from './secrets.js';
 export * from './rate-limit.js';

@@ -41,6 +41,8 @@ const lastRequestedSandboxId = (): string | null => requestedSandboxId;
 /** Restores performed through the handle the runtime built. A head rides a
  *  container it does not own, so this must stay at zero however it is touched. */
 let restoresPerformed = 0;
+let egressHandlersBound = 0;
+let egressHostsBound = 0;
 mock.module('@cloudflare/sandbox', () => ({
   getSandbox: (_ns: DurableObjectNamespace, id: string) => {
     requestedSandboxId = id;
@@ -55,6 +57,13 @@ mock.module('@cloudflare/sandbox', () => ({
       getExposedPorts: async () => [],
       createBackup: async () => null,
       restoreBackup: async () => { restoresPerformed += 1; },
+      // Egress interception is configured before the container can run
+      // anything, so every handle-backed operation reaches these two. Recorded
+      // rather than ignored: a facet must ride the configuration its ROOT
+      // installed, so a head configuring the container would be a defect of
+      // the same shape as a head deciding its restore.
+      setOutboundHandler: async () => { egressHandlersBound += 1; },
+      setOutboundByHost: async () => { egressHostsBound += 1; },
     };
   },
 }));
@@ -139,6 +148,17 @@ function makeNimbusNamespace(files: Record<string, string>) {
 function makeParentWorkspace(files: Record<string, string>) {
   const calls: ParentCall[] = [];
   const stub = {
+    // A facet's approval policy is its ROOT's — it reads these two off the
+    // parent rather than its own empty agent_config, which is what stops a head
+    // re-asking for consent the owner already gave on the workspace. Both are
+    // reachable through AGENT_RPC_ACCESS on ORCHESTRATOR_RPC_SURFACE.
+    async getShellApprovalMode() {
+      return { mode: 'strict' as const };
+    },
+    async getShellApprovalGrants() {
+      const grants: { rule: string; executor: string }[] = [];
+      return { grants };
+    },
     async execWorkspaceCommand(command: string) {
       calls.push({ method: 'execWorkspaceCommand', arg: command });
       // Enough of a shell to prove the round trip is one call, not a walk.

@@ -233,11 +233,13 @@ const USER_DO_METHODS = [
   'listCredentials',
   'listDeviceConsents',
   'listDevices',
+  'listEgressSecrets',
   'listWorkspaces',
   'mintAccessToken',
   'mintCliToken',
   'pollCodexDeviceFlow',
   'publishExperience',
+  'putEgressSecret',
   'recordReleaseCheck',
   'recordReleaseDeployment',
   'registerDevice',
@@ -246,9 +248,11 @@ const USER_DO_METHODS = [
   'removeWorkspace',
   'reserveWorkspace',
   'requestReleaseApproval',
+  'resolveEgressInjection',
   'revokeAccessToken',
   'revokeCliTokenHash',
   'revokeDevice',
+  'revokeEgressSecret',
   'searchExperience',
   'selectAIGateway',
   'selectCloudflareAccount',
@@ -335,6 +339,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
  * fork copy to another.
  */
 const ORCHESTRATOR_METHODS = [
+  'acceptContainerEvent',
   'acceptEmailDelivery',
   'acceptWebhookDelivery',
   'awaitDeviceConsent',

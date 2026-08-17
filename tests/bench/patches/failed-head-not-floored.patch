@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/heads/controller.ts b/packages/core/src/heads/controller.ts
-index 2d3e06e..1e30384 100644
+index 0ff2a05f0..b74a81fda 100644
 --- a/packages/core/src/heads/controller.ts
 +++ b/packages/core/src/heads/controller.ts
-@@ -260,7 +260,7 @@ export class HeadController {
-         if (!g) return { ...base, score: 0.5, grounding: 'judge' };
+@@ -392,7 +392,7 @@ export class HeadController {
+         if (!g) return { ...base, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
          // A head that never completed produced no trustworthy outcome — floor it
          // without a judge call so it ranks below a head that ran.
 -        if (r.status !== 'completed') return { ...base, score: 0, grounding: 'judge' };
-+        if (r.status !== 'completed') return { ...base, score: 0.5, grounding: 'judge' };
++        if (r.status !== 'completed') return { ...base, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
          const evaluation = await evaluateWithMultiModelJudging({
            task: rationale,
            trajectory: siblings[i]!,

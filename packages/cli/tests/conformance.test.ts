@@ -14,6 +14,8 @@
 import { describe, test, expect, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2 } from '@ai-sdk/provider';
 import {
@@ -24,7 +26,7 @@ import {
 } from '@proteus/core';
 import { LocalAgentSession, openWorkspaceCLI, type LocalModelResolver } from '@proteus/cli-backend';
 import { createCliAgent } from '../src/agent-create';
-import { resolveLLMConfig, agentDbPath, agentDir } from '../src/config';
+import { resolveLLMConfig, agentDbPath, agentDir, AGENT_HOME, updateConfigFile } from '../src/config';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model.js';
 
 // Dummy provider config so resolveLLMConfig succeeds offline — the capturing
@@ -33,10 +35,36 @@ process.env.PROTEUS_BASE_URL = process.env.PROTEUS_BASE_URL ?? 'http://localhost
 process.env.PROTEUS_AUTH = process.env.PROTEUS_AUTH ?? 'Bearer conformance';
 process.env.PROTEUS_MODEL = process.env.PROTEUS_MODEL ?? 'conformance-model';
 
+// This suite wrote 274 of the 283 `agents` entries in the owner's REAL
+// ~/.proteus/config.json before this guard existed. Two independent causes, and
+// the assertion answers the one that cannot be fixed from inside this file:
+// `AGENT_HOME` is resolved at MODULE LOAD (config.ts:37), so assigning
+// PROTEUS_HOME in this body is already too late. The only mechanism that can
+// set it is scripts/test-preload.ts, and a hand-run `bun test --cwd packages/cli`
+// does not execute a preload — which is exactly how these entries accumulated.
+// So prove the home rather than trust it, and fail before creating anything.
+// Same rule as the bench harness's assert_throwaway_home and the git fixture's
+// toplevel check: state that must not be ambient is asserted at the boundary.
+if (resolve(AGENT_HOME) === resolve(join(homedir(), '.proteus'))
+  || !resolve(AGENT_HOME).startsWith(resolve(tmpdir()))) {
+  throw new Error(
+    `conformance suite refuses to run against a real Proteus home (${AGENT_HOME}). `
+    + 'Run it as `bun test packages/cli/tests/conformance.test.ts` from the repo root so '
+    + 'scripts/test-preload.ts provides a throwaway PROTEUS_HOME.',
+  );
+}
+
 const AGENT_NAME = `conformance-${Date.now()}`;
 
 afterAll(() => {
   rmSync(agentDir(AGENT_NAME), { recursive: true, force: true });
+  // The directory was never the whole footprint. `proteus create` also writes an
+  // `agents` entry, and `workspace delete` REFUSES local workspaces
+  // ("deletes cloud workspaces only"), so nothing in the product removes one —
+  // which is why the row survived every run while the directory was cleaned.
+  updateConfigFile((config) => {
+    if (config.agents) delete config.agents[AGENT_NAME];
+  });
 });
 
 type CapturedTool = NonNullable<Parameters<LanguageModelV2['doStream']>[0]['tools']>[number];

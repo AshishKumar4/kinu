@@ -134,8 +134,11 @@ export interface SelectEnsembleJudgesOpts {
   /** Judges the operator named outright. */
   specs: ReadonlyArray<string> | null | undefined;
   /** The resolved `<provider>/<modelId>` the agent chats with — and therefore
-   *  the family the classifier under test runs on. */
-  chatSpec: string;
+   *  the family the classifier under test runs on. A thunk, like `candidates`,
+   *  and for the same reason: resolving a spec reaches the signed-in session and
+   *  the stored keys, so an eager argument reports "not authenticated" for a
+   *  panel that was never going to run. Only the cross-family branch needs it. */
+  chatSpec: () => string;
   /** Available specs in registry preference order. */
   candidates: () => Promise<readonly string[]>;
   count?: number;
@@ -167,7 +170,7 @@ export async function selectEnsembleJudges(
   const configured = (opts.specs ?? []).map((spec) => spec.trim()).filter((spec) => spec !== '');
   if (configured.length > 0) return { specs: configured, source: 'configured' };
 
-  const seen = new Set([modelVendorFamily(opts.chatSpec)]);
+  const seen = new Set([modelVendorFamily(opts.chatSpec())]);
   const specs: string[] = [];
   for (const candidate of await opts.candidates()) {
     const family = modelVendorFamily(candidate);

@@ -40,6 +40,12 @@ ln -s /path/to/Proteus/bench/clbench/proteus src/systems/proteus
 clbench inspect system proteus     # confirms registration + every parameter
 ```
 
+Point it at a checkout that will still be there. `clbench inspect system proteus`
+fails on a dangling link, and a symlink into a throwaway agent worktree under
+`.claude/worktrees/` dies the moment that worktree is removed — which is how the
+first install of this adapter was wired. Repoint with `ln -sfn` rather than
+re-cloning CL-Bench.
+
 Some tasks need a one-time dataset download:
 
 ```bash
@@ -67,7 +73,15 @@ setting `model`, `base_url`, and `provider` together; known providers read their
 own key, while a custom endpoint must name its exact `api_key_env`.
 
 Every run gets a throwaway `PROTEUS_HOME`, so your own workspaces are never
-opened, mutated, or measured. That home goes through `bench/isolation.py`, the
+opened, mutated, or measured. `_env()` strips every `PROTEUS_*` variable the
+operator's shell holds and re-adds exactly six: `HOME` and `PROTEUS_HOME` (both,
+so the child cannot fall back to `~/.proteus` even if it ignored the latter),
+`PROTEUS_BASE_URL`, `PROTEUS_MODEL`, `PROTEUS_AUTH` — the resolved bearer, via
+the environment rather than argv, because a command line is world-readable — and
+`CI=1`. Anything else named `PROTEUS_*` cannot reach a measured run at all,
+which is worth knowing before blaming one for a result: `PROTEUS_MAX_STEPS` was
+suspected of causing the first run's one-step turns and was ruled out on exactly
+this filter, leaving the default of 500 steps against 1 used. That home goes through `bench/isolation.py`, the
 one rule both benchmark adapters share: it refuses an unset or relative home,
 your real `~/.proteus`, and anything inside the Proteus checkout.
 

@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/jobs/runner.ts b/packages/core/src/jobs/runner.ts
-index 2c70e12..bc9433c 100644
+index 3fabd5a20..caccb356b 100644
 --- a/packages/core/src/jobs/runner.ts
 +++ b/packages/core/src/jobs/runner.ts
-@@ -191,7 +191,7 @@ export class BackgroundJobRunner {
-    *  abort rejection or wake the agent. */
-   cancel(jobId: string): boolean {
+@@ -402,7 +402,7 @@ export class BackgroundJobRunner {
+    *  public verbs above, which differ only in whether the agent is woken. */
+   private settleCancelled(jobId: string): boolean {
      const job = this.deps.store.get(jobId);
 -    if (!job || job.status !== 'running') return false;
 +    if (!job || job.status === 'running') return false;
      this.deps.store.cancel(jobId, job.epoch, Date.now());
      const controller = this.controllers.get(jobId);
-     if (controller) { try { controller.abort(new Error('cancelled by operator')); } catch { /* nop */ } }
+     if (controller) controller.abort(new Error('cancelled by operator'));

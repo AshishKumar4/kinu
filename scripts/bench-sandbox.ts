@@ -15,13 +15,19 @@ import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { attemptPassed } from '../packages/core/src/index.js';
 import type { AttemptBudget, BenchCheck, BenchTask, CheckOutcome } from '../packages/core/src/index.js';
 import { tolerate } from '../packages/core/src/obs/index.js';
+import { ARTIFACT_DIRNAME } from './bench-retention.js';
 
 /** Paths never copied into a sandbox. `tests/bench` is the seal's outermost
  *  ring: an agent that cannot read the corpus cannot read the held-out tasks,
- *  look up its own defect patch, or tune against either. `.claude` holds agent
- *  worktrees — checkouts of this same repo, each with its own node_modules,
- *  and none of them are the source under test. */
-const SANDBOX_EXCLUDES = ['.git', 'node_modules', '.claude', join('tests', 'bench')] as const;
+ *  look up its own defect patch, or tune against either. `bench-artifacts` is
+ *  the SECOND ring, and it is the one retention created: a retained run holds
+ *  per-trial outcomes and check output for sealed tasks, so copying it in would
+ *  hand a solver the held-out answers by a different route. `.claude` holds
+ *  agent worktrees — checkouts of this same repo, each with its own
+ *  node_modules, and none of them are the source under test. */
+const SANDBOX_EXCLUDES = [
+  '.git', 'node_modules', '.claude', ARTIFACT_DIRNAME, join('tests', 'bench'),
+] as const;
 
 /** Nested checkouts, excluded wherever they appear. Each carries its OWN
  *  node_modules, and copying those turns a ~500MB sandbox into a multi-gigabyte

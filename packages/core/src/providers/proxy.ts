@@ -49,6 +49,32 @@ export function providerProxyCredentialsURL(origin: string): string {
 }
 
 /**
+ * The signed-in worker's OpenAI-compatible inference proxy — the sibling route
+ * to `PROVIDER_PROXY_PATH` above, and the one the two Cloudflare-backed
+ * providers are served on.
+ *
+ * It is here for the same reason its sibling is: a route shape is an agreement
+ * between the server that mounts it and every client that builds a URL for it,
+ * so it cannot live on either side. It was stated twice — `USER_AI_PROXY_PREFIX`
+ * in cf-backend's `user/ai-proxy.ts` and an inline literal inside cli-backend's
+ * `cloudProxyBaseURL` — with nothing relating them, and a third private copy was
+ * about to be added in test-utils. Two copies of a route agree until one moves.
+ */
+export const USER_AI_PROXY_PATH = '/api/user/ai/v1';
+
+export function cloudProxyBaseURL(origin: string): string {
+  return `${origin.replace(/\/+$/, '')}${USER_AI_PROXY_PATH}`;
+}
+
+/** The provider ids that proxy fronts — the native Cloudflare path. It travels
+ *  with the route because it only means anything relative to it: this is the set
+ *  of specs belonging to the signed-in account rather than to a local BYO
+ *  credential, which is what the CLI's endpoint/credential seam and the server's
+ *  registry must agree on. */
+export const CLOUD_PROXY_PROVIDER_IDS = ['workers-ai', 'my-gateway'] as const;
+export type CloudProxyProviderId = typeof CLOUD_PROXY_PROVIDER_IDS[number];
+
+/**
  * Credentials the general proxy refuses to front.
  *
  * The two Cloudflare keys authorize more than inference — the same bearer

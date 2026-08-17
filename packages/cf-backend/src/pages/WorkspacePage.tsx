@@ -36,7 +36,7 @@ import { MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { extractPreviewUrl } from "@/lib/preview-origin";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
-import { describeToolCall, isToolCallFailed, summarizeToolCall, summarizeToolRun } from "@/components/tool-call-summary";
+import { describeToolCall, isToolCallFailed, summarizeToolCall, summarizeToolRun } from "@proteus/core";
 import { groupMessageParts, type AnyToolPart } from "@/components/tool-call-grouping";
 import { liveTail } from "@/components/message-live-tail";
 import {

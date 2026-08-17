@@ -6,6 +6,7 @@ import { join } from "node:path";
 import antiSlopPlugin from "./index.ts";
 
 const expectedRules = [
+  "anti-slop/no-ambient-git-in-tests",
   "anti-slop/no-chained-type-assertions",
   "anti-slop/no-conditional-empty-object-spread",
   "anti-slop/no-ddl-in-catch",

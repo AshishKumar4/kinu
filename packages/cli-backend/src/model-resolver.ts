@@ -27,6 +27,8 @@ import {
   type AuthResolver,
   type ModelCapability,
   type ModelInfo,
+  cloudProxyBaseURL,
+  type CloudProxyProviderId,
   type ModelMenu,
   type ModelProvider,
   type ProviderDeps,
@@ -88,16 +90,13 @@ export interface LocalCloudSession {
   sessionAffinity?: string;
 }
 
-/** The provider ids the signed-in worker fronts — the native Cloudflare path.
- *  One list so the CLI's endpoint/credential seam and this registry agree on
- *  which specs belong to the account rather than to a local BYO credential. */
-export const CLOUD_PROXY_PROVIDER_IDS = ['workers-ai', 'my-gateway'] as const;
-export type CloudProxyProviderId = typeof CLOUD_PROXY_PROVIDER_IDS[number];
-
-/** The worker's signed-in OpenAI-compatible inference proxy. */
-export function cloudProxyBaseURL(origin: string): string {
-  return `${origin.replace(/\/+$/, '')}/api/user/ai/v1`;
-}
+// CLOUD_PROXY_PROVIDER_IDS and cloudProxyBaseURL now live beside the route they
+// describe, in core's providers/proxy.ts, and are re-exported here because this
+// module is the CLI's endpoint/credential seam and every caller already imports
+// them from it.
+export {
+  CLOUD_PROXY_PROVIDER_IDS, cloudProxyBaseURL, type CloudProxyProviderId,
+} from '@proteus/core';
 
 /**
  * Proxy fetch wrappers, memoized per session + underlying fetch.

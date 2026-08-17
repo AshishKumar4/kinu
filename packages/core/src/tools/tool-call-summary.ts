@@ -1,16 +1,22 @@
 /**
- * Tool-call summary lines — the pure half of the chat's tool card.
+ * Tool-call summary lines — what a tool call is doing, from its arguments.
  *
  * A bare `agents` chip repeated six times tells the operator nothing, and the
  * arguments the agent already passed say exactly what each call was about.
  * This turns those arguments into one compact line per call. It never invents
  * detail the arguments do not carry: when they say nothing the summary is
- * empty and the card falls back to the tool name alone.
+ * empty and the caller falls back to the tool name alone.
+ *
+ * This lived in `cf-backend/src/components/` and was therefore a web-chat
+ * capability, which is not what it is: nothing in it touches Cloudflare, React
+ * or a DOM. The CLI, which renders the same tool calls to a terminal, had no
+ * access to it and printed the raw argument VALUES joined with commas and
+ * clipped at 70 characters — so `file({action:'edit', path, replacements})`
+ * read as `edit, /a/b.ts, [{"old":"…` there and `Edited b.ts — 3 replacements`
+ * on the web. One vocabulary, one home, both surfaces.
  */
-import {
-  JsonObjectSchema, JsonValueSchema, isFailingToolResult,
-  type JsonObject, type JsonValue,
-} from "@proteus/core";
+import { isFailingToolResult } from '../orchestrator/turn-steering.js';
+import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json.js';
 import * as v from 'valibot';
 
 /** Chip budget — long enough for a command or a short task, short enough to

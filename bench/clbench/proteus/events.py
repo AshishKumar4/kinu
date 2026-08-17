@@ -18,6 +18,49 @@ EMPTY_USAGE: dict[str, int] = {"input": 0, "output": 0, "cached": 0}
 
 Event = dict[str, Any]
 
+#: The CLI's ``type: "evolution"`` stream is a general ACTIVITY channel, not an
+#: evolution channel: ``packages/cli-backend/src/local-session.ts`` publishes
+#: ``bg_job_started``, ``bg_jobs_settling``, ``bg_jobs_abandoned``, ``mcp`` and
+#: ``system_prompt_hash`` on it alongside the real thing. So a trial configured
+#: ``evolve=false`` can and does report a non-zero "evolution" count -- the
+#: 2026-08-10 Terminal-Bench 2.1 run recorded 7, every one of them
+#: ``bg_job_started`` -- which makes the one field an operator would read to
+#: answer "was the distinctive mechanism live?" say nothing about evolution.
+#:
+#: These are the event names that ARE evolution. Source of truth is
+#: ``EvolutionEvent['type']`` in packages/core/src/evolution/types.ts plus the
+#: two shadow-eval outcomes emitted directly by local-session.ts; the drift gate
+#: in scripts/bench.test.ts fails if this set and that union diverge.
+EVOLUTION_EVENTS = frozenset({
+    "reflection",
+    "craft_discovered",
+    "scaffold_proposed",
+    "consolidation",
+    "mcts_started",
+    "mcts_complete",
+    "turn_complete",
+    "replay_eval",
+    "changelog_digest",
+    "experience_import",
+    "scaffold_promotion",
+    "scaffold_rollback",
+})
+
+
+def split_activity(events: list[Event]) -> tuple[list[Event], list[Event]]:
+    """Partition the activity channel into (everything, the evolution subset).
+
+    Returned as two lists rather than one filtered list because both are
+    evidence: the activity count says the agent was busy, and only the evolution
+    subset says the mechanism under test ran.
+    """
+    activity = [
+        {"event": str(e.get("event") or ""), "message": str(e.get("message") or "")}
+        for e in events
+        if e.get("type") == "evolution"
+    ]
+    return activity, [e for e in activity if e["event"] in EVOLUTION_EVENTS]
+
 
 def parse_events(stdout: str) -> list[Event]:
     """Parse the NDJSON stream, skipping blank and malformed lines."""

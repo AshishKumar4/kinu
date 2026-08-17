@@ -51,25 +51,6 @@ describe('AgentConfigStore — lastActiveExecutor', () => {
   });
 });
 
-describe('AgentConfigStore — workspace backup handle', () => {
-  test('round-trips a DirectoryBackup and stamps the time', () => {
-    const c = setup();
-    expect(c.getWorkspaceBackup()).toBeNull();
-    expect(c.getWorkspaceBackupAt()).toBe(0);
-    c.setWorkspaceBackup({ id: 'abc-123', dir: '/workspace', localBucket: true });
-    expect(c.getWorkspaceBackup()).toEqual({ id: 'abc-123', dir: '/workspace', localBucket: true });
-    expect(c.getWorkspaceBackupAt()).toBeGreaterThan(0);
-  });
-
-  test('a stored handle that does not parse throws rather than reading as no backup', () => {
-    const c = setup();
-    c.set('workspace_backup', 'not json');
-    expect(() => c.getWorkspaceBackup()).toThrow();
-    c.set('workspace_backup', JSON.stringify({ id: 'x' })); // missing dir
-    expect(() => c.getWorkspaceBackup()).toThrow();
-  });
-});
-
 describe('AgentConfigStore — auto-GEPA cadence', () => {
   test('unset defaults to the autonomous cadence; explicit values stick', () => {
     const c = setup();
@@ -337,8 +318,6 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setFastModel('anthropic/claude-haiku-4-5'),
     (c) => c.setAlwaysActiveSkills(['research']),
     (c) => c.setLastActiveExecutor('sandbox'),
-    // Stamps workspace_backup_at alongside the handle.
-    (c) => c.setWorkspaceBackup({ id: 'b1', dir: '/workspace' }),
     (c) => c.setAutoGepaEveryNTurns(10),
     (c) => c.setChangelogSeenAt(1_750_000_000_000),
     (c) => c.countClosedSessionWindow(),

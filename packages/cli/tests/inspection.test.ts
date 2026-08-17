@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -123,6 +123,28 @@ function createLegacyLocalAgent(home: string, name: string): void {
     ["legacy-1", name, "Run the household and the lab.", 1781042330894]);
   db.close();
 }
+/** A workspace from before `mission` was added to the identity table — the
+ *  column exists in the CREATE and is backfilled by `reconcileColumns`
+ *  (identity/schema.ts:163), but only on the OPEN path. A read-only `list` must
+ *  therefore not assume it. Three of the owner's real local workspaces reported
+ *  `(error reading)` for exactly this, and the fixture above hid it by including
+ *  `mission`. */
+function createPreMissionLocalAgent(home: string, name: string): void {
+  const dir = join(home, name);
+  mkdirSync(dir, { recursive: true });
+  const db = new Database(join(dir, "agent.db"));
+  db.exec(`
+    CREATE TABLE workspace_identity (
+      id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      owner_user_id TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL
+    );
+  `);
+  db.run("INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)",
+    ["pre-mission-1", name, 1781042330894]);
+  db.close();
+}
 
 describe("legacy workspaces stay readable", () => {
   test("proteus list reports a pre-rename workspace's real purpose", () => {
@@ -147,6 +169,38 @@ describe("legacy workspaces stay readable", () => {
     // Absent tables read as zero rather than taking the whole workspace down.
     expect(status.stdout.toString()).toContain("Scaffold:");
     expect(status.stderr.toString()).not.toContain("readonly database");
+  });
+
+  test("a workspace predating the mission column lists without an error", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-pre-mission-"));
+    tempDirs.push(home);
+    createPreMissionLocalAgent(home, "jarvis-d03e0a");
+
+    const list = runCli(home, ["list"]);
+    expect(list.exitCode).toBe(0);
+    const out = list.stdout.toString();
+    expect(out).toContain("jarvis-d03e0a");
+    // An absent column is a value, not a failure: no purpose to show, and
+    // nothing about the row is reported as broken.
+    expect(out).not.toContain("(error reading)");
+    expect(out).not.toContain("unreadable");
+    expect(list.stderr.toString()).not.toContain("no such column");
+  });
+
+  test("a genuinely unreadable workspace names its cause instead of hiding it", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-unreadable-"));
+    tempDirs.push(home);
+    const dir = join(home, "broken-ws");
+    mkdirSync(dir, { recursive: true });
+    // Not a database at all — the one condition that legitimately reaches the
+    // handler. The control for the test above: absent column degrades silently,
+    // an unopenable file must still say why.
+    writeFileSync(join(dir, "agent.db"), "this is not sqlite\n");
+
+    const list = runCli(home, ["list"]);
+    expect(list.exitCode).toBe(0);
+    expect(list.stdout.toString()).toContain("unreadable:");
+    expect(list.stderr.toString()).toContain("workspace.read_failed broken-ws");
   });
 });
 

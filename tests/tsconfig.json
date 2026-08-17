@@ -1,0 +1,10 @@
+{
+  "//": "The root end-to-end and eval suites, which no other project included. `bun run check` named eight projects and none of them reached this directory, so the four suites that are the only evidence for multi-turn tool calling, memory across a reopen, MCTS evolution and cross-session transfer were never typechecked — on top of never having run. Same shape as a gate whose corpus quietly excludes a folder nobody remembers to add, which is why this globs rather than listing files.",
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["bun", "node"]
+  },
+  "include": ["**/*.ts"]
+}

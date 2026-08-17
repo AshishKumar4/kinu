@@ -72,6 +72,8 @@ import {
   type JsonObject,
   type JsonValue,
   type OAuthCredential,
+  type EgressRequestFacts,
+  type EgressSecretBinding,
   JsonObjectSchema,
   decodeJsonValue,
 } from '@proteus/core';
@@ -93,6 +95,12 @@ import { DeviceSocketHub, deviceIdFromSocket } from './device-hub.js';
 import { credentialToHeaders, accessTokenExpiring, isModelInferenceCredentialKey } from './credential-headers.js';
 import { validateCredential, validateCredentialKey, validateWorkspaceName } from './validate.js';
 import { createCredentialCipher, type CredentialCipher } from './credential-envelope.js';
+import {
+  listEgressSecrets, putEgressSecret, resolveEgressInjection,
+  revokeEgressSecret, rewrapEgressSecrets,
+  type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps,
+  type PutEgressSecretInput,
+} from './egress-vault.js';
 import { randomToken, sha256Hex } from '../lib/crypto.js';
 import { resolveWorkspaceTitle } from '../lib/agent-naming.js';
 import {
@@ -1426,6 +1434,10 @@ export class UserDO extends Agent<Env> {
           console.warn(`[user-do] MCP headers for ${row.id} could not be re-sealed:`, errorMessage(err));
         }
       }
+      // Egress secrets are sealed with the same cipher, so they rotate in the
+      // same pass. Omitting them would let the marker claim the whole store is
+      // current while these rows still needed a key the next rotation drops.
+      if (!await rewrapEgressSecrets(this.egressVaultDeps(cipher))) clean = false;
       // The marker claims the WHOLE store is sealed under this key, and the
       // documented rotation drops the retired key on the strength of that
       // claim. A pass that left a row behind must not make it.
@@ -1462,6 +1474,70 @@ export class UserDO extends Agent<Env> {
       console.warn(`[user-do] MCP headers for ${serverId} are unreadable:`, errorMessage(err));
       return null;
     }
+  }
+
+  // ── Egress secret vault ─────────────────────────────────────────────
+  // The owner's per-host secrets, spent by an agent's container without ever
+  // entering it. Same DO, same cipher, same key as `user_credentials`; see
+  // user/egress-vault.ts for why the row shape is its own table.
+
+  /** Shared wiring for every vault call: the DO's own storage, the deployment
+   *  cipher, and an AAD naming this row in this DO so a ciphertext cannot be
+   *  replayed into another binding or another user's store. */
+  private egressVaultDeps(cipher: CredentialCipher): EgressVaultDeps {
+    return {
+      sql: this.ctx.storage.sql,
+      cipher,
+      aad: (id) => `${this.ctx.id.toString()}:egress:${id}`,
+    };
+  }
+
+  /** Every binding, with no secret material — this is the read-back surface,
+   *  and there is deliberately no other. A stored secret is never returned to
+   *  the owner, the UI or an agent. */
+  async listEgressSecrets(caller: UserCaller): Promise<EgressSecretSummary[]> {
+    await this.requireTier(caller, 'egress_secrets.manage');
+    return listEgressSecrets(this.ctx.storage.sql);
+  }
+
+  /**
+   * Add or rotate a secret, returning the binding the container will use.
+   *
+   * The returned `placeholder` is the ONLY thing that may be written into the
+   * container. Rotating an existing id keeps its placeholder, so a rotation
+   * needs no change inside the container.
+   */
+  async putEgressSecret(caller: UserCaller, input: PutEgressSecretInput): Promise<EgressSecretBinding> {
+    await this.requireTier(caller, 'egress_secrets.manage');
+    await this.rewrapCredentials();
+    return putEgressSecret(this.egressVaultDeps(await this.cipher()), input);
+  }
+
+  /** Revoke a secret. The next intercepted request carrying its placeholder is
+   *  refused rather than forwarded with a dummy. */
+  async revokeEgressSecret(caller: UserCaller, id: string): Promise<{ revoked: boolean }> {
+    await this.requireTier(caller, 'egress_secrets.manage');
+    return { revoked: revokeEgressSecret(this.ctx.storage.sql, id) };
+  }
+
+  /**
+   * Resolve one intercepted request: which placeholders in it may become real
+   * secrets, for this destination.
+   *
+   * `active` is the caller's grant-filtered view of the vault, so CONSENT was
+   * decided by the approval gate before the request was made; this decides
+   * DESTINATION, on every request, and opens only what it authorises. Gated at
+   * `egress_secrets.inject` — a workspace-scoped caller must hold it, and the
+   * outbound handler presents the owner capability.
+   */
+  async resolveEgressInjection(
+    caller: UserCaller,
+    facts: EgressRequestFacts,
+    active: readonly EgressSecretBinding[],
+  ): Promise<EgressInjectionResult> {
+    await this.requireTier(caller, 'egress_secrets.inject');
+    await this.rewrapCredentials();
+    return resolveEgressInjection(this.egressVaultDeps(await this.cipher()), facts, active);
   }
 
   /** Expose the baseURL for openai-compat credentials. The orchestrator's

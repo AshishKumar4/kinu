@@ -303,6 +303,13 @@ class ProteusAgent(BaseInstalledAgent):
             "duration_ms": summary.duration_ms,
             "had_error": summary.had_error,
             "errors": summary.errors,
+            # Two fields, because they answer different questions. `activity`
+            # is the CLI's whole `type:"evolution"` channel, which also carries
+            # background-job and MCP notices; `evolution` is the subset that is
+            # really evolution. Reading the first as the second is how a trial
+            # configured evolve=false came to report 7 "evolution events".
+            "activity_events": summary.activity_events,
             "evolution_events": summary.evolution_events,
+            "evolution_fired": len(summary.evolution_events) > 0,
             "run_events": summary.run_events,
         }

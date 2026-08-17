@@ -85,10 +85,13 @@
       //   available when a tunnel WebSocket attaches at runtime.
     ]
   },
+  // The image tag MUST equal the @cloudflare/sandbox version in package.json:
+  // the SDK asks the container for its own SANDBOX_VERSION on every start and
+  // logs a version mismatch (Sandbox.checkVersionCompatibility). Bump both.
   "containers": [
     {
       "class_name": "ProteusSandbox",
-      "image": "docker.io/cloudflare/sandbox:0.11.0",
+      "image": "docker.io/cloudflare/sandbox:0.12.7",
       "max_instances": 10,
       "instance_type": {
         "vcpu": 2,
@@ -209,11 +212,25 @@
   // use the logged-in user's Cloudflare OAuth credential so Workers AI usage
   // bills to that user's Cloudflare account/quota.
   "ai": { "binding": "AI" },
-  // R2 bucket for sandbox /workspace backups (squashfs archives). The SDK's
-  // localBucket backup mode moves bytes straight through this binding — no
-  // presigned R2 credentials needed. Bucket: `wrangler r2 bucket create
-  // proteus-backups` (already created). Set an R2 lifecycle rule on the
-  // `backups/` prefix to GC expired archives.
+  // R2 bucket for sandbox /workspace snapshots (squashfs archives), written and
+  // read by ProteusSandbox. Bucket: `wrangler r2 bucket create proteus-backups`
+  // (already created). Set an R2 lifecycle rule on the `backups/` prefix to GC
+  // archives past their TTL — the SDK enforces TTL at restore time only and
+  // never deletes anything itself.
+  //
+  // Two transports exist and NEITHER puts a credential in the container:
+  //  * binding mode (today, no setup): bytes stream container → this object →
+  //    R2. Restore EXTRACTS the archive with `unsquashfs`, so it costs a full
+  //    pass over every byte and room for a second copy.
+  //  * presigned mode: this object mints a presigned URL and the container
+  //    curls it. Restore MOUNTS the archive (`squashfuse` + `fuse-overlayfs`)
+  //    with copy-on-write, which is constant work regardless of archive size.
+  //    OWNER SETUP to switch: `wrangler secret put R2_ACCESS_KEY_ID`,
+  //    `wrangler secret put R2_SECRET_ACCESS_KEY`, and add
+  //    "BACKUP_BUCKET_NAME": "proteus-backups" plus "CLOUDFLARE_ACCOUNT_ID"
+  //    to `vars` below. ProteusSandbox picks the mode up from their presence —
+  //    no flag — and the mode is recorded per snapshot, so handles taken in one
+  //    mode keep restoring in that mode.
   "r2_buckets": [
     { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }
   ],
@@ -278,7 +295,7 @@
       "containers": [
         {
           "class_name": "ProteusSandbox",
-          "image": "docker.io/cloudflare/sandbox:0.11.0",
+          "image": "docker.io/cloudflare/sandbox:0.12.7",
           "max_instances": 5,
           "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
         }

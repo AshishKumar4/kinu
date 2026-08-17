@@ -53,6 +53,8 @@ _SPEC.loader.exec_module(_events)
 parse_events = _events.parse_events
 run_events = _events.run_events
 turn_usage = _events.turn_usage
+split_activity = _events.split_activity
+EVOLUTION_EVENTS = _events.EVOLUTION_EVENTS
 
 
 @dataclass
@@ -64,6 +66,10 @@ class ProteusRunSummary:
     had_error: bool | None = None
     tool_calls: int = 0
     errors: list[str] = field(default_factory=list)
+    #: Everything on the CLI's activity channel, verbatim.
+    activity_events: list[dict[str, str]] = field(default_factory=list)
+    #: The subset that is actually evolution. This is the field a reader may
+    #: use to decide whether the mechanism under test ran.
     evolution_events: list[dict[str, str]] = field(default_factory=list)
     usage: dict[str, int] | None = None
     #: The agent's durable run-event ledger, verbatim — the only copy that
@@ -199,8 +205,10 @@ def build_trajectory(
                 "event": str(event.get("event") or ""),
                 "message": str(event.get("message") or ""),
             }
-            summary.evolution_events.append(record)
-            builder.add_dispatch(record["message"], {"proteus_evolution": record["event"]})
+            summary.activity_events.append(record)
+            if record["event"] in EVOLUTION_EVENTS:
+                summary.evolution_events.append(record)
+            builder.add_dispatch(record["message"], {"proteus_activity": record["event"]})
         elif kind == "error":
             message = str(event.get("message") or "")
             summary.errors.append(message)
@@ -216,6 +224,8 @@ def build_trajectory(
     summary.usage = usage if any(usage.values()) else None
 
     extra = dict(agent_extra)
+    if summary.activity_events:
+        extra["activity_events"] = summary.activity_events
     if summary.evolution_events:
         extra["evolution_events"] = summary.evolution_events
 

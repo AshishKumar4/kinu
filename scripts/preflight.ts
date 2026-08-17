@@ -2,9 +2,9 @@
  * The environment invariants every other gate silently assumes.
  *
  * This exists because of a measured incident, not a hypothesis. On 2026-08-17
- * deploy gate 6 (`bun test --cwd packages/cli-backend`) went red at HEAD
- * 5183d69d, reproducibly, in a clean worktree. The message the ladder printed
- * was:
+ * deploy gate 6 (the cli-backend suite, then spelled `--cwd packages/cli-backend`)
+ * went red at HEAD 5183d69d, reproducibly, in a clean worktree. The message the
+ * ladder printed was:
  *
  *     (fail) the laptop executor reads and writes the real host filesystem
  *       ^ this test timed out after 5000ms.
@@ -37,13 +37,42 @@ import { assertMeasured, finding } from './gate-ratchet.ts';
 const repo = new URL('..', import.meta.url).pathname;
 
 /**
- * What one full root suite run costs the temp filesystem, measured on
- * 2026-08-17: 444 test processes, each given a throwaway `PROTEUS_HOME` by
- * `scripts/test-preload.ts`, plus the heavier per-test homes the CLI and
- * cli-backend suites build shadow-git checkpoint stores inside.
+ * What one full suite sweep costs the temp filesystem.
+ *
+ * MEASURED 2026-08-17 with `TMPDIR` pointed at a private directory (so nothing
+ * another process does is attributed here) and `du --inodes` polled at 0.3s
+ * across `bun run test` plus every per-package gate plus `bun run test:workerd`:
+ * a peak of 3,968 inodes and 22.3 MiB, leaving 2,079 inodes of residue behind
+ * after the sweep finished — homes whose suite did not reach the `exit`
+ * handler, which is what `--reclaim` is for.
+ *
+ * The previous comment here read "444 test processes, each given a throwaway
+ * PROTEUS_HOME by scripts/test-preload.ts". That was FALSE at the time it was
+ * written: `bun test --cwd <dir>` makes bun load a bunfig.toml from THAT
+ * directory, so the root one — and its `preload` — never applied, and every
+ * per-package gate ran with no throwaway home at all. A probe printed
+ * `PROTEUS_HOME= undefined` under `--cwd` and a real temp path root-relative.
+ * Every gate string is root-relative now, so the sentence is true and the
+ * measurement above is of the system it describes.
+ *
+ * The budget stays well above the measured peak on purpose and the floors below
+ * are NOT lowered to match it: the measurement is one sweep alone on the box,
+ * and the failure this gate exists for happened with several agents running
+ * suites at once — one CI-tier run reported 12,591 temp entries, 7,016 of them
+ * leaked test scratch. A floor derived from a quiet box would not have caught
+ * that.
  */
+const MEASURED_INODES_PER_RUN = 3_968 + 2_079;
 const INODES_PER_FULL_RUN = 24_000;
 const BYTES_PER_FULL_RUN = 1024 * 1024 * 1024;
+
+if (INODES_PER_FULL_RUN < MEASURED_INODES_PER_RUN) {
+  throw new Error(
+    `preflight: INODES_PER_FULL_RUN (${String(INODES_PER_FULL_RUN)}) is below what one `
+    + `sweep was measured to cost (${String(MEASURED_INODES_PER_RUN)}). Re-measure before `
+    + 'lowering it — the budget is a margin over a measurement, not a guess.',
+  );
+}
 
 /**
  * Two runs' worth of headroom, so the floor is crossed while a legible message

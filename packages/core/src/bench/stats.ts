@@ -391,20 +391,40 @@ export interface GainStats {
   /** statefulReward − statelessReward. */
   gain: number;
   /** gain / (1 − statelessReward) — the fraction of remaining headroom the
-   *  evolution machinery captured. Undefined when there is no headroom. */
+   *  evolution machinery captured. `null` when there is no headroom, and also
+   *  when a reward left [0,1]: the ratio assumes a bounded scale, and CL-Bench's
+   *  poker rewards are signed chip counts, where "fraction of headroom" is not a
+   *  quantity. Reporting it there would be a number about nothing. */
   normalizedGain: number | null;
   ci: Interval;
   pValue: number;
   tasks: number;
+  /** Tasks whose arms actually differed. This is the real denominator of the
+   *  significance claim, and it is reported because it is routinely far below
+   *  `tasks`: the first CL-Bench run had 5 tasks and 2 differences. */
+  pairsWithDifference: number;
+  /** Smallest p this many differing pairs could ever produce. */
+  floorPValue: number;
+  /** False when no outcome on this design could be significant. An inert
+   *  contrast otherwise reports a neutral-looking p and reads as "no effect"
+   *  when the truth is "measured nothing at all" — an empty denominator is
+   *  vacuous per task and a failure per design. */
+  canReachSignificance: boolean;
   verdict: string;
 }
 
 /** CL-Bench's stateful-vs-stateless primitive. `paired[i]` is the same task run
- *  under both arms; a gain at or below zero is a real, reportable result. */
+ *  under both arms; a gain at or below zero is a real, reportable result.
+ *
+ *  A gain that the design could not have resolved is NOT a reportable result,
+ *  and this says so mechanically rather than leaving it to whoever reads the
+ *  number: `canReachSignificance` is false below the exact test's own floor, and
+ *  the verdict leads with that rather than with the point estimate. */
 export function computeGain(
   paired: readonly { taskId: string; stateful: number; stateless: number }[],
-  opts: BootstrapOptions = {},
+  opts: BootstrapOptions & { alpha?: number } = {},
 ): GainStats {
+  const alpha = opts.alpha ?? DEFAULT_ALPHA;
   const tasks = paired.length;
   const mean = (pick: (p: { stateful: number; stateless: number }) => number) =>
     tasks === 0 ? 0 : paired.reduce((s, p) => s + pick(p), 0) / tasks;
@@ -412,18 +432,34 @@ export function computeGain(
   const statelessReward = mean((p) => p.stateless);
   const diffs = paired.map((p) => p.stateful - p.stateless);
   const { mean: gain, ci } = pairedBootstrapCI(diffs, opts);
+  const bounded = paired.every((p) => (
+    p.stateful >= 0 && p.stateful <= 1 && p.stateless >= 0 && p.stateless <= 1
+  ));
   const headroom = 1 - statelessReward;
-  const normalizedGain = headroom > 1e-9 ? gain / headroom : null;
+  const normalizedGain = bounded && headroom > 1e-9 ? gain / headroom : null;
   // Binary-safe significance: the same exact paired test, on sign of the diff.
   const wins = diffs.filter((d) => d > 0).length;
   const losses = diffs.filter((d) => d < 0).length;
-  const pValue = binomialTwoSidedP(wins, wins + losses);
+  const pairsWithDifference = wins + losses;
+  const pValue = binomialTwoSidedP(wins, pairsWithDifference);
+  const floor = floorPValue(pairsWithDifference);
+  const canReach = pairsWithDifference > 0 && floor <= alpha;
 
   let verdict: string;
   if (tasks === 0) verdict = 'no tasks ran — no gain measured';
-  else if (ci.lo <= 0 && ci.hi >= 0) verdict = `gain ${fmtPp(gain)} — interval spans zero; the evolution state showed no measurable contribution`;
+  else if (!canReach) {
+    verdict = `UNDECIDABLE: ${pairsWithDifference} of ${tasks} task(s) differed between the arms, and `
+      + `${pairsWithDifference === 0
+        ? 'a contrast where no task differed measured nothing at all'
+        : `the smallest p that many differing pairs can produce is ${floor.toFixed(4)} > alpha ${alpha}`}`
+      + `. The observed gain ${fmtPp(gain)} is not evidence of an effect in either direction — `
+      + `${minimumPairsForSignificance(alpha)} differing pairs are the minimum.`;
+  } else if (ci.lo <= 0 && ci.hi >= 0) verdict = `gain ${fmtPp(gain)} — interval spans zero; the evolution state showed no measurable contribution`;
   else if (gain > 0) verdict = `gain ${fmtPp(gain)}${normalizedGain === null ? '' : ` (${(normalizedGain * 100).toFixed(1)}% of headroom)`}`;
   else verdict = `gain ${fmtPp(gain)} — the stateful arm did WORSE than a fresh v0 agent`;
 
-  return { statefulReward, statelessReward, gain, normalizedGain, ci, pValue, tasks, verdict };
+  return {
+    statefulReward, statelessReward, gain, normalizedGain, ci, pValue, tasks,
+    pairsWithDifference, floorPValue: floor, canReachSignificance: canReach, verdict,
+  };
 }

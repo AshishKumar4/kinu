@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { weakLabel, type JsonObject, type JsonValue } from '@proteus/core';
+import { gitEnv } from '@proteus/test-utils';
 import { defaultTranscriptRoot, mineTranscripts, renderMineSkips } from '../src/cc-transcript.js';
 import * as v from 'valibot';
 
@@ -394,6 +395,14 @@ describe('mined artifacts cannot be committed', () => {
     // The only mechanical guarantee that the owner's private sessions stay out
     // of the repository. `--no-index` so the answer does not depend on whether
     // a file happens to exist right now.
+    //
+    // `gitEnv()` rather than `cwd` alone, because `cwd` was not protecting this.
+    // Measured: with GIT_DIR/GIT_WORK_TREE pointed at an unrelated repository,
+    // `git check-ignore --no-index -q .cc-corpus/CC-CORPUS-2026-08-07.md` from
+    // this root answers NOT-IGNORED where the GIT_-free form answers IGNORED. A
+    // hook exports GIT_DIR, so the one assertion standing between the owner's
+    // transcripts and a commit was answerable by a repository nobody named here.
+    // The exit code is the subject, so `gitEnv()` and not the throwing `git()`.
     for (const path of [
       '.cc-corpus/CC-CORPUS-2026-08-07.md',
       'CC-CORPUS-2026-08-07.md',
@@ -403,6 +412,7 @@ describe('mined artifacts cannot be committed', () => {
       const result = Bun.spawnSync({
         cmd: ['git', 'check-ignore', '--no-index', '-q', path],
         cwd: repoRoot,
+        env: gitEnv(),
       });
       expect({ path, ignored: result.exitCode === 0 }).toEqual({ path, ignored: true });
     }

@@ -2,7 +2,7 @@
 // six different calls, and no summary may claim detail the arguments never
 // carried.
 import { describe, test, expect } from 'bun:test';
-import { clip, isToolCallFailed, summarizeToolCall } from '../src/components/tool-call-summary.ts';
+import { clip, isToolCallFailed, summarizeToolCall } from '../src/tools/tool-call-summary.ts';
 
 describe('tool call summaries — the unified agents tool', () => {
   test('agents calls are told apart by action and target', () => {

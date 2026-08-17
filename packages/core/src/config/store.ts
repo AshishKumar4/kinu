@@ -7,8 +7,6 @@
 // The store is a deep module (small interface, real behavior): typed getters
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
-import * as v from 'valibot';
-import type { DirectoryBackup } from '../execution/sandbox.js';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort.js';
 import {
   DEFAULT_AGENT_STANCE,
@@ -18,16 +16,9 @@ import {
 import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
 } from '../prompting/cache-breakpoints.js';
-import { parseJsonValue } from '../utils/json.js';
 import {
   formatApprovalGrant, parseApprovalGrant, type ApprovalGrant,
 } from '../safety/approval-gate.js';
-
-const DirectoryBackupSchema: v.GenericSchema<DirectoryBackup> = v.object({
-  id: v.string(),
-  dir: v.string(),
-  localBucket: v.optional(v.boolean()),
-});
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
@@ -69,10 +60,6 @@ export const AGENT_CONFIG_KEYS = {
   /** The executor namespace the agent most recently ran a tool in — so the UI
    *  (diff / file manager) defaults to where work actually happened. */
   lastActiveExecutor: 'last_active_executor',
-  /** Serialized DirectoryBackup handle for the agent's /workspace snapshot. */
-  workspaceBackup: 'workspace_backup',
-  /** Epoch ms of the last successful /workspace backup (backup debounce). */
-  workspaceBackupAt: 'workspace_backup_at',
   /** Run GEPA self-optimization after this many turns of new execution traces
    *  (0 = off; unset = the autonomous default cadence). Trace-driven, not
    *  clock-driven. */
@@ -176,14 +163,6 @@ export interface AgentConfigStore {
   /** Record the last-active executor. Ignores values that aren't a plausible
    *  executor namespace (defense against a poisoned config value). */
   setLastActiveExecutor(name: string): void;
-  /** The persisted /workspace backup handle, or null when none is stored. A
-   *  stored value that does not parse throws: a corrupt handle read as "never
-   *  backed up" is how a workspace silently stops being recoverable. */
-  getWorkspaceBackup(): DirectoryBackup | null;
-  /** Persist the latest /workspace backup handle and stamp the backup time. */
-  setWorkspaceBackup(backup: DirectoryBackup): void;
-  /** Epoch ms of the last successful /workspace backup, or 0. */
-  getWorkspaceBackupAt(): number;
   /** Turns-of-new-traces between auto-GEPA passes (0 = disabled; unset
    *  defaults to DEFAULT_AUTO_GEPA_EVERY_N_TURNS). */
   getAutoGepaEveryNTurns(): number;
@@ -389,19 +368,6 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       // bad value can't poison the UI default. Not a fixed allow-list (executors
       // are registered dynamically) — just a shape check.
       if (/^[a-z0-9_-]{1,32}$/i.test(name)) set(AGENT_CONFIG_KEYS.lastActiveExecutor, name);
-    },
-    getWorkspaceBackup() {
-      const stored = get(AGENT_CONFIG_KEYS.workspaceBackup);
-      if (!stored) return null;
-      return v.parse(DirectoryBackupSchema, parseJsonValue(stored));
-    },
-    setWorkspaceBackup(backup) {
-      set(AGENT_CONFIG_KEYS.workspaceBackup, JSON.stringify({ id: backup.id, dir: backup.dir, localBucket: backup.localBucket }));
-      set(AGENT_CONFIG_KEYS.workspaceBackupAt, String(Date.now()));
-    },
-    getWorkspaceBackupAt() {
-      const n = Number(get(AGENT_CONFIG_KEYS.workspaceBackupAt));
-      return Number.isFinite(n) ? n : 0;
     },
     getAutoGepaEveryNTurns() {
       const raw = get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns);

@@ -4,7 +4,7 @@ import { listConfiguredAgentRefs, requireAuthConfig } from '../config.js';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
 import { createAgentClient, type AgentClientFlags } from '../client-factory.js';
 import type { AgentClient, AgentClientEvent } from '../agent-client.js';
-import { decodeJsonValue, JsonValueSchema, parseJsonObject, type JsonObject, type JsonValue } from '@proteus/core';
+import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '@proteus/core';
 import * as v from 'valibot';
 import type { CliSessionOptions } from '../session.js';
 import { chatCommand } from './chat.js';
@@ -587,8 +587,15 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
     // for this switch to learn about the next kind. Enveloped rather than
     // flattened because the ledger's own `turn_start`/`turn_end`/`error` names
     // collide with the presentation events above.
+    // `projectJsonValue`, not `decodeJsonValue`: a run-event is an in-process
+    // object on its way OUT to the wire, not a value that arrived as JSON. The
+    // accumulator builds steps from SDK results, so optional properties are
+    // present-and-`undefined` (`toolCallId`, `providerMetadata`), which JSON has
+    // no representation for. Validating instead of projecting threw ValiError
+    // inside the listener, so `proteus exec --json` printed a valibot stack to
+    // stderr mid-run while still exiting 0.
     case 'run-event':
-      return [{ type: 'run_event', event: decodeJsonValue({ value: event.event }) }];
+      return [{ type: 'run_event', event: projectJsonValue({ value: event.event }) }];
   }
 }
 

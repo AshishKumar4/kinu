@@ -11,6 +11,10 @@ export {
   parseApprovalGrant,
   approvalGrants,
   gateExec,
+  decideApproval,
+  grantsAreSubset,
+  resolveInheritedGrants,
+  createInheritedApprovalPolicy,
   STRICT_NO_CHANNEL_POLICY,
   type ApprovalDecision,
   type ApprovalRuleHit,
@@ -20,8 +24,31 @@ export {
   type ShellApprovalRequest,
   type ShellApprovalOutcome,
   type ShellApprovalPolicy,
+  type InheritedApprovalSource,
   type DeferredApprovalChannel,
 } from './approval-gate.js';
+
+export {
+  EGRESS_PLACEHOLDER_PREFIX,
+  EGRESS_PLACEHOLDER_BYTES,
+  EGRESS_EXECUTOR,
+  grantedEgressBindings,
+  isEgressPlaceholder,
+  findEgressPlaceholders,
+  egressSecretRule,
+  parseEgressSecretRule,
+  egressHostMatches,
+  reviewEgressBinding,
+  egressBindingAction,
+  planEgress,
+  scrubText,
+  createScrubStream,
+  type EgressSecretBinding,
+  type EgressRequestFacts,
+  type EgressSubstitution,
+  type EgressPlan,
+  type ScrubReplacement,
+} from './egress-gate.js';
 
 export {
   DeferredApprovalQueue,

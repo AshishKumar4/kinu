@@ -1,4 +1,4 @@
-import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, timingSafeEqual, type JsonValue } from '@proteus/core';
+import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, USER_AI_PROXY_PATH, timingSafeEqual, type JsonValue } from '@proteus/core';
 import type { AuthIdentity } from '../auth/session.js';
 import { AuthError, authenticateRequest, isFreshAuthTime } from '../auth/session.js';
 import { publicHtmlHeaders } from '../lib/security-headers.js';
@@ -17,7 +17,7 @@ import { isAgentRpcMethod, requiredRpcAccess, rpcAccessScope } from './rpc-gate.
 import { buildCliInstallCommand } from './install-command.js';
 import { listAvailableModels } from '../user/available-models.js';
 import { claimOwnedWorkspace, handleCreateWorkspaceRequest } from '../user/workspace-access.js';
-import { USER_AI_PROXY_PREFIX, handleUserAIProxyRequest } from '../user/ai-proxy.js';
+import { handleUserAIProxyRequest } from '../user/ai-proxy.js';
 import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy.js';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '../user/workspace-capability.js';
 import * as v from 'valibot';
@@ -66,7 +66,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   // session tokens pass, scoped access tokens need ai.proxy. Both the
   // Cloudflare-pinned proxy and the general provider proxy spend the owner's
   // inference credentials, so they share one scope.
-  const aiProxy = url.pathname.startsWith(`${USER_AI_PROXY_PREFIX}/`);
+  const aiProxy = url.pathname.startsWith(`${USER_AI_PROXY_PATH}/`);
   const providerProxy = url.pathname.startsWith(`${USER_AI_PROXY_FORWARD_PREFIX}/`);
   if (aiProxy || providerProxy) {
     const cli = await authenticateCli(request, env);

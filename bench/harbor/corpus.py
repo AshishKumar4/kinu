@@ -28,6 +28,17 @@ MANIFEST_NAME = "corpus.json"
 # solutions without changing the task the agent is scored on.
 _GRADED = ("instruction.md", "task.toml", "environment", "tests")
 
+# The subset that decides what the agent must do and how it is judged.
+# `task.toml` is deliberately absent: 2.1 migrated every manifest from schema
+# 1.0 to 1.1 (renamed keys, added [task], memory="2G" -> memory_mb=2048) and
+# added a README, so NO task directory is byte-identical across the releases
+# even where the work and the verifier are unchanged. Reading "7 of 10 tasks
+# were byte-identical" against _GRADED gives 0 of 10 and looks like a
+# contradiction; against _SCORED it gives 7 of 10, which is what the claim
+# meant. Both denominators are legitimate and they answer different questions,
+# so the tool reports both rather than picking one.
+_SCORED = ("instruction.md", "environment", "tests")
+
 
 class CorpusError(RuntimeError):
     """The corpus on disk is missing, unreadable, or not what it claims."""
@@ -96,6 +107,72 @@ def content_hash(corpus_dir: Path) -> tuple[str, int]:
                 digest.update(file.relative_to(task).as_posix().encode())
                 digest.update(hashlib.sha256(file.read_bytes()).digest())
     return digest.hexdigest(), len(tasks)
+
+
+def _entry_hash(task: Path, entries: tuple[str, ...]) -> str:
+    digest = hashlib.sha256()
+    for entry in entries:
+        target = task / entry
+        for file in sorted(
+            (target.rglob("*") if target.is_dir() else [target]),
+            key=lambda p: p.as_posix(),
+        ):
+            if not file.is_file():
+                continue
+            digest.update(file.relative_to(task).as_posix().encode())
+            digest.update(hashlib.sha256(file.read_bytes()).digest())
+    return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class TaskSameness:
+    """Whether one task is the same task across two corpus releases."""
+
+    name: str
+    in_both: bool
+    graded_same: bool
+    scored_same: bool
+
+
+def compare(left: Path, right: Path) -> list[TaskSameness]:
+    """Per-task sameness across two releases, under both definitions.
+
+    This is the denominator any cross-release comparison needs. A flip rate
+    quoted over all shared tasks answers "how much did the score move"; the same
+    flips quoted over the scored-identical tasks answer "how much of that was
+    noise", because those tasks put the same work in front of the agent and
+    judged it the same way.
+    """
+    names = sorted({p.name for p in task_dirs(Path(left))} | {p.name for p in task_dirs(Path(right))})
+    out: list[TaskSameness] = []
+    for name in names:
+        a, b = Path(left) / name, Path(right) / name
+        if not (a.is_dir() and b.is_dir()):
+            out.append(TaskSameness(name, False, False, False))
+            continue
+        out.append(TaskSameness(
+            name, True,
+            _entry_hash(a, _GRADED) == _entry_hash(b, _GRADED),
+            _entry_hash(a, _SCORED) == _entry_hash(b, _SCORED),
+        ))
+    return out
+
+
+def sample(corpus_dir: Path, size: int, seed: int) -> list[str]:
+    """A seeded random task sample, not the alphabetical head.
+
+    Both prior Terminal-Bench runs used harbor's `-l 10`, which takes the first
+    ten names in sort order — so the same ten of eighty-nine were measured every
+    time and nothing drawn from them generalizes to the corpus. Ordering by a
+    keyed digest makes the subset an actual sample while keeping the run exactly
+    reproducible from (seed, size); the winners come back in name order so the
+    resulting `-i` list is stable.
+    """
+    names = [p.name for p in task_dirs(Path(corpus_dir))]
+    if size >= len(names):
+        return sorted(names)
+    keyed = sorted(names, key=lambda n: hashlib.sha256(f"{seed}:{n}".encode()).hexdigest())
+    return sorted(keyed[:size])
 
 
 def load(corpus_dir: Path) -> CorpusIdentity:
@@ -201,6 +278,15 @@ def _main() -> int:
     init.add_argument("--registry-ref")
     init.add_argument("--upstream-commit")
     init.add_argument("--fetched-at", required=True)
+    cmp_ = sub.add_parser("compare", help="Per-task sameness across two releases.")
+    cmp_.add_argument("left", type=Path)
+    cmp_.add_argument("right", type=Path)
+    cmp_.add_argument("--json", action="store_true")
+    smp = sub.add_parser("sample", help="A seeded random task sample, for -i flags.")
+    smp.add_argument("path", type=Path)
+    smp.add_argument("--size", type=int, required=True)
+    smp.add_argument("--seed", type=int, required=True)
+    smp.add_argument("--as-flags", action="store_true", help="Print as harbor -i arguments.")
 
     args = parser.parse_args()
     if args.cmd == "init":
@@ -214,6 +300,42 @@ def _main() -> int:
         )
         print(identity)
         return 0
+    if args.cmd == "sample":
+        names = sample(args.path, args.size, args.seed)
+        print(
+            " ".join(f"-i {n}" for n in names) if args.as_flags
+            else json.dumps({"corpus": str(args.path), "seed": args.seed,
+                             "size": args.size, "tasks": names}, indent=2)
+        )
+        return 0
+
+    if args.cmd == "compare":
+        rows = compare(args.left, args.right)
+        both = [r for r in rows if r.in_both]
+        graded = [r for r in both if r.graded_same]
+        scored = [r for r in both if r.scored_same]
+        if args.json:
+            print(json.dumps({
+                "left": str(args.left), "right": str(args.right),
+                "shared": len(both), "graded_identical": len(graded),
+                "scored_identical": len(scored),
+                "tasks": [
+                    {"name": r.name, "in_both": r.in_both,
+                     "graded_same": r.graded_same, "scored_same": r.scored_same}
+                    for r in rows
+                ],
+            }, indent=2))
+        else:
+            for r in rows:
+                mark = "absent from one release" if not r.in_both else (
+                    f"graded_same={str(r.graded_same).lower():5s} scored_same={str(r.scored_same).lower()}"
+                )
+                print(f"  {r.name:34s} {mark}")
+            print(f"\nshared tasks: {len(both)}")
+            print(f"graded identical ({'+'.join(_GRADED)}): {len(graded)}/{len(both)}")
+            print(f"scored identical ({'+'.join(_SCORED)}): {len(scored)}/{len(both)}")
+        return 0
+
 
     identity = load(args.path)
     print(json.dumps(identity.as_dict(), indent=2) if args.json else identity)

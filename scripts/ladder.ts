@@ -80,15 +80,15 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run check',
     tier: 'commit',
-    seconds: 9.5,
-    catches: 'type errors and the 15 anti-slop rules across all 8 projects. The largest '
+    seconds: 6.8,
+    catches: 'type errors and the 21 anti-slop rules across all 11 projects. The largest '
       + 'defect class by volume and the only total one — every file, every line.',
     blind: 'everything about behaviour. A well-typed call to the wrong function passes.',
   },
   {
     run: 'bun run gate:do-init',
     tier: 'commit',
-    seconds: 0.3,
+    seconds: 0.1,
     catches: 'off-object I/O inside a Durable Object `onStart`, which put a pure SELECT '
       + 'at 25s and, past 31s, RESET the object. That invariant held at the method and '
       + 'was defeated at the object.',
@@ -97,7 +97,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:duplication',
     tier: 'commit',
-    seconds: 0.7,
+    seconds: 1.1,
     catches: 'a second implementation of an existing function body, including one with '
       + 'every identifier renamed — the mechanism behind "X never worked in Y backend".',
     blind: 'duplication refactored enough to differ structurally, and duplicated '
@@ -106,7 +106,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:reachability',
     tier: 'commit',
-    seconds: 0.9,
+    seconds: 1,
     catches: 'an @callable RPC no caller reaches — the "correct, wired, dead" class this '
       + 'codebase has shipped at least ten times.',
     blind: 'a reachable RPC whose result nobody reads.',
@@ -118,6 +118,50 @@ export const LADDER: readonly Gate[] = [
     catches: 'a platform number stated in prose with no catalog id behind it, and a '
       + 'catalog entry with no evidence label or provenance.',
     blind: 'whether the catalogued number is still true.',
+  },
+  {
+    run: 'bun run gate:egress-interception',
+    tier: 'commit',
+    seconds: 0.1,
+    catches: 'a container class that lost `enableInternet = false` or '
+      + '`interceptHttps = true`, a Worker entry that stopped exporting '
+      + 'ContainerProxy, or a catch-all egress handler nobody binds — each one an '
+      + 'un-intercepted way out of a container whose secrets have been replaced '
+      + 'by placeholders.',
+    blind: 'whether interception actually engages at runtime, and DNS, which '
+      + 'leaves regardless and which the gate reports as a known residual '
+      + 'rather than closing.',
+  },
+  {
+    run: 'bun run gate:typecheck-coverage',
+    tier: 'commit',
+    seconds: 0.1,
+    catches: 'a directory of tests that no tsconfig `bun run check` runs ever compiles. '
+      + 'The root `tests/` directory was in that state: `check` named eight projects and '
+      + 'not one included it, so the four suites that are the only evidence for '
+      + 'multi-turn tool calling, memory across a reopen, MCTS evolution and '
+      + 'cross-session transfer were never typechecked — on top of never having run. '
+      + 'Pointed at the project compiler for the first time they produced 23 errors, '
+      + 'including calls to `EvolutionEngine.onTurnComplete` and `BuiltinToolDeps.engine` '
+      + 'long after both were deleted. The corpus is DISCOVERED on disk and the project '
+      + 'list is PARSED from the `check` script (following `bun run` transitively), so '
+      + 'neither side can be quietly narrowed.',
+    blind: 'whether the tests in a covered directory assert anything. It proves they '
+      + 'compile, which is exactly the signal that was missing.',
+  },
+  {
+    run: 'bun run gate:skip-ratchet',
+    tier: 'commit',
+    seconds: 0.3,
+    catches: 'a test that starts skipping, and a declared skip that has started running '
+      + 'without the lock being tightened. `bun test ./tests/` reports 23 skips and exits '
+      + '0, and that exit code is all anyone reads — so the skipped set is locked with a '
+      + 'written reason per entry. Locking the SET rather than a count is what makes it '
+      + 'work: a count of 23 cannot tell you a different 23 are skipping now. It also '
+      + 'asserts every target contributed a test, because `bun test tests` and `bun test '
+      + 'tests/` both match NOTHING here and only `./tests/` selects them.',
+    blind: 'whether a running test asserts anything real. A skip is visible now; a '
+      + 'vacuous pass is the next tier\'s problem.',
   },
 
   {
@@ -145,13 +189,27 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts',
     tier: 'push',
     seconds: 1,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
       + 'genuinely different body.',
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts.',
+  },
+  {
+    run: 'bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts',
+    tier: 'push',
+    seconds: 0.1,
+    catches: 'the two new gates\' own decision boundaries — including the one that '
+      + 'matters most here: a JUnit parse that matched only self-closing `<testcase/>` '
+      + 'elements would report every SKIPPED test as absent, so the ratchet would '
+      + 'reconcile an empty set and pass forever. Also proves the coverage gate follows '
+      + '`bun run` script references transitively, without which it demands an exclusion '
+      + 'for `tools/oxlint/anti-slop`, which IS covered — a gate lying in the safe '
+      + 'direction still teaches people to silence it.',
+    blind: 'whether the locked skips are the RIGHT skips. That is a judgement in the '
+      + 'lock\'s reason strings, which is why each entry has to carry one.',
   },
   {
     run: 'bun test scripts/ladder.test.ts',
@@ -183,11 +241,20 @@ export const LADDER: readonly Gate[] = [
     tier: 'push',
     seconds: 24,
     catches: 'behavioural regressions in agent-utils, core and compaction: 3,105 tests, '
-      + 'the whole shared spine both backends run on.',
-    blind: 'both backend composition roots, and every subprocess path.',
+      + 'the whole shared spine both backends run on. Every gate on this list spells '
+      + 'its suite ROOT-RELATIVE (`bun test packages/x/`) rather than `--cwd packages/x`: '
+      + 'measured 2026-08-17, `--cwd` makes bun read a bunfig.toml from THAT directory, '
+      + 'so the root one is not loaded and both `preload` and `pathIgnorePatterns` are '
+      + 'silently dropped. A probe printed `PROTEUS_HOME= undefined` under `--cwd` and a '
+      + 'real temp home root-relative — meaning the throwaway home that exists because '
+      + 'cli-backend once wrote ~580 checkpoint stores into a developer\'s real ~/.proteus '
+      + 'was reaching NO per-package gate.',
+    blind: 'both backend composition roots, and every subprocess path. It also covers '
+      + 'only 3 of the 8 workspace packages — see ROOT_TEST_OMISSIONS in ladder.test.ts, '
+      + 'which pins the other 5 by equality with the gate that does run each.',
   },
   {
-    run: 'bun test --cwd packages/test-utils',
+    run: 'bun test packages/test-utils/',
     tier: 'push',
     seconds: 0.2,
     catches: 'a broken source-slicing helper. Three wiring suites once asserted against '
@@ -195,16 +262,18 @@ export const LADDER: readonly Gate[] = [
     blind: 'the suites that use it.',
   },
   {
-    run: 'bun test --cwd packages/cf-backend',
+    run: 'bun test packages/cf-backend/',
     tier: 'push',
     seconds: 13,
     catches: 'the Cloudflare composition root observed against the capability manifest '
       + '— the conformance gate.',
-    blind: 'anything needing a Workers runtime rather than a composition root.',
+    blind: 'anything needing a Workers runtime rather than a composition root — every '
+      + 'test here mocks the Agent SDK (`tests/helpers/agents-sdk.ts`) and runs under '
+      + 'bun, which is why `bun run test:workerd` exists below.',
   },
 
   {
-    run: 'bun test --cwd packages/cli-backend',
+    run: 'bun test packages/cli-backend/',
     tier: 'ci',
     seconds: 41,
     catches: 'the local composition root and its conformance gate, plus the real host '
@@ -212,7 +281,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'the CLI surface above it.',
   },
   {
-    run: 'bun test --cwd packages/cli',
+    run: 'bun test packages/cli/',
     tier: 'ci',
     seconds: 92,
     catches: 'the production CLI end to end, including the PTY and subprocess paths. 41 '
@@ -223,7 +292,7 @@ export const LADDER: readonly Gate[] = [
       + 'wall clock for 7.5% of its tests, which is why it is not earlier.',
   },
   {
-    run: 'bun test --cwd packages/pc-agent',
+    run: 'bun test packages/pc-agent/',
     tier: 'ci',
     seconds: 0.3,
     catches: 'the local-device daemon, 6 tests. Runs in no tier today — `bun run check` '
@@ -249,13 +318,36 @@ export const LADDER: readonly Gate[] = [
     run: 'bun test ./tests/',
     tier: 'ci',
     seconds: 0.3,
-    catches: 'the root end-to-end lifecycle suites, 22 tests. Runs in no tier today. 19 '
-      + 'of the 22 SKIP without PROTEUS_AUTH, and the point of running them is that the '
-      + 'skip becomes visible rather than absent. Note the path form: `bun test tests` '
-      + 'silently matches NOTHING, and `bun test tests/` also matches nothing — only '
-      + '`./tests/` selects them, which is exactly the kind of silent zero this ladder '
-      + 'asserts against.',
-    blind: 'everything it skips, which is most of it — declared, not hidden.',
+    catches: 'the root end-to-end and eval suites parsing, constructing their workspaces '
+      + 'and reaching their skip decision, credential-free — 27 tests, 23 of which skip '
+      + 'without a live-model target. Kept beside `test:eval` deliberately: this is the '
+      + 'run that needs no secret, so it is the one that reproduces anywhere, and '
+      + '`gate:skip-ratchet` is what turns its 23 skips from an invisible exit 0 into a '
+      + 'locked, reasoned list. Note the path form: `bun test tests` silently matches '
+      + 'NOTHING, and `bun test tests/` also matches nothing — only `./tests/` selects '
+      + 'them, which is exactly the kind of silent zero this ladder asserts against.',
+    blind: 'everything it skips, which is most of it — declared, not hidden. It also '
+      + 'cannot see a suite whose code no longer compiles, because bun strips types; '
+      + 'that is `gate:typecheck-coverage` plus `tsc -p tests`, and the absence of both '
+      + 'is how these four suites came to call two deleted APIs.',
+  },
+  {
+    run: 'bun run test:eval',
+    tier: 'ci',
+    seconds: 0.3,
+    catches: 'the behavioural evidence nothing else in this ladder can produce: whether '
+      + 'the agent reaches for MCTS on a task that warrants it, whether a search opens '
+      + 'more than one branch and leaves a DURABLY ranked winner, whether every settle '
+      + 'mode writes where the Exploration reader reads, and what fraction of eligible '
+      + 'turns convert to a delegation. Each score reports its denominator, and each '
+      + 'assertion checks that denominator is non-zero BEFORE anything else, because '
+      + '"0 of 0 searches were unranked" is the shape of a check that cannot fail. The '
+      + '0.3s figure is the credential-free path where everything skips; with a target '
+      + 'set it is minutes and the script prints the measured token cost.',
+    blind: 'the cf runtime. These drive core and the CLI\'s local session in-process, so '
+      + 'a defect that only appears in workerd — a rejected cross-DO RPC inside '
+      + 'background work that only console.warns — is invisible here by construction. '
+      + 'That is the workerd layer\'s job, not this one\'s.',
   },
   {
     run: 'bun test scripts/eval.test.ts',
@@ -309,7 +401,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:capability-parity',
     tier: 'commit',
-    seconds: 2.4,
+    seconds: 1.2,
     catches: 'the two shapes of backend divergence. A core contract whose optional '
       + 'capability is wired on one backend only (25 today, including '
       + 'ShellApprovalPolicy.requestApproval, absent on cf), and a module that would '
@@ -323,6 +415,41 @@ export const LADDER: readonly Gate[] = [
     blind: 'a platform GLOBAL reached with no import — measured at zero occurrences over '
       + 'the 62 reported modules, and caught in one second by `tsc -p packages/core` the '
       + 'moment anyone acts on the finding.',
+  },
+  {
+    run: 'bun run test:workerd',
+    tier: 'ci',
+    seconds: 7,
+    catches: 'Durable Object semantics no bun test can express, executed inside real '
+      + 'workerd (1.20260811.1) via @cloudflare/vitest-pool-workers. Two of them are '
+      + 'defects we shipped and found only from production: `ctx.waitUntil` retains '
+      + 'nothing in an actor and its write is cancelled on reset with the exception '
+      + 'swallowed, and anything Durable Object init awaits stalls every later request '
+      + 'on that object. Both were guarded before this only by a source-text grep and an '
+      + 'AST walk — correct rules whose STATED REASON nothing re-established. Both '
+      + 'reproduce red here against the historical shape: 2ms instead of a held 700ms '
+      + 'invocation, and 703ms for a `SELECT 1`. Each polarity carries its own control, '
+      + 'so a green cannot come from a write that never happened.',
+    blind: 'everything above the platform. This tier is deliberately NOT a second home '
+      + 'for unit tests: `include` is exactly packages/*/tests/workerd and bunfig excludes '
+      + 'the same path, so the two runners cannot overlap. It also cannot see '
+      + '`ctx.facets.clone`, which needs @cloudflare/workers-types >= 5.20260804.1, nor '
+      + 'tailStream dispatch, which is absent platform-wide and was refuted as a local pin.',
+  },
+  {
+    run: 'bun run gate:policy-drift',
+    tier: 'commit',
+    seconds: 0.6,
+    catches: 'one policy number written down twice. `RETRY_BASE_MS` is declared three '
+      + 'times with three values (5s in core, 30s in the email outbox, 1s in a React '
+      + 'hook) and `RETRY_MAX_MS` three times with two, so grepping either name returns '
+      + 'a confident wrong answer. Values are folded before comparison, because five '
+      + 'minutes is written `300_000` in one file and `5 * 60 * 1000` in three others. '
+      + '12 findings over 277 named constants and 2,629 literals in a role position.',
+    blind: 'a policy held in a lowercase local, and an unnamed literal whose role words '
+      + 'only PARTIALLY match a constant — the partial-match version reported 12 and '
+      + 'every one was two unrelated decisions picking the same round number, so exact '
+      + 'is the rule and 0 is the honest count.',
   },
 ];
 
@@ -398,6 +525,26 @@ export function packageScripts() {
 }
 
 /**
+ * The paths `bun test` refuses to walk into, read from bunfig.toml rather than
+ * restated here. Without this, `bun test packages/cf-backend/` reads as
+ * claiming `tests/workerd/*.test.ts` — files bun cannot even import, since they
+ * pull `cloudflare:workers`. That is a green ladder over a suite that is not
+ * executing, which is precisely the defect this file exists to make impossible.
+ */
+const BunfigSchema = v.object({ test: v.object({ pathIgnorePatterns: v.array(v.string()) }) });
+
+export function bunIgnoredPatterns(): string[] {
+  const text = readFileSync(resolve(root, 'bunfig.toml'), 'utf8');
+  return v.parse(BunfigSchema, Bun.TOML.parse(text)).test.pathIgnorePatterns;
+}
+
+const bunIgnores = bunIgnoredPatterns().map((pattern) => new Bun.Glob(pattern));
+
+export function bunWouldSkip(path: string): boolean {
+  return bunIgnores.some((glob) => glob.match(path));
+}
+
+/**
  * Which test files a command runs. This is how monotonicity and reachability are
  * decided — comparing command text would call a gate that gained an argument a
  * hole, and would call two spellings of the same suite two different gates.
@@ -418,14 +565,23 @@ export function claims(command: string, tracked: readonly string[]): string[] {
   if (words[0] === 'node') {
     return words.filter((word) => TEST_FILE.test(word) && tracked.includes(word));
   }
-  if (words[0] !== 'bun' || words[1] !== 'test') return [];
-
-  const cwd = words.indexOf('--cwd');
-  if (cwd !== -1) {
-    const dir = words[cwd + 1];
-    if (dir === undefined) return [];
-    return tracked.filter((path) => path.startsWith(`${dir}/`));
+  // `vitest run --root R <dir>/` — the workerd layer. Resolved from the command
+  // text like every other form, so its files are monotonicity- and
+  // reachability-checked rather than exempted. The positional is a filter on
+  // top of the config's own `include`, which is the enforcing half; naming it
+  // here is what lets this resolver answer without parsing a TS config.
+  if (words[0] === 'vitest' && words[1] === 'run') {
+    const rootAt = words.indexOf('--root');
+    const base = rootAt === -1 ? undefined : words[rootAt + 1];
+    const targets = words.slice(2).filter((word, index) => !word.startsWith('-') && index + 2 !== rootAt + 1);
+    if (base === undefined || targets.length === 0) return [];
+    return tracked.filter((path) => targets.some((target) => path.startsWith(`${base}/${target}`)));
   }
+  if (words[0] !== 'bun' || words[1] !== 'test') return [];
+  // Root-relative only. `--cwd` is deliberately NOT understood: it makes bun
+  // load a bunfig.toml from that directory instead of the repo root, dropping
+  // `preload` and `pathIgnorePatterns` silently, so no gate may use it — and a
+  // gate that does claims nothing and fails as an orphan rather than passing.
 
   const targets = words.slice(2).filter((word) => !word.startsWith('-'));
   const claimed: string[] = [];
@@ -442,7 +598,28 @@ export function claims(command: string, tracked: readonly string[]): string[] {
     }
     if (tracked.includes(clean)) claimed.push(clean);
   }
-  return [...new Set(claimed)];
+  return [...new Set(claimed)].filter((path) => !bunWouldSkip(path));
+}
+
+/**
+ * The argv to spawn for a gate. `Bun.spawnSync` runs no shell, so a
+ * glob-spelled gate reaches `bun test` as a literal FILTER and matches nothing
+ * — deploy.sh's globs are expanded by bash and this runner's never were, so
+ * `bun test scripts/bench*.test.ts` at the ci tier could not run at all while
+ * `claims()` credited it with three files. A gate that cannot run is worse than
+ * a gate that cannot fail, because the second at least reports something.
+ *
+ * Expanded from the same `claims()` resolution the tier is MEASURED with, so
+ * the set a gate runs and the set it is credited with are one set by
+ * construction rather than two spellings that happen to agree. A glob matching
+ * no tracked test file is a fault and says so, never an empty pass.
+ */
+export function runnableArgv(run: string, tracked: readonly string[]): string[] {
+  const words = run.split(' ');
+  if (!words.some((word) => word.includes('*'))) return words;
+  const files = claims(run, tracked);
+  if (files.length === 0) throw new Error(`${run} — glob matched no tracked test file`);
+  return [...words.filter((word) => !word.includes('*')), ...files];
 }
 
 function printMatrix(deploy: readonly string[]): void {
@@ -539,10 +716,11 @@ if (import.meta.main) {
   );
 
   const started = performance.now();
+  const tracked = trackedTestFiles();
   for (const [index, gate] of gates.entries()) {
     console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
     const at = performance.now();
-    const proc = Bun.spawnSync(gate.run.split(' '), { cwd: root, stdout: 'inherit', stderr: 'inherit' });
+    const proc = Bun.spawnSync(runnableArgv(gate.run, tracked), { cwd: root, stdout: 'inherit', stderr: 'inherit' });
     const seconds = (performance.now() - at) / 1000;
     if (proc.exitCode === 0) {
       console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s)`);

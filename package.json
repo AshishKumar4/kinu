@@ -15,9 +15,10 @@
   ],
   "scripts": {
     "prepare": "bun scripts/ladder.ts --install-hooks",
-    "test": "bun test --cwd packages/agent-utils && bun test --cwd packages/core && bun test --cwd packages/compaction",
-    "check": "bun run lint && tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/test-utils && tsc --noEmit -p scripts/tsconfig.scripts.json && node --check packages/pc-agent/src/index.js",
-    "test:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/rules.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-swallow.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-wait-until.gate.test.ts",
+    "test": "bun test packages/agent-utils/ && bun test packages/core/ && bun test packages/compaction/",
+    "test:workerd": "vitest run --root packages/cf-backend tests/workerd/",
+    "check": "bun run lint && tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cf-backend/tests/workerd && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/test-utils && tsc --noEmit -p tests && tsc --noEmit -p scripts/tsconfig.scripts.json && node --check packages/pc-agent/src/index.js",
+    "test:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/rules.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-swallow.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-wait-until.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-ambient-git.gate.test.ts",
     "lint": "bun run test:anti-slop && oxlint",
     "deploy": "bash scripts/deploy.sh",
     "dev": "bun run --cwd packages/cf-backend start",
@@ -29,9 +30,14 @@
     "gate:duplication": "bun scripts/ast-duplication.ts",
     "gate:reachability": "bun scripts/reachability.ts",
     "gate:do-init": "bun scripts/do-init-gate.ts",
+    "gate:egress-interception": "bun scripts/egress-interception.ts",
     "gate:platform": "bun scripts/platform-catalog.ts",
     "gate:computed-style": "bun scripts/computed-style.ts",
     "gate:capability-parity": "bun scripts/capability-parity.ts",
+    "gate:policy-drift": "bun scripts/policy-drift.ts",
+    "gate:skip-ratchet": "bun scripts/skip-ratchet.ts",
+    "gate:typecheck-coverage": "bun scripts/typecheck-coverage.ts",
+    "test:eval": "bash scripts/eval-tier.sh",
     "ladder": "bun scripts/ladder.ts",
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",
     "verify:lean": "bash scripts/verify-lean.sh",
@@ -54,7 +60,8 @@
       "packages/cf-backend": {
         "entry": [
           "src/index.ts!",
-          "src/gallery.tsx!"
+          "src/gallery.tsx!",
+          "tests/**/*.test.ts"
         ]
       },
       "packages/cli-backend": {
@@ -88,6 +95,7 @@
     "puppeteer": "^24.41.0",
     "puppeteer-core": "^24.41.0",
     "typescript": "7.0.2",
+    "vitest": "^4.1.10",
     "wrangler": "^4.95.0"
   },
   "patchedDependencies": {

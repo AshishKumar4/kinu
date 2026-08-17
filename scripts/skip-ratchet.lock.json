@@ -1,0 +1,94 @@
+[
+  {
+    "key": "tests/deep-evolution.test.ts › Deep Evolution — 8 Algorithmic Challenges › scorecard and evolution summary",
+    "reason": "needs a live model: reports the 8-problem scorecard the preceding test produces. Runs in the eval tier with PROTEUS_ORIGIN + PROTEUS_TOKEN."
+  },
+  {
+    "key": "tests/deep-evolution.test.ts › Deep Evolution — 8 Algorithmic Challenges › solve 8 algorithmic problems with native tool calling",
+    "reason": "needs a live model: 8 problems with verifiable answers, the agent must write and execute code. The most expensive single test here. Runs in the eval tier."
+  },
+  {
+    "key": "tests/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 3. chat turn 1: simple math question",
+    "reason": "needs a live model: multi-turn tool calling, turn 1 of 3. Runs in the eval tier."
+  },
+  {
+    "key": "tests/evals/delegation.eval.test.ts › Delegation evals — conversion over eligible turns › the delegation rate is measured over a non-zero count of eligible turns",
+    "reason": "needs a live model: drives three fresh workspaces through the full LocalAgentSession turn spine to get three eligible turns, and measures how many converted. A mock model cannot answer 'does the agent delegate' — that IS the measurement. The scorer's own logic, including the false-zero regression where the signal was a run-event type nothing emits, is covered credential-free at packages/test-utils/tests/agent-evals.test.ts."
+  },
+  {
+    "key": "tests/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 4. chat turn 2: code execution",
+    "reason": "needs a live model: proves the agent reaches execute_tools rather than answering from memory. Runs in the eval tier."
+  },
+  {
+    "key": "tests/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 5. chat turn 3: save note to memory",
+    "reason": "needs a live model: writes the memory the reopen test then reads back. Runs in the eval tier."
+  },
+  {
+    "key": "tests/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 6. close and reopen agent — verify persistence",
+    "reason": "needs a live model: the ONLY memory-across-a-reopen evidence in the repo. Depends on the three turns above having really run. Runs in the eval tier."
+  },
+  {
+    "key": "tests/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 7. full database state summary",
+    "reason": "needs a live model: reports the end state of the lifecycle above. Runs in the eval tier."
+  },
+  {
+    "key": "tests/e2e-lifecycle.test.ts › E2E Lifecycle › 5-turn conversation with native tool calling",
+    "reason": "needs a live model: the multi-turn tool-calling evidence. Runs in the eval tier."
+  },
+  {
+    "key": "tests/e2e-lifecycle.test.ts › E2E Lifecycle › MCTS evolution",
+    "reason": "needs a live model: drives runMCTS and asserts the winner is among the persisted nodes. Superseded in strength by tests/evals/exploration.eval.test.ts, which asserts branch count and a DURABLE ranked winner rather than an in-memory winnerId; kept because it exercises the lifetime-evolution entry point rather than the agents tool."
+  },
+  {
+    "key": "tests/e2e-lifecycle.test.ts › E2E Lifecycle › evolution events fired",
+    "reason": "needs a live model: asserts the EvolutionEngine emitted events for the turns above."
+  },
+  {
+    "key": "tests/e2e-lifecycle.test.ts › E2E Lifecycle › memory has content",
+    "reason": "needs a live model: asserts evolution wrote memory/MEMORY.md."
+  },
+  {
+    "key": "tests/e2e-lifecycle.test.ts › E2E Lifecycle › persistence",
+    "reason": "needs a live model: message count and SOUL.md survive a close/reopen. Vacuous without the turns above, which is why it is not worth un-gating on its own."
+  },
+  {
+    "key": "tests/evals/exploration.eval.test.ts › Exploration evals — MCTS reached, ranked, and readable › USED: the model reaches for exploration on a task that warrants it",
+    "reason": "needs a live model BY DEFINITION: it measures whether the model reaches for the delegation tool. This is the eval whose number is the finding."
+  },
+  {
+    "key": "tests/evals/exploration.eval.test.ts › Exploration evals — MCTS reached, ranked, and readable › VISIBLE: every settle mode wrote where the Exploration reader reads",
+    "reason": "needs a live model transitively: its denominator is the search the WORKS test writes, and it must assert a NON-ZERO rootsWritten. The reader/writer agreement itself is covered credential-free at packages/test-utils/tests/agent-evals.test.ts, including both directions of the twice-shipped empty pane."
+  },
+  {
+    "key": "tests/evals/exploration.eval.test.ts › Exploration evals — MCTS reached, ranked, and readable › WORKS: a driven mcts fork branches and ranks, durably",
+    "reason": "needs a live model: an MCTS search is model calls all the way down — branch rollouts plus judge samples. The harness drives the fork so the model cannot decline, but it cannot fake the search."
+  },
+  {
+    "key": "tests/evolution-proof.test.ts › Evolution Proof › evolution artifacts exist after session 1",
+    "reason": "needs a live model: asserts session 1 produced crafted tools / patterns."
+  },
+  {
+    "key": "tests/evolution-proof.test.ts › Evolution Proof › evolution summary: compare session 1 vs session 2",
+    "reason": "needs a live model: the cross-session transfer comparison, and the only such evidence in the repo."
+  },
+  {
+    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 1, turn 1: RSA challenge (learn the pattern)",
+    "reason": "needs a live model: session 1 of the cross-session transfer proof. Runs in the eval tier."
+  },
+  {
+    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 1, turn 2: Dijkstra challenge (learn algorithm pattern)",
+    "reason": "needs a live model: session 1 of the cross-session transfer proof."
+  },
+  {
+    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 1, turn 3: cipher challenge + session reflection",
+    "reason": "needs a live model: closes session 1 and triggers session reflection."
+  },
+  {
+    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 2, turn 1: similar RSA challenge (should benefit from pattern)",
+    "reason": "needs a live model: session 2 — the half that tests whether session 1's patterns transferred."
+  },
+  {
+    "key": "tests/evolution-proof.test.ts › Evolution Proof › session 2, turn 2: similar graph challenge (should benefit from pattern)",
+    "reason": "needs a live model: session 2 of the cross-session transfer proof."
+  }
+]

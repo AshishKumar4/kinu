@@ -16,7 +16,19 @@ preload = ["./scripts/test-preload.ts"]
 #
 # tools/oxlint/anti-slop is ours and DOES run — under Node, via
 # `bun run test:anti-slop`, because oxlint's RuleTester needs Node's raw
-# transfer and throws under bun. Both exclusions are asserted by
-# scripts/ladder.test.ts, which also proves every excluded file is claimed by
-# some other runner. An exclusion nobody asserts is how coverage disappears.
-pathIgnorePatterns = ["**/external/**", "tools/oxlint/anti-slop/**"]
+# transfer and throws under bun.
+#
+# packages/*/tests/workerd is ours and DOES run — inside workerd, via
+# `bun run test:workerd`. Those files import `cloudflare:workers` and
+# `cloudflare:test`, which exist only in the Workers runtime; under bun they are
+# 2 instant errors, and `bun test --cwd packages/cf-backend` walks into them.
+# This pattern is the LOAD-BEARING HALF of the runner boundary: the other half
+# is `packages/cf-backend/vitest.config.ts`, whose `include` is exactly that
+# directory. scripts/ladder.test.ts asserts the two globs are disjoint, that
+# each selects a non-empty set, and that every excluded file is claimed by some
+# other runner. An exclusion nobody asserts is how coverage disappears.
+pathIgnorePatterns = [
+  "**/external/**",
+  "tools/oxlint/anti-slop/**",
+  "**/tests/workerd/**",
+]

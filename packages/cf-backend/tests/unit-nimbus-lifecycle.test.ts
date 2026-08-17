@@ -147,14 +147,21 @@ describe('canonical Nimbus workspace lifecycle', () => {
 
     installSandbox(harness.agent, {
       idFromName: (name: string) => name,
-      get: () => ({ async destroy() { nimbus.events.push('sandbox.destroy'); } }),
+      get: () => ({
+        // The container object owns its /workspace snapshot, so the snapshot has
+        // to go before the object that knows which R2 objects were its.
+        async discardWorkspaceSnapshot() { nimbus.events.push('sandbox.snapshot.discard'); },
+        async destroy() { nimbus.events.push('sandbox.destroy'); },
+      }),
     });
     Object.defineProperty(harness.agent, 'destroy', {
       value: async () => { nimbus.events.push('actor.destroy'); },
     });
     await harness.agent.destroyAgent(OWNER);
 
-    expect(nimbus.events).toEqual(['sandbox.destroy', 'nimbus.destroy', 'actor.destroy']);
+    expect(nimbus.events).toEqual([
+      'sandbox.snapshot.discard', 'sandbox.destroy', 'nimbus.destroy', 'actor.destroy',
+    ]);
     const recreated = createNimbusWorkspaceSandbox(
       nimbusEnvironment(nimbus),
       OWNER,
@@ -184,7 +191,10 @@ describe('canonical Nimbus workspace lifecycle', () => {
     await writeWorkspaceFiles(nimbus);
     installSandbox(harness.agent, {
       idFromName: (name: string) => name,
-      get: () => ({ async destroy() { throw new Error('Sandbox destroy failed'); } }),
+      get: () => ({
+        async discardWorkspaceSnapshot() {},
+        async destroy() { throw new Error('Sandbox destroy failed'); },
+      }),
     });
     let actorDestroyed = false;
     Object.defineProperty(harness.agent, 'destroy', {

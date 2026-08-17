@@ -543,7 +543,7 @@ export async function runLocalOutcomeEnsemble(
     return await runEnsemble(sql, {
       specs: async () => (await selectEnsembleJudges({
         specs,
-        chatSpec: resolver.normalizeSpecSync(createAgentConfigStore(sql).getModel()),
+        chatSpec: () => resolver.normalizeSpecSync(createAgentConfigStore(sql).getModel()),
         candidates: () => resolver.judgeCandidates(),
       })).specs,
       judge: (named) => localJudge(resolver, named),
@@ -574,7 +574,7 @@ export async function runLocalCorpusEval(name: string, input: {
   );
   const selection = await selectEnsembleJudges({
     specs: input.specs,
-    chatSpec,
+    chatSpec: () => chatSpec,
     candidates: () => resolver.judgeCandidates(),
   });
   const judges = selection.specs.map((named) => localJudge(resolver, named));
@@ -657,7 +657,9 @@ export async function setLocalStoredModel(name: string, spec: string): Promise<{
 }
 
 export function getLocalReasoningEffort(name: string): { effort: ReasoningEffort | null } {
-  return withLocalDb(name, (db) => ({ effort: createAgentConfigStore(makeSql(db)).getReasoningEffort() }));
+  return withLocalDb(name, (db) => ({
+    effort: tableExists(db, 'agent_config') ? createAgentConfigStore(makeSql(db)).getReasoningEffort() : null,
+  }));
 }
 
 export async function setLocalReasoningEffort(name: string, effort: ReasoningEffort): Promise<{ ok: true; effort: ReasoningEffort }> {
@@ -864,7 +866,14 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
   // directories and advances the process-generation counter on every open). A
   // listing that mutated every workspace it walked past would be wrong twice
   // over, so `writeSoul` keeps this one line current instead (identity/soul.ts).
-  const mission = identityTable
+  // `mission` was added to this table AFTER it shipped, so an older workspace
+  // does not have the column. `reconcileColumns` (identity/schema.ts:163) adds
+  // it — but only on the OPEN path, and this inspection is deliberately
+  // read-only per the note above, so it can never have run here. Ask, do not
+  // assume: three of the owner's real local workspaces reported
+  // `(error reading)` in `proteus list` because this line selected a column
+  // that only a write would have created, and the caller discarded the cause.
+  const mission = identityTable && columnSet(db, identityTable).has('mission')
     ? get<{ mission: string | null }>(db, `SELECT mission FROM ${safeIdentifier(identityTable)} LIMIT 1`)?.mission?.trim() || null
     : null;
   return {

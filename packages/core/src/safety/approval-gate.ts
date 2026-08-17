@@ -502,6 +502,21 @@ export interface ShellApprovalPolicy {
    *  tripped on this executor, so the next command of the same kind in the
    *  same place does not ask. */
   remember?(grants: readonly ApprovalGrant[]): void;
+  /**
+   * Bring `mode()` and `granted()` up to date before they are read.
+   *
+   * `mode`/`granted` are synchronous because every boundary that reaches a
+   * shell reads them inline. That is fine when the answers live in the
+   * caller's own storage, and wrong for a facet — a head, a subordinate —
+   * whose grants live in the ROOT workspace's storage, one DO away and
+   * reachable only by RPC. Without this, a facet reads its own empty
+   * `agent_config` and re-asks for consent the owner already gave.
+   *
+   * Called once per decision, before anything is read, and only where the
+   * answers are not local. Omitted for a root actor: its storage IS the
+   * source, so there is nothing to resolve.
+   */
+  resolve?(): Promise<void>;
 }
 
 /** The conservative default every gated boundary falls back to when no
@@ -572,64 +587,178 @@ export function gateExec<R>(
   return async (...args) => {
     const [command, ...rest] = args;
     const cmd = String(command);
-    const mode = policy.mode();
-    const review = afterGrants(reviewCommand(cmd, executor), policy, executor);
-    if (review.decision === 'deny') {
-      return denyResult(`Denied — ${formatApproval(review)}`);
-    }
-    if (review.decision === 'gate') {
-      if (mode === 'allow_all') {
-        console.warn(`[approval-gate] gate→allow (allow_all mode): ${formatApproval(review)}`);
-      } else {
-        // 'deny_all' never asks. Under 'strict' a connected channel gets to
-        // put the decision to the user; null means nobody is listening.
-        const outcome = mode === 'strict' && policy.requestApproval
-          ? await policy.requestApproval({ command: cmd, executor, review })
-          : null;
-        if (outcome === null) {
-          // Nobody decided. Under 'strict' that is an ABSENCE, not a refusal:
-          // if a deferral queue is wired, the action is parked on the owner
-          // and the model is told exactly that — never that it ran, and never
-          // that it was denied. 'deny_all' skips this: the owner's standing
-          // answer is already no, so there is nothing to park.
-          // The queue is consulted only here, after the interactive channel
-          // has declined to decide: when a human IS on the channel their
-          // answer is the better one, and replaying a grant they left in the
-          // queue hours ago behind their back would be worse.
-          const parked = mode === 'strict'
-            ? policy.deferrals?.park({ command: cmd, executor, review })
-            : undefined;
-          if (parked && !parked.run) return denyResult(parked.message);
-          if (!parked) {
-            // 'deny_all' is an answer the owner already gave; 'strict' with no
-            // queue and no channel is an absence. Saying "nobody to ask" under
-            // deny_all would invite the agent to keep asking.
-            return denyResult(mode === 'deny_all'
-              ? `NOT RUN — refused by standing policy (deny_all) — ${formatApproval(review)}`
-              : `NOT RUN — needs owner approval, nobody to ask — ${formatApproval(review)}`);
-          }
-          // parked.run — the owner approved this command while the agent was
-          // away and the grant has just been spent; fall through to execute.
-        } else if (!approvalGrants(outcome)) {
-          return denyResult(`Denied by the owner — ${formatApproval(review)}`);
-        } else if (outcome === 'allow_always') {
-          // Scoped to exactly what was asked: these rules, this executor.
-          policy.remember?.(gatedGrants(review, executor));
-        }
-      }
-    }
-    if (review.decision === 'warn') {
-      if (mode === 'deny_all') {
-        return denyResult(`Denied (deny_all mode) — ${formatApproval(review)}`);
-      }
-      console.warn(`[approval-gate] warn: ${formatApproval(review)}`);
-    }
+    const decision = await decideApproval(
+      { command: cmd, executor }, reviewCommand(cmd, executor), policy,
+    );
+    if (!decision.run) return denyResult(decision.message);
     return execute(cmd, ...rest);
   };
+}
+
+/**
+ * The mode/grant/channel/deferral ladder, over ANY reviewable action.
+ *
+ * Split out of {@link gateExec} because a command is not the only thing the
+ * owner is asked about. An egress request that would carry one of their
+ * secrets is the same question — mode, then standing grants, then the
+ * interactive channel, then the deferral queue — asked about a different
+ * subject. Two copies of this ladder would be two places for "strict with
+ * nobody listening" to drift into a silent allow, so there is one.
+ *
+ * `subject.command` is the human-readable action the owner is shown; for a
+ * shell boundary it is literally the command line, for another subject it is
+ * whatever names the action. Standing grants are applied here, not by the
+ * caller: a rule the owner already blessed on this executor must stop the
+ * asking no matter which boundary asked.
+ */
+export async function decideApproval(
+  subject: { readonly command: string; readonly executor: string },
+  rawReview: ApprovalResult,
+  policy: ShellApprovalPolicy,
+): Promise<{ readonly run: true } | { readonly run: false; readonly message: string }> {
+  const { command: cmd, executor } = subject;
+  // Before anything is read: a facet's answers live in its root's storage.
+  await policy.resolve?.();
+  const mode = policy.mode();
+  const review = afterGrants(rawReview, policy, executor);
+  const deny = (message: string) => ({ run: false, message }) as const;
+  if (review.decision === 'deny') {
+    return deny(`Denied — ${formatApproval(review)}`);
+  }
+  if (review.decision === 'gate') {
+    if (mode === 'allow_all') {
+      console.warn(`[approval-gate] gate→allow (allow_all mode): ${formatApproval(review)}`);
+    } else {
+      // 'deny_all' never asks. Under 'strict' a connected channel gets to
+      // put the decision to the user; null means nobody is listening.
+      const outcome = mode === 'strict' && policy.requestApproval
+        ? await policy.requestApproval({ command: cmd, executor, review })
+        : null;
+      if (outcome === null) {
+        // Nobody decided. Under 'strict' that is an ABSENCE, not a refusal:
+        // if a deferral queue is wired, the action is parked on the owner
+        // and the model is told exactly that — never that it ran, and never
+        // that it was denied. 'deny_all' skips this: the owner's standing
+        // answer is already no, so there is nothing to park.
+        // The queue is consulted only here, after the interactive channel
+        // has declined to decide: when a human IS on the channel their
+        // answer is the better one, and replaying a grant they left in the
+        // queue hours ago behind their back would be worse.
+        const parked = mode === 'strict'
+          ? policy.deferrals?.park({ command: cmd, executor, review })
+          : undefined;
+        if (parked && !parked.run) return deny(parked.message);
+        if (!parked) {
+          // 'deny_all' is an answer the owner already gave; 'strict' with no
+          // queue and no channel is an absence. Saying "nobody to ask" under
+          // deny_all would invite the agent to keep asking.
+          return deny(mode === 'deny_all'
+            ? `NOT RUN — refused by standing policy (deny_all) — ${formatApproval(review)}`
+            : `NOT RUN — needs owner approval, nobody to ask — ${formatApproval(review)}`);
+        }
+        // parked.run — the owner approved this command while the agent was
+        // away and the grant has just been spent; fall through to execute.
+      } else if (!approvalGrants(outcome)) {
+        return deny(`Denied by the owner — ${formatApproval(review)}`);
+      } else if (outcome === 'allow_always') {
+        // Scoped to exactly what was asked: these rules, this executor.
+        policy.remember?.(gatedGrants(review, executor));
+      }
+    }
+  }
+  if (review.decision === 'warn') {
+    if (mode === 'deny_all') {
+      return deny(`Denied (deny_all mode) — ${formatApproval(review)}`);
+    }
+    console.warn(`[approval-gate] warn: ${formatApproval(review)}`);
+  }
+  return { run: true };
 }
 
 /** The grants an 'always' answer to this review buys: every rule that was
  *  actually asked about, on the executor it was asked about. Nothing wider. */
 export function gatedGrants(review: ApprovalResult, executor: string): ApprovalGrant[] {
   return review.hits.filter((h) => h.decision === 'gate').map((h) => ({ rule: h.rule, executor }));
+}
+
+/** Whether every grant in `child` is also in `parent` — the invariant a facet
+ *  must satisfy. Written as a predicate, not an assertion, because it is both
+ *  the thing {@link resolveInheritedGrants} guarantees and the thing a test
+ *  and a gate check independently. */
+export function grantsAreSubset(
+  child: readonly ApprovalGrant[],
+  parent: readonly ApprovalGrant[],
+): boolean {
+  const held = new Set(parent.map(formatApprovalGrant));
+  return child.every((g) => held.has(formatApprovalGrant(g)));
+}
+
+/**
+ * The grants a facet actually holds: its root's set, or a narrowing of it.
+ *
+ * Every agent in a workspace shares one container and one set of capabilities
+ * — the ones the owner granted — or a SUBSET. Two failure modes this rules
+ * out, and both were live:
+ *
+ *   Too few. A facet's `agent_config` is its own and nobody writes grants to
+ *   it, so a head read an empty list and re-asked for consent the owner had
+ *   already given on the workspace. `own === null` means "this facet has said
+ *   nothing about its own reach", which is not the same as "it has none" —
+ *   it inherits.
+ *
+ *   Too many. A facet that recorded its own grant could otherwise out-reach
+ *   the parent it was forked from. Intersection makes that unrepresentable:
+ *   a grant the root does not hold cannot survive, whatever the facet stored.
+ */
+export function resolveInheritedGrants(source: {
+  readonly root: readonly ApprovalGrant[];
+  readonly own: readonly ApprovalGrant[] | null;
+}): ApprovalGrant[] {
+  const root = [...source.root];
+  if (source.own === null || source.own.length === 0) return root;
+  const held = new Set(root.map(formatApprovalGrant));
+  return source.own.filter((g) => held.has(formatApprovalGrant(g)));
+}
+
+/** What a facet needs fetched from its root to decide anything. */
+export interface InheritedApprovalSource {
+  /** The root workspace's standing mode and grants, over whatever transport
+   *  reaches it. Called once per decision via
+   *  {@link ShellApprovalPolicy.resolve}. */
+  fetchRoot(): Promise<{ mode: ShellApprovalMode; grants: readonly ApprovalGrant[] }>;
+  /** This facet's own narrowing, if it has ever recorded one. `null` — the
+   *  normal case — means it inherits the root's set whole. */
+  ownGrants(): readonly ApprovalGrant[] | null;
+}
+
+/**
+ * A facet's approval policy: the owner's decisions, made on the workspace,
+ * applied to an agent that is not the workspace.
+ *
+ * Deliberately carries no `remember` and no `requestApproval`. A facet has no
+ * chat surface the owner is watching and no needs-you queue of its own, and a
+ * facet that could record a grant would be a facet that can widen its own
+ * reach. Approving is the root's job; a facet only ever spends what the root
+ * already granted.
+ *
+ * Until the first {@link ShellApprovalPolicy.resolve} lands this fails CLOSED
+ * — `strict`, nothing granted — so an unreachable root narrows a facet
+ * instead of unleashing it.
+ */
+export function createInheritedApprovalPolicy(
+  source: InheritedApprovalSource,
+): ShellApprovalPolicy {
+  let mode: ShellApprovalMode = 'strict';
+  let grants: readonly ApprovalGrant[] = [];
+  return {
+    async resolve() {
+      const root = await source.fetchRoot();
+      mode = root.mode;
+      grants = resolveInheritedGrants({ root: root.grants, own: source.ownGrants() });
+    },
+    mode: () => mode,
+    granted: (grant) => grants.some(
+      (g) => g.rule === grant.rule && g.executor === grant.executor,
+    ),
+  };
 }

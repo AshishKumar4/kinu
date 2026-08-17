@@ -5,12 +5,11 @@
 
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { BUILTIN_TOOLS } from '@proteus/core';
+import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall } from '@proteus/core';
 import type { SearchNode, ReasoningEffort, JsonObject } from '@proteus/core';
 import type { WorkspaceInfo } from '@proteus/core/identity';
 import { guideFailure, type ProviderFailure } from './provider-guidance.js';
 import cliPackage from '../package.json' with { type: 'json' };
-import * as v from 'valibot';
 
 // ── Brand ────────────────────────────────────────────────────────
 
@@ -236,16 +235,23 @@ export function printSearchTree(nodes: SearchNode[]): void {
 
 // ── Tool call display (for chat) ─────────────────────────────────
 
+/**
+ * A tool call, as a person reads it: what it is doing, then the arguments that
+ * say which thing.
+ *
+ * Until the summary vocabulary was hoisted out of cf-backend this printed the
+ * raw argument VALUES, JSON-encoded, comma-joined and clipped at 70 characters
+ * — so a file edit read `edit, /a/b.ts, [{"old":"import {…` while the web chat
+ * card, from the same arguments, read `Edited b.ts — 3 replacements`. The
+ * fallback below is what the CLI had for every tool; it now applies only to
+ * MCP and crafted tools, whose argument contracts nothing knows.
+ */
 export function printToolCall(toolName: string, args: JsonObject): void {
-  const argStr = Object.entries(args)
-    .map(([, value]) => {
-      const text = v.safeParse(v.string(), value);
-      const s = text.success ? text.output : JSON.stringify(value);
-      return s.length > 60 ? s.slice(0, 57) + '...' : s;
-    })
-    .join(', ');
   console.log(`\n${DIM('  ⚙ ')}${MUTED(toolName)} ${DIM('━'.repeat(Math.max(1, 40 - toolName.length)))}`);
-  if (argStr) console.log(`${DIM('  ')}${MUTED(argStr.slice(0, 70))}`);
+  const action = describeToolCall(toolName, args);
+  if (action) console.log(`${DIM('  ')}${ACCENT(action)}`);
+  const summary = summarizeToolCall(toolName, args);
+  if (summary) console.log(`${DIM('  ')}${MUTED(summary)}`);
 }
 
 export function printToolResult(result: string): void {

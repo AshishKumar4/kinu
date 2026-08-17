@@ -93,6 +93,36 @@ export interface AttemptOutcome {
   error?: string;
 }
 
+const NonNegativeInteger = v.pipe(v.number(), v.finite(), v.integer(), v.minValue(0));
+
+/** Parsers for the two outcome shapes, beside the shapes themselves. Anything
+ *  that reads an outcome back — the validation diagnostics document, a retained
+ *  run's per-trial ledger — parses it rather than asserting it, so a retained
+ *  trial that has drifted from this contract fails loudly instead of being
+ *  silently reinterpreted. */
+export const CheckOutcomeSchema = v.strictObject({
+  id: v.pipe(v.string(), v.minLength(1)),
+  passed: v.boolean(),
+  exitCode: v.nullable(NonNegativeInteger),
+  durationMs: NonNegativeInteger,
+  output: v.string(),
+});
+
+export const AttemptOutcomeSchema = v.strictObject({
+  taskId: v.pipe(v.string(), v.minLength(1)),
+  variantId: v.pipe(v.string(), v.minLength(1)),
+  slot: v.picklist(['a', 'b']),
+  repeat: NonNegativeInteger,
+  passed: v.boolean(),
+  checks: v.array(CheckOutcomeSchema),
+  durationMs: NonNegativeInteger,
+  tokens: NonNegativeInteger,
+  modelCalls: v.optional(NonNegativeInteger),
+  peakPromptTokens: NonNegativeInteger,
+  budgetBreach: v.nullable(v.picklist(['wall-clock', 'tokens'])),
+  error: v.optional(v.string()),
+});
+
 /** Solvers mutate a prepared sandbox in place; they never score themselves. */
 export interface SolverContext {
   task: BenchTask;

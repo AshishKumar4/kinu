@@ -130,10 +130,11 @@ echo -e "${BOLD}Step 1: Required pre-deploy gates${NC}"
 run_required_gate "Strict lint and TypeScript" bun run check
 run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
 run_required_gate "Agent-utils, Core, and compaction suites" bun run test
-run_required_gate "Test-utils suite" bun test --cwd packages/test-utils
-run_required_gate "Cloudflare backend and conformance suite" bun test --cwd packages/cf-backend
-run_required_gate "CLI backend and conformance suite" bun test --cwd packages/cli-backend
-run_required_gate "Full production CLI suite" bun test --cwd packages/cli
+run_required_gate "Test-utils suite" bun test packages/test-utils/
+run_required_gate "Cloudflare backend and conformance suite" bun test packages/cf-backend/
+run_required_gate "Durable Object semantics under workerd" bun run test:workerd
+run_required_gate "CLI backend and conformance suite" bun test packages/cli-backend/
+run_required_gate "Full production CLI suite" bun test packages/cli/
 run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts
 run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts
 run_required_gate "Secret scanner self-test" bun test scripts/secret-scan.test.ts
@@ -151,17 +152,23 @@ run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
 # Its DECISION LOGIC is guarded below, though — a gate kept off the path for its
 # cost still needs its own reasoning tested, or the thing that would have caught
 # `--radius` undefined at `:root` is itself unguarded.
-run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts
+run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts
+run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts
 run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts
 run_required_gate "Gate ladder wiring" bun test scripts/ladder.test.ts
 run_required_gate "Dead code" bun run gate:dead-code
 run_required_gate "Duplicate implementations" bun run gate:duplication
 run_required_gate "Cross-backend capability parity" bun run gate:capability-parity
+run_required_gate "Duplicated policy constants" bun run gate:policy-drift
 run_required_gate "Durable Object cold start" bun run gate:do-init
 run_required_gate "Unreachable RPC surface" bun run gate:reachability
 run_required_gate "Platform fact catalog" bun run gate:platform
-run_required_gate "Local-device daemon suite" bun test --cwd packages/pc-agent
+run_required_gate "Egress interception totality" bun run gate:egress-interception
+run_required_gate "Typecheck coverage" bun run gate:typecheck-coverage
+run_required_gate "Declared skip ratchet" bun run gate:skip-ratchet
+run_required_gate "Local-device daemon suite" bun test packages/pc-agent/
 run_required_gate "Root end-to-end lifecycle suites" bun test ./tests/
+run_required_gate "Behavioural evals" bun run test:eval
 run_required_gate "Layergate conformance" bun run layergate
 run_required_gate "Layergate fault-localization matrix" bun run layergate --matrix
 run_required_gate "Lean proofs, consistency, and traceability" bun run verify:lean
