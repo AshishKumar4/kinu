@@ -172,6 +172,22 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
  * whole module exists to remove.
  */
 export function liveModelTarget(suite: string): LiveModelTarget | null {
+  // Ambient credentials are NOT consent to spend. These suites are named
+  // `*.eval.test.ts`, so a root `bun test` collects them, so the COMMIT tier
+  // collects them — and on a machine that happens to export PROTEUS_BASE_URL /
+  // PROTEUS_AUTH they fired real paid model calls from a git hook (measured:
+  // 101s and 81s for two tests) and then failed on a remote model's choices. A
+  // developer's exported credential is a fact about their shell, never a
+  // request to bill the owner's account during a commit.
+  //
+  // So a live run requires the eval tier to be DRIVING it. `PROTEUS_EVAL_LIVE`
+  // is set by scripts/eval-tier.sh and by nothing else; absent it, the suite
+  // skips exactly as it does with no credential at all — and the skip-ratchet
+  // gate still requires that skip to be declared, so the suite cannot go quiet.
+  if (process.env['PROTEUS_EVAL_LIVE'] !== '1') {
+    console.warn(`[skip] ${suite} — live evals are opt-in: run 'bun run test:eval' (PROTEUS_EVAL_LIVE=1)`);
+    return null;
+  }
   const resolved = resolveLiveModel();
   if (resolved.kind === 'misconfigured') {
     throw new Error(`${suite}: live-model environment is half-configured — ${resolved.reason}`);
