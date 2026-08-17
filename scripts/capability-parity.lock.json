@@ -36,7 +36,6 @@
   "movable packages/cf-backend/src/components/surfaces/activity-breakdown.ts",
   "movable packages/cf-backend/src/components/surfaces/plan-annotation-save.ts",
   "movable packages/cf-backend/src/components/tool-call-grouping.ts",
-  "movable packages/cf-backend/src/components/tool-call-summary.ts",
   "movable packages/cf-backend/src/components/ui/form.tsx",
   "movable packages/cf-backend/src/components/ui/score-bar.tsx",
   "movable packages/cf-backend/src/device-transport.ts",

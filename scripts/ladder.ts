@@ -158,7 +158,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts',
     tier: 'push',
     seconds: 1,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
@@ -367,6 +367,21 @@ export const LADDER: readonly Gate[] = [
       + 'the same path, so the two runners cannot overlap. It also cannot see '
       + '`ctx.facets.clone`, which needs @cloudflare/workers-types >= 5.20260804.1, nor '
       + 'tailStream dispatch, which is absent platform-wide and was refuted as a local pin.',
+  },
+  {
+    run: 'bun run gate:policy-drift',
+    tier: 'commit',
+    seconds: 0.7,
+    catches: 'one policy number written down twice. `RETRY_BASE_MS` is declared three '
+      + 'times with three values (5s in core, 30s in the email outbox, 1s in a React '
+      + 'hook) and `RETRY_MAX_MS` three times with two, so grepping either name returns '
+      + 'a confident wrong answer. Values are folded before comparison, because five '
+      + 'minutes is written `300_000` in one file and `5 * 60 * 1000` in three others. '
+      + '12 findings over 277 named constants and 2,629 literals in a role position.',
+    blind: 'a policy held in a lowercase local, and an unnamed literal whose role words '
+      + 'only PARTIALLY match a constant — the partial-match version reported 12 and '
+      + 'every one was two unrelated decisions picking the same round number, so exact '
+      + 'is the rule and 0 is the honest count.',
   },
 ];
 

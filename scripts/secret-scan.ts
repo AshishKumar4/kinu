@@ -74,6 +74,23 @@ export const PATTERNS: readonly SecretPattern[] = [
     message: 'Cloudflare-internal source reference (public repo — cite the measurement instead)',
   },
   {
+    // Proteus's OWN credentials were the one shape this scan did not cover, and
+    // they are the shape most likely to leak from this repo: `proteus tokens
+    // create` prints the value once, so it gets pasted — into a chat, a CI
+    // config, a scratch file. The precedent is already in the ledger: an
+    // OpenRouter key pasted in plaintext into a transcript has never been
+    // confirmed rotated, and it is tracked as owner-blocked because the paste
+    // is unrecoverable once it lands anywhere durable.
+    //
+    // `pta_` access token, `ptc_` CLI token, `pdt_` device token. The body is a
+    // hex block, so 16+ hex digits after the prefix distinguishes a real value
+    // from prose naming the prefix.
+    id: 'proteus-token',
+    regex: /\bp(?:ta|tc|dt)_[0-9a-f]{16,}/g,
+    benign: /<your-|\bpta_\.\.\.|…/,
+    message: 'Proteus access/CLI/device token (rotate it — a printed-once value that reached a file is compromised)',
+  },
+  {
     id: 'credentialed-url',
     regex: /(?:mongodb|postgres|mysql|redis|amqp):\/\/[^:\s]+:[^@\s]{8,}@/g,
     benign: /<your-|localhost/,

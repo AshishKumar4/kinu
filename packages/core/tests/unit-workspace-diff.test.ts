@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { execFileSync } from 'node:child_process';
+import { git, gitEnv, initRepo } from '@proteus/test-utils';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -262,17 +262,20 @@ describe('workspace diff lifecycle', () => {
 
   test('repeated git diff reads include untracked work without changing the real index', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'proteus-output-diff-'));
-    execFileSync('git', ['init', '-q'], { cwd: repo });
-    execFileSync('git', ['config', 'user.email', 'proteus@example.invalid'], { cwd: repo });
-    execFileSync('git', ['config', 'user.name', 'Proteus Test'], { cwd: repo });
+    initRepo(repo);
     writeFileSync(join(repo, 'tracked.txt'), 'before\n');
-    execFileSync('git', ['add', 'tracked.txt'], { cwd: repo });
-    execFileSync('git', ['commit', '-qm', 'seed'], { cwd: repo });
+    git(repo, 'add', 'tracked.txt');
+    git(repo, 'commit', '-qm', 'seed');
     writeFileSync(join(repo, 'tracked.txt'), 'after\n');
     writeFileSync(join(repo, 'untracked file.txt'), 'new\n');
 
+    // The shell the executor tool stands in for. It runs `git` too, so it needs
+    // the same clean environment: under a git hook the inherited GIT_DIR points
+    // the diff at the developer's checkout instead of `repo`.
     const exec = async (command: string): Promise<string> => {
-      const result = Bun.spawnSync(['bash', '-lc', command], { cwd: repo, stdout: 'pipe', stderr: 'pipe' });
+      const result = Bun.spawnSync(['bash', '-lc', command], {
+        cwd: repo, env: gitEnv(), stdout: 'pipe', stderr: 'pipe',
+      });
       const stdout = result.stdout.toString();
       const stderr = result.stderr.toString();
       if (result.exitCode === 0) return stdout || (stderr ? stderr : '(no output)');

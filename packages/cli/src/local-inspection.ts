@@ -657,7 +657,9 @@ export async function setLocalStoredModel(name: string, spec: string): Promise<{
 }
 
 export function getLocalReasoningEffort(name: string): { effort: ReasoningEffort | null } {
-  return withLocalDb(name, (db) => ({ effort: createAgentConfigStore(makeSql(db)).getReasoningEffort() }));
+  return withLocalDb(name, (db) => ({
+    effort: tableExists(db, 'agent_config') ? createAgentConfigStore(makeSql(db)).getReasoningEffort() : null,
+  }));
 }
 
 export async function setLocalReasoningEffort(name: string, effort: ReasoningEffort): Promise<{ ok: true; effort: ReasoningEffort }> {

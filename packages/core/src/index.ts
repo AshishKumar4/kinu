@@ -478,6 +478,13 @@ export { createReportCodemodeProvider } from './tools/report-codemode.js';
 // The file plane's dispatcher, shared by the native `file` tool and
 // workspace.editFile (execution/inline.ts) — see tools/file-tool.ts.
 export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './tools/file-tool.js';
+// Tool-call rendering vocabulary, shared by the web chat card and the CLI
+// transcript. It was a cf-backend component and the CLI therefore printed raw
+// argument values; see tools/tool-call-summary.ts.
+export {
+  summarizeToolCall, summarizeToolRun, describeToolCall, describeCommand,
+  isToolCallFailed, clip,
+} from './tools/tool-call-summary.js';
 export {
   clampToolResult,
   clampSerializedToolResult,

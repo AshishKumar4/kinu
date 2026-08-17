@@ -34,6 +34,7 @@
     "gate:platform": "bun scripts/platform-catalog.ts",
     "gate:computed-style": "bun scripts/computed-style.ts",
     "gate:capability-parity": "bun scripts/capability-parity.ts",
+    "gate:policy-drift": "bun scripts/policy-drift.ts",
     "ladder": "bun scripts/ladder.ts",
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",
     "verify:lean": "bash scripts/verify-lean.sh",

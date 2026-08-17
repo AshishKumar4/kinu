@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { git } from '@proteus/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { summarizeRestorePlan } from '@proteus/core';
@@ -131,13 +131,14 @@ describe('createHostCheckpoints', () => {
   test("the user's own .git repo is never snapshotted or touched", async () => {
     const { work, engine, cleanup } = setup();
     try {
-      // A real user repo in the target dir.
-      const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
-      execFileSync('git', ['init', '--quiet', '-b', 'main', work], { env });
+      // A real user repo in the target dir. `git()` clears the whole GIT_
+      // prefix, not just the config vars: a git hook exports GIT_DIR, and with
+      // it set these `cwd: work` calls read and write the developer's checkout.
+      git(work, 'init', '--quiet', '-b', 'main');
       writeFileSync(join(work, 'file.txt'), 'v1');
-      execFileSync('git', ['add', '-A'], { cwd: work, env });
-      execFileSync('git', ['-c', 'user.email=u@x', '-c', 'user.name=u', 'commit', '-q', '-m', 'user commit'], { cwd: work, env });
-      const userHeadBefore = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: work, env }).toString().trim();
+      git(work, 'add', '-A');
+      git(work, '-c', 'user.email=u@x', '-c', 'user.name=u', 'commit', '-q', '-m', 'user commit');
+      const userHeadBefore = git(work, 'rev-parse', 'HEAD').trim();
 
       engine.beginTurn({ turnId: 't', sessionId: 's' });
       const id = await engine.ensureCheckpoint(work);
@@ -146,8 +147,8 @@ describe('createHostCheckpoints', () => {
 
       // The user's repo is untouched: same HEAD, fully functional, no shadow
       // refs leaked into it.
-      expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: work, env }).toString().trim()).toBe(userHeadBefore);
-      const refs = execFileSync('git', ['for-each-ref'], { cwd: work, env }).toString();
+      expect(git(work, 'rev-parse', 'HEAD').trim()).toBe(userHeadBefore);
+      const refs = git(work, 'for-each-ref');
       expect(refs).not.toContain('refs/proteus');
       // And the snapshot itself excluded .git entirely.
       const plan = await engine.plan(work, id!);

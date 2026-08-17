@@ -19,6 +19,19 @@ const RunEventEnvelopeSchema = v.object({
   type: v.literal("run_event"),
   event: v.object({ type: v.string(), runId: v.string() }),
 });
+// The turn-start delegation nudge carries no `tool` — nothing repeated or
+// failed, so `SteeringEnvelopeSchema` below (which requires one) matches only
+// the reactive steers. Kept separate rather than loosening that one: a schema
+// that accepts both stops proving which arm fired.
+const StartNudgeEnvelopeSchema = v.object({
+  type: v.literal("run_event"),
+  event: v.object({
+    type: v.literal("turn_steering"),
+    trigger: v.literal("turn_start_no_delegation"),
+    step: v.number(),
+    converted: v.boolean(),
+  }),
+});
 const SteeringEnvelopeSchema = v.object({
   type: v.literal("run_event"),
   event: v.object({
@@ -333,7 +346,23 @@ describe("proteus exec (headless)", () => {
         const parsed = v.safeParse(RunEventEnvelopeSchema, event);
         return parsed.success ? [parsed.output.event] : [];
       });
-      expect(ledger.map((e) => e.type)).toEqual(["run_start", "turn_start", "step_finish", "turn_end", "run_end"]);
+      // `turn_steering` sits between `step_finish` and `turn_end` because
+      // `closeTurnRun` writes the turn's conditional records there. It fires
+      // deterministically in this fixture rather than incidentally: the mock
+      // model answers in one step and never delegates, which is exactly the
+      // turn-start delegation nudge's trigger. Asserted by name so a future
+      // change that stops the nudge firing fails here instead of quietly
+      // reverting the ledger to the shorter sequence.
+      expect(ledger.map((e) => e.type)).toEqual([
+        "run_start", "turn_start", "step_finish", "turn_steering", "turn_end", "run_end",
+      ]);
+      const nudges = events.flatMap((e) => {
+        const parsed = v.safeParse(StartNudgeEnvelopeSchema, e);
+        return parsed.success ? [parsed.output.event] : [];
+      });
+      expect(nudges).toEqual([{
+        type: "turn_steering", trigger: "turn_start_no_delegation", step: 0, converted: false,
+      }]);
       expect(ledger.every((e) => e.runId.length > 0)).toBe(true);
       expect(new Set(ledger.map((e) => e.runId)).size).toBe(1);
 
