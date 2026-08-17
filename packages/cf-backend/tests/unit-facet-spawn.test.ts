@@ -136,7 +136,11 @@ describe('exploration-facet spawn seam', () => {
     });
     calls.length = 0;
 
-    await head.abort('wall-clock timeout');
+    // Eviction is unconditional AND the failed notify surfaces: `abortHead`'s
+    // flags live only in the instance the eviction then discards, so a head that
+    // survives its abort is a live facet nobody is waiting for — which is why
+    // core's raceWithTimeout documents that this failure must not be absorbed.
+    await expect(head.abort('wall-clock timeout')).rejects.toThrow('abortHead exploded');
 
     expect(methods(calls)).toEqual(['abortHead', 'abortSubAgent']);
   });
@@ -192,9 +196,18 @@ describe('exploration-facet spawn seam', () => {
   });
 
   test('aborting a facet that is already gone is not an error', () => {
-    const { host, calls } = makeHost({ abortSubAgentThrows: true });
+    const { host, calls } = makeHost();
 
+    // `ctx.facets.abort` shuts down a facet if it is running and is otherwise a
+    // no-op, so "already gone" needs no tolerance at all.
     expect(() => abortExplorationFacet(host, 'branch-7')).not.toThrow();
     expect(methods(calls)).toEqual(['abortSubAgent']);
+
+    // What abortSubAgent DOES throw for is a runtime with no facet registry at
+    // all (the SDK's compatibility_date guard). Reading that as "already gone"
+    // would report every discarded facet as evicted while all of them stayed
+    // live, so it has to surface.
+    const unsupported = makeHost({ abortSubAgentThrows: true });
+    expect(() => abortExplorationFacet(unsupported.host, 'branch-7')).toThrow('facet registry gone');
   });
 });

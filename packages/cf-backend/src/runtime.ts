@@ -35,7 +35,7 @@ import {
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   decodeJsonValue,
   effortFor,
-  createAgentConfigStore, selectFastModel,
+  createAgentConfigStore, initAgentConfigTable, selectFastModel,
   type VectorStore,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
@@ -264,6 +264,14 @@ export function createCFRuntime(
   const vectorStore = buildVectorStore(env, actor);
   // Owns the semantic-index completeness markers, read by the backfill and
   // cleared by the write path when a sync fails.
+  // This factory ensures the schema of every store it opens — the memory and
+  // craft stores above do — and it reads config during construction, not only
+  // on demand. An exploration facet builds its whole head runtime on its OWN
+  // storage, which no `initWorkspaceSchema` touches, so without this every head
+  // dies on `no such table: agent_config` before its first step. These are that
+  // facet's own settings, as a subordinate facet's are its own; a head's MODEL
+  // is not read here — it arrives with the HeadInput the spawner built.
+  initAgentConfigTable(execRaw);
   const memoryConfig = createAgentConfigStore(sql);
   // One-time backfill of chunks indexed before the vector store existed.
   // Fire-and-forget (same pattern as deviceTransport.refreshStatus): bounded
@@ -343,16 +351,25 @@ export function createCFRuntime(
   if (env.Sandbox) {
     try {
       const rawHandle = adaptCloudflareSandbox(getSandbox(env.Sandbox, sandboxId, { normalizeId: true }));
-      const configStore = createAgentConfigStore(sql);
-      const handle = createRestoringSandboxHandle(rawHandle, configStore);
+      // Restoring the container belongs to whoever owns its NAME. `sandboxId` is
+      // keyed to actor.workspaceName, which for a facet — a head, a subordinate —
+      // is its PARENT's: it rides a container it does not own, and its own
+      // `workspace_backup` row is not that container's history. A facet that
+      // wrapped this handle read its own empty key and marked the container
+      // restored having restored nothing, then execed against whatever state it
+      // found — permanently, because the mark is one-shot and never retried. A
+      // facet that cannot mark the container restored cannot mark it falsely.
+      const ownsContainer = agent.name === actor.workspaceName;
+      const handle = ownsContainer
+        ? createRestoringSandboxHandle(rawHandle, createAgentConfigStore(sql))
+        : rawHandle;
       sandboxHandle = handle;
-      // The executor carries its own file view over this same (restoring) raw
-      // handle, for the file manager's sandbox pane. An unset
-      // PREVIEW_HOST_SUFFIX turns off previews alone: exec, files and the
-      // release engine keep working, and port exposure refuses with the
-      // preview-specific reason.
+      // The executor carries its own file view over this same handle, for the
+      // file manager's sandbox pane. An unset PREVIEW_HOST_SUFFIX turns off
+      // previews alone: exec, files and the release engine keep working, and
+      // port exposure refuses with the preview-specific reason.
       executionRouter.register(createSandboxExecutor(handle, previewSuffix));
-      console.log(`[proteus] SandboxExecutor registered (${previewSuffix ? `previews=*.${previewSuffix}` : "previews off — PREVIEW_HOST_SUFFIX unset"} id=${sandboxId})`);
+      console.log(`[proteus] SandboxExecutor registered (${previewSuffix ? `previews=*.${previewSuffix}` : "previews off — PREVIEW_HOST_SUFFIX unset"} id=${sandboxId} restore=${ownsContainer ? 'owner' : `deferred to ${actor.workspaceName}`})`);
     } catch (err) {
       console.warn("[proteus] Failed to register SandboxExecutor:", errorMessage(err));
       executionRouter.register(createSandboxExecutor());

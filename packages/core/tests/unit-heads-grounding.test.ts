@@ -151,6 +151,42 @@ describe('grounded head outcome scores', () => {
     expect(done.score).toBeGreaterThan(gone.score);
   });
 
+  test('a judge the provider cannot answer costs the split its grounded signal, not the split', async () => {
+    // The heads have already run and banked their findings. The shared evaluator
+    // propagates a judge FAILURE deliberately (mcts/evaluation.ts) because the
+    // MCTS engine answers one per branch under its own allSettled; this caller
+    // has no branch to fail, so an unreachable or rate-limited judge used to
+    // reject `run` and take the whole split with it — discarding both reports,
+    // the merge that would have carried them, and the `head_merge` phase that is
+    // the only durable trace a fork ran at all.
+    const { journal } = newJournal();
+    const brokenJudge: LLM = {
+      stream() { throw new Error('judge provider unreachable'); },
+      async complete(): Promise<string> { throw new Error('judge provider unreachable'); },
+    };
+    const runtime = buildRuntime({
+      reports: { a: report('h-a', { summary: 'found A' }), b: report('h-b', { summary: 'found B' }) },
+      grounding: grounding({ judge: brokenJudge, explorer: brokenJudge }),
+    });
+    const phases: string[] = [];
+    const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
+      parentHeadId: null, inheritedContext: ctx,
+      request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+      onPhase: (e) => phases.push(e.kind),
+    });
+
+    // Reaching 'merge' is the whole point: that phase is what the run-event
+    // ledger records a fork's cost and productivity from.
+    expect(phases).toEqual(['split', 'merge']);
+    expect(result.costSummary.headsWithFindings).toBe(2);
+    expect(result.mergedNarrative).toBe('merged');
+    // Each head reports the absence of a grounded verdict rather than a 0 it
+    // did not earn — its judge broke, its work did not.
+    expect(result.headScores.map((s) => s.score)).toEqual([0.5, 0.5]);
+    expect(result.headScores.map((s) => s.status)).toEqual(['completed', 'completed']);
+  });
+
   test('without a grounding seam, scores are neutral and grounded=false', async () => {
     const { journal } = newJournal();
     const runtime = buildRuntime({ reports: { a: report('h-a'), b: report('h-b') } });
@@ -197,6 +233,38 @@ describe('k-sample median merge', () => {
     expect(mergePrompts).toHaveLength(3);
     // The median-scored candidate ("mid") wins — not low, not high.
     expect(result.mergedNarrative).toBe('CAND-mid');
+  });
+
+  test('a merge judge the provider cannot answer costs the ensemble, not the merge', async () => {
+    const { journal } = newJournal();
+    const mergePrompts: string[] = [];
+    // The per-head judge answers; only the merge-narrative scorer rejects. The
+    // k syntheses are already in hand and paid for at that point, so losing the
+    // ensemble's tie-break is the honest cost — losing the merge is not. This
+    // only bites with mergeSamples > 1, which is why nothing caught it when the
+    // judge-failure catch was removed; k defaults to 1.
+    const halfBrokenJudge: LLM = {
+      async *stream() { yield ''; },
+      async complete(prompt: string) {
+        if (prompt.includes('Synthesized answer:')) throw new Error('judge provider unreachable');
+        return JSON.stringify({ score: 0.5 });
+      },
+    };
+    const runtime = buildRuntime({
+      reports: { a: report('h-a'), b: report('h-b') },
+      grounding: grounding({ judge: halfBrokenJudge, explorer: halfBrokenJudge, mergeSamples: 3 }),
+      mergeNarratives: ['CAND-a', 'CAND-b', 'CAND-c'],
+      mergePrompts,
+    });
+    const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
+      parentHeadId: null, inheritedContext: ctx,
+      request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+    });
+    // All k samples were still produced, and one of them is the merge — not an
+    // exception that discards the split and its head_merge ledger row.
+    expect(mergePrompts).toHaveLength(3);
+    expect(result.mergedNarrative).toBe('CAND-a');
   });
 
   test('ungrounded merge is n=1', async () => {

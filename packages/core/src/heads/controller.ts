@@ -114,6 +114,12 @@ export type SplitPhaseEvent =
 export const RECLAIMED_RUN_REASON =
   'Interrupted before it reported. This fork was restarted, and the branches below it are the retry.';
 
+/** The score a head carries when nothing grounded can be said about it — no
+ *  judge is wired, or the one that is could not be reached. Mid-range on
+ *  purpose: a 0 would rank a head below one that genuinely failed, and a 1
+ *  would credit work nobody scored. */
+const NO_GROUNDED_SIGNAL = 0.5;
+
 export class HeadController {
   constructor(
     private readonly runtime: HeadRuntime,
@@ -294,7 +300,22 @@ export class HeadController {
    * band, so a head whose work ran outscores one whose didn't. A non-completed
    * head gets the floor (0) without a judge call. Always returns one entry per
    * head carrying the head's text + status (the Alternate-Takes candidate); when
-   * no grounding seam is wired the score is a neutral 0.5 (no grounded signal).
+   * no grounded signal is available the score is a neutral
+   * {@link NO_GROUNDED_SIGNAL}.
+   *
+   * Settled per head, because the evaluator's judge is a PROVIDER call and this
+   * caller has no branch to fail. The MCTS engine drives the same evaluator
+   * under its own allSettled and answers a judge failure by reporting the
+   * branch failed and scoring it 0; there is no equivalent here — a rejection
+   * propagates out of `run` and takes the whole split with it, so a single 429
+   * discards findings the heads have already produced and paid for, the merge
+   * that would have carried them, and the `head_merge` ledger row that is the
+   * only durable trace a fork ran at all. The heads' work outlives its judge.
+   *
+   * A head whose judge could not be reached is therefore scored exactly as one
+   * with no grounding seam — that IS its epistemic state — and the reason is
+   * stated on the way past, because a neutral score is otherwise
+   * indistinguishable from a workspace that never wired a judge.
    */
   private async scoreHeads(
     reports: readonly HeadReport[],
@@ -303,12 +324,12 @@ export class HeadController {
   ): Promise<readonly HeadScore[]> {
     const g = mode === 'plan' ? undefined : this.runtime.grounding;
     const siblings = reports.map(headTrajectory);
-    return Promise.all(
+    const settled = await Promise.allSettled(
       reports.map(async (r, i): Promise<HeadScore> => {
         const base = { id: r.id, text: r.summary, status: r.status } as const;
         // No grounding seam → no honest outcome signal; a neutral score keeps
         // the take candidate without inventing a verdict.
-        if (!g) return { ...base, score: 0.5, grounding: 'judge' };
+        if (!g) return { ...base, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
         // A head that never completed produced no trustworthy outcome — floor it
         // without a judge call so it ranks below a head that ran.
         if (r.status !== 'completed') return { ...base, score: 0, grounding: 'judge' };
@@ -325,6 +346,15 @@ export class HeadController {
         return { ...base, score: evaluation.score, grounding: evaluation.grounding };
       }),
     );
+    return settled.map((outcome, i) => {
+      if (outcome.status === 'fulfilled') return outcome.value;
+      const r = reports[i]!;
+      // The reason itself, not its `message`: a provider error carries the url
+      // and cause that say WHICH judge broke, and AI SDK call errors routinely
+      // have an empty message.
+      console.warn(`[proteus] head ${r.id} could not be scored — reporting no grounded signal:`, outcome.reason);
+      return { id: r.id, text: r.summary, status: r.status, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
+    });
   }
 
   /**
@@ -446,10 +476,24 @@ export class HeadController {
 
     // Score each candidate synthesis with the grounded judge and keep the
     // median — the same median ensemble the MCTS evaluator uses.
+    //
+    // Settled, for the reason scoreHeads is: the judge is a PROVIDER call, and
+    // k valid syntheses are already in hand. `score === null` below already
+    // degrades to the first sample, so a judge that answers unusably costs the
+    // ensemble and not the merge — but under Promise.all a judge that REJECTS
+    // took the whole synthesis with it, discarding those samples and the
+    // head_merge row. Only reachable with mergeSamples > 1, which is why no
+    // test caught it; k defaults to 1.
     const judge = g.judge ?? g.explorer;
-    const scored = await Promise.all(
+    const settled = await Promise.allSettled(
       samples.map(async (s) => ({ sample: s, score: await scoreMergeNarrative(judge, rationale, s.narrative) })),
     );
+    const scored = settled.map((outcome, i) => {
+      if (outcome.status === 'fulfilled') return outcome.value;
+      // The reason itself, not its `message` — see scoreHeads.
+      console.warn('[proteus] a merge sample could not be scored — dropping it from the ensemble:', outcome.reason);
+      return { sample: samples[i]!, score: null };
+    });
     const usable = scored.filter((x): x is { sample: MergeOutput; score: number } => x.score !== null);
     if (usable.length === 0) return { ok: true, output: samples[0]! };
     const medianScore = median(usable.map((x) => x.score));
