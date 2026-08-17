@@ -11,11 +11,13 @@
  * environment wants the reason rendered in the pane, not a failed RPC.
  */
 
+import { normalizePath } from '@proteus/agent-utils';
 import type { VFS } from '../types/primitives.js';
 
-/** Just enough of the router to find one executor's files. */
+/** Just enough of the router to find one executor's files, and to ask that
+ *  environment where its own relative paths resolve. */
 export interface ExecutorFileLookup {
-  getProvider(name: string): { files?: VFS } | undefined;
+  getProvider(name: string): { files?: VFS; homeDir(): Promise<string> } | undefined;
 }
 
 /**
@@ -31,9 +33,7 @@ export interface EnvironmentInfo {
   /** How the environment is addressed in its own namespace, e.g. `sandbox.*`. */
   prefix: string;
   live: boolean;
-  policy: { readOnly: boolean; rootPath: string; consistency: 'durable' | 'ephemeral' | 'live-shared' };
-  /** Working directory to open the browser at, or null when unavailable. */
-  cwd: string | null;
+  policy: { readOnly: boolean; consistency: 'durable' | 'ephemeral' | 'live-shared' };
   /** Why it is listed but not reachable; null when it is. */
   reason: string | null;
 }
@@ -49,7 +49,9 @@ const CONSISTENCY: RuntimeConsistency = {
   workspace: 'durable', parent: 'durable', sandbox: 'ephemeral', nimbus: 'ephemeral', laptop: 'live-shared',
 };
 
-/** Enough of the router to list environments. */
+/** Enough of the router to list environments. Listing is a roster read and
+ *  stays synchronous: where each environment's files START is answered by the
+ *  listing call itself, which is the only call that has to resolve a path. */
 export interface ExecutorRowLookup {
   listExecutors(): Array<{
     name: string; available: boolean; configured: boolean; reason?: string;
@@ -65,8 +67,7 @@ export function listEnvironments(router: ExecutorRowLookup): EnvironmentInfo[] {
       name: exec.name,
       prefix: `${exec.name}.*`,
       live: exec.available && router.getProvider(exec.name)?.files !== undefined,
-      policy: { readOnly: false, rootPath: '/', consistency: CONSISTENCY[exec.name] ?? 'ephemeral' },
-      cwd: exec.available ? '.' : null,
+      policy: { readOnly: false, consistency: CONSISTENCY[exec.name] ?? 'ephemeral' },
       reason: exec.available ? null : (exec.reason ?? 'this environment is not available right now'),
     }));
 }
@@ -81,13 +82,37 @@ export interface DirEntry {
 
 export type ExecutorWriteResult = { ok: true } | { error: string };
 
-/** Read cap for the file viewer — past this the content is carried truncated. */
+/** Read cap for the file viewer — past this the content is carried truncated.
+ *  A `response` bound in the platform catalog's terms, applied after the whole
+ *  file is already resident, so it protects the wire and not the isolate. The
+ *  one constant in the tree that models peak resident bytes instead is
+ *  `identity/archive.ts`'s page budget. */
 const MAX_VIEWABLE_BYTES = 512 * 1024;
 
 /** The named executor's file view, or null when it has none (unknown id, or an
  *  environment with no browsable filesystem). */
 export function executorFiles(router: ExecutorFileLookup, executorId: string): VFS | null {
   return router.getProvider(executorId)?.files ?? null;
+}
+
+/**
+ * Absolute-path arithmetic for the file plane — the ONE implementation, shared
+ * by the listing here and by the browser that navigates it. `normalizePath`
+ * already resolves `.`/`..` and refuses to climb above root; these three only
+ * keep the leading slash it strips, so an absolute path stays absolute.
+ */
+export function normalizeDir(path: string): string {
+  return `/${normalizePath(path)}`;
+}
+
+/** One child of a directory, absolute. */
+export function joinDir(dir: string, name: string): string {
+  return dir === '/' ? `/${name}` : `${dir}/${name}`;
+}
+
+/** The directory above, which for the root is the root. */
+export function parentDir(dir: string): string {
+  return normalizeDir(`${dir}/..`);
 }
 
 /** Directories first, then files; alphabetical within each group. */
@@ -98,28 +123,37 @@ export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
   });
 }
 
-/** Typed directory listing — off the executor's own raw handle, so types and
- *  sizes are the environment's real ones. */
+/**
+ * Typed directory listing — off the executor's own raw handle, so types and
+ * sizes are the environment's real ones.
+ *
+ * `path` is an absolute directory in that environment's own paths, or empty
+ * for "wherever this environment starts". Either way the answer carries the
+ * ABSOLUTE directory that was listed, so the browser never has to invent one:
+ * the shape this replaced returned entries for a literal `'.'` reported as
+ * every environment's working directory, and "go up one level" computed from
+ * that token landed on the filesystem root instead of the directory above.
+ */
 export async function getExecutorFiles(
   router: ExecutorFileLookup,
   executorId: string,
   path: string,
-): Promise<{ entries?: DirEntry[]; error?: string }> {
-  const vfs = executorFiles(router, executorId);
-  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
-  const dir = path || '.';
+): Promise<{ path?: string; entries?: DirEntry[]; error?: string }> {
+  const provider = router.getProvider(executorId);
+  const vfs = provider?.files;
+  if (!provider || !vfs) return { error: `Executor "${executorId}" has no file plane` };
   try {
+    const dir = path === '' ? await provider.homeDir() : normalizeDir(path);
     const names = await vfs.readdir(dir);
     const entries: DirEntry[] = [];
     for (const name of names) {
-      const full = dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
       let type: DirEntry['type'] = 'file';
       let size: number | undefined;
-      try { const s = await vfs.stat(full); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } }
+      try { const s = await vfs.stat(joinDir(dir, name)); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } }
       catch { /* unstattable — keep the default */ }
       entries.push({ name, type, size });
     }
-    return { entries: sortDirEntries(entries) };
+    return { path: dir, entries: sortDirEntries(entries) };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
   }

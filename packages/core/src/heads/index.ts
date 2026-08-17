@@ -34,10 +34,17 @@ export {
   HeadFileChanges, formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE,
 } from './file-changes.js';
 export { initHeadsTables } from './schema.js';
-export { HeadJournal, type HeadJournalRow, type LiveHeadRun } from './journal.js';
+export {
+  HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
+} from './journal.js';
+export {
+  reconcileInterruptedForks, forkInterruptedWake,
+  FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
+} from './reconcile.js';
 export { MergeOutputSchema, DecisionSchema, type MergeOutput } from './merge-schema.js';
 export {
   HeadController,
+  RECLAIMED_RUN_REASON,
   type HeadRuntime,
   type HeadGrounding,
   type SpawnedHead,

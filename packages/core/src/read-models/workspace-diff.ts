@@ -17,8 +17,21 @@ import type { RawSqlExec } from '../types/primitives.js';
 import { computeWorkspaceDiff, parseGitDiff, type FileDiff } from '../vfs/diff.js';
 import { nanoid } from '../utils/nanoid.js';
 
-/** Files bigger than this are excluded from the snapshot — a change-set is a
- *  review surface, not a backup. */
+/**
+ * Files bigger than this are excluded from the snapshot — a change-set is a
+ * review surface, not a backup.
+ *
+ * Both numbers bound the RESPONSE, not peak resident bytes, and their product is
+ * 102.4 MiB, which sits under `worker.isolate.memory`'s published 128 MB with no
+ * margin worth the name. They read like memory protection and are not: nothing
+ * here bounds how much is resident at once. `do.isolate.reset_silent` is the
+ * mode that would end this — a retained working set past roughly 200 MiB resets
+ * the object with nothing thrown or logged — so the failure would present as an
+ * unexplained disappearance rather than as a diff that came back truncated.
+ * Left as-is: making the snapshot streaming or byte-budgeted is a behavioural
+ * change, and this comment is so the next reader does not have to rediscover the
+ * multiplication.
+ */
 const MAX_SNAPSHOT_FILE_BYTES = 256 * 1024;
 const MAX_SNAPSHOT_FILES = 400;
 const SNAPSHOT_IGNORED_DIRECTORIES = new Set([

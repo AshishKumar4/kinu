@@ -29,8 +29,13 @@ const UiMessageSchema = v.object({
 /** Widest transcript page a surface may ask for. */
 const MAX_HISTORY_LIMIT = 200;
 
+/** One workspace identifier reaches a surface: `name`, the permanent slug it is
+ *  addressed by. `workspace_identity.id` is deliberately NOT here — on the cloud
+ *  backend it is `ctx.id.toString()`, i.e. `idFromName(name)`, so showing it
+ *  beside the name showed the same fact twice; on the local backend it addresses
+ *  nothing. Its one real job is fork provenance
+ *  (`fork_lineage.source_workspace_id`), which reads the column directly. */
 export interface AgentStatus {
-  id: string;
   name: string;
   displayName: string;
   purpose: string;
@@ -68,7 +73,6 @@ export interface AgentStatusDeps {
   /** The workspace filesystem — SOUL.md is a file in it. */
   readonly vfs: VFS;
   readonly config: AgentConfigStore;
-  readonly fallbackId: string;
   readonly name: string;
   readonly displayName: string;
   readonly fallbackMessageCount: number;
@@ -100,8 +104,8 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
   try {
     const soul = (await readSoul(vfs)) ?? '';
     const purpose = summarizeSoul(soul);
-    const identity = sql<{ id: string; name: string; created_at: number }>`
-      SELECT id, name, created_at FROM workspace_identity LIMIT 1`;
+    const identity = sql<{ name: string; created_at: number }>`
+      SELECT name, created_at FROM workspace_identity LIMIT 1`;
     const scaffoldVersion = sql<{ v: number }>`
       SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`;
     const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
@@ -113,7 +117,6 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
     const tableCount = sql<{ c: number }>`
       SELECT COUNT(*) as c FROM messages WHERE session_id = 'default'`;
     return {
-      id: identity[0]?.id ?? deps.fallbackId,
       name: identity[0]?.name ?? deps.name,
       displayName: deps.displayName,
       purpose,
@@ -129,7 +132,7 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
     };
   } catch {
     return {
-      id: deps.fallbackId, name: deps.name, displayName: deps.name, purpose: '', soul: '', createdAt: 0,
+      name: deps.name, displayName: deps.name, purpose: '', soul: '', createdAt: 0,
       scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0,
       model: config.getModel(),
       reasoningEffort: config.getReasoningEffort(),

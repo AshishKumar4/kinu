@@ -45,3 +45,33 @@ export function readSearchTree(sql: SqlExecutor, rootId: string): SearchNode[] {
     FROM search_nodes WHERE root_id = ${rootId}
     ORDER BY depth, created_at`;
 }
+
+/**
+ * Every recent search's tree, in ONE projection — what a canvas showing all of
+ * a workspace's trees side by side reads.
+ *
+ * Explicitly multi-root, and that distinction is load-bearing. The bug this
+ * table's scoping exists to prevent was an UNSCOPED read whose rows the client
+ * folded into whichever root it happened to pick, silently dropping every node
+ * not reachable from it. Removing the scoping to get several trees would
+ * reintroduce exactly that. So the roots are chosen here, by recency, and every
+ * row carries the `root_id` that says which tree it belongs to — a caller folds
+ * per root and cannot accidentally fold across them.
+ *
+ * Ordered by root (newest search first), then depth and insertion inside each,
+ * so consecutive rows of one tree stay together and each tree arrives in the
+ * same order {@link readSearchTree} delivers it.
+ */
+export function readSearchForest(sql: SqlExecutor, limit = 30): SearchNode[] {
+  return sql<SearchNode>`
+    WITH roots AS (
+      SELECT root_id, MAX(created_at) AS last_write
+      FROM search_nodes WHERE root_id IS NOT NULL
+      GROUP BY root_id ORDER BY last_write DESC, root_id DESC LIMIT ${limit}
+    )
+    SELECT n.id, n.parent_id, n.root_id, n.task, n.action, n.observation, n.code_used,
+           n.code_language, n.visits, n.value, n.depth, n.status, n.msg_id,
+           n.branch_agent_key, n.created_at
+    FROM search_nodes n JOIN roots r ON r.root_id = n.root_id
+    ORDER BY r.last_write DESC, n.root_id DESC, n.depth, n.created_at`;
+}

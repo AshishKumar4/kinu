@@ -108,11 +108,41 @@ export type SplitPhaseEvent =
        *  is a query over the ledger rather than a re-read of merges by hand. */
       blindSpots: MergeResult['blindSpots'] };
 
+/** What a reclaimed run's interrupted branches are marked with. Written into
+ *  `head_journal.error_message`, which the Exploration surface shows verbatim,
+ *  so it is worded for the person reading the branch. */
+export const RECLAIMED_RUN_REASON =
+  'Interrupted before it reported. This fork was restarted, and the branches below it are the retry.';
+
 export class HeadController {
   constructor(
     private readonly runtime: HeadRuntime,
     private readonly journal: HeadJournal,
   ) {}
+
+  /**
+   * The run identity a top-level split writes under: the unfinished run for
+   * this task if there is one, else a fresh id.
+   *
+   * This is what makes a fork's identity survive a re-drive. A detached fork's
+   * background job is re-driven by evict/exit recovery, which for heads means
+   * re-running them — they are ephemeral facets with no durable checkpoint, so
+   * a resume has nothing else to continue from. Minting a fresh id there turned
+   * ONE request into one run per re-drive, up to the runner's attempt cap: the
+   * owner saw four near-identical `merged · 5 branches` rows for a single ask,
+   * each of which had really spawned and paid for its own five heads.
+   *
+   * The interrupted attempt's heads are retired under the reclaimed root rather
+   * than deleted — their partial step traces are the only record of what those
+   * branches did before the interruption, and the surface shows them as the
+   * branches that died with it.
+   */
+  private resolveTopLevelRun(task: string): HeadId {
+    const resumed = this.journal.findResumableRun(task);
+    if (!resumed) return nanoid();
+    this.journal.abandonRunning(RECLAIMED_RUN_REASON, { rootId: resumed });
+    return resumed;
+  }
 
   /**
    * Run a full split → await → merge cycle for the parent head identified
@@ -136,7 +166,7 @@ export class HeadController {
     missionLabels?: readonly string[];
     onPhase?: (event: SplitPhaseEvent) => void;
   }): Promise<MergeResult> {
-    const rootId = opts.rootId ?? opts.parentHeadId ?? nanoid();
+    const rootId = opts.rootId ?? opts.parentHeadId ?? this.resolveTopLevelRun(opts.request.rationale);
     const strategy: MergeStrategy = opts.request.mergeStrategy ?? DEFAULT_MERGE_STRATEGY;
 
     const parentBudget: HeadBudget = opts.parentBudget ?? {
@@ -154,7 +184,8 @@ export class HeadController {
     const childBudget = deriveChildBudget(parentBudget);
 
     // Anchor the run identity before spawning so its heads group under one root
-    // (top-level splits have a synthetic root with no head row of its own).
+    // (top-level splits have a synthetic root with no head row of its own). On a
+    // reclaimed run this rewrites nothing: the row already carries this task.
     this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
 
     // Spawn all children concurrently.
@@ -217,8 +248,7 @@ export class HeadController {
             artifactRefs: [],
             fileChanges: [],
             childHeadIds: [],
-            toolCalls: [],
-            steps: [],
+            toolCalls: [], stepCount: 0,
             tokenUsage: { input: 0, output: 0, total: 0 },
             wallClockMs: Date.now() - startedAt,
             errorMessage: err instanceof Error ? err.message : String(err),
@@ -488,7 +518,7 @@ function emptySplitNarrative(reports: readonly HeadReport[], rationale: string):
     lines.push(
       `- Head ${r.id}: ${r.status}${r.errorMessage ? ` — ${r.errorMessage}` : ''}`
       + ` (${r.tokenUsage.total} tokens, ${Math.round(r.wallClockMs / 100) / 10}s,`
-      + ` ${r.toolCalls.length} tool call(s), ${r.steps.length} step(s))`,
+      + ` ${r.toolCalls.length} tool call(s), ${r.stepCount} step(s))`,
     );
   }
   lines.push(

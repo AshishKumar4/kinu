@@ -43,12 +43,16 @@ export interface MCTSPhase {
 }
 
 /**
- * Live search progress. Branch failures are non-fatal by design — a failed
- * exploration or evaluation scores 0 and the search continues — so they are
- * reported rather than thrown; without them a fully degraded run is
- * indistinguishable from a healthy one that simply found nothing.
+ * What a search reports, without saying which search. Branch failures are
+ * non-fatal by design — a failed exploration or evaluation scores 0 and the
+ * search continues — so they are reported rather than thrown; without them a
+ * fully degraded run is indistinguishable from a healthy one that simply found
+ * nothing.
+ *
+ * Never consumed on its own: {@link MCTSProgressEvent} is this plus the search
+ * that raised it. Exported only so the engine can stamp that identity once.
  */
-export type MCTSProgressEvent =
+export type MCTSProgressBody =
   | {
       type: 'phase';
       phase: 'explore' | 'evaluate' | 'reflect';
@@ -77,6 +81,20 @@ export type MCTSProgressEvent =
       remainingBudget: number;
       scores: readonly number[];
     };
+
+/**
+ * Live search progress, and WHICH search produced it.
+ *
+ * A workspace runs several searches at once — two `agents(settle:'mcts')` forks
+ * detach independently — so a consumer that answered a progress event by
+ * reading "the latest tree" was reading whichever root had been written to most
+ * recently. That is a coin flip between the live searches: one search's
+ * iteration shipped another's nodes under its own phase and budget, and a
+ * backpropagation (which updates visits without inserting a node, so it never
+ * becomes "latest") was dropped as a no-change. The event names its own tree so
+ * neither is possible.
+ */
+export type MCTSProgressEvent = MCTSProgressBody & { readonly rootId: string };
 
 export interface MCTSConfig {
   /** Trusted caller mode. Direct/eval callers default to Build. */

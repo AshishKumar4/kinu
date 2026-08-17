@@ -34,7 +34,7 @@ interface ResultLike { text?: string; reasoningText?: string; steps?: ReadonlyAr
  *  results carry `.output`, matched by `toolCallId`. */
 interface ToolCallLike { toolName?: string; name?: string; input?: unknown; toolCallId?: string }
 interface ToolResultLike { toolName?: string; output?: unknown; result?: unknown; toolCallId?: string }
-interface TraceStepLike {
+export interface TraceStepLike {
   text?: string;
   reasoningText?: string;
   toolCalls?: ReadonlyArray<ToolCallLike>;
@@ -59,32 +59,51 @@ function digest<Value>(value: Value): JsonValue | undefined {
   } catch { return String(value).slice(0, DIGEST_LIMIT); }
 }
 
-/** Walk ai-SDK v6 `result.steps` into the ordered head trace: each step's prose,
- *  reasoning, and tool calls (input matched with its output by toolCallId).
- *  Steps with no text, reasoning, or tool calls are dropped (empty padding). */
-export function extractHeadSteps(steps: ReadonlyArray<TraceStepLike> | undefined): HeadStep[] {
-  if (!steps?.length) return [];
-  const out: HeadStep[] = [];
+/**
+ * One ai-SDK v6 step as the head's trace row: its prose, its reasoning, and its
+ * tool calls (input matched with its output by toolCallId). Null for a step
+ * that carries none of the three — empty padding the trace should not show.
+ *
+ * Per step, not per run, because the trace is written AS the head runs: the
+ * head hands each finished step to its journal, so a fork that is still
+ * thinking already has a readable trace. A whole-run walk would only ever run
+ * after the report, which is the state the Exploration surface used to be
+ * stuck in.
+ */
+export function toHeadStep(step: TraceStepLike): HeadStep | null {
+  const calls = Array.isArray(step.toolCalls) ? step.toolCalls : [];
+  const results = Array.isArray(step.toolResults) ? step.toolResults : [];
+  const toolCalls = calls.map((c, i) => {
+    const match = c.toolCallId
+      ? results.find((r) => r.toolCallId === c.toolCallId)
+      : results[i];
+    const output = match?.output ?? match?.result;
+    return {
+      name: String(c.toolName ?? c.name ?? "?"),
+      input: digest(c.input),
+      output: output === undefined ? undefined : digest(output),
+    };
+  });
+  const text = step.text?.trim() ?? "";
+  const reasoning = step.reasoningText?.trim() || undefined;
+  if (!text && !reasoning && toolCalls.length === 0) return null;
+  return { text, reasoning, toolCalls };
+}
+
+/**
+ * The whole run's trace, for a reader that has a finished result rather than
+ * a live head: every step that carried prose, reasoning or a tool call, in
+ * order. `toHeadStep` is the live path and this is the retrospective one, so
+ * a report reconstructed after the fact reads the same as one streamed.
+ */
+export function extractHeadSteps(steps?: ReadonlyArray<TraceStepLike>): HeadStep[] {
+  if (!Array.isArray(steps)) return [];
+  const trace: HeadStep[] = [];
   for (const step of steps) {
-    const calls = Array.isArray(step.toolCalls) ? step.toolCalls : [];
-    const results = Array.isArray(step.toolResults) ? step.toolResults : [];
-    const toolCalls = calls.map((c, i) => {
-      const match = c.toolCallId
-        ? results.find((r) => r.toolCallId === c.toolCallId)
-        : results[i];
-      const output = match?.output ?? match?.result;
-      return {
-        name: String(c.toolName ?? c.name ?? "?"),
-        input: digest(c.input),
-        output: output === undefined ? undefined : digest(output),
-      };
-    });
-    const text = step.text?.trim() ?? "";
-    const reasoning = step.reasoningText?.trim() || undefined;
-    if (!text && !reasoning && toolCalls.length === 0) continue;
-    out.push({ text, reasoning, toolCalls });
+    const row = toHeadStep(step);
+    if (row) trace.push(row);
   }
-  return out;
+  return trace;
 }
 
 /** The head's real final answer: the last text-bearing step (not just the last

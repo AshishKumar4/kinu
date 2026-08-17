@@ -21,7 +21,7 @@ import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json.j
 /** The four things the control plane asks of a running job registry —
  *  BackgroundJobRunner's public surface, named at the width this plane uses. */
 export interface BackgroundJobControl {
-  cancel(jobId: string): boolean;
+  cancel(jobId: string): Promise<boolean>;
   cancelRunning(): string[];
   create(kind: string, input: JsonValue, mode: WorkMode, controller: AbortController): string;
   detach(jobId: string, kind: string, promise: Promise<JsonValue | undefined>): void;
@@ -49,10 +49,12 @@ export function listBackgroundJobs(jobs: BackgroundJobStore, limit = 20): Backgr
 }
 
 /** Hard-cancel a running job: abort the underlying work (its merged
- *  AbortSignal) and mark it cancelled. The detach fiber sees 'cancelled' and
- *  won't relabel the abort rejection or wake the agent. */
-export function cancelBackgroundJob(jobRunner: BackgroundJobControl, jobId: string) {
-  return { ok: jobRunner.cancel(jobId) };
+ *  AbortSignal), mark it cancelled, and wake the agent so it stops waiting on
+ *  a result that will never arrive. Awaited, because the wake is part of the
+ *  cancel: an operator who is told "cancelled" while the agent still believes
+ *  the job is in flight is exactly the split this closed. */
+export async function cancelBackgroundJob(jobRunner: BackgroundJobControl, jobId: string) {
+  return { ok: await jobRunner.cancel(jobId) };
 }
 
 /** Remove a settled job from the registry (an operator dismiss). */
