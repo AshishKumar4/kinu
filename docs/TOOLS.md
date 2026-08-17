@@ -26,6 +26,46 @@ action of `agents`.
 | `web` | Live web access — `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
 | `report` | A subordinate's progress spine back to its orchestrator — `progress \| completed \| blocked` |
 
+### The reach axis — declared, not derived
+
+How the model reaches a capability is a **declared property** of that
+capability, in `TOOL_REACH` (`packages/core/src/tools/registry.ts`):
+
+```ts
+report: { native: true,  codemode: 'report' }   // both surfaces
+run:    { native: true,  codemode: 'workspace' } // native, plus a namespace it does not own
+release:{ native: false, codemode: 'release' }   // codemode only
+execute_tools: { native: true, codemode: null }  // native only — it IS the sandbox
+```
+
+`codemode` is a namespace *name* rather than a boolean because it is not always
+the capability's own name: `run` and `file` are reached inside the sandbox
+through the shared `workspace` primitives they already dispatch into, so they
+own no namespace. A capability owns its namespace exactly when `codemode`
+equals its own key.
+
+Four things read the declaration, which is what stops the surfaces disagreeing:
+
+| Reader | What it uses the declaration for |
+| --- | --- |
+| `BuiltinToolName` (a derived type) | `BUILTIN_TOOL_SPECS` / `BUILTIN_TOOL_DESCRIPTIONS` cannot compile without an entry for a newly-native capability, and `BUILTIN_TOOLS` cannot list one the declaration does not call native |
+| every `*-codemode.ts` factory | takes its provider `name` straight from the table, so a namespace cannot exist for a capability the table gives none, and cannot be spelled differently — deleting `report`'s namespace from the table makes `report-codemode.ts` fail to compile |
+| `explainNativeToolReferenceError` | tells the model where the capability actually is when it reaches for a native tool name inside the sandbox. This was previously a hardcoded `name === 'run'` branch, with the other seven told they were "not reachable from inside execute_tools" — false for all of them |
+| `getToolDescriptions` (cf) | reports it to the Tools panel instead of guessing `nativeNames.has(name) ? 'native' : 'codemode'` |
+
+**Reach is not permission.** What a given actor gets is reach ∩ the deps its
+backend wires (`actorActiveTools`, and each tool's dep gate in
+`buildBuiltinTools`). Those are two facts and the UI receives them as two
+fields — `exposure` (declared) and `wired` (this actor). The old single guessed
+word could not express "this agent has it on neither surface", so `report`, the
+one dep-gated builtin, rendered as codemode-only on an orchestrator — which is
+the report *sink* and has it on no surface at all.
+
+Adding a `native` row grows the standing 8-tool surface. That is a decision, not
+a side effect: `packages/core/tests/unit-tool-reach.test.ts` pins the native set
+*and* the count, and asserts that every declared namespace has a factory
+producing exactly that name with at least one member.
+
 Two capabilities that used to be top-level tools are gone from this list on
 purpose, with their machinery intact and reachable from `execute_tools`
 instead — neither earned a standing choice on every turn:
@@ -124,12 +164,29 @@ the deps a backend wires (`agentsActionsFor`).
 
 Delegation is **one ladder keyed on lifetime**, because lifetime is the only
 axis the model actually has to decide on. The system prompt's `## Delegation`
-section (`packages/core/src/prompt.ts`) renders it, with both rung triggers
-pulled verbatim from `BUILTIN_TOOL_SPECS` so `registry.ts` stays the single
-source:
+section (`packages/core/src/prompt.ts`) indexes the rungs and carries the
+operational doctrine no schema does; each rung's *triggers* live in
+`BUILTIN_TOOL_SPECS` (`registry.ts`, the single source) and reach the model
+through the `agents` schema description, which providers weight for selection.
 
-0. **Do it yourself** — a single short coherent change. Naming the zeroth rung
-   is what makes "delegate" a decision rather than a reflex.
+The section opens on a **default**, not on a choice: *"Delegate once the shape
+of the work is settled: naming the parts is yours, running them is theirs."*
+The three exemptions — a single coherent change in one file, a direct answer
+that needs no change, a command the user asked you to run — come last, and are
+stated as things to *do*.
+
+That ordering is the point, and it replaced a first bullet reading *"Do it
+yourself — a single short coherent change"* (2026-08-17). Naming the zeroth
+rung first made the section a *classification*, and the correct classification
+of "I am not sure" is to do it alone — so every ambiguous turn failed closed:
+the doctrine converted **0%** of eligible turns where the mechanical splice in
+`orchestrator/turn-steering.ts` converted 24%. An exemption list fails the
+other way. The same file now also states the shape test at **step 0** of a
+session's first ask (`turn_start_no_delegation`), because the 25-step steer
+beside it can only ever be recovery from a shape already chosen serially.
+
+The rungs themselves:
+
 1. **No agent at all** — for bulk text that needs no tools, slice it and
    `llm.query` each slice inside `execute_tools`. Rendered only where the RLM
    provider is actually wired, and weight-ordered here because it is the
@@ -326,6 +383,55 @@ Node adapter (`createNodeExecuteToolFactory` in `@proteus/cli-backend`). If
 neither is wired, `execute_tools` still registers but returns a sharp
 "not configured" error rather than quietly compiling code with `new Function()`,
 which would break in a V8 isolate anyway.
+
+### One docstring, both backends
+
+`execute_tools`' description is composed once, by
+`renderExecuteToolsDescription(typeBlock)` in the registry: the registry's own
+spec for the tool, then the two standing facts about the sandbox, then the
+TypeScript declaration of every namespace it binds. Both backends call it —
+CF passes `@cloudflare/codemode`'s `{{types}}` placeholder and lets
+`createCodeTool` substitute (it can generate a declaration from a tool's input
+schema, which the CLI cannot); the CLI joins its providers' declared `types`.
+
+This is worth stating because both halves were previously missing, in opposite
+directions. CF passed **no** description to `createCodeTool`, so production
+shipped the vendor's generic `"Execute code to achieve a goal."` and none of
+`BUILTIN_TOOL_SPECS.execute_tools` — no when-to-use, no `workspace.*` doctrine,
+no returns — with a worked example calling `codemode.searchWeb({...})`, a shape
+`craftedDispatcherEntry` is written to throw on. The CLI passed the spec and
+discarded every provider's `types`, so its model was handed `memory.*`,
+`tasks.*`, `agents.*`, `web.*` and `llm.*` as live callables and told about
+none of them.
+
+Every capability provider therefore declares its own `types`. The last one that
+did not was `web`, and codemode generated `search: (input: SearchInput) =>
+Promise<SearchOutput>` from its absent input schema — an object-argument
+signature beside a member description stating the positional shape, so a model
+following the declared type searched for the literal `"[object Object]"`.
+
+### The crafted-tool preamble reaches every code shape
+
+Crafted tools are callable as `tools.<name>` because `PreambleCraftedExecutor`
+splices a `const tools = { … }` preamble into the model's program before the
+sandbox runs it — that is what makes a tool crafted in step 1 callable in step 2
+of the same turn. The splice used to be a regex against the head of
+`async (...) => {` on the model's **raw** code, and it dropped the preamble
+silently when the code did not have that head. A bare statement body never does
+— and a bare statement body is what this tool's own worked example teaches, and
+what codemode itself wraps for you (`normalizeCode`, called later inside
+`DynamicWorkerExecutor`). So on those calls every `tools.<name>` was
+`undefined`, with nothing naming why.
+
+`injectPreamble` now normalizes first and wraps rather than splices:
+`async () => { const tools = {…}; return await (<normalized>)(); }`. The
+namespaces are `const`s in the scope enclosing the evaluated arrow, so the
+model's code still closes over `workspace`, `memory`, `agents` and the rest, and
+now over `tools` as well. `normalizeCode` is idempotent, so codemode
+re-normalizing the wrapper is a no-op. Statements, a trailing expression, a
+concise arrow and a block arrow are all equally correct now —
+`packages/cf-backend/tests/unit-crafted-injection.test.ts` runs the injected
+program for each shape.
 
 ## file — action reference
 

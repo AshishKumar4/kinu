@@ -30,6 +30,22 @@ bash scripts/setup-worktree.sh           # prepare a git worktree (see below)
 `bun run check` runs the strict lint gate before TypeScript. All anti-slop rules are
 errors, warnings fail the gate, and unused disable directives are errors.
 
+The anti-slop plugin is **vendored**, not a dependency: upstream
+[dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) is `private: true` and publishes no
+npm package. `tools/oxlint/anti-slop/upstream.json` pins the upstream commit and a digest per
+vendored file, and `drift.test.ts` fails naming any file that diverged. Three rules are
+deliberately stronger than upstream and are declared there with their reason; changing one fails
+the gate rather than passing as a sync. To take a newer upstream:
+
+```bash
+git clone https://github.com/dmmulroy/anti-slop /tmp/anti-slop
+# merge upstream's rules/ and src/rules/*.test.ts into tools/oxlint/anti-slop/, keeping the
+# declared local deltas, then re-pin:
+ANTI_SLOP_UPSTREAM=/tmp/anti-slop node --experimental-strip-types \
+  tools/oxlint/anti-slop/drift.test.ts --update
+bun run test:anti-slop
+```
+
 ## Working In A Git Worktree
 
 A fresh worktree has no `node_modules`. **Run `bash scripts/setup-worktree.sh` in
@@ -151,7 +167,9 @@ available bindings. `getProviders()` filters to available-only for `createExecut
   own workspace, skills, actions, channels and scheduled tasks unused
 - `getModel()` resolves from `agent_config` table, default: `@cf/deepseek-ai/deepseek-v4-pro-0813` (`DEFAULT_WORKERS_AI_MODEL_ID` in `@proteus/core`)
 - `getTools()` builds the 8-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`): `execute_tools`, `run`, `file`, `agents`, `memory`, `tasks`, `web`, `report`; results are cached per CraftStore version
+- **How the model reaches a capability is DECLARED, not derived**: `TOOL_REACH` in `core/src/tools/registry.ts` gives each capability `{ native, codemode }`, where `codemode` is the sandbox NAMESPACE (not a boolean — `run` and `file` reach the sandbox through the shared `workspace` primitives, so they own no namespace). `BuiltinToolName` is derived from it, every `*-codemode.ts` factory takes its provider `name` from it, `explainNativeToolReferenceError` reads it to tell the model where a capability actually is, and `getToolDescriptions` reports it instead of guessing from ToolSet keys. Reach is not permission: what an actor gets is reach ∩ its wired deps, and `getToolDescriptions` reports those two facts separately (`exposure` + `wired`). Adding a native row grows the 8-tool surface, which `core/tests/unit-tool-reach.test.ts` pins by both name set and count
 - `agents`, `web`, and `report` are dependency-gated native builtins. `report` appears only on a subordinate's assigned turn, while the `agents` action schema is derived from the actor's wired fork/team/peer capabilities. Release is codemode-only and mechanically omitted in Plan mode. See [docs/TOOLS.md](docs/TOOLS.md)
+- `execute_tools`' docstring is composed ONCE, in `registry.renderExecuteToolsDescription(typeBlock)`, and both backends use it: CF passes `@cloudflare/codemode`'s `{{types}}` placeholder and lets `createCodeTool` substitute; the CLI joins its providers' declared `types`. Do not let either backend describe this tool on its own — CF used to ship the vendor's generic `DEFAULT_DESCRIPTION` (none of the registry spec reached the model, and its worked example named a `codemode.<name>` call the dispatcher throws on) while the CLI shipped the spec and discarded every namespace declaration
 - `agents` is the ONE delegation surface (`fork | staff | ask | send | reply | list | dismiss`), and it is projected into the codemode sandbox as the `agents.*` namespace over the same dispatch — so a script can delegate with ordinary control flow. Do not reintroduce `think` / `team` / `peers` as separate tools
 - `memory` is the ONE durable-state surface (`save | search | sessions` prose, `remember | recall | forget` keyed facts — the last three gated on the FactsStore dep) and `web` the ONE live-web surface (`search | fetch`). Prose versus keyed rows is OUR storage shape, and discovery versus retrieval is one capability used as a pair: neither is a tool choice the model should have to make. Do not reintroduce `fact` / `web_search` / `web_fetch`
 - `file` is the ONE file plane (`read | edit | write`) over the same workspace filesystem `run` and `execute_tools` address — do not split it into separate `read`/`write`/`edit` tools, and do not add a second filesystem path for it. Its load-bearing property is that an `edit` whose `old_text` is absent or repeated FAILS naming the problem, and that `edit`/overwriting `write` require the file to have been read first. Both are locked by the `file-plane` layergate layer; losing either is what the `file-plane/edits-land-blind` fault models

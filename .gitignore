@@ -56,3 +56,8 @@ CC-CORPUS-*.md
 
 # Preserved harbor job artifacts (raw trial evidence, not source)
 /bench-artifacts/
+
+# Cloudflare-internal research never belongs in a public repo. Nimbus kept its
+# dossiers under this path, compiled from internal source, and only their
+# citations escaped — into a shipped production constant.
+/docs/research/
