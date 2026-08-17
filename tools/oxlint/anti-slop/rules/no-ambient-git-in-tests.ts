@@ -44,7 +44,28 @@ const GIT_SPAWNERS: ReadonlySet<string> = new Set([
 	"spawnSync",
 ]);
 
-const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
+/**
+ * What counts as test code. Two independent shapes, because either alone leaves
+ * a hole:
+ *
+ *   a `.test.` / `.eval.` / `.spec.` segment in the basename, and
+ *   anything under a `tests/`, `test/` or `__tests__/` directory.
+ *
+ * `.eval.` is here before a single eval file exists, on report from two peers
+ * building that tier: `vitest-evals` suites are conventionally `*.eval.ts` under
+ * their own config so they do not run on every `bun test`, and agent evals
+ * copy fixtures into an isolated worktree PER TASK — which is a git spawn, in a
+ * file a `.test.` pattern would never have looked at.
+ *
+ * The first version of this rule matched `.test.` only, and its gate scanned
+ * `packages` while `bun run lint` scanned the repo. That gap held three real
+ * sites. The durable form of that lesson is not "check your denominator" but:
+ * THE SET A GATE MEASURES AND THE SET IT GOVERNS MUST BE THE SAME SET, AND THAT
+ * EQUALITY HAS TO BE THE ASSERTION. Widening here, and widening the gate's live
+ * scan to `.`, is that equality — so a directory convention nobody has adopted
+ * yet cannot open the hole again.
+ */
+export const TEST_FILE = /(^|\/)(tests?|__tests__)\/|\.(test|eval|spec)\.[cm]?[jt]sx?$/;
 
 /** The first argument's literal string, for the two shapes a spawn takes it in:
  *  `spawn("git", […])` and `spawn(["git", …])`. */

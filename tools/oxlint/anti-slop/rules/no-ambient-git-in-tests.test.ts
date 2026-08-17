@@ -16,6 +16,10 @@ tester.run("anti-slop/no-ambient-git-in-tests", noAmbientGitInTestsRule, {
     // Production code shelling out to git runs in a workspace the user chose, where inheriting the
     // ambient repository is usually the point.
     { code: "execFileSync('git', ['status'], { cwd: repo });", filename: production },
+    // `contest.ts` and `latest.ts` are not tests; the directory segment has to be
+    // a whole path component.
+    { code: "execFileSync('git', ['status'], { cwd: repo });", filename: "packages/core/src/contests/run.ts" },
+    { code: "execFileSync('git', ['status'], { cwd: repo });", filename: "packages/core/src/evaluate.ts" },
     // The remedy.
     { code: "git(repo, 'commit', '-qm', 'seed');", filename: test },
     { code: "initRepo(repo);", filename: test },
@@ -56,6 +60,16 @@ tester.run("anti-slop/no-ambient-git-in-tests", noAmbientGitInTestsRule, {
     // `.test.tsx`, `.test.mts` and friends are test files too.
     { code: "execFileSync('git', ['log'], { cwd: repo });", filename: "a/b.test.tsx", errors: [error] },
     { code: "execFileSync('git', ['log'], { cwd: repo });", filename: "a/b.test.mts", errors: [error] },
+    // The eval tier, which does not exist yet: `vitest-evals` suites are
+    // conventionally `*.eval.ts` under their own config, and agent evals copy a
+    // fixture into an isolated worktree per task — a git spawn in a file a
+    // `.test.` pattern would never have looked at.
+    { code: "execFileSync('git', ['worktree', 'add', dir], { cwd: repo });", filename: "tests/evals/agent.eval.ts", errors: [error] },
+    { code: "spawnSync(['git', 'clone', url]);", filename: "a/b.spec.ts", errors: [error] },
+    // A fixture under a tests/ directory, whatever it is called.
+    { code: "execFileSync('git', ['init']);", filename: "packages/core/tests/helpers/repo.ts", errors: [error] },
+    { code: "execFileSync('git', ['init']);", filename: "packages/cf-backend/tests/fixtures/seed.ts", errors: [error] },
+    { code: "execFileSync('git', ['init']);", filename: "a/__tests__/helper.ts", errors: [error] },
     // A computed `env` key is not an `env` option the reader can see.
     { code: "execFileSync('git', ['log'], { [key]: gitEnv() });", filename: test, errors: [error] },
   ],

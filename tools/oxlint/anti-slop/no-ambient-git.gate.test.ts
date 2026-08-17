@@ -16,6 +16,8 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { TEST_FILE } from "./rules/no-ambient-git-in-tests.ts";
+
 const repoRoot = process.cwd();
 
 type Diagnostic = { readonly code?: string; readonly filename?: string };
@@ -122,9 +124,11 @@ function corpus(): { readonly testFiles: number; readonly remedyExports: readonl
     maxBuffer: 64 * 1024 * 1024,
   });
   assert.equal(tracked.status, 0, "git ls-files failed; the corpus cannot be counted");
-  const testFiles = tracked.stdout
-    .split("\n")
-    .filter((file) => /\.test\.[cm]?[jt]sx?$/.test(file)).length;
+  // The rule's OWN pattern, imported rather than restated. A copy here would be
+  // free to drift narrower than the rule, and then this count would certify a
+  // population the rule does not govern — the same defect, one level up, and the
+  // one that already hid three sites in scripts/.
+  const testFiles = tracked.stdout.split("\n").filter((file) => TEST_FILE.test(file)).length;
 
   const helper = join(repoRoot, "packages/test-utils/src/git.ts");
   const source = readFileSync(helper, "utf8");
