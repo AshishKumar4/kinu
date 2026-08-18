@@ -385,6 +385,34 @@ describe('the hooks run the tiers they claim to', () => {
     }
   });
 
+  /**
+   * `commit-msg` is not a tier and cannot be one: every tier takes no argument,
+   * and this hook carries the path of the message git is about to write. So it is
+   * held to a different, stronger assertion — that it runs the SAME program the
+   * ladder declares. That equality is what stops it becoming the fifth list the
+   * two tests above exist to prevent.
+   */
+  const PAYLOAD_HOOKS = {
+    'commit-msg': 'bun run gate:commit-message',
+  };
+
+  test('the payload hook runs exactly the program its ladder gate runs', () => {
+    const scripts = packageScripts();
+    for (const [name, gate] of Object.entries(PAYLOAD_HOOKS)) {
+      const path = resolve(root, HOOKS_DIR, name);
+      expect(statSync(path).mode & 0o111).toBeGreaterThan(0);
+      const declared = LADDER.find((entry) => entry.run === gate);
+      expect(declared?.tier).toBe('commit');
+      // `bun run gate:commit-message` resolves to `bun scripts/commit-hygiene.ts`,
+      // and the hook must invoke that same program with git's message path
+      // appended. Comparing the resolved body rather than the script NAME is what
+      // makes a divergence impossible: renaming the program breaks this.
+      const program = scripts[gate.split(' ')[2] ?? ''] ?? '';
+      expect(program).toMatch(/^bun scripts\/\S+\.ts$/);
+      expect(readFileSync(path, 'utf8')).toContain(`exec ${program} "$1"`);
+    }
+  });
+
   test('the installer writes a RELATIVE hooks path', () => {
     // The value git had was an absolute path to the main checkout's empty
     // `.git/hooks`, so all 42 worktrees resolved to one directory with no hooks
