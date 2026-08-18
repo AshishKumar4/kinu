@@ -28,7 +28,15 @@ import type {
   CarrySuppression, Floor, MeasuredValue, Objective, ObjectiveDirection, PublicationState,
 } from './objective';
 
-/** What one node is. */
+/**
+ * What one node is.
+ *
+ * A TAGGED axis value ({@link SwarmUnitSetting}), because `trajectory` carries a
+ * parameter the other three cannot: only an agent node has a CONVERSATION, so only
+ * `trajectory` can be asked whether it starts from the caller's. `SWARM_UNITS`
+ * remains the axis's value set — the tags ARE the values, exactly as the note on
+ * {@link SwarmConfig.score} records for `SWARM_SCORES`.
+ */
 export const SWARM_UNITS = ['step', 'answer', 'trajectory', 'generator'] as const;
 export type SwarmUnit = (typeof SWARM_UNITS)[number];
 
@@ -142,11 +150,50 @@ export type SwarmCarrySetting =
   | { readonly kind: 'artifacts'; readonly threshold: number };
 
 /**
- * The rule the two types above instantiate, and its ONE honest exception.
+ * The `unit` axis, tagged — and the home of the CALLER-CONTEXT question.
+ *
+ * `inherit` says whether a node starts from the CALLER'S completed turns or from
+ * nothing. It lives on `trajectory` and nowhere else because of the rule below: a
+ * `step`, an `answer` and a `generator` have no conversation to start FROM, so on
+ * those three the parameter would have no meaning to be absent from. This is the
+ * distinction the delegation ladder spells as the difference between an ephemeral
+ * copy running on the caller's own recent turns and a helper starting blank
+ * (`tools/registry.ts` DELEGATION_INHERITANCE), recorded here as what it is: a
+ * property of what one node IS.
+ *
+ * NOT {@link BranchProposal.inherit}, which is a different question with a different
+ * arbiter. That one is per-branch `decorrelate` — do this node's CHILDREN inherit
+ * THIS node's accumulated context — and §8.4 validates it against the search's
+ * `decorrelate`. This one is the caller-to-node edge and is fixed for the whole run.
+ *
+ * DECLARING IT IS NOT OFFERING IT. §8.6 blocks `unit:'trajectory'` outright —
+ * "unblocked by per-node workspace isolation, and by nothing else" — because nodes
+ * share one workspace and a node cannot be graded on what it changed when every node
+ * changed the same tree. The value is declared so the surface can REFUSE the blocked
+ * shape by name and say what would unblock it, which is §8.6's own remedy for the
+ * defect it measured: models correctly compose `unit:'trajectory'` for the task, the
+ * design blocks it, and nothing on the surface said so (`agent-trajectory-search`,
+ * 18%). A blocked composition documented in a design note and absent from the
+ * surface is the third instance of that class the specification names.
+ */
+export type SwarmUnitSetting =
+  | { readonly kind: 'step' }
+  | { readonly kind: 'answer' }
+  | { readonly kind: 'generator' }
+  | {
+      readonly kind: 'trajectory';
+      /** Whether this node starts from the caller's completed turns. REQUIRED here
+       *  and unrepresentable elsewhere, so the refusal always has its input. */
+      readonly inherit: boolean;
+    };
+
+/**
+ * The rule the three types above instantiate, and its ONE honest exception.
  *
  * **Where a parameter belongs to exactly one axis value, it lives ON that value.**
- * Applied exhaustively: `samples` to `score:'judge'`, and the admission thresholds to
- * `carry:'reflections'`/`'artifacts'`.
+ * Applied exhaustively: `samples` to `score:'judge'`, the admission thresholds to
+ * `carry:'reflections'`/`'artifacts'`, and `inherit` to `unit:'trajectory'` — the only
+ * unit that has a conversation to start from.
  *
  * **Where a parameter belongs to a REGION of values it cannot be tagged, and then its
  * applicability condition must be CHECKED rather than assumed.** `pruneThreshold` and
@@ -164,7 +211,12 @@ export type SwarmCarrySetting =
  * there is one definition of legal.
  */
 export interface SwarmConfig {
-  readonly unit: SwarmUnit;
+  /**
+   * What one node is. TAGGED for the same reason {@link score} is: `trajectory`
+   * carries the caller-context parameter and the other three have no conversation for
+   * it to describe. See {@link SwarmUnitSetting}.
+   */
+  readonly unit: SwarmUnitSetting;
   readonly observe: SwarmObserve;
   readonly expand: SwarmExpand;
   readonly decorrelate: SwarmDecorrelate;
@@ -422,7 +474,7 @@ export function isPresetPoint(row: SwarmPresetRow): row is SwarmPresetPoint {
 export const SWARM_PRESET_POINTS = {
   ideate: {
     config: {
-      unit: 'answer', observe: 'none', expand: 'sample', decorrelate: 'angles',
+      unit: { kind: 'answer' }, observe: 'none', expand: 'sample', decorrelate: 'angles',
       score: { kind: 'none' }, advance: 'none', carry: { kind: 'none' },
     },
     // Depth is one BY CONSTRUCTION rather than by choice: `advance:'none'` means there is no
@@ -442,7 +494,7 @@ export const SWARM_PRESET_POINTS = {
   },
   redteam: {
     config: {
-      unit: 'answer', observe: 'own', expand: 'mutate', decorrelate: 'angles',
+      unit: { kind: 'answer' }, observe: 'own', expand: 'mutate', decorrelate: 'angles',
       score: { kind: 'novelty' }, advance: 'archive', carry: { kind: 'elites' },
     },
     depth: 3,
@@ -450,7 +502,7 @@ export const SWARM_PRESET_POINTS = {
   },
   optimise: {
     config: {
-      unit: 'answer', observe: 'ancestors', expand: 'mutate', decorrelate: 'angles',
+      unit: { kind: 'answer' }, observe: 'ancestors', expand: 'mutate', decorrelate: 'angles',
       score: { kind: 'verify' }, advance: 'uct', carry: { kind: 'elites' },
     },
     // The deepest of the five because it is the only preset with a verifier — the
@@ -832,9 +884,13 @@ export interface BranchProposal {
    *
    * Per-branch `decorrelate`, and defensible precisely because the NODE knows
    * whether its context is worth inheriting while the engine does not. Validated
-   * against the search's `decorrelate` rather than overriding it: a run configured
-   * `fresh` refuses `inherit: true` and says so, instead of quietly honouring one
-   * of two conflicting policies.
+   * against the search's `decorrelate` rather than overriding it (§8.4): a run
+   * configured `blind` refuses `inherit: true` and says so, instead of quietly
+   * honouring one of two conflicting policies. The node may narrow, never widen.
+   *
+   * `blind`, not `fresh`. This rule was written against `fresh` — a value renamed six
+   * declarations up for being measured unusable ({@link SWARM_DECORRELATES}) — so it
+   * cited the axis it belongs to by a name that axis no longer had.
    */
   readonly inherit: boolean;
 }

@@ -140,9 +140,24 @@ function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
       + 'which runs exactly as configured. For the judged tree that does exist, use '
       + 'agents.fork settle:"mcts", which is scored by judge on purpose and says so.');
   }
-  if (config.unit !== 'answer') {
-    return unsupported(`unit:"${config.unit}" is not executable here — a node is one complete answer, `
-      + 'measured as a whole. Use unit:"answer".');
+  // §8.6 requires the BLOCKED composition to be said, not merely omitted. A caller
+  // who composes `unit:'trajectory'` has composed it CORRECTLY for the task — the
+  // measured `agent-trajectory-search` region scored 18% because the design blocked it
+  // and nothing on the surface did. So this arm names the blocker (nodes share one
+  // workspace, so a node cannot be graded on what it changed), names what would
+  // unblock it (per-node workspace isolation), and states ONE imperative. It does not
+  // offer "wait for isolation", which is not something a caller can do.
+  if (config.unit.kind === 'trajectory') {
+    return unsupported('unit:"trajectory" makes each node a tool-using agent, and every node here '
+      + 'shares ONE workspace — so a node cannot be graded on what it changed, because every node '
+      + 'changed the same tree. What would unblock it is per-node workspace isolation, and nothing '
+      + `else.${config.unit.inherit ? ' Inheriting the caller\'s turns does not change that: the '
+        + 'blocker is the shared workspace, not the context.' : ''} Use unit:"answer", which is the `
+      + 'shape that is gradeable today.');
+  }
+  if (config.unit.kind !== 'answer') {
+    return unsupported(`unit:"${config.unit.kind}" is not executable here — a node is one complete `
+      + 'answer, measured as a whole. Use unit:"answer".');
   }
   if (config.observe === 'own') {
     return unsupported('observe:"own" gives a node feedback about its OWN attempt, which needs a '
