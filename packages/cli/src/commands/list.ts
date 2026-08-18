@@ -1,4 +1,5 @@
 import { statSync } from 'node:fs';
+import { diagnostics, toProteusError } from '@proteus/core/obs';
 import { listCloudAgents } from '../cloud-api.js';
 import { reconcileAgentRefs } from '../agent-list.js';
 import { agentDbPath, listAgentDirs, loadConfigFile, resolveCloudSession } from '../config.js';
@@ -46,7 +47,11 @@ export async function listCommand(): Promise<void> {
       // workspaces read `(error reading)` for months while the actual cause was
       // `no such column: mission`. The reason travels with the row.
       const reason = caught instanceof Error ? caught.message : String(caught);
-      console.error(`[proteus] workspace.read_failed ${name}: ${reason}`);
+      diagnostics.failure(
+        'workspace.read_failed',
+        toProteusError({ doing: 'reading a local workspace', cause: caught, otherwise: 'io' }),
+        { workspace: name },
+      );
       return { name, mode: agent.mode, purpose: `(unreadable: ${reason})`, scaffoldVersion: 0, toolCount: 0 };
     }
   });

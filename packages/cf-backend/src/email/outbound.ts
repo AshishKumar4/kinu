@@ -15,6 +15,7 @@
 import { JsonValueSchema, type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore } from '@proteus/core';
 import { agentEmailAddress } from './inbound.js';
 import type { EmailOutbox } from './outbox.js';
+import { diagnostics, ProteusError } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 const EmailThreadAddrSchema = v.object({
@@ -181,7 +182,11 @@ export async function sendOwnerEmail(
     headers: { 'Auto-Submitted': 'auto-generated' },
   }, Date.now());
   if (result.status === 'failed') {
-    console.warn('[proteus-email] owner notification failed:', result.error);
+    diagnostics.failure(
+      'email.owner_notification_failed',
+      new ProteusError('unavailable', result.error),
+      { workspace: deps.agentName, messageId: result.messageId },
+    );
     return false;
   }
   return true;

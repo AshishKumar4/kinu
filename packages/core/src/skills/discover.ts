@@ -10,6 +10,7 @@
 import { parseSkillFile } from './parse.js';
 import { BUILTIN_SKILLS } from './builtins.js';
 import { SKILLS_DIR, type ParsedSkill } from './types.js';
+import { diagnostics, toProteusError } from '../obs/index.js';
 
 /** Minimal VFS shape — duck-typed against any file view. */
 export interface SkillsVfs {
@@ -36,8 +37,11 @@ export async function discoverSkills(
   opts: DiscoverOpts = {},
 ): Promise<ParsedSkill[]> {
   const dir = opts.skillsDir ?? SKILLS_DIR;
-  const onErr = opts.onParseError ?? ((file, err) =>
-    console.warn(`[skills] failed to parse ${file}: ${err}`));
+  const onErr = opts.onParseError ?? ((file, err) => diagnostics.failure(
+    'skills.parse_failed',
+    toProteusError({ doing: 'parse a skill file', cause: err, otherwise: 'bad_input' }),
+    { file },
+  ));
 
   const byName = new Map<string, ParsedSkill>();
   for (const s of BUILTIN_SKILLS) byName.set(s.name, s);

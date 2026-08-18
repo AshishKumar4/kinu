@@ -25,6 +25,7 @@
 import type { RunEventInput } from '../events/types.js';
 import type { SignalDeliverer } from '../types/signals.js';
 import type { AbandonedHeadRun, HeadJournal } from './journal.js';
+import { diagnostics, toProteusError } from '../obs/index.js';
 
 /** What this reconciliation needs of the run-event recorder: find the run a
  *  fork was dispatched from, and append to it. Structural so core's heads layer
@@ -146,9 +147,10 @@ function recordAbandonedRuns(
         reason: FORK_INTERRUPTED_REASON,
       });
     } catch (err) {
-      console.warn(
-        `[proteus] could not record the abandonment of fork ${run.rootId}:`,
-        err instanceof Error ? err.message : String(err),
+      diagnostics.failure(
+        'head.abandonment_record_failed',
+        toProteusError({ doing: 'record an abandoned fork', cause: err, otherwise: 'io' }),
+        { rootId: run.rootId },
       );
     }
   }

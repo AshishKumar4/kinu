@@ -186,6 +186,7 @@ import {
   type DeferredApprovalNotice, type ApprovalGrant,
 } from "@proteus/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@proteus/core";
+import { diagnostics, toProteusError } from "@proteus/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
 import { deliverCloudFork } from "./user/workspace-fork.js";
 import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route.js';
@@ -314,13 +315,17 @@ export class OrchestratorAgent extends ActorAgent {
         turnId, assistantText, Date.now(),
       );
       if (replies.pending) {
-        console.warn(`[proteus] event reply remains pending for ${turnId}; keeping delivery lease open`);
+        diagnostics.event('event.reply_pending', { turnId });
         return false;
       }
       this.eventLog.markTurnCompleted(turnId);
       return true;
     } catch (err) {
-      console.warn('[proteus] event reply dispatch failed:', err);
+      diagnostics.failure('event.reply_dispatch_failed', toProteusError({
+        doing: 'dispatching the event replies a completed turn owes',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { turnId });
       return false;
     }
   }
@@ -507,7 +512,11 @@ export class OrchestratorAgent extends ActorAgent {
             const { stub, caller } = await this.userHub();
             return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
           } catch (err) {
-            console.warn('[proteus] hasPeerGrant lookup failed:', err instanceof Error ? err.message : String(err));
+            diagnostics.failure('peer.grant_lookup_failed', toProteusError({
+              doing: 'asking the owner UserDO whether a peer grant exists',
+              cause: err,
+              otherwise: 'unavailable',
+            }), { sender: senderAgentName });
             return false;   // default deny on lookup failure
           }
         },
@@ -572,7 +581,10 @@ export class OrchestratorAgent extends ActorAgent {
       cutoffSec,
     ).toArray().length;
     if (dropped > 0) {
-      console.warn(`[proteus] dropped ${dropped} unrunnable schedule row(s) overdue by more than ${STALE_SCHEDULE_HORIZON_MS}ms`);
+      diagnostics.event('schedule.stale_rows_dropped', {
+        dropped,
+        horizonMs: STALE_SCHEDULE_HORIZON_MS,
+      });
     }
   }
 
@@ -621,7 +633,11 @@ export class OrchestratorAgent extends ActorAgent {
         const stub = await this.subAgent(SubordinateAgent, entry.name);
         await stub.installWorkspaceCapability(token);
       } catch (err) {
-        console.warn(`[proteus] capability push to subordinate ${entry.name} failed:`, err instanceof Error ? err.message : String(err));
+        diagnostics.failure('capability.subordinate_push_failed', toProteusError({
+          doing: 'pushing the workspace capability token to a subordinate',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { subordinate: entry.name });
       }
     }
     return result;
@@ -902,7 +918,11 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       this.ensureSchema();
     } catch (err) {
-      console.error('[orchestrator] claimOwner ensureSchema failed:', err instanceof Error ? err.message : String(err));
+      diagnostics.failure('workspace.schema_ensure_failed', toProteusError({
+        doing: 'creating the workspace tables before an owner claim',
+        cause: err,
+        otherwise: 'io',
+      }), { workspace: this.name });
     }
     // The HASH, not a boolean: the owner's UserDO compares it against what it
     // has registered, so any disagreement — a workspace holding nothing, or one
@@ -1109,11 +1129,17 @@ export class OrchestratorAgent extends ActorAgent {
       });
       if (!update) return;
       const summary = applySleepTimeUpdate(this.facts, update);
-      console.log(
-        `[proteus] sleep-time-compute: upserted=${summary.upserted} decayed=${summary.decayed} skipped=${summary.skipped}`,
-      );
+      diagnostics.event('memory.facts_compressed', {
+        upserted: summary.upserted,
+        decayed: summary.decayed,
+        skipped: summary.skipped,
+      });
     } catch (err) {
-      console.warn('[proteus] sleep-time-compute failed:', err instanceof Error ? err.message : err);
+      diagnostics.failure('memory.fact_compression_failed', toProteusError({
+        doing: 'compressing the turn into agent facts',
+        cause: err,
+        otherwise: 'unavailable',
+      }));
     }
   }
 
@@ -1134,9 +1160,13 @@ export class OrchestratorAgent extends ActorAgent {
         persist: async (name) => { await this.setAutoDisplayName(name); },
         suggest: (text) => this.suggestWorkspaceTitle(text),
       });
-      if (title) console.log(`[proteus] auto-titled workspace → "${title}"`);
+      if (title) diagnostics.event('workspace.auto_titled', { workspace: this.name, title });
     } catch (err) {
-      console.warn('[proteus] workspace titling failed:', err instanceof Error ? err.message : err);
+      diagnostics.failure('workspace.auto_title_failed', toProteusError({
+        doing: 'deriving a workspace title from the mission',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { workspace: this.name });
     }
   }
 
@@ -1178,7 +1208,11 @@ export class OrchestratorAgent extends ActorAgent {
         const { stub, caller } = await this.userHub();
         await stub.setWorkspaceDisplayName(caller, this.name, displayName);
       } catch (err) {
-        console.warn('[proteus] propagateDisplayName roster sync failed:', err instanceof Error ? err.message : err);
+        diagnostics.failure('roster.display_name_sync_failed', toProteusError({
+          doing: 'syncing the workspace display name to the owner roster',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { workspace: this.name });
       }
     }
     this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
@@ -1546,13 +1580,21 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       this.sweepUnrunnableSchedules();
     } catch (err) {
-      console.warn('[proteus] stale schedule sweep failed:', err instanceof Error ? err.message : String(err));
+      diagnostics.failure('schedule.stale_sweep_failed', toProteusError({
+        doing: 'sweeping unrunnable schedule rows on activation',
+        cause: err,
+        otherwise: 'io',
+      }));
     }
     let reconciledEventIds: string[] = [];
     try {
       reconciledEventIds = this.eventLog.unbindStale(STALE_EVENT_DELIVERY_MS);
     } catch (err) {
-      console.warn('[proteus] startup event reconciliation failed:', err);
+      diagnostics.failure('event.stale_delivery_unbind_failed', toProteusError({
+        doing: 'unbinding event deliveries a dead activation left leased',
+        cause: err,
+        otherwise: 'io',
+      }));
     }
 
     // one-time per-agent migration that merges case-collision
@@ -1561,17 +1603,18 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       const report = migrateCraftedToolDuplicates(this.boundSql, execRaw);
       if (report.ranMigration && report.mergedGroups > 0) {
-        console.log(
-          `[proteus] duplicate migration: merged ${report.mergedGroups} group(s), ` +
-          `deleted ${report.rowsDeletedCraftedTools} crafted_tools rows, ` +
-          `${report.rowsDeletedCraftScores} craft_scores rows`,
-        );
-        for (const d of report.details) {
-          console.log(`  - ${d.lowerName}: kept "${d.kept}", dropped [${d.dropped.join(', ')}]`);
-        }
+        diagnostics.event('tool.duplicates_merged', {
+          groups: report.mergedGroups,
+          craftedToolRows: report.rowsDeletedCraftedTools,
+          craftScoreRows: report.rowsDeletedCraftScores,
+        });
       }
     } catch (err) {
-      console.error("[proteus] duplicate migration failed:", err);
+      diagnostics.failure('tool.duplicate_merge_failed', toProteusError({
+        doing: 'merging case-collision duplicates in the crafted-tool store',
+        cause: err,
+        otherwise: 'io',
+      }));
     }
 
     try {
@@ -1580,7 +1623,11 @@ export class OrchestratorAgent extends ActorAgent {
         void this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
       }
     } catch (err) {
-      console.error("[proteus] onStart init failed:", err);
+      diagnostics.failure('workspace.identity_init_failed', toProteusError({
+        doing: 'writing the workspace identity row on activation',
+        cause: err,
+        otherwise: 'io',
+      }), { workspace: this.name });
     }
     // A cold activation is the moment the fork journal's `running` heads become
     // provably stale: nothing in this isolate is executing one, and
@@ -1602,10 +1649,14 @@ export class OrchestratorAgent extends ActorAgent {
       runEvents: this.eventRecorder,
       logActivity: (event, detail) => this.logActivity(event, detail),
     }).catch((err) => {
-      console.warn('[proteus] fork journal reconciliation failed:', err instanceof Error ? err.message : String(err));
+      diagnostics.failure('head.journal_reconcile_failed', toProteusError({
+        doing: 'settling fork-journal heads a dead activation left running',
+        cause: err,
+        otherwise: 'io',
+      }), { workspace: this.name });
     });
     if (reconciledEventIds.length > 0) {
-      console.warn(`[proteus] startup event reconciliation re-pended ${reconciledEventIds.length} event(s)`);
+      diagnostics.event('event.deliveries_repended', { events: reconciledEventIds.length });
       this.orch.scheduleDrain();
     }
 
@@ -1617,7 +1668,11 @@ export class OrchestratorAgent extends ActorAgent {
       void readSoul(this.rt.storage.vfs)
         .then((soul) => this.maybeAutoTitleWorkspace(summarizeSoul(soul ?? '')))
         .catch((error) => {
-          console.warn('[proteus] workspace auto-title read failed:', error instanceof Error ? error.message : String(error));
+          diagnostics.failure('workspace.auto_title_soul_read_failed', toProteusError({
+            doing: 'reading SOUL.md to title a legacy workspace',
+            cause: error,
+            otherwise: 'io',
+          }), { workspace: this.name });
         });
     }
   }
@@ -1635,52 +1690,100 @@ export class OrchestratorAgent extends ActorAgent {
   //
   // Crash-safe: dedupe via `(trigger_id, scheduled_fire_at)` means a
   // re-fire after DO eviction is a no-op publish.
+  //
+  // TRACED, and this is the path the tracing seam was wired on first because it is
+  // the one the contract is about: a wake is a SEPARATE invocation from whatever
+  // armed it. The turn that scheduled this trigger finished minutes or days ago, in
+  // an isolate that may since have been reset, so a span covering both would be
+  // measuring an interval nothing observed. `tracing.invocation` makes that
+  // unreachable rather than discouraged — it revokes the handle when this method's
+  // promise settles, so a span opened from anything that escaped this tick throws.
+  // The four phases are four sibling spans under one root, which is what turns
+  // "the alarm was slow" into "the email reconcile was slow".
   async _proteusTimerTick(): Promise<void> {
     const now = Date.now();
-    try {
-      // Wake the agent to act on the freshly-published timer events (and any
-      // other pending events) — an autonomous turn, debounced so events
-      // arriving alongside the alarm coalesce into it.
-      const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
-      if (fired > 0) this.orch.scheduleDrain();
-    } catch (err) {
-      console.error('[proteus] alarm handler failed:', err instanceof Error ? err.message : String(err));
-    }
+    await this.tracing.invocation('alarm', 'tick', async (tick) => {
+      await tick.span('alarm.due_triggers', async (span) => {
+        try {
+          // Wake the agent to act on the freshly-published timer events (and any
+          // other pending events) — an autonomous turn, debounced so events
+          // arriving alongside the alarm coalesce into it.
+          const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
+          span.setAttribute('proteus.triggers_fired', fired);
+          if (fired > 0) this.orch.scheduleDrain();
+        } catch (err) {
+          const failure = toProteusError({
+            doing: 'firing the triggers due on this wake',
+            cause: err,
+            otherwise: 'io',
+          });
+          // `fail` and not a rethrow: the tick tolerates this and continues to the
+          // next phase, so the span closes SUCCESSFULLY unless it says otherwise.
+          span.fail(failure);
+          diagnostics.failure('schedule.due_triggers_failed', failure);
+        }
+      });
 
-    // Re-drive pending outbound peer messages (crash/eviction recovery + the
-    // exponential-backoff retry path — inline tool dispatch handles the happy
-    // path, this alarm is the durable one).
-    try {
-      await this.peerHub.dispatchOutbox(now);
-    } catch (err) {
-      console.warn('[proteus] peer outbox dispatch failed:', err instanceof Error ? err.message : String(err));
-    }
+      // Re-drive pending outbound peer messages (crash/eviction recovery + the
+      // exponential-backoff retry path — inline tool dispatch handles the happy
+      // path, this alarm is the durable one).
+      await tick.span('alarm.peer_outbox', async (span) => {
+        try {
+          await this.peerHub.dispatchOutbox(now);
+        } catch (err) {
+          const failure = toProteusError({
+            doing: 're-driving the pending outbound peer messages',
+            cause: err,
+            otherwise: 'unavailable',
+          });
+          span.fail(failure);
+          diagnostics.failure('peer.outbox_dispatch_failed', failure);
+        }
+      });
 
-    // Reconcile indeterminate outbound email: an intent left `pending` (crash
-    // between the send and its status write) is safely re-driven here — the
-    // stored Message-ID makes the re-send idempotent downstream (SPEC §7.4).
-    try {
-      if (this.env.EMAIL) await this.emailOutbox.reconcile(this.env.EMAIL, now);
-    } catch (err) {
-      console.warn('[proteus] email outbox reconcile failed:', err instanceof Error ? err.message : String(err));
-    }
+      // Reconcile indeterminate outbound email: an intent left `pending` (crash
+      // between the send and its status write) is safely re-driven here — the
+      // stored Message-ID makes the re-send idempotent downstream (SPEC §7.4).
+      await tick.span('alarm.email_outbox', async (span) => {
+        try {
+          if (this.env.EMAIL) await this.emailOutbox.reconcile(this.env.EMAIL, now);
+        } catch (err) {
+          const failure = toProteusError({
+            doing: 'reconciling indeterminate outbound email',
+            cause: err,
+            otherwise: 'unavailable',
+          });
+          span.fail(failure);
+          diagnostics.failure('email.outbox_reconcile_failed', failure);
+        }
+      });
 
-    // Re-arm for the next-soonest wake (triggers ∪ peer-outbox ∪ email-outbox
-    // retries). A due/past-due retry is clamped to `now` (see nextAlarmTime),
-    // and the arm is soonest-wins so this never clobbers a sooner wake armed
-    // during dispatch. Awaited, not fire-and-forget: this is the link that
-    // keeps the timer chain alive.
-    try {
-      const next = nextAlarmTime(
-        now,
-        this.triggerRegistry.list({ state: 'active' }).map((t) => t.next_fire_at),
-        this.peerHub.nextRetryAt(),
-        this.emailOutbox.nextRetryAt(),
-      );
-      if (next !== null) await this.armTimer(next);
-    } catch (err) {
-      console.warn('[proteus] timer re-arm failed:', err instanceof Error ? err.message : String(err));
-    }
+      // Re-arm for the next-soonest wake (triggers ∪ peer-outbox ∪ email-outbox
+      // retries). A due/past-due retry is clamped to `now` (see nextAlarmTime),
+      // and the arm is soonest-wins so this never clobbers a sooner wake armed
+      // during dispatch. Awaited, not fire-and-forget: this is the link that
+      // keeps the timer chain alive.
+      await tick.span('alarm.timer_rearm', async (span) => {
+        try {
+          const next = nextAlarmTime(
+            now,
+            this.triggerRegistry.list({ state: 'active' }).map((t) => t.next_fire_at),
+            this.peerHub.nextRetryAt(),
+            this.emailOutbox.nextRetryAt(),
+          );
+          span.setAttribute('proteus.rearmed', next !== null);
+          if (next !== null) await this.armTimer(next);
+        } catch (err) {
+          const failure = toProteusError({
+            doing: 're-arming the wake that keeps the timer chain alive',
+            cause: err,
+            otherwise: 'io',
+          });
+          span.fail(failure);
+          diagnostics.failure('schedule.timer_rearm_failed', failure);
+        }
+      });
+    });
   }
 
   /** Compute the next firing time for a cron expression after `from`.
@@ -2118,7 +2221,11 @@ export class OrchestratorAgent extends ActorAgent {
         toVersion: result.newCurrentVersion,
       });
     } catch (err) {
-      console.warn('[proteus] event emit failed at applyScaffoldDecision:', err);
+      diagnostics.failure('event.scaffold_decision_emit_failed', toProteusError({
+        doing: 'recording a scaffold promotion/rollback run event',
+        cause: err,
+        otherwise: 'io',
+      }), { action: result.action });
     }
     return result;
   }
@@ -2348,7 +2455,11 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       await this.engine.applyExplicitFeedback(messageId, feedback);
     } catch (err) {
-      console.warn('[proteus] applyExplicitFeedback failed:', err instanceof Error ? err.message : err);
+      diagnostics.failure('feedback.explicit_apply_failed', toProteusError({
+        doing: 'recording an explicit turn verdict in the outcome ledger',
+        cause: err,
+        otherwise: 'io',
+      }), { messageId });
     }
     return { ok: true, messageId, feedback, rescored };
   }
@@ -2927,7 +3038,11 @@ export class OrchestratorAgent extends ActorAgent {
     const signal = workspaceGenesisSignal(readMission(this.boundSql));
     if (!signal) return { started: false };
     void this.keepAliveWhile(() => this.orch.signals.deliver(signal)).catch((err) => {
-      console.warn('[proteus] genesis turn failed:', err instanceof Error ? err.message : err);
+      diagnostics.failure('genesis.turn_failed', toProteusError({
+        doing: "taking the workspace's first turn",
+        cause: err,
+        otherwise: 'unavailable',
+      }), { workspace: this.name });
     });
     return { started: true };
   }
@@ -3388,7 +3503,11 @@ export class OrchestratorAgent extends ActorAgent {
     if (getPendingScaffold(this.boundSql)) return;  // wait for the slot; keep the counter
     this._turnsSinceGepa = 0;
     void this.runScaffoldGepaOptimization()
-      .catch((err) => console.warn('[proteus] auto-GEPA failed:', err instanceof Error ? err.message : String(err)));
+      .catch((err) => diagnostics.failure('gepa.auto_run_failed', toProteusError({
+        doing: 'running the cadence GEPA scaffold optimisation',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { workspace: this.name }));
   }
 
   /** Run a webhook delivery through the hub from within the agent DO. This
@@ -3589,7 +3708,11 @@ export class OrchestratorAgent extends ActorAgent {
         ownerEmail: await this.getOwnerEmail(),
         outbox: this.emailOutbox,
       }, notification);
-    })().catch((err) => console.warn('[proteus-email] notification failed:', err));
+    })().catch((err) => diagnostics.failure('email.owner_notification_failed', toProteusError({
+      doing: 'sending the owner an away-channel notification',
+      cause: err,
+      otherwise: 'unavailable',
+    }), { subject }));
   }
 
   /** Recent events for the operator UI's events sidebar. Mirrors

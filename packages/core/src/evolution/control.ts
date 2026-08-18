@@ -55,6 +55,7 @@ import {
 import type { EvalInstance, MetricOutcome } from './gepa/types.js';
 import type { ScoreInterval } from '../utils/stats.js';
 import { nanoid } from '../utils/nanoid.js';
+import { diagnostics, toProteusError } from '../obs/index.js';
 
 /**
  * The inference surface a candidate scaffold runs against.
@@ -235,7 +236,10 @@ export function queueTurnShadowTrial(
       context: turn.context,
     });
   } catch (err) {
-    console.warn('[proteus] shadow trial queue failed:', err instanceof Error ? err.message : err);
+    diagnostics.failure(
+      'evolution.shadow_trial_queue_failed',
+      toProteusError({ doing: 'queue a shadow trial', cause: err, otherwise: 'io' }),
+    );
     return 'failed';
   }
 }
@@ -292,15 +296,15 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
       } catch (err) {
         // A trial that throws is a trial we cannot score, not a queue we should
         // wedge on: drop it below and carry on with the rest.
-        console.warn('[proteus] shadow trial failed:', err instanceof Error ? err.message : err);
+        diagnostics.failure(
+          'evolution.shadow_trial_failed',
+          toProteusError({ doing: 'run a queued shadow trial', cause: err, otherwise: 'unavailable' }),
+          { trialId: trial.id },
+        );
       }
       dropQueuedShadowTrial(control.sql, trial.id);
       if (applied) {
         purgeQueuedShadowTrials(control.sql, null);
-        // stderr for the same reason as every other core diagnostic: stdout is
-        // the CLI's machine channel (`proteus exec --json`), and Workers Logs
-        // capture stderr just the same.
-        console.error(`[proteus] promotion gate chose ${applied} for scaffold v${pending.version} after ${trials} trial(s)`);
         return { trials, applied };
       }
     }

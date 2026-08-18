@@ -7,6 +7,7 @@ import type { UserDO } from './user-do.js';
 import { createCloudWorkspaceForUser } from './workspace-create.js';
 import { err, json, safeJson } from '../lib/http.js';
 import { ownerCaller } from './workspace-capability.js';
+import { diagnostics, toProteusError } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 /** POST /workspaces body → created WorkspaceEntry (201) | mapped error response. */
@@ -53,7 +54,11 @@ export function notifyWorkspacesCredentialsChanged(
       .filter((a) => a.archivedAt === null)
       .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
   })().catch((e) => {
-    console.warn('[workspace-access] credential-change fanout failed:', e instanceof Error ? e.message : e);
+    diagnostics.failure('workspace.credential_fanout_failed', toProteusError({
+      doing: 'notifying the user\'s workspaces of a credential change',
+      cause: e,
+      otherwise: 'unavailable',
+    }));
   });
   ctx?.waitUntil(task);
 }
@@ -87,7 +92,13 @@ export async function claimOwnedWorkspace(
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     const status = /owned by a different user/i.test(message) ? 403 : 500;
-    if (status === 500) console.error(`[workspace-access] claimOwner(${workspaceName}) failed:`, message);
+    if (status === 500) {
+      diagnostics.failure('workspace.claim_owner_failed', toProteusError({
+        doing: 'claiming workspace ownership',
+        cause: e,
+        otherwise: 'unavailable',
+      }), { workspace: workspaceName });
+    }
     return { ok: false, status, error: message };
   }
   // Reconcile the workspace's identity with the registry on every touch. The
@@ -98,7 +109,11 @@ export async function claimOwnedWorkspace(
     await userDO.ensureWorkspaceCapability(workspaceName, claim.capabilityHash);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    console.error(`[workspace-access] capability provisioning for ${workspaceName} failed:`, message);
+    diagnostics.failure('workspace.capability_provisioning_failed', toProteusError({
+      doing: "provisioning the workspace's capability token",
+      cause: e,
+      otherwise: 'unavailable',
+    }), { workspace: workspaceName });
     return { ok: false, status: 500, error: `Could not issue this workspace's capability token: ${message}` };
   }
   return { ok: true, agent };

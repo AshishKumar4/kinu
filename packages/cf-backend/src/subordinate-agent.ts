@@ -30,6 +30,7 @@ import {
   type SubordinateLiveStatus,
   type SubordinateReportOrigin,
 } from '@proteus/core';
+import { diagnostics, toProteusError } from '@proteus/core/obs';
 
 export interface SetSubordinateIdentityInput {
   name: string;
@@ -44,9 +45,15 @@ export interface SetSubordinateIdentityInput {
   capabilityToken?: string;
 }
 
-function warnSubordinateFailure(label: string) {
+/** Both report lanes are fire-and-forget, so a rejection has nowhere to go but
+ *  a log line. `lane` names which one — the event name stays literal. */
+function reportSubordinateFailure(lane: string) {
   return <Thrown,>(thrown: Thrown): void => {
-    console.warn(label, thrown);
+    diagnostics.failure('subordinate.report_failed', toProteusError({
+      doing: 'reporting to the parent workspace',
+      cause: thrown,
+      otherwise: 'unavailable',
+    }), { lane });
   };
 }
 
@@ -135,7 +142,7 @@ export class SubordinateAgent extends ActorAgent {
    *  against no assignment and stops at the parent's ingress. */
   protected notifyOwner(subject: string, body: string): void {
     void this.sendReport('progress', `${subject}\n\n${body}`, 'turn_end')
-      .catch(warnSubordinateFailure('[subordinate] parent notification failed:'));
+      .catch(reportSubordinateFailure('parent_notification'));
   }
 
   protected ensureSchema(): void {
@@ -354,7 +361,7 @@ export class SubordinateAgent extends ActorAgent {
 
     if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText })) {
       void this.sendReport('progress', assistantText, 'turn_end')
-        .catch(warnSubordinateFailure('[subordinate] turn-end report failed:'));
+        .catch(reportSubordinateFailure('turn_end'));
     }
     this.reportedThisTurn = false;
     void this.orch.drainPendingEvents();

@@ -321,6 +321,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setAutoGepaEveryNTurns(10),
     (c) => c.setChangelogSeenAt(1_750_000_000_000),
     (c) => c.countClosedSessionWindow(),
+    (c) => c.countIsolateGeneration(),
     (c) => c.setGepaEvalBudget(16),
     (c) => c.setMctsOverrides({
       explorationWeight: 1.2, budget: 8, maxDepth: 4,

@@ -22,6 +22,13 @@ export {
   type ExpectedFailure,
 } from './expected-failure.js';
 export {
+  createAgentTracing,
+  SPAN_ATTR_INVOCATION,
+  type AgentTracing,
+  type InvocationKind,
+  type TracedInvocation,
+} from './agent-tracing.js';
+export {
   createRecordingTracer,
   renderSelfPath,
   SPAN_ATTR_ERROR_MESSAGE,
@@ -49,6 +56,7 @@ export {
 export {
   createConsoleLogger,
   createRecordingLogger,
+  diagnostics,
   RESERVED_LOG_FIELDS,
   type LogEventName,
   type LogFields,

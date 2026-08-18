@@ -58,6 +58,7 @@ import { StepInjections } from '../prompting/step-injections.js';
 import { nanoid } from '../utils/nanoid.js';
 import { isWorkMode, type WorkMode } from '../prompting/surface.js';
 import type { JsonObject } from '../utils/json.js';
+import { diagnostics, ProteusError, toProteusError } from '../obs/index.js';
 
 const SignalIdMetadataSchema = v.object({
   [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()),
@@ -203,10 +204,18 @@ export class SignalDelivery implements SignalDeliverer {
       );
       if (result.status === 'queued') return 'queued';
       reason = 'preempted';
-      console.warn(`[proteus] signal "${signal.kind}" pre-empted; compensating`);
+      diagnostics.failure(
+        'signal.preempted',
+        new ProteusError('unavailable', 'the host pre-empted the signal turn; compensating'),
+        { signal: signal.kind },
+      );
     } catch (err) {
       reason = 'failed';
-      console.warn(`[proteus] signal "${signal.kind}" enqueue failed:`, errorMessage(err));
+      diagnostics.failure(
+        'signal.enqueue_failed',
+        toProteusError({ doing: 'enqueue a signal turn', cause: err, otherwise: 'io' }),
+        { signal: signal.kind },
+      );
     }
     this.moveCard(signal.cardId, 'undelivered');
     signal.compensate?.(reason);
@@ -242,10 +251,10 @@ const turnMetadata = (signal: AgentSignal): JsonObject => {
 
 function reportRedeliveryFailure(kind: string) {
   return <Failure>(failure: Failure): void => {
-    console.warn(`[proteus] signal "${kind}" re-delivery failed:`, failure);
+    diagnostics.failure(
+      'signal.redelivery_failed',
+      toProteusError({ doing: 're-deliver a signal', cause: failure, otherwise: 'io' }),
+      { signal: kind },
+    );
   };
-}
-
-function errorMessage<Failure>(failure: Failure): string {
-  return failure instanceof Error ? failure.message : String(failure);
 }

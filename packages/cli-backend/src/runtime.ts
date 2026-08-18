@@ -48,6 +48,7 @@ import {
 } from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
 import type { OAuthCredential, FileCheckpoints } from '@proteus/core';
+import { diagnostics, ProteusError } from '@proteus/core/obs';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 
@@ -266,7 +267,11 @@ export function createCLIRuntime(
   initFiberTable(execRaw);
   const orphans = detectOrphanedFibers(sql);
   if (orphans.length > 0) {
-    console.warn(`[agent] ${orphans.length} orphaned fiber(s) from previous run:`, orphans.map(o => o.name));
+    diagnostics.failure(
+      'fiber.orphans_detected',
+      new ProteusError('cancelled', 'fibers from a previous run were interrupted by its exit'),
+      { orphans: orphans.length },
+    );
   }
 
   // Stable identity — core's DDL, not a second spelling of it. The hand-rolled

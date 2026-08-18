@@ -27,6 +27,7 @@ import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summary.js';
 import { HeadFileChanges } from './file-changes.js';
 import { isJsonObject, projectJsonValue, type JsonObject } from '../utils/json.js';
+import { diagnostics, toProteusError } from '../obs/index.js';
 
 /**
  * The mutable findings a head accumulates as it runs — evidence/decisions
@@ -499,7 +500,11 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
           try {
             await deps.reportStep?.(seq, traced);
           } catch (err) {
-            console.warn(`[proteus] head ${input.id} could not record step ${seq}:`, err);
+            diagnostics.failure(
+              'head.step_trace_failed',
+              toProteusError({ doing: 'record a head step trace', cause: err, otherwise: 'io' }),
+              { headId: input.id, seq },
+            );
           }
         }
         const usage = normalizeUsage(step.usage);

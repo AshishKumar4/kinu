@@ -21,7 +21,7 @@ import { isAbortError, raceAbort } from '@proteus/agent-utils';
 import type { ExecutorProvider, ExecutorCapability } from './types.js';
 import { readExecSignal } from './signal.js';
 import { formatExecResult, refusalText } from './exec-result.js';
-import { ProteusError, toProteusError } from '../obs/index.js';
+import { diagnostics, ProteusError, toProteusError } from '../obs/index.js';
 import type { VFS } from '../types/primitives.js';
 import { makeVfsError } from '../vfs/errno.js';
 import { shellQuote } from '../utils/shell.js';
@@ -407,7 +407,11 @@ export function createSandboxExecutor(
           // Continue — the SDK exposePort call below will surface its own
           // error if exposure can't be set up; we don't want to gate the
           // happy path on a probe glitch.
-          console.warn(`[sandbox.exposePort] port probe failed (continuing): ${errorMessage({ error: err })}`);
+          diagnostics.failure(
+            'sandbox.port_probe_failed',
+            toProteusError({ doing: 'probe a sandbox port before exposing it', cause: err, otherwise: 'unavailable' }),
+            { port: p },
+          );
         }
         try {
           const opts: SandboxExposeOptions = { hostname: previewHostSuffix };

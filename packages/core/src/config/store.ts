@@ -92,6 +92,11 @@ export const AGENT_CONFIG_KEYS = {
    *  without re-embedding. Internal plumbing — accessed via generic get/set. */
   memoryVectorBackfillDone: 'memory_vector_backfill_done',
   memoryVectorBackfillCursor: 'memory_vector_backfill_cursor',
+  /** Constructions of this agent object, bumped once per activation. The span
+   *  attribute `proteus.isolate_gen` — persisted BECAUSE a boot-time counter
+   *  cannot see a reconstruction that reuses the isolate, which is how a Proteus
+   *  fork most commonly dies (`ctx.facets.abort()`). */
+  isolateGen: 'isolate_gen',
 } as const;
 
 export interface AgentConfigStore {
@@ -173,6 +178,11 @@ export interface AgentConfigStore {
   setChangelogSeenAt(ms: number): void;
   /** Count one more closed session window and return the new lifetime total. */
   countClosedSessionWindow(): number;
+  /** Count one more construction of this agent object and return the new
+   *  generation. Called once per activation, from `onStart`; the RETURNED value is
+   *  what every span carries, so a discontinuity between two spans on one
+   *  `selfPath` is a positive reset signal instead of an inferred one. */
+  countIsolateGeneration(): number;
   /** GEPA eval budget — labeled instances per run (train + val). See
    *  DEFAULT_GEPA_EVAL_BUDGET / clampGepaEvalBudget. */
   getGepaEvalBudget(): number;
@@ -251,6 +261,19 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
   const set = (key: string, value: string): void => {
     void sql`INSERT INTO agent_config (key, value) VALUES (${key}, ${value})
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
+  };
+  /** Read-modify-write of a monotone counter, returning the new value. Shared by
+   *  the two lifetime counters here — closed session windows, and isolate
+   *  generations — because they differ only in their key and a byte-identical
+   *  second copy is what `gate:duplication` exists to reject. An absent, empty or
+   *  unparseable row reads as 0, so a first bump answers 1: the caller uses the
+   *  RETURN value, and `null` would make it decide what an unwritten counter means.
+   */
+  const increment = (key: string): number => {
+    const previous = Math.floor(Number(get(key)));
+    const next = (Number.isFinite(previous) && previous > 0 ? previous : 0) + 1;
+    set(key, String(next));
+    return next;
   };
   /** Reads in the parsed domain, so an unparseable token is not just ignored
    *  on read but dropped on the next write — the row never accretes rubbish a
@@ -396,10 +419,10 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       if (Number.isFinite(ms) && ms > 0) set(AGENT_CONFIG_KEYS.changelogSeenAt, String(Math.floor(ms)));
     },
     countClosedSessionWindow() {
-      const previous = Math.floor(Number(get(AGENT_CONFIG_KEYS.closedSessionWindows)));
-      const next = (Number.isFinite(previous) && previous > 0 ? previous : 0) + 1;
-      set(AGENT_CONFIG_KEYS.closedSessionWindows, String(next));
-      return next;
+      return increment(AGENT_CONFIG_KEYS.closedSessionWindows);
+    },
+    countIsolateGeneration() {
+      return increment(AGENT_CONFIG_KEYS.isolateGen);
     },
     getMctsOverrides() {
       const positive = (key: string): number | undefined => {

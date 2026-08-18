@@ -1,5 +1,6 @@
 import { asFetchFunction } from './fetch-shim.js';
 import * as v from 'valibot';
+import { diagnostics, ProteusError } from '../obs/index.js';
 
 const DEFAULT_MAX_ATTEMPTS = 6;
 const DEFAULT_MAX_ELAPSED_MS = 180_000;
@@ -36,7 +37,10 @@ export function withRateLimitRetry(
   const sleep = opts.sleep ?? abortableSleep;
   const now = opts.now ?? Date.now;
   const random = opts.random ?? Math.random;
-  const warn = opts.warn ?? console.warn;
+  const warn = opts.warn ?? ((message: string) => diagnostics.failure(
+    'provider.rate_limited',
+    new ProteusError('unavailable', message),
+  ));
 
   return asFetchFunction(async (input, init) => {
     if (!hasReplayableBody(input, init)) return fetchImpl(input, init);

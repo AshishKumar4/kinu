@@ -26,6 +26,7 @@ import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery.js';
 import { estimateCost } from './cost.js';
 import { persistableMCTSConfig } from './search-store.js';
 import { initMctsSearchTable } from './search-store.js';
+import { diagnostics } from '../obs/index.js';
 import { nanoid } from '../utils/nanoid.js';
 import { isoDate } from '../utils/date.js';
 import * as v from 'valibot';
@@ -406,23 +407,20 @@ export async function runMCTS(
         // Durable, epoch-fenced checkpoint: an eviction after this can re-enter and
         // continue from the remaining budget against the persisted tree (B6).
         search?.checkpoint(rootId, searchEpoch, phase.iteration, phase.budget, Date.now());
-        // The checkpoint above IS this search's one real heartbeat (mirrored
-        // into a queryable row a debug read can already show), but nothing
-        // reached Workers Logs/`wrangler tail` per iteration — a durably
-        // checkpointed search running for hours produced no visible sign of
-        // life at all. Gated on `search` (only durably-checkpointed runs,
-        // matching the checkpoint call itself) so the fiber-snapshot-only /
-        // test path stays silent.
-        //
-        // stderr, not stdout, and for one reason that holds on both surfaces:
-        // on the CLI stdout IS the machine channel (`proteus exec --json`
-        // writes NDJSON there, and a heartbeat interleaved into it is a corrupt
-        // line a CI consumer cannot parse), while Workers Logs capture every
-        // console channel alike, so `wrangler tail` still shows this.
+        // The checkpoint above is durable but silent: nothing reached Workers Logs
+        // or `wrangler tail` per iteration, so a durably-checkpointed search running
+        // for HOURS produced no visible sign of life. Gated on `search`, matching the
+        // checkpoint call itself, so the fiber-snapshot-only and test paths stay
+        // quiet. An `event` and not a `failure`: an iteration completing is not a
+        // failure, and `failure` would demand a classification there is none of.
         if (search) {
-          console.error(`[proteus] mcts checkpoint rootId=${rootId} iteration=${phase.iteration}/${phase.iteration + phase.budget} remaining=${phase.budget}`);
+          diagnostics.event('mcts.checkpoint_reached', {
+            rootId,
+            iteration: phase.iteration,
+            total: phase.iteration + phase.budget,
+            remaining: phase.budget,
+          });
         }
-
         report({
           type: 'iteration-complete',
           iteration: phase.iteration, remainingBudget: phase.budget, scores,

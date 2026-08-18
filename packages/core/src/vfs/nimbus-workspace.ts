@@ -32,6 +32,7 @@ import { provisionWorkspaceRuntimes } from './workspace-runtimes.js';
 import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives.js';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path.js';
+import { diagnostics, toProteusError } from '../obs/index.js';
 
 export { workspaceToolchainCapabilities } from './workspace-runtimes.js';
 export type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
@@ -212,8 +213,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   // once, because a workspace that fails to boot before any file call is made
   // would otherwise leave no trace at all.
   booting.catch((error) => {
-    console.warn('[proteus] workspace boot failed:',
-      error instanceof Error ? error.message : error);
+    diagnostics.failure(
+      'workspace.boot_failed',
+      toProteusError({ doing: 'boot the Nimbus workspace', cause: error, otherwise: 'unavailable' }),
+    );
   });
   const open = (): Promise<NimbusWorkspace> => booting;
   return {

@@ -18,6 +18,8 @@
 // EventLog until markConsumed, and the next trigger (ingress, cron alarm,
 // post-turn drain) picks the backlog up.
 
+import { diagnostics, toProteusError } from '../obs/index.js';
+
 /** The coalescing window. Long enough to absorb a same-cause burst, short
  *  enough to be imperceptible against a multi-second agent turn. */
 export const DRAIN_DEBOUNCE_MS = 250;
@@ -47,8 +49,10 @@ export class DrainScheduler {
       } catch (err) {
         // Never wedge: the window is already disarmed, the next schedule()
         // re-arms. Events stay pending in the EventLog for the next drain.
-        const message = err instanceof Error ? err.message : String(err);
-        console.warn('[proteus] debounced drain failed:', message);
+        diagnostics.failure(
+          'orchestrator.debounced_drain_failed',
+          toProteusError({ doing: 'run the debounced event drain', cause: err, otherwise: 'unavailable' }),
+        );
       }
     }, DRAIN_DEBOUNCE_MS);
   }

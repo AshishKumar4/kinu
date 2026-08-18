@@ -30,13 +30,17 @@ import {
   type JsonValue,
   type LLMProviderConfig,
 } from '@proteus/core';
+import { diagnostics, ProteusError } from '@proteus/core/obs';
 import * as v from 'valibot';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver.js';
 import { createFileCodexAuthStore } from './codex-auth-store.js';
 
 const dbPath = process.argv[2];
 if (!dbPath) {
-  console.error('[branch-worker] No database path provided');
+  diagnostics.failure(
+    'branch.worker_missing_db_path',
+    new ProteusError('bad_input', 'branch worker started without a database path'),
+  );
   process.exit(1);
 }
 

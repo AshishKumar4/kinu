@@ -30,7 +30,7 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { CompletedTurn } from './types.js';
 import { JsonObjectSchema, JsonValueSchema, parseJsonValue } from '../utils/json.js';
 import { UsageSchema } from '../usage.js';
-import { tolerate } from '../obs/index.js';
+import { diagnostics, toProteusError, tolerate } from '../obs/index.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
 
@@ -122,8 +122,10 @@ export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
       try {
         encoded = JSON.stringify(turn);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.warn('[proteus] session window: turn could not be serialized:', message);
+        diagnostics.failure(
+          'evolution.session_turn_unserializable',
+          toProteusError({ doing: 'serialize a session-window turn', cause: err, otherwise: 'bad_input' }),
+        );
         return;
       }
       const awaitingReview = opts.awaitsFollowup ? 1 : 0;

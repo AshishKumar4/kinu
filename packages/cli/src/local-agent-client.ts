@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite';
 import type { AgentRuntime, SessionSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@proteus/core';
 import type { WorkspaceInfo } from '@proteus/core/identity';
 import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, readLatestSearchTree, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@proteus/core';
+import { diagnostics, toProteusError } from '@proteus/core/obs';
 import {
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   LocalAgentSession,
@@ -161,7 +162,11 @@ export function autoTitleLocalWorkspace(
       // The naming model refusing, or our database/config.json refusing the write:
       // `applyWorkspaceTitle` absorbs neither, and the deterministic title has landed
       // by the time either can happen.
-      console.warn(`Could not save the workspace title for "${name}": ${error instanceof Error ? error.message : String(error)}`);
+      diagnostics.failure(
+        'workspace.title_save_failed',
+        toProteusError({ doing: 'saving the workspace title', cause: error, otherwise: 'io' }),
+        { workspace: name },
+      );
     }
   })();
 }

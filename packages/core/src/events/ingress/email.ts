@@ -27,6 +27,7 @@ import type { SqlExec, VFS } from '../../types/primitives.js';
 import type { MissingCapability } from '../../prompting/volatile-context.js';
 import { argumentDigest } from '../../safety/argument-digest.js';
 import { tryConsumeWebhookRateLimit } from './rate-limit.js';
+import { diagnostics, toProteusError } from '../../obs/index.js';
 
 /**
  * Inbound-email budget per agent (all senders combined). Email is a wake
@@ -327,8 +328,11 @@ export class EmailInbox {
       });
       this.deps.onAdmitted();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn('[proteus] email rate-drop notice failed:', message);
+      diagnostics.failure(
+        'email.rate_drop_notice_failed',
+        toProteusError({ doing: 'publish the inbound-email rate-drop notice', cause: err, otherwise: 'io' }),
+        { limitPerMin: drop.limit },
+      );
     }
   }
 }

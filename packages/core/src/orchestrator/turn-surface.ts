@@ -14,6 +14,7 @@ import { unionAllowedTools, toolAllowedBySkills } from '../skills/render.js';
 import type { ActiveSkillSet, ParsedSkill } from '../skills/types.js';
 import { renderFactsBlock, type FactsStore } from '../memory/facts.js';
 import type { VFS } from '../types/primitives.js';
+import { diagnostics, toProteusError } from '../obs/index.js';
 
 /** Passthrough SkillsVfs shim over the runtime's Storage.vfs. */
 export function skillsVfsOver(vfs: VFS): SkillsVfs {
@@ -59,8 +60,10 @@ export async function resolveTurnSkills(opts: {
   try {
     available = await discoverSkills(opts.vfs);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn('[proteus] skills discovery failed:', message);
+    diagnostics.failure(
+      'skills.discovery_failed',
+      toProteusError({ doing: 'discover the turn\'s skills', cause: err, otherwise: 'io' }),
+    );
     available = [...BUILTIN_SKILLS];
   }
   const explicit = extractExplicitInvocations(opts.userText);

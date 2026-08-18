@@ -1,4 +1,5 @@
 import { JsonObjectSchema, type JsonObject, type OAuthCredential } from '@proteus/core';
+import { diagnostics, toProteusError } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 const CloudflareAccountSchema = v.object({ id: v.string(), name: v.optional(v.string()) });
@@ -132,10 +133,11 @@ export async function cloudflareTokenToCredential(
   try {
     accounts = await fetchCloudflareAccounts(accessToken);
   } catch (err) {
-    console.warn(
-      '[cloudflare-oauth] account lookup failed; storing credential without an account:',
-      err instanceof Error ? err.message : String(err),
-    );
+    diagnostics.failure('oauth.cloudflare_account_lookup_failed', toProteusError({
+      doing: "looking up the Cloudflare login's accounts",
+      cause: err,
+      otherwise: 'unavailable',
+    }));
   }
 
   const metadata: JsonObject = {

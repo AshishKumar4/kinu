@@ -14,6 +14,7 @@ import { noReflectGetRule } from "./rules/no-reflect-get.ts";
 import { noRuntimeTypeofRule } from "./rules/no-runtime-typeof.ts";
 import { noSentinelCatchRule } from "./rules/no-sentinel-catch.ts";
 import { noForbiddenTermInSymbolNamesRule } from "./rules/no-shape-in-symbol-names.ts";
+import { noUntypedConsoleRule } from "./rules/no-untyped-console.ts";
 import { noUnknownParametersRule } from "./rules/no-unknown-parameters.ts";
 import { noUnknownReturnsRule } from "./rules/no-unknown-returns.ts";
 import { noUnknownTypeAliasesRule } from "./rules/no-unknown-type-aliases.ts";
@@ -26,7 +27,7 @@ import { requireSafetyCommentForTypeAssertionRule } from "./rules/require-safety
 /**
  * Generic Oxlint rules that reject low-evidence and low-signal implementation patterns, plus the
  * Proteus-local rules (see upstream.json's `proteusRules`): the no-swallow family,
- * no-wait-until-in-durable-object, and no-copy-rpc-stub.
+ * no-wait-until-in-durable-object, no-copy-rpc-stub, and no-untyped-console.
  */
 const antiSlopPlugin = eslintCompatPlugin({
 	meta: { name: "anti-slop" },
@@ -47,6 +48,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-unsafe-dictionary-type": noUnsafeDictionaryTypeRule,
 		"no-shape-in-symbol-names": noForbiddenTermInSymbolNamesRule,
 		"no-unknown-parameters": noUnknownParametersRule,
+		"no-untyped-console": noUntypedConsoleRule,
 		"no-unknown-returns": noUnknownReturnsRule,
 		"no-unknown-type-aliases": noUnknownTypeAliasesRule,
 		"no-wait-until-in-durable-object": noWaitUntilInDurableObjectRule,

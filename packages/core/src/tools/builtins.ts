@@ -85,7 +85,7 @@ import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '.
 import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review.js';
 import type { JsonValue } from '../utils/json.js';
 import {
-  createConsoleLogger, ProteusError, toProteusError, type Logger,
+  createConsoleLogger, diagnostics, ProteusError, toProteusError, type Logger,
 } from '../obs/index.js';
 
 type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
@@ -312,9 +312,10 @@ function buildCraftedToolSetFromExecute(
         },
       };
     } catch (err) {
-      console.warn(
-        `[proteus] Skipping broken crafted tool "${t.name}":`,
-        err instanceof Error ? err.message : String(err),
+      diagnostics.failure(
+        CRAFT_TOOL_SKIPPED,
+        toProteusError({ doing: 'compile a crafted tool', cause: err, otherwise: 'bad_input' }),
+        { tool: t.name },
       );
     }
   }
@@ -346,16 +347,18 @@ interface WebToolInput {
 }
 
 /**
- * The `run` tool's log event names. Declared as constants beside the code that
+ * This toolset's log event names. Declared as constants beside the code that
  * emits them, the way `SPAN_ATTR_*` is declared beside the tracer: what makes an
  * event findable across Workers Logs and the CLI journal is that the emitter and
  * the query spell it identically, and a constant is the only way to guarantee
- * that. All three are refusals or handled failures — a THROWN error is not logged
- * here, because whoever catches it classifies it there.
+ * that. Every one is a refusal or a handled failure — a THROWN error is not
+ * logged here, because whoever catches it classifies it there.
  */
 const RUN_SHELL_ABSENT = 'run.shell_absent';
 const RUN_ESCALATION_REFUSED = 'run.escalation_refused';
 const RUN_ESCALATION_FAILED = 'run.escalation_failed';
+const CRAFT_TOOL_SKIPPED = 'craft.tool_skipped';
+const EXECUTE_TOOLS_UNBUILDABLE = 'tool.execute_tools_unbuildable';
 
 export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const { rt } = deps;
@@ -415,9 +418,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         loader: deps.codemodeLoader,
       });
     } catch (err) {
-      console.error(
-        '[proteus] createExecuteTool FAILED:',
-        err instanceof Error ? err.message : String(err),
+      logger.failure(
+        EXECUTE_TOOLS_UNBUILDABLE,
+        toProteusError({ doing: 'build the execute_tools dispatcher', cause: err, otherwise: 'unavailable' }),
       );
     }
   }

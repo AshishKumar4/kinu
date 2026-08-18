@@ -44,6 +44,8 @@
  * the same intuition + add Cloudflare-Workers-specific deny rules.
  */
 
+import { diagnostics, ProteusError } from '../obs/index.js';
+
 export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 
 /**
@@ -647,7 +649,11 @@ export async function decideApproval(
   }
   if (review.decision === 'gate') {
     if (mode === 'allow_all') {
-      console.warn(`[approval-gate] gate→allow (allow_all mode): ${formatApproval(review)}`);
+      diagnostics.failure(
+        'approval.gate_bypassed',
+        new ProteusError('unsupported', 'allow_all mode cannot ask the owner; the gated command ran unapproved'),
+        { executor, rules: review.hits.map((h) => h.rule).join(',') },
+      );
     } else {
       // 'deny_all' never asks. Under 'strict' a connected channel gets to
       // put the decision to the user; null means nobody is listening.
@@ -690,7 +696,11 @@ export async function decideApproval(
     if (mode === 'deny_all') {
       return deny(`${APPROVAL_DENIED} (deny_all mode) — ${formatApproval(review)}`);
     }
-    console.warn(`[approval-gate] warn: ${formatApproval(review)}`);
+    diagnostics.failure(
+      'approval.warn_unenforced',
+      new ProteusError('unsupported', 'a warn-level review is not put to the owner; the command ran'),
+      { executor, rules: review.hits.map((h) => h.rule).join(',') },
+    );
   }
   return { run: true };
 }

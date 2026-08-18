@@ -22,6 +22,7 @@ import {
 } from './inline-primitives.js';
 import { createVercelAILLM } from '../llm.js';
 import { buildRuntime } from '../runtime-builder.js';
+import { diagnostics, ProteusError } from '../obs/index.js';
 
 export interface WorkspaceResumeConfig {
   llm: LLMProviderConfig;
@@ -84,13 +85,13 @@ export async function openWorkspace(db: AgentDatabase, config: WorkspaceResumeCo
 
   // Step 8: Detect orphaned fibers
   const orphanedFibers = sql<{ id: string; name: string }>`SELECT id, name FROM fibers`;
-  if (orphanedFibers.length > 0) {
-    console.warn(`[workspace] ${orphanedFibers.length} orphaned fiber(s) from previous run:`,
-      orphanedFibers.map(f => f.name).join(', '));
-    // Clean up orphaned fibers
-    for (const fiber of orphanedFibers) {
-      void sql`DELETE FROM fibers WHERE id = ${fiber.id}`;
-    }
+  for (const fiber of orphanedFibers) {
+    diagnostics.failure(
+      'fiber.orphan_cleared',
+      new ProteusError('cancelled', 'a fiber left running by a previous session was discarded'),
+      { fiberId: fiber.id, fiber: fiber.name },
+    );
+    void sql`DELETE FROM fibers WHERE id = ${fiber.id}`;
   }
 
   const vfs = workspace.vfs;

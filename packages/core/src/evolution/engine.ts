@@ -103,6 +103,7 @@ const GeneralizedToolSchema = v.object({
 });
 import { runMCTS } from '../mcts/engine.js';
 import { createAgentConfigStore, initAgentConfigTable, type AgentConfigStore } from '../config/store.js';
+import { diagnostics, toProteusError } from '../obs/index.js';
 
 /** The archive context handed to the proposal prompt: which version the
  *  proposal branches from + the variants it may cite as stepping stones. */
@@ -658,7 +659,10 @@ export class EvolutionEngine {
     try {
       await this.config.shadowTrialRunner();
     } catch (err) {
-      console.warn('[proteus] shadow trial drain failed:', err instanceof Error ? err.message : err);
+      diagnostics.failure(
+        'evolution.shadow_trial_drain_failed',
+        toProteusError({ doing: 'drain the due shadow trials', cause: err, otherwise: 'unavailable' }),
+      );
     }
   }
 

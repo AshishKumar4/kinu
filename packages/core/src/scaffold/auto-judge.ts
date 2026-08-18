@@ -30,6 +30,7 @@ import {
   recordShadowEvaluation, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow.js';
 import { runScaffold, scaffoldEventText, SCAFFOLD_TURN_TIMEOUT_MS, type ScaffoldRunResult } from './executor.js';
+import { diagnostics, ProteusError, toProteusError } from '../obs/index.js';
 
 /**
  * Structured output of ONE judge call. Deliberately neutral: the judge sees
@@ -191,7 +192,10 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
       timeoutMs: config.scaffoldTimeoutMs,
     });
   } catch (err) {
-    console.warn('[auto-judge] pending scaffold run failed:', err instanceof Error ? err.message : err);
+    diagnostics.failure(
+      'scaffold.pending_run_failed',
+      toProteusError({ doing: 'run the pending scaffold for a shadow trial', cause: err, otherwise: 'unavailable' }),
+    );
     return { skipped: true, reason: 'pending_unreadable' };
   }
 
@@ -210,7 +214,10 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   try {
     judgeResult = await judgeTrialOrderSwapped({ ...evidence, judge: opts.judge, pendingFirst: rng() < 0.5 });
   } catch (err) {
-    console.warn('[auto-judge] judge LLM failed:', err instanceof Error ? err.message : err);
+    diagnostics.failure(
+      'scaffold.judge_failed',
+      toProteusError({ doing: 'judge a shadow trial', cause: err, otherwise: 'unavailable' }),
+    );
     return { skipped: true };
   }
 
@@ -237,10 +244,18 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
       const outcome = await applyPromotionDecision(opts.rt, fresh, decision);
       applied = outcome.action;
       if (outcome.vetoReason) {
-        console.warn('[auto-judge] promotion vetoed:', outcome.vetoReason);
+        diagnostics.failure(
+          'scaffold.promotion_vetoed',
+          new ProteusError('denied', outcome.vetoReason),
+          { scaffoldVersion: fresh.version, action: outcome.action },
+        );
       }
     } catch (err) {
-      console.warn('[auto-judge] applyPromotionDecision failed:', err instanceof Error ? err.message : err);
+      diagnostics.failure(
+        'scaffold.promotion_apply_failed',
+        toProteusError({ doing: 'apply a scaffold promotion decision', cause: err, otherwise: 'io' }),
+        { scaffoldVersion: fresh.version, decision },
+      );
     }
   }
 

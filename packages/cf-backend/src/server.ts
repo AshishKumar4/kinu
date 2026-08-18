@@ -23,6 +23,7 @@
 
 import { routeAgentRequest } from "agents";
 import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
+import { diagnostics, toProteusError } from "@proteus/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
@@ -234,10 +235,20 @@ export default {
         const monitor = env.MonitorDO.get(env.MonitorDO.idFromName(MONITOR_SINGLETON));
         const result = await monitor.check();
         if (result.failing.length > 0 || result.recovered.length > 0) {
-          console.warn('[proteus-monitor]', JSON.stringify(result));
+          diagnostics.event('monitor.check_settled', {
+            failing: result.failing.length,
+            alerting: result.alerting.length,
+            recovered: result.recovered.length,
+            emails: result.emails,
+            emailSkipped: result.skipped !== undefined,
+          });
         }
       } catch (e) {
-        console.error('[proteus-monitor] check failed:', e instanceof Error ? e.message : e);
+        diagnostics.failure('monitor.check_failed', toProteusError({
+          doing: 'running the synthetic monitoring tick',
+          cause: e,
+          otherwise: 'unavailable',
+        }));
       }
     })());
   },

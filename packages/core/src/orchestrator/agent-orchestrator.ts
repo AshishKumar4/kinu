@@ -68,10 +68,7 @@ import {
 import { nanoid } from '../utils/nanoid.js';
 import { workModeForTurnMetadata, type WorkMode } from '../prompting/surface.js';
 import type { JsonObject } from '../utils/json.js';
-
-function errorMessage<Failure>(failure: Failure): string {
-  return failure instanceof Error ? failure.message : String(failure);
-}
+import { diagnostics, toProteusError } from '../obs/index.js';
 
 /**
  * Whether an arriving user message is a genuine conversational follow-up —
@@ -386,7 +383,10 @@ export class AgentOrchestrator {
         endedAt: Date.now(),
       });
     } catch (err) {
-      console.error('[proteus] Session evolution failed:', err);
+      diagnostics.failure(
+        'evolution.session_pass_failed',
+        toProteusError({ doing: 'run the session evolution pass', cause: err, otherwise: 'unavailable' }),
+      );
     }
     // Settled either way: retrying the same window forever on a persistent
     // failure would be a livelock, and every step of the chain already absorbs
@@ -422,9 +422,14 @@ export class AgentOrchestrator {
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
         const abandoned = [...new Set(this.inFlight.values())].join(', ');
-        console.warn(
-          `[proteus] evolution settle gave up after ${this.settleTimeoutMs}ms; ` +
-          `still running, abandoned: ${abandoned}`,
+        diagnostics.failure(
+          'evolution.settle_timed_out',
+          toProteusError({
+            doing: 'wait for the turn lane to settle before exit',
+            cause: new Error(`still running: ${abandoned}`),
+            otherwise: 'timeout',
+          }),
+          { timeoutMs: this.settleTimeoutMs, abandoned },
         );
         return;
       }
@@ -460,7 +465,11 @@ export class AgentOrchestrator {
 
   private detach(work: Promise<void>, label: string): void {
     const tracked = work
-      .catch((err) => console.error(`[proteus] ${label} failed:`, err))
+      .catch((err) => diagnostics.failure(
+        'orchestrator.detached_work_failed',
+        toProteusError({ doing: 'run detached post-turn work', cause: err, otherwise: 'unavailable' }),
+        { work: label },
+      ))
       .then(() => { this.inFlight.delete(tracked); });
     this.inFlight.set(tracked, label);
   }
@@ -481,7 +490,11 @@ export class AgentOrchestrator {
       try {
         this.deps.eventLog.unbind(id);
       } catch (err) {
-        console.warn('[proteus] event unbind failed:', id, err instanceof Error ? err.message : err);
+        diagnostics.failure(
+          'event.unbind_failed',
+          toProteusError({ doing: 'return a bound event to pending', cause: err, otherwise: 'io' }),
+          { eventId: id },
+        );
       }
     }
   }
@@ -511,7 +524,11 @@ export class AgentOrchestrator {
       if (!batch) return;
       for (const id of batch.ids) this.deps.eventLog.markConsumed(id, turnId, 0);
     } catch (err) {
-      console.warn('[proteus] drainPendingEvents (select) failed:', errorMessage(err));
+      diagnostics.failure(
+        'orchestrator.drain_select_failed',
+        toProteusError({ doing: 'select the pending events for a drain turn', cause: err, otherwise: 'io' }),
+        { turnId },
+      );
       return;
     }
     const ids = batch.ids;

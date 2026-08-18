@@ -33,6 +33,7 @@ import {
   type EvalInstance, type GepaCandidate, type GepaConfig, type GepaConstraints,
   type GepaResult, type GepaIterationState, type GepaMetric,
 } from './types.js';
+import { diagnostics, toProteusError } from '../../obs/index.js';
 
 type ProposalOutcome =
   | { ok: true; source: string; operator: 'mutate' | 'merge'; metricCallsCharged: number; parentSource?: string }
@@ -301,6 +302,10 @@ async function emitIteration(
 ): Promise<void> {
   if (!hook) return;
   try { await hook(state); } catch (err) {
-    console.warn('[gepa] onIteration hook failed:', errorMessage(err));
+    diagnostics.failure(
+      'gepa.iteration_hook_failed',
+      toProteusError({ doing: 'run the GEPA onIteration hook', cause: err, otherwise: 'io' }),
+      { iteration: state.iteration },
+    );
   }
 }

@@ -114,6 +114,7 @@ import {
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   priceCall, WORKSPACE_RUN_ID,
 } from '@proteus/core';
+import { diagnostics, ProteusError, toProteusError } from '@proteus/core/obs';
 import { makeSqlExec, type CLIRuntime } from './runtime.js';
 import { discoverAgentsMd } from './agents-md.js';
 import { createNodeCraftedExecute } from './craft-executor.js';
@@ -496,15 +497,18 @@ export class LocalAgentSession implements BackendHost {
       ports: {
         transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
         plans: this.compactionState.plans,
+        // `@better-compact/core`'s `Logger` requires all four levels, so none can be
+        // dropped as scaffolding. `info`/`debug` go through `event`, NOT through
+        // `failure` with an invented code: `failure` demands a classification
+        // precisely so a failure line cannot omit which kind it was, and stamping
+        // `unavailable` on a debug line would put that code into every
+        // failure-rate read. The `data` argument is an object nobody looked
+        // inside — `message` is the whole scalar fact, so it rides as a field.
         logger: {
-          // All diagnostics go to stderr: under `proteus exec --json` stdout IS
-          // the event stream, so an info/debug console.log would corrupt the
-          // JSONL (console.info/debug write to stdout in Node). stderr keeps the
-          // stream clean and is still visible on an interactive terminal.
-          info: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
-          debug: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
-          warn: (message, data) => console.warn(`[proteus:compaction] ${message}`, data ?? ''),
-          error: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
+          info: (message) => { diagnostics.event('compaction.info', { message }); },
+          debug: (message) => { diagnostics.event('compaction.debug', { message }); },
+          warn: (message) => { diagnostics.failure('compaction.degraded', new ProteusError('unavailable', message)); },
+          error: (message) => { diagnostics.failure('compaction.failed', new ProteusError('io', message)); },
         },
       },
       archive: this.compactionState.archive,
@@ -993,8 +997,10 @@ export class LocalAgentSession implements BackendHost {
   setTimer(fn: () => Promise<void>, ms: number): void {
     setTimeout(() => {
       if (this.ended) return;
-      void fn().catch((error) =>
-        console.warn('[proteus] drain timer callback failed:', errorMessage({ error })));
+      void fn().catch((error) => diagnostics.failure(
+        'drain.timer_callback_failed',
+        toProteusError({ doing: 'running the drain-debounce timer callback', cause: error, otherwise: 'io' }),
+      ));
     }, ms);
   }
 
@@ -1228,7 +1234,11 @@ export class LocalAgentSession implements BackendHost {
     void settled.then(([outcome]) => {
       this.backgroundFibers.delete(settled);
       if (outcome.status === 'rejected') {
-        console.error(`[proteus] durable fiber '${name}' failed to settle:`, outcome.reason);
+        diagnostics.failure(
+          'fiber.settle_failed',
+          toProteusError({ doing: 'settling a durable background fiber', cause: outcome.reason, otherwise: 'io' }),
+          { fiber: name },
+        );
       }
     });
     return running;
@@ -1292,7 +1302,9 @@ export class LocalAgentSession implements BackendHost {
       `this machine. Cancel with: proteus jobs ${this.agentName()} cancel <id>.` +
       (roster ? ` Interrupted: ${roster}.` : '');
     this.emit({ type: 'evolution', event: 'bg_jobs_abandoned', message });
-    console.warn(`[proteus] ${message}`);
+    diagnostics.failure('jobs.abandoned_at_exit', new ProteusError('timeout', message), {
+      jobs: interrupted.length,
+    });
   }
 
   /**
@@ -1369,7 +1381,11 @@ export class LocalAgentSession implements BackendHost {
       // A frontend render error must not kill the agent loop — but it is still a
       // defect, and the event stream that would have shown it is the thing that
       // just failed, so stderr is the only channel left.
-      console.error(`[proteus] session event listener failed on '${event.type}':`, error);
+      diagnostics.failure(
+        'session.event_listener_failed',
+        toProteusError({ doing: 'delivering a session event to the frontend listener', cause: error, otherwise: 'io' }),
+        { eventType: event.type },
+      );
     }
   }
 
@@ -1431,7 +1447,10 @@ export class LocalAgentSession implements BackendHost {
         try {
           await this.processTurn(item);
         } catch (err) {
-          console.error('[proteus] turn processing failed:', err instanceof Error ? err.message : String(err));
+          diagnostics.failure(
+            'turn.processing_failed',
+            toProteusError({ doing: 'processing a queued turn', cause: err, otherwise: 'io' }),
+          );
         } finally {
           item.resolve();
         }
@@ -1484,7 +1503,12 @@ export class LocalAgentSession implements BackendHost {
     const id = runId !== undefined ? runId : this.currentRunId;
     if (!id) return;
     try { this.eventRecorder.emit(id, input); }
-    catch (err) { console.warn('[proteus] run event emit failed:', err); }
+    catch (err) {
+      diagnostics.failure(
+        'event.run_row_write_failed',
+        toProteusError({ doing: 'appending a row to the durable run-event log', cause: err, otherwise: 'io' }),
+      );
+    }
   }
 
   /** Seal the in-flight run via the shared core turn-lifecycle bracket.
@@ -1925,7 +1949,10 @@ export class LocalAgentSession implements BackendHost {
       const message = err instanceof Error ? err.message : String(err);
       this.orch.acc.hadError = true;
       this.closeRun(runError ?? message.slice(0, 500));
-      console.error('[proteus] turn finalization failed:', message);
+      diagnostics.failure(
+        'turn.finalization_failed',
+        toProteusError({ doing: 'finalizing the turn', cause: err, otherwise: 'io' }),
+      );
       // Any response messages runChat produced remain in live history as a
       // best-effort recovery for later turns in this process. We do not retry
       // potentially partial side effects, and failed persistence cannot survive

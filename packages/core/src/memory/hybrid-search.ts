@@ -17,6 +17,7 @@
 import type { Memory } from '../types/primitives.js';
 import type { VectorStore, VectorSearchHit } from './vector-store.js';
 import { reciprocalRankFusion } from './vector-store.js';
+import { diagnostics, toProteusError } from '../obs/index.js';
 
 export interface LexicalHit {
   readonly id: string;
@@ -114,12 +115,18 @@ export async function hybridSearch(
   const rrfK = options.rrfK ?? 60;
 
   const lexicalPromise: Promise<LexicalHit[]> = lexicalSearch(query, perSourceK).catch((err) => {
-      console.warn('[hybrid-search] lexical search failed:', err instanceof Error ? err.message : err);
+      diagnostics.failure(
+        'memory.lexical_search_failed',
+        toProteusError({ doing: 'run the lexical half of a hybrid search', cause: err, otherwise: 'io' }),
+      );
       return [];
     });
   const semanticPromise: Promise<VectorSearchHit[]> = vectorStore.available
     ? vectorStore.search(query, perSourceK).catch((err) => {
-          console.warn('[hybrid-search] semantic search failed:', err instanceof Error ? err.message : err);
+          diagnostics.failure(
+            'memory.semantic_search_failed',
+            toProteusError({ doing: 'run the semantic half of a hybrid search', cause: err, otherwise: 'unavailable' }),
+          );
           return [];
         })
     : Promise.resolve([]);

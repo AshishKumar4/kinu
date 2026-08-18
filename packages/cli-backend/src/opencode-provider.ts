@@ -21,6 +21,7 @@ import {
 } from '@proteus/core';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@proteus/core';
+import { diagnostics, ProteusError } from '@proteus/core/obs';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -514,9 +515,13 @@ async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo
   // An unreadable entry is opencode's output format having changed, and the
   // symptom — a short or empty model list — reads exactly like a small account.
   if (unreadable.length > 0) {
-    console.warn(
-      `[proteus] opencode models --verbose: ${unreadable.length} of `
-      + `${models.length + unreadable.length} entries could not be read — ${unreadable.join('; ')}`,
+    diagnostics.failure(
+      'model.catalog_entries_unreadable',
+      new ProteusError(
+        'bad_input',
+        `opencode models --verbose: entries could not be read — ${unreadable.join('; ')}`,
+      ),
+      { unreadable: unreadable.length, readable: models.length },
     );
   }
   return models;

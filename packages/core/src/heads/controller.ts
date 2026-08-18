@@ -38,6 +38,7 @@ import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation.js';
 import type { LLM, Executor } from '../types/primitives.js';
 import type { WorkMode } from '../prompting/surface.js';
 import { addUsage, usageTotal, type Usage } from '../usage.js';
+import { diagnostics, toProteusError } from '../obs/index.js';
 
 /** What the merge LLM should return. Validated by MergeOutputSchema. */
 export type MergeLLMFn = (
@@ -416,7 +417,11 @@ export class HeadController {
       // The reason itself, not its `message`: a provider error carries the url
       // and cause that say WHICH judge broke, and AI SDK call errors routinely
       // have an empty message.
-      console.warn(`[proteus] head ${r.id} could not be scored — reporting no grounded signal:`, outcome.reason);
+      diagnostics.failure(
+        'head.score_failed',
+        toProteusError({ doing: 'score a head report', cause: outcome.reason, otherwise: 'unavailable' }),
+        { headId: r.id },
+      );
       return { id: r.id, text: r.summary, status: r.status, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
     });
   }
@@ -555,7 +560,11 @@ export class HeadController {
     const scored = settled.map((outcome, i) => {
       if (outcome.status === 'fulfilled') return outcome.value;
       // The reason itself, not its `message` — see scoreHeads.
-      console.warn('[proteus] a merge sample could not be scored — dropping it from the ensemble:', outcome.reason);
+      diagnostics.failure(
+        'merge.sample_score_failed',
+        toProteusError({ doing: 'score a merge sample', cause: outcome.reason, otherwise: 'unavailable' }),
+        { sampleIndex: i },
+      );
       return { sample: samples[i]!, score: null };
     });
     const usable = scored.filter((x): x is { sample: MergeOutput; score: number } => x.score !== null);

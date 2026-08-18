@@ -9,6 +9,7 @@
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import { routeInboundEmail } from './route.js';
+import { diagnostics } from '@proteus/core/obs';
 
 export async function handleInboundEmail(
   message: ForwardableEmailMessage,
@@ -20,6 +21,9 @@ export async function handleInboundEmail(
     async (name) => await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name),
   );
   if (result.outcome === 'dropped') {
-    console.warn(`[proteus-email] dropped mail from ${message.from}: ${result.reason}`);
+    diagnostics.event('email.delivery_dropped', {
+      from: message.from,
+      reason: result.reason ?? 'unknown',
+    });
   }
 }

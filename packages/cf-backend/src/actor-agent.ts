@@ -19,6 +19,8 @@
 import { type AgentContext, type Connection, type ConnectionContext } from "agents";
 import { parseProtocolMessage } from "agents/chat";
 import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate.js";
+import { createWorkersTracer } from "./obs/cf-tracer.js";
+import { createAgentTracing, type AgentTracing } from "@proteus/core/obs";
 import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer,
@@ -155,7 +157,7 @@ import {
   type PromptCacheStrategy,
 } from "@proteus/core";
 import type { CodemodeProvider, DeferredApprovalChannel } from "@proteus/core";
-import { tolerate } from "@proteus/core/obs";
+import { diagnostics, ProteusError, toProteusError, tolerate } from "@proteus/core/obs";
 import type { UserDO } from "./user/user-do.js";
 import type { UserCaller } from "./user/workspace-capability.js";
 import { sha256Hex } from "./lib/crypto.js";
@@ -543,7 +545,11 @@ export abstract class ActorAgent extends Think<Env> {
           try {
             await this.compactionState.plans.save(this.name, null);
           } catch (err) {
-            console.warn('[proteus] clear-history compaction reset failed:', err);
+            diagnostics.failure('compaction.reset_failed', toProteusError({
+              doing: 'clearing the persisted compaction plan after clear-history',
+              cause: err,
+              otherwise: 'io',
+            }), { workspace: this.name });
           }
         }
       }
@@ -650,7 +656,11 @@ export abstract class ActorAgent extends Think<Env> {
       parts: [{ type: 'text' as const, text: steer.text }],
       metadata: { proteusSteer: true },
     }))).catch((err) =>
-      console.warn('[proteus] persisting a mid-turn steer failed:', errorMessage(err)));
+      diagnostics.failure('steer.persist_failed', toProteusError({
+        doing: 'persisting a mid-turn steer as a durable user row',
+        cause: err,
+        otherwise: 'io',
+      }), { steers: steers.length }));
   }
 
   /**
@@ -687,7 +697,11 @@ export abstract class ActorAgent extends Think<Env> {
     if (leftover.length === 0) return;
     void this.host.enqueueTurn({ text: leftover.map((steer) => steer.text).join('\n\n') })
       .catch((err) =>
-        console.warn('[proteus] leftover steer rerun failed:', errorMessage(err)));
+        diagnostics.failure('steer.rerun_failed', toProteusError({
+          doing: 'enqueuing leftover steers as their own user turn',
+          cause: err,
+          otherwise: 'io',
+        }), { steers: leftover.length }));
   }
 
   /** The settled turn's telemetry — the measured compaction trigger, the
@@ -761,13 +775,16 @@ export abstract class ActorAgent extends Think<Env> {
   private registerCompactionExtension(): void {
     const logger: CompactionLogger = {
       info: (message, data) => this.logActivity('compaction', compactionLogDetail(message, data)),
-      debug: (message, data) => console.log(`[proteus:compaction] ${message}`, data ?? ''),
+      debug: (message) => diagnostics.event('compaction.debug', { message }),
+      // `degraded`/`failed` rather than `warn`/`error`: a level is not an outcome, and these two names
+      // are shared verbatim with `cli-backend/src/local-session.ts`, which adapts the same
+      // `@better-compact/core` Logger port to the same outcomes. One query reads both backends.
       warn: (message, data) => {
-        console.warn(`[proteus:compaction] ${message}`, data ?? '');
+        diagnostics.failure('compaction.degraded', new ProteusError('unavailable', message));
         this.logActivity('compaction_warn', compactionLogDetail(message, data));
       },
       error: (message, data) => {
-        console.error(`[proteus:compaction] ${message}`, data ?? '');
+        diagnostics.failure('compaction.failed', new ProteusError('io', message));
         this.logActivity('compaction_error', compactionLogDetail(message, data));
       },
     };
@@ -830,12 +847,24 @@ export abstract class ActorAgent extends Think<Env> {
           onToolCallEvent: (ev) => {
             try {
               if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'tool_call_end', ...ev });
-            } catch (err) { console.warn('[proteus] event emit failed at afterToolCall:', err); }
+            } catch (err) {
+              diagnostics.failure('event.tool_call_end_emit_failed', toProteusError({
+                doing: 'recording a tool_call_end run event',
+                cause: err,
+                otherwise: 'io',
+              }));
+            }
           },
           onStepEvent: (ev) => {
             try {
               if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', ...ev });
-            } catch (err) { console.warn('[proteus] event emit failed at onStepFinish:', err); }
+            } catch (err) {
+              diagnostics.failure('event.step_finish_emit_failed', toProteusError({
+                doing: 'recording a step_finish run event',
+                cause: err,
+                otherwise: 'io',
+              }));
+            }
           },
         },
       });
@@ -859,7 +888,13 @@ export abstract class ActorAgent extends Think<Env> {
       onExhausted: ({ error: _error, ...refusal }) => {
         try {
           if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'budget_exhausted', ...refusal });
-        } catch (err) { console.warn('[proteus] event emit failed at budget exhaustion:', err); }
+        } catch (err) {
+          diagnostics.failure('event.budget_exhausted_emit_failed', toProteusError({
+            doing: 'recording a budget_exhausted run event',
+            cause: err,
+            otherwise: 'io',
+          }));
+        }
       },
     });
     return this._budget;
@@ -971,7 +1006,11 @@ export abstract class ActorAgent extends Think<Env> {
       await this.orch.settleEvolution();
       await this.orch.runDueSessionEvolution();
     })
-      .catch((err) => console.warn('[proteus] evolution settle failed:', errorMessage(err)))
+      .catch((err) => diagnostics.failure('evolution.settle_failed', toProteusError({
+        doing: 'settling the turn and session evolution lanes',
+        cause: err,
+        otherwise: 'unavailable',
+      })))
       .finally(() => { this._evolutionSettling = false; });
   }
 
@@ -1188,11 +1227,19 @@ export abstract class ActorAgent extends Think<Env> {
           void this.keepAliveWhile(() => new Promise<void>((resolve) => {
             setTimeout(() => {
               fn().catch((err) =>
-                console.warn('[proteus] drain timer callback failed:', errorMessage(err)),
+                diagnostics.failure('drain.timer_callback_failed', toProteusError({
+                  doing: 'running the debounced event drain',
+                  cause: err,
+                  otherwise: 'io',
+                })),
               ).finally(resolve);
             }, ms);
           })).catch((err) =>
-            console.warn('[proteus] drain timer keepAlive failed:', errorMessage(err)));
+            diagnostics.failure('drain.timer_keepalive_failed', toProteusError({
+              doing: 'holding the actor alive across the drain debounce window',
+              cause: err,
+              otherwise: 'io',
+            })));
         },
         // Branching-heads runtime (Facet spawner + merge LLM), resolved lazily —
         // heads need the owner for UserDO auth, set by first-turn time. undefined
@@ -1291,7 +1338,11 @@ export abstract class ActorAgent extends Think<Env> {
       if (usd !== undefined) event.usd = usd;
       this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, event);
     } catch (err) {
-      console.warn('[proteus] event emit failed at model_call:', err);
+      diagnostics.failure('event.model_call_emit_failed', toProteusError({
+        doing: 'recording a model_call run event',
+        cause: err,
+        otherwise: 'io',
+      }), { source: report.source });
     }
   }
 
@@ -1355,7 +1406,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (this._scaffoldReady || !this.getOwnerUserId()) return;
     if (!(await this.rt.identity.scaffold.exists())) {
       await bootstrapScaffold(this.rt);
-      console.log('[proteus] Bootstrapped initial scaffold');
+      diagnostics.event('scaffold.bootstrapped', { workspace: this.workspaceName() });
     }
     this._scaffoldReady = true;
   }
@@ -1401,7 +1452,11 @@ export abstract class ActorAgent extends Think<Env> {
         nodeCount: nodes.length, nodes,
       }));
     } catch (err) {
-      console.warn('[proteus] broadcastMctsProgress failed:', err);
+      diagnostics.failure('mcts.progress_broadcast_failed', toProteusError({
+        doing: 'pushing an MCTS search tree to connected surfaces',
+        cause: err,
+        otherwise: 'io',
+      }), { rootId, phase });
     }
   }
 
@@ -1622,10 +1677,39 @@ export abstract class ActorAgent extends Think<Env> {
     return this._boundSql;
   }
 
+  private _tracing: AgentTracing | null = null;
+  /**
+   * The tracing seam, one per construction of this object.
+   *
+   * LAZY, and that is what makes `isolateGen` correct rather than merely present.
+   * The generation is bumped on FIRST use inside an activation, so exactly one
+   * bump happens per construction — including the case a boot-time counter cannot
+   * see, `ctx.facets.abort()`, which reuses the isolate and is how a Proteus fork
+   * most commonly dies. It is deliberately NOT bumped in `onStart`: that runs
+   * inside `ctx.blockConcurrencyWhile`, where every added write stalls every
+   * request on this object and 30s of it RESETS the object
+   * (`do.block_concurrency.cancel_ms`), and an observability counter has no
+   * business on that path.
+   *
+   * `selfPath` rather than `ctx.id`: measured on the deployed runtime, two facets
+   * with distinct ids both reported under the ROOT's `durableObjectId`, so an
+   * id-keyed trace collapses every head and subordinate into one orchestrator
+   * (`do.facet.id_is_root_namespace`).
+   */
+  protected get tracing(): AgentTracing {
+    if (!this._tracing) {
+      this._tracing = createAgentTracing({
+        tracer: createWorkersTracer(),
+        isolateGen: this.config.countIsolateGeneration(),
+        selfPath: this.selfPath,
+      });
+    }
+    return this._tracing;
+  }
+
   protected logActivity(event: string, detail?: string) {
     const elapsed = this._turnT0 > 0 ? Math.round(performance.now() - this._turnT0) : 0;
     const now = Date.now();
-    console.log(`[proteus:${String(elapsed).padStart(6)}ms] ${event}${detail ? ` — ${detail}` : ""}`);
     void this.sql`INSERT INTO activity_log (event, detail, elapsed_ms, created_at)
       VALUES (${event}, ${detail ?? null}, ${elapsed}, ${now})`;
   }
@@ -2048,7 +2132,11 @@ export abstract class ActorAgent extends Think<Env> {
       this.logActivity("gettools_end", `rebuilt — ${Object.keys(tools).length} tools`);
       return tools;
     } catch (err) {
-      console.error("[proteus] getRawTools() FAILED:", err);
+      diagnostics.failure('tool.surface_build_failed', toProteusError({
+        doing: 'assembling the turn tool surface',
+        cause: err,
+        otherwise: 'io',
+      }), { mode });
       throw err;
     }
   }
@@ -2150,7 +2238,11 @@ export abstract class ActorAgent extends Think<Env> {
       if (!runId) return;
       this.eventRecorder.emit(runId, headPhaseRunEvent(event));
     } catch (err) {
-      console.warn('[proteus] event emit failed at head onPhase:', err);
+      diagnostics.failure('event.head_phase_emit_failed', toProteusError({
+        doing: 'recording a head split/merge phase run event',
+        cause: err,
+        otherwise: 'io',
+      }), { runId, phase: event.kind, rootId: event.rootId });
     }
   }
 
@@ -2186,7 +2278,11 @@ export abstract class ActorAgent extends Think<Env> {
     let watermark: number;
     try { watermark = await userDOStub.userMcp_updatedAt(caller); }
     catch (err) {
-      console.warn('[proteus] mcp watermark fetch failed:', errorMessage(err));
+      diagnostics.failure('mcp.watermark_fetch_failed', toProteusError({
+        doing: 'reading the user MCP configuration watermark from UserDO',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { userId });
       return this._cachedMcpTools;
     }
     if (watermark === this._cachedMcpToolsKey && Object.keys(this._cachedMcpTools).length > 0) {
@@ -2214,7 +2310,11 @@ export abstract class ActorAgent extends Think<Env> {
         source: `MCP server "${u.server}"`, reason: u.reason,
       }));
     } catch (err) {
-      console.warn('[proteus] mcp descriptor fetch failed:', errorMessage(err));
+      diagnostics.failure('mcp.descriptor_fetch_failed', toProteusError({
+        doing: 'fetching the user MCP tool descriptors from UserDO',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { userId, watermark });
       return this._cachedMcpTools;
     }
 
@@ -2394,7 +2494,13 @@ export abstract class ActorAgent extends Think<Env> {
     // surfaces the broken-server status via /api/user/mcp/servers polling.
     let mcpTools: ToolSet = {};
     try { mcpTools = await this.buildUserMcpTools(); }
-    catch (err) { console.warn('[proteus] buildUserMcpTools failed:', errorMessage(err)); }
+    catch (err) {
+      diagnostics.failure('mcp.tool_surface_failed', toProteusError({
+        doing: 'building the user MCP tool adapters for this turn',
+        cause: err,
+        otherwise: 'unavailable',
+      }));
+    }
 
     // Expose MCP tool keys to the active-tools allowlist so Think doesn't
     // strip them out. Builtin names + MCP `mcp_<server>_<name>` keys are
@@ -2415,7 +2521,11 @@ export abstract class ActorAgent extends Think<Env> {
       const status = await this.rt.deviceTransport.refreshStatus();
       deviceNotice = observeDevicePresence(this.config, status).notice;
     } catch (err) {
-      console.warn('[proteus] device status refresh failed:', errorMessage(err));
+      diagnostics.failure('device.status_refresh_failed', toProteusError({
+        doing: 'refreshing the device hub presence for this turn',
+        cause: err,
+        otherwise: 'unavailable',
+      }));
     }
 
     // AGENTS.md (agents.md standard) — agent VFS root + the sandbox workspace
@@ -2800,7 +2910,7 @@ export abstract class ActorAgent extends Think<Env> {
         ? null
         : projectJsonValue({ value: ctx.snapshot });
       const summary = JSON.stringify(snapshot).slice(0, 400);
-      console.log(`[proteus] fiber recovered: name=${ctx.name} id=${ctx.id}; snapshot=${summary}`);
+      diagnostics.event('fiber.recovered', { fiber: ctx.name, fiberId: ctx.id });
       // Background-job fiber (bg:*) is operational plumbing, not an evolution
       // event: the runner re-fails + wakes an orphaned 'running' job (a 'settled'
       // one already recorded its outcome + woke), skipping the MEMORY.md note +
@@ -2827,7 +2937,11 @@ export abstract class ActorAgent extends Think<Env> {
         `Snapshot at interruption: ${summary}\n`,
       );
     } catch (err) {
-      console.error('[proteus] onFiberRecovered handler failed:', err);
+      diagnostics.failure('fiber.recovery_failed', toProteusError({
+        doing: 'handling a fiber recovered after eviction',
+        cause: err,
+        otherwise: 'io',
+      }), { fiber: ctx.name, fiberId: ctx.id });
     }
   }
 

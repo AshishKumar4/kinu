@@ -18,6 +18,7 @@ import {
   type CloudflareTokenPayload,
 } from '../lib/cloudflare-oauth.js';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, JsonValueSchema, type JsonObject } from '@proteus/core';
+import { diagnostics, toProteusError } from '@proteus/core/obs';
 import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access.js';
 import { ownerCaller } from '../user/workspace-capability.js';
 import * as v from 'valibot';
@@ -204,7 +205,11 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
     });
   } catch (e) {
     const failure = summarizeOAuthFailure(e);
-    console.warn(`[auth] OAuth callback failed at ${stage}: ${failure.log}`);
+    diagnostics.failure('auth.oauth_callback_failed', toProteusError({
+      doing: 'completing the OAuth callback',
+      cause: e,
+      otherwise: 'unavailable',
+    }), { provider: providerId, stage, reason: failure.reason, detail: failure.log });
     return html('Sign in failed', `
       <p class="lede">The sign-in request could not be completed. Return to sign in and try again.</p>
       <p class="muted">Failure stage: <code>${escapeHtml(stage)}</code></p>
@@ -240,7 +245,12 @@ async function attachCloudflareWorkersAI(
     }
     notifyWorkspacesCredentialsChanged(env, userDO, ctx);
   } catch (e) {
-    console.warn(`[auth] Workers AI credential unavailable: ${summarizeOAuthFailure(e).log}`);
+    const failure = summarizeOAuthFailure(e);
+    diagnostics.failure('auth.workers_ai_credential_unavailable', toProteusError({
+      doing: 'attaching the Workers AI credential to a Cloudflare sign-in',
+      cause: e,
+      otherwise: 'unavailable',
+    }), { reason: failure.reason, detail: failure.log });
   }
 }
 

@@ -39,6 +39,16 @@ import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet.ts';
 import { isRunnableSuite, trackedFiles } from './sources.ts';
 
+/** DERIVED, because it was hardcoded as 21 while the config carried 22 — a stale count in the
+ *  document that tells a reader what a rung catches. Read from the enabled rules rather than from the
+ *  plugin's registry: a rule registered and not enabled catches nothing. */
+const ANTI_SLOP_RULE_COUNT = Object.keys(
+  v.parse(
+    v.object({ rules: v.record(v.string(), v.unknown()) }),
+    JSON.parse(readFileSync(new URL('../.oxlintrc.json', import.meta.url).pathname, 'utf8')),
+  ).rules,
+).filter((rule) => rule.startsWith('anti-slop/')).length;
+
 const root = new URL('..', import.meta.url).pathname;
 /** Where the tracked hooks live, RELATIVE so git resolves it against each
  *  worktree's own root — see `--install-hooks`. */
@@ -82,8 +92,8 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run check',
     tier: 'commit',
     seconds: 6.8,
-    catches: 'type errors and the 21 anti-slop rules across all 11 projects. The largest '
-      + 'defect class by volume and the only total one — every file, every line.',
+    catches: `type errors and the ${String(ANTI_SLOP_RULE_COUNT)} anti-slop rules across all 11 `
+      + 'projects. The largest defect class by volume and the only total one — every file, every line.',
     blind: 'everything about behaviour. A well-typed call to the wrong function passes.',
   },
   {

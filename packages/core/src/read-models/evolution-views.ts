@@ -23,6 +23,7 @@ import { getCurrentScaffoldVersion } from '../scaffold/shadow.js';
 import type { SignalDeliverer } from '../types/signals.js';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { SqlExecutor } from '../types/primitives.js';
+import { diagnostics, toProteusError } from '../obs/index.js';
 
 export interface EvolutionChangelogView {
   entries: ChangelogEntry[];
@@ -88,7 +89,11 @@ export async function pickAlternateTake(
   try {
     await deps.engine.applyTakePick(record.set.turnId, record.outcome);
   } catch (err) {
-    console.warn('[proteus] applyTakePick lesson corroboration failed:', err instanceof Error ? err.message : err);
+    diagnostics.failure(
+      'evolution.take_pick_corroboration_failed',
+      toProteusError({ doing: 'corroborate the lesson behind an alternate take', cause: err, otherwise: 'unavailable' }),
+      { takeId, nodeId },
+    );
   }
   let continuationQueued = false;
   if (record.changedAnswer) {

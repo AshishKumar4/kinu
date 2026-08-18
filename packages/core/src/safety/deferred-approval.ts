@@ -55,6 +55,7 @@ import {
 } from './approval-gate.js';
 import { reconcileColumns } from '../identity/columns.js';
 import { nanoid } from '../utils/nanoid.js';
+import { diagnostics, toProteusError } from '../obs/index.js';
 
 /** The `proteusEvent` kind a decision wakes the agent under — its own name,
  *  not `background_job`'s: the card the owner sees, and the provenance stamped
@@ -435,8 +436,11 @@ export class DeferredApprovalQueue {
   private notify(event: DeferredApprovalNotice): void {
     try { this.deps.announce?.(event); }
     catch (err) {
-      console.warn('[proteus] deferred-approval announce failed:',
-        err instanceof Error ? err.message : err);
+      diagnostics.failure(
+        'approval.deferred_announce_failed',
+        toProteusError({ doing: 'announce a deferred-approval notice', cause: err, otherwise: 'io' }),
+        { notice: event.kind },
+      );
     }
   }
 }
