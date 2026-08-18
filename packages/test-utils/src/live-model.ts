@@ -164,6 +164,46 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
   };
 }
 
+/** A live target the eval tier may borrow when the environment names none. */
+export interface LiveModelSession {
+  readonly origin: string;
+  readonly token: string;
+}
+
+/**
+ * The signed-in CLI session, promoted to a live target — but ONLY when the
+ * environment names none.
+ *
+ * WHY THIS EXISTS. `resolveLiveModel` reads the environment and nothing else,
+ * and nothing ever populated it. So on the one machine that holds a credential —
+ * the owner's, signed in with `proteus auth` — `bun run test:eval` printed
+ * `target: none`, all six live suites skipped, the ratchet proved the skips were
+ * declared, and the tier reported `TOTAL: 0 model call(s)`. A deploy gate
+ * (`scripts/deploy.sh`: "Behavioural evals") that has never once called a model
+ * is a gate in name only, and `calls: 0` could not distinguish "spent nothing"
+ * from "was never wired".
+ *
+ * WHY IT NEVER OVERRIDES. An explicit `PROTEUS_TOKEN`, or either gateway auth
+ * variable, is somebody choosing a target — often a specific gateway model the
+ * account proxy does not front. Worker-proxy resolution is tried FIRST in
+ * `resolveLiveModel`, so injecting a stored session over a deliberate
+ * `AI_GATEWAY_*` pair would silently bill and measure the wrong endpoint. This
+ * fills a blank; it never argues.
+ *
+ * Pure over both inputs, and it takes the session as data rather than importing
+ * the CLI's config reader: test-utils sits below the CLI, and the caller that
+ * can read a config file is `scripts/eval-credentials.ts`.
+ */
+export function liveModelFallback(
+  session: LiveModelSession | null,
+  env: EnvSource = process.env,
+): LiveModelSession | null {
+  if (!session) return null;
+  if (env[LIVE_MODEL_ENV.token]?.trim()) return null;
+  if (first(env, LIVE_MODEL_ENV.gatewayAuth)) return null;
+  return session;
+}
+
 /**
  * The live target for `suite`, or null when the environment legitimately has
  * none. Throws on a half-configured environment.
