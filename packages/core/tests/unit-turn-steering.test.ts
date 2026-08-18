@@ -17,7 +17,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
-  AgentOrchestrator, TurnSteering, isFailingToolResult, runChat,
+  AgentOrchestrator, TurnSteering, isFailingToolResult, runChat, AGENTS_TOOL_ACTIONS,
   IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER, LONG_TURN_STEPS_BEFORE_STEER,
   STEPS_WITHOUT_PROGRESS_BEFORE_STEER,
   TURN_STEERING_HEADER, ExtensionHost, EvolutionEngine, EventLog, initEventsHubTables,
@@ -39,6 +39,17 @@ const followUp = (text: string): ModelMessage[] => [user('earlier'), assistant('
  *  turn where one fired, the turn-start hint on a turn that only got the hint. */
 const rows = (orch: AgentOrchestrator) => orch.steering.snapshot();
 const lastSteer = (orch: AgentOrchestrator) => orch.steering.snapshot().at(-1) ?? null;
+
+/** Every delegation action a steer names must exist on the `agents` surface.
+ *  The repeated-failure steer told the model to pass `settle=mcts` for a whole
+ *  release after that field left the tool, so the nudge fired on the exact turn
+ *  the model was already failing and bought it a refusal. Derived from the enum
+ *  rather than from prose, so the next rename fails here instead of in a run. */
+function expectOnlyRealActions(text: string): void {
+  const named = [...text.matchAll(/action[=:]'?(\w+)/g)].map((m) => m[1]!);
+  expect(named.length).toBeGreaterThan(0);
+  expect(named.filter((action) => !AGENTS_TOOL_ACTIONS.some((real) => real === action))).toEqual([]);
+}
 
 /** Steering as production wires it: the orchestrator's turn extension on a
  *  backend that never queues, so a steer that fired is a steer the model saw. */
@@ -172,7 +183,11 @@ describe('repeated-failure trigger', () => {
     const text = injected(nudged)[0]!;
     expect(text).toContain('`run` has failed 3 times in a row');
     expect(text).toContain('agents` action=fork');
-    expect(text).toContain('settle=mcts');
+    expect(text).toContain('action=swarm');
+    // Both halves the steer always offered, spelled with the two verbs that
+    // carry them now: merge several angles, or have candidates measured.
+    expect(text).toContain('`forks`');
+    expectOnlyRealActions(text);
     expect(text).toContain('hint, not an instruction');
     expect(lastSteer(orch)).toEqual({ trigger: 'repeated_failure', step: 2, tool: 'run', converted: false });
   });
@@ -226,6 +241,7 @@ describe('repeated-call trigger', () => {
     expect(text).toContain('`run` has run 3 times with the same arguments');
     expect(text).toContain('make');
     expect(text).toContain('change the approach');
+    expectOnlyRealActions(text);
     expect(text).toContain('hint, not an instruction');
     expect(lastSteer(orch)).toEqual({
       trigger: 'repeated_call', step: 2, tool: 'run', converted: false,
@@ -342,6 +358,7 @@ describe('no-progress trigger', () => {
     expect(steered).toHaveLength(1);
     expect(steered[0]).toContain('steps in a row with nothing new');
     expect(steered[0]).toContain('Steps that succeed are not the same as steps that get somewhere');
+    expectOnlyRealActions(steered[0]!);
     expect(steered[0]).toContain('hint, not an instruction');
     expect(lastSteer(orch)).toEqual({
       trigger: 'no_progress', step: STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1, converted: false,
@@ -525,6 +542,7 @@ describe('turn-start trigger', () => {
     const text = injected(nudged)[0]!;
     expect(text).toContain('Settle the shape first');
     expect(text).toContain('agents` action=fork');
+    expectOnlyRealActions(text);
     expect(text).toContain('hint, not an instruction');
     expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: false }]);
     // Step 0 only: a hint that re-arrived every step would be the nagging the
@@ -853,6 +871,7 @@ describe('through a real runChat turn', () => {
     expect(first).toContain(TURN_STEERING_HEADER);
     expect(first).toContain('Settle the shape first');
     expect(first).toContain('agents` action=fork');
+    expectOnlyRealActions(first);
     expect(first).toContain('hint, not an instruction');
     // Once, however long the turn then runs.
     for (const prompt of prompts) {

@@ -181,7 +181,7 @@ function repeatedCallText(tool: string, args: string, calls: number): string {
 
 function repeatedFailureText(tool: string, failures: number): string {
   return `\`${tool}\` has failed ${failures} times in a row. Running the same approach again is the least likely thing to work: `
-    + `fork now (\`${DELEGATION_TOOL}\` action=fork) to try competing approaches in parallel, and settle=mcts if they have to be scored by execution rather than merged. `
+    + `fork now (\`${DELEGATION_TOOL}\` action=fork) to try competing approaches in parallel — put the angles you want tried in \`forks\`, which runs the briefs you supply and infers none — or action=swarm if they have to be measured against an \`objective\` you declare rather than merged. `
     + 'This is a hint, not an instruction — push on alone if you already know the fix.';
 }
 

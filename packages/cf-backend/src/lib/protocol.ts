@@ -10,10 +10,10 @@ import type {
 /**
  * One branch of a fork, as the tree view draws it.
  *
- * A fork is a tree whatever settled it: a competition (settle=mcts) is a deep
- * tree whose branches were scored against each other, and a merge
- * (settle=merge) is the same tree at depth 1 — the task at the root, one head
- * per child. One shape, one renderer, depth varying.
+ * A fork is a tree whatever produced it: a search (`action:'swarm'` with a
+ * `depth`) is a deep tree whose branches were scored against each other, and a
+ * merge (`action:'fork'`) is the same tree at depth 1 — the task at the root,
+ * one head per child. One shape, one renderer, depth varying.
  *
  * `value` and `visits` are nullable BECAUSE of that: only a competition scores
  * its branches and counts rollouts. A merge has neither, and the encodings

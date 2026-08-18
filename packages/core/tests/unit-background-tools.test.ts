@@ -102,7 +102,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     // to the background runner, so the model got a handle instead of an answer
     // and teardown abandoned the job a grace later. On a surface with no wake
     // there is nobody to deliver that result to, so the detach could only ever
-    // throw the work away — a settle=mcts run was measured doing exactly that,
+    // throw the work away — a tree-search fork was measured doing exactly that,
     // 4 of 40 iterations before `bg_jobs_abandoned`.
     const crossings: string[] = [];
     const jobRunner = fakeJobRunner(

@@ -66,22 +66,21 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/NOT stateless between turns/);
   });
 
-  test('mcts is a settle policy inside the fork rung, never a third rung', () => {
-    // Preservation contract: mcts stays fully named and reachable in the
-    // doctrine the model reads — but as how forks are SETTLED, not as a
-    // co-equal delegation choice. That doctrine is selection doctrine, so it
-    // lives in the schema every family reads, not in the prompt index.
+  test('tree search is action=swarm, named inside the fork rung and never as a ladder bullet', () => {
+    // Preservation contract, inverted by the cutover: the tree search that used
+    // to be a settle policy inside this rung is its own ACTION now, and the fork
+    // rung is where a caller reading about forks is told so. It is still not a
+    // bullet in the prompt's index, which is keyed on lifetime and not on search.
     const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
-    expect(agents).toMatch(/set settle=mcts/);
-    expect(agents).toMatch(/runs and passes outranks every branch whose code failed/);
-    // It is never introduced as a ladder rung of its own, in either surface.
+    expect(agents).not.toContain('settle=');
+    expect(agents).toMatch(/that is action=swarm, which measures candidates against an `objective` you declare/);
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).not.toMatch(/^- .*\bmcts\b.*\) — /m);
-    // The mcts settle text lives inside the fork rung, after it starts.
+    expect(prompt).not.toMatch(/^- .*\bswarm\b.*\) — /m);
+    // Stated inside the fork rung, after it starts.
     const forkRung = agents.indexOf('Fork (action=fork)');
     expect(forkRung).toBeGreaterThan(-1);
-    expect(agents.indexOf('set settle=mcts')).toBeGreaterThan(forkRung);
+    expect(agents.indexOf('that is action=swarm')).toBeGreaterThan(forkRung);
   });
 
   test('each rung renders only for the agents actions the backend wires', () => {
@@ -183,32 +182,21 @@ describe('buildSystemPromptSync', () => {
     expect(buildSystemPromptSync(rt)).not.toContain('A finished subordinate');
   });
 
-  test('the settle doctrine leads with what mcts does, and states its limit honestly after', () => {
-    // The honest framing is unchanged in substance — mcts branches score
-    // text/code and do not run the caller's tool loop; proposed code IS
-    // executed at scoring — but the ORDER is the doctrine. It used to open
-    // "set settle=mcts ONLY … do NOT run your tool loop", three deterrents in
-    // one sentence, and a shell corpus read that as a disqualification (0/10
-    // uses). It now leads with the payoff and names the shape it fits, with
-    // the limitation stated plainly at the end rather than as a gate.
+  test('the fork rung closes on the fork/swarm boundary, stated as a mechanism and not a preference', () => {
+    // What replaced the settle doctrine. That doctrine contrasted two
+    // settlements; with merge the only one a fork has, the choice a caller
+    // actually faces is fork against swarm, and the line states the fact that
+    // decides it rather than a preference between them.
     const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
-    expect(agents).toMatch(/rival scripts that must produce a specific artifact/);
-    expect(agents).toMatch(/propose text\/code rather than running your own tool loop/);
-    // 2026-08-11: the ranking claim is now stated the way the scorer actually
-    // works. "scored against each other by execution" read as pure execution
-    // scoring; mcts/evaluation.ts uses execution to pick the score BAND (pass
-    // [0.60,1.00] vs fail [0.05,0.30]) and a judge ensemble to place the
-    // branch inside it. What survives verbatim is the consequence that band
-    // ordering guarantees, which is the part a caller decides on.
-    expect(agents).toMatch(/runs and passes outranks every branch whose code failed/);
-    expect(agents).not.toMatch(/proposed code IS executed to earn its score/);
-    // The deterrent framing is gone: no "only", no "genuinely unclear".
-    expect(agents).not.toMatch(/set settle=mcts only/);
+    expect(agents).toMatch(/`forks` is required, 2-6 briefs, and nothing infers them for you/);
+    expect(agents).toMatch(/measures candidates against an `objective` you declare/);
+    expect(agents).toMatch(/a merge reconciles what the forks report, a swarm scores what its candidates produced/);
+    // Payoff before limitation, the ordering this test was written for: what a
+    // fork buys the caller comes before what it will not infer for them.
+    expect(agents.indexOf('hands you back only the answer'))
+      .toBeLessThan(agents.indexOf('nothing infers them for you'));
+    // And the deterrent framing the doctrine shed stays shed.
     expect(agents).not.toMatch(/genuinely unclear/);
-    // Payoff before limitation, in that order — the ordering this test was
-    // written for, unchanged.
-    expect(agents.indexOf('outranks every branch whose code failed'))
-      .toBeLessThan(agents.indexOf('rather than running your own tool loop'));
   });
 
   test('the fork rung triggers on DOUBT, not only on decomposability', () => {
@@ -253,42 +241,18 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain(DELEGATION_RUNGS.fork);
   });
 
-  test('the prompt contrasts the two settles by the shape of work each one is for', () => {
-    // `settle=mcts` was fully specified in the schema and named nowhere in the
-    // prompt, so the choice between settles read as a parameter detail rather
-    // than as the shape judgement it is. One sentence, at the altitude where
-    // the work is being shaped: independent pieces you want all of vs rival
-    // attempts at one thing, with the honest limit attached.
+  test('the prompt contrasts a fork with a swarm by the shape of work each one is for', () => {
+    // The choice used to be between two settles and is now between two actions,
+    // at the same altitude: pieces you want all of and merged, against candidates
+    // you want written for you and measured. One sentence, where work is shaped.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/Merging \(the default\) keeps every fork's piece/);
-    expect(prompt).toMatch(/settle=mcts keeps one instead, for rival attempts at a single thing/);
-    // The limit is stated, so a model does not reach for mcts when the rivals
-    // need their own tool loops.
-    expect(prompt).toMatch(/propose code rather than running their own tool loops/);
-  });
-
-  test('the prompt describes what mcts DOES, matching the engine rather than tree search in general', () => {
-    // A trigger alone did not move it: settle=mcts was used once in 89 trials.
-    // Each clause below is checked against the engine, because an impressive
-    // inaccurate description is worse than none — every one of these is a
-    // place the runtime does something a reader of "MCTS" would not assume.
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    // The call shape differs from merge: strategy/mcts.ts runs on ctx.task and
-    // never reads `forks`, so hand-authored rivals would be dead arguments.
-    expect(prompt).toMatch(/you give it the task and it writes the competing approaches itself/);
-    // mcts/diversity.ts assigns each branch a fixed angle and tells it what
-    // its siblings drew — divergence by construction, not by temperature.
-    expect(prompt).toMatch(/each on a different angle so they do not converge/);
-    // The engine's budget loop: UCT select, backpropagate, prune, re-expand.
-    expect(prompt).toMatch(/over several rounds that drop the weak ones and expand what scored well/);
-    // The band, stated as the ordering it guarantees (mcts/evaluation.ts).
-    expect(prompt).toMatch(/a proposal whose code runs and passes places above every proposal whose code failed/);
-    expect(prompt).toMatch(/prose that produced no code places below both once a rival produced some/);
-    expect(prompt).toMatch(/the judge only orders proposals inside the band execution already fixed/);
-    // And never the overstatement it replaced.
-    expect(prompt).not.toMatch(/scored by executing what each proposes/);
+    expect(prompt).toMatch(/A fork keeps every piece/);
+    expect(prompt).toMatch(/each brief in `forks` — required, nothing infers the angles for you —/);
+    // The limit is stated as what the other action gives you, so a model does not
+    // reach for a fork when it wants the candidates written and ranked.
+    expect(prompt).toMatch(/candidates written for you and MEASURED against an `objective` you declare/);
+    expect(prompt).toMatch(/that is action=swarm rather than a fork/);
   });
 
   test('forks cannot see each other, stated where a fork brief is written and nowhere twice', () => {
@@ -1135,13 +1099,14 @@ describe('buildSystemPromptSync', () => {
 
   test('does NOT promise unimplemented or redundant strategies', () => {
     // Regression: the old think tool description once claimed support for
-    // strategies that don't exist. The prompt names only `mcts`, the one
-    // settle id a caller ever has to type — merging is the default, so the
-    // ladder does not make the model pick a settle policy to delegate at all.
-    // single-shot stays registered for eval harnesses but is pure overhead for
-    // a chat model, so it is never advertised.
+    // strategies that don't exist. There is no strategy id left for a caller to
+    // type at all — a fork merges and a swarm measures — so naming one would be
+    // that same defect. single-shot stays registered for eval harnesses but is
+    // pure overhead for a chat model, so it is never advertised, and `mcts` is
+    // registered for the durable search store and reaches neither surface.
     const { rt } = createTestRuntime();
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(/settle=mcts/);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toMatch(/\bmcts\b/);
+    expect(buildSystemPromptSync(rt)).not.toMatch(/\bmcts\b/);
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toMatch(/single-shot/);
     expect(buildSystemPromptSync(rt)).not.toMatch(/single-shot/);
   });
@@ -1157,7 +1122,7 @@ describe('buildSystemPromptSync', () => {
       expect(prompt).toMatch(/## Delegation/);
       expect(prompt).toMatch(/- Ephemeral fork \(action=fork\) — /);
       expect(prompt).toMatch(/- Persistent subordinate \(action=hire\) — /);
-      expect(prompt).toMatch(/settle=mcts keeps one/);
+      expect(prompt).toMatch(/that is action=swarm rather than a fork/);
     }
   });
 });

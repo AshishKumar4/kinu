@@ -151,7 +151,7 @@ function refusalMessage(kind: string, running: readonly BackgroundJob[]): string
  *  it directly on the store). Truncated to match the short-snippet
  *  convention every other debug summary line already uses (task.slice(0,60)
  *  for head runs, etc.) — this is a label, not a payload dump. */
-const ForkJobInputSchema = v.object({ task: v.string(), settle: v.optional(v.string()) });
+const ForkJobInputSchema = v.object({ task: v.string() });
 const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()) });
 const ExecuteJobInputSchema = v.object({ code: v.string() });
 
@@ -159,7 +159,7 @@ function describeJobInput<T>(kind: string, input: T): string | undefined {
   if (kind === 'agents') {
     const parsed = v.safeParse(ForkJobInputSchema, input);
     if (parsed.success) {
-      return `fork(settle=${parsed.output.settle ?? 'merge'}): ${parsed.output.task.slice(0, 80)}`;
+      return `fork: ${parsed.output.task.slice(0, 80)}`;
     }
   }
   if (kind === 'run') {

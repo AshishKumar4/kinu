@@ -157,7 +157,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     case '/takes': {
       const set = await client.latestTakes();
       if (!set || set.candidates.length < 2) {
-        return { kind: 'text', text: 'No alternate takes yet — they appear when a fork with settle=mcts converges on near-tied approaches, or when a /branch redirect settles against the live turn.' };
+        return { kind: 'text', text: 'No alternate takes yet — they appear when an agents.swarm search with a depth converges on near-tied approaches, or when a /branch redirect settles against the live turn.' };
       }
       if (!arg) return { kind: 'takes', set };
       const n = Number.parseInt(arg, 10);

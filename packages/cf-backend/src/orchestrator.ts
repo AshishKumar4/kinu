@@ -544,7 +544,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
         enabled: true,
-        // The same sink an agent-initiated fork(settle=mcts) uses — one
+        // The same sink an agent-initiated agents(action:'swarm') uses — one
         // broadcast for every search this workspace runs (ActorAgent).
         onMctsProgress: (event) => this.onMctsProgress(event),
         // Replay-eval rollout: the LIVE scaffold with the real LLM + tool

@@ -1677,8 +1677,9 @@ export abstract class ActorAgent extends Think<Env> {
     this._scaffoldReady = true;
   }
 
-  // Durable MCTS search checkpoints — the resume record a fork(settle=mcts)
-  // evicted mid-search continues from (B6). One per DO; keyed by search root id.
+  // Durable MCTS search checkpoints — the resume record an `action:'swarm'`
+  // search evicted mid-flight continues from (B6). One per DO; keyed by search
+  // root id.
   protected get mctsSearchStore(): MctsSearchStore {
     return this.stores.mctsSearchStore;
   }
@@ -1693,7 +1694,7 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * Scoped by the `rootId` the event carries, NOT by "which tree was written to
    * most recently". A workspace runs concurrent searches — two detached
-   * `settle:'mcts'` forks — and the latest-tree read made every event a coin
+   * `action:'swarm'` calls — and the latest-tree read made every event a coin
    * flip between them: one search's iteration shipped the other's nodes under
    * its own phase and budget, and a backpropagation (visits change, no insert,
    * so never "latest") was suppressed by the shared fingerprint as a no-change.

@@ -1252,7 +1252,15 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('recoverBackgroundJobs re-drives an orphaned agents fork job (the post-unification kind)', async () => {
     const { db, session } = setup('resumed fork answer');
-    const input = JSON.stringify({ action: 'fork', settle: 'single-shot', task: 'finish the interrupted exploration' });
+    // The briefs are part of the row because they are what a fork re-drives:
+    // a stored fork with none has nothing to run and is refused, not resumed.
+    const input = JSON.stringify({
+      action: 'fork', task: 'finish the interrupted exploration',
+      forks: [
+        { task: 'read it', rationale: 'ground it' },
+        { task: 'test it', rationale: 'check it' },
+      ],
+    });
     db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-a', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f4', 'bg:agents', '{"phase":"running","jobId":"bgjob-a","kind":"agents"}', 1)`);
 
@@ -2819,20 +2827,18 @@ describe('agents.* codemode namespace — node sandbox', () => {
    *  answers without an LLM. */
   function scriptedFork(seen: StrategyContext[] = []): ScriptedFork {
     const registry = createStrategyRegistry();
-    for (const id of [FORK_STRATEGY_ID, 'mcts']) {
-      registry.register({
-        id,
-        async explore(ctx: StrategyContext) {
-          seen.push(ctx);
-          return {
-            strategy: id,
-            best: { text: `${id} settled: ${ctx.task}`, score: 0.9, source: id },
-            all: [],
-            cost: { durationMs: 1 },
-          };
-        },
-      });
-    }
+    registry.register({
+      id: FORK_STRATEGY_ID,
+      async explore(ctx: StrategyContext) {
+        seen.push(ctx);
+        return {
+          strategy: FORK_STRATEGY_ID,
+          best: { text: `${FORK_STRATEGY_ID} settled: ${ctx.task}`, score: 0.9, source: FORK_STRATEGY_ID },
+          all: [],
+          cost: { durationMs: 1 },
+        };
+      },
+    });
     const db = new Database(':memory:');
     const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
     return { deps: { mode: 'build', fork: { registry, rt, model: fakeModel('unused') } }, seen };
@@ -2871,12 +2877,26 @@ describe('agents.* codemode namespace — node sandbox', () => {
     expect(heads).toHaveLength(2);
   });
 
-  test('settle:"mcts" from the sandbox reaches the mcts strategy', async () => {
-    const { deps } = scriptedFork();
-    const result = v.parse(v.object({ result: v.object({ strategy: v.string() }) }), await sandboxWith(deps)(
-      'return await agents.fork({ task: "pick an approach", settle: "mcts" });',
-    ));
-    expect(result.result.strategy).toBe('mcts');
+  test('a sandbox fork dispatches the heads strategy, and one with no forks is refused toward swarm', async () => {
+    const { deps, seen } = scriptedFork();
+    const run = sandboxWith(deps);
+    const dispatched = v.parse(v.object({ result: v.object({ strategy: v.string() }) }), await run(`
+      const settled = await agents.fork({ task: 'pick an approach', forks: [
+        { task: 'read it', rationale: 'ground it' },
+        { task: 'test it', rationale: 'check it' },
+      ] });
+      return settled;
+    `));
+    expect(dispatched.result.strategy).toBe(FORK_STRATEGY_ID);
+    // A fork runs the briefs it is given, so a call with none has nothing to
+    // run: it must be refused before anything spawns, and the refusal has to
+    // name the action that writes its own candidates.
+    const refused = v.parse(
+      v.object({ result: v.object({ reason: v.literal('bad_input'), error: v.string() }) }),
+      await run(`return await agents.fork({ task: 'pick an approach' });`),
+    );
+    expect(refused.result.error).toContain("action:'swarm'");
+    expect(seen).toHaveLength(1);
   });
 
   test('a fork error is a value the script can branch on, not a sandbox failure', async () => {

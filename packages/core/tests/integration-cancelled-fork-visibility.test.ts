@@ -49,7 +49,7 @@ function workspace() {
   const now = Date.now();
   jobs.create({
     id: 'bgjob-fork', kind: 'agents', workMode: 'build', now,
-    label: 'fork(settle=merge): survey the prior art',
+    label: 'fork: survey the prior art',
   });
   journal.recordSplit(ROOT, RATIONALE, now);
   for (let i = 1; i <= HEADS; i++) {

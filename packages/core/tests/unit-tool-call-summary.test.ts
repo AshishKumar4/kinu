@@ -10,8 +10,8 @@ describe('tool call summaries — the unified agents tool', () => {
       action: 'fork', task: 'compare X vs Y',
       forks: [{ task: 'a' }, { task: 'b' }, { task: 'c' }, { task: 'd' }],
     })).toBe('4 forks: "compare X vs Y"');
-    expect(summarizeToolCall('agents', { action: 'fork', task: 'find the fix', settle: 'mcts' }))
-      .toBe('fork settle=mcts: "find the fix"');
+    expect(summarizeToolCall('agents', { action: 'fork', task: 'find the fix' }))
+      .toBe('fork: "find the fix"');
     expect(summarizeToolCall('agents', { action: 'hire', agent: 'scout', role: 'researcher — landscape' }))
       .toBe('hire scout — "researcher — landscape"');
     expect(summarizeToolCall('agents', { action: 'hire', role: 'researcher' })).toBe('hire researcher');

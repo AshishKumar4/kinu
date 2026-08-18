@@ -43,9 +43,9 @@ function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   });
 }
 
-/** Every fork here settles by merge, and merge refuses a call that supplies no
- *  briefs — so each call carries the two-brief minimum. Nothing in this file is
- *  about the fork's shape: a refusal observed below has to be the budget's. */
+/** A fork refuses a call that supplies no briefs — so each call carries the
+ *  two-brief minimum. Nothing in this file is about the fork's shape: a refusal
+ *  observed below has to be the budget's. */
 const TWO_FORKS = [
   { task: 'survey prior art', rationale: 'establish baseline' },
   { task: 'sketch design', rationale: 'exercise constraints' },

@@ -2,11 +2,11 @@
  * The fork trees — every time the agent split its work, drawn as the trees they
  * are, on ONE canvas.
  *
- * A merge (settle=merge) is this tree at depth 1: the task at the root, one
- * head per child. A competition (settle=mcts) is the same tree deeper, with
- * its branches scored against each other. One renderer, one node shape, depth
- * varying — because the alternative was two panes where the same user action
- * landed in one or the other depending on an internal strategy id.
+ * A merge (`action:'fork'`) is this tree at depth 1: the task at the root, one
+ * head per child. A search (`action:'swarm'` with a `depth`) is the same tree
+ * deeper, with its branches scored against each other. One renderer, one node
+ * shape, depth varying — because the alternative was two panes where the same
+ * user action landed in one or the other depending on an internal strategy id.
  *
  * ONE canvas, not one per search. Each search used to get its own fixed-height
  * SVG in its own card, so the room a tree could use was decided before anyone

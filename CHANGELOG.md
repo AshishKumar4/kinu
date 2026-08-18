@@ -183,6 +183,23 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   the nine unreachable on one of the five tools — and the comment above it
   claimed the behaviour the code did not have.
 
+- **`fork` has one settlement, and tree search is its own action.** `settle` is
+  gone from the `agents` surface, including the `enum: ['merge','mcts']` the
+  advertised JSON Schema carried. A fork runs the briefs it was given and merges
+  them; `forks` is required, and a call supplying none is refused naming
+  `action:'swarm'`. That is where a search writes its own competing candidates
+  and measures them, to whatever `depth` is asked for, against an `objective`
+  the caller declares through the verifier registry. One field had been making
+  one call shape mean two unrelated things: one reading `forks` and merging
+  them, the other ignoring them to rank candidates of its own by a judged
+  ensemble. The MCTS engine is untouched and stays registered — the lifetime
+  evolution cycle calls it directly, and its durable search store still resumes
+  an interrupted tree from the checkpoint — it simply has no route from a
+  model-facing field. A stored job row carrying a `settle` is re-driven as
+  `{action:'swarm', preset:'ideate', task}` rather than refused, and logs
+  `agents.resume.fields_dropped` with `ranking` among the losses, because
+  `ideate` returns its candidates unordered.
+
 ### Fixed
 
 - `proteus events` renders rows against a cloud workspace, not raw JSON. The

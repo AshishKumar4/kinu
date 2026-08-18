@@ -136,8 +136,8 @@ function forkOnlyDeps(explore?: (ctx: StrategyContext) => Promise<JsonValue>): A
   return { mode: 'build', fork: { registry, rt, model: new MockLanguageModelV3() } };
 }
 
-/** settle=merge is the settle that RUNS briefs, and it refuses a call with
- *  none — so every fork below carries the two-brief minimum. */
+/** A fork RUNS the briefs it is given and refuses a call with none — so every
+ *  fork below carries the two-brief minimum. */
 const TWO_FORKS = [
   { task: 'read it', rationale: 'ground it' },
   { task: 'test it', rationale: 'check it' },
