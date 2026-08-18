@@ -256,12 +256,21 @@ function DevicesCard() {
   const [issuing, setIssuing] = useState(false);
   const { status: copyStatus, copy } = useCopy();
   const [err, setErr] = useState<string | null>(null);
+  const [rosterErr, setRosterErr] = useState<string | null>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
 
   // A failed poll leaves the last known roster in place. Blanking it to `[]`
   // flashed "register a device" over devices that are registered and running.
+  // But it has to SAY so: dropping the rejection made an unreachable UserDO
+  // look exactly like an account with no devices, and a stale roster look
+  // exactly like a live one. Reported apart from `err` because this runs every
+  // 5s — writing the action slot would wipe a register/revoke failure before
+  // the owner could read it.
   const refreshDevices = useCallback(() => {
-    listDevices().then(setDevices, () => {});
+    listDevices().then(
+      (roster) => { setDevices(roster); setRosterErr(null); },
+      (e) => { setRosterErr(`Could not list devices: ${errorMessage(e)}`); },
+    );
   }, []);
   useEffect(() => {
     refreshDevices();
@@ -315,6 +324,7 @@ function DevicesCard() {
             ))}
           </div>
         )}
+        {rosterErr && <div className="text-xs p-danger">{rosterErr}</div>}
         {devices && devices.length > 0 && !devices.some((d) => d.connected) && (
           <p className="p-meta p-text-3">
             Offline device? Restart the daemon on that machine with <code className="font-mono p-fill px-1 rounded-sm">proteus connect</code>.
