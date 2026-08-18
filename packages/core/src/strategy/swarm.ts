@@ -1,11 +1,11 @@
 /**
- * The shape of a configured search: seven axes, five presets, one escape hatch —
+ * The shape of a configured search: the axes, five presets, one escape hatch —
  * and what a call resolves to, whether that resolution is legal, and what a run
  * reports.
  *
  * Specified by docs/EXPLORATION-SPEC.md sections 6-9. The axes are derived from a
  * 27-technique coverage matrix rather than chosen; the matrix, not this file, is the
- * argument for why there are seven.
+ * argument for how many there are.
  *
  * WHAT A PRESET IS. A preset fixes the search. The caller supplies the objective.
  * Those are the two halves of a call and they never mix: `config` is axes only,
@@ -29,16 +29,50 @@ import type {
 } from './objective';
 
 /**
- * What one node is.
+ * What one node PRODUCES.
  *
- * A TAGGED axis value ({@link SwarmUnitSetting}), because `trajectory` carries a
- * parameter the other three cannot: only an agent node has a CONVERSATION, so only
- * `trajectory` can be asked whether it starts from the caller's. `SWARM_UNITS`
- * remains the axis's value set — the tags ARE the values, exactly as the note on
- * {@link SwarmConfig.score} records for `SWARM_SCORES`.
+ * `answer` and `generator` are AGENT nodes — a tool loop with its own turns and its
+ * own transcript (§8.1) — and they differ in what the loop is asked for: one
+ * candidate, or the generator that produces candidates (`objective.ts` reaches
+ * `scaffold_versions` when the artifact IS a prompt or a scaffold). `thought` is
+ * §8.9's degenerate point: one model call, no tools, no observation of an
+ * environment because it has no way to touch one. It is the CHEAP TIER rather than
+ * a defect, and Tree-of-Thoughts is that point plus a selector.
+ *
+ * `trajectory` is gone and `step` with it. `trajectory` named the shape this axis
+ * now HAS at two of its three values, so keeping it would be two spellings of one
+ * thing — and the parameter it carried (does this node start from the caller's
+ * conversation) is the {@link SWARM_CONTEXTS} question, asked once for the whole
+ * surface instead of twice with two names. `step` never executed at all.
  */
-export const SWARM_UNITS = ['step', 'answer', 'trajectory', 'generator'] as const;
+export const SWARM_UNITS = ['answer', 'generator', 'thought'] as const;
 export type SwarmUnit = (typeof SWARM_UNITS)[number];
+
+/**
+ * What a child STARTS FROM — §8.4, and the one axis that spans the caller-to-root
+ * edge and every parent-to-child edge with a single spelling.
+ *
+ * `fork` — the child inherits the parent's context VERBATIM, plus the parent's
+ * reported results, plus its own focus. Verbatim is a decision about CACHING and
+ * not about fidelity: an unmodified prefix is a prefix a provider can cache, so
+ * every sibling of one parent shares one cacheable prefix, and rewriting the
+ * history to hand each child a summary breaks that prefix for all of them at once.
+ *
+ * `fresh` — the last two and nothing else. Not "start blank": a fresh child is
+ * SEEDED with what its parent reported, which is a third thing from both inheriting
+ * everything and starting from nothing, and it is the one §8.4 names explicitly.
+ *
+ * The only difference between the two values is the inherited conversation, which
+ * is what makes them two values of one axis rather than two mechanisms.
+ *
+ * IT MAY NARROW DOWN THE TREE AND NEVER WIDEN. A search resolved to `fresh`
+ * refuses a `fork` child and says so, rather than quietly honouring one of two
+ * conflicting policies — the same asymmetry as an inner mission cap only ever
+ * being tighter than its outer one (`agents-tool.ts`'s cap doc), and the arbiter's
+ * fifth arm.
+ */
+export const SWARM_CONTEXTS = ['fork', 'fresh'] as const;
+export type BranchContext = (typeof SWARM_CONTEXTS)[number];
 
 /**
  * What ENVIRONMENT FEEDBACK enters the expansion prompt.
@@ -150,50 +184,36 @@ export type SwarmCarrySetting =
   | { readonly kind: 'artifacts'; readonly threshold: number };
 
 /**
- * The `unit` axis, tagged — and the home of the CALLER-CONTEXT question.
+ * The `unit` axis, UNTAGGED — and the note recording why it stopped being tagged.
  *
- * `inherit` says whether a node starts from the CALLER'S completed turns or from
- * nothing. It lives on `trajectory` and nowhere else because of the rule below: a
- * `step`, an `answer` and a `generator` have no conversation to start FROM, so on
- * those three the parameter would have no meaning to be absent from. This is the
- * distinction the delegation ladder spells as the difference between an ephemeral
- * copy running on the caller's own recent turns and a helper starting blank
- * (`tools/registry.ts` DELEGATION_INHERITANCE), recorded here as what it is: a
- * property of what one node IS.
+ * It carried `inherit` on a `trajectory` value, on the argument that only an agent
+ * node has a conversation to start from. Both halves of that argument have since
+ * become false in the same commit: every node except `thought` is now an agent, so
+ * the parameter would belong to two of three values rather than one, and the
+ * question it asked is the {@link SWARM_CONTEXTS} axis, which asks it once for the
+ * caller-to-root edge and every branch edge together. §8.4: *"the caller-to-root
+ * edge is the same question and MUST have the same spelling"* — two fields, two
+ * names, one question, with a docstring whose only job was telling a reader they
+ * were different.
  *
- * NOT {@link BranchProposal.inherit}, which is a different question with a different
- * arbiter. That one is per-branch `decorrelate` — do this node's CHILDREN inherit
- * THIS node's accumulated context — and §8.4 validates it against the search's
- * `decorrelate`. This one is the caller-to-node edge and is fixed for the whole run.
- *
- * DECLARING IT IS NOT OFFERING IT. §8.6 blocks `unit:'trajectory'` outright —
- * "unblocked by per-node workspace isolation, and by nothing else" — because nodes
- * share one workspace and a node cannot be graded on what it changed when every node
- * changed the same tree. The value is declared so the surface can REFUSE the blocked
- * shape by name and say what would unblock it, which is §8.6's own remedy for the
- * defect it measured: models correctly compose `unit:'trajectory'` for the task, the
- * design blocks it, and nothing on the surface said so (`agent-trajectory-search`,
- * 18%). A blocked composition documented in a design note and absent from the
- * surface is the third instance of that class the specification names.
+ * A tagged shape kept for a parameter that moved would be the second spelling
+ * §6.4's first reason exists to prevent, so the variant is a plain union: the
+ * remaining tagged axes are {@link SwarmScoreSetting} and {@link SwarmCarrySetting},
+ * which still carry parameters no other value of theirs can hold.
  */
 export type SwarmUnitSetting =
-  | { readonly kind: 'step' }
   | { readonly kind: 'answer' }
   | { readonly kind: 'generator' }
-  | {
-      readonly kind: 'trajectory';
-      /** Whether this node starts from the caller's completed turns. REQUIRED here
-       *  and unrepresentable elsewhere, so the refusal always has its input. */
-      readonly inherit: boolean;
-    };
+  | { readonly kind: 'thought' };
 
 /**
- * The rule the three types above instantiate, and its ONE honest exception.
+ * The rule the types above instantiate, and its ONE honest exception.
  *
  * **Where a parameter belongs to exactly one axis value, it lives ON that value.**
- * Applied exhaustively: `samples` to `score:'judge'`, the admission thresholds to
- * `carry:'reflections'`/`'artifacts'`, and `inherit` to `unit:'trajectory'` — the only
- * unit that has a conversation to start from.
+ * Applied exhaustively: `samples` to `score:'judge'` and the admission thresholds to
+ * `carry:'reflections'`/`'artifacts'`. `unit` carried one and no longer does, for the
+ * reason recorded on {@link SwarmUnitSetting}: a parameter belonging to a whole
+ * SURFACE rather than to one value is an axis, and {@link SWARM_CONTEXTS} is it.
  *
  * **Where a parameter belongs to a REGION of values it cannot be tagged, and then its
  * applicability condition must be CHECKED rather than assumed.** `pruneThreshold` and
@@ -212,11 +232,17 @@ export type SwarmUnitSetting =
  */
 export interface SwarmConfig {
   /**
-   * What one node is. TAGGED for the same reason {@link score} is: `trajectory`
-   * carries the caller-context parameter and the other three have no conversation for
-   * it to describe. See {@link SwarmUnitSetting}.
+   * What one node produces, and therefore whether it is an agent at all. See
+   * {@link SwarmUnitSetting} — `answer` and `generator` run a tool loop, `thought`
+   * is one model call.
    */
   readonly unit: SwarmUnitSetting;
+  /**
+   * What a child starts from, for the whole search: the caller-to-root edge and the
+   * default every branch narrows below. §8.4, and {@link SWARM_CONTEXTS} for why
+   * one axis carries both edges.
+   */
+  readonly context: BranchContext;
   readonly observe: SwarmObserve;
   readonly expand: SwarmExpand;
   readonly decorrelate: SwarmDecorrelate;
@@ -474,7 +500,11 @@ export function isPresetPoint(row: SwarmPresetRow): row is SwarmPresetPoint {
 export const SWARM_PRESET_POINTS = {
   ideate: {
     config: {
-      unit: { kind: 'answer' }, observe: 'none', expand: 'sample', decorrelate: 'angles',
+      // §6.3's row: `fresh`. A flat ideation wave has no parent conversation to
+      // inherit — the root's parent is the caller, and `context` binds the branch
+      // edge, of which this preset has none.
+      unit: { kind: 'answer' }, context: 'fresh',
+      observe: 'none', expand: 'sample', decorrelate: 'angles',
       score: { kind: 'none' }, advance: 'none', carry: { kind: 'none' },
     },
     // Depth is one BY CONSTRUCTION rather than by choice: `advance:'none'` means there is no
@@ -494,7 +524,10 @@ export const SWARM_PRESET_POINTS = {
   },
   redteam: {
     config: {
-      unit: { kind: 'answer' }, observe: 'own', expand: 'mutate', decorrelate: 'angles',
+      // `fresh`: a probe of a new coverage cell wants the parent's RESULTS, not its
+      // transcript (§6.3's note on the archive rows).
+      unit: { kind: 'answer' }, context: 'fresh',
+      observe: 'own', expand: 'mutate', decorrelate: 'angles',
       score: { kind: 'novelty' }, advance: 'archive', carry: { kind: 'elites' },
     },
     depth: 3,
@@ -502,7 +535,12 @@ export const SWARM_PRESET_POINTS = {
   },
   optimise: {
     config: {
-      unit: { kind: 'answer' }, observe: 'ancestors', expand: 'mutate', decorrelate: 'angles',
+      // `fork`, and §6.3 states why: a fork IS `observe:'ancestors'` by
+      // construction, because a forked conversation contains the ancestor chain's
+      // observations transitively. The two values agree here rather than one
+      // standing in for the other.
+      unit: { kind: 'answer' }, context: 'fork',
+      observe: 'ancestors', expand: 'mutate', decorrelate: 'angles',
       score: { kind: 'verify' }, advance: 'uct', carry: { kind: 'elites' },
     },
     // The deepest of the five because it is the only preset with a verifier — the
@@ -594,21 +632,33 @@ function badInput(error: string): SwarmRefusal {
 }
 
 /**
- * The seven axes a resolved configuration must name.
+ * The axes a resolved configuration must name.
  *
  * `satisfies` holds every member to a real key of {@link SwarmConfig}, so a typo cannot
  * enter the list — but the compiler cannot force the converse, that a NEW required axis
  * joins it. What holds that direction is behavioural and lives in the fixture: the
  * refusal below names every axis a composition is missing, and a `custom` call with an
- * empty `config` therefore has to come back naming all seven. An axis added to the
+ * empty `config` therefore has to come back naming all of them. An axis added to the
  * interface and forgotten here makes that assertion fail rather than making the
  * resolver quietly accept an incomplete tuple.
+ *
+ * THE COUNT IS EIGHT HERE AND SIX IN §6.1, AND THAT IS AN INTERIM RATHER THAN A
+ * DISAGREEMENT. `context` joined because §8.4's inheritance needs one spelling for
+ * the caller-to-root edge and the branch edge together. The two §6.7 cut that this
+ * commit does not — `observe`, whose `ancestors` value a forked conversation supplies
+ * by construction, and `decorrelate`, whose sibling angles §6.1 makes unconditional
+ * default behaviour — are still declared and still executed, so a caller composing
+ * them gets what they ask for rather than a silently ignored field. Removing them is
+ * the rest of §6.7's obligation list and it is not this change: an axis deleted while
+ * its consumers still read it is the accepted-and-ignored defect, and deleting them
+ * correctly means re-pointing the coverage matrix and the ergonomics corpus that
+ * measure them.
  */
 const AXES = [
-  'unit', 'observe', 'expand', 'decorrelate', 'score', 'advance', 'carry',
+  'unit', 'context', 'observe', 'expand', 'decorrelate', 'score', 'advance', 'carry',
 ] as const satisfies readonly (keyof SwarmConfig)[];
 
-/** Whether a merged override names all seven axes. A type guard rather than a check
+/** Whether a merged override names every axis. A type guard rather than a check
  *  plus an assertion: the narrowing IS the result, so nothing downstream has to be
  *  told what was just proved. */
 function namesEveryAxis(merged: Partial<SwarmConfig>): merged is SwarmConfig {
@@ -640,7 +690,7 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
     if (!input.config) {
       return badInput('`custom` is the statement that no preset is the base, so it needs the axes '
         + 'spelled out: supply `config`. Seed it from a tested path with `from` and override only '
-        + 'what differs, or name all seven axes. A named preset needs no `config` at all.');
+        + `what differs, or name all ${String(AXES.length)} axes. A named preset needs no \`config\` at all.`);
     }
     if (!input.label?.trim()) {
       return badInput('a composed configuration needs `label`: a shape recorded repeatedly under one '
@@ -712,7 +762,8 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
   const merged = { ...base?.config, ...input.config };
   if (!namesEveryAxis(merged)) {
     const missing = AXES.filter((axis) => merged[axis] === undefined);
-    return badInput(`a resolved configuration names all seven axes and this one is missing ${missing.join(', ')}. `
+    return badInput(`a resolved configuration names all ${String(AXES.length)} axes and this one is `
+      + `missing ${missing.join(', ')}. `
       + (base
         ? `\`config\` overrides \`from\`'s row, so state only what differs from "${String(baseName)}".`
         : 'With no `from` there is no row to inherit from, so `config` must name every axis — or name a '
@@ -877,23 +928,21 @@ export interface BranchProposal {
   /** Why this thread deserves the budget. Prose, and it is the only thing the
    *  node knows that the engine does not. */
   readonly rationale: string;
-  /** 2-4 narrower sub-questions. */
-  readonly branches: readonly { readonly task: string; readonly rationale: string }[];
   /**
-   * Do children inherit this node's accumulated context?
+   * 2-4 narrower sub-questions, each naming what it starts from.
    *
-   * Per-branch `decorrelate`, and defensible precisely because the NODE knows
-   * whether its context is worth inheriting while the engine does not. Validated
-   * against the search's `decorrelate` rather than overriding it (§8.4): a run
-   * configured `blind` refuses `inherit: true` and says so, instead of quietly
-   * honouring one of two conflicting policies. The node may NARROW, never widen — the
-   * same asymmetry as an inner mission cap only ever being tighter than its outer one.
-   *
-   * `blind`, not `fresh`. This rule was written against `fresh` — a value renamed six
-   * declarations up for being measured unusable ({@link SWARM_DECORRELATES}) — so it
-   * cited the axis it belongs to by a name that axis no longer had.
+   * `context` is PER BRANCH (§8.2's shape) and defensible precisely because the
+   * NODE knows which of its threads is worth inheriting a whole conversation for
+   * while the engine does not. It is validated against the search's own `context`
+   * rather than overriding it: a run resolved `fresh` refuses a `fork` child and
+   * says so, instead of quietly honouring one of two conflicting policies. A node
+   * may NARROW, never widen.
    */
-  readonly inherit: boolean;
+  readonly branches: readonly {
+    readonly task: string;
+    readonly rationale: string;
+    readonly context: BranchContext;
+  }[];
 }
 
 /**
@@ -923,7 +972,7 @@ export const BRANCH_PROPOSAL_WIDTH = { min: 2, max: 4 } as const;
  */
 export const BRANCH_REFUSAL_POLICIES = [
   'does-not-expand-at-node', 'width-out-of-range', 'depth-exhausted',
-  'budget-exhausted', 'decorrelate-conflict',
+  'budget-exhausted', 'context-conflict',
 ] as const;
 export type BranchRefusalPolicy = (typeof BRANCH_REFUSAL_POLICIES)[number];
 
@@ -973,17 +1022,23 @@ export interface BranchArbitrationInput {
  * node is TOLD, which is the half §7.2 measured as load-bearing. The five arms
  * discharge, in order, `archive_refuses_at_node`, `accepted_width_in_range`,
  * `accepted_children_within_depth` (S3), `accepted_within_budget` (S8) and
- * `accepted_respects_decorrelate` (§8.4).
+ * `accepted_respects_context` (§8.4).
  *
  * Every refusal names the POLICY and the STATE that made it refuse, because a node
  * that cannot tell refusal from being ignored will simply propose again. Absent
  * caps are refused rather than defaulted: a search whose depth nothing states
  * cannot grant depth, and saying so is not the same as saying the budget ran out.
  *
- * NOTE ON THE LEAN SPELLING: `Arbitration.lean:105` names the fifth arm's trigger
- * `Decorrelate.fresh`, which is this axis's former spelling; the value has been
- * `'blind'` since `SWARM_DECORRELATES` was written, and §8.4 uses `'blind'` too.
- * The token is stale in Lean only, not the contract.
+ * THE FIFTH ARM MOVED AXIS, and Lean moved with it. It used to read
+ * `decorrelate:'blind' && proposal.inherit`, coupling sibling-blindness to
+ * parent-inheritance because `inherit` was described as a per-branch `decorrelate`.
+ * Those are two questions: `decorrelate` decides what a sibling is SHOWN, and
+ * {@link SWARM_CONTEXTS} decides what a child STARTS FROM. §8.4 states the rule over
+ * the second one — *"a search resolved to `fresh` refuses a `fork` child"* — so the
+ * arm compares `context` with `context`, and the theorem is
+ * `accepted_respects_context`. That re-pointing is the cost §6.7's cut list named,
+ * paid here rather than deferred, because a proven theorem about a field that no
+ * longer exists is worse than no theorem.
  */
 export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitration {
   const { config, caps, atDepth, remainingChildren, proposal } = input;
@@ -1025,12 +1080,15 @@ export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitratio
       + `${String(remainingChildren)} remain in this search's expansion budget. The budget is the `
       + 'search\'s, shared by every node, and a proposal cannot mint children it cannot pay for.');
   }
-  if (config.decorrelate === 'blind' && proposal.inherit) {
-    return refused('decorrelate-conflict',
-      'this search is configured decorrelate:"blind", which expands a child without sight of what its '
-      + 'siblings proposed, and `inherit: true` asks for the opposite. A node may narrow the search\'s '
-      + 'decorrelation and never widen it, so this is refused rather than one of two conflicting '
-      + 'policies being honoured quietly. Propose the same branches with `inherit: false`.');
+  const widening = proposal.branches.filter((branch) => branch.context === 'fork');
+  if (config.context === 'fresh' && widening.length > 0) {
+    return refused('context-conflict',
+      `this search is resolved context:"fresh", which starts every child from its parent's REPORTED `
+      + `results rather than its conversation, and ${String(widening.length)} of these `
+      + `${String(width)} branches ask for context:"fork". A node may narrow the search's inheritance `
+      + 'and never widen it, so this is refused rather than one of two conflicting policies being '
+      + 'honoured quietly. Propose the same branches with context:"fresh" — they still receive your '
+      + 'report, your candidate and their own focus, which is everything except your transcript.');
   }
   return { kind: 'accepted', width };
 }

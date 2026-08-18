@@ -47,7 +47,8 @@ import type { SqlExecutor } from '../src/types/primitives';
 
 function treeConfig(over?: Partial<SwarmConfig>): SwarmConfig {
   return {
-    unit: { kind: 'answer' }, observe: 'ancestors', expand: 'mutate', decorrelate: 'angles',
+    unit: { kind: 'thought' }, context: 'fork',
+    observe: 'ancestors', expand: 'mutate', decorrelate: 'angles',
     score: { kind: 'verify' }, advance: 'uct', carry: { kind: 'none' },
     ...over,
   };
@@ -60,24 +61,33 @@ function caps(depth: number | null, branches: number): ResolvedSwarmCaps {
   };
 }
 
-/** A legal proposal: the minimum width §8.2 states, and no inherit conflict. */
+/** A legal proposal: the minimum width §8.2 states, and no context conflict. */
 function proposal(over?: Partial<BranchProposal>): BranchProposal {
   return {
     rationale: 'this thread splits into two independent sub-questions',
     branches: [
-      { task: 'narrow the first way', rationale: 'a' },
-      { task: 'narrow the second way', rationale: 'b' },
+      { task: 'narrow the first way', rationale: 'a', context: 'fresh' },
+      { task: 'narrow the second way', rationale: 'b', context: 'fresh' },
     ],
-    inherit: false,
     ...over,
   };
+}
+
+/** A proposal whose branches all ask to FORK — the shape the fifth arm refuses under a
+ *  `fresh` search and accepts under a forking one. */
+function forking(width = 2): BranchProposal {
+  return proposal({
+    branches: Array.from({ length: width }, (_unused, i) => ({
+      task: `sub-question ${String(i)}`, rationale: 'r', context: 'fork' as const,
+    })),
+  });
 }
 
 /** A proposal of exactly `width` branches, for the band checks. */
 function widthOf(width: number): BranchProposal {
   return proposal({
     branches: Array.from({ length: width }, (_unused, i) => ({
-      task: `sub-question ${String(i)}`, rationale: 'r',
+      task: `sub-question ${String(i)}`, rationale: 'r', context: 'fresh' as const,
     })),
   });
 }
@@ -90,7 +100,7 @@ describe('§8.2 the arbiter: a node proposes, the engine decides', () => {
     // witness for the same reason (`a_legal_proposal_is_accepted`).
     const verdict = arbitrateBranch({
       config: treeConfig(), caps: caps(5, 3), atDepth: 1,
-      remainingChildren: 10, proposal: proposal({ inherit: true }),
+      remainingChildren: 10, proposal: forking(),
     });
     expect(verdict).toEqual({ kind: 'accepted', width: 2 });
   });
@@ -121,9 +131,12 @@ describe('§8.2 the arbiter: a node proposes, the engine decides', () => {
         config: treeConfig(), caps: caps(5, 3), atDepth: 3,
         remainingChildren: 1, proposal: proposal(),
       }),
+      // The fifth arm moved axis with §8.4: a search resolved `fresh` refuses a child
+      // that asks to `fork`, which is "a node may narrow and never widen" over the axis
+      // that actually owns inheritance.
       arbitrateBranch({
-        config: treeConfig({ decorrelate: 'blind' }), caps: caps(5, 3), atDepth: 1,
-        remainingChildren: 10, proposal: proposal({ inherit: true }),
+        config: treeConfig({ context: 'fresh' }), caps: caps(5, 3), atDepth: 1,
+        remainingChildren: 10, proposal: forking(),
       }),
     ];
     for (const verdict of refusals) {
@@ -138,7 +151,7 @@ describe('§8.2 the arbiter: a node proposes, the engine decides', () => {
     expect(reached[1]?.error).toContain('names 5');
     expect(reached[2]?.error).toContain('depth exhausted at depth 1');
     expect(reached[3]?.error).toContain('budget exhausted at depth 3');
-    expect(reached[4]?.error).toContain('decorrelate:"blind"');
+    expect(reached[4]?.error).toContain('context:"fresh"');
   });
 
   test('an absent depth cap refuses as ABSENT, which is not the same as exhausted', () => {
@@ -198,12 +211,13 @@ describe('§8.2 the arbiter: a node proposes, the engine decides', () => {
     // the failure mode §8.2 is written against: a node that cannot tell refusal from
     // being ignored will simply propose again.
     for (const advance of ['uct', 'beam', 'best-first', 'none', 'archive', 'pareto'] as const) {
-      for (const decorrelate of ['none', 'angles', 'blind'] as const) {
+      for (const context of ['fork', 'fresh'] as const) {
         for (const width of [0, 1, 2, 4, 5]) {
-          for (const inherit of [false, true]) {
+          for (const asked of ['fork', 'fresh'] as const) {
             const verdict = arbitrateBranch({
-              config: treeConfig({ advance, decorrelate }), caps: caps(3, 2), atDepth: 1,
-              remainingChildren: 4, proposal: { ...widthOf(width), inherit },
+              config: treeConfig({ advance, context }), caps: caps(3, 2), atDepth: 1,
+              remainingChildren: 4,
+              proposal: asked === 'fork' ? forking(width) : widthOf(width),
             });
             expect(['accepted', 'refused']).toContain(verdict.kind);
             if (verdict.kind === 'refused') expect(verdict.error.length).toBeGreaterThan(0);
@@ -450,9 +464,10 @@ function answering(proposeWidth: number | null): MockLanguageModelV3 {
   const branch = proposeWidth === null ? '' : `\n\nPROPOSE-BRANCH\n${JSON.stringify({
     rationale: 'the tail of this task deserves its own thread',
     branches: Array.from({ length: proposeWidth }, (_unused, i) => ({
-      task: `narrow the search, angle ${String(i)}`, rationale: 'worth its own budget',
+      task: `narrow the search, angle ${String(i)}`,
+      rationale: 'worth its own budget',
+      context: 'fresh',
     })),
-    inherit: false,
   })}\n`;
   return new MockLanguageModelV3({
     provider: 'fake',

@@ -441,32 +441,37 @@ describe('the implementation, asserted where absences used to be pinned', () => 
       'PUBLICATION_SURFACES', 'PUBLISHING_CARRIES', 'admitsPublication',
       'carrySuppression', 'floorMargin', 'isBetter', 'normalisedScore',
     ]);
-    // GROWN BY THREE, deliberately: §8.2's arbiter landed. `arbitrateBranch` is the
-    // executable port of `Exploration/Arbitration.lean`'s `arbitrate`, and the two
-    // constants are the bounds its theorems quantify over — `BRANCH_PROPOSAL_WIDTH` is
-    // the 2-4 band `accepted_width_in_range` proves, `BRANCH_REFUSAL_POLICIES` the five
-    // reasons `every_refusal_is_reachable` proves none of is unreachable. Named here
-    // because that is what this pin is for: the decision is recorded rather than
-    // absorbed.
+    // GROWN BY FOUR since §8.2's arbiter landed. `arbitrateBranch` is the executable
+    // port of `Exploration/Arbitration.lean`'s `arbitrate`, and two of the constants are
+    // the bounds its theorems quantify over — `BRANCH_PROPOSAL_WIDTH` is the 2-4 band
+    // `accepted_width_in_range` proves, `BRANCH_REFUSAL_POLICIES` the five reasons
+    // `every_refusal_is_reachable` proves none of is unreachable. `SWARM_CONTEXTS` is
+    // §8.4's axis, which arrived with agent nodes and is the trigger of the fifth
+    // refusal. Named here because that is what this pin is for: growth stays a decision.
     expect(Object.keys(swarmModule).sort()).toEqual([
       'BRANCH_PROPOSAL_WIDTH', 'BRANCH_REFUSAL_POLICIES',
       'JUDGE_MARGINALISATION_MIN', 'NAMED_SWARM_PRESETS', 'SWARM_ADVANCES', 'SWARM_CARRIES',
-      'SWARM_DECORRELATES', 'SWARM_EXPANDS', 'SWARM_OBSERVES', 'SWARM_PRESETS',
-      'SWARM_PRESET_POINTS', 'SWARM_SCORES', 'SWARM_TREE_ADVANCES', 'SWARM_UNITS',
-      'arbitrateBranch', 'isPresetPoint', 'isTreeAdvance', 'resolveSwarm', 'settleOf',
-      'swarmValidity',
+      'SWARM_CONTEXTS', 'SWARM_DECORRELATES', 'SWARM_EXPANDS', 'SWARM_OBSERVES',
+      'SWARM_PRESETS', 'SWARM_PRESET_POINTS', 'SWARM_SCORES', 'SWARM_TREE_ADVANCES',
+      'SWARM_UNITS', 'arbitrateBranch', 'isPresetPoint', 'isTreeAdvance', 'resolveSwarm',
+      'settleOf', 'swarmValidity',
     ]);
   });
 
   test('a composition missing axes is refused naming every one of them', () => {
     // The behavioural half of the resolver's axis list: a `custom` call with nothing in
-    // `config` must come back naming all seven, so an axis added to `SwarmConfig` and
-    // forgotten in the resolver's list fails HERE instead of letting an incomplete
-    // tuple through as if it were resolved.
+    // `config` must come back naming every axis, so an axis added to `SwarmConfig` and
+    // forgotten in the resolver's list fails HERE instead of letting an incomplete tuple
+    // through as if it were resolved. `context` is in the list because agent nodes gave
+    // inheritance one spelling (§8.4); `observe` and `decorrelate` are still in it
+    // because §6.7's cut of them has not landed and an axis nothing has removed is an
+    // axis a composition must still state.
     const refusal = resolveSwarm({ preset: 'custom', task: 'x', label: 'l', config: {} });
     expect(refusal).toMatchObject({ reason: 'bad_input' });
     const error = 'error' in refusal ? refusal.error : '';
-    for (const axis of ['unit', 'observe', 'expand', 'decorrelate', 'score', 'advance', 'carry']) {
+    for (const axis of [
+      'unit', 'context', 'observe', 'expand', 'decorrelate', 'score', 'advance', 'carry',
+    ]) {
       expect(error).toContain(axis);
     }
   });

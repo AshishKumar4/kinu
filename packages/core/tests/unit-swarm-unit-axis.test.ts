@@ -1,36 +1,45 @@
 /**
- * The `unit` axis, tagged — and the one thing the tag exists to make sayable.
+ * The `unit` axis, and the axis that took its parameter.
  *
- * `fork`'s meaning was lifetime AND context: a child running on the caller's own
- * completed turns, against one starting blank. The context half had no spelling on
- * the swarm surface, and `decorrelate` is not it — that axis is sibling-to-sibling
- * ("how hard children are pushed apart"), while inheritance is caller-to-child. So
- * it lives on `unit:'trajectory'`, the only unit with a conversation to start FROM.
+ * THIS FILE USED TO ASSERT A REFUSAL. `unit:'trajectory'` named a tool-using agent
+ * node and `regionRefusal` refused it, because nodes share one workspace and a node
+ * cannot be graded on what it changed when every node changed the same tree. §8.6
+ * measured that region at 18% — models compose the shape CORRECTLY, the design blocked
+ * it, and nothing on the surface said so — so the refusal's own wording was the
+ * contract under test.
  *
- * These tests assert the two halves that are observable: the tag is REPRESENTABLE
- * only where it means something (the parse), and composing it produces §8.6's
- * disclosure rather than a silent redirect (the run). §8.6 measured the
- * `agent-trajectory-search` region at 18% because models compose the shape
- * CORRECTLY, the design blocks it, and nothing on the surface said so — so "the
- * refusal names the blocker" is the contract under test, not a wording preference.
+ * The blocker was real and it was mis-sited. It bounds the GRADING SIGNAL, not the tool
+ * surface: a node holding a shell can still be graded, as long as it is graded on what
+ * it REPORTS. So the shape runs now, the value that named it is gone because it is what
+ * `answer` and `generator` ARE, and what these tests assert is the migration itself —
+ * the old spellings are unrepresentable, the new ones resolve, and the composition that
+ * was permanently refused is no longer refused at all.
+ *
+ * The inheritance question `unit:'trajectory'` carried did not vanish; it moved to the
+ * `context` axis, which asks it once for the caller-to-root edge and every branch edge
+ * (§8.4). That is the second half of what is asserted here.
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { MockLanguageModelV3 } from 'ai/test';
 import { createTestRuntime } from '@proteus/test-utils';
 import { SwarmConfigSchema } from '../src/tools/swarm-input';
-import { resolveSwarm } from '../src/strategy/swarm';
+import {
+  resolveSwarm, SWARM_CONTEXTS, SWARM_UNITS,
+  type BranchContext, type SwarmUnitSetting,
+} from '../src/strategy/swarm';
 import { runSwarm } from '../src/strategy/swarm-run';
+import { MockLanguageModelV3 } from 'ai/test';
 
 /** A composition legal in every respect except the axis under test, so a refusal can
- *  only ever be about `unit`. */
-function trajectoryCall(inherit: boolean) {
+ *  only ever be about `unit` or `context`. */
+function unitCall(over: { unit: SwarmUnitSetting; context: BranchContext }) {
   return {
     preset: 'custom' as const,
     task: 'find the cheapest correct implementation',
     label: 'unit-axis',
     config: {
-      unit: { kind: 'trajectory' as const, inherit },
+      unit: over.unit,
+      context: over.context,
       observe: 'none' as const,
       expand: 'sample' as const,
       decorrelate: 'angles' as const,
@@ -43,93 +52,111 @@ function trajectoryCall(inherit: boolean) {
   };
 }
 
-/**
- * `regionRefusal` is the first thing `runSwarm` does and it spends nothing, so the
- * refusal is observable without a model call ever being made — which is also the
- * ordering §2.3 requires (a run that will not start must not pay for a baseline).
- */
-async function refusalFor(inherit: boolean) {
-  const { rt } = createTestRuntime();
-  const resolved = resolveSwarm(trajectoryCall(inherit));
-  if ('reason' in resolved) throw new Error(`the fixture must resolve: ${resolved.error}`);
-  const result = await runSwarm({ rt, model: new MockLanguageModelV3(), mode: 'build' }, resolved);
-  if (!('reason' in result)) throw new Error('unit:"trajectory" must be refused, and was not');
-  return result;
-}
+describe('the unit axis names what a node produces, and nothing else', () => {
+  test('the three units are exactly answer/generator/thought', () => {
+    expect([...SWARM_UNITS]).toEqual(['answer', 'generator', 'thought']);
+  });
 
-describe('the unit axis carries the caller-context question', () => {
-  test('`inherit` is representable on trajectory and unrepresentable on every other unit', () => {
-    // The point of tagging rather than adding a free field beside the axis: there is
-    // no absent case to reason about, because the parameter cannot exist unless the
-    // value that owns it does.
-    expect(v.parse(SwarmConfigSchema, { unit: { kind: 'trajectory', inherit: true } }))
-      .toMatchObject({ unit: { kind: 'trajectory', inherit: true } });
-    expect(v.parse(SwarmConfigSchema, { unit: { kind: 'trajectory', inherit: false } }))
-      .toMatchObject({ unit: { kind: 'trajectory', inherit: false } });
-
-    // A node with no conversation cannot be asked whether it inherits one.
-    for (const kind of ['step', 'answer', 'generator']) {
-      expect(() => v.parse(SwarmConfigSchema, { unit: { kind, inherit: true } })).toThrow();
-    }
-    // And trajectory cannot DECLINE to answer: absent is not false here.
-    expect(() => v.parse(SwarmConfigSchema, { unit: { kind: 'trajectory' } })).toThrow();
+  test('the removed spellings are UNREPRESENTABLE, not merely refused', () => {
+    // The migration guard. `trajectory` named the shape two of the three values now
+    // have, and `step` never executed — accepting either beside the current set would
+    // be the second spelling §6.4's first reason exists to prevent.
+    expect(() => v.parse(SwarmConfigSchema, { unit: { kind: 'trajectory', inherit: true } })).toThrow();
+    expect(() => v.parse(SwarmConfigSchema, { unit: { kind: 'step' } })).toThrow();
+    // And no unit carries a parameter any more: the one it had is the `context` axis.
+    expect(() => v.parse(SwarmConfigSchema, { unit: { kind: 'answer', inherit: true } })).toThrow();
   });
 
   test('a bare axis string is not a unit — the tag IS the value', () => {
-    // Guards the migration itself: `unit:'answer'` was the old spelling, and accepting
-    // it beside the tagged form would be the second spelling §6.4's first reason
-    // exists to prevent.
     expect(() => v.parse(SwarmConfigSchema, { unit: 'answer' })).toThrow();
   });
 
-  test('every declared unit still resolves, so tagging removed no value', () => {
-    const base = trajectoryCall(false);
-    for (const kind of ['step', 'answer', 'generator'] as const) {
-      const resolved = resolveSwarm({ ...base, config: { ...base.config, unit: { kind } } });
+  test('every declared unit resolves, so the rename removed no reachable value', () => {
+    for (const kind of SWARM_UNITS) {
+      const call = unitCall({ unit: { kind }, context: 'fresh' });
+      const resolved = resolveSwarm(call);
       if ('reason' in resolved) throw new Error(`unit:${kind} did not resolve: ${resolved.error}`);
       expect(resolved.config.unit).toEqual({ kind });
     }
   });
 });
 
-describe('§8.6: the blocked composition is SAID, not omitted', () => {
-  test('unit:"trajectory" refuses as `unsupported`, naming the blocker and its remedy', async () => {
-    const refusal = await refusalFor(false);
-    // `unsupported`, not `bad_input`: the composition is CORRECT for the task and
-    // permanently unrunnable here, and the two codes are the retry/permanent line.
-    expect(refusal.reason).toBe('unsupported');
-    // The blocker itself — the reason a node cannot be graded, not merely that it
-    // cannot. This sentence is what the measured 18% was missing.
-    expect(refusal.error).toContain('shares ONE workspace');
-    expect(refusal.error).toContain('graded on what it changed');
-    // What would unblock it, stated as the only thing that would.
-    expect(refusal.error).toContain('per-node workspace isolation');
-    // ONE imperative, per §7.2 — a refusal offering two remedies was measured being
-    // corrected to the wrong one.
-    expect(refusal.error).toContain('unit:"answer"');
-    // And it does NOT offer "wait for isolation", which is not something a caller can
-    // do about it.
-    expect(refusal.error).not.toMatch(/wait for|once isolation|when isolation/i);
+describe('the context axis carries the inheritance question, at one spelling', () => {
+  test('both values parse, and the axis is a bare picklist rather than a tagged value', () => {
+    for (const context of SWARM_CONTEXTS) {
+      expect(v.parse(SwarmConfigSchema, { context })).toMatchObject({ context });
+    }
+    expect(() => v.parse(SwarmConfigSchema, { context: 'inherit' })).toThrow();
+    expect(() => v.parse(SwarmConfigSchema, { context: { kind: 'fork' } })).toThrow();
   });
 
-  test('inheriting the caller\'s turns does not change the verdict, and the refusal says why', async () => {
-    // The interesting half: `inherit` is the capability the delegation ladder used to
-    // spell as a verb, so a caller who sets it is asking for the closest thing to the
-    // old `fork`. It is still refused, and the refusal separates the blocker from the
-    // thing the caller actually asked for — otherwise the natural next move is to
-    // toggle `inherit` and try again.
-    const inherited = await refusalFor(true);
-    expect(inherited.reason).toBe('unsupported');
-    expect(inherited.error).toContain('the blocker is the shared workspace, not the context');
-
-    // The uninherited form does NOT carry that sentence, so this is a real
-    // discrimination rather than boilerplate on both arms.
-    const fresh = await refusalFor(false);
-    expect(fresh.error).not.toContain('the blocker is the shared workspace, not the context');
+  test('a resolved configuration is INCOMPLETE without it — an axis, not an option', () => {
+    // The completeness check is behavioural on purpose (`AXES` cannot force the
+    // compiler to notice a new required axis), so this is the assertion that holds the
+    // direction the type cannot: a composition that omits `context` is refused naming
+    // it.
+    const call = unitCall({ unit: { kind: 'answer' }, context: 'fresh' });
+    const { context: _dropped, ...withoutContext } = call.config;
+    const resolved = resolveSwarm({ ...call, config: withoutContext });
+    if (!('reason' in resolved)) throw new Error('a composition missing `context` must be refused');
+    expect(resolved.error).toContain('context');
   });
 
-  test('the refusal is reason-FIRST, so a clamp cannot cut the discriminator off', async () => {
-    const serialized = JSON.stringify(await refusalFor(true));
-    expect(serialized.indexOf('"reason"')).toBeLessThan(serialized.indexOf('"error"'));
+  test('a named preset supplies it from §6.3s row, verifier presets forking', () => {
+    // The two verifier presets take `fork` because a fork IS the cut
+    // `observe:'ancestors'` by construction; the archive presets take `fresh` because a
+    // probe of a new coverage cell wants the parent's RESULTS, not its transcript.
+    const optimise = resolveSwarm({
+      preset: 'optimise',
+      task: 'make it faster',
+      objective: {
+        kind: 'scalar', metric: 'ms', unit: 'ms', direction: 'minimise', scale: 'linear',
+        target: 1, verify: { kind: 'exec-ratio', spec: {} },
+      },
+    });
+    if ('reason' in optimise) throw new Error(`optimise did not resolve: ${optimise.error}`);
+    expect(optimise.config.context).toBe('fork');
+
+    const ideate = resolveSwarm({ preset: 'ideate', task: 'name some approaches' });
+    if ('reason' in ideate) throw new Error(`ideate did not resolve: ${ideate.error}`);
+    expect(ideate.config.context).toBe('fresh');
   });
+});
+
+describe('the composition that was permanently refused is no longer refused', () => {
+  test('a tool-using node run starts — no `unsupported` about a shared workspace', async () => {
+    // Reaching the model at all is the claim: `regionRefusal` is the first thing
+    // `runSwarm` does and it spends nothing, so a refusal would come back before any
+    // call. This model answers once and stops, which is the smallest run that proves
+    // the region opened; what an agent node DOES with its tools is the behavioural
+    // suite's subject, not this one's.
+    const { rt } = createTestRuntime();
+    const result = await runSwarm({
+      rt,
+      model: new MockLanguageModelV3({
+        provider: 'fake',
+        modelId: 'fake-unit-axis',
+        doGenerate: async () => ({
+          content: [{ type: 'text', text: 'one approach' }],
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage: {
+            inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 3, text: 3, reasoning: undefined },
+          },
+          warnings: [],
+        }),
+      }),
+      mode: 'build',
+      maxSteps: 2,
+    }, (() => {
+      const resolved = resolveSwarm(unitCall({ unit: { kind: 'answer' }, context: 'fresh' }));
+      if ('reason' in resolved) throw new Error(`the fixture must resolve: ${resolved.error}`);
+      return resolved;
+    })());
+
+    if ('reason' in result) {
+      throw new Error(`a tool-using node composition must run: ${result.error}`);
+    }
+    expect(result.report.expansions).toBe(3);
+  }, 60_000);
 });

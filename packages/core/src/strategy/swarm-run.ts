@@ -7,10 +7,12 @@
  * TREE bounded by `depth` and widened by `branches`, and every axis it names is
  * realised rather than approximated:
  *
- *   - `branches` candidates per expansion, each a single toolless generation, which
- *     is what an `expand:'sample'` or `expand:'mutate'` step IS (a child of the root
- *     starts from the workspace as found; a child of a deeper node starts from that
- *     node's own answer);
+ *   - `branches` candidates per expansion. What ONE candidate costs is the `unit`
+ *     axis: `answer` and `generator` run a real agent per node — a tool loop with
+ *     its own turns and its own journalled transcript (`node-agent.ts`, §8.1) —
+ *     while `thought` is §8.9's degenerate point, one toolless generation, kept as
+ *     the cheap tier. `expand:'sample'` starts a child from the workspace as found
+ *     and `expand:'mutate'` from its parent's own answer;
  *   - `advance` through `mcts/frontier.ts` — the ONE scheduler, so `uct` re-widens,
  *     `beam` sweeps a level at a time, `best-first` takes the best unexpanded node
  *     and `none` expands the root once and stops;
@@ -35,32 +37,48 @@
  * `record-node.ts` for the one INSERT, `pruning.ts` for retirement. The reward those
  * receive is `normalisedScore` over the caller's own metric.
  *
- * A NODE DOES NOT SPAWN CHILDREN — it PROPOSES, and `advance` arbitrates (§8.2). The
- * proposal is read out of the node's own text, because a node here is toolless and a
- * proposal is therefore text the engine reads (§8.6). It is answered when selection
- * REACHES that node, which is what makes it an input to selection rather than a
- * bypass of it, and any proposal selection never reached is answered in the sweep
- * after the loop — a node that cannot tell refusal from being ignored will simply
- * propose again.
+ * A NODE DOES NOT SPAWN CHILDREN — it PROPOSES, and `advance` arbitrates (§8.2). An
+ * AGENT node proposes by calling `propose_branch` and the verdict is that tool's
+ * return value, so a refusal's text is the node's next instruction. A THOUGHT node
+ * has no tool to be answered through, so its proposal is a marker line the engine
+ * reads out of its text and its verdict is a typed diagnostic event; that path is
+ * answered when selection REACHES the node, which is what makes it an input to
+ * selection rather than a bypass of it, and any proposal selection never reached is
+ * answered in the sweep after the loop. Both forms carry the same data and neither
+ * is ever dropped silently — a node that cannot tell refusal from being ignored will
+ * simply propose again.
  *
- * WHY THE ISOLATION PROOF STILL COVERS THIS, STATED RATHER THAN ASSUMED.
- * `MCTS/StorageIsolation.lean` holds because branches are toolless: its two
- * branch-side actions carry a frame condition forbidding a branch from introducing a
- * storage identity no existing branch holds, and `Exploration/Isolation.lean`'s
- * `agent_node_is_not_a_branch_explore` shows the theorem does not reach a node that
- * acquires its own storage. THIS expansion gives a node neither tools nor storage: a
- * node is one `generateText` call whose entire output is text, and the ENGINE writes
- * that text to the one verifier path and measures it, serially. So the swarm creates
- * no branch storage at all — `AcquiresOwnStorage` is false for every node here, the
- * branch set stays empty, and `init_isolated` covers it without needing the
- * preservation theorem. Nothing is extended and nothing new is claimed. The shape
- * that WOULD need a new argument is `unit:'trajectory'`, a tool-using agent node,
- * and it is refused below for exactly that reason.
+ * THE BUDGET IS CONSERVED AND NOT MERELY CAPPED, and that is new here because
+ * arbitration moved. A thought node's proposal was answered in this loop, one node
+ * at a time, so reading the remaining budget and spending it could not interleave.
+ * An agent node asks from inside its own tool loop and N of those run concurrently,
+ * so `SwarmBudget` owns the number and decides-and-debits in one synchronous step
+ * (§8.11: the allocations granted to a node's children must SUM to no more than the
+ * parent's remaining budget). Depth and width bound the shape; conservation bounds
+ * the spend.
+ *
+ * WHAT THE ISOLATION PROOF COVERS, AND WHAT IT NO LONGER COVERS.
+ * `MCTS/StorageIsolation.lean` holds of TOOLLESS branches: its two branch-side
+ * actions carry a frame condition forbidding a branch from introducing a storage
+ * identity no existing branch holds. `Exploration/Isolation.lean`'s
+ * `agent_node_is_not_a_branch_explore` proves the complementary fact, and it is the
+ * one that matters now: the theorem DOES NOT REACH a node that acquires its own
+ * storage. So `unit:'thought'` is still inside the proof — one `generateText` call
+ * whose entire output is text, `AcquiresOwnStorage` false, branch set empty,
+ * `init_isolated` sufficient — and an AGENT node is NOT, because it holds a shell.
+ * That obligation is named rather than assumed away, and what bounds it today is
+ * `nodeWorkspace`: every agent node reports `isolation:'shared-origin-plane'`, which
+ * is to say the search creates no per-node storage at all and therefore still adds
+ * no branch storage — the workspace is the ORIGIN's, one plane, exactly as before.
+ * What that costs is attribution, and the engine pays it the only honest way: a node
+ * is graded on the candidate it REPORTS, never on a diff of a tree every node wrote.
+ * A per-node home (§8.6) is what would need the preservation theorem extended, and
+ * it is deliberately not built here.
  */
 import { generateText } from 'ai';
-import type { LanguageModel } from 'ai';
+import type { LanguageModel, ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { DEFAULT_CONFIG } from '../config';
+import { DEFAULT_CONFIG, DEFAULT_MAX_STEPS } from '../config';
 import { diversityAngle, siblingAngles } from '../mcts/diversity';
 import { explorePrompt, type ExplorePrompt } from '../mcts/explore-prompt';
 import { initSearchTables } from '../mcts/schemas';
@@ -75,6 +93,18 @@ import { ProteusError, refusalOf, type Refusal } from '../obs/error';
 import { renderIssues } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { normalizeUsage, usageTotal, type Usage, addUsage } from '../usage';
+import { estimateTokens } from '../llm';
+import { contextWindowForModel } from '../context-window';
+import { HeadJournal } from '../heads/journal';
+import { initHeadsTables } from '../heads/schema';
+import { runNodeAgent } from './node-agent';
+import type { NodeAgentDeps } from './node-agent';
+import { SwarmBudget, type BranchDecision, type BranchGrant } from './swarm-budget';
+import { sha256Hex } from '../safety/argument-digest';
+import type { NodeWorkspaceProvisioner } from './node-workspace';
+import type { SerializedMessage } from '../heads/types';
+import type { MissionScope } from '../mission-budget';
+import type { WebSearchProvider } from '../web/index';
 import { resolveVerifier, type ResolvedVerifier } from './verifier-registry';
 import {
   carrySuppression, floorMargin, isBetter, normalisedScore, PUBLISHING_CARRIES,
@@ -84,11 +114,11 @@ import type {
   ObjectiveDirection, ObjectiveScale, PublicationState, PublishingCarry, VerifierSource,
 } from './objective';
 import {
-  arbitrateBranch, isTreeAdvance, BRANCH_PROPOSAL_WIDTH, SWARM_TREE_ADVANCES,
+  isTreeAdvance, BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS, SWARM_TREE_ADVANCES,
 } from './swarm';
 import type {
-  BranchArbitration, BranchProposal, BranchRefusalPolicy, BranchVerdict, ResolvedSwarm,
-  SwarmAdvance, SwarmCandidate, SwarmPreset, SwarmResult, SwarmSettleReport,
+  BranchContext, BranchProposal, BranchRefusalPolicy, BranchVerdict,
+  ResolvedSwarm, SwarmAdvance, SwarmCandidate, SwarmPreset, SwarmResult, SwarmSettleReport,
 } from './swarm';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ModelCallSink } from '../events/model-call';
@@ -114,6 +144,52 @@ export interface SwarmRunDeps {
    * stopped.
    */
   readonly logger?: Logger;
+  /**
+   * The step envelope one agent node runs to. Defaults to the shipped turn
+   * envelope, because a node is the origin running on the same workspace and gets
+   * the same room — the same argument `HeadInferenceDeps.maxSteps` records for a
+   * fork. Ignored entirely by `unit:'thought'`, which has one step by construction.
+   */
+  readonly maxSteps?: number;
+  /** The mission ledger an agent node's steps charge, when the run has one. */
+  readonly mission?: MissionScope;
+  /**
+   * The origin agent's own conversation, which is what a swarm's ROOT starts from.
+   *
+   * §8.4: *"a root that started blank would throw away precisely the context that made
+   * the caller decide to search"*. This is the caller-to-root edge, and it is the same
+   * axis as every branch edge — `context:'fork'` gives the first level this prefix
+   * verbatim, `'fresh'` gives it the task block and the seed alone.
+   *
+   * Absent means the caller wired none, and then the first level starts from the task
+   * block. Absent rather than empty-and-claimed: a run whose root inherited nothing is
+   * a different run from one whose caller had nothing to inherit.
+   */
+  readonly originContext?: readonly ModelMessage[];
+  /** §8.6's per-node home provisioner. Absent until the substrate lands, and then
+   *  every node reports `shared-origin-plane` rather than pretending otherwise. */
+  readonly provisionHome?: NodeWorkspaceProvisioner;
+  /** Backend-built `execute_tools` and live research, handed to every agent node.
+   *  Absent means the node's surface is narrower, not broken. */
+  readonly executeTool?: unknown;
+  readonly webSearch?: WebSearchProvider;
+  /**
+   * §8.4's compaction barrier: rewrite one parent's context ONCE, for every child
+   * of that parent to share.
+   *
+   * A SEAM and not an implementation, for §6.4's first reason. `packages/compaction`
+   * is *"the @better-compact ladder that actually rewrites history"* and core does
+   * not depend on it, so a summariser written here would be a second ladder that
+   * drifts from the real one. What the engine owns is the POLICY — the ~85%
+   * threshold, and firing once per branch point so the shared view cannot become
+   * part of what siblings are ranked on — and that policy is testable without a
+   * summariser. Absent means no compaction: a parent past its window inherits
+   * verbatim and the provider refuses, which is a loud failure rather than a silent
+   * paraphrase of the objective.
+   */
+  readonly compactShared?: (
+    messages: readonly ModelMessage[],
+  ) => Promise<readonly ModelMessage[]>;
 }
 
 /** The scalar half of an objective — the metric, direction, scale, target, floor and
@@ -182,25 +258,15 @@ function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
     return badInput('neither this call nor its base states `branches`, so nothing says how many '
       + 'candidates an expansion produces. Pass `branches`, or name a base with `from`.');
   }
-  // §8.6 requires the BLOCKED composition to be said, not merely omitted. A caller
-  // who composes `unit:'trajectory'` has composed it CORRECTLY for the task — the
-  // measured `agent-trajectory-search` region scored 18% because the design blocked it
-  // and nothing on the surface did. So this arm names the blocker (nodes share one
-  // workspace, so a node cannot be graded on what it changed), names what would
-  // unblock it (per-node workspace isolation), and states ONE imperative. It does not
-  // offer "wait for isolation", which is not something a caller can do.
-  if (config.unit.kind === 'trajectory') {
-    return unsupported('unit:"trajectory" makes each node a tool-using agent, and every node here '
-      + 'shares ONE workspace — so a node cannot be graded on what it changed, because every node '
-      + 'changed the same tree. What would unblock it is per-node workspace isolation, and nothing '
-      + `else.${config.unit.inherit ? ' Inheriting the caller\'s turns does not change that: the '
-        + 'blocker is the shared workspace, not the context.' : ''} Use unit:"answer", which is the `
-      + 'shape that is gradeable today.');
-  }
-  if (config.unit.kind !== 'answer') {
-    return unsupported(`unit:"${config.unit.kind}" is not executable here — a node is one complete `
-      + 'answer, measured as a whole. Use unit:"answer".');
-  }
+  // NO `unit` ARM REFUSES ANY MORE, and the absence is the ticket. `trajectory` was
+  // refused here because a tool-using node shares one workspace with its siblings and
+  // so cannot be graded on what it changed — the measured `agent-trajectory-search`
+  // region scored 18% because the design blocked the composition and nothing on the
+  // surface said so. The blocker was real and it was mis-sited: it bounds the GRADING
+  // SIGNAL, not the tool surface. A node now holds tools and is graded on what it
+  // REPORTS (`node-agent.ts`), the value that named the shape is gone because the
+  // shape is what `answer` and `generator` now are, and `thought` is §8.9's
+  // degenerate point kept as the cheap tier. All three execute below.
   if (config.observe === 'own') {
     return unsupported('observe:"own" gives a node feedback about its OWN attempt, and a node here is '
       + 'one complete answer measured as a whole — it is never re-attempted, so there is no second '
@@ -288,6 +354,41 @@ interface TreeNode {
    *  unparseable. Not one of arbitration's five policies — it never reached the
    *  arbiter — and reported under its own event for that reason. */
   readonly proposalError: string | null;
+  /**
+   * The branch an AGENT node was granted while it ran, still unexpanded.
+   *
+   * Distinct from {@link proposal}, and the distinction is the whole difference
+   * between the two node kinds: a thought node's request is UNANSWERED until selection
+   * reaches it, while an agent node's was answered and PAID FOR inside its own tool
+   * call. Cleared when the engine expands it, because a tree selector may re-select an
+   * expanded node and a grant left in place would be spent twice off one debit.
+   */
+  granted: BranchGrant | null;
+  /**
+   * What this node CONCLUDED, in its own words — the report a `fresh` child is
+   * seeded with (§8.4). Null for the root, which reported nothing because no model
+   * wrote it, and for a `thought` node, whose whole output IS its artifact.
+   */
+  readonly conclusion: string | null;
+  /**
+   * The conversation a `fork` child of this node inherits: what this node itself
+   * inherited, plus what it produced. Append-only, so every sibling of one parent
+   * shares one byte-identical cacheable prefix (§8.4).
+   *
+   * Empty for a thought node, which has no conversation to hand down, and for the
+   * root, whose children start from the origin's own framing.
+   */
+  readonly transcript: readonly ModelMessage[];
+  /**
+   * The compacted view of {@link transcript}, once this node has crossed the window
+   * threshold and the barrier has run.
+   *
+   * Held on the PARENT and not on each child, which is the whole point of §8.4's
+   * once-per-branch-point rule: a shared view cannot vary across the siblings it is
+   * compared over, so no part of the ranking is a fact about which sibling's
+   * compaction kept the useful paragraph.
+   */
+  compacted: readonly ModelMessage[] | null;
 }
 
 /** The marker a node ends its answer with to request a branch. A line rather than a
@@ -304,8 +405,11 @@ const PROPOSAL_MARKER = 'PROPOSE-BRANCH';
  */
 const BranchProposalSchema = v.strictObject({
   rationale: v.string(),
-  branches: v.array(v.strictObject({ task: v.string(), rationale: v.string() })),
-  inherit: v.boolean(),
+  branches: v.array(v.strictObject({
+    task: v.string(),
+    rationale: v.string(),
+    context: v.picklist(SWARM_CONTEXTS),
+  })),
 });
 
 /** A node's answer, split from the branch it asked for. */
@@ -352,14 +456,19 @@ function readAnswer(text: string): ReadAnswer {
 }
 
 /**
- * The invitation to propose, appended to an expansion prompt only where a branch
+ * The invitation to propose, appended to a THOUGHT node's prompt only where a branch
  * could actually be granted.
  *
- * §8.2's build-time rule, which `head-tools.ts:110` already applies to
- * `split_subheads`: a request that can only ever be refused MUST NOT be offered,
- * because offering it spends a step to learn a limit the surface already knew. So a
- * flat run and a node at the depth cap are never asked. The runtime refusal stays
- * anyway — the budget can empty between the invitation and the answer.
+ * §8.2's build-time rule, which `head-tools.ts` already applies to `split_subheads`
+ * and `node-agent.ts` applies to `propose_branch`: a request that can only ever be
+ * refused MUST NOT be offered, because offering it spends a step to learn a limit the
+ * surface already knew. So a flat run and a node at the depth cap are never asked.
+ * The runtime refusal stays anyway — the budget can empty between the invitation and
+ * the answer.
+ *
+ * A MARKER RATHER THAN A TOOL, because this is the degenerate point: a thought node
+ * has no tool call to be answered through, so its request is text the engine reads
+ * and its verdict is a typed diagnostic event (§8.2). An agent node gets the tool.
  */
 function proposalInvitation(input: {
   readonly advance: ResolvedSwarm['config']['advance'];
@@ -369,9 +478,10 @@ function proposalInvitation(input: {
   if (!isTreeAdvance(input.advance) || input.atDepth + 1 >= input.maxDepth) return '';
   return `\n\nIf one thread of this task deserves its own branch of the search, end your answer with `
     + `a line reading ${PROPOSAL_MARKER} followed by a JSON object: `
-    + `{"rationale": why this thread deserves the budget, "branches": [{"task", "rationale"}, ...] `
-    + `(${String(BRANCH_PROPOSAL_WIDTH.min)}-${String(BRANCH_PROPOSAL_WIDTH.max)} narrower `
-    + `sub-questions), "inherit": whether those children should be given your answer as context}. `
+    + `{"rationale": why this thread deserves the budget, "branches": [{"task", "rationale", `
+    + `"context"}, ...] (${String(BRANCH_PROPOSAL_WIDTH.min)}-${String(BRANCH_PROPOSAL_WIDTH.max)} `
+    + 'narrower sub-questions, each naming what it starts from: "fork" for your own answer as '
+    + 'context, "fresh" for its own focus and your conclusion alone)}. '
     + 'You are proposing, not spawning: the search decides, against a budget and a depth cap you '
     + 'cannot see, and you will be told the reason if it refuses. Omit the block entirely if no '
     + 'thread needs one.';
@@ -426,6 +536,10 @@ function branchPrompt(input: {
   readonly ancestors: readonly TreeNode[];
   readonly atDepth: number;
   readonly maxDepth: number;
+  /** Whether to append the marker-line invitation. False for an agent node, which is
+   *  invited by `propose_branch` being on its surface instead — two invitations for
+   *  one capability would teach the model a protocol the engine does not read. */
+  readonly invite: boolean;
 }): ExplorePrompt {
   const { resolved, index, branches } = input;
   const { decorrelate, expand, observe, advance } = resolved.config;
@@ -442,7 +556,9 @@ function branchPrompt(input: {
   return explorePrompt({
     mode: input.mode,
     context: `${input.task}${feedback}${inherited}${angle}${instruction}`
-      + proposalInvitation({ advance, atDepth: input.atDepth, maxDepth: input.maxDepth }),
+      + (input.invite
+        ? proposalInvitation({ advance, atDepth: input.atDepth, maxDepth: input.maxDepth })
+        : ''),
     craftedTools: [],
     // `blind` is exactly this: the child is not shown what its siblings were sent.
     siblings: decorrelate === 'angles' ? siblingAngles(index, branches) : [],
@@ -450,14 +566,183 @@ function branchPrompt(input: {
   });
 }
 
-/** One generated child, before it is measured. Its token spend is NOT here: the run
- *  accumulates that as it reads each generation, and a per-child copy nothing reads
- *  was carried through the flat version unused. */
+/**
+ * The share of a model's window at which §8.4's compaction ladder is allowed to run.
+ *
+ * *"When a node's context reaches roughly 85% of its window, the ladder runs; below
+ * that it does not run at all."* Named because it is a CACHING judgement and not a
+ * measurement of where quality falls off — the specification says so itself, and a
+ * bare `0.85` in an expression would read as the second thing.
+ */
+const CONTEXT_COMPACTION_THRESHOLD = 0.85;
+
+/**
+ * §8.4's BARRIER: the one prefix every child of this parent inherits.
+ *
+ * Verbatim below the threshold, which is the whole of what `context:'fork'` means and
+ * a decision about caching: an unmodified prefix is a prefix a provider can cache, so
+ * every sibling of one parent shares one cacheable prefix, and rewriting the history
+ * per child would break that prefix for all of them at once.
+ *
+ * Past the threshold it fires ONCE and the result is cached on the parent, which is
+ * the load-bearing half: a search ranks siblings against each other, so if compaction
+ * were lossy AND per-child, part of that ranking would be a fact about which sibling's
+ * compaction kept the useful paragraph. One shared view per level makes the
+ * compaction identical across the comparison, so there is nothing to confound.
+ *
+ * With no ladder wired the prefix is handed over whole and the absence is REPORTED. A
+ * provider refusing an over-long context is a loud failure; a silently paraphrased
+ * objective is the §2.4(c) fabrication reached by attrition.
+ */
+
+/**
+ * The model's own identifier, for the window lookup.
+ *
+ * PARSED rather than narrowed on a representation: the SDK's `LanguageModel` is a
+ * specifier string OR a model object, and the two arms are established here, at the one
+ * boundary where the value arrives, instead of every reader branching on its shape.
+ * Neither arm is an error — an empty spec resolves to the shipped default window, which
+ * is what an unrecognised model already gets.
+ */
+function modelSpecOf(model: LanguageModel): string {
+  const asSpec = v.safeParse(v.string(), model);
+  if (asSpec.success) return asSpec.output;
+  const asModel = v.safeParse(v.object({ modelId: v.string() }), model);
+  return asModel.success ? asModel.output.modelId : '';
+}
+
+/** §8.4's BARRIER: the one prefix every child of this parent inherits, verbatim below
+ *  the threshold and compacted ONCE above it. See the note above `modelSpecOf`. */
+async function sharedPrefix(input: {
+  readonly parent: TreeNode;
+  readonly deps: SwarmRunDeps;
+  readonly log: Logger;
+  readonly preset: SwarmPreset;
+}): Promise<readonly ModelMessage[]> {
+  const { parent, deps } = input;
+  if (parent.compacted) return parent.compacted;
+  if (parent.transcript.length === 0) return parent.transcript;
+  const chars = parent.transcript.reduce(
+    (total, message) => total + JSON.stringify(message.content).length, 0,
+  );
+  const room = contextWindowForModel(modelSpecOf(deps.model)) * CONTEXT_COMPACTION_THRESHOLD;
+  if (estimateTokens(chars) < room) return parent.transcript;
+  if (!deps.compactShared) {
+    input.log.event('swarm.compaction_absent', {
+      preset: input.preset, node: parent.id, depth: parent.depth,
+      estimated_tokens: estimateTokens(chars), threshold: Math.round(room),
+    });
+    return parent.transcript;
+  }
+  const shared = await deps.compactShared(parent.transcript);
+  parent.compacted = shared;
+  input.log.event('swarm.context_compacted', {
+    preset: input.preset, node: parent.id, depth: parent.depth,
+    before: parent.transcript.length, after: shared.length,
+  });
+  return shared;
+}
+
+/**
+ * §8.4's SEED, assembled by the engine and never authored by the parent.
+ *
+ * *"A parent that writes its own child's seed can launder a claim about its own value:
+ * it would be supplying, one hop removed, the number its child is told to beat."* So
+ * the parent authors its report and this turns that report plus its EARNED outcome
+ * into a seed.
+ *
+ * Both context values get this. The difference between them is the conversation in
+ * front of it and nothing else, which is what makes them two values of one axis.
+ *
+ * A field nobody computed is ABSENT rather than zero or "unknown" — an outcome exists
+ * here only where the instrument produced one.
+ */
+function branchSeed(input: {
+  readonly parent: TreeNode;
+  readonly measured: MeasuredObjective | null;
+  readonly baseline: number | null;
+  readonly verifier: ResolvedVerifier | null;
+  readonly atDepth: number;
+  readonly maxDepth: number;
+  readonly focus: string;
+  readonly context: BranchContext;
+}): ModelMessage {
+  const { parent, measured } = input;
+  const parts: string[] = [];
+  if (parent.conclusion) {
+    parts.push(`What the node you continue from concluded:\n${parent.conclusion}`);
+  }
+  if (input.verifier && parent.artifact !== null) {
+    // The PATH and a digest of the bytes, so the child reads the artifact rather than
+    // being told about it in prose — prose about code is a lossy copy of code.
+    parts.push(`Its candidate is at ${input.verifier.artifact} `
+      + `(digest ${sha256Hex(parent.artifact, 12)}). Read it rather than reconstructing it.`);
+  }
+  if (measured && parent.measurement?.kind === 'measured') {
+    parts.push(`That candidate measured ${String(parent.measurement.value)} ${measured.unit} on `
+      + `${measured.metric}, against a target of ${String(measured.target)}. That is what you have `
+      + 'to beat.');
+  }
+  parts.push(`You are at depth ${String(input.atDepth)} of ${String(input.maxDepth)}, so scope your `
+    + 'work to what can finish here.');
+  parts.push(`Your focus:\n${input.focus}`);
+  return {
+    role: 'user',
+    content: parts.join('\n\n'),
+  };
+}
+
+/**
+ * The inherited prefix as the journal records it.
+ *
+ * The journal's `inheritedContext` is `SerializedMessage`, which is what a fork's
+ * durable history is written as; a node's prefix is `ModelMessage`. One projection
+ * here rather than a second serialised shape beside it, and content that is not a
+ * plain string is rendered by the codec that already writes it — a node's prefix
+ * carries tool traffic, and a JSON blob in a role-tagged row is what the read model
+ * already expects.
+ */
+function inheritedAsSerialized(prefix: readonly ModelMessage[]): SerializedMessage[] {
+  return prefix.map((message, index) => ({
+    id: `p${String(index)}`,
+    role: message.role,
+    // A structural check rather than a `typeof`: the SDK's content is a string or a part
+    // ARRAY, and the array arm is the one a node's prefix actually carries.
+    content: Array.isArray(message.content)
+      ? JSON.stringify(message.content)
+      : message.content,
+    createdAt: index,
+  }));
+}
+
+/**
+ * One expanded child, before it is measured.
+ *
+ * Its spend IS here now, unlike the flat version's unused per-child copy: an agent
+ * node's usage comes off its own report rather than off one `generateText` call, so
+ * the run reads it back per child instead of accumulating inside the generation.
+ */
 interface Expansion {
   readonly id: string;
+  /** What the instrument will measure: the reported candidate for an agent node, the
+   *  answer text for a thought node. */
   readonly artifact: string;
+  /** A THOUGHT node's marker-line request, still unanswered. Always null for an agent
+   *  node, which was answered by the tool while it ran. */
   readonly proposal: BranchProposal | null;
   readonly proposalError: string | null;
+  /** The branch an AGENT node was granted while it ran, carried onto its tree node so
+   *  selection can expand it when it reaches it. */
+  readonly granted: BranchGrant | null;
+  /** What an agent node concluded, for a `fresh` child's seed (§8.4). Null for a
+   *  thought node, whose conclusion IS its artifact. */
+  readonly conclusion: string | null;
+  /** The conversation a `fork` child of this node inherits. Empty for a thought node. */
+  readonly transcript: readonly ModelMessage[];
+  readonly usage: Usage;
+  /** Reported per call by a thought node and per node by an agent node, so this is
+   *  null exactly where the model call was already reported elsewhere. */
+  readonly modelId: string | null;
 }
 
 /**
@@ -514,14 +799,16 @@ function pathTo(nodes: ReadonlyMap<string, TreeNode>, node: TreeNode): TreeNode[
 }
 
 /**
- * Disclose a verdict — the ONE place a proposal's answer is reported.
+ * Disclose a verdict — the one place a THOUGHT node's proposal is answered.
  *
- * It goes to the diagnostics stream and nowhere else, and that is forced rather than
- * chosen: a node here is toolless, so by the time the engine can answer, the node has
- * already finished its one call and there is no channel back to it. The specification
- * requires the answer to exist and says nothing about where it lands when the asker
- * cannot receive it; this is that place, with a stable dotted name so the refusals are
- * queryable rather than merely printed.
+ * It goes to the diagnostics stream and nowhere else, and for a toolless node that is
+ * forced rather than chosen: by the time the engine can answer, the node has already
+ * finished its one call and there is no channel back to it. §8.2 requires the answer
+ * to exist and states where it lands when the asker cannot receive it; this is that
+ * place, with a stable dotted name so the refusals are queryable rather than merely
+ * printed. An AGENT node is answered by `propose_branch`'s return value instead, and
+ * the engine still logs the accepted verdict so both kinds of node leave the same
+ * trail in the stream.
  */
 function reportVerdict(log: Logger, input: {
   readonly verdict: BranchVerdict;
@@ -548,37 +835,40 @@ function reportVerdict(log: Logger, input: {
 }
 
 /**
- * Answer one node's branch proposal, or return null when it made none.
+ * Answer one THOUGHT node's branch proposal, or return null when it made none.
  *
  * The arbiter itself is `arbitrateBranch` in `swarm.ts` — pure, total, and a port of
  * the proven one. This is the engine half: it supplies the two facts the node is not
  * allowed to supply (its own depth, read from the row this engine wrote, and the
- * budget that remains) and it discloses the answer.
+ * budget that remains), DEBITS an accepted grant, and discloses the answer.
+ *
+ * The budget is asked rather than passed, because conservation is the budget's own
+ * invariant and a caller that read the number first and handed it in could not hold
+ * it (§8.11, and `swarm-budget.ts`'s header).
  */
 function answerProposal(input: {
   readonly log: Logger;
   readonly node: TreeNode;
   readonly resolved: ResolvedSwarm;
-  readonly remainingChildren: number;
-}): BranchArbitration | null {
+  readonly budget: SwarmBudget;
+}): BranchDecision | null {
   const { node, resolved } = input;
   const proposal = node.proposal;
   if (!proposal) return null;
-  const arbitration = arbitrateBranch({
+  const decision = input.budget.arbitrate({
     config: resolved.config,
     caps: resolved.caps,
     atDepth: node.depth,
-    remainingChildren: input.remainingChildren,
     proposal,
   });
-  if (arbitration.kind === 'refused') {
+  if (decision.kind === 'refused') {
     reportVerdict(input.log, {
-      verdict: { kind: 'refused', reason: 'denied', error: arbitration.error },
+      verdict: { kind: 'refused', reason: 'denied', error: decision.error },
       preset: resolved.preset, nodeId: node.id, atDepth: node.depth,
-      policy: arbitration.policy,
+      policy: decision.policy,
     });
   }
-  return arbitration;
+  return decision;
 }
 
 /** What measuring one child produced, and what the tree must do about it. */
@@ -757,6 +1047,16 @@ export async function runSwarm(
   // here is `normalisedScore` over the caller's own metric.
   const sql = deps.rt.storage.sql;
   initSearchTables(deps.rt.storage.execRaw, sql);
+  // §8.8's transcript store, and it is the SAME ledger a fork's turns land in: *"the
+  // transcript is a read model over the node's journal, never a second store"*.
+  // `search_nodes` stays the TREE — structure and one normalised value per node — and
+  // the journal stays the turns. Initialised rather than assumed, for the reason
+  // `initSearchTables` is: a workspace that has never run a fork has no `head_journal`.
+  initHeadsTables(deps.rt.storage.execRaw, sql);
+  const journal = new HeadJournal(sql);
+  // Whether a node is an agent at all. `thought` is §8.9's degenerate point and takes
+  // the toolless path below unchanged; the other two run `node-agent.ts`.
+  const agentNodes = resolved.config.unit.kind !== 'thought';
   const languages = deps.rt.executor.languages;
   // The narrowing, not a second policy: `regionRefusal` has already refused the two
   // values with no scheduler here.
@@ -780,8 +1080,19 @@ export async function runSwarm(
     // The baseline IS the root's measurement, and its normalised score is 0 by
     // construction — the point the search climbs away from.
     measurement: null, score: measures ? 0 : null,
-    proposal: null, proposalError: null,
+    proposal: null, proposalError: null, granted: null,
+    // The root reported nothing because no model wrote it. Its children's prefix is
+    // the ORIGIN's conversation when the caller supplied one (§8.4: *"a root that
+    // started blank would throw away precisely the context that made the caller
+    // decide to search"*) and the task block alone when it did not.
+    conclusion: null, transcript: deps.originContext ?? [], compacted: null,
   }]]);
+  // One run header, so every node of this search groups under one root in the journal
+  // instead of each appearing as its own empty run — the defect `recordSplit` exists
+  // to close, reached here for the same reason.
+  if (agentNodes) {
+    journal.recordSplit(rootId, resolved.label ?? resolved.preset, Date.now());
+  }
 
   const candidates: SwarmCandidate[] = [];
   let best: SwarmCandidate | null = null;
@@ -797,16 +1108,62 @@ export async function runSwarm(
   // so enabling the tree changes nothing about the depth that already ran. An invented
   // third number would be worse than a derivation: a default nothing declared is a
   // shape the record cannot report honestly, and this one `expansions` reports.
-  let childBudget = maxDepth * branches;
+  //
+  // OWNED BY A TYPE rather than by a `let`, because arbitration no longer happens only
+  // in this loop: an agent node asks from inside its own concurrent tool loop, so the
+  // read and the debit have to be one step (`swarm-budget.ts`).
+  const budget = new SwarmBudget(maxDepth * branches);
+
+  /**
+   * What every agent node of this run is handed, built ONCE.
+   *
+   * Assigned rather than spread conditionally, and the reason is the same one
+   * `nodeWorkspace` is written for: an absent dep must be an ABSENT KEY. A key written as
+   * `undefined` would make "the caller wired none" indistinguishable from "the caller
+   * wired nothing", and that distinction is what decides whether a node's surface holds a
+   * tool at all.
+   */
+  const nodeDeps: NodeAgentDeps = {
+    rt: deps.rt, model: deps.model, journal, logger: log,
+    maxSteps: deps.maxSteps ?? DEFAULT_MAX_STEPS,
+  };
+  if (deps.signal !== undefined) nodeDeps.signal = deps.signal;
+  if (deps.reportModelCall !== undefined) nodeDeps.reportModelCall = deps.reportModelCall;
+  if (deps.mission !== undefined) nodeDeps.mission = deps.mission;
+  if (deps.provisionHome !== undefined) nodeDeps.provisionHome = deps.provisionHome;
+  if (deps.executeTool !== undefined) nodeDeps.executeTool = deps.executeTool;
+  if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
+
   let lost = 0;
   let aborted = false;
 
-  while (childBudget > 0) {
+  /**
+   * A grant that has been PAID FOR and not yet expanded.
+   *
+   * The loop's continuation test needs it because an agent node's grant debits the
+   * budget the moment the arbiter pays, from inside that node's own tool call — so a
+   * search can reach `remaining === 0` with children it has already bought and not yet
+   * created. Stopping there would charge the run for a level it never ran, which is the
+   * one way conservation could become dishonest in the other direction.
+   */
+  const reservedChildren = (): boolean => {
+    for (const node of nodes.values()) if (node.granted) return true;
+    return false;
+  };
+
+  while (budget.remaining > 0 || reservedChildren()) {
     if (deps.signal?.aborted) {
       aborted = true;
       break;
     }
-    const selected = selectFrontierNode(sql, {
+    // A PAID GRANT IS EXPANDED FIRST, and that is not a bypass of the scheduler: the
+    // grant was arbitrated against the scheduler's own policies — this `advance` expands
+    // at a node, the depth cap admits the level, the budget could pay — and accepted.
+    // The node was told "children reserved". Letting selection postpone that
+    // indefinitely would make the verdict a lie, and letting the budget be spent
+    // elsewhere first would make it unpayable.
+    const owed = [...nodes.values()].find((node) => node.granted !== null);
+    const selected = owed ?? selectFrontierNode(sql, {
       rootId, policy, maxDepth, beamWidth: branches,
       explorationWeight: resolved.config.explorationWeight
         ?? DEFAULT_CONFIG.mcts.explorationWeight,
@@ -824,52 +1181,131 @@ export async function runSwarm(
         + 'inconsistent tree rather than a missing instrument, and it stops the run.');
     }
 
-    // ARBITRATE, before anything is spent. A node PROPOSED and `advance` answers —
-    // here, where selection reached it, which is what makes a proposal an input to
-    // selection rather than a bypass of it (§8.2).
-    const granted = answerProposal({
-      log, node: parent, resolved, remainingChildren: childBudget,
-    });
-    const accepted = granted?.kind === 'accepted' ? parent.proposal : null;
+    // ARBITRATE, before anything is spent — or read the grant this node already
+    // earned. An AGENT node was answered by `propose_branch` while it ran, and the
+    // budget was debited there; a THOUGHT node is answered HERE, where selection
+    // reached it, which is what makes a proposal an input to selection rather than a
+    // bypass of it (§8.2). Both go through one arbiter and one budget.
+    const grant = parent.granted ?? (() => {
+      const decision = answerProposal({ log, node: parent, resolved, budget });
+      return decision?.kind === 'granted' ? decision : null;
+    })();
     parent.proposal = null;
+    // Cleared because a tree selector may re-select an expanded node: `uct` re-widens,
+    // and a grant left in place would be spent twice off one debit.
+    parent.granted = null;
 
-    // EXPAND. Model calls in parallel — they touch nothing — and measurement strictly
-    // sequential below, because every candidate is written to the same path.
-    //
-    // The executor's declared languages travel into the prompt for the reason
-    // explore-prompt.ts states: a proposal fenced in a language nothing here can run
-    // is unverifiable, so the question has to name what the measurement can execute.
-    const width = accepted ? accepted.branches.length : branches;
-    const inherited = (accepted ? accepted.inherit : resolved.config.expand === 'mutate')
-      ? parent.artifact
-      : null;
+    // Committed whether or not every call came back: a rejected generation may still
+    // have been paid for, and a budget that only counted successes would let a failing
+    // provider buy unbounded expansions. A granted width was already debited at
+    // arbitration, so charging it again here would bill the search twice.
+    const width = grant?.width ?? budget.take(branches);
+    // The budget is spent and nothing is owed: the wave this iteration would have run
+    // has no room, and creating it free is the overspend conservation exists to refuse.
+    if (width === 0) break;
+
     const ancestors = pathTo(nodes, parent);
     const childDepth = parent.depth + 1;
+    // §8.4's barrier: ONE compacted view per branch point, computed before any child
+    // of this parent starts, so nothing a level is ranked on can be a fact about which
+    // sibling's compaction kept the useful paragraph.
+    const prefix = agentNodes ? await sharedPrefix({ parent, deps, log, preset: resolved.preset }) : [];
+    const inheritedArtifact = (grant
+      ? grant.proposal.branches.some((branch) => branch.context === 'fork')
+      : resolved.config.expand === 'mutate')
+      ? parent.artifact
+      : null;
+
+    // EXPAND. Nodes in parallel — an agent node touches the shared plane, and that is
+    // exactly why it is graded on what it REPORTS rather than on what it changed — and
+    // measurement strictly sequential below, because every candidate is written to the
+    // same path.
+    //
+    // The executor's declared languages travel into the prompt for the reason
+    // explore-prompt.ts states: a candidate fenced in a language nothing here can run
+    // is unverifiable, so the question has to name what the measurement can execute.
     const generated = await Promise.allSettled(
-      Array.from({ length: width }, async (_unused, index) => {
+      Array.from({ length: width }, async (_unused, index): Promise<Expansion> => {
+        const branch = grant?.proposal.branches[index];
+        const childContext = branch?.context ?? resolved.config.context;
         const prompt = branchPrompt({
           resolved, mode: deps.mode, languages, measured, baseline,
           index, branches: width,
-          task: accepted?.branches[index]?.task ?? resolved.task,
-          inherited, ancestors, atDepth: childDepth, maxDepth,
+          task: branch?.task ?? resolved.task,
+          inherited: inheritedArtifact, ancestors, atDepth: childDepth, maxDepth,
+          // A thought node's whole request is one prompt, so its invitation is part of
+          // it. An agent node is invited by the tool being present instead.
+          invite: !agentNodes,
         });
-        const result = await generateText({
-          model: deps.model,
-          system: prompt.system,
-          prompt: prompt.user,
-          abortSignal: deps.signal,
+        const id = grant?.nodeIds[index] ?? nanoid();
+        if (!agentNodes) {
+          const result = await generateText({
+            model: deps.model,
+            system: prompt.system,
+            prompt: prompt.user,
+            abortSignal: deps.signal,
+          });
+          const answer = readAnswer(result.text);
+          const code = readProposalCode(answer.text, languages);
+          return {
+            id,
+            artifact: code?.kind === 'runnable' ? code.code : answer.text,
+            proposal: answer.proposal,
+            proposalError: answer.proposalError,
+            granted: null,
+            conclusion: null,
+            transcript: [],
+            usage: normalizeUsage(result.usage),
+            modelId: result.response.modelId,
+          };
+        }
+        const seed = branchSeed({
+          parent, measured, baseline, verifier, atDepth: childDepth, maxDepth,
+          focus: prompt.user, context: childContext,
+        });
+        const run = await runNodeAgent({
+          nodeId: id, rootId, parentId: parent.id, depth: childDepth,
+          task: resolved.task,
+          rationale: branch?.rationale ?? `expansion ${String(index + 1)} of ${String(width)}`,
+          base: prompt.system,
+          messages: childContext === 'fork' ? [...prefix, seed] : [seed],
+          inherited: childContext === 'fork' ? inheritedAsSerialized(prefix) : [],
+          context: childContext,
+          mode: deps.mode,
+          settle: resolved.settle,
+          // §8.2's build-time rule: the tool exists only where a branch could be granted.
+          // Depth is what cannot change mid-run, so it gates the BUILD; the budget can
+          // empty between the invitation and the answer, so it stays a runtime refusal
+          // inside the arbiter.
+          arbitrate: isTreeAdvance(resolved.config.advance) && childDepth + 1 <= maxDepth
+            ? (proposal) => budget.arbitrate({
+              config: resolved.config, caps: resolved.caps, atDepth: childDepth, proposal,
+            })
+            : null,
+        }, nodeDeps);
+        log.event('swarm.node_settled', {
+          preset: resolved.preset, node: id, depth: childDepth,
+          status: run.report.status, steps: run.report.stepCount,
+          tool_calls: run.report.toolCalls.length,
+          wall_clock_ms: run.report.wallClockMs,
+          isolation: run.isolation,
+          reported: run.reportedItself ? 'self' : 'final-text',
         });
         return {
-          text: result.text,
-          usage: normalizeUsage(result.usage),
-          modelId: result.response.modelId,
+          id,
+          artifact: run.candidate,
+          proposal: null,
+          proposalError: null,
+          granted: run.granted?.kind === 'granted' ? run.granted : null,
+          conclusion: run.candidate,
+          transcript: [...prefix, seed, ...run.produced],
+          usage: run.usage,
+          // The node's own report already reached `reportModelCall` per node, so the
+          // run does not report it twice — it only sums it for the settle report.
+          modelId: null,
         };
       }),
     );
-    // Committed whether or not every call came back: a rejected generation may still
-    // have been paid for, and a budget that only counted successes would let a
-    // failing provider buy unbounded expansions.
-    childBudget -= width;
 
     const expansions: Expansion[] = [];
     for (const settled of generated) {
@@ -885,23 +1321,15 @@ export async function runSwarm(
         });
         continue;
       }
-      const { text, usage: spent, modelId } = settled.value;
-      usage = addUsage(usage, spent);
-      deps.reportModelCall?.({ source: 'swarm', usage: spent, modelId });
-      const answer = readAnswer(text);
-      // A proposal fenced in a language the executor cannot run is kept WHOLE rather
-      // than dropped: it is still the branch's answer, the measurement will report it
-      // as unmeasurable with the instrument's own reason, and a caller reading the
-      // report can see what was proposed instead of an absence.
-      const code = readProposalCode(answer.text, languages);
-      expansions.push({
-        id: nanoid(),
-        artifact: code?.kind === 'runnable' ? code.code : answer.text,
-        proposal: answer.proposal,
-        proposalError: answer.proposalError,
-      });
+      usage = addUsage(usage, settled.value.usage);
+      if (settled.value.modelId !== null) {
+        deps.reportModelCall?.({
+          source: 'swarm', usage: settled.value.usage, modelId: settled.value.modelId,
+        });
+      }
+      expansions.push(settled.value);
     }
-    if (granted?.kind === 'accepted') {
+    if (grant) {
       reportVerdict(log, {
         verdict: { kind: 'accepted', nodeIds: expansions.map((child) => child.id) },
         preset: resolved.preset, nodeId: parent.id, atDepth: parent.depth, policy: null,
@@ -943,6 +1371,12 @@ export async function runSwarm(
         score: outcome?.kind === 'scored' ? outcome.score : null,
         proposal: expansion.proposal,
         proposalError: expansion.proposalError,
+        granted: expansion.granted,
+        conclusion: expansion.conclusion,
+        transcript: expansion.transcript,
+        // Not yet crossed the threshold: compaction is decided when this node becomes a
+        // branch point, not when it is created.
+        compacted: null,
       });
       if (expansion.proposalError) {
         // The node asked for a branch and the engine could not read the request. Not
@@ -998,13 +1432,14 @@ export async function runSwarm(
     }
   }
 
-  // THE SWEEP. Every proposal selection never reached is answered now, against the
-  // state that kept it waiting — §8.2's rule that a proposal is never dropped
-  // silently, and the only place `depth-exhausted` and `budget-exhausted` can be
-  // reached, since selection excludes a capped node and the loop guards the budget.
+  // THE SWEEP. Every THOUGHT node's proposal that selection never reached is answered
+  // now, against the state that kept it waiting — §8.2's rule that a proposal is never
+  // dropped silently, and the only place `depth-exhausted` and `budget-exhausted` can
+  // be reached, since selection excludes a capped node and the loop guards the budget.
+  // An agent node needs no sweep: its request was answered inside its own tool call.
   for (const node of nodes.values()) {
     if (!node.proposal) continue;
-    answerProposal({ log, node, resolved, remainingChildren: Math.max(0, childBudget) });
+    answerProposal({ log, node, resolved, budget });
     node.proposal = null;
   }
 
@@ -1023,7 +1458,7 @@ export async function runSwarm(
     // configured width is truncated too even if it stopped for another reason.
     stop: aborted
       ? 'aborted'
-      : lost > 0 || (childBudget <= 0 && selectFrontierNode(sql, {
+      : lost > 0 || (budget.remaining <= 0 && selectFrontierNode(sql, {
         rootId, policy, maxDepth, beamWidth: branches,
         explorationWeight: resolved.config.explorationWeight
           ?? DEFAULT_CONFIG.mcts.explorationWeight,
