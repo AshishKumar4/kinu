@@ -27,13 +27,22 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import { toolExecute } from '@proteus/test-utils';
 import {
   buildBuiltinTools, censusToolFailures, classifyToolFailure,
   toolFailureKey, FAILURE_WITHOUT_ERROR,
+  createDeviceTunnelExecutor, createInlineExecutor, createNimbusExecutor,
+  createParentExecutor, createSandboxExecutor,
+  DefaultExecutionRouter, isFailingResultText,
+  type ExecutorProvider, type ToolFailureCensus,
 } from '../src/index.js';
-import { createRecordingLogger, type RecordingLogger } from '../src/obs/index.js';
-import { parseJsonValue } from '../src/utils/json.js';
+import {
+  classifyErrorCode, createRecordingLogger, ERROR_CODES, ProteusError,
+  type ErrorCode, type RecordingLogger,
+} from '../src/obs/index.js';
+import { refusalText } from '../src/execution/exec-result.js';
+import { JsonObjectSchema, parseJsonValue } from '../src/utils/json.js';
 import { createTestRuntime } from './helpers.js';
 import type { RunEvent } from '../src/events/types.js';
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
@@ -473,5 +482,274 @@ describe('the classification the `run` tool actually produced reaches the reader
       reason: 'unsupported', refused: true, workFailed: false, runtimeMissing: false,
     });
     expect(logger.emitted.map((line) => line.event)).toEqual(['run.shell_absent']);
+  });
+});
+
+/** The four disjoint parts, by name. */
+type CensusPart = 'refused' | 'workFailed' | 'runtimeMissing' | 'broke';
+
+/**
+ * WHICH PART OF THE SPLIT EACH CLASS LANDS IN.
+ *
+ * The five executor tools now classify their own failures, and a code that lands
+ * work in the wrong part of this census is worse than no code at all: the census
+ * is published as four numbers and somebody quotes them. So the code→part mapping
+ * is asserted here as a TOTAL table over `ErrorCode` — a new code cannot be added
+ * without a verdict, the same way `CODE_IS_REFUSAL` forces one — and then proven
+ * on the payloads the real executors really produce.
+ *
+ * The invariant behind the table, and the reason nothing maps to `workFailed`: a
+ * classified refusal always means the work did NOT run. The work running and
+ * failing arrives as an ordinary successful result prefixed `Error (exit N)` and
+ * is read off the exit code, never off a class.
+ */
+const PART_BY_CODE = {
+  // The tool established that proceeding would be wrong and declined.
+  bad_input: 'refused',
+  denied: 'refused',
+  unsupported: 'refused',
+  // The environment the call addressed is not there. A platform gap: Proteus never
+  // provisioned it, so it is neither a defect nor the work.
+  unavailable: 'runtimeMissing',
+  // Nothing decided these and nothing here proves the environment was absent, so
+  // they stay in the residual — the only part that is a candidate defect.
+  missing: 'broke',
+  timeout: 'broke',
+  cancelled: 'broke',
+  oom: 'broke',
+  io: 'broke',
+} satisfies Readonly<Record<ErrorCode, CensusPart>>;
+
+/** The four counts, so a wrong part fails on the OTHER three too rather than on a
+ *  single boolean that happened to be false for two different reasons. */
+function parts(census: ToolFailureCensus) {
+  return {
+    refused: census.refused, workFailed: census.workFailed,
+    runtimeMissing: census.runtimeMissing, broke: census.broke,
+  };
+}
+
+function onlyPart(part: CensusPart) {
+  return { refused: 0, workFailed: 0, runtimeMissing: 0, broke: 0, [part]: 1 };
+}
+
+describe('every error class lands in exactly one part of the census', () => {
+  test('the code→part mapping is total, and no class is ever the work failing', () => {
+    // Total by construction: `PART_BY_CODE` is `satisfies Record<ErrorCode, …>`, so
+    // this loop covers the whole vocabulary and a new code fails to compile above
+    // rather than silently skipping the assertion below.
+    expect(Object.keys(PART_BY_CODE).sort()).toEqual([...ERROR_CODES].sort());
+
+    for (const code of ERROR_CODES) {
+      const census = censusToolFailures([call({
+        name: 'run', toolCallId: `t-${code}`, args: { command: 'pytest -q' },
+        result: refusalText(new ProteusError(code, `refused: ${code}`)),
+      })]);
+      expect(census.failures).toHaveLength(1);
+      expect(parts(census)).toEqual(onlyPart(PART_BY_CODE[code]));
+      // Never `workFailed`: a class means the work did not run. The work failing
+      // is an exit code, and conflating them would report a refusal as a finding.
+      expect(census.workFailed).toBe(0);
+    }
+  });
+
+  test('the parts still sum to the failures, over the whole vocabulary at once', () => {
+    const census = censusToolFailures(ERROR_CODES.map((code) => call({
+      name: 'run', toolCallId: `t-${code}`, args: { command: 'pytest -q' },
+      result: refusalText(new ProteusError(code, `refused: ${code}`)),
+    })));
+    expect(census.failures).toHaveLength(ERROR_CODES.length);
+    expect(census.refused + census.workFailed + census.runtimeMissing + census.broke)
+      .toBe(census.failures.length);
+    for (const f of census.failures) {
+      expect([f.refused, f.workFailed, f.runtimeMissing].filter(Boolean).length)
+        .toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+/**
+ * THE FIVE EXECUTOR TOOLS, on the payloads they really produce.
+ *
+ * Read through the real `run` tool wherever `run` can reach the executor, because
+ * that is the seam that writes the durable row: `run` calls `provider.tools.exec`,
+ * decides the escalation outcome from `isFailingResultText`, and hands the text on
+ * as the tool result the ledger stores.
+ *
+ * What every case here would have shown before the conversion: `null`. Prose like
+ * `exec error: …` or `No device connected.` is not a failure to
+ * `isFailingResultText`, so the escalation was recorded `ok` and the census never
+ * saw the call at all. A platform condition read as SUCCESS is worse than one read
+ * as a defect, because nobody goes looking for it.
+ */
+describe('each executor tool files its own failure in the right part', () => {
+  async function escalate(provider: ExecutorProvider, command = 'pytest -q'): Promise<string> {
+    const { rt } = createTestRuntime();
+    const router = new DefaultExecutionRouter();
+    router.register(provider);
+    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router } });
+    const run = { execute: toolExecute<{ command: string; runtime: string }, string>(tools.run) };
+    return run.execute({ command, runtime: provider.name });
+  }
+
+  function censusOf(payload: string): ToolFailureCensus {
+    return censusToolFailures([call({
+      name: 'run', toolCallId: 'tc-1', args: { command: 'pytest -q' }, result: payload,
+    })]);
+  }
+
+  test('sandbox: an unconfigured binding is a platform gap, not a broken tool', async () => {
+    // The stub the router really registers when the binding is absent
+    // (cf-backend/src/runtime.ts:509,512) — so this is the deployed shape, not a
+    // hypothetical one.
+    const census = censusOf(await escalate(createSandboxExecutor()));
+    expect(census.byKey).toEqual([['run·unavailable', 1]]);
+    expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
+  });
+
+  test('sandbox: admission control that outlived its retries is also a platform gap', async () => {
+    // 429 on the container start-rate burst. `withSandboxRetry` has already spent
+    // three attempts, so what reaches the census is a container Proteus could not
+    // get — `unavailable`. Filed `io` it would have been a candidate defect in
+    // this tool, which is the platform's capacity ceiling wearing our name.
+    const census = censusOf(await escalate(createSandboxExecutor({
+      exec: async () => { throw new Error('Too many containers per second'); },
+      readFile: async () => ({}), writeFile: async () => {}, listFiles: async () => ({ files: [] }),
+      deleteFile: async () => {}, exposePort: async () => ({ url: '', port: 0 }),
+      unexposePort: async () => {}, getExposedPorts: async () => [],
+    })));
+    expect(census.byKey).toEqual([['run·unavailable', 1]]);
+    expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
+  }, 10_000);
+
+  test('sandbox: a transport fault is NOT a platform gap', async () => {
+    // The contrast that makes the case above mean something. Both used to be one
+    // prose string; pooling them would put every container fault in the bucket
+    // that says "Proteus never provisioned this".
+    const census = censusOf(await escalate(createSandboxExecutor({
+      exec: async () => { throw new Error('the container hung up mid-write'); },
+      readFile: async () => ({}), writeFile: async () => {}, listFiles: async () => ({ files: [] }),
+      deleteFile: async () => {}, exposePort: async () => ({ url: '', port: 0 }),
+      unexposePort: async () => {}, getExposedPorts: async () => [],
+    })));
+    expect(census.byKey).toEqual([['run·io', 1]]);
+    expect(parts(census)).toEqual(onlyPart('broke'));
+  });
+
+  test('nimbus: an absent binding is a platform gap; a narrow handle is a refusal', async () => {
+    const absent = censusOf(await escalate(createNimbusExecutor()));
+    expect(absent.byKey).toEqual([['run·unavailable', 1]]);
+    expect(parts(absent)).toEqual(onlyPart('runtimeMissing'));
+
+    // `unsupported` and therefore `refused`: this deployment's handle has no
+    // `runCode`, retrying cannot grow one, and declining is the correct outcome.
+    // The two codes are the retry/permanent line, and the census reads them as
+    // two different findings — which is the whole reason both exist.
+    const narrow = createNimbusExecutor({
+      box: { ready: async () => {},
+        exec: async () => ({ command: 'noop', success: true, exitCode: 0, stdout: '', stderr: '' }),
+        files: { read: async () => '', write: async () => {}, list: async () => [], exists: async () => true,
+          delete: async () => {} } },
+    });
+    const refusal = String(await narrow.tools.runCode.execute('print(1)'));
+    const census = censusOf(refusal);
+    expect(census.byKey).toEqual([['run·unsupported', 1]]);
+    expect(parts(census)).toEqual(onlyPart('refused'));
+  });
+
+  test('laptop: no device attached is a platform gap, and it used to be invisible', async () => {
+    const payload = await escalate(createDeviceTunnelExecutor({
+      rpc: async () => { throw new Error('no device connected'); },
+      status: () => ({ connected: false, registered: true }),
+      refreshStatus: async () => ({ connected: false, registered: true }),
+    }));
+    // The regression this locks: the old prose was read as a SUCCESSFUL call, so
+    // the census counted nothing at all here.
+    expect(isFailingResultText(payload)).toBe(true);
+    const census = censusOf(payload);
+    expect(census.byKey).toEqual([['run·unavailable', 1]]);
+    expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
+    // And the instruction the user needs survives inside the payload.
+    expect(payload).toContain('proteus connect');
+  });
+
+  test('parent: the errno the parent raised is the class, and it is not re-guessed', async () => {
+    // This executor writes no reason of its own, on purpose: `makeVfsError` puts
+    // the parent's code on the error and the classifier reads errnos, so ENOENT
+    // arrives as `missing` without parent.ts naming anything. Adding a code here
+    // would have added one whose value never varies.
+    const census = censusOf(await escalate(createParentExecutor({
+      handle: {
+        read: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such file', path: '/p' } }),
+        write: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such file', path: '/p' } }),
+        list: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such file', path: '/p' } }),
+        stat: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such file', path: '/p' } }),
+        delete: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such file', path: '/p' } }),
+        exec: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such shell', path: '/p' } }),
+      },
+    })));
+    expect(census.byKey).toEqual([['run·missing', 1]]);
+    expect(parts(census)).toEqual(onlyPart('broke'));
+  });
+
+  test('parent: an aborted exec ends as `cancelled`, which it could not before', async () => {
+    // The signal was parsed and dropped, so this executor's exec had no way to end
+    // as `cancelled` at all — one class of the nine was unreachable on one of the
+    // five tools, and a caller could not tell a cancelled wait from a dead parent.
+    const controller = new AbortController();
+    const provider = createParentExecutor({
+      handle: {
+        read: async () => ({ ok: true, value: new Uint8Array() }),
+        write: async () => ({ ok: true, value: null }),
+        list: async () => ({ ok: true, value: [] }),
+        stat: async () => ({ ok: true, value: null }),
+        delete: async () => ({ ok: true, value: null }),
+        exec: () => new Promise(() => { /* the parent never answers */ }),
+      },
+    });
+    const pending = provider.tools.exec.execute('sleep 9999', { signal: controller.signal });
+    controller.abort();
+    let raised: unknown;
+    try { await pending; } catch (err) { raised = err; }
+    expect(classifyErrorCode({ cause: raised })).toBe('cancelled');
+  });
+
+  test('workspace: the inline plane refuses with a class its own caller can read', async () => {
+    // `run` never reaches this tool — the workspace branch calls `rt.shell`
+    // directly — so what the classification buys here is the OTHER caller:
+    // LLM-generated code inside `execute_tools`, which can now branch on `reason`
+    // instead of matching prose, and a block reader that can see a failure at all.
+    const { rt } = createTestRuntime();
+    const workspace = createInlineExecutor({
+      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+    });
+    const payload = String(await workspace.tools.exec.execute(42));
+    expect(isFailingResultText(payload)).toBe(true);
+    expect(parseJsonValue(payload)).toEqual({
+      reason: 'bad_input', error: 'workspace.exec: command must be a string',
+    });
+    expect(parts(censusOf(payload))).toEqual(onlyPart('refused'));
+  });
+
+  test('workspace: the misevolution gate working is a refusal, not a defect', async () => {
+    // Measured shape of the bug this class removes: the veto answered
+    // `{ ok: false, error }` with no reason, so the census read `returned_error`
+    // and filed the gate DOING ITS JOB under `broke`.
+    const { rt } = createTestRuntime();
+    const workspace = createInlineExecutor({
+      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+    });
+    const vetoed = await workspace.tools.createTool.execute(
+      'promote', 'promotes itself', 'async () => sql`UPDATE scaffold_versions SET status = "live"`',
+    );
+    expect(vetoed).toMatchObject({ ok: false, reason: 'denied' });
+    const census = censusToolFailures([call({
+      name: 'execute_tools', toolCallId: 'tc-1', args: { code: 'workspace.createTool(...)' },
+      result: v.parse(JsonObjectSchema, vetoed),
+    })]);
+    expect(census.byKey).toEqual([['execute_tools·denied', 1]]);
+    expect(parts(census)).toEqual(onlyPart('refused'));
   });
 });

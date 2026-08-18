@@ -17,6 +17,11 @@ import type { RawSqlExec, VfsEntryStat } from '../types/primitives.js';
 import { PLATFORM_CATALOG } from '../platform-catalog.js';
 import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus } from '../vfs/diff.js';
 import { nanoid } from '../utils/nanoid.js';
+// The ONE failure predicate. What stood here was a local regex over
+// `Error (exit N)` and `exec error:` — the second is prose no executor writes any
+// more, and neither shape covered the refusal payload they return, so an
+// unconfigured executor's refusal would have been parsed as a git diff.
+import { isFailingResultText } from '../execution/exec-result.js';
 
 /**
  * Files bigger than this are excluded from the snapshot — a change-set is a
@@ -255,13 +260,13 @@ async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<Executo
       `git rev-parse --show-toplevel 2>/dev/null || printf '${NOT_GIT_REPO}'`,
     )).trim();
     if (root === NOT_GIT_REPO) return { files: [], mode: 'git', notGitRepo: true };
-    if (isExecutorFailure(root)) return { files: [], mode: 'git', error: root };
+    if (isFailingResultText(root)) return { files: [], mode: 'git', error: root };
 
     const quotedRoot = `'${root.replace(/'/g, `'\\''`)}'`;
     const headOutput = String(await execTool.execute(
       `git -C ${quotedRoot} rev-parse --verify HEAD >/dev/null 2>&1 && printf yes || printf no`,
     )).trim();
-    if (isExecutorFailure(headOutput)) return { files: [], mode: 'git', error: headOutput };
+    if (isFailingResultText(headOutput)) return { files: [], mode: 'git', error: headOutput };
     if (headOutput !== 'yes' && headOutput !== 'no') {
       return { files: [], mode: 'git', error: `Unexpected git HEAD probe output: ${headOutput}` };
     }
@@ -271,29 +276,25 @@ async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<Executo
           `git -C ${quotedRoot} --no-pager diff --no-ext-diff --no-renames HEAD --`,
         ))
       : '';
-    if (isExecutorFailure(tracked)) return { files: [], mode: 'git', error: tracked };
+    if (isFailingResultText(tracked)) return { files: [], mode: 'git', error: tracked };
     const pathScope = hasHead ? '--others' : '--cached --others';
     const untracked = String(await execTool.execute(
       `git -C ${quotedRoot} ls-files ${pathScope} --exclude-standard -z`,
     ));
-    if (isExecutorFailure(untracked)) return { files: [], mode: 'git', error: untracked };
+    if (isFailingResultText(untracked)) return { files: [], mode: 'git', error: untracked };
     const untrackedDiff = untracked === '(no output)'
       ? ''
       : String(await execTool.execute(
           `git -C ${quotedRoot} ls-files ${pathScope} --exclude-standard -z | ` +
           `xargs -0 -n 1 sh -c '[ -z "$2" ] || git -C "$1" --no-pager diff --no-index --no-ext-diff --no-renames -- /dev/null "$2" || test "$?" -eq 1' sh ${quotedRoot}`,
         ));
-    if (isExecutorFailure(untrackedDiff)) return { files: [], mode: 'git', error: untrackedDiff };
+    if (isFailingResultText(untrackedDiff)) return { files: [], mode: 'git', error: untrackedDiff };
     const unified = [tracked === '(no output)' ? '' : tracked, untrackedDiff === '(no output)' ? '' : untrackedDiff]
       .filter(Boolean).join('\n');
     return { files: parseGitDiff(unified), mode: 'git' };
   } catch (err) {
     return { files: [], mode: 'git', error: err instanceof Error ? err.message : String(err) };
   }
-}
-
-function isExecutorFailure(output: string): boolean {
-  return /^(?:Error \(exit \d+\)|exec error:)/i.test(output.trim());
 }
 
 export async function getExecutorDiff(rt: AgentRuntime, executorId: string): Promise<ExecutorDiffResult> {

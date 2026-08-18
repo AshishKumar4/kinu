@@ -24,6 +24,7 @@
  * one call that greps, instead of a walk that reads every file across the wire.
  */
 
+import { raceAbort } from '@proteus/agent-utils';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types.js';
 import type { VFS } from '../types/primitives.js';
 import { makeVfsError, type VfsErrorCode } from '../vfs/errno.js';
@@ -75,6 +76,17 @@ export interface ParentWorkspaceHandle {
   exec(command: string): Promise<ParentRpcResult<ParentExecResult>>;
 }
 
+/**
+ * The failure a refused RPC becomes.
+ *
+ * This executor writes no reason of its own, and that is the finding rather than
+ * an omission: `makeVfsError` puts the parent's `code` on the error, and
+ * `classifyErrorCode` reads errnos — so `ENOENT` already arrives as `missing` at
+ * whichever seam catches it, and everything the backends collapse into `EIO`
+ * arrives as that seam's `otherwise`, which is `io` for every caller this has.
+ * Wrapping it in a second classification here would add a code whose value never
+ * varies while discarding the one distinction the errno still carries.
+ */
 function detail(error: ParentRpcError): string {
   const prefix = `${error.code}:`;
   return error.message.startsWith(prefix) ? error.message.slice(prefix.length).trimStart() : error.message;
@@ -189,11 +201,23 @@ export function createParentExecutor(deps: {
           "Run one command in the parent workspace's real shell — the full coreutils set, pipes, "
           + 'redirects and loops. The fast way to search it (grep -rn, find).',
         execute: async <Command, Context>(command: Command, context?: Context) => {
-          // The signal is read for parity with every other executor; a Durable
-          // Object RPC exposes no kill for an in-flight call, so an aborted
-          // caller stops waiting while the parent's command finishes.
-          readExecSignal({ context });
-          return formatExecResult(value(await deps.handle.exec(String(command))));
+          // The comment this replaces claimed an aborted caller stops waiting.
+          // It did not: the signal was parsed and dropped, so `parent.exec` was
+          // the one executor whose exec could never end as `cancelled` — the
+          // whole class was unreachable here while the other four raced it.
+          // A Durable Object RPC still exposes no kill, so the parent's command
+          // runs on; what changes is that WE stop waiting, and the AbortError
+          // that ends the wait is what `classifyErrorCode` reads as `cancelled`.
+          // No catch, deliberately: an abort is already `cancelled` by NAME and a
+          // refused RPC is already an errno-carrying `VfsError`. Both classify at
+          // the seam that catches them, and re-wrapping either here would blur the
+          // code it arrived with.
+          const signal = readExecSignal({ context });
+          return formatExecResult(value(await raceAbort(
+            () => deps.handle.exec(String(command)),
+            signal,
+            'parent exec aborted — the command may still finish in the parent workspace',
+          )));
         },
       },
     },

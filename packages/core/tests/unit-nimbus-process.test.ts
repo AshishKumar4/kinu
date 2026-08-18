@@ -80,13 +80,18 @@ describe("nimbus startProcess — the process is alive when the call returns", (
     expect(out).toContain("nimbus.logs(7)");
   });
 
-  test("a handle without startProcess names the unavailability on the first attempt", async () => {
+  test("a handle without startProcess names the class on the first attempt", async () => {
     const box = handleWith(async () => runningStart());
     Reflect.deleteProperty(box, "startProcess");
     const nimbus = createNimbusExecutor({ box });
     const out = String(await nimbus.tools.startProcess!.execute("node server.js"));
-    expect(out).toContain("startProcess error");
-    expect(out).toContain("does not expose startProcess");
+    // `unsupported`, not `unavailable`: retrying cannot grow a method onto this
+    // deployment's handle, and the two codes exist to keep a permanent gap apart
+    // from a cold start. It lands in the census as a correct refusal.
+    expect(JSON.parse(out)).toEqual({
+      reason: "unsupported",
+      error: "Nimbus SDK handle does not expose startProcess",
+    });
   });
 });
 

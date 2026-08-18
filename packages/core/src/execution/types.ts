@@ -108,9 +108,10 @@ export interface ExecutorProvider {
 
   /**
    * This environment's files, in ITS OWN native paths, over the executor's RAW
-   * handle — never its LLM tools, which return error strings and lossy
-   * listings. Present only where the environment has a filesystem a host can
-   * browse; the file manager is the one consumer.
+   * handle — never its LLM tools, whose listings are lossy by design (a mode
+   * letter and a name) and whose failures are a refusal payload rather than a
+   * throw a `VFS` caller can switch on. Present only where the environment has a
+   * filesystem a host can browse; the file manager is the one consumer.
    *
    * Deliberately NOT the agent's own `Storage.vfs`, and never merged into it:
    * one environment, one file view. The agent's own filesystem is Nimbus and

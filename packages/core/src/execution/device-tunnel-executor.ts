@@ -22,12 +22,12 @@ import type { VFS } from '../types/primitives.js';
 import { makeVfsError } from '../vfs/errno.js';
 import { shellQuote } from '../utils/shell.js';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64.js';
-import { parseStatLine } from './exec-result.js';
+import { formatExecResult, parseStatLine, refusalText } from './exec-result.js';
+import { ProteusError, toProteusError } from '../obs/index.js';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types.js';
 import type { DeviceStatus } from './device-status.js';
 import { isDeviceNotConnectedError } from './device-tunnel.js';
 import { readExecSignal } from './signal.js';
-import { formatExecResult } from './exec-result.js';
 import {
   isJsonObject,
   JsonValueSchema,
@@ -37,6 +37,31 @@ import {
 const NOT_CONNECTED =
   'No device connected. Connect your machine once at the user level ' +
   '(Devices / Executors tab → "Connect a device", or run the Proteus CLI: `proteus connect`).';
+
+/**
+ * `unavailable` — the user has no machine attached right now, and connecting one
+ * is exactly the retry that fixes it. The prose stays verbatim inside the
+ * refusal: it names the two places the user connects from, and that instruction is
+ * the whole value of the message.
+ *
+ * This was the worst of the five, because the old prose reached NO reader as a
+ * failure. `No device connected.` does not begin `Error` and is not JSON, so
+ * `isFailingResultText` said not-a-failure — and so did the two private prose
+ * matchers that used to sit beside it, in cf-backend's Executors terminal and in
+ * `read-models/workspace-diff.ts`. So `run { runtime: 'laptop' }` with
+ * no device recorded outcome `ok`, the tool-failure census counted a clean call,
+ * and the Executors terminal drew it as exit 0. A platform condition read as
+ * success is worse than one read as a defect: nobody goes looking.
+ */
+const NOT_CONNECTED_REFUSAL = refusalText(new ProteusError('unavailable', NOT_CONNECTED));
+
+/** `io` is this seam's own answer for an unrecognised failure — the transport is a
+ *  socket to the user's machine, held by the hub. A cause the classifier does
+ *  recognise (an abort, a deadline, an errno the daemon reported) keeps the more
+ *  precise code it already carries. */
+function deviceFailure(input: { doing: string; cause: unknown }): ProteusError {
+  return toProteusError({ ...input, otherwise: 'io' });
+}
 
 /**
  * Transport the laptop executor speaks through. The actual device socket lives
@@ -76,10 +101,6 @@ function parseInput<TSchema extends v.GenericSchema>(
   return result.success ? result.output : undefined;
 }
 
-function errorMessage(input: { error: unknown }): string {
-  return input.error instanceof Error ? input.error.message : String(input.error);
-}
-
 /**
  * Create the laptop (`laptop.*`) executor over a device transport. The transport
  * forwards to the user's device hub; this executor just shapes the tool surface.
@@ -112,7 +133,9 @@ export function createDeviceTunnelExecutor(
       description: 'Execute a command on the user\'s local machine via the device tunnel.',
       execute: async (...args: unknown[]): Promise<string> => {
         const command = parseInput(StringSchema, { value: args[0] });
-        if (command === undefined) return 'exec error: command must be a string';
+        if (command === undefined) {
+          return refusalText(new ProteusError('bad_input', 'laptop exec: command must be a string'));
+        }
         const signal = readExecSignal({ context: args[1] });
         try {
           // The device protocol has no kill RPC — abort stops the wait; the
@@ -131,8 +154,8 @@ export function createDeviceTunnelExecutor(
           return formatExecResult(parsed);
         } catch (err) {
           if (isAbortError(err)) throw err;
-          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
-          return `exec error: ${errorMessage({ error: err })}`;
+          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+          return refusalText(deviceFailure({ doing: `laptop exec \`${command}\``, cause: err }));
         }
       },
     },
@@ -141,12 +164,14 @@ export function createDeviceTunnelExecutor(
       description: 'Read a file from the user\'s local filesystem via the desktop daemon.',
       execute: async (...args: unknown[]): Promise<string> => {
         const path = parseInput(StringSchema, { value: args[0] });
-        if (path === undefined) return 'readFile error: path must be a string';
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'laptop readFile: path must be a string'));
+        }
         try {
           return v.parse(v.string(), await rpc('readFile', [path]));
         } catch (err) {
-          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
-          return `readFile error: ${errorMessage({ error: err })}`;
+          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+          return refusalText(deviceFailure({ doing: `laptop readFile ${path}`, cause: err }));
         }
       },
     },
@@ -156,8 +181,12 @@ export function createDeviceTunnelExecutor(
       execute: async (...args: unknown[]): Promise<string> => {
         const path = parseInput(StringSchema, { value: args[0] });
         const content = parseInput(StringSchema, { value: args[1] });
-        if (path === undefined) return 'writeFile error: path must be a string';
-        if (content === undefined) return 'writeFile error: content must be a string';
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'laptop writeFile: path must be a string'));
+        }
+        if (content === undefined) {
+          return refusalText(new ProteusError('bad_input', 'laptop writeFile: content must be a string'));
+        }
         try {
           const result = await rpc('writeFile', [path, content]);
           if (result !== 'ok' && !(result !== undefined && isJsonObject(result) && result.success === true)) {
@@ -165,12 +194,16 @@ export function createDeviceTunnelExecutor(
               ? v.safeParse(v.string(), result.error)
               : undefined;
             const error = parsedError?.success ? parsedError.output : 'unknown error';
-            return `writeFile failed: ${error}`;
+            // The daemon answered, and what it answered is that the write did not
+            // happen — its own filesystem said no. `io`, and never `denied`: the
+            // daemon reports a refused path and a full disk through the same
+            // field, and `denied` is what the approval ladder means.
+            return refusalText(new ProteusError('io', `laptop writeFile ${path}: ${error}`));
           }
           return `Written ${content.length} bytes to ${path}`;
         } catch (err) {
-          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
-          return `writeFile error: ${errorMessage({ error: err })}`;
+          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+          return refusalText(deviceFailure({ doing: `laptop writeFile ${path}`, cause: err }));
         }
       },
     },
@@ -179,7 +212,9 @@ export function createDeviceTunnelExecutor(
       description: 'List directory contents on the user\'s local machine.',
       execute: async (...args: unknown[]): Promise<string[] | string> => {
         const path = parseInput(OptionalStringSchema, { value: args[0] });
-        if (args[0] !== undefined && path === undefined) return 'readdir error: path must be a string';
+        if (args[0] !== undefined && path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'laptop readdir: path must be a string'));
+        }
         try {
           const result = v.parse(DeviceListResultSchema, await rpc('listFiles', [path || '/']));
           return result.map((entry) => {
@@ -190,8 +225,8 @@ export function createDeviceTunnelExecutor(
             return JSON.stringify(entry);
           });
         } catch (err) {
-          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
-          return `readdir error: ${errorMessage({ error: err })}`;
+          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+          return refusalText(deviceFailure({ doing: `laptop readdir ${path || '/'}`, cause: err }));
         }
       },
     },
@@ -200,12 +235,18 @@ export function createDeviceTunnelExecutor(
       description: 'Check if a path exists on the user\'s local machine.',
       execute: async (...args: unknown[]): Promise<boolean | string> => {
         const path = parseInput(StringSchema, { value: args[0] });
-        if (path === undefined) return false;
+        // Both answers used to be `false`, which claims the path is absent on the
+        // user's machine. One call was never made and the other could not reach
+        // the device — neither established anything about the path, and the
+        // second one swallowed its error to say so.
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'laptop exists: path must be a string'));
+        }
         try {
           return v.parse(v.boolean(), await rpc('exists', [path]));
         } catch (err) {
-          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
-          return false;
+          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+          return refusalText(deviceFailure({ doing: `laptop exists ${path}`, cause: err }));
         }
       },
     },
@@ -230,23 +271,32 @@ export function createDeviceTunnelExecutor(
       try {
         await rpc('exec', ['echo connected']);
       } catch (err) {
-        if (isDeviceNotConnectedError(err)) throw new Error(NOT_CONNECTED, { cause: err });
+        // Classified rather than a bare `Error`, so a caller that catches this
+        // lifecycle failure reads the same `unavailable` the tools return.
+        if (isDeviceNotConnectedError(err)) throw new ProteusError('unavailable', NOT_CONNECTED, { cause: err });
         throw err;
       }
     },
     disconnect: async () => { /* the hub owns the socket lifecycle */ },
     tools,
-    types: `declare namespace laptop {
+    types: `/**
+ * Every call below either answers, or resolves to a refusal
+ * \`{"reason":"<class>","error":"<what happened>"}\`. \`reason\` is the class —
+ * bad_input, unavailable, unsupported, timeout, cancelled, oom, io — so branch on
+ * it rather than matching prose. \`unavailable\` means no device is attached right
+ * now; the error text says how the user attaches one.
+ */
+declare namespace laptop {
   /** Execute a command on the user's local machine */
   function exec(command: string): Promise<string>;
   /** Read a file from the user's local filesystem */
   function readFile(path: string): Promise<string>;
   /** Write a file to the user's local filesystem */
   function writeFile(path: string, content: string): Promise<string>;
-  /** List directory contents on the user's local machine */
-  function readdir(path: string): Promise<string[]>;
-  /** Check if a path exists on the user's local machine */
-  function exists(path: string): Promise<boolean>;
+  /** List directory contents on the user's local machine — or a refusal payload */
+  function readdir(path: string): Promise<string[] | string>;
+  /** true or false — or a refusal payload, if the device could not be asked */
+  function exists(path: string): Promise<boolean | string>;
 }`,
     positionalArgs: true,
     // The user's PC is behind their NAT — we don't open inbound ports

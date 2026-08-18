@@ -218,7 +218,13 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     await exec.tools.readFile.execute('victim.txt');
     expect(String(await exec.tools.writeFile.execute('victim.txt', 'replacement'))).toContain('Written');
     expect(await vfs.readFile('victim.txt', { encoding: 'utf8' })).toBe('replacement');
-    expect(exec.types).toContain("Promise<string | { error: string; reason?: 'unread' | 'stale' | 'io' }>");
+    // The declared codemode type is the promise the model reads, so it has to
+    // name the whole vocabulary a refusal can carry. The union it used to name
+    // was three of ten reasons the dispatcher already returned.
+    expect(exec.types).toContain('function writeFile(path: string, content: string): Promise<string | Refusal>;');
+    for (const reason of ['unread', 'stale', 'io', 'missing', 'not_found', 'ambiguous', 'bad_input']) {
+      expect(exec.types).toContain(`'${reason}'`);
+    }
   });
 
   test('relative and absolute name the same file — one namespace, no prefixes', async () => {

@@ -101,15 +101,39 @@ describe('createDeviceTunnelExecutor', () => {
     const fromHub = await createDeviceTunnelExecutor(hubRejects).tools.exec.execute('ls');
     const fromTunnel = await createDeviceTunnelExecutor(tunnelDropped).tools.readFile.execute('/tmp/a');
 
+    // The connect guidance survives, and it now arrives with the CLASS in front of
+    // it: `unavailable` is what puts a device that is not attached in the census's
+    // platform part instead of counting it against the tool. Asserting the prose
+    // alone is what let this ship as a value no reader could see was a failure.
+    expect(JSON.parse(String(fromHub))).toMatchObject({ reason: 'unavailable' });
+    expect(JSON.parse(String(fromTunnel))).toMatchObject({ reason: 'unavailable' });
     expect(fromHub).toContain('proteus connect');
     expect(fromTunnel).toContain('proteus connect');
     await expect(createDeviceTunnelExecutor(hubRejects).connect()).rejects.toThrow('proteus connect');
   });
 
-  test('non-connection errors keep their own message', async () => {
+  test('a non-connection failure is classified, and keeps its own message', async () => {
     const t = staticTransport({ connected: true, registered: true }, async () => {
       throw new Error('permission denied');
     });
-    expect(await createDeviceTunnelExecutor(t).tools.exec.execute('ls')).toBe('exec error: permission denied');
+    // `io`, not `unavailable`: the device answered and its filesystem said no.
+    // Pooling the two would read a permission problem as an absent machine.
+    expect(JSON.parse(String(await createDeviceTunnelExecutor(t).tools.exec.execute('ls')))).toEqual({
+      reason: 'io',
+      error: 'laptop exec `ls`: permission denied',
+    });
+  });
+
+  test('a read that could not reach the device never answers `false`', async () => {
+    const t = staticTransport({ connected: true, registered: true }, async () => {
+      throw new Error('permission denied');
+    });
+    const answer = await createDeviceTunnelExecutor(t).tools.exists.execute('/tmp/a');
+
+    // It used to be `false` — "the path is absent on your machine" — from a catch
+    // that dropped its error. An unreachable read and an absent path are different
+    // facts and the boolean channel cannot hold both.
+    expect(answer).not.toBe(false);
+    expect(JSON.parse(String(answer))).toMatchObject({ reason: 'io' });
   });
 });

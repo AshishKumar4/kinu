@@ -129,11 +129,18 @@ export class ProteusError extends Error {
  * The refusal payload a tool puts on its own result: the class first, the prose
  * second. The one shape `read-models/tool-failures.ts` reads and
  * `execution/exec-result.ts` recognises as a failure.
+ *
+ * A type ALIAS and not an interface, which is load-bearing rather than a style
+ * choice: this value's whole purpose is to cross a JSON boundary, and the
+ * executor tools that return it are typed `JsonValue`. TypeScript grants an
+ * implicit index signature to an object type alias and never to an interface, so
+ * as an interface this shape could not be returned by the tools it exists for
+ * without a spread at every site whose only job was to launder the declaration.
  */
-export interface Refusal {
+export type Refusal = {
   readonly reason: ErrorCode;
   readonly error: string;
-}
+};
 
 /** Project a classified failure onto the wire. */
 export function refusalOf(error: ProteusError): Refusal {

@@ -17,7 +17,8 @@ import { workspacePath } from '../vfs/workspace-path.js';
 import { shellQuote } from '../utils/shell.js';
 import type { ExecutorCapability, ExecutorProvider } from './types.js';
 import { readExecSignal } from './signal.js';
-import { formatExecResult } from './exec-result.js';
+import { formatExecResult, refusalText } from './exec-result.js';
+import { ProteusError, toProteusError } from '../obs/index.js';
 import type { JsonValue } from '../utils/json.js';
 
 export interface NimbusExecOptions {
@@ -139,6 +140,38 @@ const NOT_CONFIGURED =
   'Nimbus executor not configured. Add the NIMBUS_SESSION Durable Object binding ' +
   'and construct the executor with Nimbus.fromEnv(...).sandbox(...).';
 
+/**
+ * `unavailable`, for the reason spelled out in `sandbox.ts`: the binding is
+ * absent, so this deployment has no session at all, and it is the same fact the
+ * `run` tool already spells `unavailable` for an unregistered runtime. One fact,
+ * one code, one part of the census.
+ *
+ * Its own bucket matters more here than anywhere else: on the Cloudflare backend
+ * Nimbus IS the workspace (`createNimbusWorkspaceExecutor` registers it as
+ * `workspace`), so a missing binding used to answer every single call with prose
+ * that `isFailingResultText` reads as a clean success.
+ */
+const NOT_CONFIGURED_REFUSAL = refusalText(new ProteusError('unavailable', NOT_CONFIGURED));
+
+/**
+ * The session is live and the SDK handle this deployment holds has no such
+ * surface — an older `@nimbus-sh/sdk`, or a host that composed a narrower handle.
+ *
+ * `unsupported`, never `unavailable`: retrying cannot grow a method onto a handle,
+ * which is the exact line the two codes divide (obs/error.ts), and it is the same
+ * call the `run` tool makes for `runtime_does_not_support_exec`.
+ */
+function handleLacks(surface: string): string {
+  return refusalText(new ProteusError('unsupported', `Nimbus SDK handle does not expose ${surface}`));
+}
+
+/** Every failure out of the session's RPC. `io` is the seam's own answer for an
+ *  unrecognised one — this is a transport to a Durable Object — while an abort, a
+ *  timeout or the memory wall keeps the more precise code the classifier pinned. */
+function nimbusFailure(input: { doing: string; cause: unknown }): ProteusError {
+  return toProteusError({ ...input, otherwise: 'io' });
+}
+
 /** `success: false` with a zero exit code is Nimbus reporting a transport-level
  *  failure the exit code cannot express — render it as the failure it is. */
 function normalizeExec(result: NimbusExecResult): string {
@@ -237,9 +270,11 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
     exec: {
       description: 'Run a shell command in the Nimbus development environment.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
+        if (!box) return NOT_CONFIGURED_REFUSAL;
         const command = parseInput(StringSchema, { value: args[0] });
-        if (command === undefined) return 'exec error: command must be a string';
+        if (command === undefined) {
+          return refusalText(new ProteusError('bad_input', 'nimbus exec: command must be a string'));
+        }
         const signal = readExecSignal({ context: args[1] });
         try {
           // Nimbus exec exposes no kill for an in-flight command — abort
@@ -251,66 +286,76 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
           ));
         } catch (err) {
           if (isAbortError(err)) throw err;
-          return `exec error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus exec \`${command}\``, cause: err }));
         }
       },
     },
     runCode: {
       description: 'Run code in Nimbus using the requested language runtime.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
-        if (!box.runCode) return 'runCode error: Nimbus SDK handle does not expose runCode';
+        if (!box) return NOT_CONFIGURED_REFUSAL;
+        if (!box.runCode) return handleLacks('runCode');
         const code = parseInput(StringSchema, { value: args[0] });
-        if (code === undefined) return 'runCode error: code must be a string';
+        if (code === undefined) {
+          return refusalText(new ProteusError('bad_input', 'nimbus runCode: code must be a string'));
+        }
         const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
         try {
           return normalizeExec(await touch(() => box.runCode!(code, options)));
         } catch (err) {
-          return `runCode error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: 'nimbus runCode', cause: err }));
         }
       },
     },
     readFile: {
       description: 'Read a file from the Nimbus filesystem.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
+        if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
-        if (path === undefined) return 'readFile error: path must be a string';
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'nimbus readFile: path must be a string'));
+        }
         try {
           return await touch(() => box.files.read(path)) ?? '';
         } catch (err) {
-          return `readFile error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus readFile ${path}`, cause: err }));
         }
       },
     },
     writeFile: {
       description: 'Write a file to the Nimbus filesystem.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
+        if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
-        if (path === undefined) return 'writeFile error: path must be a string';
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'nimbus writeFile: path must be a string'));
+        }
         try {
           const stringContent = v.safeParse(v.string(), args[1]);
           const body = stringContent.success ? stringContent.output : JSON.stringify(args[1]);
-          if (body === undefined) return 'writeFile error: content is not serializable';
+          if (body === undefined) {
+            return refusalText(new ProteusError('bad_input', 'nimbus writeFile: content is not serializable'));
+          }
           await touch(() => box.files.write(path, body));
           return `Written ${body.length} bytes to ${path}`;
         } catch (err) {
-          return `writeFile error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus writeFile ${path}`, cause: err }));
         }
       },
     },
     listFiles: {
       description: 'List directory contents in Nimbus.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
+        if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(OptionalPathSchema, { value: args[0] });
-        if (args[0] !== undefined && path === undefined) return 'listFiles error: path must be a string';
+        if (args[0] !== undefined && path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'nimbus listFiles: path must be a string'));
+        }
         try {
           const entries = await touch(() => box.files.list(path || root));
           return entries.map((f) => `${(f.isDir ?? (f.type === 'directory' || f.type === 'dir')) ? 'd' : '-'} ${f.name}${f.size != null ? ` (${f.size}b)` : ''}`).join('\n');
         } catch (err) {
-          return `listFiles error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus listFiles ${path || root}`, cause: err }));
         }
       },
     },
@@ -321,103 +366,115 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
     exists: {
       description: 'Check whether a path exists in Nimbus.',
       execute: async (...args: unknown[]): Promise<boolean | string> => {
-        if (!box) return NOT_CONFIGURED;
+        if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
-        if (path === undefined) return false;
+        // `false` here was the same lie the catch below already refuses to tell:
+        // a boolean answer claims the path is absent, and a call that was never
+        // made has established nothing about the path.
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'nimbus exists: path must be a string'));
+        }
         try {
           return await touch(() => box.files.exists(path));
         } catch (err) {
-          // The `<tool> error: …` shape every sibling here uses, and the reason
-          // `false` could not carry: a boolean answer means the path is absent,
-          // never that Nimbus could not be asked.
-          return `exists error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus exists ${path}`, cause: err }));
         }
       },
     },
     stat: {
       description: 'Get file or directory metadata from Nimbus.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
+        if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
-        if (path === undefined) return 'stat error: path must be a string';
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'nimbus stat: path must be a string'));
+        }
         try {
           const result = await touch(() => box.exec(`stat -c "%s %Y %F" ${shellQuote(path)}`));
           return normalizeExec(result);
         } catch (err) {
-          return `stat error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus stat ${path}`, cause: err }));
         }
       },
     },
     mkdir: {
       description: 'Create a directory in Nimbus.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
+        if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
-        if (path === undefined) return 'mkdir error: path must be a string';
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'nimbus mkdir: path must be a string'));
+        }
         try {
           if (box.files.mkdir) await touch(() => box.files.mkdir!(path));
           else await touch(() => box.exec(`mkdir -p ${shellQuote(path)}`));
           return `Created ${path}`;
         } catch (err) {
-          return `mkdir error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus mkdir ${path}`, cause: err }));
         }
       },
     },
     rm: {
       description: 'Delete a file or directory in Nimbus.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
+        if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
-        if (path === undefined) return 'rm error: path must be a string';
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'nimbus rm: path must be a string'));
+        }
         try {
           await touch(() => box.files.delete(path, { recursive: true }));
           return `Deleted ${path}`;
         } catch (err) {
-          return `rm error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus rm ${path}`, cause: err }));
         }
       },
     },
     startProcess: {
       description: 'Start a background process in Nimbus; returns while it is still running.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
-        if (!box.startProcess) return 'startProcess error: Nimbus SDK handle does not expose startProcess';
+        if (!box) return NOT_CONFIGURED_REFUSAL;
+        if (!box.startProcess) return handleLacks('startProcess');
         const command = parseInput(StringSchema, { value: args[0] });
-        if (command === undefined) return 'startProcess error: command must be a string';
+        if (command === undefined) {
+          return refusalText(new ProteusError('bad_input', 'nimbus startProcess: command must be a string'));
+        }
         const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
         try {
           return formatStartResult(await touch(() => box.startProcess!(command, options)), namespace);
         } catch (err) {
-          return `startProcess error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
         }
       },
     },
     killProcess: {
       description: 'Kill a Nimbus process by pid.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
-        if (!box.processes?.kill) return 'killProcess error: Nimbus SDK handle does not expose process control';
+        if (!box) return NOT_CONFIGURED_REFUSAL;
+        if (!box.processes?.kill) return handleLacks('process control');
         const input = parseInput(ProcessInputSchema, { value: args[0] });
         const pid = input === undefined ? undefined : v.is(v.number(), input) ? input : input.pid;
         if (pid === undefined || !Number.isFinite(pid)) {
-          return `killProcess error: invalid pid ${stringifyResult({ value: args[0] })}`;
+          return refusalText(new ProteusError('bad_input',
+            `nimbus killProcess: invalid pid ${stringifyResult({ value: args[0] })}`));
         }
         try {
           return stringifyResult({ value: await touch(() => box.processes!.kill!(pid)) });
         } catch (err) {
-          return `killProcess error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus killProcess ${pid}`, cause: err }));
         }
       },
     },
     logs: {
       description: 'Read Nimbus process logs.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
-        if (!box.processes?.logs) return 'logs error: Nimbus SDK handle does not expose process logs';
+        if (!box) return NOT_CONFIGURED_REFUSAL;
+        if (!box.processes?.logs) return handleLacks('process logs');
         const input = parseInput(ProcessInputSchema, { value: args[0] });
         const pid = input === undefined ? undefined : v.is(v.number(), input) ? input : input.pid;
         if (pid === undefined || !Number.isFinite(pid)) {
-          return `logs error: invalid pid ${stringifyResult({ value: args[0] })}`;
+          return refusalText(new ProteusError('bad_input',
+            `nimbus logs: invalid pid ${stringifyResult({ value: args[0] })}`));
         }
         const options = input !== undefined && !v.is(v.number(), input)
           ? { lines: input.lines, bytes: input.bytes }
@@ -425,84 +482,91 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         try {
           return stringifyResult({ value: await touch(() => box.processes!.logs!(pid, options)) });
         } catch (err) {
-          return `logs error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus logs ${pid}`, cause: err }));
         }
       },
     },
     exposePort: {
       description: 'Expose an HTTP-like port from Nimbus and return its preview URL.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
-        if (!box.ports?.expose) return 'exposePort error: Nimbus SDK handle does not expose ports';
+        if (!box) return NOT_CONFIGURED_REFUSAL;
+        if (!box.ports?.expose) return handleLacks('ports');
         const input = parseInput(PortInputSchema, { value: args[0] });
         const port = input === undefined ? undefined : v.is(v.number(), input) ? input : input.port;
         if (port === undefined || !Number.isFinite(port) || port <= 0 || port > 65535) {
-          return `exposePort error: invalid port ${stringifyResult({ value: args[0] })}`;
+          return refusalText(new ProteusError('bad_input',
+            `nimbus exposePort: invalid port ${stringifyResult({ value: args[0] })}`));
         }
         try {
           const result = await touch(() => box.ports!.expose!(port));
           return result.url ?? box.ports?.url?.(port) ?? stringifyResult({ value: result });
         } catch (err) {
-          return `exposePort error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus exposePort ${port}`, cause: err }));
         }
       },
     },
     unexposePort: {
       description: 'Stop exposing a Nimbus port.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
-        if (!box.ports?.unexpose) return 'unexposePort error: Nimbus SDK handle does not expose ports';
+        if (!box) return NOT_CONFIGURED_REFUSAL;
+        if (!box.ports?.unexpose) return handleLacks('ports');
         const input = parseInput(PortInputSchema, { value: args[0] });
         const port = input === undefined ? undefined : v.is(v.number(), input) ? input : input.port;
         if (port === undefined || !Number.isFinite(port)) {
-          return `unexposePort error: invalid port ${stringifyResult({ value: args[0] })}`;
+          return refusalText(new ProteusError('bad_input',
+            `nimbus unexposePort: invalid port ${stringifyResult({ value: args[0] })}`));
         }
         try {
           await touch(() => box.ports!.unexpose!(port));
           return `unexposed ${port}`;
         } catch (err) {
-          return `unexposePort error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus unexposePort ${port}`, cause: err }));
         }
       },
     },
     listPorts: {
       description: 'List Nimbus exposed ports.',
       execute: async (): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
-        if (!box.ports?.list) return '[]';
+        if (!box) return NOT_CONFIGURED_REFUSAL;
+        // `'[]'` claimed this session has no exposed ports. It has no port API at
+        // all, which is a different fact — an empty read must stay
+        // distinguishable from a read that could not be made (AGENTS.md).
+        if (!box.ports?.list) return handleLacks('ports');
         try {
           const ports = await touch(() => box.ports!.list!());
           return JSON.stringify(ports.map((p) => ({ ...p, url: p.url ?? box.ports?.url?.(p.port) })));
         } catch (err) {
-          return `listPorts error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: 'nimbus listPorts', cause: err }));
         }
       },
     },
     installRuntime: {
       description: 'Install or ensure a Nimbus runtime such as python, bun, or clang.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
+        if (!box) return NOT_CONFIGURED_REFUSAL;
         const spec = parseInput(StringSchema, { value: args[0] });
-        if (spec === undefined) return 'installRuntime error: spec must be a string';
+        if (spec === undefined) {
+          return refusalText(new ProteusError('bad_input', 'nimbus installRuntime: spec must be a string'));
+        }
         try {
           if (box.runtimes?.install) await touch(() => box.runtimes!.install!(spec));
           else if (box.runtimes?.ensure) await touch(() => box.runtimes!.ensure!(spec));
-          else return 'installRuntime error: Nimbus SDK handle does not expose runtime installation';
+          else return handleLacks('runtime installation');
           return `installed ${spec}`;
         } catch (err) {
-          return `installRuntime error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: `nimbus installRuntime ${spec}`, cause: err }));
         }
       },
     },
     listRuntimes: {
       description: 'List Nimbus runtimes.',
       execute: async (): Promise<string> => {
-        if (!box) return NOT_CONFIGURED;
-        if (!box.runtimes?.list) return 'listRuntimes error: Nimbus SDK handle does not expose runtime listing';
+        if (!box) return NOT_CONFIGURED_REFUSAL;
+        if (!box.runtimes?.list) return handleLacks('runtime listing');
         try {
           return stringifyResult({ value: await touch(() => box.runtimes!.list!()) });
         } catch (err) {
-          return `listRuntimes error: ${errorMessage({ error: err })}`;
+          return refusalText(nimbusFailure({ doing: 'nimbus listRuntimes', cause: err }));
         }
       },
     },
@@ -541,14 +605,22 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
     connect: async () => { if (!box) throw new Error(NOT_CONFIGURED); await touch(() => box.ready()); },
     disconnect: async () => { active = false; },
     tools,
-    types: `declare namespace ${namespace} {
+    types: `/**
+ * Every call below either answers, or resolves to a refusal
+ * \`{"reason":"<class>","error":"<what happened>"}\`. \`reason\` is the class —
+ * bad_input, unavailable, unsupported, timeout, cancelled, oom, io — so branch on
+ * it rather than matching prose. \`unsupported\` means this deployment's session
+ * handle has no such surface and a retry cannot change that.
+ */
+declare namespace ${namespace} {
   function exec(command: string): Promise<string>;
   function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<string>;
   function readFile(path: string): Promise<string>;
   function writeFile(path: string, content: string): Promise<string>;
   function listFiles(path?: string): Promise<string>;
   function readdir(path?: string): Promise<string>;
-  function exists(path: string): Promise<boolean>;
+  /** true or false — or a refusal payload, if the session could not be asked. */
+  function exists(path: string): Promise<boolean | string>;
   function stat(path: string): Promise<string>;
   function mkdir(path: string): Promise<string>;
   function rm(path: string): Promise<string>;

@@ -114,6 +114,9 @@ import {
   WORKSPACE_TITLE_SYSTEM_PROMPT, workspaceTitlePrompt,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
+  // The one definition of "this executor output is a failure", shared with the
+  // renderer that produces both shapes it recognises.
+  isFailingResultText,
   type CheckpointAvailability, type FileCheckpointListing,
   type FileRestorePlan, type FileRestoreResult,
   // Shared turn lifecycle
@@ -251,12 +254,6 @@ const ArchiveCursorSchema = v.variant('phase', [
 function clampLimit(requested: number | undefined, max: number): number {
   if (requested === undefined || !Number.isFinite(requested)) return max;
   return Math.min(Math.max(Math.floor(requested), 1), max);
-}
-
-function executorOutputIsError(output: string): boolean {
-  const text = output.trim();
-  if (!text) return false;
-  return /^(error\b|exit\b|exec error:|read error:|write error:|list error:|delete error:|expose error:|unexpose error:|listports error:|runtime error:)/i.test(text);
 }
 
 export class OrchestratorAgent extends ActorAgent {
@@ -3025,7 +3022,13 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       const result = await execTool.execute(command);
       const stdout = v.is(v.string(), result) ? result : JSON.stringify(result);
-      const isError = executorOutputIsError(stdout);
+      // The ONE failure predicate (core execution/exec-result.ts). What stood here
+      // was a third prose matcher listing `exec error:`, `read error:` and friends
+      // — prefixes no executor writes any more, and one that never matched the
+      // shapes that mattered: an unconfigured sandbox and an unattached laptop
+      // both drew as exit 0 in this terminal. The refusal payload those now return
+      // is one of the two shapes `isFailingResultText` is defined over.
+      const isError = isFailingResultText(stdout);
 
       void this.sql`INSERT INTO executor_output (executor, command, stdout, stderr, exit_code)
         VALUES (${executorId}, ${command}, ${stdout}, ${isError ? stdout : ''}, ${isError ? 1 : 0})`;

@@ -76,7 +76,7 @@ import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executo
 import { filterByEffectiveScore } from '../craft/ema.js';
 import { craftInvocationError } from '../craft/in-episode.js';
 import { DEFAULT_CONFIG } from '../config.js';
-import { formatExecResult, isFailingResultText } from '../execution/exec-result.js';
+import { formatExecResult, isFailingResultText, refusalText } from '../execution/exec-result.js';
 import { TurnEscalationLedger } from '../execution/escalation.js';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool.js';
 import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool.js';
@@ -85,7 +85,7 @@ import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '.
 import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review.js';
 import type { JsonValue } from '../utils/json.js';
 import {
-  createConsoleLogger, ProteusError, refusalOf, toProteusError, type Logger,
+  createConsoleLogger, ProteusError, toProteusError, type Logger,
 } from '../obs/index.js';
 
 type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
@@ -517,7 +517,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
             'no workspace shell available in this runtime',
           );
           logger.failure(RUN_SHELL_ABSENT, refusal, { runtime: runtimeKey });
-          return JSON.stringify(refusalOf(refusal));
+          return refusalText(refusal);
         }
         return clamp(formatExecResult(await shell.exec(args.command, signal ? { signal } : undefined)));
       }
@@ -586,7 +586,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         });
         escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'failed' });
         logger.failure(RUN_ESCALATION_FAILED, failure, { runtime: runtimeKey });
-        return JSON.stringify(refusalOf(failure));
+        return refusalText(failure);
       }
       // The ONE failure predicate (exec-result.ts). A non-zero exit comes back
       // as an ordinary successful result prefixed `Error (exit N)`, so reading

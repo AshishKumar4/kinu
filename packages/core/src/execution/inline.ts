@@ -22,7 +22,8 @@ import { appendMemoryNote } from '../memory/note.js';
 import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno.js';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path.js';
 import { readExecSignal } from './signal.js';
-import { formatExecResult } from './exec-result.js';
+import { formatExecResult, refusalText } from './exec-result.js';
+import { ProteusError, refusalOf, toProteusError } from '../obs/index.js';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution.js';
 import { seedCraftScore } from '../craft/in-episode.js';
 import { createView, deleteView, viewSlug } from '../views/store.js';
@@ -162,7 +163,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'Read a file from the agent workspace. Returns content as string.',
       execute: async (...args: unknown[]) => {
         const p = parseInput(StringSchema, { value: args[0] });
-        if (p === undefined) return 'readFile error: path must be a string';
+        if (p === undefined) {
+          return refusalText(new ProteusError('bad_input', 'workspace.readFile: path must be a string'));
+        }
         const content = await vfs.readFile(p, { encoding: 'utf8' });
         const text = v.parse(v.string(), content);
         // The caller now has the WHOLE file, exactly like a native `file`
@@ -178,8 +181,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (...args: unknown[]) => {
         const p = parseInput(StringSchema, { value: args[0] });
         const text = parseInput(StringSchema, { value: args[1] });
-        if (p === undefined) return 'writeFile error: path must be a string';
-        if (text === undefined) return 'writeFile error: content must be a string';
+        if (p === undefined) return refusalOf(new ProteusError('bad_input', 'workspace.writeFile: path must be a string'));
+        if (text === undefined) return refusalOf(new ProteusError('bad_input', 'workspace.writeFile: content must be a string'));
         const result = await currentFileDispatch()({ action: 'write', path: p, content: text });
         const success = v.safeParse(FileWriteSuccessSchema, result);
         return success.success
@@ -192,7 +195,11 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'Replace exact text inside a file — old_text must occur exactly once and match what a prior readFile/writeFile/editFile here showed; refused if the file was never read/written in this scope or has changed since.',
       execute: async (...args: unknown[]) => {
         const path = parseInput(StringSchema, { value: args[0] });
-        if (path === undefined) return { error: 'editFile path must be a string' };
+        // `refusalOf`, not `refusalText`: this tool's declared result is already an
+        // OBJECT carrying `reason` then `error`, so the classification travels as
+        // the field the dispatcher's own refusals use rather than as JSON in a
+        // string. What it replaces was an `{ error }` with no reason at all.
+        if (path === undefined) return refusalOf(new ProteusError('bad_input', 'workspace.editFile: path must be a string'));
         const list = parseInput(FileEditsSchema, { value: args[1] }) ?? [];
         // Built per call: the SAME dispatcher and ledger the native `file`
         // tool's edit action uses (createFileDispatcher, tools/file-tool.ts),
@@ -207,7 +214,12 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'List entries in a directory.',
       execute: async (...args: unknown[]) => {
         const path = parseInput(OptionalPathSchema, { value: args[0] });
-        if (args[0] !== undefined && path === undefined) return [];
+        // `[]` claimed the directory was empty. Nothing was read, so nothing is
+        // known about the directory (AGENTS.md: an empty read stays
+        // distinguishable from a failed one).
+        if (args[0] !== undefined && path === undefined) {
+          return refusalOf(new ProteusError('bad_input', 'workspace.readdir: path must be a string'));
+        }
         return vfs.readdir(path || '/');
       },
     },
@@ -216,7 +228,11 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'Check if a path exists.',
       execute: async (...args: unknown[]) => {
         const path = parseInput(StringSchema, { value: args[0] });
-        return path === undefined ? false : vfs.exists(path);
+        // `false` claimed the path was absent — the same lie one line up.
+        if (path === undefined) {
+          return refusalOf(new ProteusError('bad_input', 'workspace.exists: path must be a string'));
+        }
+        return vfs.exists(path);
       },
     },
 
@@ -227,7 +243,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         + 'Available binaries and process features are listed in this workspace provider’s capabilities; use sandbox or laptop only when the task needs that separate machine.',
       execute: async (...args: unknown[]) => {
         const command = parseInput(StringSchema, { value: args[0] });
-        if (command === undefined) return 'exec error: command must be a string';
+        if (command === undefined) {
+          return refusalText(new ProteusError('bad_input', 'workspace.exec: command must be a string'));
+        }
         const signal = readExecSignal({ context: args[1] });
         return formatExecResult(await shell.exec(command, signal ? { signal } : undefined));
       },
@@ -237,7 +255,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'Search long-term memory using FTS5 full-text search. Returns matching chunks.',
       execute: async (...args: unknown[]) => {
         const query = parseInput(StringSchema, { value: args[0] });
-        if (query === undefined) return 'searchMemory error: query must be a string';
+        if (query === undefined) {
+          return refusalText(new ProteusError('bad_input', 'workspace.searchMemory: query must be a string'));
+        }
         const results = await memory.search(query, 10);
         if (results.length === 0) return 'No results found.';
         return results.map(r => `[${r.path}:${r.startLine}-${r.endLine}] (score ${r.score.toFixed(2)})\n${r.snippet}`).join('\n\n');
@@ -249,7 +269,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (...args: unknown[]) => {
         const content = parseInput(StringSchema, { value: args[0] });
         return content === undefined
-          ? 'saveNote error: content must be a string'
+          ? refusalText(new ProteusError('bad_input', 'workspace.saveNote: content must be a string'))
           : appendMemoryNote(memory, content);
       },
     },
@@ -291,10 +311,14 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const description = parseInput(StringSchema, { value: args[1] });
         const code = parseInput(StringSchema, { value: args[2] });
         if (!name || !description || !code) {
-          return { ok: false, error: 'createTool requires name, description, and code arguments.' };
+          return { ok: false, ...refusalOf(new ProteusError('bad_input',
+            'createTool requires name, description, and code arguments.')) };
         }
         let toolName = name.replace(/[^A-Za-z0-9_]/g, '_');
-        if (!toolName) return { ok: false, error: 'Tool name must contain at least one identifier character.' };
+        if (!toolName) {
+          return { ok: false, ...refusalOf(new ProteusError('bad_input',
+            'Tool name must contain at least one identifier character.')) };
+        }
         if (/^[0-9]/.test(toolName)) toolName = '_' + toolName;
         try {
           // Exact-name update is an upsert. A different name that matches
@@ -318,11 +342,16 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
                 detail: `workspace.createTool("${toolName}") rejected`,
               });
             }
+            // `denied`, which is the one code that exists for this: a GATE
+            // refused and the work correctly never ran. It reached the census as
+            // an unreasoned `{ ok: false, error }` — `returned_error`, filed under
+            // `broke` — so the misevolution gate working was counted as a defect
+            // in the tool it protected.
             return {
               ok: false,
-              error:
-                `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason} ` +
-                `Rewrite the tool body without it and call createTool again.`,
+              ...refusalOf(new ProteusError('denied',
+                `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason} `
+                + `Rewrite the tool body without it and call createTool again.`)),
             };
           }
           if (existing) {
@@ -336,11 +365,11 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           if (caseHit) {
             return {
               ok: false,
-              error:
-                `A tool named "${caseHit.name}" already exists ` +
-                `(case-insensitive match with "${toolName}"). ` +
-                `Either call that tool as codemode.${caseHit.name}(...) or ` +
-                `pick a genuinely different name.`,
+              ...refusalOf(new ProteusError('bad_input',
+                `A tool named "${caseHit.name}" already exists `
+                + `(case-insensitive match with "${toolName}"). `
+                + `Either call that tool as codemode.${caseHit.name}(...) or `
+                + `pick a genuinely different name.`)),
             };
           }
           craftStore.create({
@@ -360,7 +389,12 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           onToolRegistered?.({ name: toolName, description: desc, code: codeStr });
           return { ok: true, name: toolName, action: 'created' };
         } catch (err) {
-          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+          // The craft store is SQLite in this agent's own object, so `io` is what
+          // an unrecognised failure means here; a classified cause keeps its code.
+          const failure = toProteusError({
+            doing: `workspace.createTool ${toolName}`, cause: err, otherwise: 'io',
+          });
+          return { ok: false, ...refusalOf(failure) };
         }
       },
     },
@@ -376,7 +410,12 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         'blocks are stat | table | list | kv | markdown | section, and every block reads from ' +
         'one of the allowed workspace RPCs. Upserts by name. Returns { ok, slug, version, action }.',
       execute: async (...args: unknown[]) => {
-        if (!sql) return { ok: false, error: 'This workspace has no SQL store, so views cannot be published.' };
+        // `unsupported`: a workspace built without a SQL store will not grow one
+        // on a retry, which is the line between this and `unavailable`.
+        if (!sql) {
+          return { ok: false, ...refusalOf(new ProteusError('unsupported',
+            'This workspace has no SQL store, so views cannot be published.')) };
+        }
         return createView({ vfs, sql }, args[0], args[1]);
       },
     },
@@ -384,18 +423,37 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     deleteView: {
       description: 'Remove a published view. Its versions stay in the changelog and can be restored.',
       execute: async (...args: unknown[]) => {
-        if (!sql) return { ok: false, error: 'This workspace has no SQL store, so views cannot be removed.' };
+        if (!sql) {
+          return { ok: false, ...refusalOf(new ProteusError('unsupported',
+            'This workspace has no SQL store, so views cannot be removed.')) };
+        }
         const name = parseInput(StringSchema, { value: args[0] });
         const slug = viewSlug(name ?? '');
-        if (!slug) return { ok: false, error: 'A view name must contain at least one letter or digit.' };
+        if (!slug) {
+          return { ok: false, ...refusalOf(new ProteusError('bad_input',
+            'A view name must contain at least one letter or digit.')) };
+        }
         return deleteView({ vfs, sql }, slug);
       },
     },
   };
 
   const types = `declare namespace workspace {
+  /**
+   * A refused call, CLASS first: branch on \`reason\`, never on the prose.
+   * \`empty_anchor\`/\`not_found\`/\`ambiguous\`/\`overlap\`/\`no_change\`/\`unread\`/
+   * \`stale\` are the file plane's verdicts about an anchor or a read;
+   * \`bad_input\`/\`missing\`/\`io\`/\`denied\`/\`unsupported\` are the classes every
+   * tool in this runtime shares. This is exactly the vocabulary the durable
+   * failure ledger reads, so anything you branch on here is what gets counted.
+   */
+  type Refusal = {
+    reason: 'empty_anchor' | 'not_found' | 'ambiguous' | 'overlap' | 'no_change'
+      | 'unread' | 'stale' | 'missing' | 'io' | 'bad_input' | 'denied' | 'unsupported';
+    error: string;
+  };
   function readFile(path: string): Promise<string>;
-  function writeFile(path: string, content: string): Promise<string | { error: string; reason?: 'unread' | 'stale' | 'io' }>;
+  function writeFile(path: string, content: string): Promise<string | Refusal>;
   /**
    * Replace exact text inside a file — old_text must occur exactly once,
    * copied verbatim (indentation and all) from what readFile/writeFile/
@@ -407,9 +465,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
    */
   function editFile(
     path: string, edits: Array<{ old_text: string; new_text: string }>
-  ): Promise<{ ok: boolean; path?: string; applied?: Array<{ line: number; removed_lines: number; added_lines: number }>; error?: string; reason?: 'unread' | 'stale' | 'io' }>;
-  function readdir(path: string): Promise<string[]>;
-  function exists(path: string): Promise<boolean>;
+  ): Promise<{ ok: boolean; path?: string; applied?: Array<{ line: number; removed_lines: number; added_lines: number }> } | Refusal>;
+  function readdir(path: string): Promise<string[] | Refusal>;
+  function exists(path: string): Promise<boolean | Refusal>;
   /**
    * Run a command in the workspace shell, over the SAME files the calls above
    * address. A real POSIX shell: ~95 coreutils, pipes, redirects, loops,
@@ -428,11 +486,13 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
    */
   function createTool(
     name: string, description: string, code: string
-  ): Promise<{ ok: boolean; name?: string; action?: 'created' | 'updated'; error?: string }>;
+  ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | ({ ok: false } & Refusal)>;
   /** Publish a dashboard tab in the workspace UI, upserting by name. The host
-   *  draws it: no code, no HTML, no links, no images, nothing clickable. */
-  function createView(name: string, spec: ViewSpec): Promise<{ ok: boolean; slug?: string; version?: number; error?: string }>;
-  function deleteView(name: string): Promise<{ ok: boolean; error?: string }>;
+   *  draws it: no code, no HTML, no links, no images, nothing clickable.
+   *  \`reason\` is present when this tool refused; the view store's own
+   *  validation failures still answer with prose only. */
+  function createView(name: string, spec: ViewSpec): Promise<{ ok: boolean; slug?: string; version?: number; error?: string; reason?: Refusal['reason'] }>;
+  function deleteView(name: string): Promise<{ ok: boolean; error?: string; reason?: Refusal['reason'] }>;
   type ViewSpec = { v: 1; title: string; subtitle?: string; refreshMs?: number; blocks: ViewBlock[] };
   /** \`path\`/\`field\` are dotted paths into the RPC's result; omit for the whole result. */
   type ViewSource = { rpc: ${VIEW_DATA_SOURCES.map(s => `'${s}'`).join(' | ')}; limit?: number; path?: string };
