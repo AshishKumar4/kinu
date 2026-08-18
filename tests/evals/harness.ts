@@ -328,6 +328,60 @@ export function requireExecutorSurface(taskId: string, rt: AgentRuntime): void {
   }
 }
 
+/** Executor kinds an episode may be measured on: planes whose filesystem is
+ *  not the developer's. An allowlist rather than a `laptop` denylist, so a
+ *  plane added later is refused until someone decides it is isolated. */
+const SANDBOXED_EXECUTOR_KINDS: readonly string[] = ['workspace'];
+
+/**
+ * Thrown when the runtime handed to an episode can execute on the developer's
+ * own machine.
+ *
+ * NOT a {@link DegenerateRunError}: this is the harness being misconfigured, so
+ * it is `errored` rather than an observation about the agent
+ * (behaviour.eval.ts:347).
+ *
+ * The escape it catches was measured, not imagined. A live run left
+ * `scratch-add/{add.js,add.test.js}` in a worktree ROOT and `report.txt` /
+ * `todos.txt` in the repo root, and the commit that swept them up was refused by
+ * `gate:typecheck-coverage`. `createCLIRuntime` registers a `laptop`
+ * ExecutorProvider rooted at `process.cwd()` unless told not to, and an episode
+ * reaches every registered provider through `execute_tools` — so the harness
+ * that omitted `hostRoot: null` handed each episode the developer's filesystem.
+ */
+export class UnsandboxedRuntimeError extends Error {
+  constructor(readonly taskId: string, readonly executor: string) {
+    super(`unsandboxed runtime for ${taskId}: executor \`${executor}\` runs on the `
+      + 'developer\'s own machine. The eval must not run: an episode reaches every '
+      + 'registered provider through `execute_tools`, and a corpus task that writes '
+      + 'files then writes them into the repo the harness was launched from. Open the '
+      + 'workspace with `hostRoot: null` (cli-backend/src/open.ts) — re-rooting the '
+      + 'provider is not enough, because `laptop.writeFile` passes an absolute path '
+      + 'through and `laptop.exec` can `cd` anywhere.');
+    this.name = 'UnsandboxedRuntimeError';
+  }
+}
+
+/**
+ * Refuse a runtime that can reach outside the episode's sandbox.
+ *
+ * Reads `listExecutors()` rather than `getProviders()` because the codemode
+ * surface deliberately drops `kind` (execution/router.ts:38-52), and the kind is
+ * the whole question — a name is a namespace, not a claim about which machine
+ * runs the command.
+ *
+ * Checked before the model is driven, beside {@link requireExecutorSurface}: the
+ * refusal costs nothing, and discovering it afterwards costs a paid run plus
+ * whatever the episode wrote.
+ */
+export function requireSandboxedExecutors(taskId: string, rt: AgentRuntime): void {
+  for (const executor of rt.executionRouter?.listExecutors() ?? []) {
+    if (!SANDBOXED_EXECUTOR_KINDS.includes(executor.kind)) {
+      throw new UnsandboxedRuntimeError(taskId, executor.name);
+    }
+  }
+}
+
 /**
  * Refuse a runtime that cannot run a command, for a task whose ground truth IS a
  * command.
@@ -397,11 +451,16 @@ export async function runBehaviourTask(
     llm: opts.llm,
   });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: opts.llm });
+  // `hostRoot: null`: no `laptop` executor, so the episode's only filesystem is
+  // the workspace one this runtime owns. The default plane is rooted at
+  // `process.cwd()` — the repo the suite was launched from.
+  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: opts.llm, hostRoot: null });
 
   // Before anything is driven or spent: a runtime that cannot execute is not a
-  // measurement of an agent that can.
+  // measurement of an agent that can, and one that can execute on the
+  // developer's machine is not a measurement either.
   requireExecutorSurface(task.id, rt);
+  requireSandboxedExecutors(task.id, rt);
 
   // Seeded through the OPENED runtime's filesystem: the workspace the agent
   // reads is the one this runtime owns, not the inline VFS birth returned.

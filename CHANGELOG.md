@@ -144,6 +144,29 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- A shell command or file write no longer fails because the shadow-git
+  checkpoint before it met a directory the agent may not read. Staging a
+  working directory the agent does not own — a system temp root, a project
+  holding another user's private tree — made `git add` refuse, and the engine
+  reported that as `checkpoint staging failed: warning: could not open
+  directory 'systemd-private-…'`, which failed the tool call the snapshot was
+  protecting: 3 of 4 `execute_tools` failures in one measured run. A path this
+  process cannot read is now skipped and NAMED in the checkpoint's own reason
+  (`file write [skipped 2 unreadable: …]`), so `/undo` shows an incomplete
+  snapshot as incomplete instead of the snapshot being lost entirely. Staging
+  also no longer stops at the first refusal, which used to leave every later
+  path out of the snapshot without saying so. A staging failure that is NOT a
+  permission denial still fails, and both engines — the CLI's and the device
+  daemon's — record it identically.
+- An eval episode can no longer write into the developer's own repository. The
+  local runtime registers a `laptop` executor rooted at `process.cwd()`, and
+  the measurement harness inherited it, so an episode reached the filesystem of
+  whatever checkout the suite was launched from: one live run left
+  `scratch-add/{add.js,add.test.js}` in a worktree root, and `grep -rl 'TODO' /`
+  scanned the host. Episodes now open their workspace with no host plane at all
+  and work in the workspace filesystem the harness measures; the harness refuses
+  a runtime carrying a host executor before any model is driven. Interactive
+  CLI use is unchanged.
 - `/takes` on a local agent no longer claims a continuation was queued when it
   was not. The local pick reported `continuationQueued: true` the moment it
   dispatched the follow-up, without waiting to learn whether delivery landed —

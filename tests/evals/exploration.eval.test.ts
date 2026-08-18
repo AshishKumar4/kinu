@@ -46,6 +46,7 @@ import {
 import { createWorkspace } from '../../packages/core/src/identity/index.js';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
 import { makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
+import { requireSandboxedExecutors } from './harness.js';
 import {
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend,
   scoreExploration, scoreSettleVisibility, UNCONFIGURED_LLM,
@@ -119,7 +120,12 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
       llm: LLM_CONFIG,
     });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG }));
+    // `hostRoot: null` for the reason harness.ts states at length: an episode
+    // reaches every registered executor, and the default `laptop` plane is
+    // rooted at the repo this suite was launched from. Asserted rather than
+    // trusted, because this suite spends real money to find out.
+    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
+    requireSandboxedExecutors('exploration-eval', rt);
     model = liveChatModel(LLM_CONFIG);
 
     // Only `mcts` is registered, so `settle` has exactly one destination and a

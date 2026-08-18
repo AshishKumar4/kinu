@@ -6,7 +6,7 @@
  * and honest degradation without git.
  */
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs';
 import { git } from '@proteus/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -254,6 +254,70 @@ describe('createHostCheckpoints', () => {
       rmSync(work, { recursive: true, force: true });
       expect(engine.plan(work, id!)).rejects.toThrow('working directory');
       expect(await engine.status()).toEqual({ available: true }); // git is still here
+    } finally { cleanup(); }
+  });
+
+  test('a path it may not read is skipped and named in the record, not a failed checkpoint', async () => {
+    // The live failure verbatim: `checkpoint staging failed: warning: could not
+    // open directory 'systemd-private-…'`, which accounted for 3 of 4
+    // `execute_tools` failures in one run. A directory owned by someone else is
+    // not a failed checkpoint, and refusing to snapshot is not a reason to
+    // refuse the agent's write.
+    const { work, engine, cleanup } = setup();
+    const foreign = join(work, 'systemd-private-9f2c');
+    try {
+      writeFileSync(join(work, 'a.txt'), 'mine');
+      // Sorts AFTER both unreadable entries, so a staging pass that aborts on
+      // the first refusal leaves it out of the snapshot — a checkpoint missing
+      // files restores a tree the user never had.
+      writeFileSync(join(work, 'zz.txt'), 'also mine');
+      mkdirSync(foreign, { recursive: true });
+      writeFileSync(join(foreign, 'inside.txt'), 'not mine');
+      writeFileSync(join(work, 'locked.txt'), 'not mine either');
+      chmodSync(join(work, 'locked.txt'), 0o000);
+      chmodSync(foreign, 0o000);
+
+      engine.beginTurn({ turnId: 't', sessionId: 's' });
+      const id = await engine.ensureCheckpoint(work, 'file write');
+      expect(id).toBeTruthy();
+
+      // RECORDED, not swallowed: the snapshot says which paths are missing from
+      // it, so an incomplete restore is explainable rather than surprising.
+      const [entry] = await engine.list();
+      expect(entry!.reason).toBe('file write [skipped 2 unreadable: locked.txt systemd-private-9f2c]');
+
+      // And the readable tree is WHOLE — including the file that sorts after the
+      // refusals, which is what an aborted staging pass would have dropped.
+      writeFileSync(join(work, 'a.txt'), 'clobbered');
+      rmSync(join(work, 'zz.txt'));
+      await engine.restore(work, id!);
+      expect(readFileSync(join(work, 'a.txt'), 'utf8')).toBe('mine');
+      expect(readFileSync(join(work, 'zz.txt'), 'utf8')).toBe('also mine');
+
+      // The unreadable paths are untouched by the restore: absent from the tree
+      // means absent from the restore's business, never "delete it".
+      expect(existsSync(join(work, 'locked.txt'))).toBe(true);
+      expect(existsSync(foreign)).toBe(true);
+    } finally {
+      chmodSync(foreign, 0o700);
+      cleanup();
+    }
+  });
+
+  test('the shared temp root is not a work tree, so it is never snapshotted', async () => {
+    // `workdirForPath('/tmp/scratch.js')` finds no project marker above it and
+    // answers `/tmp` — 12,017 entries on this box, belonging to every process
+    // and user on the machine. Tolerating the unreadable ones (above) is what
+    // makes staging that tree SUCCEED, so this is the difference between a
+    // skipped snapshot and copying the box's scratch into the agent's store.
+    const { engine, cleanup } = setup();
+    try {
+      expect(engine.workdirForPath(join(tmpdir(), 'scratch.js'))).toBe(tmpdir());
+
+      engine.beginTurn({ turnId: 't', sessionId: 's' });
+      expect(await engine.ensureCheckpoint(tmpdir(), 'file write')).toBeNull();
+      expect(await engine.ensureCheckpoint('/var/tmp', 'file write')).toBeNull();
+      expect(await engine.list()).toEqual([]);
     } finally { cleanup(); }
   });
 

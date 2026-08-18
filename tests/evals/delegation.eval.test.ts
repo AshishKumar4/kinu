@@ -47,6 +47,7 @@ import { createWorkspace } from '../../packages/core/src/identity/index.js';
 import { LocalAgentSession } from '../../packages/cli-backend/src/local-session.js';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
 import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
+import { requireSandboxedExecutors } from './harness.js';
 import {
   liveChatModel, liveModelTarget, reportLiveModelSpend, scoreDelegation, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
@@ -109,7 +110,12 @@ describe('Delegation evals — conversion over eligible turns', () => {
         llm: LLM_CONFIG,
       });
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-      const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM_CONFIG });
+      // `hostRoot: null` for the reason harness.ts states at length: an episode
+      // reaches every registered executor, and the default `laptop` plane is
+      // rooted at the repo this suite was launched from. Asserted rather than
+      // trusted, because this suite spends real money to find out.
+      const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM_CONFIG, hostRoot: null });
+      requireSandboxedExecutors(`delegation-${String(index)}`, rt);
       const session = new LocalAgentSession({
         rt, db, model, onEvent: () => {}, noAutoEvolve: true,
       });

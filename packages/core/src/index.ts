@@ -845,6 +845,7 @@ export {
 export {
   CHECKPOINT_REF_PREFIX, CHECKPOINT_WORKDIR_MARKER, CHECKPOINT_EXCLUDES,
   checkpointSubject, parseCheckpointSubject, checkpointRefTimestampMs,
+  checkpointReason, diagnoseStaging, type StagingDiagnosis,
 } from './checkpoints/format.js';
 
 // Vectorize-backed semantic memory (Workers AI embeddings + hybrid retrieval)

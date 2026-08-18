@@ -301,8 +301,16 @@ afterAll(() => {
     },
     transcripts: TRANSCRIPTS,
   };
-  const out = process.env.PROTEUS_EVAL_RECORD
-    ?? join(REPO_ROOT, 'tests/eval/runs', `${record.runId}.json`);
+  // Beside the stores it cites, not in the repo. The default used to be
+  // `tests/eval/runs/<runId>.json`, a TRACKED directory, so every local run —
+  // including a scripted-model one that costs nothing and proves nothing —
+  // dirtied the working tree; one such record reached the primary checkout and
+  // blocked a deploy, because `deploy.sh` correctly refuses a dirty tree.
+  // `tests/eval/runs/` holds PUBLISHED records (`flash-a`, `flash-b` — the
+  // baseline `eval-run.ts` reads), committed deliberately by whoever publishes
+  // the number. A run that nobody publishes leaves nothing behind but its own
+  // artifact directory, under `bench-artifacts/` retention.
+  const out = process.env.PROTEUS_EVAL_RECORD ?? join(TRANSCRIPTS, 'run-record.json');
   writeRunRecord(out, record);
   console.log(`\n${formatRunRecord(record)}\n\nrecord: ${out}\n`);
 

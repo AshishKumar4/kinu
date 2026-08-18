@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { createRequire } from 'node:module';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHostCheckpoints } from '../src/checkpoints.js';
@@ -145,5 +145,44 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
       expect(readFileSync(join(a!, 'PROTEUS_WORKDIR'), 'utf8').trim()).toMatch(/project(-b)?$/);
       expect(readFileSync(join(b!, 'PROTEUS_WORKDIR'), 'utf8').trim()).toMatch(/project(-b)?$/);
     } finally { cleanup(); }
+  });
+
+  test('both engines skip a path they may not read and record it identically', async () => {
+    // The record is what a reader sees in /undo, so "one format regardless of
+    // which side wrote it" has to cover an incomplete snapshot too — otherwise
+    // the two engines describe the same tree differently.
+    const { root, work, host, device, cleanup } = setup();
+    const workB = join(root, 'project-b');
+    const foreign = [join(work, 'systemd-private-1'), join(workB, 'systemd-private-1')];
+    try {
+      mkdirSync(workB);
+      for (const [index, dir] of [work, workB].entries()) {
+        writeFileSync(join(dir, 'mine.txt'), 'kept');
+        mkdirSync(foreign[index]!);
+        writeFileSync(join(foreign[index]!, 'theirs.txt'), 'not mine');
+        chmodSync(foreign[index]!, 0o000);
+      }
+
+      host.beginTurn({ turnId: 't', sessionId: 's' });
+      const hostId = await host.ensureCheckpoint(work, 'file write');
+      const deviceId = device.ensure({ agent: AGENT, dir: workB, turnId: 't', sessionId: 's' }, undefined);
+      expect(hostId).toBeTruthy();
+      expect(deviceId).toBeTruthy();
+
+      const byId = new Map(device.list(AGENT).map((e) => [e.id, e.reason]));
+      expect(byId.get(hostId!)).toBe('file write [skipped 1 unreadable: systemd-private-1]');
+      // The daemon's own default reason, with the same note appended by the
+      // same encoding.
+      expect(byId.get(deviceId!)).toBe('pre-mutation [skipped 1 unreadable: systemd-private-1]');
+
+      // And each snapshot still holds the readable file, read back through the
+      // OTHER engine.
+      writeFileSync(join(work, 'mine.txt'), 'damaged');
+      expect((await host.plan(work, hostId!)).files).toEqual([{ path: 'mine.txt', kind: 'modify' }]);
+      expect(device.plan(AGENT, workB, deviceId!).files).toEqual([]);
+    } finally {
+      for (const dir of foreign) chmodSync(dir, 0o700);
+      cleanup();
+    }
   });
 });

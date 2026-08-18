@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn, spawnSync, execFileSync } = require('node:child_process');
 
 const CONFIG_PATH = path.join(os.homedir(), '.proteus', 'device.json');
 
@@ -67,6 +67,53 @@ const CHECKPOINT_EXCLUDES = [
   '.DS_Store', 'Thumbs.db', '*.log',
 ];
 
+// Shared temp roots, pinned alongside the TS engine's copy
+// (cli-backend/src/checkpoints.ts): a bare `/tmp/x.js` resolves to `/tmp` for
+// want of a project marker, and that is not a work tree.
+const UNSNAPSHOTTABLE = new Set([os.tmpdir(), '/tmp', '/var/tmp'].map((dir) => path.resolve(dir)));
+
+// What `git add` says about a path it could not READ, pinned as literals —
+// core/src/checkpoints/format.ts holds the same four patterns and the same
+// reason encoding. A path this process may not read (a private temp directory,
+// another user's tree) is not a failed checkpoint: it is a path the snapshot
+// does not cover, recorded in the reason so an incomplete restore is
+// explainable. `--ignore-errors` is what keeps the rest of the tree staged;
+// without it git aborts at the first refusal and everything after it is
+// silently missing. `LC_ALL=C` below is what makes these strings the ones git
+// emits.
+const UNREADABLE_DIR = /^warning: could not open directory '(.+?)\/?': Permission denied$/;
+const UNREADABLE_FILE = /^error: open\("(.+)"\): Permission denied$/;
+const UNINDEXED_FILE = /^error: unable to index file '(.+?)'$/;
+const ADD_FAILED = /^fatal: adding files failed$/;
+const REASON_UNREADABLE_LIMIT = 3;
+
+function diagnoseStaging(stderr) {
+  const lines = String(stderr || '').split('\n').map((line) => line.trim()).filter(Boolean);
+  const unreadable = new Set();
+  for (const line of lines) {
+    const denied = UNREADABLE_DIR.exec(line) || UNREADABLE_FILE.exec(line);
+    if (denied) unreadable.add(denied[1]);
+  }
+  const explained = (line) => {
+    if (UNREADABLE_DIR.test(line) || UNREADABLE_FILE.test(line)) return true;
+    const unindexed = UNINDEXED_FILE.exec(line);
+    if (unindexed) return unreadable.has(unindexed[1]);
+    return ADD_FAILED.test(line) && unreadable.size > 0;
+  };
+  return {
+    unreadable: [...unreadable].sort(),
+    unexplained: lines.filter((line) => !explained(line)),
+  };
+}
+
+function reasonWithSkips(reason, unreadable) {
+  if (unreadable.length === 0) return reason;
+  const shown = unreadable.slice(0, REASON_UNREADABLE_LIMIT);
+  const rest = unreadable.length - shown.length;
+  const more = rest > 0 ? ` +${rest} more` : '';
+  return `${reason} [skipped ${unreadable.length} unreadable: ${shown.join(' ')}${more}]`;
+}
+
 function createCheckpoints(opts = {}) {
   const base = opts.base || path.join(os.homedir(), '.proteus', 'checkpoints');
   const keep = Math.max(1, opts.keep || 50);
@@ -88,6 +135,9 @@ function createCheckpoints(opts = {}) {
     env.GIT_AUTHOR_EMAIL = 'checkpoints@proteus.local';
     env.GIT_COMMITTER_NAME = 'Proteus Checkpoint';
     env.GIT_COMMITTER_EMAIL = 'checkpoints@proteus.local';
+    // So `diagnoseStaging` parses git's own words rather than a translation of
+    // them: a localized warning would read as an unexplained staging failure.
+    env.LC_ALL = 'C';
     return env;
   };
   const storeEnv = (gitDir, workdir) => ({ ...isolatedEnv(), GIT_DIR: gitDir, GIT_WORK_TREE: workdir });
@@ -153,7 +203,12 @@ function createCheckpoints(opts = {}) {
 
   const snapshotSkipped = (dir) => {
     const abs = path.resolve(dir);
+    // Not a work tree, so a whole-tree snapshot of one is never what the caller
+    // meant: the filesystem root, the user's home, and the SHARED temp roots —
+    // `workdirForPath` resolves a bare `/tmp/x.js` to `/tmp`, which holds every
+    // process's and user's scratch, none of it this agent's to copy.
     if (abs === path.parse(abs).root || abs === path.resolve(os.homedir())) return true;
+    if (UNSNAPSHOTTABLE.has(abs)) return true;
     try { return !fs.statSync(abs).isDirectory(); } catch { return true; }
   };
 
@@ -177,10 +232,36 @@ function createCheckpoints(opts = {}) {
     return m ? Number(m[1]) : 0;
   };
 
+  /** `git add -A`, keeping what it could not read instead of failing over it.
+   *  spawnSync rather than the `git` helper above because stderr is the answer
+   *  here, and it arrives on a clean exit too (an unreadable DIRECTORY is only
+   *  a warning). */
+  const stageAll = (workdir, env) => {
+    if (!fs.existsSync(workdir)) throw new Error(`working directory not found: ${workdir}`);
+    const run = spawnSync(gitBin, ['add', '-A', '--ignore-errors'], {
+      cwd: workdir, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30_000, maxBuffer: 32 * 1024 * 1024,
+    });
+    if (run.error && run.error.code === 'ENOENT') {
+      gitAvailable = false;
+      throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT, { cause: run.error });
+    }
+    gitAvailable = true;
+    if (run.error) throw new Error(`checkpoint staging failed: ${run.error.message}`, { cause: run.error });
+    const stderr = String(run.stderr || '');
+    const diagnosis = diagnoseStaging(stderr);
+    // Non-zero explained entirely by paths it may not read is not a failure;
+    // anything else is, and a truncated tree must not be called a checkpoint.
+    if (diagnosis.unexplained.length > 0 || (run.status !== 0 && diagnosis.unreadable.length === 0)) {
+      throw new Error(`checkpoint staging failed: ${stderr.trim()}`);
+    }
+    return diagnosis.unreadable;
+  };
+
   const stageCurrent = (gitDir, workdir) => {
     const env = storeEnv(gitDir, workdir);
-    git(['add', '-A'], workdir, env);
-    return git(['write-tree'], workdir, env).trim();
+    const unreadable = stageAll(workdir, env);
+    return { tree: git(['write-tree'], workdir, env).trim(), unreadable };
   };
 
   const snapshot = (agent, dir, turn, reason) => {
@@ -189,7 +270,8 @@ function createCheckpoints(opts = {}) {
     const gitDir = storeDirFor(agent, abs);
     initStore(gitDir, abs);
     const env = storeEnv(gitDir, abs);
-    const tree = stageCurrent(gitDir, abs);
+    const staged = stageCurrent(gitDir, abs);
+    const tree = staged.tree;
 
     const refs = storeRefs(gitDir, abs);
     const latest = refs[0];
@@ -197,7 +279,8 @@ function createCheckpoints(opts = {}) {
       if (git(['rev-parse', `${latest.id}^{tree}`], abs, env).trim() === tree) return latest.id;
     }
 
-    const sha = git(['commit-tree', tree, '-m', subjectFor(turn, reason)], abs, env).trim();
+    const subject = subjectFor(turn, reasonWithSkips(reason, staged.unreadable));
+    const sha = git(['commit-tree', tree, '-m', subject], abs, env).trim();
     const refName = `${REF_PREFIX}/${String(Date.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
     git(['update-ref', refName, sha], abs, env);
 
@@ -227,8 +310,9 @@ function createCheckpoints(opts = {}) {
   /** diff current staged state → checkpoint tree, in restore direction. */
   const diffToCheckpoint = (gitDir, abs, id) => {
     const env = storeEnv(gitDir, abs);
-    const currentTree = stageCurrent(gitDir, abs);
-    const out = git(['diff-tree', '-r', '--name-status', currentTree, `${id}^{tree}`], abs, env);
+    // An unreadable path is in neither tree, so no change names it.
+    const current = stageCurrent(gitDir, abs);
+    const out = git(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, env);
     const files = [];
     for (const line of out.split('\n')) {
       if (!line) continue;

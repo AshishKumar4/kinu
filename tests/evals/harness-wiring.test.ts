@@ -24,7 +24,7 @@
  */
 import { describe, test, expect, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { LanguageModel } from 'ai';
@@ -32,18 +32,21 @@ import * as v from 'valibot';
 
 import type { AgentRuntime, EvalCase, LLMProviderConfig, RunEvent, SeekCursor } from '../../packages/core/src/index.js';
 import {
-  censusToolFailures, DefaultExecutionRouter, listRuns, RunEventRecorder,
+  censusToolFailures, classifyToolFailure, DefaultExecutionRouter, initWorkspaceSchema,
+  listRuns, RunEventRecorder,
 } from '../../packages/core/src/index.js';
 import { DIGEST_LIMIT, JsonObjectSchema } from '../../packages/core/src/utils/json.js';
 import { createWorkspace } from '../../packages/core/src/identity/index.js';
-import { makeSql } from '../../packages/cli-backend/src/runtime.js';
+import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
+import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
 import {
   HARD_TASKS, REFERENCE_FILE, SOLUTION_FILE, hardTaskCases, type EvalArmState,
 } from '@proteus/test-utils';
 
 import {
   DegenerateRunError, DegenerateRuntimeError, requireExecutorSurface,
-  runBehaviourTask, type BehaviourScoreJson,
+  requireSandboxedExecutors, runBehaviourTask, UnsandboxedRuntimeError,
+  type BehaviourScoreJson,
 } from './harness.js';
 
 const LLM: LLMProviderConfig = {
@@ -249,6 +252,83 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     // And it is NOT filed as an inert agent — that bucket means the agent did
     // nothing, not that the harness was broken (behaviour.eval.ts:281).
     expect(new DegenerateRuntimeError('t', 'r')).not.toBeInstanceOf(DegenerateRunError);
+  }, 30_000);
+});
+
+/**
+ * EPISODE ISOLATION — an episode may not reach the developer's own filesystem.
+ *
+ * A live run left `scratch-add/{add.js,add.test.js}` in a worktree ROOT and two
+ * committed stray files (`report.txt`, `todos.txt`) in the repo root, and
+ * `gate:typecheck-coverage` refused the commit that swept them up. The cause is
+ * not the corpus: `createCLIRuntime` registered a `laptop` ExecutorProvider
+ * rooted at `process.cwd()` (cli-backend/src/runtime.ts:380 before this change),
+ * so every episode the harness opened could write anywhere the developer can.
+ *
+ * WHY THE PLANE HAS TO BE ABSENT RATHER THAN RE-ROOTED. `laptop.writeFile`
+ * resolves its argument with `resolve(cwd, path)`, which passes an ABSOLUTE path
+ * straight through, and `laptop.exec` runs a real shell that can `cd` anywhere.
+ * Rooting that provider at the episode's temp directory would contain neither.
+ * Containment on the host plane needs a sandbox the CLI does not have, so an
+ * eval episode gets no host plane at all and works in the workspace filesystem
+ * — which is what the harness header already says it measures.
+ */
+describe('episode isolation — no plane outside the episode sandbox', () => {
+  test('an episode that tries to write on the host writes nothing and is refused', async () => {
+    // An ABSOLUTE path under the developer's cwd, which is what escaped. Cleaned
+    // up front so a leftover from a previous red run cannot pass this.
+    const probe = join(process.cwd(), '.eval-host-escape-probe');
+    rmSync(probe, { recursive: true, force: true });
+
+    await run('wiring-isolation', [
+      { tool: 'execute_tools', input: { code:
+        `await laptop.writeFile(${JSON.stringify(join(probe, 'add.js'))}, "escaped"); return "wrote";` } },
+      { tool: 'execute_tools', input: { code:
+        `return await laptop.exec(${JSON.stringify(`mkdir -p ${probe} && echo escaped > ${join(probe, 'add.test.js')}`)});` } },
+    ]);
+
+    // The assertion the stray files would have failed.
+    expect(existsSync(probe)).toBe(false);
+
+    // And it failed for the RIGHT reason: the episode really issued both calls
+    // and both were refused, rather than the fixture never reaching the host.
+    const db = opened[opened.length - 1];
+    if (!db) throw new Error('the harness opened no store');
+    const rows = toolCallRows(db).filter((r) => r.name === 'execute_tools');
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      // An absent binding comes back as a result the tool called an error, not
+      // as a thrown call — the `returned_error` class named in
+      // read-models/tool-failures.ts:230-232. Asserting the class rather than a
+      // string keeps this from passing on a call that never ran.
+      expect(classifyToolFailure(row)?.reason).toBe('returned_error');
+      expect(JSON.stringify(row.result)).toContain('laptop');
+    }
+  }, 30_000);
+
+  test('the harness REFUSES a runtime carrying a host plane, before spending anything', async () => {
+    const dbPath = join(dir, 'unsandboxed.db');
+    const db = new Database(dbPath);
+    opened.push(db);
+    await createWorkspace(db, { name: 'unsandboxed', purpose: 'host plane probe', llm: LLM });
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+
+    // The default — what every interactive CLI surface wants and what the
+    // harness used to get by omission. `listExecutors` is the read that carries
+    // `kind`; the codemode surface drops it (execution/router.ts:38-52).
+    const hosted = await openWorkspaceCLI(db, dbPath, { llm: LLM });
+    expect(hosted.rt.executionRouter?.listExecutors().map((e) => e.kind)).toContain('laptop');
+    expect(() => requireSandboxedExecutors('probe', hosted.rt)).toThrow(UnsandboxedRuntimeError);
+
+    // What the harness asks for, and what the cases above prove still executes:
+    // the workspace plane, and no host plane.
+    const sandboxed = await openWorkspaceCLI(db, dbPath, { llm: LLM, hostRoot: null });
+    expect(sandboxed.rt.executionRouter?.listExecutors().map((e) => e.kind)).toEqual(['workspace']);
+    expect(sandboxed.rt.executionRouter?.getProviders().map((p) => p.name)).toEqual(['workspace']);
+    expect(() => requireSandboxedExecutors('probe', sandboxed.rt)).not.toThrow();
+
+    // A misconfigured harness is not an inert agent (behaviour.eval.ts:347).
+    expect(new UnsandboxedRuntimeError('t', 'laptop')).not.toBeInstanceOf(DegenerateRunError);
   }, 30_000);
 });
 
