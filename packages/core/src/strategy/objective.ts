@@ -310,7 +310,7 @@ export interface FloorBreach {
 }
 
 /**
- * Whether the records store will accept a write for an objective.
+ * Whether a PUBLICATION is permitted for an objective.
  *
  * A breach voids the FLOOR's guarantee, not the search: the run CONTINUES,
  * because the verifier is still scoring candidates and halting would discard
@@ -322,6 +322,14 @@ export interface FloorBreach {
  * Stated as a REACHABILITY property rather than a guard, which is what makes it
  * checkable: a write requires `'open'`, so a breach makes publication unreachable.
  * That is Lean invariant S7 in docs/EXPLORATION-SPEC.md §10.1.
+ *
+ * **This governs SEVERAL surfaces, not this file's records store.** It lives here
+ * because the records store is where the seal was first stated, and stating it over
+ * one table was a hole: §5.3 routed `carry:'artifacts'` through
+ * `experience_library` and called that publication "separate and unchanged", so a
+ * breached run could publish cross-workspace while the leaderboard was sealed. The
+ * governed set is {@link PUBLICATION_SURFACES} and the gate is
+ * {@link admitsPublication} — do not re-derive "it is about the table".
  */
 export type PublicationState =
   | { readonly kind: 'open' }
@@ -336,6 +344,155 @@ export type PublicationState =
        *  lucky measurement restore a guarantee nobody re-proved. */
       readonly clearedBy: FloorRederivation | null;
     };
+
+/**
+ * Every surface through which a search's output can reach a run other than the one
+ * that produced it. The seal is stated over THIS SET, not over one table.
+ *
+ * A write is a PUBLICATION when it makes a candidate's ARTIFACT, or a VALUE
+ * measured against the sealed objective, available to a run other than the one that
+ * produced it. Both halves are load-bearing: the artifact is what gets reused and
+ * the value is what gets quoted.
+ *
+ * Stating the seal over one table made it a true theorem about a false property —
+ * the Lean statement quantified over records-store actions and the laundering
+ * channel was not one of them. The members below come from a writer census rather
+ * than from the spec's own inventory, which is why there are six and not one:
+ *
+ * - `records` — §5.2/§5.3's one new table; {@link ExplorationRecord} is its row.
+ *   No writer exists yet.
+ * - `experience_library` — `experience/library.ts` `publish()`. CROSS-WORKSPACE,
+ *   the widest blast radius in the set, and `carry:'artifacts'` routes here.
+ * - `craft` — `craft/discovery.ts` `maybeStoreCraftedTool`, called from
+ *   `mcts/convergence.ts` and admitted by `winner.value > craftExtractionThreshold`.
+ *   Its admission gate is the very value a breach makes suspect.
+ * - `memory` — `memory/MEMORY.md` plus `lessons` and `agent_facts`. Vector-indexed,
+ *   so it re-enters later turns' context rather than waiting to be read.
+ * - `task_history` — `recordTaskOutcome` in `mcts/convergence.ts`. Feeds scaffold
+ *   error-rate monitoring, so a laundered score steers evolution.
+ * - `scaffold_versions` — `scaffold/modify.ts`, reachable when the artifact IS a
+ *   prompt or scaffold (`unit:'generator'`).
+ *
+ * `craft`, and `memory`'s lessons and facts, are `EXPERIENCE_KINDS` members
+ * (`experience/types.ts`), so each is additionally a TWO-HOP egress into
+ * `experience_library` via `experience/publishable.ts`. Sealing the library alone
+ * would leave the winner's own code walking out through `crafted_tools`.
+ *
+ * Adding a publication surface without adding it here is a specification
+ * violation, and `contract-publication-seal.test.ts` holds both directions: a
+ * writer census against this set, and set equality against §4.4's own table.
+ */
+export const PUBLICATION_SURFACES = [
+  'records', 'experience_library', 'craft', 'memory', 'task_history',
+  'scaffold_versions',
+] as const;
+
+export type PublicationSurface = (typeof PUBLICATION_SURFACES)[number];
+
+/**
+ * Why a publication was refused, carrying the breach so the caller can disclose it.
+ *
+ * A refusal is a VALUE rather than a throw, because the caller's next move is to
+ * report the suppression (§4.4) and a thrown seal would be indistinguishable from a
+ * store that broke.
+ */
+export type PublicationVerdict =
+  | { readonly kind: 'admitted' }
+  | {
+      readonly kind: 'refused';
+      readonly surface: PublicationSurface;
+      readonly breach: FloorBreach;
+    };
+
+/**
+ * The gate. Total over {@link PUBLICATION_SURFACES} on purpose: the seal admits no
+ * per-surface exception, so the surface is an argument the caller must NAME rather
+ * than a discriminator this function reads. A new writer therefore cannot reach a
+ * store without choosing a member of the enumeration.
+ *
+ * A sealed state with a recorded {@link FloorRederivation} admits again — that is
+ * §4.4's retroactive publication, and it is the one edge out of a seal. Tested with
+ * `!== null` and never for falsiness: a re-derivation is present or absent, and
+ * absent is not the same claim as a re-derivation that adjudicated nothing.
+ */
+export function admitsPublication(
+  state: PublicationState, surface: PublicationSurface,
+): PublicationVerdict {
+  if (state.kind === 'open') return { kind: 'admitted' };
+  if (state.clearedBy !== null) return { kind: 'admitted' };
+  return { kind: 'refused', surface, breach: state.breach };
+}
+
+/** The `carry` values whose whole purpose is publication. `'none'` and
+ *  `'reflections'` write nothing a later run reads, so a seal cannot void them —
+ *  which is why the suppression disclosure is stated over this subset rather than
+ *  over the axis. A containment test pins it against `SWARM_CARRIES`. */
+export const PUBLISHING_CARRIES = ['elites', 'artifacts'] as const;
+
+export type PublishingCarry = (typeof PUBLISHING_CARRIES)[number];
+
+/**
+ * What a settle report MUST state when the seal voided the run's `carry`.
+ *
+ * Nine of the 27 matrix techniques use `carry:'elites'` and two use `'artifacts'`.
+ * Under a seal both become a no-op and the run spends its whole remaining budget
+ * carrying nothing. **The run still does not halt** — the calling turn is the
+ * primary consumer and the verifier still works — so silence is the defect, not the
+ * spend.
+ *
+ * Disclosure as DATA, never a rendered string, for §3.5's reason: every consumer
+ * reads fields and nothing downstream couples to how it is rendered.
+ */
+export interface CarrySuppression {
+  /** The configured value that was voided. Naming it beats "publication stopped",
+   *  which tells a reader nothing about what the run was trying to do. */
+  readonly carry: PublishingCarry;
+  readonly breach: FloorBreach;
+  /** Every enumerated surface the carry would have written and did not. */
+  readonly refused: readonly PublicationSurface[];
+  /**
+   * DISTINCT cells whose best the run reached and could not record. Counted once
+   * per cell, however many times that cell's best moved and however many surfaces
+   * refused it.
+   *
+   * The load-bearing field, and the reason is §5.2's monotone invariant: a sealed
+   * run that found a better elite and could not write it means the NEXT run's carry
+   * starts from a worse elite than the search actually reached. The seal degrades
+   * FUTURE runs, not only this record, and that is invisible without a number.
+   *
+   * **The cardinality follows from what the number is FOR, and it is deliberately
+   * not the count of refused publications.** Future damage is one fact per cell —
+   * the next run starts from a worse best in cell C, or it does not — so a cell
+   * whose best improved three times mid-run still costs the next run exactly one
+   * thing, and counting three would overstate the harm. Lean's
+   * `suppression_counts_every_refusal` counts refused publication ATTEMPTS instead,
+   * which is the right quantity for proving the disclosure cannot under-report and
+   * the wrong one for reporting damage. The two numbers differ on purpose.
+   */
+  readonly suppressedCells: number;
+}
+
+/**
+ * The disclosure, or `null` when the carry was not suppressed.
+ *
+ * `null` is "not suppressed". It is NOT the same claim as a suppression of zero
+ * cells: a sealed run that reached no new best still had its carry axis voided, and
+ * the report must say so.
+ */
+export function carrySuppression(
+  state: PublicationState, carry: PublishingCarry, suppressedCells: number,
+): CarrySuppression | null {
+  if (state.kind === 'open') return null;
+  if (state.clearedBy !== null) return null;
+  return {
+    carry,
+    breach: state.breach,
+    refused: PUBLICATION_SURFACES.filter(
+      (surface) => admitsPublication(state, surface).kind === 'refused',
+    ),
+    suppressedCells,
+  };
+}
 
 /**
  * A human's replacement for a breached floor.
