@@ -4,7 +4,7 @@
  * Architecture reference: docs/MCTS.md — "search_nodes Table"
  *
  * BUG-1 FIX: NodeData.value defaults to 0, NOT 0.5.
- * Formal spec: MCTS/Backpropagation.lean — initial_valid, init_values_equal_at_first_step.
+ * Formal spec: MCTS/Backpropagation.lean — initial_in_range, init_values_equal_at_first_step.
  */
 
 import type { ModelCallSink } from '../events/model-call';

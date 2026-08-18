@@ -1,6 +1,7 @@
 /**
  * Unit tests: CraftStore consolidation + BUG-2 non-empty guard.
- * Formal spec: CraftStore.lean — all_below_gives_empty, consolidation_requires_nonempty_guard.
+ * Formal spec: Evolution/FullCraftLifecycle.lean — consolidation_never_empties,
+ * consolidation_nonincreasing, below_threshold_filtered.
  */
 
 import { describe, test, expect } from 'bun:test';
