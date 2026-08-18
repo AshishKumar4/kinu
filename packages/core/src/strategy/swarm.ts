@@ -45,8 +45,21 @@ export type SwarmExpand = (typeof SWARM_EXPANDS)[number];
  *
  * This is where decorrelation lives, and it is the ONLY place it lives. Varying
  * models is not decorrelation — see {@link SwarmConfig.models}.
+ *
+ * `blind` — a child is expanded WITHOUT sight of its siblings' proposals. Named
+ * `blind` and not `fresh` because `fresh` was measured unusable: 0/6 on a reverse
+ * probe, read as RECENCY by both vendors shown the bare name, and 4 of its 10
+ * in-context uses described the `angles` mechanism instead **with the gloss in front of
+ * the model**. Three independent instruments, six model families
+ * (`AxisErgonomics`, 245 answered calls). It is the only axis value the study found
+ * unusable and the only rename argued from measurement rather than taste.
+ *
+ * `angles` STAYS despite scoring 2/6 on the same bare-name probe, because it was
+ * correct in all 29 of its in-context uses — and `carry` stays for the same reason
+ * (23/24 with the mechanism present). A name is only ever read beside the question it
+ * answers, so a bare-probe failure is a documentation constraint and not a rename.
  */
-export const SWARM_DECORRELATES = ['none', 'angles', 'fresh'] as const;
+export const SWARM_DECORRELATES = ['none', 'angles', 'blind'] as const;
 export type SwarmDecorrelate = (typeof SWARM_DECORRELATES)[number];
 
 /** How a node is valued. */
@@ -74,6 +87,63 @@ export type SwarmCarry = (typeof SWARM_CARRIES)[number];
 export type SwarmSettle = 'best' | 'archive' | 'front' | 'merge';
 
 /**
+ * An axis value together with the parameters that belong to THAT value.
+ *
+ * WHY TAGGED RATHER THAN FREE FIELDS BESIDE THE AXIS. `judgeSamples` was a required
+ * field on the config, which made §6.3's preset table — normatively
+ * `resolve(preset) -> SwarmConfig` — **unconstructible for all five rows**, because
+ * four presets do not score by judge and have nothing to put there. Proven by the
+ * compiler, not by reading (`FixtureZero`, TS2741).
+ *
+ * The three ways out were not equal, and only one makes the invalid state
+ * UNREPRESENTABLE rather than merely refused:
+ *  - optional `judgeSamples?` — then §6.5's refusal is stated over an ABSENT input,
+ *    and absent-is-not-zero is this document's founding rule. It manufactures the
+ *    very shape the audit just removed: a gate that cannot see its own input.
+ *  - `judgeSamples` inheriting the live default of 3 — then four of five presets ship
+ *    below the marginalisation bar and the record cannot say whether 3 was chosen or
+ *    inherited, which is the absent-default defect one level up.
+ *  - TAGGING it onto `judge` — the parameter cannot exist unless the value that owns
+ *    it does, so there is no absent case to reason about at all.
+ *
+ * This is the same move as {@link Measurement} having no `fault` member and as
+ * `subordinates/depth.ts` making a child's depth unstateable: the number a config
+ * would have to lie about is one it never supplies.
+ */
+export type SwarmScoreSetting =
+  | { readonly kind: 'verify' }
+  | { readonly kind: 'agree' }
+  | { readonly kind: 'novelty' }
+  | { readonly kind: 'none' }
+  | {
+      readonly kind: 'judge';
+      /** Ensemble size. REQUIRED here and unrepresentable elsewhere, so §6.5's
+       *  marginalisation refusal always has its input. */
+      readonly samples: number;
+    };
+
+export type SwarmCarrySetting =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'elites' }
+  | { readonly kind: 'reflections'; readonly threshold: number }
+  | { readonly kind: 'artifacts'; readonly threshold: number };
+
+/**
+ * The rule the two types above instantiate, and its ONE honest exception.
+ *
+ * **Where a parameter belongs to exactly one axis value, it lives ON that value.**
+ * Applied exhaustively: `samples` to `score:'judge'`, and the admission thresholds to
+ * `carry:'reflections'`/`'artifacts'`.
+ *
+ * **Where a parameter belongs to a REGION of values it cannot be tagged, and then its
+ * applicability condition must be CHECKED rather than assumed.** `pruneThreshold` and
+ * `minVisitsForPrune` span every tree selector; `explorationWeight` is `uct`-only but
+ * sits beside them so the pruning region reads as one group. Stating the exception is
+ * the point — a rule applied to one axis and quietly dropped for another is the
+ * "predicate stated but not exhaustively applied" defect §6.1 exists to close.
+ */
+
+/**
  * The resolved configuration a run actually executes.
  *
  * Validity is checked HERE, on the resolved composition, never on the preset name
@@ -85,29 +155,34 @@ export interface SwarmConfig {
   readonly observe: SwarmObserve;
   readonly expand: SwarmExpand;
   readonly decorrelate: SwarmDecorrelate;
-  readonly score: SwarmScore;
-  readonly advance: SwarmAdvance;
-  readonly carry: SwarmCarry;
   /**
-   * Judge ensemble size, read by the validity predicate rather than by taste.
+   * How a node is valued. A TAGGED value rather than a bare string, because
+   * `score:'judge'` carries a parameter and the other four do not.
    *
-   * A judged scalar driving a tree selector must be MARGINALISED. Koh et al.
-   * 2407.01476 Table 4 (§5.1) holds NODE EXPANSIONS fixed at c=20,d=5,b=5 across all
-   * five search rows and varies only the value function: strong judge with no
-   * self-consistency 28.5%, a WEAKER LLaVA-34B judge marginalised to SC(20) 30.0%,
-   * strong judge at SC(5) 32.5%, at SC(20) 37.0%, ground-truth reward 43.5%.
-   *
-   * The like-for-like comparison is inside those rows: an unmarginalised strong judge
-   * is beaten by a marginalised weak one (28.5 vs 30.0), so marginalisation buys more
-   * than judge strength. SC(1)->SC(20) is +8.5 AT FIXED EXPANSIONS, not at fixed LM
-   * calls — SC(20) is twenty value-function calls per state. Do NOT cite 37.0-24.5 as
-   * a matched-compute gain: it spans the no-search row, which performs zero
-   * expansions, and §5.4 prices that span at "up to 20x more LM calls".
-   *
-   * Our live default of 3 (config.ts:100) is below the smallest SC arm the paper
-   * measured.
+   * `SWARM_SCORES` remains the axis's value set — the tags ARE the values, so the
+   * coverage matrix and `settleOf` read `score.kind` and the 28-value derivation is
+   * unchanged.
    */
-  readonly judgeSamples: number;
+  readonly score: SwarmScoreSetting;
+  readonly advance: SwarmAdvance;
+  /** What survives, tagged for the same reason as {@link score}: two of the four
+   *  values carry an admission threshold and two do not. */
+  readonly carry: SwarmCarrySetting;
+  /**
+   * UCT's exploration constant. Applies ONLY to `advance:'uct'` and is otherwise
+   * ignored — see the region note below for why this one is not tagged.
+   */
+  readonly explorationWeight?: number;
+  /**
+   * Pruning policy. Applies to the REGION of tree selectors (`uct`, `beam`,
+   * `best-first`) rather than to one axis value, which is why it cannot be tagged
+   * onto a value the way {@link score} is. **Its applicability condition must
+   * therefore be CHECKED rather than assumed**: supplying either under
+   * `advance:'archive'`/`'pareto'`/`'none'` is a refusal, not a silent no-op, because
+   * a parameter that is accepted and ignored is the §2.5 lie about what a run did.
+   */
+  readonly pruneThreshold?: number;
+  readonly minVisitsForPrune?: number;
   /**
    * NOTE what is deliberately NOT here: `branches`, `depth` and `models`. All three
    * are per-run choices rather than technique identity — ToT at branches=3 and ToT
@@ -256,7 +331,7 @@ export interface SwarmRefusal {
 export function settleOf(config: SwarmConfig): SwarmSettle {
   if (config.advance === 'archive') return 'archive';
   if (config.advance === 'pareto') return 'front';
-  if (config.score === 'none' && config.advance === 'none') return 'merge';
+  if (config.score.kind === 'none' && config.advance === 'none') return 'merge';
   return 'best';
 }
 

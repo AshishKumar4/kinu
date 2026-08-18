@@ -167,19 +167,22 @@ const CALL: SwarmCall = {
  * table exists, so this is the fixture's reading of that prose and not a
  * resolution — which is why the assertions below use it only for `settleOf`,
  * whose answer is the same for every tree `advance` under `score:'verify'`.
- * `judgeSamples` is required by the type and unreachable from a named preset.
+ * This is now §6.3's declared `optimise` row rather than a hand-built config: the
+ * tuple table is normatively `resolve(preset) -> SwarmConfig`, and `judgeSamples` is
+ * no longer a required field to invent — it lives on `score:'judge'`, which
+ * `optimise` does not use, so the row is constructible exactly as declared.
  */
 const TREE_ADVANCES: readonly SwarmAdvance[] = ['uct', 'beam', 'best-first'];
 
+/** §6.3's `optimise` point, verbatim. */
 const VERIFIER_TREE: SwarmConfig = {
   unit: 'answer',
-  observe: 'own',
+  observe: 'ancestors',
   expand: 'mutate',
   decorrelate: 'angles',
-  score: 'verify',
-  advance: 'best-first',
-  carry: 'elites',
-  judgeSamples: 3,
+  score: { kind: 'verify' },
+  advance: 'uct',
+  carry: { kind: 'elites' },
 };
 
 describe('§2.4(a) crosses a JSON tool boundary, or it is not a call', () => {

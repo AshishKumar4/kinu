@@ -162,10 +162,37 @@ export interface VerifierSpec {
    * capture that on its own. Found by `FixtureZero` while forcing the JSON boundary.
    */
   readonly kind: string;
-  /** Everything that kind needs, as JSON. Digested with `stableStringify`, so key
-   *  order cannot change the identity. Model it on `RatioProblem` and keep every
-   *  field: a spec that drops `lowerBoundOps` leaves §4's floor nowhere to live and
-   *  §4.5's C1/C2 checks with no input. */
+  /**
+   * Everything that kind needs, as JSON. Model it on `RatioProblem` and keep every
+   * field: a spec that drops `lowerBoundOps` leaves §4's floor nowhere to live and
+   * §4.5's C1/C2 checks with no input.
+   *
+   * WHICH FORM THE DIGEST IS TAKEN OVER, which §5.1 had left unnamed. `stableStringify`
+   * fixes key ORDER and says nothing about key SPELLING — and `objective`'s wire form is
+   * snake_case (§2.2) while `RatioProblem`'s fields are camelCase. If a naming
+   * convention reached inside `spec`, something would transform it between wire and
+   * registry, and `verifierDigest` would differ **depending on which side of that
+   * transform it was computed on**: two runs of the identical instrument, incomparable,
+   * with nothing detecting it. That is §5.1's own failure mode reached through a naming
+   * convention. Found by `FixtureZero`.
+   *
+   * Both halves are needed, and the CANONICAL FORM IS THE WIRE FORM — every digest in
+   * this specification is computed on the wire form, after normalisation, once. It is
+   * the only form **both the caller and the registry provably see**.
+   *
+   * For `spec` the two coincide, which is what makes it safe: **`spec` is OPAQUE to the
+   * objective's naming convention** — the convention governs the fields this
+   * specification declares (`objective`, `metric`, `unit`, `best_known_honest`), not the
+   * interior of a payload whose schema the registered kind owns, so `spec` is not a
+   * camelCase island in a snake_case namespace but outside that namespace entirely —
+   * **and the harness MUST NOT transform `spec`.** With no transform there are not two
+   * sides, so "wire form" and "as received" are the same bytes and there is nothing for
+   * two honest implementations to disagree about.
+   *
+   * This completes §5.1's one rule rather than sitting beside it: an identity that names
+   * an implementation must digest what the name resolves to, **and must say in which
+   * form**.
+   */
   readonly spec: JsonValue;
 }
 
