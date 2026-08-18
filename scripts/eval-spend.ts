@@ -34,6 +34,10 @@ const SpendLineSchema = v.object({
   calls: v.number(),
   callsWithoutUsage: v.number(),
   usage: UsageSchema,
+  /** Episodes the suite drove and could not account for. A suite line with
+   *  `calls: 0` and this above 0 is a HOLE, not a free tier, and the render
+   *  below says which. */
+  episodesUnmeasured: v.number(),
 });
 export type SpendLine = v.InferOutput<typeof SpendLineSchema>;
 
@@ -42,6 +46,7 @@ export interface SpendTotals {
   readonly calls: number;
   readonly callsWithoutUsage: number;
   readonly usage: Usage;
+  readonly episodesUnmeasured: number;
 }
 
 export function parseSpend(text: string): SpendLine[] {
@@ -57,20 +62,26 @@ export function totalSpend(lines: readonly SpendLine[]): SpendTotals {
     calls: lines.reduce((n, l) => n + l.calls, 0),
     callsWithoutUsage: lines.reduce((n, l) => n + l.callsWithoutUsage, 0),
     usage: lines.reduce<Usage>((total, l) => addUsage(total, l.usage), {}),
+    episodesUnmeasured: lines.reduce((n, l) => n + l.episodesUnmeasured, 0),
   };
 }
 
 /**
  * The report. A zero-call run says so in the same shape a paid one does, because
  * "this tier cost nothing" and "this tier was not measured" have to be
- * different sentences.
+ * different sentences — and a suite that drove episodes it could not account for
+ * is named, since its zero is the second sentence wearing the first one's clothes.
  */
 export function renderSpend(lines: readonly SpendLine[]): string {
   const total = totalSpend(lines);
   const rows = lines.map((l) =>
     `  ${l.suite}: ${String(l.calls)} call(s), ${l.usage.input ?? 'unreported'} in / `
     + `${l.usage.output ?? 'unreported'} out`
-    + (l.callsWithoutUsage > 0 ? `, ${String(l.callsWithoutUsage)} unreported` : ''));
+    + (l.callsWithoutUsage > 0 ? `, ${String(l.callsWithoutUsage)} unreported` : '')
+    + (l.episodesUnmeasured > 0
+      ? `, ${String(l.episodesUnmeasured)} EPISODE(S) UNACCOUNTED — this line is not this `
+        + 'suite\'s cost'
+      : ''));
 
   if (total.suites === 0) {
     return 'eval-tier cost: no suite reported spend — either nothing ran, or a suite '
@@ -80,11 +91,19 @@ export function renderSpend(lines: readonly SpendLine[]): string {
     ? ` (${String(total.callsWithoutUsage)} call(s) the provider reported no usage for, so the `
       + 'token totals under-count those)'
     : '';
+  // Named on its own line rather than folded into the parenthetical above: an
+  // unaccounted episode is not an under-count of a known size, it is a piece of
+  // the run whose cost this file cannot bound at all, and a reader has to be able
+  // to tell those two apart before quoting the total.
+  const unaccounted = total.episodesUnmeasured > 0
+    ? `\n  NOT A TOTAL: ${String(total.episodesUnmeasured)} episode(s) ran whose spend no suite `
+      + 'could account for, so the figure above is a floor of unknown distance from the bill'
+    : '';
   return [
     `eval-tier cost per run, measured over ${String(total.suites)} suite(s):`,
     ...rows,
     `  TOTAL: ${String(total.calls)} model call(s), ${total.usage.input ?? 'unreported'} input + `
-    + `${total.usage.output ?? 'unreported'} output tokens${unreported}`,
+    + `${total.usage.output ?? 'unreported'} output tokens${unreported}${unaccounted}`,
   ].join('\n');
 }
 

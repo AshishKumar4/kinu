@@ -60,7 +60,7 @@ import { LocalAgentSession } from '../../packages/cli-backend/src/local-session.
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
 import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
 import {
-  hardTaskFor, scoreTrajectory, seedHardTask, verifyHardTask,
+  hardTaskFor, recordLiveModelEpisode, scoreTrajectory, seedHardTask, verifyHardTask,
   type EvalArmState, type EvalScoreRow, type HardTask,
 } from '@proteus/test-utils';
 
@@ -478,6 +478,16 @@ export async function runBehaviourTask(
   });
   await session.send(task.task);
   await session.settleBackgroundWork();
+
+  // WHAT THIS EPISODE COST, registered BEFORE the degenerate check below, because
+  // a trajectory that produced nothing gradable still burned the tokens it took
+  // to produce nothing: an `inert` episode whose spend is dropped on the throw is
+  // the same lie in a smaller font. This suite drives a session rather than
+  // calling `generateText`, so the store is the only place its usage exists —
+  // `recordLiveModelEpisode` reads it through the workspace-spend seam, which is
+  // why the behavioural tier no longer reports `0 model call(s)` over an episode
+  // that spent hundreds of thousands of neurons.
+  recordLiveModelEpisode(makeSql(db));
 
   const totals = readLedgerTotals(db);
 

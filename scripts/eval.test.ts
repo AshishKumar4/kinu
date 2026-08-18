@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs, partitionRunnable, runBenchmark } from './eval.ts';
+import { parseSpend, renderSpend, totalSpend, type SpendLine } from './eval-spend.ts';
 import { parseCorpus } from '../packages/core/src/index.js';
 import type { EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn } from '../packages/core/src/index.js';
 import { createTestRuntime } from '@proteus/test-utils';
@@ -137,5 +138,82 @@ describe('seed corpus', () => {
     const { runnable, excluded } = partitionRunnable([{ id: 'x', task: 't' }]);
     expect(runnable.map((c) => c.id)).toEqual(['x']);
     expect(excluded).toEqual([]);
+  });
+});
+
+/**
+ * The tier's COST REPORT, which is the surface the owner actually reads.
+ *
+ * The behavioural tier reported `0 model call(s), unreported in / unreported out
+ * tokens` for runs that spent hundreds of thousands of neurons, and the number was
+ * quoted because nothing in the sentence said it was unmeasured. So the report has
+ * to be unable to render a clean zero over work it could not account for: these
+ * assert the three lines a reader has to be able to tell apart — a tier that ran
+ * nothing, a tier whose provider went partly silent, and a tier with a hole in it.
+ */
+describe('eval-tier cost report — a zero says which kind of zero it is', () => {
+  const measured: SpendLine = {
+    suite: 'Behaviour Evals', calls: 42, callsWithoutUsage: 0,
+    usage: { input: 13_415_180, output: 401_195 }, episodesUnmeasured: 0,
+  };
+  /** The regression, as a line: a suite that drove episodes and accounted for
+   *  nothing. Before the meter had `episodesUnmeasured` this line was
+   *  indistinguishable from a suite that legitimately never ran. */
+  const hole: SpendLine = {
+    suite: 'Behaviour Evals', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 20,
+  };
+
+  test('a measured tier reports its real totals and claims nothing more', () => {
+    const out = renderSpend([measured]);
+    expect(out).toContain('42 model call(s), 13415180 input + 401195 output tokens');
+    // No caveat is attached to a total that has none. A report that always hedges
+    // is a report nobody reads the hedge in.
+    expect(out).not.toContain('NOT A TOTAL');
+    expect(out).not.toContain('UNACCOUNTED');
+  });
+
+  test('a tier with unaccounted episodes is refused a clean zero', () => {
+    const out = renderSpend([hole]);
+    // The per-suite line names it...
+    expect(out).toContain('20 EPISODE(S) UNACCOUNTED');
+    // ...and the total refuses to be read as one, which is the sentence that was
+    // missing when 584,751 neurons were reported as nothing.
+    expect(out).toContain('NOT A TOTAL');
+    expect(out).toContain('floor of unknown distance from the bill');
+  });
+
+  test('unaccounted episodes survive the sum, so one holed suite marks the run', () => {
+    const total = totalSpend([measured, hole]);
+    expect(total.calls).toBe(42);
+    expect(total.episodesUnmeasured).toBe(20);
+    // The measured suite's real tokens are still reported — a hole elsewhere
+    // degrades confidence in the total, it does not erase what WAS measured.
+    expect(total.usage.input).toBe(13_415_180);
+    expect(renderSpend([measured, hole])).toContain('NOT A TOTAL');
+  });
+
+  test('a tier that genuinely ran nothing is a different sentence from a hole', () => {
+    const out = renderSpend([{
+      suite: 'Delegation Evals', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0,
+    }]);
+    expect(out).toContain('0 model call(s)');
+    // Nothing ran, nothing is missing, and the report must not cry hole.
+    expect(out).not.toContain('NOT A TOTAL');
+  });
+
+  test('a silent provider still under-counts, and that is its own caveat', () => {
+    const out = renderSpend([{
+      suite: 'E2E Lifecycle', calls: 5, callsWithoutUsage: 2,
+      usage: { input: 100, output: 10 }, episodesUnmeasured: 0,
+    }]);
+    expect(out).toContain('2 call(s) the provider reported no usage for');
+    // A known under-count is not a hole: the calls were seen and counted, only
+    // their tokens were not. Conflating the two would make the loud label routine.
+    expect(out).not.toContain('NOT A TOTAL');
+  });
+
+  test('the parsed line carries the field, so the aggregate cannot drop the label', () => {
+    const [line] = parseSpend(`${JSON.stringify(hole)}\n`);
+    expect(line?.episodesUnmeasured).toBe(20);
   });
 });

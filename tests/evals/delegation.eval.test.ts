@@ -47,7 +47,8 @@ import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
 import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
 import { requireSandboxedExecutors } from './harness.js';
 import {
-  liveChatModel, liveModelTarget, reportLiveModelSpend, scoreDelegation, scratchDir, UNCONFIGURED_LLM,
+  liveChatModel, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend, scoreDelegation,
+  scratchDir, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
 
 const TARGET = liveModelTarget('Delegation Evals');
@@ -116,6 +117,11 @@ describe('Delegation evals — conversion over eligible turns', () => {
         rt, db, model, onEvent: () => {}, noAutoEvolve: true,
       });
       await session.send(ask);
+      // Registered per ask, in the loop, so an ask that throws later still leaves
+      // the tokens it spent in the meter. This suite drives a session, so the
+      // store is the only place its usage exists — without this the teardown's
+      // `reportLiveModelSpend` printed a clean `0` over three real live turns.
+      recordLiveModelEpisode(makeSql(db));
       outcomes.push({ ask, db });
     }
 
