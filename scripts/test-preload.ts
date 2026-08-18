@@ -11,7 +11,6 @@
 // eleven test files that build a runtime, so it is set once, here, for every
 // `bun test` process. Tests that need the fallback still delete the variable
 // themselves.
-import { afterAll } from 'bun:test';
 import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,25 +19,39 @@ import { releaseScratch } from '../packages/test-utils/src/scratch.ts';
 const home = mkdtempSync(join(tmpdir(), 'proteus-test-home-'));
 process.env.PROTEUS_HOME = home;
 
-// The ONE release that runs under this runner, and it took three probes with
-// filesystem markers to establish which one that is. `process.on('exit')` does
-// NOT fire under `bun test` (nor does `beforeExit`) — this file claimed it did,
-// and consequently stranded one `proteus-test-home-*` per invocation on the
-// PLAIN PASSING PATH: 274 of them on this box, which the stale sweeper below
-// then quietly absorbed. A `bun:test` `afterAll` registered HERE, in the
-// preload, applies to every test file in the invocation, fires once at the end,
-// and fires even when a file failed — measured across a two-file probe with one
-// passing and one failing file, both scratch directories removed.
+// The ONE release, and it belongs to whichever RUNNER is executing this file.
+// This preload is loaded by BOTH: `bunfig.toml:15` for `bun test`, and
+// `vitest.evals.config.ts:57` as the behavioural tier's setup file. A static
+// `bun:test` `afterAll` therefore threw "Cannot use afterAll() outside of the
+// test runner" under vitest, failing the eval tier at COLLECTION — no tests, one
+// failed suite — which is how it blocked a production deploy. So the runner is
+// asked, not assumed: vitest sets `VITEST` in every worker it spawns.
+//
+// Which hook took three probes with filesystem markers to establish.
+// `process.on('exit')` does NOT fire under `bun test` (nor does `beforeExit`) —
+// this file claimed it did, and consequently stranded one `proteus-test-home-*`
+// per invocation on the PLAIN PASSING PATH: 274 of them on this box, which the
+// stale sweeper below then quietly absorbed. An `afterAll` registered HERE, in
+// the preload, applies to every test file in the invocation, fires once at the
+// end, and fires even when a file failed — measured across a two-file probe with
+// one passing and one failing file, both scratch directories removed.
 //
 // It also releases what suites minted through `scratchDir` (test-utils
 // src/scratch.ts), so no suite has to remember an afterEach for the same
 // property. Deep-imported rather than taken from the package index: this module
 // is preloaded into every test process and has no business pulling that graph
 // in.
-afterAll(() => {
+const release = (): void => {
   releaseScratch();
   rmSync(home, { recursive: true, force: true });
-});
+};
+
+// Runtime-selected on purpose, and a static import cannot express it: importing
+// BOTH runners statically would load vitest into every `bun test` process (and
+// bun:test into vitest), and importing one would be wrong under the other. The
+// specifier is chosen from which runner is actually executing.
+const runner = process.env.VITEST ? await import('vitest') : await import('bun:test');
+runner.afterAll(release);
 
 // The signal path stays: it is the `timeout <n> bun test` case that every agent
 // and CI step runs under, whose default kill is SIGTERM, and a runner that
@@ -46,10 +59,6 @@ afterAll(() => {
 // listener releases, deregisters itself, and re-raises the default disposition
 // rather than swallowing the signal. SIGKILL remains uncatchable by definition;
 // `scripts/preflight.ts --reclaim` is the backstop for that.
-const release = (): void => {
-  releaseScratch();
-  rmSync(home, { recursive: true, force: true });
-};
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
   process.on(signal, () => {
     release();
