@@ -1,8 +1,9 @@
 diff --git a/packages/core/src/evolution/session-window.ts b/packages/core/src/evolution/session-window.ts
+index dcaaa4d5..25b6400b 100644
 --- a/packages/core/src/evolution/session-window.ts
 +++ b/packages/core/src/evolution/session-window.ts
-@@ -124,7 +124,7 @@
-         console.warn('[proteus] session window: turn could not be serialized:', message);
+@@ -128,7 +128,7 @@ export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
+         );
          return;
        }
 -      const awaitingReview = opts.awaitsFollowup ? 1 : 0;
