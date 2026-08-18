@@ -40,6 +40,7 @@ import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
 import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
+import { hostToolchainCapabilities } from './host-toolchain';
 import { createHostMountVFS } from './host-mount';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber';
 import { createBranchSpawner } from './branch-process';
@@ -683,7 +684,10 @@ function createLocalLaptopExecutor(
     // Where the CLI was invoked — the directory its shell starts in and the
     // one its relative paths already resolve against (`toHostPath`).
     homeDir: async () => cwd,
-    capabilities: new Set(['shell', 'git', 'npm', 'fs_shared', 'net_outbound', 'process_spawn']),
+    // Probed on this very machine rather than declared for a machine like it:
+    // `git` and `npm` used to be claimed unconditionally, and the model reads
+    // this set as a routing instruction (host-toolchain.ts says why).
+    capabilities: new Set(hostToolchainCapabilities()),
     positionalArgs: true,
     isAvailable: () => true,
     connect: async () => {},

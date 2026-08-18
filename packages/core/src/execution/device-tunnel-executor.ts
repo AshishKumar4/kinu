@@ -258,11 +258,37 @@ export function createDeviceTunnelExecutor(
     files,
     homeDir: files.homeDir,
     kind: 'laptop',
+    // The user's own machine, and nothing on this path asks it what it holds.
+    // So this row is only what the tunnel's existence and this provider's own
+    // tools establish — the set is rendered into the model's execution block
+    // ("— runs: …", prompting/volatile-context.ts), which is where work is
+    // routed, so a declared-but-absent capability sends work to the user's
+    // hardware, behind a consent prompt they granted, and fails there.
+    //
+    //   shell          `exec` runs commands through the device's own shell.
+    //   native_binary  the daemon holding this tunnel open is one, on that
+    //                  machine.
+    //   fs_owned       the device's real files, behind the consent boundary.
+    //   net_outbound   the device dialled this hub to get here.
+    //   process_spawn  `exec` can start a child.
+    //
+    // `net_inbound`, `process_long` and `process_signal` were declared here and
+    // are refuted by this file: `exposePort` below answers `supported: false`
+    // because the device is behind the user's NAT, and no tool in the `laptop`
+    // namespace can keep or signal a process — the surface is exec, readFile,
+    // writeFile, readdir, exists.
+    //
+    // `javascript`, `typescript`, `python`, `npm`, `git`, `docker` and `gpu` were
+    // declared here too, on nothing. The remedy is a toolchain probe at connect
+    // time — the daemon on the device IS our CLI, so it can answer exactly the
+    // question cli-backend `host-toolchain.ts` already answers locally — and
+    // `DeviceStatus` (./device-status) has no field to carry the answer yet.
+    // Until it does, `gpu` is the costly absence: a user may have attached the
+    // tunnel FOR their GPU, and an undeclared one the agent never reaches is a
+    // real loss. It still cannot be claimed on an unprobed row.
+    // Tracked in docs/EXECUTION-LAYER-SPEC.md, "Sandbox, laptop, and parent".
     capabilities: new Set<ExecutorCapability>([
-      'javascript', 'typescript', 'python', 'native_binary',
-      'shell', 'npm', 'git', 'docker',
-      'fs_owned', 'net_outbound', 'net_inbound',
-      'process_spawn', 'process_long', 'process_signal', 'gpu',
+      'native_binary', 'shell', 'fs_owned', 'net_outbound', 'process_spawn',
     ]),
     isAvailable: () => transport.status().connected,
     getStatus,

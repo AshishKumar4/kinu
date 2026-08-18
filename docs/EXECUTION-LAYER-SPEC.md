@@ -95,6 +95,21 @@ through the owner's UserDO device hub, scoped to the consented root unless the
 owner granted full-filesystem access. A disconnected or unapproved device does
 not become available through fallback routing.
 
+Its capability row is therefore the narrowest of the four, and deliberately: the
+device is the user's own machine and nothing on this path asks it what it holds,
+so only `shell`, `native_binary`, `fs_owned`, `net_outbound` and `process_spawn`
+— what the tunnel's existence and the `laptop` tools themselves establish — are
+declared. **This is a gap, not a finished state.** The row is true but says
+almost nothing, and the language capabilities are the ones the model reads when
+it decides where to send work, so an unprobed device is a device the agent will
+not use for code. The fix is a toolchain probe at connect time: the daemon
+holding the tunnel open IS the CLI, so it can answer the same question
+`cli-backend/src/host-toolchain.ts` already answers for the local host, and
+`DeviceStatus` (`execution/device-status.ts`) needs a field to carry the answer.
+`gpu` is the entry that costs the most to leave out — a user may have attached
+the tunnel specifically for it — and it is the clearest reason to build the
+probe rather than to widen the row on a guess.
+
 The parent provider is available only to actor facets that need an explicit RPC
 view of another workspace authority. It is not a duplicate registration of the
 facet's own shared workspace.

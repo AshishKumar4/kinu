@@ -81,6 +81,7 @@
   "movable packages/cf-backend/src/user/workspace-capability.ts",
   "movable packages/cli-backend/src/craft-executor.ts",
   "movable packages/cli-backend/src/fiber.ts",
+  "movable packages/cli-backend/src/host-toolchain.ts",
   "movable packages/cli/src/model-catalog.ts",
   "movable packages/cli/src/provider-guidance.ts",
   "movable packages/cli/src/tui/context-status.ts",

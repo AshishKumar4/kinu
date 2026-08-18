@@ -495,19 +495,36 @@ declare namespace sandbox {
 `.trim();
 
   // What the container image actually holds, probed inside the deployed one
-  // rather than read off the SDK's declaration. `docker` used to be here and is
-  // ABSENT — `docker` exits 127 in the running container — and a capability the
-  // model reads in its execution block ("— runs: …", prompting/
-  // volatile-context.ts) is a routing instruction, so an aspirational entry
-  // sends work somewhere it cannot be done.
+  // rather than read off the SDK's declaration: `executeInExecutor` against the
+  // deployed container reports `git` 2.34.1, `npm` 10.9.8, `node` v22.23.2,
+  // `bun`, `sh`/`bash`, `jq` and `curl` PRESENT, and `python3`, `python`,
+  // `ruby`, `clang`, `gcc`, `make`, `tsc` and `docker` ABSENT at exit 127
+  // (docs/EXECUTION-LAYER-SPEC.md; the row in AGENTS.md). A capability the model
+  // reads in its execution block ("— runs: …", prompting/volatile-context.ts) is
+  // a routing instruction, so an aspirational entry sends work somewhere it
+  // cannot be done — and the language rows are the ones it reads. Per entry:
   //
-  // `npm` and `git` stay: the container has both. They are no longer the reason
-  // to come HERE, because the Nimbus workspace serves them too (execution/
-  // nimbus.ts, vfs/workspace-runtimes.ts) — what is still exclusive to the
-  // container is in docs/EXECUTION-LAYER-SPEC.md.
+  //   javascript     `node` v22.23.2, and `bun`.
+  //   typescript     `bun`, which executes a `.ts` file directly. `tsc` is
+  //                  absent and does not bear on it: `tsc` type-checks, it is
+  //                  not what runs the code.
+  //   native_binary  a real Linux container, and `git`/`node`/`bun`/`jq`/`curl`
+  //                  are themselves ELF binaries — one fetched with `curl` runs
+  //                  the same way. RUNS them: `gcc`, `clang` and `make` are
+  //                  absent, so nothing is COMPILED here.
+  //   shell          `sh` and `bash`.
+  //   npm, git       both present. They are no longer the reason to come HERE,
+  //                  because the Nimbus workspace serves them too (execution/
+  //                  nimbus.ts, vfs/workspace-runtimes.ts) — what is still
+  //                  exclusive to the container is in the spec above.
+  //
+  // NOT `python`: `python3` and `python` both exit 127, so the workspace is the
+  // only place Python runs at all. NOT `docker`: `docker` and `dockerd` both
+  // exit 127 too, and it was declared here once already.
   const capabilities: ExecutorCapability[] = [
-    'shell', 'npm', 'git', 'process_spawn', 'process_long',
-    'net_inbound', 'net_outbound', 'fs_owned',
+    'javascript', 'typescript', 'native_binary',
+    'shell', 'npm', 'git', 'fs_owned',
+    'net_outbound', 'net_inbound', 'process_spawn', 'process_long',
   ];
 
   return {
