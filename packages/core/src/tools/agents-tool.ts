@@ -35,6 +35,11 @@ import {
   type AgentsToolAction,
 } from './registry';
 import { FORK_STRATEGY_ID } from '../strategy/heads';
+import { SwarmConfigSchema, SwarmObjectiveSchema } from './swarm-input';
+import { resolveSwarm, swarmValidity, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../strategy/swarm';
+import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
+import type { NamedSwarmPreset, SwarmConfig, SwarmPreset } from '../strategy/swarm';
+import type { Objective } from '../strategy/objective';
 import { readSpawnStarted } from '../jobs/threshold';
 import { localMissionPort, readMissionLimits, type MissionGovernor } from '../mission-budget';
 import type {
@@ -283,6 +288,12 @@ export function agentsActionsFor(deps: { fork?: object; team?: object; peers?: o
   const converse = !!deps.team || !!deps.peers;
   const present = {
     fork: !!deps.fork,
+    // The same deps as `fork`, and structurally rather than by choice: a swarm needs a
+    // model to expand with and a workspace to measure in, which is exactly what
+    // AgentsForkDeps carries. It is not a separate capability a backend could wire
+    // half of, so it gets no deps group of its own — an actor that can fork can run a
+    // configured search, and one that cannot has neither in its enum.
+    swarm: !!deps.fork,
     hire: converse,
     ask: converse,
     send: converse,
@@ -300,7 +311,7 @@ export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
   const spec = BUILTIN_TOOL_SPECS.agents;
   const use = [
     DELEGATION_FRAME,
-    ...(deps.fork ? [DELEGATION_RUNGS.fork] : []),
+    ...(deps.fork ? [DELEGATION_RUNGS.fork, DELEGATION_RUNGS.swarm] : []),
     ...(deps.team || deps.peers ? [DELEGATION_RUNGS.hire] : []),
     ...(deps.peers
       ? [DELEGATION_CONVERSE]
@@ -348,6 +359,21 @@ export interface AgentsToolInput {
   /** Name the sub-ledger. Defaults to a generated label under the caller's
    *  mission; naming it lets a run keep one budget across several calls. */
   budget_label?: string;
+  // swarm — the configured-search rung. `preset` and `objective` are the two halves
+  // of §6.4's rule: a preset fixes the search, the caller supplies the objective.
+  preset?: SwarmPreset;
+  /** What is measured, in what unit, which direction is better. Required for
+   *  `optimise`; refused on `ideate`, which has no value signal by design. */
+  objective?: Objective;
+  /** The coverage key an archive bins elites into. */
+  key?: string;
+  /** The axes, with `preset:'custom'` only — the OVERRIDE half of a composition. */
+  config?: Partial<SwarmConfig>;
+  from?: NamedSwarmPreset;
+  label?: string;
+  branches?: number;
+  depth?: number;
+  models?: string[];
   // hire / converse
   agent?: string;
   role?: string;
@@ -386,6 +412,24 @@ export const AGENTS_ACTION_FIELDS = {
   fork: [
     'task', 'forks', 'settle', 'merge_strategy', 'budget', 'wall_clock_ms', 'options',
     'budget_usd', 'budget_tokens', 'budget_label',
+  ],
+  // The mission caps sit beside the swarm's own fields because §6.4 puts them there
+  // deliberately: `budget_usd`, `budget_tokens` and `budget_label` are PRE-EXISTING
+  // caps on this input and stay there rather than being duplicated onto `SwarmInput`,
+  // which would be the second spelling §6.4's reason 1 exists to prevent. A swarm
+  // reads them through the same seam a fork does, and the governor enforces them.
+  //
+  // `budget` and `wall_clock_ms` are DELIBERATELY ABSENT, and that is a disagreement
+  // with §2.5 recorded rather than papered over. The table calls both caps optional on
+  // every preset — but an iteration cap is meaningless at the one depth that runs
+  // today, and nothing here cuts a search off on a wall clock. Declaring them would
+  // make this surface accept a cap nothing applies, which is the precise defect the
+  // specification is written against, so a caller who sends either is TOLD (the field
+  // refusal names the actions that do read them) instead of quietly ignored. They join
+  // this list when something enforces them.
+  swarm: [
+    'task', 'preset', 'objective', 'key', 'config', 'from', 'label', 'branches', 'depth',
+    'models', 'budget_usd', 'budget_tokens', 'budget_label',
   ],
   hire: ['agent', 'role', 'mission', 'model', 'scope', 'message', 'timeout_seconds'],
   ask: ['agent', 'message', 'topic', 'timeout_seconds', 'deliverable', 'deadline_hint'],
@@ -448,6 +492,19 @@ const AgentsInputEntries = {
   budget_usd: v.optional(v.number()),
   budget_tokens: v.optional(v.number()),
   budget_label: v.optional(v.string()),
+  // swarm. Spelled out here rather than spread in from tools/swarm-input.ts, because
+  // `gate:agents-fields` reads THESE KEYS as the declaration side of the relation: a
+  // spread would hide every one of them from the gate, which is the same
+  // pass-by-omission the gate exists to catch.
+  preset: v.optional(v.picklist(SWARM_PRESETS)),
+  objective: v.optional(SwarmObjectiveSchema),
+  key: v.optional(v.string()),
+  config: v.optional(SwarmConfigSchema),
+  from: v.optional(v.picklist(NAMED_SWARM_PRESETS)),
+  label: v.optional(v.string()),
+  branches: v.optional(v.number()),
+  depth: v.optional(v.number()),
+  models: v.optional(v.array(v.string())),
   agent: v.optional(v.string()),
   role: v.optional(v.string()),
   mission: v.optional(v.string()),
@@ -970,6 +1027,90 @@ async function runFork(
   }
 }
 
+// ── Swarm dispatch (the configured-search rung) ──────────────────────────────
+
+/**
+ * One `agents.swarm` call: resolve it, check it, run it — in that order, because each
+ * step is the input to the next and the last one is the only one that spends anything.
+ *
+ * The three refusals are three DIFFERENT things and the vocabulary keeps them apart:
+ * `bad_input` is a call that does not describe a legal search, `unsupported` is a legal
+ * search this tree has no engine for, and `unavailable` is a legal search whose
+ * instrument is missing from this actor. Collapsing them would put "you asked wrongly"
+ * and "we cannot do that yet" in one bucket, which is the distinction a caller needs
+ * most: only one of the three is worth correcting.
+ *
+ * WHY THIS READS THE CAPS. §6.4 keeps `budget`, `wall_clock_ms` and the mission caps on
+ * this input rather than duplicating them onto `SwarmInput`, so a swarm nests under the
+ * caller's mission scope through the very same seam a fork does — `forkMissionScope`
+ * reads `budget_usd` / `budget_tokens` / `budget_label`, and the governed model is what
+ * the expansion runs on.
+ */
+async function runSwarmAction(
+  deps: AgentsForkDeps,
+  input: AgentsToolInput,
+  mode: WorkMode,
+  toolOptions: AgentsToolCallOptions | undefined,
+  budget?: MissionGovernor,
+): Promise<object> {
+  if (!input.preset) {
+    return forkRefusal('swarm needs `preset` — the shape of the search. optimise measures a number '
+      + 'you declare in `objective`; ideate samples in parallel with no value signal; '
+      + 'research/audit/redteam bin findings under a coverage `key`; custom states the axes in '
+      + '`config` under a `label`.');
+  }
+  if (!input.task) {
+    return forkRefusal('swarm needs `task` — what the search is for, in prose. The measured '
+      + 'quantity goes in `objective`, never here.');
+  }
+  const call = { preset: input.preset, task: input.task };
+  if (input.objective) Object.assign(call, { objective: input.objective });
+  if (input.key) Object.assign(call, { key: input.key });
+  if (input.config) Object.assign(call, { config: input.config });
+  if (input.from) Object.assign(call, { from: input.from });
+  if (input.label) Object.assign(call, { label: input.label });
+  if (input.branches !== undefined) Object.assign(call, { branches: input.branches });
+  if (input.depth !== undefined) Object.assign(call, { depth: input.depth });
+  if (input.models) Object.assign(call, { models: input.models });
+
+  // §6.3 — resolution first, because §6.5 is stated over the resolved configuration
+  // and has no input without it.
+  const resolved = resolveSwarm(call);
+  if ('reason' in resolved) return resolved;
+  // §6.5 — legality, over the resolved tuple and never over the preset name.
+  const illegal = swarmValidity(resolved);
+  if (illegal) return illegal;
+
+  // The mission scope, and with it the model-call seam: the same one a fork nests
+  // under, so an exhausted label stops a search mid-flight rather than after it.
+  const mission = forkMissionScope(budget, input);
+  let rt: AgentRuntime = deps.rt;
+  if (mission) {
+    rt = { ...deps.rt, llm: mission.governor.govern(deps.rt.llm, mission.labels) };
+  }
+  const runDeps: SwarmRunDeps = { rt, model: deps.model, mode };
+  const signal = readAbortSignal(toolOptions);
+  if (signal) Object.assign(runDeps, { signal });
+  readSpawnStarted(toolOptions)?.();
+  const result = await runSwarm(runDeps, resolved);
+  if ('reason' in result) return result;
+  // The spawn always records. TOKENS are charged as a lump here because a swarm's
+  // expansions and measurements are made from THIS process through the governed
+  // `rt.llm`, so nothing has debited them yet — the opposite of a heads fork, which
+  // debits every step itself and is charged nothing again. A run that reported no
+  // total is charged nothing rather than billed a fabricated zero.
+  mission?.governor.debit(result.report.tokens ?? 0, { labels: mission.labels, spawns: 1 });
+  const output: JsonObject = parseJsonObject(JSON.stringify(result));
+  if (mission) {
+    const label = mission.labels[0];
+    const snapshot = label ? mission.governor.snapshot(label)[0] : undefined;
+    if (snapshot) {
+      Object.assign(output, { mission_budget: parseJsonObject(JSON.stringify(snapshot)) });
+    }
+  }
+  return output;
+}
+
 // ── Schema assembly ─────────────────────────────────────────────────────────
 
 /** The JSON-Schema properties an action's fields may be advertised under,
@@ -993,7 +1134,11 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
     // runs on ctx.task and never looks at `forks`) — so the wording has to
     // carry both, and "the concrete task the forks explore together" carried
     // neither past the word `task` itself.
-    task: { type: 'string', description: 'For action=fork: the task the forks explore together and the context they share — the goal, the constraints that hold for every fork, and any interface they must agree on. State it here once rather than repeating it in each fork.' },
+    // Two actions read this ONE property, so it names both. The fork half is
+    // unchanged; the swarm half is here rather than in `swarmProperties` because a
+    // second declaration of the same key would replace this sentence instead of
+    // adding to it, and this is the one that was measured.
+    task: { type: 'string', description: 'For action=fork: the task the forks explore together and the context they share — the goal, the constraints that hold for every fork, and any interface they must agree on. State it here once rather than repeating it in each fork. For action=swarm: what the search is for, in prose — never the measured quantity, which belongs in `objective`.' },
     forks: {
       type: 'array',
       minItems: 2,
@@ -1084,7 +1229,55 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
   return properties;
 }
 
-type ConverseSchemaProperties = SchemaPropertiesFor<Exclude<AgentsToolAction, 'fork'>>;
+/**
+ * What a swarm call is advertised as taking.
+ *
+ * Gated on the same deps as {@link forkProperties} and for the same reason: the action
+ * is in the enum exactly when the substrate is wired, so a property described here
+ * cannot be shown for an action that is not offered.
+ *
+ * The descriptions carry the SHAPE and not only the meaning — `objective` is nested
+ * three deep and `verify` is the field a model reaches for with a script path, twice
+ * measured, unprompted — because a field description is read at the moment the field
+ * is filled, which is where a schema beats an example.
+ */
+type SwarmSchemaProperties = SchemaPropertiesFor<'swarm'>;
+
+function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
+  if (!deps.fork) return {};
+  // `task` is deliberately NOT here. It is ONE JSON-Schema property read by two
+  // actions, and this function is spread after `forkProperties`, so declaring it again
+  // would silently replace the fork wording — the description measured to matter — with
+  // the swarm one. The shared property carries both readers instead, in forkProperties
+  // where the sentence that must survive already lives.
+  return {
+    preset: {
+      type: 'string',
+      enum: [...SWARM_PRESETS],
+      description: 'For action=swarm: the shape of the search. optimise = beat a measured number (requires `objective`). ideate = flat parallel sampling with no value signal, which is why it takes no `objective` and returns a set. research/audit/redteam = bin findings into an archive under a coverage `key`. custom = state the axes yourself in `config`, with a `label`.',
+    },
+    objective: {
+      type: 'object',
+      description: 'For action=swarm: what is measured. {kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}} and an optional floor:{value, kind:"certificate", proof, best_known_honest}. verify names a REGISTERED instrument and hands it its whole spec — a metric nothing can execute is not an objective, and a script path invented here is refused rather than run. kind:"witness" is a checkable certificate and needs a scalar `proxy` to be searchable; kind:"instanced" (one metric, 2+ instances) and kind:"vector" (2+ metrics) are the two front shapes. Field names are snake_case, like every field on this tool.',
+    },
+    key: { type: 'string', description: 'For action=swarm with research/audit/redteam: the coverage descriptor elites are binned into. It must name something a tool call can witness — a key that can only say "distinct idea" means the task wants preset:"ideate".' },
+    config: { type: 'object', description: 'For action=swarm with preset:"custom" only: the axes — unit, observe, expand, decorrelate, score, advance, carry — as the OVERRIDE on `from`\'s shape, or all seven when there is no `from`. Prohibited on a named preset, which is a tested path and cannot be refused.' },
+    from: {
+      type: 'string',
+      enum: [...NAMED_SWARM_PRESETS],
+      description: 'For action=swarm with preset:"custom": a named preset to start from, so you state only what differs. It does NOT make this a preset run — the record still says custom, which is the point of having both fields.',
+    },
+    label: { type: 'string', maxLength: 120, description: 'For action=swarm with preset:"custom": required provenance. A composed shape recorded repeatedly under one label is the evidence for a new preset.' },
+    branches: { type: 'integer', minimum: 1, description: 'For action=swarm: candidates per expansion. Omit to take the preset\'s own width.' },
+    depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion and is the depth that runs today; deeper needs a tree engine that scores by your objective, and the refusal says so rather than substituting a judge.' },
+    models: { type: 'array', items: { type: 'string' }, description: 'For action=swarm: per-node model routing — a cheap model for recon, a strong one for synthesis. NOT for diversity: a mixed panel tracks its AVERAGE member, so a weaker model added for variety measurably subtracts. Diversity is the `decorrelate` axis.' },
+    budget_usd: { type: 'number', minimum: 0, description: 'For action=swarm: cumulative USD cap for the whole search, including its measurements. Omit for no cap.' },
+    budget_tokens: { type: 'integer', minimum: 1, description: 'For action=swarm: cumulative token cap, same scope as budget_usd.' },
+    budget_label: { type: 'string', maxLength: 120, description: 'For action=swarm: name the sub-ledger so several calls share one cumulative budget.' },
+  };
+}
+
+type ConverseSchemaProperties = SchemaPropertiesFor<Exclude<AgentsToolAction, 'fork' | 'swarm'>>;
 
 function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   if (!deps.team && !deps.peers) return {};
@@ -1196,7 +1389,8 @@ export async function dispatchAgentsAction(
   // many, so the cap is checked before the launch — for every action that
   // creates or wakes an agent, not just fork. `list`, `dismiss` and `reply`
   // spend nothing and stay available so a stopped run can still wind itself up.
-  if (input.action === 'fork' || input.action === 'hire' || input.action === 'ask' || input.action === 'send') {
+  if (input.action === 'fork' || input.action === 'swarm' || input.action === 'hire'
+    || input.action === 'ask' || input.action === 'send') {
     const refusal = deps.budget?.guard('spawn');
     if (refusal) return refusal;
   }
@@ -1214,6 +1408,9 @@ export async function dispatchAgentsAction(
     switch (input.action) {
       case 'fork':
         return await runFork(deps.fork!, input, mode, toolOptions, deps.budget);
+
+      case 'swarm':
+        return await runSwarmAction(deps.fork!, input, mode, toolOptions, deps.budget);
 
       case 'hire': {
         if ((input.scope ?? 'subordinate') === 'workspace') {
@@ -1350,7 +1547,13 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
           type: 'string',
           enum: actions,
           description: [
-            ...(deps.fork ? ['fork = spawn 2–6 ephemeral forks of yourself that settle back into this turn.'] : []),
+            ...(deps.fork ? [
+              'fork = spawn 2–6 ephemeral forks of yourself that settle back into this turn. '
+              // The one line that separates the two search rungs, on the field a
+              // model reads FIRST. Without it "spawn several and pick the best"
+              // describes both, and the difference that matters is who decides.
+              + 'swarm = run a configured search whose candidates are measured by your own verifier instead of judged — it takes a preset and an objective, not briefs.',
+            ] : []),
             ...(team || peers ? [
               'hire = create a persistent named helper. ask = hand an agent work and get its answer back. send = fire-and-forget message. list = the unified roster.'
               // How much tree is left, stated the way head-tools states nesting
@@ -1369,6 +1572,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
           ].join(' '),
         },
         ...forkProperties(deps),
+        ...swarmProperties(deps),
         ...converseProperties(deps),
       },
       // No `additionalProperties: false` here, deliberately. The AI SDK

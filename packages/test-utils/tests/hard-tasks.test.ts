@@ -35,10 +35,15 @@ import { initWorkspaceSchema, type LLMProviderConfig } from '../../core/src/inde
 import { openWorkspaceCLI, makeWorkspaceSchemaSql } from '../../cli-backend/src/index';
 import { TASK_OUTCOME, type VerifierContext } from '../src/eval-outcome';
 import {
-  HARD_TASKS, HARD_TASK_ENV, REFERENCE_FILE, SOLUTION_FILE,
+  HARD_TASKS, HARD_TASK_ENV,
   hardTaskCases, hardTaskFor, scoreRatio, seedHardTask, verifyHardTask,
-  type HardTask, type RatioMeasurement,
+  type HardTask,
 } from '../src/hard-tasks/index';
+// The measurement substrate itself lives in core now — a registered verifier kind has
+// to resolve to code the tool surface can reach, and a kind whose implementation sat in
+// a test package would be a name with nothing behind it in production. The corpus is
+// one caller of it; what stayed in `cost-model.ts` is the eval ladder's own scoring.
+import { REFERENCE_FILE, SOLUTION_FILE, type RatioMeasurement } from '@proteus/core';
 
 // Never called. The unroutable baseURL is deliberate: if anything in this file
 // reaches a model, it must fail rather than quietly bill someone.

@@ -121,3 +121,21 @@ export function digestJsonValue(input: { value: unknown }): JsonValue | undefine
     return serialized.length <= DIGEST_LIMIT ? projected : serialized.slice(0, DIGEST_LIMIT) + '…';
   } catch { return String(input.value).slice(0, DIGEST_LIMIT); }
 }
+
+/**
+ * A valibot failure as one line, `path: message` per issue.
+ *
+ * Shared rather than rewritten per caller, because the two that had it were already
+ * byte-identical and the format is load-bearing at both: a refusal that names the FIELD
+ * is what lets a caller fix its call, and two copies drift into one of them naming only
+ * the message. Issues with no path render their message alone — a top-level type
+ * mismatch has no field to name.
+ */
+export function renderIssues(issues: readonly v.BaseIssue<unknown>[]): string {
+  return issues
+    .map((issue) => {
+      const path = issue.path?.map((segment) => String(segment.key)).join('.');
+      return path ? `${path}: ${issue.message}` : issue.message;
+    })
+    .join('; ');
+}

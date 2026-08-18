@@ -164,9 +164,12 @@ function actionEnumOf(deps: TestAgentsToolDeps): string[] {
 // ── Structural gating: one gate, two surfaces ───────────────────────────────
 
 describe('agents.* codemode namespace — dep gating', () => {
-  test('fork-only deps (CLI / subordinate) expose exactly agents.fork', () => {
+  test('fork-substrate deps (CLI / subordinate) expose the two search members', () => {
     const deps = withBuildMode({ fork: forkDeps() });
-    expect(Object.keys(namespaceOf(() => deps))).toEqual(['fork']);
+    // `swarm` rides the same substrate as `fork` — a model to expand with and a
+    // workspace to measure in — so a sandbox that can fan out can also run a
+    // configured search, and the namespace says so structurally.
+    expect(Object.keys(namespaceOf(() => deps))).toEqual(['fork', 'swarm']);
   });
 
   test('full deps (the workspace orchestrator) expose every action', () => {

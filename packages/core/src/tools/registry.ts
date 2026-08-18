@@ -159,14 +159,14 @@ export interface BuiltinToolSpec {
  *  actually gets is decided by the deps its backend wires — see
  *  agentsActionsFor in tools/agents-tool.ts. */
 export const AGENTS_TOOL_ACTIONS = [
-  'fork', 'hire', 'ask', 'send', 'reply', 'list', 'dismiss',
+  'fork', 'swarm', 'hire', 'ask', 'send', 'reply', 'list', 'dismiss',
 ] as const;
 
 export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 
 /** The one question the ladder asks. Prefixes the doctrine in both surfaces. */
 export const DELEGATION_FRAME =
-  'One delegation ladder. Its two rungs differ on two axes at once: how long the helper lives, and what context it starts from.';
+  'One delegation ladder. Its two spawn rungs differ on two axes at once: how long the helper lives, and what context it starts from — and beside them sits one rung whose nodes are not helpers at all, but candidate answers measured against a number you declare.';
 
 /**
  * The CONTEXT axis, one entry per spawn rung — the half of the ladder that
@@ -215,10 +215,10 @@ export const DELEGATION_INHERITANCE = {
   },
 } as const;
 
-/** The two spawn rungs of the delegation ladder. Rendered verbatim into the
- *  `agents` schema description, which every family reads for SELECTION; the
- *  prompt's Delegation section indexes the same rungs in its own words and
- *  carries only the operational doctrine no schema does (prompt.ts). */
+/** The spawn rungs of the delegation ladder, plus the measured-search rung beside
+ *  them. Rendered verbatim into the `agents` schema description, which every family
+ *  reads for SELECTION; the prompt's Delegation section indexes the same rungs in its
+ *  own words and carries only the operational doctrine no schema does (prompt.ts). */
 export const DELEGATION_RUNGS = {
   fork:
     // Opens on the payoff in the CALLER'S currency, which nothing in the
@@ -247,6 +247,18 @@ export const DELEGATION_RUNGS = {
     // forkSettleRefusal), so the difference is a fact about the call and not a
     // nicety.
     'Leave settle unset to run the briefs in `forks` and merge them back into this turn; set settle=mcts to have the search write its own rivals and compete them instead — how you pick between competing approaches, and the right settle for rival scripts that must produce a specific artifact, since a branch whose proposed code runs and passes outranks every branch whose code failed. mcts branches propose text/code rather than running your own tool loop, and it takes no `forks`: briefs handed to it are refused, because merge is the settle that runs them.',
+  // The third rung, and it is NOT a third kind of helper — which is the one thing a
+  // reader has to get right, because "spawn several and pick the best" describes a
+  // fork too. What differs is WHO DECIDES: a fork's answer is settled by a merge
+  // model or by a judge ensemble, and a swarm's is settled by the caller's own
+  // verifier running in the workspace. That is why it needs an `objective` and a fork
+  // does not, and why its refusals are about measurement rather than about briefs.
+  swarm:
+    'Run a configured search (action=swarm) when the answer can be MEASURED rather than judged: you name the shape with `preset` and what counts with `objective`, and every candidate is scored by your own verifier running in this workspace — not by a model\'s opinion of it. '
+    + 'preset=optimise beats a number you can measure (a cost, a runtime, a count) and requires `objective`; preset=ideate is deliberately flat and takes none, so it returns a set of distinct approaches with no ranking; research/audit/redteam bin findings into an archive under a coverage `key`. '
+    + '`objective` states what is measured, in what unit, which direction is better, the target that counts as done, and `verify` as {kind, spec} naming a registered instrument — a verifier is CODE that runs, so a metric nothing can execute is not an objective. '
+    + 'A floor is optional and is a PROOF: declare one and a candidate that measures past it is reported as a breach with the measurement kept, never as a score, because the bound may be what is wrong. '
+    + 'It refuses rather than approximates: an illegal composition comes back naming the axis and what to change, and a shape no engine here can run faithfully says so instead of returning a number from a different mechanism.',
   hire:
     'Hire a subordinate (action=hire) whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
     // The other half of the CONTEXT axis, from the same per-action source the
@@ -581,9 +593,9 @@ export const BUILTIN_TOOL_SPECS = {
   agents: {
     name: 'agents',
     summary:
-      "Spawn and talk to helper agents: ephemeral forks of yourself, persistent subordinates in this workspace, and the owner's other workspace agents.",
+      "Spawn and talk to helper agents — ephemeral forks of yourself, persistent subordinates in this workspace, and the owner's other workspace agents — or run a configured search whose candidates are measured against an objective you declare.",
     whenToUse:
-      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.fork} ${DELEGATION_RUNGS.hire} ${DELEGATION_CONVERSE}`,
+      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.fork} ${DELEGATION_RUNGS.swarm} ${DELEGATION_RUNGS.hire} ${DELEGATION_CONVERSE}`,
     // The same three facts as positives. This field's LABEL still frames them
     // ("Avoid when: …", renderToolSchemaDescription below), which is the honest
     // place for the framing; the sentences inside it do not have to be
@@ -596,7 +608,13 @@ export const BUILTIN_TOOL_SPECS = {
     result:
       'fork produces the merged answer with per-fork outputs, or under settle=mcts the winning proposal and its score — on a live session the call hands back a background job at spawn and that answer arrives as the wake when it settles; hire/dismiss return roster state. '
       + 'ask/send return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
-      + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id.',
+      + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id. '
+      // The result half is stated because a swarm's answer is not the only thing it
+      // carries, and the two extra fields are the ones a caller must not skip: the
+      // margin is the check §4.5 requires be LOOKED at, and the caveat is the one
+      // sentence that stops a suspect number being quoted as a result.
+      + 'swarm returns the axes actually in force, the caps and where each came from, `best` with its RAW measured value in your unit beside the normalised score, every candidate including the ones that produced no usable answer and why, and a settle report carrying the measured baseline and the floor margin. '
+      + 'A run that measured past its floor comes back with a publication caveat and no score on that candidate: the answer is still yours to read and is NOT publishable until the bound is re-derived.',
     // The fork call, because it is the one shape here a model gets wrong: the
     // trajectory data has `agents` called with an invented `fork_specs` for
     // `forks`, and the nested {task, rationale} objects are the only argument

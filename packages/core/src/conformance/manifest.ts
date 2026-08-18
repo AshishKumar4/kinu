@@ -114,6 +114,10 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
 
   'agents-action': {
     fork: EVERYWHERE,
+    // Wherever `fork` is, and by construction rather than by wiring: a swarm needs a
+    // model to expand with and a workspace to measure in, which is exactly the fork
+    // substrate, so it has no deps group of its own to under-wire.
+    swarm: EVERYWHERE,
     hire: TEAM_RECURSES,
     ask: TEAM_RECURSES,
     send: TEAM_RECURSES,

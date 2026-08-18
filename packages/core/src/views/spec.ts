@@ -22,7 +22,7 @@
 
 import * as v from 'valibot';
 import { RESERVED_VIEW_TITLES, VIEW_DATA_SOURCES, normalizeViewTitle } from './sources';
-import { isJsonObject, type JsonValue } from '../utils/json';
+import { isJsonObject, renderIssues, type JsonValue } from '../utils/json';
 
 /** Bumped only when an old spec would render wrongly under new rules. */
 export const VIEW_SPEC_VERSION = 1;
@@ -165,13 +165,7 @@ export type ViewSpecResult =
 export function parseViewSpec<Input>(input: Input): ViewSpecResult {
   const result = v.safeParse(ViewSpecSchema, input);
   if (!result.success) {
-    const issues = result.issues
-      .map((issue) => {
-        const path = issue.path?.map((p) => String(p.key)).join('.');
-        return path ? `${path}: ${issue.message}` : issue.message;
-      })
-      .join('; ');
-    return { ok: false, error: `view spec invalid — ${issues}` };
+    return { ok: false, error: `view spec invalid — ${renderIssues(result.issues)}` };
   }
   return { ok: true, spec: result.output };
 }

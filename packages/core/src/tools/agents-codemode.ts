@@ -89,6 +89,39 @@ const AGENTS_CODEMODE_MEMBERS = {
     budget_label?: string;
   }): Promise<{ strategy: string; text: string; score: number; trace: unknown; cost: unknown; mission_budget?: unknown } | { error: string; reason?: "bad_input" }>;`,
 
+  swarm: `  /** Run a configured search whose candidates are MEASURED rather than judged.
+   *  You name the shape with \`preset\` and what counts with \`objective\`, and
+   *  every candidate is scored by your own verifier running in this workspace.
+   *    preset:"optimise" beats a number and REQUIRES \`objective\`.
+   *    preset:"ideate" is flat by design: no value signal, no \`objective\`, a
+   *      set of distinct approaches back.
+   *    preset:"research"/"audit"/"redteam" bin findings under a coverage \`key\`.
+   *    preset:"custom" states the axes in \`config\` under a \`label\`, optionally
+   *      seeded from \`from\`.
+   *  \`verify\` names a REGISTERED instrument and carries its whole spec: a
+   *  script path invented here does not resolve and the call is refused, which
+   *  is the one guard that makes a measured number worth anything. A \`floor\`
+   *  is a PROOF — a candidate measuring past it comes back as a breach with the
+   *  measurement kept and no score, because the bound may be what is wrong.
+   *  It refuses rather than approximates: an illegal composition names the axis
+   *  to change, and a shape no engine here runs faithfully says so instead of
+   *  returning a number from a different mechanism. */
+  swarm(input: {
+    preset: "ideate" | "research" | "audit" | "redteam" | "optimise" | "custom";
+    task: string;
+    objective?: object;
+    key?: string;
+    config?: object;
+    from?: "ideate" | "research" | "audit" | "redteam" | "optimise";
+    label?: string;
+    branches?: number;
+    depth?: number;
+    models?: string[];
+    budget_usd?: number;
+    budget_tokens?: number;
+    budget_label?: string;
+  }): Promise<{ preset: string; config: unknown; caps: unknown; report: unknown; publication: unknown; best: unknown; candidates: unknown[] } | { reason: string; error: string }>;`,
+
   hire: `  /** Create a persistent named helper that keeps its own context across turns.
    *  It starts FRESH — it did not see this conversation — so the mission is its
    *  whole brief. Default scope:"subordinate" hires into THIS workspace (role +
@@ -134,6 +167,7 @@ const AGENTS_CODEMODE_MEMBERS = {
 /** One-line member descriptions for the provider record. */
 const AGENTS_CODEMODE_DESCRIPTIONS = {
   fork: 'Spawn 2-6 ephemeral forks of yourself that settle into one answer (merge, or settle:"mcts"). Not resumable from inside the sandbox.',
+  swarm: 'Run a configured search whose candidates are measured by your own verifier rather than judged: name the shape with preset and what counts with objective. Refuses an illegal composition by naming the axis, and a shape no engine runs faithfully rather than substituting one.',
   hire: 'Create a persistent named helper that starts with a blank context: a subordinate here, or scope:"workspace" for a specialist workspace of its own.',
   ask: 'Hand an agent work and expect the answer back (a subordinate reports later as an event; a peer reply is awaited).',
   send: 'Fire-and-forget message to any agent by name.',

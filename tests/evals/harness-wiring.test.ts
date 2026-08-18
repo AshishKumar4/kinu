@@ -41,8 +41,11 @@ import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   HARD_TASKS, liveModelSpend, recordLiveModelEpisode, resetLiveModelSpend,
-  REFERENCE_FILE, SOLUTION_FILE, hardTaskCases, type EvalArmState,
+  hardTaskCases, type EvalArmState,
 } from '@proteus/test-utils';
+// The two file names belong to the measurement substrate, which moved to core so a
+// registered verifier kind resolves to code the tool surface can reach.
+import { REFERENCE_FILE, SOLUTION_FILE } from '../../packages/core/src/index';
 
 import {
   DegenerateRunError, DegenerateRuntimeError, requireExecutorSurface,

@@ -169,13 +169,17 @@ describe('agents tool — registration and dep-gating', () => {
     expect(Object.keys(tools)).not.toContain('peers');
   });
 
-  test('fork-only deps (the CLI / subordinate surface) expose only action=fork', () => {
+  test('fork-substrate deps (the CLI / subordinate surface) expose the two search rungs', () => {
     const deps = withBuildMode({ fork: forkDeps() });
-    expect(agentsActionsFor(deps)).toEqual(['fork']);
+    // Both, and by construction rather than by wiring: `swarm` needs a model to expand
+    // with and a workspace to measure in, which is exactly what the fork substrate
+    // carries, so there is no deps group a backend could wire half of.
+    expect(agentsActionsFor(deps)).toEqual(['fork', 'swarm']);
     const t = agentsTool(deps);
-    expect(actionEnum({ value: t.inputSchema })).toEqual(['fork']);
+    expect(actionEnum({ value: t.inputSchema })).toEqual(['fork', 'swarm']);
     // The docstring drops the hire rung and the converse verbs entirely.
     expect(t.description).toContain(DELEGATION_RUNGS.fork);
+    expect(t.description).toContain(DELEGATION_RUNGS.swarm);
     expect(t.description).not.toContain(DELEGATION_RUNGS.hire);
     expect(t.description).not.toContain('reply answers');
   });
@@ -203,7 +207,7 @@ describe('agents tool — registration and dep-gating', () => {
     expect(await t.execute({ action: 'hire', role: 'r', mission: 'm' }))
       .toEqual({
         reason: 'unsupported',
-        error: 'action "hire" is not available here. Available: fork',
+        error: 'action "hire" is not available here. Available: fork, swarm',
       });
   });
 });
@@ -313,9 +317,16 @@ describe('agents tool — the field contract', () => {
 
   test('a dep-gated actor advertises a subset, and never a field no action of its own reads', () => {
     // Non-vacuity for the assertion above: it must be comparing something that
-    // can differ. A fork-only actor is offered fork's fields and nothing else.
+    // can differ. A fork-substrate actor is offered the fields of the two actions that
+    // substrate carries — fork and swarm — and nothing from the converse half.
     const forkOnly = propertyNames({ value: agentsTool({ fork: forkDeps() }).inputSchema }).sort();
-    expect(forkOnly).toEqual(['action', ...AGENTS_ACTION_FIELDS.fork].sort());
+    const searchFields = [...new Set([
+      ...AGENTS_ACTION_FIELDS.fork, ...AGENTS_ACTION_FIELDS.swarm,
+    ])];
+    expect(forkOnly).toEqual(['action', ...searchFields].sort());
+    // And the converse half really is absent, so the subset is a subset.
+    expect(forkOnly).not.toContain('agent');
+    expect(forkOnly).not.toContain('mission');
   });
 });
 

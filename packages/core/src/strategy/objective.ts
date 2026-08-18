@@ -712,6 +712,41 @@ export function isBetter(
 }
 
 /**
+ * §3.5's normalisation: the raw measurement mapped onto the [0,1] a search climbs.
+ *
+ * `0` means "no better than the baseline the harness measured" and `1` means
+ * "reached the declared target". The BASELINE is an argument rather than a field on
+ * the objective because §2.3 forbids a caller supplying one — it is measured on the
+ * workspace as found, before any candidate exists.
+ *
+ * `null` means THERE IS NO RANGE TO SCORE ON: the baseline already meets the target,
+ * or a `log` scale was asked for over a value that has no logarithm. Null rather than
+ * 0, because a degenerate span makes every candidate saturate and a fabricated 0
+ * would be indistinguishable from a candidate that genuinely improved on nothing —
+ * the caller refuses the run instead (§2.3's second normative consequence).
+ *
+ * A named function for the same reason as {@link floorMargin} and {@link isBetter}:
+ * the direction and the scale both invert the arithmetic, getting either backwards
+ * silently reverses the search, and this is the expression §3.5 is stated as.
+ */
+export function normalisedScore(input: {
+  readonly value: number;
+  readonly baseline: number;
+  readonly target: number;
+  readonly direction: ObjectiveDirection;
+  readonly scale: ObjectiveScale;
+}): number | null {
+  const { direction, scale } = input;
+  if (scale === 'log' && (input.value <= 0 || input.baseline <= 0 || input.target <= 0)) return null;
+  const at = scale === 'log' ? Math.log : (x: number): number => x;
+  const [value, baseline, target] = [at(input.value), at(input.baseline), at(input.target)];
+  const span = direction === 'minimise' ? baseline - target : target - baseline;
+  if (!(span > 0)) return null;
+  const progress = direction === 'minimise' ? baseline - value : value - baseline;
+  return Math.min(1, Math.max(0, progress / span));
+}
+
+/**
  * One member of the records store — the leaderboard row.
  *
  * Cell membership is `(objectiveId, descriptor)`; identity within a cell is
