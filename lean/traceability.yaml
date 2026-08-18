@@ -616,14 +616,14 @@ requirements:
       - The front property is strictly weaker than S2 and no code implements either
       - ObjectiveIdentity and ExplorationRecord.value remain scalar-shaped after VectorObjective was added
   PR-PROPOSAL-001:
-    statement: An accepted branch proposal always lands within the depth cap, the remaining budget and the declared width range and never widens the search's decorrelation policy, for every proposal including adversarial ones.
+    statement: An accepted branch proposal always lands within the depth cap, the remaining budget and the declared width range and never widens the search's resolved context policy, for every proposal including adversarial ones.
     status: proved-in-abstract-model
     theorems:
       - Proteus.Exploration.Arbitration.accepted_iff
       - Proteus.Exploration.Arbitration.accepted_children_within_depth
       - Proteus.Exploration.Arbitration.accepted_within_budget
       - Proteus.Exploration.Arbitration.accepted_width_in_range
-      - Proteus.Exploration.Arbitration.accepted_respects_decorrelate
+      - Proteus.Exploration.Arbitration.accepted_respects_context
       - Proteus.Exploration.Arbitration.archive_refuses_at_node
       - Proteus.Exploration.Arbitration.arbitrate_at_zero_depth_always_refuses
       - Proteus.Exploration.Arbitration.every_proposal_gets_a_verdict
@@ -631,13 +631,13 @@ requirements:
       - Proteus.Exploration.Arbitration.every_refusal_is_reachable
       - Proteus.Exploration.Arbitration.an_adversarial_proposal_is_refused
     tsRefs:
-      - packages/core/src/strategy/swarm.ts:250
-      - packages/core/src/strategy/swarm.ts:277
-      - packages/core/src/strategy/swarm.ts:195
-      - packages/core/src/strategy/swarm.ts:205
+      - packages/core/src/strategy/swarm.ts:74
+      - packages/core/src/strategy/swarm.ts:927
+      - packages/core/src/strategy/swarm.ts:973
+      - packages/core/src/strategy/swarm.ts:1043
     remainingEvidence:
       - That a tool which can only refuse is omitted from the assembled surface is a tool-assembly property Lean does not see and a containment test covers
-      - The arbiter is this model's definition; no engine code arbitrates proposals yet
+      - The shipped arbiter (swarm.ts arbitrateBranch, debited in swarm-budget.ts) is a hand-written port of this definition rather than one refined from it, so fidelity rests on reading the two side by side
       - What an accepted verdict actually spawns is unmodelled, so S3's production truth still rests on uct.ts
   PR-ISOLATION-001:
     statement: A transition in which a node acquires its own storage does not satisfy the branch-side actions of the existing MCTS transition relation, and the frame condition that proof consumes is not removable.
