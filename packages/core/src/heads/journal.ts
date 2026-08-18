@@ -228,14 +228,14 @@ export class HeadJournal {
    * request from becoming N runs.
    *
    * A fork's background job is re-driven on eviction/exit recovery
-   * (jobs/runner.ts), and re-driving a settle=merge fork means re-running its
-   * heads: they are ephemeral facets with no durable checkpoint, so there is
-   * nothing else a resume can do. MCTS survived that because its re-entry
-   * reclaims the same search by task (MctsSearchStore.findResumable), so its
-   * tree keeps ONE root_id across any number of re-drives. Heads had no such
-   * reclaim, so every re-drive minted a fresh nanoid root — one request
-   * appearing as four near-identical `merged · N branches` runs, each having
-   * really spawned and paid for its own N heads.
+   * (jobs/runner.ts), and re-driving a fork means re-running its heads: they are
+   * ephemeral facets with no durable checkpoint, so there is nothing else a resume
+   * can do. A tree search survived that because its re-entry reclaims the same
+   * search by task (MctsSearchStore.findResumable), so its tree keeps ONE root_id
+   * across any number of re-drives. Heads had no such reclaim, so every re-drive
+   * minted a fresh nanoid root — one request appearing as four near-identical
+   * `merged · N branches` runs, each having really spawned and paid for its own
+   * N heads.
    *
    * Keyed the same way MCTS keys it: the task, plus not-yet-settled. `head_runs`
    * has no status of its own, and a cached merge IS the settlement, so a run

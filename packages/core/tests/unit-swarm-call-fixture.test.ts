@@ -394,8 +394,10 @@ describe('what the live tool surface does with entry zero', () => {
       expect(smuggle).toThrow(new RegExp(`field "${field}" does not apply to action "fork"`));
     }
     // And the correction: what `fork` does take, so a caller can fix the call
-    // from the message alone rather than guessing again.
-    expect(smuggle).toThrow(/action "fork" takes: task, forks, settle/);
+    // from the message alone rather than guessing again. `settle` is absent
+    // because tree search is `action:'swarm'` with a `depth` — a fork has one
+    // settlement and nothing to choose between.
+    expect(smuggle).toThrow(/action "fork" takes: task, forks, merge_strategy/);
   });
 
   test('and the money case is refused by the spelling it got wrong', () => {

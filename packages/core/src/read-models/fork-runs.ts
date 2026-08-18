@@ -125,7 +125,7 @@ export function readForkRun(sql: SqlExecutor, rootId: string): ForkRunSummary | 
     .sort(newestFirst)[0] ?? null;
 }
 
-/* ── merged (settle=merge → branching heads) ───────────────────────── */
+/* ── merged (action:'fork' → branching heads) ──────────────────────── */
 
 /**
  * Grouped by `head_journal` rather than `head_runs`, for the same reason
