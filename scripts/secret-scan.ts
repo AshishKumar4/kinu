@@ -13,7 +13,7 @@
 // real JWT in any test file would have passed it.
 import { readFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { isTextSource, trackedFiles } from './sources';
+import { isTextSource, readMatching } from './sources';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const IGNORE_FILE = '.secretscanignore';
@@ -78,12 +78,18 @@ export const PATTERNS: readonly SecretPattern[] = [
     // confirmed rotated, and it is tracked as owner-blocked because the paste
     // is unrecoverable once it lands anywhere durable.
     //
-    // `pta_` access token, `ptc_` CLI token, `pdt_` device token. The body is a
-    // hex block, so 16+ hex digits after the prefix distinguishes a real value
-    // from prose naming the prefix.
+    // `pta_` access token, `ptc_` CLI token, `pdt_` device token. The full shape
+    // is `pta_<32 hex>_<43 base36>`, but FRAGMENTS MATCH TOO, deliberately: 8+
+    // hex after the prefix is a finding. A truncated paste like `pta_e3abe8dc…`
+    // is still evidence a live token reached a durable file — the 2026-08-18
+    // transcript leak carried exactly that fragment beside two full tokens, and
+    // the old `{16,}` floor plus a benign that exempted any LINE containing `…`
+    // let the fragment through twice over. `…`/`...` are benign only when they
+    // elide the whole body directly after the prefix, i.e. prose NAMING the
+    // shape rather than quoting a value.
     id: 'proteus-token',
-    regex: /\bp(?:ta|tc|dt)_[0-9a-f]{16,}/g,
-    benign: /<your-|\bpta_\.\.\.|…/,
+    regex: /\bp(?:ta|tc|dt)_[0-9a-f]{8,}/g,
+    benign: /<your-|\bp(?:ta|tc|dt)_(?:\.\.\.|…)/,
     message: 'Proteus access/CLI/device token (rotate it — a printed-once value that reached a file is compromised)',
   },
   {
@@ -194,18 +200,16 @@ function main(): void {
   const ignorePath = join(REPO_ROOT, IGNORE_FILE);
   const entries = existsSync(ignorePath) ? parseIgnoreFile(readFileSync(ignorePath, 'utf8')) : [];
 
-  // From the one enumeration. This gate is where "tracked-only is not the
-  // governed set" was first paid for: a brand-new file carrying a credential
-  // passed until the commit that introduced it, after which the secret is
-  // already in history and the scan fires too late to matter. The widening that
-  // fixed it — tracked PLUS new files `.gitignore` does not cover, minus
-  // anything gone from disk — is `trackedFiles()` now, so every other gate
-  // inherits it instead of each one relearning it.
+  // From the one enumeration, MATERIALISED there too: `readMatching` reads a
+  // tracked file's index blob when the working-tree copy is gone. Both halves
+  // were paid for separately. Tracked-only missed a credential in a brand-new
+  // file until it was already in history; disk-only missed the 2026-08-18
+  // re-added transcript — tracked, gitignored, absent from the working tree —
+  // whose index blob held two live tokens while this scan exited 0.
   const self = relative(REPO_ROOT, import.meta.path);
-  const files = trackedFiles()
-    .filter((f) => isTextSource(f) && f !== IGNORE_FILE && f !== self);
+  const corpus = readMatching((f) => isTextSource(f) && f !== IGNORE_FILE && f !== self);
   const raw: Finding[] = [];
-  for (const file of files) raw.push(...scanText(file, readFileSync(join(REPO_ROOT, file), 'utf8')));
+  for (const [file, text] of corpus) raw.push(...scanText(file, text));
   const { findings, unused } = applyIgnores(raw, entries);
 
   for (const f of findings) {
@@ -226,7 +230,7 @@ function main(): void {
   }
   if (findings.length > 0 || unused.length > 0) process.exit(1);
 
-  console.log(`Secret scan passed — ${PATTERNS.length} patterns over ${files.length} tracked files.`);
+  console.log(`Secret scan passed — ${PATTERNS.length} patterns over ${corpus.size} tracked files.`);
 }
 
 if (import.meta.main) main();

@@ -337,11 +337,14 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether the gates it enumerates pass.',
   },
   {
-    run: 'bun test scripts/secret-scan.test.ts',
+    run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts',
     tier: 'push',
     seconds: 1,
-    catches: 'a secret scanner that stopped matching. The scanner passing means nothing '
-      + 'until this says it still recognises a planted credential.',
+    catches: 'a secret scanner that stopped matching, and an enumeration that stopped treating '
+      + 'tracked-ness as authoritative. The scanner passing means nothing until this says it '
+      + 'still recognises a planted credential — including one in a tracked file that is '
+      + 'gitignored, or gone from the working tree, which is how a re-added transcript with '
+      + 'live tokens rode a green scan on 2026-08-18.',
     blind: 'credential shapes nobody wrote a case for.',
   },
   {

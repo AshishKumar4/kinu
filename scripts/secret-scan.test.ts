@@ -59,6 +59,24 @@ describe('the patterns catch what they are for', () => {
     }
   });
 
+  // The fragment decision, recorded in the rule comment: 8+ hex after the
+  // prefix is a finding even without the full `pta_<32 hex>_<43>` shape — a
+  // truncated paste is still evidence a live token reached a durable file. The
+  // 2026-08-18 transcript leak carried exactly this fragment, and the old rule
+  // missed it twice over: a `{16,}` floor, and a benign that exempted any LINE
+  // containing `…`.
+  test('a truncated token fragment is a finding, ellipsis and all', () => {
+    const fragment = ['pta', 'e3abe8dc'].join('_');
+    expect(scanText('f.md', `PROTEUS_TOKEN=${fragment}\u2026 proteus exec`).map((f) => f.pattern))
+      .toEqual(['proteus-token']);
+  });
+
+  test('prose that only NAMES the token shape stays benign', () => {
+    for (const line of ['use pta_\u2026 from setup', 'use ptc_... from setup', 'set <your-pta-token>']) {
+      expect(scanText('f.md', line)).toEqual([]);
+    }
+  });
+
   test('benign shapes do not fire', () => {
     const benign = [
       `const key = process.env.API_KEY; // api_key = ${"'from-the-env'"}`,
@@ -143,10 +161,13 @@ test('this file contains no literal secret shape of its own', () => {
 });
 
 test('the scanned set is the enumerated set narrowed by content type, nothing else', () => {
-  // Deletion filtering moved INTO the enumerator, where every gate inherits it,
-  // so what is left here is the one narrowing this gate owns: which extensions a
-  // human writes text into. Both halves are asserted, because a predicate that
-  // admitted everything and one that admitted nothing look identical downstream.
+  // Presence-on-disk filtering lives in the enumerator and narrows only
+  // UNTRACKED additions — a tracked file is in the corpus even with no
+  // working-tree copy, read from its index blob (`scripts/sources.test.ts`
+  // proves both). What is left here is the one narrowing this gate owns: which
+  // extensions a human writes text into. Both halves are asserted, because a
+  // predicate that admitted everything and one that admitted nothing look
+  // identical downstream.
   expect(['src/current.ts', 'docs/current.md', 'infra/main.tf.json', 'id_rsa.pem', 'a.sh']
     .filter(isTextSource))
     .toEqual(['src/current.ts', 'docs/current.md', 'infra/main.tf.json', 'id_rsa.pem', 'a.sh']);

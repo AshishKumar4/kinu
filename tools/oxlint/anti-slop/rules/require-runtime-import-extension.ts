@@ -38,13 +38,14 @@ import type { ESTree } from "@oxlint/plugins";
  * neither an extensionless specifier nor a directory index, so inside that regime the specifier
  * must name a file that is actually there.
  *
- * `RAW_NODE_MODULE` is the boundary, and it is two entries rather than one because
+ * `RAW_NODE_MODULE` is the boundary, and it carries entries beyond the plugin directory because
  * `scripts/sources.ts` — the repository's single file enumeration — is imported by the plugin's
- * suites and imports `no-ambient-git-in-tests.ts` back. `import-extension.gate.test.ts` recomputes
- * the transitive closure from the `node` entrypoints in `package.json` and asserts it equals
- * exactly what this pattern matches, so the boundary cannot drift away from the measurement: a new
- * import out of the plugin into a third file fails the gate naming that file, instead of silently
- * widening the exception.
+ * suites and imports `no-ambient-git-in-tests.ts` back, and the enumerator spawns git through
+ * `packages/test-utils/src/git.ts`'s rebuilt environment so a hook-exported `GIT_DIR` cannot
+ * re-point it. `import-extension.gate.test.ts` recomputes the transitive closure from the `node`
+ * entrypoints in `package.json` and asserts it equals exactly what this pattern matches, so the
+ * boundary cannot drift away from the measurement: a new import out of the plugin into another
+ * file fails the gate naming that file, instead of silently widening the exception.
  *
  * The existence check is what keeps the rule honest in both directions. `.mjs` and `.cjs` fixtures,
  * `.json` data, `packages/pc-agent/src/index.js` (a genuinely CommonJS package) and the Vite
@@ -54,10 +55,11 @@ import type { ESTree } from "@oxlint/plugins";
  */
 
 /**
- * The raw-Node regime: the anti-slop plugin, plus the one file outside it that the plugin's
+ * The raw-Node regime: the anti-slop plugin, plus the files outside it that the plugin's
  * entrypoints reach. Repo-relative paths. Proven exact by `import-extension.gate.test.ts`.
  */
-export const RAW_NODE_MODULE = /^(?:tools\/oxlint\/anti-slop\/.+\.ts|scripts\/sources\.ts)$/u;
+export const RAW_NODE_MODULE =
+	/^(?:tools\/oxlint\/anti-slop\/.+\.ts|scripts\/sources\.ts|packages\/test-utils\/src\/git\.ts)$/u;
 
 /** Extensions TypeScript would have emitted from. A specifier ending in one of these names a build
  *  output, and there are no build outputs. Set membership over `extname`, not a pattern: the
