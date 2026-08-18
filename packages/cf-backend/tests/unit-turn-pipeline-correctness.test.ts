@@ -77,21 +77,22 @@ describe('turn-pipeline correctness wiring', () => {
     expect(assembleIdx).toBeGreaterThan(-1);
     expect(sourceIdx).toBeGreaterThan(-1);
     expect(sourceIdx).toBeLessThan(assembleIdx);
-    // The snapshot reads every OTHER plane live, at the step it is called.
+    // Everything else the block carries is now read live inside core, at the
+    // step the snapshot is called: WHICH planes exist is agentDynamicContext's
+    // (pinned in core's unit-volatile-context.test.ts) and WHICH STORE feeds
+    // each is collectDynamicContext's (pinned behaviourally, per plane, in
+    // core's unit-dynamic-context-binding.test.ts). What is left here is the
+    // two inputs only this backend knows.
     const snapshot = actor.slice(
       actor.indexOf('protected dynamicContextSnapshot(): DynamicContext {'),
       actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
     );
+    expect(snapshot).toContain('collectDynamicContext({');
     expect(snapshot).toContain('memoryTail: this._turnMemoryTail');
-    expect(snapshot).toContain('this.renderFactsForTurn()');
-    expect(snapshot).toContain('this.rt.executionRouter?.listExecutors()');
-    expect(snapshot).toContain('this.jobs.listRunning()');
-    expect(snapshot).toContain('this.headJournal.listLive()');
-    // Which planes the block carries, and when one is omitted rather than
-    // rendered empty, is core's (agentDynamicContext — pinned behaviourally in
-    // core's unit-volatile-context.test.ts). This backend only says where each
-    // plane is read from.
-    expect(snapshot).toContain('agentDynamicContext({');
+    expect(snapshot).toContain('missingCapabilities: this._mcpUnavailable');
+    // Passed, not re-derived: a backend that rebuilt its own store handles here
+    // would be back to stating the binding twice.
+    expect(snapshot).toContain('stores: this.stores');
   });
 
   test('the dynamic-context ledger rides the shared STEP pipeline, not the turn assembly', () => {

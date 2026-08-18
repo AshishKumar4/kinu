@@ -38,11 +38,12 @@ import type {
 } from '@proteus/core';
 import {
   AgentOrchestrator,
-  BackgroundJobStore, BackgroundJobRunner, TaskListStore,
+  createAgentStores, type AgentStores, collectDynamicContext,
+  type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
   wrapToolsForBackground, resumeForkBackgroundJob, BACKGROUND_POLICY, type BackgroundPolicy,
-  MctsSearchStore, createDurableMctsSession,
+  type MctsSearchStore, createDurableMctsSession,
   EventLog, ReplyChannelStore,
-  RunEventRecorder,
+  type RunEventRecorder,
   TriggerRegistry,
   // Ingress — core owns the gates; this session owns the local clock and the
   // process boundary in front of them.
@@ -50,11 +51,10 @@ import {
   initWebhookRateLimitTables,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers,
   EvolutionEngine,
-  createAgentConfigStore,
-  createFactsStore, readMemoryTail,
+  readMemoryTail,
   listProposedTasks, updateProposedTaskStatus,
   buildStrategyForkDeps, agentsActionsFor,
-  HeadController, HeadJournal, reconcileInterruptedForks,
+  HeadController, type HeadJournal, reconcileInterruptedForks,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
   recordGroundedHeadsTake, inheritedContextFromHistory, headPhaseRunEvent,
   ModelCatalogSession,
@@ -73,8 +73,7 @@ import {
   createAgentsCodemodeProvider, createReleaseCodemodeProvider, type CodemodeProvider,
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   MissionGovernor,
-  DynamicContextLedger, turnLocalContextMessage, agentDynamicContext, observeSystemPromptHash,
-  listRecoveryFindings,
+  DynamicContextLedger, turnLocalContextMessage, observeSystemPromptHash,
   type DynamicContext,
   type MediaModality,
   createReleaseStore, initReleaseTables, releaseSqlFromExec,
@@ -298,6 +297,10 @@ export class LocalAgentSession implements BackendHost {
   private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
   private readonly engine: EvolutionEngine;
   private readonly orch: AgentOrchestrator;
+  /** The stores every agent has, from core — one list both backends inherit.
+   *  The named fields below are its members, kept as fields because the call
+   *  sites reach them by name. */
+  private readonly stores: AgentStores;
   private readonly jobs: BackgroundJobStore;
   /** The agent's own task list — the `tasks` tool writes it, the live context
    *  block reads it. */
@@ -479,14 +482,18 @@ export class LocalAgentSession implements BackendHost {
     initWorkspaceSchema({ execRaw: this.rt.storage.execRaw, sql: this.rt.storage.sql, exec: hubSql });
     initWorkspaceBaselineTable(this.rt.storage.execRaw);
 
-    // Background-job lifecycle over the durable local fiber (createLinuxFiber) +
-    // this session as the BackendHost (enqueueTurn wakes the agent).
-    this.jobs = new BackgroundJobStore(this.rt.storage.sql);
-    this.taskList = new TaskListStore(this.rt.storage.sql);
-    this.headJournal = new HeadJournal(this.rt.storage.sql);
-    this.mctsSearchStore = new MctsSearchStore(this.rt.storage.sql);
-    this.config = createAgentConfigStore(this.rt.storage.sql);
-    this.factsStore = createFactsStore(this.rt.storage.sql);
+    // The stores every agent has, from core — one list both backends inherit.
+    // Background-job lifecycle rides the durable local fiber (createLinuxFiber)
+    // with this session as the BackendHost (enqueueTurn wakes the agent).
+    this.stores = createAgentStores(() => this.rt.storage.sql);
+    const stores = this.stores;
+    this.jobs = stores.jobs;
+    this.taskList = stores.taskList;
+    this.headJournal = stores.headJournal;
+    this.mctsSearchStore = stores.mctsSearchStore;
+    this.config = stores.config;
+    this.factsStore = stores.facts;
+    this.eventRecorder = stores.eventRecorder;
 
     // Better-compact is THE default (and only) compaction path — the same
     // staged transformContext ladder the cloud backend registers, over the
@@ -577,8 +584,7 @@ export class LocalAgentSession implements BackendHost {
     initWebhookRateLimitTables(hubSql);
 
     // The durable per-run event log (run_events) — the same recorder, table and
-    // RunEvent union the cloud backend records, over local SQLite.
-    this.eventRecorder = new RunEventRecorder(this.rt.storage.sql);
+    // RunEvent union the cloud backend records, over local SQLite — is written…
     // …and forwarded to the frontends as it is written. The table alone is
     // observable only to something that outlives the database, which a
     // benchmark container or a one-shot `proteus exec` does not.
@@ -2259,14 +2265,10 @@ export class LocalAgentSession implements BackendHost {
    * await), so the caller closes over it.
    */
   private dynamicContextSnapshot(memoryTail: string | undefined): DynamicContext {
-    return agentDynamicContext({
-      factsBlock: this.renderFactsForTurn(),
+    return collectDynamicContext({
+      rt: this.rt,
+      stores: this.stores,
       memoryTail,
-      recoveryFindings: listRecoveryFindings(this.rt.storage.sql),
-      executors: this.rt.executionRouter?.listExecutors() ?? [],
-      runningJobs: this.jobs.listRunning(),
-      openTasks: this.taskList.listOpen(),
-      liveHeadRuns: this.headJournal.listLive(),
       missingCapabilities: this.mcpUnavailable,
     });
   }

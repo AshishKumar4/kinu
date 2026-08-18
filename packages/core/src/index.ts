@@ -648,6 +648,10 @@ export { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window';
 // Runtime builder (shared across backends)
 export { buildRuntime } from './runtime-builder';
 export type { RuntimeComponents } from './runtime-builder';
+export { createAgentStores } from './state/agent-stores';
+export type { AgentStores } from './state/agent-stores';
+export { collectDynamicContext } from './state/dynamic-context';
+export type { DynamicContextInput } from './state/dynamic-context';
 
 // MCTS engine
 export { runMCTS } from './mcts/engine';

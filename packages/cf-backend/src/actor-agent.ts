@@ -64,8 +64,7 @@ import {
   currentDateForPrompt,
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
-  DynamicContextLedger, turnLocalContextMessage, agentDynamicContext, observeSystemPromptHash,
-  listRecoveryFindings,
+  DynamicContextLedger, turnLocalContextMessage, observeSystemPromptHash,
   type DynamicContext, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
@@ -86,13 +85,13 @@ import {
   ACTIVE_TOOLS,
   nanoid,
   // Branching heads
-  HeadController, HeadJournal,
+  HeadController, type HeadJournal,
   type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
   type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type MergeResult,
   // Canonical memory-note read (the dynamic-context MEMORY.md tail)
   readMemoryTail,
   // Durable run-event log
-  RunEventRecorder,
+  type RunEventRecorder,
   // Cumulative, label-scoped spend governor (opt-in; no label = no cap)
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   // The one normalized provider usage report
@@ -104,23 +103,24 @@ import {
   // debits — and only when the rate belongs to the model that served it.
   priceCall,
   // agent_facts world model
-  createFactsStore, type FactsStore,
+  type FactsStore,
   // Per-turn device awareness (laptop runtime presence + change notice)
   observeDevicePresence,
-  // Typed agent_config store
-  createAgentConfigStore,
+  // The stores every agent has, built once from its one SQL handle, and the
+  // one binding of the live per-step planes to them.
+  createAgentStores, type AgentConfigStore, collectDynamicContext,
   type SessionWriter, type SqlExecutor,
   // The agents tool's fork substrate (shared factory) + durable MCTS session
   buildStrategyForkDeps, createDurableMctsSession, agentsActionsFor,
   // Background-job system (#173 — auto-background past the surface threshold)
-  BackgroundJobStore, BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
-  TaskListStore,
+  BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
+  type BackgroundJobStore, type TaskListStore,
   wrapToolsForBackground, resumeForkBackgroundJob,
-  MctsSearchStore, readSearchTree, type MCTSProgressEvent,
+  type MctsSearchStore, readSearchTree, type MCTSProgressEvent,
   // EventsHub primitives (spec §1)
   EventLog,
   // Skills + per-turn surface (core turn-surface)
-  resolveTurnSkills, filterToolNamesBySkills, skillsVfsOver, renderFactsForTurn,
+  resolveTurnSkills, filterToolNamesBySkills, skillsVfsOver,
   type ActiveSkillSet, type SkillsVfs,
   // Heads support (takes capture + inherited-context digest)
   recordGroundedHeadsTake, INHERITED_CONTEXT_CAP,
@@ -1551,12 +1551,16 @@ export abstract class ActorAgent extends Think<Env> {
   // defaultOptions().
   private _headController: HeadController | null = null;
 
+  /** The stores every agent has, from core — one list both backends inherit,
+   *  so a store added there exists for this actor too. Lazy inside: the bundle
+   *  never touches `boundSql` until a store is first read, which is what lets
+   *  it be built here rather than in the constructor body. */
+  private readonly stores = createAgentStores(() => this.boundSql);
+
   // The orchestrator's view of head activity (journal + runs + steps). Shared by
   // getHeadController (write path) and getHeadRuns (read path).
-  private _headJournal: HeadJournal | null = null;
   protected get headJournal(): HeadJournal {
-    if (!this._headJournal) this._headJournal = new HeadJournal(this.boundSql);
-    return this._headJournal;
+    return this.stores.headJournal;
   }
 
   // Durable run-event recorder (Flue-style discriminated union, SSE-resumable).
@@ -1564,12 +1568,8 @@ export abstract class ActorAgent extends Think<Env> {
   // reactor_decision}. The RunEventRecorder shim adapts the existing emit()
   // API to the unified log so the SSE stream and the events sidebar share
   // one source of truth.
-  private _eventRecorder: RunEventRecorder | null = null;
   protected get eventRecorder(): RunEventRecorder {
-    if (!this._eventRecorder) {
-      this._eventRecorder = new RunEventRecorder(this.boundSql);
-    }
-    return this._eventRecorder;
+    return this.stores.eventRecorder;
   }
 
   /**
@@ -1633,25 +1633,19 @@ export abstract class ActorAgent extends Think<Env> {
     return this._eventLog;
   }
   // agent_facts world model — typed, idempotent, keyed.
-  private _factsStore: FactsStore | null = null;
   protected get facts(): FactsStore {
-    if (!this._factsStore) this._factsStore = createFactsStore(this.boundSql);
-    return this._factsStore;
+    return this.stores.facts;
   }
 
   // Background-job registry — work auto-detached past the 30s threshold (#173).
-  private _jobs: BackgroundJobStore | null = null;
   protected get jobs(): BackgroundJobStore {
-    if (!this._jobs) this._jobs = new BackgroundJobStore(this.boundSql);
-    return this._jobs;
+    return this.stores.jobs;
   }
 
   // The agent's own task list — written by the `tasks` tool, read here for the
   // live context block and by the Tasks surface.
-  private _taskList: TaskListStore | null = null;
   protected get taskList(): TaskListStore {
-    if (!this._taskList) this._taskList = new TaskListStore(this.boundSql);
-    return this._taskList;
+    return this.stores.taskList;
   }
 
   /** The scaffold is the program a turn executes (core reads it in
@@ -1685,10 +1679,8 @@ export abstract class ActorAgent extends Think<Env> {
 
   // Durable MCTS search checkpoints — the resume record a fork(settle=mcts)
   // evicted mid-search continues from (B6). One per DO; keyed by search root id.
-  private _mctsSearchStore: MctsSearchStore | null = null;
   protected get mctsSearchStore(): MctsSearchStore {
-    if (!this._mctsSearchStore) this._mctsSearchStore = new MctsSearchStore(this.boundSql);
-    return this._mctsSearchStore;
+    return this.stores.mctsSearchStore;
   }
 
   /**
@@ -1786,10 +1778,8 @@ export abstract class ActorAgent extends Think<Env> {
 
   // Typed accessors over the `agent_config` key/value table — replaces
   // scattered raw SQL with a single deep module.
-  private _config: import('@proteus/core').AgentConfigStore | null = null;
-  protected get config(): import('@proteus/core').AgentConfigStore {
-    if (!this._config) this._config = createAgentConfigStore(this.boundSql);
-    return this._config;
+  protected get config(): AgentConfigStore {
+    return this.stores.config;
   }
 
   /** The unified `agents` tool's deps: the fork substrate is universal on cf
@@ -2306,12 +2296,6 @@ export abstract class ActorAgent extends Think<Env> {
     // executor status, device notice, skill activations) is appended to the
     // turn's MESSAGES in beforeTurn — see prompting/volatile-context.ts.
     return base;
-  }
-
-  /** The recent-facts block for the volatile turn-context message (core
-   *  turn-surface) — rendered fresh each turn, never in the cacheable prefix. */
-  private renderFactsForTurn(): string | undefined {
-    return renderFactsForTurn(this.facts);
   }
 
   /**
@@ -2975,14 +2959,10 @@ export abstract class ActorAgent extends Think<Env> {
    * the block on every request and append a block per step.
    */
   protected dynamicContextSnapshot(): DynamicContext {
-    return agentDynamicContext({
-      factsBlock: this.renderFactsForTurn(),
+    return collectDynamicContext({
+      rt: this.rt,
+      stores: this.stores,
       memoryTail: this._turnMemoryTail,
-      recoveryFindings: listRecoveryFindings(this.rt.storage.sql),
-      executors: this.rt.executionRouter?.listExecutors() ?? [],
-      runningJobs: this.jobs.listRunning(),
-      openTasks: this.taskList.listOpen(),
-      liveHeadRuns: this.headJournal.listLive(),
       missingCapabilities: this._mcpUnavailable,
     });
   }
