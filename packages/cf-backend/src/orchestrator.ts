@@ -3539,9 +3539,12 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** Recent events, newest first — `events_v` ordering (received_at desc).
-   *  Read by the operator UI's events sidebar and by `proteus inspect events`,
-   *  which formats it through the one row formatter its four sibling reads go
-   *  through: a bare list of rows, not an envelope. */
+   *  Reached two ways: `proteus events` over the CLI RPC transport, and
+   *  `GET /api/workspaces/<name>/events` through the wire form below. The CLI
+   *  formats it through the one row formatter its four sibling list reads go
+   *  through, so this answers a bare list of rows and never an envelope. The
+   *  operator UI does not read it — the events it shows are the ones drained
+   *  into a turn, carried on that turn's message. */
   async listRecentEvents(opts?: {
     variant?: string;
     since?: number;
