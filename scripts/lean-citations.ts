@@ -12,12 +12,17 @@
  * guarantee.
  *
  * It was not hypothetical. On introduction this gate found three stale citations
- * that every other gate in the repository had passed: `mcts/schemas.ts` and
- * `types/mcts.ts` both cited `MCTS/Backpropagation.lean:initial_valid`, a theorem
- * the Float-to-scaled-integer rewrite had renamed to `initial_in_range`, and
- * `unit-consolidation.test.ts` cited `CraftStore.lean — all_below_gives_empty,
- * consolidation_requires_nonempty_guard`, two names that have never existed in
- * any module.
+ * that every other gate in the repository had passed. `mcts/schemas.ts` and
+ * `types/mcts.ts` both named `initial_valid`, a theorem the
+ * Float-to-scaled-integer rewrite had renamed to `initial_in_range`; and
+ * `unit-consolidation.test.ts` named two `CraftStore.lean` theorems,
+ * `all_below_gives_empty` and `consolidation_requires_nonempty_guard`, which have
+ * never existed in any module.
+ *
+ * Those three defects are described HERE without being re-spelled as citations,
+ * which is deliberate: a gate's own account of what it caught must not be a thing
+ * it catches. Where an illustration genuinely needs the citation SHAPE, it is
+ * enrolled in `CITATION_ILLUSTRATIVE` below rather than skipped.
  *
  * WHY IT IS A SEPARATE PROGRAM. It needs two things that cannot meet in one file.
  * The corpus must come from `sources.ts`, the repository's single enumeration, and
@@ -38,13 +43,14 @@ import { isTextSource, readMatching } from './sources';
 const repoRoot = new URL('..', import.meta.url).pathname;
 const leanRoot = join(repoRoot, 'lean');
 
-/** A cited path: `MCTS/Foo.lean`, `lean/Proteus/MCTS/Foo.lean`, bare `Foo.lean`,
+/** A cited path, in the three spellings the tree uses. `Foo` here is a placeholder
+ *  for any module: `MCTS/Foo.lean`, `lean/Proteus/MCTS/Foo.lean`, bare `Foo.lean`,
  *  or the brace form `Execution/{Capabilities,ToolSystem}.lean`. */
 const LEAN_PATH = /(?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean/g;
 
 /**
- * A citation with theorem names attached, in the two spellings the tree uses:
- * `Foo.lean:name` and `Foo.lean — name, name`.
+ * A citation with theorem names attached, in the two spellings the tree uses. For
+ * example `Foo.lean:name` and `Foo.lean — name, name`, with `Foo` a placeholder.
  *
  * A name must be snake_case, and that is load-bearing rather than cosmetic: the
  * colon form runs into prose, so `StorageIsolation.lean: branch storage disjoint`
@@ -52,9 +58,10 @@ const LEAN_PATH = /(?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean/g;
  * theorem. The cost is one blind spot — an underscore-free theorem that gets
  * renamed — and `CITATION_OPAQUE` below is the ratchet that stops it growing.
  */
-/** A citation naming a LINE rather than a theorem: `Foo.lean:470` or a range
- *  `Foo.lean:470-478`. Only the first number is checked, because a range whose start
- *  is in the file and whose end is not is the same finding. */
+/** A citation naming a LINE rather than a theorem. For example `Foo.lean:470`, or a
+ *  range `Foo.lean:470-478` — `Foo` is a placeholder again. Only the first number is
+ *  checked, because a range whose start is in the file and whose end is not is the
+ *  same finding. */
 const CITED_LINE = /((?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean):([1-9][0-9]*)/g;
 
 const CITED_NAMES =
@@ -65,12 +72,117 @@ const CITED_NAMES =
  *  itself instead of quietly joining the blind spot. */
 const CITATION_OPAQUE = { 'Proteus.Execution.Capabilities.chain': true } as const;
 
+/**
+ * Citations presented as ILLUSTRATIONS rather than as references — the declared
+ * category, and the reason it is a category and not a skip.
+ *
+ * The defect it answers: `docs/EXPLORATION-SPEC.md` §10.1 documents THIS GATE's own
+ * red-proof, and writing down how the instrument catches a bad citation made the
+ * gate fire on the documentation. The only way to green the tree was to delete the
+ * account of the check, which would make this an instrument for undocumented gates.
+ * `LiteratureGate` hit the mirror image — a withdrawn number quoted inside the
+ * paragraph that withdraws it, where a naive rule forces the CORRECTION to be
+ * deleted — and its answer is the shape adopted here.
+ *
+ * THREE PROPERTIES, shared with `hand: 'withdrawn'` in `scripts/literature.ts`, and
+ * the shape rather than the name is what is shared:
+ *
+ * 1. ENROLLED, so adding one is a reviewable edit rather than a regex tweak. Same
+ *    ratchet as `CITATION_OPAQUE`.
+ * 2. It CHANGES which check applies and never disables one. A reference must
+ *    RESOLVE; an illustration must NOT — see `checkIllustrative`.
+ * 3. The residual check makes the category self-policing. An illustration may not
+ *    name a module that exists, so declaring a real reference as an illustration is
+ *    INEFFECTIVE rather than exculpatory: the declaration is refused and the
+ *    citation is still checked live. That is what stops the marker laundering a
+ *    genuinely stale citation, which is the only thing a category like this could
+ *    get wrong.
+ *
+ * There is deliberately NO marker token at the site. A token is a suppression
+ * handle: it costs an author nothing, so it gets pasted, and later nobody can tell
+ * an illustration from a silencing. The site is recognised instead by the ordinary
+ * language a documenting author already writes — see `DOCUMENTING_PROSE` — so the
+ * gate rides on documentation the reader wanted anyway.
+ */
+interface Illustrative {
+  /** The file whose prose presents this as an example. */
+  readonly file: string;
+  /** The citation exactly as written. NOT a pattern — a pattern is an allowlist. */
+  readonly cites: string;
+  /** Why it is an illustration. Required: a declared category with no stated reason
+   *  is a skip wearing a costume. */
+  readonly reason: string;
+}
+
+const CITATION_ILLUSTRATIVE: readonly Illustrative[] = [
+  {
+    file: 'docs/EXPLORATION-SPEC.md',
+    cites: 'Foo.lean:<line>',
+    reason: "§10.1's own account of this gate's line check, in the passage arguing that"
+      + ' a theorem name is a stabler citation than a line number. Gating it would make'
+      + ' this an instrument for undocumented gates.',
+  },
+  {
+    file: 'scripts/lean-citations.ts',
+    cites: 'Foo.lean:<line>',
+    reason: "This register quoting the spec's own declared illustration, and"
+      + " `citedToken`'s docstring explaining why the two spellings are separate"
+      + ' entries.',
+  },
+  {
+    file: 'scripts/lean-citations.ts',
+    cites: 'MCTS/Foo.lean',
+    reason: 'A placeholder in the docstring naming the three path spellings accepted.',
+  },
+  {
+    file: 'scripts/lean-citations.ts',
+    cites: 'lean/Proteus/MCTS/Foo.lean',
+    reason: 'The same placeholder in its prefixed spelling.',
+  },
+  {
+    file: 'scripts/lean-citations.ts',
+    cites: 'Foo.lean',
+    reason: 'The same placeholder in its bare spelling, which is the case basename'
+      + ' resolution exists for.',
+  },
+  {
+    file: 'scripts/lean-citations.ts',
+    cites: 'Foo.lean:name',
+    reason: "The docstring's example of the colon spelling of a NAME citation.",
+  },
+  {
+    file: 'scripts/lean-citations.ts',
+    cites: 'Foo.lean:470',
+    reason: "This gate's own explanation of the line-citation shape it checks.",
+  },
+  {
+    file: 'scripts/lean-citations.ts',
+    cites: 'Foo.lean:470-478',
+    reason: 'The range spelling of the same illustration.',
+  },
+  {
+    file: 'scripts/lean-citations.ts',
+    cites: '{A,B}/x.lean',
+    reason: 'The brace-expansion example in `expandBraces`.',
+  },
+];
+
+/**
+ * The language a documenting author writes around an illustration. Matched over the
+ * enclosing PARAGRAPH and never one sentence: the spec's own case heads a sentence
+ * with the explanation and carries the example in the next, so a sentence-scoped
+ * check would fail the very paragraph it exists to permit — `LiteratureGate` paid
+ * for that lesson and this borrows it.
+ */
+const DOCUMENTING_PROSE =
+  /\b(?:red-green|red->green|would fail|now fails|fails when|placeholder\w*|illustrat\w*|for example|example|past the module|does not exist|proven against|spelling\w*)\b/i;
+
 const findings: string[] = [];
 const fail = (message: string): void => { findings.push(message); };
 
-/** `{A,B}/x.lean` names two modules. Expanded rather than skipped: it is how
- *  `Execution/{Capabilities,ToolSystem}.lean` is spelled, and skipping it would
- *  leave a real citation unchecked. */
+/** A brace form names two modules — for example the placeholder `{A,B}/x.lean`.
+ *  Expanded rather than skipped: it is how `Execution/{Capabilities,ToolSystem}.lean`
+ *  is spelled, and skipping it would leave a real citation unchecked. */
 function expandBraces(path: string): string[] {
   const match = path.match(/\{([A-Za-z0-9_,]+)\}/);
   if (match === null) return [path];
@@ -106,6 +218,7 @@ function readDeclarations(): Map<string, string> {
 }
 
 const declarations = readDeclarations();
+const corpus = readMatching(isTextSource);
 
 /** Modules by basename, because `docs/MCTS.md` and the exploration spec cite bare
  *  `StorageIsolation.lean`. An ambiguous basename fails rather than guessing: two
@@ -148,22 +261,96 @@ for (const name of Object.keys(CITATION_OPAQUE)) {
   if (!declarations.has(name)) fail(`CITATION_OPAQUE names a theorem that no longer exists: ${name}`);
 }
 
-const corpus = readMatching(isTextSource);
+/**
+ * Validate the register itself, before it is trusted to exempt anything.
+ *
+ * Two of the three properties live here. PRESENT: the declared string must actually
+ * occur in its file, so a register entry cannot outlive the prose it describes.
+ * SELF-POLICING: the citation must not resolve to a real module, which is what makes
+ * declaring a live reference as an illustration INEFFECTIVE rather than exculpatory.
+ */
+const illustrativeByFile = new Map<string, Illustrative[]>();
+for (const entry of CITATION_ILLUSTRATIVE) {
+  const module = resolveCitation(entry.cites.replace(/:.*$/, ''));
+  if (module !== null) {
+    fail(
+      `CITATION_ILLUSTRATIVE declares \`${entry.cites}\` (${entry.file}) an illustration,`
+      + ` but it names the real module ${module} — an illustration may not name a module`
+      + ' that exists, because that is how the category would launder a stale citation.'
+      + ' The citation is still checked live.',
+    );
+    continue;
+  }
+  if (entry.reason.length === 0) {
+    fail(`CITATION_ILLUSTRATIVE entry for \`${entry.cites}\` states no reason`);
+    continue;
+  }
+  const host = corpus.get(entry.file);
+  if (host === undefined) {
+    fail(`CITATION_ILLUSTRATIVE names a file outside the corpus: ${entry.file}`);
+    continue;
+  }
+  if (!host.includes(entry.cites)) {
+    fail(
+      `CITATION_ILLUSTRATIVE declares \`${entry.cites}\` in ${entry.file}, which no longer`
+      + ' contains it — a declaration that outlived its prose exempts nothing and hides'
+      + ' the next one that matters',
+    );
+    continue;
+  }
+  illustrativeByFile.set(entry.file, [...(illustrativeByFile.get(entry.file) ?? []), entry]);
+}
+
+/**
+ * The citation exactly as written at a site: the module path plus whatever `:suffix`
+ * follows it. Register entries are keyed on this rather than on the bare path, so an
+ * entry names the string an author actually typed — `Foo.lean:<line>` and
+ * `Foo.lean:470` are different illustrations and get different entries. A bare path
+ * would be a pattern, and a pattern is an allowlist.
+ */
+function citedToken(text: string, match: RegExpExecArray | RegExpMatchArray): string {
+  const start = match.index ?? 0;
+  const rest = text.slice(start + match[0].length);
+  const suffix = rest.match(/^:[^\s`,)\]'"]+/);
+  return `${match[0]}${suffix === null ? '' : suffix[0]}`;
+}
+
+/** The paragraph a citation sits in, for the documenting-prose check. */
+function paragraphAround(text: string, index: number): string {
+  const before = text.lastIndexOf('\n\n', index);
+  const after = text.indexOf('\n\n', index);
+  return text.slice(before === -1 ? 0 : before, after === -1 ? text.length : after);
+}
+
+/** Is this exact citation, at this site, a declared illustration whose paragraph
+ *  reads like documentation? Both halves are required: the declaration alone is a
+ *  skip, and the prose alone would let any unenrolled placeholder through. */
+function isIllustrative(file: string, cites: string, text: string, index: number): boolean {
+  const declared = illustrativeByFile.get(file)?.some((entry) => entry.cites === cites);
+  if (declared !== true) return false;
+  return DOCUMENTING_PROSE.test(paragraphAround(text, index));
+}
+
+let illustrativeSites = 0;
 let modulesCited = 0;
 let namesCited = 0;
 let linesCited = 0;
 for (const [file, text] of corpus) {
   // `lean/` is the other side of the citation and is checked by the traceability
-  // gate. This file is excluded because its own docstring quotes the citations it
-  // exists to catch — the same reason a secret scanner does not scan its fixtures.
-  // It carries no real citation and must not acquire one.
-  if (file.startsWith('lean/') || file === 'scripts/lean-citations.ts') continue;
+  // gate. There is no per-file skip beyond that: this gate's own docstring is
+  // scanned like any other file, and the placeholders in it are enrolled in
+  // `CITATION_ILLUSTRATIVE` rather than excluded.
+  if (file.startsWith('lean/')) continue;
   // Strip JSDoc continuation leaders, so a citation wrapped across lines reads as
   // one string. `consolidation_never_empties,\n * consolidation_nonincreasing` is
   // the live case.
   const flat = text.replace(/^[ \t]*\*[ \t]?/gm, '');
 
   for (const match of flat.matchAll(LEAN_PATH)) {
+    if (isIllustrative(file, citedToken(flat, match), flat, match.index)) {
+      illustrativeSites += 1;
+      continue;
+    }
     for (const path of expandBraces(match[0])) {
       modulesCited += 1;
       if (resolveCitation(path) === null) {
@@ -172,12 +359,14 @@ for (const [file, text] of corpus) {
     }
   }
 
-  // A `Foo.lean:470` citation is the other way a Lean reference rots, and it rots
-  // FASTER than a name: a theorem keeps its name across edits and loses its line
-  // number on the next insertion above it. §10.1's S7 row cites three theorems by
-  // line, and `check-traceability.mjs` already range-checks its own `tsRef`s this
-  // way, so the Lean side gets the same treatment rather than a weaker one.
+  // A line citation — for example the placeholder `Foo.lean:470` — is the other way
+  // a Lean reference rots, and it rots FASTER than a name: a theorem keeps its name
+  // across edits and loses its line number on the next insertion above it. §10.1's
+  // S7 row cites three theorems by line, and `check-traceability.mjs` already
+  // range-checks its own `tsRef`s this way, so the Lean side gets the same
+  // treatment rather than a weaker one.
   for (const match of flat.matchAll(CITED_LINE)) {
+    if (isIllustrative(file, citedToken(flat, match), flat, match.index)) continue;
     const module = resolveCitation(match[1]);
     if (module === null) continue;   // already reported by the module scan above
     linesCited += 1;
@@ -232,4 +421,16 @@ console.log(
   `lean-citations: OK — ${String(declarations.size)} theorems, ${String(modulesCited)} module,`
   + ` ${String(namesCited)} theorem and ${String(linesCited)} line citations across`
   + ` ${String(corpus.size)} files`,
+);
+// Printed on the SUCCESS path, not only on failure: a blind spot that appears only
+// in red output is invisible exactly when the tree is green, which is when it
+// matters. Wording shared verbatim with `scripts/literature.ts`'s blind-spot block
+// so a reader of either instrument learns the same thing in the same words.
+console.log(
+  `lean-citations: BLIND SPOTS — ${String(illustrativeSites)} citations carry an`
+  + ' author-declared category (CITATION_ILLUSTRATIVE): the declaration is TRUSTED, not'
+  + ' verified — this gate checks only that the site behaves like one, never that the'
+  + ' author was right to declare it.'
+  + ` ${String(Object.keys(CITATION_OPAQUE).length)} theorem name(s) carry no underscore`
+  + ' and are invisible to the name scanner, so a rename of one is not caught.',
 );
