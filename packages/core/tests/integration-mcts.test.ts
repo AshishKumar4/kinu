@@ -464,6 +464,52 @@ describe('MCTS integration', () => {
     ).rejects.toThrow('exceeds limit');
   });
 
+  test('cost guard names the model and the basis of its estimate', async () => {
+    const { rt } = createTestRuntime();
+    initTables(rt);
+
+    // A model the catalog DOES price: the refusal must be attributable, so an
+    // operator can tell a real cap from a mispriced one.
+    await expect(
+      runMCTS(rt, createMockSession(), 'huge task', {
+        budget: 1000, branches: 10, maxCostUSD: 0.01,
+        costModel: () => ({
+          spec: 'anthropic/claude-fable-5',
+          pricing: { input: 10, output: 50 },
+        }),
+      }),
+    ).rejects.toThrow(/anthropic\/claude-fable-5.*\$10\/1M in/);
+
+    // A model NOBODY priced still gets a ceiling, but the refusal says the
+    // number is a blended guess rather than the model's rate.
+    await expect(
+      runMCTS(rt, createMockSession(), 'huge task', {
+        budget: 1000, branches: 10, maxCostUSD: 0.01,
+        costModel: () => ({ spec: 'ollama-cloud/kimi-k3', pricing: null }),
+      }),
+    ).rejects.toThrow(/ollama-cloud\/kimi-k3 is unpriced in the catalog/);
+  });
+
+  test('cost guard does NOT refuse a search the catalog prices at nothing', async () => {
+    const { rt } = createTestRuntime();
+    initTables(rt);
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'a candidate' }),
+      generateReflection: async () => ({ text: 'no lesson' }),
+    });
+
+    // The defect: a blended rate refused this at any realistic cap. The catalog
+    // prices the model at zero, so a $0 ceiling is the honest comparison — and
+    // it must pass. `estimatedUSD > maxCostUSD` is 0 > 0, which is false.
+    await expect(
+      runMCTS(rt, createMockSession(), 'free work', {
+        budget: 2, branches: 2, maxCostUSD: 0,
+        judgeSamples: 1, maxEvalLLMCalls: 1,
+        costModel: () => ({ spec: 'free/model', pricing: { input: 0, output: 0 } }),
+      }),
+    ).resolves.toBeDefined();
+  });
+
   test('BUG-4: all-low-score convergence returns converged=false', async () => {
     const { rt } = createTestRuntime({
       llmResponses: { 'hopeless attempt': '{"score": 0.05}' },

@@ -100,6 +100,9 @@ export function createMCTSStrategy(): ExplorationStrategy {
         // Asked of every rollout whether or not a mission labelled this search:
         // the debit above is a cap, this is the ledger.
         reportModelCall: ctx.reportModelCall,
+        // What the pre-run `maxCostUSD` gate prices this search at. Absent here
+        // means the gate blends and says so — never that the search is free.
+        costModel: ctx.costModel,
       });
       // The winner's trajectory is the agent-readable answer.
       const text = result.trajectory.map(m => `${m.role}: ${m.content}`).join('\n');

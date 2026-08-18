@@ -18,6 +18,7 @@ import { createHeadsStrategy } from '../strategy/heads';
 import type { AgentsForkDeps } from '../tools/agents-tool';
 import type { SessionWriter } from '../mcts/record-node';
 import type { MctsSearchStore } from '../mcts/search-store';
+import type { CostModel } from '../mcts/cost';
 import type { MCTSProgressEvent } from '../types/mcts';
 import type { HeadController, SplitPhaseEvent } from '../heads/controller';
 import type { MergeResult, SerializedMessage } from '../heads/types';
@@ -26,6 +27,16 @@ import type { MctsOverrides } from '../config/store';
 export interface ForkDepsWiring {
   rt: AgentRuntime;
   model: LanguageModel;
+  /**
+   * What the resolved model charges — the pre-run spend gate's pricing route.
+   * Backends pass the ModelCatalogSession they already hold for the context
+   * window and the mission ledger; `model` above is a `LanguageModel`, which
+   * carries neither the spec it was built from nor a rate.
+   *
+   * Optional so a host with no catalog keeps today's behaviour: the gate blends
+   * and its refusal says it blended.
+   */
+  costModel?: () => CostModel;
   mcts: {
     /** Fresh per fork call — a search must not share another's tree. */
     session: () => SessionWriter;
@@ -84,6 +95,7 @@ export function buildStrategyForkDeps(wiring: ForkDepsWiring): AgentsForkDeps {
     registry,
     rt: wiring.rt,
     model: wiring.model,
+    costModel: wiring.costModel,
     defaultOptions: () => {
       const mcts = {
         session: wiring.mcts.session(),

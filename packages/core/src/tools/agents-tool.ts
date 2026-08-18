@@ -46,6 +46,7 @@ import type {
   BuiltinStrategyOptions, StrategyContext, StrategyRegistry,
 } from '../strategy/types';
 import type { AgentRuntime } from '../types/agent-runtime';
+import type { CostModel } from '../mcts/cost';
 import type { MergeStrategy } from '../heads/types';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
@@ -237,6 +238,10 @@ export interface AgentsForkDeps {
   registry: StrategyRegistry;
   rt: AgentRuntime;
   model: LanguageModel;
+  /** What the resolved model charges, for strategies that gate on projected
+   *  spend before starting. Backends wire the ModelCatalogSession they already
+   *  hold; absence makes the gate blend and say so. */
+  costModel?: () => CostModel;
   /** Build per-strategy infrastructure options the LLM must not set —
    *  e.g. `{ mcts: { session }, heads: { controller, inheritedContext, onPhase } }`.
    *  Called once per fork invocation and deep-merged (one level) under the
@@ -967,6 +972,10 @@ async function runFork(
       wallClockMs: input.wall_clock_ms,
     },
     options,
+    // The spend gate's pricing route. Passed through as the thunk the backend
+    // supplied so the catalog rate is read when the gate runs, not when this
+    // context was built — the lookup is usually still in flight at this point.
+    costModel: deps.costModel,
   };
   const signal = readAbortSignal(toolOptions);
   if (signal) Object.assign(ctx, { signal });

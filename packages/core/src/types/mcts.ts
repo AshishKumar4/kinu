@@ -8,6 +8,7 @@
  */
 
 import type { ModelCallSink } from '../events/model-call';
+import type { CostModel } from '../mcts/cost';
 
 export type NodeStatus = 'open' | 'terminal' | 'failed' | 'pruned';
 
@@ -143,6 +144,19 @@ export interface MCTSConfig {
    * Absent = unreported, which the coverage fraction states rather than hides.
    */
   reportModelCall?: ModelCallSink;
+  /**
+   * The model this search will run on, and what the catalog charges for it —
+   * read ONCE, by the pre-run `maxCostUSD` gate.
+   *
+   * A thunk rather than a value because the catalog lookup lands
+   * asynchronously (ModelCatalogSession arms it and never blocks), so a rate
+   * captured when the config was built would be null far more often than the
+   * catalog is actually silent.
+   *
+   * Absent = the gate prices at the blended fallback and says so in its
+   * refusal, which is what it did for every model before this existed.
+   */
+  costModel?: () => CostModel;
   /** Called as the search progresses — phase transitions, branch failures and
    *  iteration completion. Use for real-time UI updates. */
   onProgress?: (event: MCTSProgressEvent) => void;

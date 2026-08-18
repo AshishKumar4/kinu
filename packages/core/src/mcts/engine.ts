@@ -28,7 +28,7 @@ import { evaluateWithMultiModelJudging, executionObservation } from './evaluatio
 import { readProposalCode } from '../execution/code-fence';
 import { pruneLowValueBranches } from './pruning';
 import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery';
-import { estimateCost } from './cost';
+import { describeCostBasis, estimateCost } from './cost';
 import { persistableMCTSConfig } from './search-store';
 import { initMctsSearchTable } from './search-store';
 import { diagnostics } from '../obs/index';
@@ -88,11 +88,19 @@ export async function runMCTS(
   const reflectionThreshold = defaults.reflectionThreshold;
   const craftExtractionThreshold = defaults.craftExtractionThreshold;
 
-  const estimate = estimateCost(effective.budget, N_BRANCHES, maxEvalLLMCalls);
+  // `config.costModel`, not `effective.costModel`: this is a host seam (like
+  // `reportModelCall` and `onProgress` below), never a persisted knob, so a
+  // resume must not be able to restore a stale one.
+  const estimate = estimateCost(effective.budget, N_BRANCHES, maxEvalLLMCalls, config.costModel?.());
   if (estimate.estimatedUSD > maxCostUSD) {
+    // The BASIS is named, not just the number. A refusal that says only
+    // "$19.08 exceeds $10" is unactionable when the $19.08 came from a blended
+    // guess about a model the catalog never priced — the operator cannot tell a
+    // real cap from a mispriced one without it.
     throw new Error(
-      `Estimated cost $${estimate.estimatedUSD.toFixed(2)} exceeds limit $${maxCostUSD}. ` +
-      `Reduce budget (${effective.budget}) or branches (${N_BRANCHES}).`,
+      `Estimated cost $${estimate.estimatedUSD.toFixed(2)} exceeds limit $${maxCostUSD} `
+      + `(${describeCostBasis(estimate.basis)}). `
+      + `Reduce budget (${effective.budget}) or branches (${N_BRANCHES}).`,
     );
   }
 

@@ -1805,6 +1805,13 @@ export abstract class ActorAgent extends Think<Env> {
       fork: buildStrategyForkDeps({
         rt: this.rt,
         model: this.getModel(),
+        // Same catalog session that answers the context window and prices the
+        // mission ledger — so a search's pre-run estimate and the ledger that
+        // later debits it read one rate.
+        costModel: () => ({
+          spec: this.effectiveModelSpec(),
+          pricing: this.modelCatalog.pricing(),
+        }),
         mcts: {
           session: () => this.createMCTSSession(),
           search: this.mctsSearchStore,
