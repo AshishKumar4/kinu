@@ -248,6 +248,128 @@ describe('the false positives that shaped the corpus decision', () => {
   });
 });
 
+describe('reach, and the recorded corpus that showed it was unbounded', () => {
+  /** A recording as its writer emits one: the timestamp stamped at the head of the
+   *  document, and no blank line anywhere after it. */
+  const recorded = (body: string): string =>
+    `{\n  "ranAt": "2026-08-18T06:06:17.962Z",\n  "replies": [\n${body}\n  ]\n}`;
+
+  /** The sentence the real runs echo hundreds of times: this repository's own R7
+   *  refusal, quoted back by the models it was shown to. It carries a genuine
+   *  bare-parity defect, and that is the point — a recording is not exempt because it
+   *  happens to be clean. */
+  const reply =
+    '    { "error": "That is the arm Self-MoA (2502.00674) re-ran over Mixture-of-Agents\''
+    + ' own six models and measured WORSE than repeated sampling from the single best one'
+    + ' — 59.1 against 65.7 at identical compute." },';
+
+  /** Machine-written structure: no blank line and no punctuation, which is what made
+   *  a 206KB file one paragraph AND one sentence. */
+  const structure = Array.from(
+    { length: 600 }, (_, index) => `    { "candidate": ${String(9000 + index)} },`,
+  ).join('\n');
+
+  /** One paragraph of prose that names no author, sized like a real one. */
+  const passage = 'Filler that names no author and carries no number. '.repeat(17);
+
+  test('the raw recorded corpus produces no findings', () => {
+    // 369 of them before this: `-08` out of an ISO timestamp, array indices, and JSON
+    // structure, all read as unlocated claims about a paper because a minified or
+    // machine-written document is one paragraph and a paragraph was the reach.
+    expect(auditProse(
+      'scripts/axis-ergonomics/runs/axis-fixture.json',
+      recorded(`${reply}\n${structure}`),
+      coverage(),
+    )).toEqual([]);
+  });
+
+  test('and REACH, not the declaration, is what stops a citation crossing a blob', () => {
+    // The same bytes with the declaration removed, so the file is fully governed. The
+    // candidate beside the citation is a finding; the one 16KB down the same
+    // structureless paragraph is not. Under paragraph reach it was.
+    const found = auditProse(
+      'scripts/axis-ergonomics/runs/axis-fixture.json',
+      recorded(`${reply}\n${structure}`).replace('"ranAt"', '"stampedAt"'),
+      coverage(),
+    );
+    expect(found.some((finding) => finding.includes('cites 9000 beside'))).toBe(true);
+    expect(found.some((finding) => finding.includes('cites 9599 beside'))).toBe(false);
+    // And the load-bearing check still fires on the same text, so the bound did not
+    // buy quiet by going blind.
+    expect(found.some((finding) =>
+      finding.includes('adjective where a compute condition belongs'))).toBe(true);
+  });
+
+  test('a real unlocated number in ordinary prose still fails', () => {
+    const found = auditProse(
+      'scripts/axis-ergonomics/runs/axis-fixture.json',
+      recorded(reply).replace('"ranAt"', '"stampedAt"'),
+      coverage(),
+    );
+    expect(found.some((finding) =>
+      finding.includes('adjective where a compute condition belongs'))).toBe(true);
+  });
+
+  test('a claim three paragraphs from its citation is still governed', () => {
+    // §6.5's shape and the case that set the bound: a citation opens the passage and
+    // the argument runs on for paragraphs without naming an author again. Sentence
+    // scope left every number of those paragraphs ungoverned.
+    const found = audit([
+      '## The passage',
+      'Koh et al. 2407.01476 Table 4 holds node expansions fixed at c=20, d=5, b=5.',
+      passage, passage, passage,
+      'The judged selector still gives 37.0% at matched compute.',
+    ].join('\n\n'));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('adjective where a compute condition belongs');
+  });
+
+  test('and past the reach it is not — the bound is a blind spot, printed as one', () => {
+    expect(audit([
+      '## The passage',
+      'Koh et al. 2407.01476 Table 4 holds node expansions fixed at c=20, d=5, b=5.',
+      passage, passage, passage, passage, passage, passage,
+      'The judged selector still gives 37.0% at matched compute.',
+    ].join('\n\n'))).toEqual([]);
+  });
+
+  test('a register entry whose only home is a recording is a finding, not a pass', () => {
+    // The residual that makes the category self-policing. Credit is withheld along
+    // with blame, so relabelling real prose as a recording is INEFFECTIVE rather than
+    // exculpatory: every number it was carrying becomes a coverage finding, and the
+    // corpus reports that it cannot fail.
+    const seen = coverage();
+    auditProse('scripts/axis-ergonomics/runs/axis-fixture.json', recorded(reply), seen);
+    const found = auditCoverage(seen);
+    expect(found.some((finding) =>
+      finding.includes('self-moa 59.1 is quoted only inside recorded output'))).toBe(true);
+    expect(found.some((finding) => finding.includes('cannot fail'))).toBe(true);
+  });
+
+  test('a timestamp anywhere but the head of the document exempts nothing', () => {
+    // The declared property is that a PROGRAM wrote this document, in one pass, as the
+    // record of a run. A `ranAt` pasted into a hand-written file is a suppression
+    // handle, and it is refused.
+    const found = auditProse(
+      'scripts/axis-ergonomics/runs/axis-fixture.json',
+      `{\n  "note": "hand written",\n  "ranAt": "2026-08-18T06:06:17.962Z",\n${reply}\n}`,
+      coverage(),
+    );
+    expect(found.some((finding) =>
+      finding.includes('adjective where a compute condition belongs'))).toBe(true);
+  });
+
+  test('a document placed beside the recordings is governed like any other', () => {
+    // Why this is a property of the content and not a glob over `runs/`: a glob would
+    // make the gate blind to every future document written there.
+    expect(auditProse(
+      'scripts/axis-ergonomics/runs/README.md',
+      'Koh et al. 2407.01476 Table 4 gives 37.0% at matched compute.',
+      coverage(),
+    )).toHaveLength(1);
+  });
+});
+
 describe('the enumerability ratchet', () => {
   test('an empty corpus is a finding, not a pass', () => {
     // The one failure a gate must not have, and the reason `sources.ts` throws on an

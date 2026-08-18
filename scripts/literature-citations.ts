@@ -128,6 +128,17 @@ const ABBREVIATIONS = [
   'e.g.', 'i.e.', 'vs.', 'approx.', 'No.', 'al.', 'resp.', 'ca.',
 ];
 
+/** What an abbreviation's period is replaced by while sentences are being split. One
+ *  character, so the mask is LENGTH-PRESERVING: a sentence's offset in the paragraph
+ *  that holds it is what makes reach a distance, and a placeholder of a different
+ *  width would move every offset after it. */
+const MASK = '\u0000';
+
+/** The same abbreviations as one pattern, so their periods can be masked in place. */
+const ABBREVIATION = new RegExp(
+  ABBREVIATIONS.map((abbreviation) => abbreviation.replace(/\./g, '\\.')).join('|'), 'g',
+);
+
 /**
  * A paragraph marking a number as retracted. Read over the PARAGRAPH, because a
  * retraction is a paragraph-level act: §6.5's correction heads one sentence and
@@ -183,24 +194,141 @@ export function citable(file: string, text: string): string {
     .replace(/`[^`\n]*`/g, ' ');
 }
 
-/** Prose split into sentences, with abbreviations protected. The lookbehind admits
- *  trailing emphasis and brackets, because `… 0.60.** Landis & Koch …` is two
- *  sentences and reading it as one attributed our own confidence bound to them. */
-function sentences(text: string): string[] {
-  let held = text;
-  ABBREVIATIONS.forEach((abbreviation, index) => {
-    held = held.split(abbreviation).join(`\u0000${String(index)}\u0000`);
-  });
-  return held
-    .split(/(?<=[.!?][*_)"'\u201d]{0,2})[ \n]+(?=[A-Z*_(\u201c"\u00a7[\u2014-])|\n{2,}|\n(?=[|#])/)
-    .map((part) => {
-      let restored = part;
-      ABBREVIATIONS.forEach((abbreviation, index) => {
-        restored = restored.split(`\u0000${String(index)}\u0000`).join(abbreviation);
-      });
-      return restored.replace(/\s+/g, ' ').trim();
-    })
-    .filter((part) => part.length > 0);
+/**
+ * How far a citation REACHES past the sentence that carries it, in characters, and
+ * why the structure alone was not enough.
+ *
+ * The structural unit — paragraph, table row, list item — is still the primary
+ * reach, and no distance replaces it: a table row must not inherit the row above
+ * it, and that boundary is not a number. But a unit is only evidence of PROXIMITY
+ * in a file that has units, and a machine-written one has none.
+ * `scripts/axis-ergonomics/runs/axis-zoo3.json` is 206KB of recorded replies
+ * carrying no blank line, so it was ONE paragraph: a single `Self-MoA` on line 176
+ * reached line 3800, and every integer between them — array indices, an ISO
+ * timestamp's `-08` — arrived as an unlocated claim about a paper.
+ *
+ * The value is measured, not chosen. Below 3,700 the corpus starts losing real claim
+ * sites: `docs/EXPLORATION-SPEC.md` §6.5 opens with a citation and then argues for
+ * four paragraphs naming no author, which is the longest carry this tree actually
+ * uses. At 4000 the corpus governs the same 133 claim sites and the same 54 register
+ * entries as unbounded paragraphs did. Beyond that distance it is a real blind spot,
+ * and it is printed as one.
+ *
+ * It is not, on its own, enough for a recorded corpus, and the measurement says so:
+ * on `runs/` the bound takes 369 findings down to 175, not to zero, because that file
+ * quotes the same citation 17 times and machine-written JSON is dense with integers at
+ * every distance. Reach fixes the CLASS — a citation reaching an unrelated part of a
+ * file — and `RECORDING` below is what answers the corpus question.
+ */
+const REACH = 4000;
+
+/**
+ * A RECORDING: machine-written captured output, recognised by the timestamp its
+ * writer stamped on the document as its opening field.
+ *
+ * WHY IT IS A CATEGORY AND NOT A PATH GLOB. A glob over `runs/` would make this gate
+ * blind to any future DOCUMENT placed there, which is the failure a skip always has.
+ * The property is of the CONTENT: this document was written by a program, in one
+ * pass, as the record of a run. `lean-citations.ts`'s `CITATION_ILLUSTRATIVE` and
+ * this register's own `hand: 'withdrawn'` are the shape being followed, and the
+ * shape rather than the name is what is shared:
+ *
+ * 1. DECLARED — and declared by the writer at the moment of writing, not by an author
+ *    later reaching for an exemption. There is no marker token to paste.
+ * 2. It CHANGES which check applies and never disables one. A recording asserts
+ *    nothing: no reader takes a number out of a transcript as this repository's claim
+ *    about a paper, and nobody can correct a transcript without falsifying it. So it
+ *    carries no obligation to hold a locator. What it does carry is the obligation
+ *    not to be LOAD-BEARING: its quotations go to a separate ledger, and
+ *    `auditCoverage` refuses any register entry whose only home is that ledger.
+ * 3. That residual is what makes the category self-policing, because credit is
+ *    withheld along with blame. A recording cannot green a stale register entry,
+ *    cannot enrol a work as cited, and contributes no claim site. Relabelling real
+ *    prose as a recording is therefore INEFFECTIVE rather than exculpatory: every
+ *    number it was carrying turns into a coverage finding instead.
+ *
+ * The recordings are named in the blind-spot list on the GREEN path, with their
+ * count, because an exclusion nobody prints is how coverage disappears.
+ */
+const RECORDING = /^\{\s*"ranAt":\s*"\d{4}-\d{2}-\d{2}T[\d:.]+Z"/;
+
+/** Where the structure breaks: a blank line, a table row, a heading, a list item.
+ *  Each is its own unit, or one citation pools across a whole table. */
+const PARAGRAPH_BREAK = /\n{2,}|\n(?=[|#]|\s*[-*+] )/g;
+
+/** Where a sentence breaks. The lookbehind admits trailing emphasis and brackets,
+ *  because `… 0.60.** Landis & Koch …` is two sentences and reading it as one
+ *  attributed our own confidence bound to them. */
+const SENTENCE_BREAK =
+  /(?<=[.!?][*_)"'\u201d]{0,2})[ \n]+(?=[A-Z*_(\u201c"\u00a7[\u2014-])|\n{2,}|\n(?=[|#])/g;
+
+/** A piece of text and where it starts in the text that holds it. */
+interface Piece {
+  readonly raw: string;
+  readonly at: number;
+}
+
+/** A sentence, normalised for reading, keeping its offset and the RAW width it
+ *  occupies — normalisation shortens the text, and the window around it is cut from
+ *  the original. */
+interface Sentence {
+  readonly text: string;
+  readonly at: number;
+  readonly width: number;
+}
+
+/** Split on a global pattern, keeping each piece's offset. */
+function pieces(text: string, breaks: RegExp): Piece[] {
+  const found: Piece[] = [];
+  let at = 0;
+  for (const match of text.matchAll(breaks)) {
+    found.push({ raw: text.slice(at, match.index), at });
+    at = match.index + match[0].length;
+  }
+  found.push({ raw: text.slice(at), at });
+  return found;
+}
+
+/**
+ * A unit longer than the reach is not a sentence.
+ *
+ * Punctuation is what the splitter has to work with, and machine-written text has
+ * none: a MINIFIED JSON is one line, one paragraph and one "sentence", and every
+ * number in it would then stand beside any citation in it whatever the window said —
+ * the window bounds where a citation may be FOUND, not which numbers share a unit
+ * with it. So an oversized piece is cut to the reach, at whitespace, which keeps the
+ * invariant the reach depends on: no unit is wider than REACH, therefore no citation
+ * governs a number it is not near.
+ */
+function cut(piece: Piece): Piece[] {
+  if (piece.raw.length <= REACH) return [piece];
+  const found: Piece[] = [];
+  let at = 0;
+  while (piece.raw.length - at > REACH) {
+    // The last line or word break inside the reach; a hard cut only where the text
+    // offers neither, which is a single token longer than the reach.
+    const gap = Math.max(piece.raw.lastIndexOf('\n', at + REACH), piece.raw.lastIndexOf(' ', at + REACH));
+    const end = gap > at ? gap : at + REACH;
+    found.push({ raw: piece.raw.slice(at, end), at: piece.at + at });
+    at = end;
+  }
+  found.push({ raw: piece.raw.slice(at), at: piece.at + at });
+  return found;
+}
+
+/** Prose split into sentences, with abbreviations protected — `Koh et al. Table 4
+ *  holds` is one sentence, and splitting it there would orphan every number from its
+ *  citation. */
+function sentences(text: string): Sentence[] {
+  const held = text.replace(ABBREVIATION, (found) => found.split('.').join(MASK));
+  return pieces(held, SENTENCE_BREAK)
+    .flatMap(cut)
+    .map(({ raw, at }) => ({
+      text: raw.split(MASK).join('.').replace(/\s+/g, ' ').trim(),
+      at,
+      width: raw.length,
+    }))
+    .filter((sentence) => sentence.text.length > 0);
 }
 
 /**
@@ -360,13 +488,22 @@ export function auditRegister(): string[] {
  *  entry is a finding rather than a comment. */
 export interface Coverage {
   readonly works: Set<string>;
-  readonly claims: Set<string>;
+  /** `claimKey -> the files whose prose cites it`. The cited set and the site index
+   *  are ONE structure on purpose: a second mirror of the same keys is how a recorded
+   *  quotation would end up greening a stale entry in one of them. */
   readonly files: Map<string, Set<string>>;
+  /** The same, for quotations found inside a RECORDING — a separate ledger, because
+   *  evidence may not stand in for an assertion. */
+  readonly recorded: Map<string, Set<string>>;
+  /** Which files were read as recordings, so the exclusion is printable. */
+  readonly recordings: Set<string>;
   sites: number;
 }
 
 export function coverage(): Coverage {
-  return { works: new Set(), claims: new Set(), files: new Map(), sites: 0 };
+  return {
+    works: new Set(), files: new Map(), recorded: new Map(), recordings: new Set(), sites: 0,
+  };
 }
 
 /**
@@ -375,135 +512,153 @@ export function coverage(): Coverage {
  */
 export function auditProse(file: string, text: string, seen: Coverage): string[] {
   const findings: string[] = [];
-  // How far a citation reaches, and it differs by file kind because the files do.
-  //
-  // Markdown is paragraph-structured prose and a citation reaches FORWARD through
-  // the section: §6.5 opens `Koh et al. 2407.01476 Table 4 (§5.1) holds node
-  // expansions fixed …` and then argues for four paragraphs that name no author at
-  // all. Sentence scope left every number of those paragraphs ungoverned and
-  // paragraph scope left three of the four. Carry-forward is reset by a heading and
-  // replaced by the next citation, so the reach is exactly "the work currently under
-  // discussion" and never the whole document.
-  //
-  // A doc comment is not prose in that sense: it is a dense block where one
+  // A doc comment is not paragraph-structured prose: it is a dense block where one
   // `Self-MoA` mention would pool a module's constants, so there a citation reaches
-  // its own sentence only. A table ROW and a list ITEM are each their own paragraph:
-  // both carry no blank line between them and would otherwise pool one citation
-  // across a table or a bullet list.
+  // its own sentence only. In Markdown it reaches forward through the section —
+  // §6.5 opens `Koh et al. 2407.01476 Table 4 (§5.1) holds node expansions fixed …`
+  // and then argues for four paragraphs that name no author at all. Carry-forward is
+  // reset by a heading, replaced by the next citation, and expires at REACH, so the
+  // reach is exactly "the work currently under discussion" and never the whole file.
   const narrow = isParseable(file);
-  const units = citable(file, text).split(/\n{2,}|\n(?=[|#]|\s*[-*+] )/)
-    .flatMap((paragraph) => sentences(paragraph).map((sentence) => ({ paragraph, sentence })));
+  // A recording is still READ, and judged by a different obligation: its quotations
+  // are collected so `auditCoverage` can refuse a register entry that lives only
+  // there, and no finding is raised against it either way.
+  const recording = RECORDING.test(text);
+  if (recording) seen.recordings.add(file);
+  const blame = !recording;
+  const ledger = recording ? seen.recorded : seen.files;
+  const source = citable(file, text);
   let carried: readonly Work[] = [];
+  let carriedAt = -Infinity;
 
-  for (const { paragraph, sentence } of units) {
-    const reach = narrow ? sentence : paragraph;
-    const here = WORKS.filter((work) => work.cites.some((cite) => reach.includes(cite)));
-    if (!narrow) {
-      if (paragraph.startsWith('#')) carried = [];
-      if (here.length > 0) carried = here;
-    }
-    const numbers = claimNumbers(sentence);
-    if (numbers.length === 0) continue;
-    const mentioned = here.length > 0 || narrow ? here : carried;
-    const allowed = new Set(mentioned.flatMap((work) => [...(licensed.get(work.id) ?? [])]));
-    const cited = CITATION_FORM.some((pattern) => pattern.test(reach));
-
-    if (mentioned.length === 0) {
-      if (cited) {
-        findings.push(
-          `${file}: cites an external work with numbers and no register entry`
-          + ` — "${sentence.slice(0, 180)}"`,
-        );
+  for (const paragraph of pieces(source, PARAGRAPH_BREAK)) {
+    if (!narrow && paragraph.raw.startsWith('#')) carried = [];
+    for (const sentence of sentences(paragraph.raw)) {
+      const at = paragraph.at + sentence.at;
+      // The window a citation reaches over: the structural unit, cut to REACH
+      // characters either side of the sentence. Paragraph-shaped prose is shorter
+      // than that, so the window IS the paragraph and nothing changes; a
+      // machine-written document has no paragraphs, and the window is the whole of
+      // what stops one citation in it from reaching every number in the file.
+      const nearby = paragraph.raw.slice(
+        Math.max(0, sentence.at - REACH),
+        sentence.at + sentence.width + REACH,
+      );
+      const reach = narrow ? sentence.text : nearby;
+      const here = WORKS.filter((work) => work.cites.some((cite) => reach.includes(cite)));
+      if (!narrow) {
+        if (here.length > 0) {
+          carried = here;
+          carriedAt = at;
+        } else if (at - carriedAt > REACH) carried = [];
       }
-      continue;
-    }
-    seen.sites += 1;
-    for (const work of mentioned) seen.works.add(work.id);
+      const numbers = claimNumbers(sentence.text);
+      if (numbers.length === 0) continue;
+      const mentioned = here.length > 0 || narrow ? here : carried;
+      const allowed = new Set(mentioned.flatMap((work) => [...(licensed.get(work.id) ?? [])]));
+      const cited = CITATION_FORM.some((pattern) => pattern.test(reach));
 
-    // Attribution: an author-or-arXiv citation, or prose already quoting one of this
-    // source's registered numbers distinctively enough to be its fingerprint.
-    const attributed = cited
-      || numbers.some((number) => allowed.has(normalise(number)) && FINGERPRINT.test(number));
-    const matched: Claim[] = [];
-    for (const number of numbers) {
-      if (!allowed.has(normalise(number))) {
-        if (attributed) {
+      if (mentioned.length === 0) {
+        if (cited && blame) {
           findings.push(
-            `${file}: cites ${number} beside ${mentioned.map((work) => work.id).join(', ')} with`
-            + ' no register entry, so it carries no locator'
-            + ` — "${sentence.slice(0, 180)}"`,
+            `${file}: cites an external work with numbers and no register entry`
+            + ` — "${sentence.text.slice(0, 180)}"`,
           );
         }
         continue;
       }
-      for (const work of mentioned) {
-        for (const claim of byWork.get(work.id) ?? []) {
-          if (normalise(claim.value) !== normalise(number)) continue;
-          seen.claims.add(claimKey(claim));
-          seen.files.set(claimKey(claim), (seen.files.get(claimKey(claim)) ?? new Set()).add(file));
-          matched.push(claim);
+      if (blame) {
+        seen.sites += 1;
+        for (const work of mentioned) seen.works.add(work.id);
+      }
+
+      // Attribution: an author-or-arXiv citation, or prose already quoting one of
+      // this source's registered numbers distinctively enough to be its fingerprint.
+      const attributed = cited
+        || numbers.some((number) => allowed.has(normalise(number)) && FINGERPRINT.test(number));
+      const matched: Claim[] = [];
+      for (const number of numbers) {
+        if (!allowed.has(normalise(number))) {
+          if (attributed && blame) {
+            findings.push(
+              `${file}: cites ${number} beside ${mentioned.map((work) => work.id).join(', ')} with`
+              + ' no register entry, so it carries no locator'
+              + ` — "${sentence.text.slice(0, 180)}"`,
+            );
+          }
+          continue;
+        }
+        for (const work of mentioned) {
+          for (const claim of byWork.get(work.id) ?? []) {
+            if (normalise(claim.value) !== normalise(number)) continue;
+            ledger.set(claimKey(claim), (ledger.get(claimKey(claim)) ?? new Set()).add(file));
+            matched.push(claim);
+          }
         }
       }
-    }
-    if (matched.length === 0) continue;
+      if (matched.length === 0 || recording) continue;
 
-    // A withdrawn number inside the paragraph that withdraws it is a QUOTATION of a
-    // retracted claim, not an assertion of it, so the qualifier checks are off for
-    // this sentence — they would demand the correction be reworded into a claim.
-    const withdrawn = matched.filter((claim) => claim.hand === 'withdrawn');
-    if (withdrawn.length > 0) {
-      if (!RETRACTION.test(paragraph)) {
-        findings.push(
-          `${file}: re-asserts ${withdrawn.map((claim) => claim.value).join(', ')}, which the`
-          + ' register records as WITHDRAWN, in a paragraph that does not say so'
-          + ` — ${withdrawn[0]?.says.slice(0, 120) ?? ''}. Sentence: "${sentence.slice(0, 180)}"`,
-        );
+      // A withdrawn number inside the paragraph that withdraws it is a QUOTATION of
+      // a retracted claim, not an assertion of it, so the qualifier checks are off
+      // for this sentence — they would demand the correction be reworded into a
+      // claim.
+      const withdrawn = matched.filter((claim) => claim.hand === 'withdrawn');
+      if (withdrawn.length > 0) {
+        if (!RETRACTION.test(nearby)) {
+          findings.push(
+            `${file}: re-asserts ${withdrawn.map((claim) => claim.value).join(', ')}, which the`
+            + ' register records as WITHDRAWN, in a paragraph that does not say so'
+            + ` — ${withdrawn[0]?.says.slice(0, 120) ?? ''}.`
+            + ` Sentence: "${sentence.text.slice(0, 180)}"`,
+          );
+        }
+        continue;
       }
-      continue;
-    }
 
-    const parity = BARE_PARITY.exec(sentence);
-    const dependent = matched.find((claim) => claim.computeDependent === true);
-    if (parity !== null && dependent !== undefined) {
-      findings.push(
-        `${file}: "${parity[0]}" is an adjective where a compute condition belongs, beside a`
-        + ' number whose argument depends on one. The register says:'
-        + ` ${dependent.condition ?? ''} — state what was held fixed.`
-        + ` Sentence: "${sentence.slice(0, 180)}"`,
-      );
-    }
-    // Compared only when the sentence names exactly ONE paper locator. Two means it
-    // is discussing two, and which number belongs to which is not readable from the
-    // text — `32.0% (Fig. 2) against re-ranking (Appendix A.2, Fig. 6)` is one
-    // legitimate sentence with three.
-    const locators = [...sentence.matchAll(PAPER_LOCATOR)].map((match) => canonical(match[0]));
-    for (const claim of matched) {
-      if (claim.hedge !== undefined
-        && !sentence.toLowerCase().includes(claim.hedge.toLowerCase())) {
+      const parity = BARE_PARITY.exec(sentence.text);
+      const dependent = matched.find((claim) => claim.computeDependent === true);
+      if (parity !== null && dependent !== undefined) {
         findings.push(
-          `${file}: cites ${claim.value} without the source's own "${claim.hedge}" — the`
-          + ` register records it as: ${claim.says.slice(0, 120)}.`
-          + ` Sentence: "${sentence.slice(0, 180)}"`,
+          `${file}: "${parity[0]}" is an adjective where a compute condition belongs, beside a`
+          + ' number whose argument depends on one. The register says:'
+          + ` ${dependent.condition ?? ''} — state what was held fixed.`
+          + ` Sentence: "${sentence.text.slice(0, 180)}"`,
         );
       }
-      // Read over the PARAGRAPH: an author names a unit once and then argues. The
-      // unit WORD is exact for the same reason — the drift said "discriminator", the
-      // thing, where the unit is "discrimination", and a stem would have passed it.
-      if (claim.unitWords !== undefined
-        && !claim.unitWords.some((word) => paragraph.toLowerCase().includes(word))) {
-        findings.push(
-          `${file}: cites ${claim.value} without naming its unit (${claim.unit}) — the number`
-          + ' has a confusable twin and this paragraph does not say which.'
-          + ` Sentence: "${sentence.slice(0, 180)}"`,
-        );
-      }
-      if (locators.length === 1 && claim.where !== NO_LOCATOR
-        && !canonical(claim.where).includes(locators[0] ?? '')) {
-        findings.push(
-          `${file}: names ${locators[0] ?? ''} for ${claim.value}, which the register locates`
-          + ` at ${claim.where} — a locator that does not hold the number is a citation nobody`
-          + ` can check. Sentence: "${sentence.slice(0, 180)}"`,
-        );
+      // Compared only when the sentence names exactly ONE paper locator. Two means
+      // it is discussing two, and which number belongs to which is not readable from
+      // the text — `32.0% (Fig. 2) against re-ranking (Appendix A.2, Fig. 6)` is one
+      // legitimate sentence with three.
+      const locators = [...sentence.text.matchAll(PAPER_LOCATOR)].map((m) => canonical(m[0]));
+      for (const claim of matched) {
+        if (claim.hedge !== undefined
+          && !sentence.text.toLowerCase().includes(claim.hedge.toLowerCase())) {
+          findings.push(
+            `${file}: cites ${claim.value} without the source's own "${claim.hedge}" — the`
+            + ` register records it as: ${claim.says.slice(0, 120)}.`
+            + ` Sentence: "${sentence.text.slice(0, 180)}"`,
+          );
+        }
+        // Read over the window, not the sentence: an author names a unit once and
+        // then argues. The unit WORD is exact for the same reason — the drift said
+        // "discriminator", the thing, where the unit is "discrimination", and a stem
+        // would have passed it.
+        if (claim.unitWords !== undefined
+          && !claim.unitWords.some((word) => nearby.toLowerCase().includes(word))) {
+          findings.push(
+            `${file}: cites ${claim.value} without naming its unit (${claim.unit}) — the number`
+            + ' has a confusable twin and this paragraph does not say which.'
+            + ` Sentence: "${sentence.text.slice(0, 180)}"`,
+          );
+        }
+        if (locators.length === 1 && claim.where !== NO_LOCATOR
+          && !canonical(claim.where).includes(locators[0] ?? '')) {
+          findings.push(
+            `${file}: names ${locators[0] ?? ''} for ${claim.value}, which the register locates`
+            + ` at ${claim.where} — a locator that does not hold the number is a citation nobody`
+            + ` can check. Sentence: "${sentence.text.slice(0, 180)}"`,
+          );
+        }
       }
     }
   }
@@ -527,11 +682,21 @@ export function auditCoverage(seen: Coverage): string[] {
   }
   for (const claim of CLAIMS) {
     if (claim.hand === 'withdrawn') continue;
-    if (!seen.claims.has(claimKey(claim))) {
+    const key = claimKey(claim);
+    if (seen.files.has(key)) continue;
+    const quoted = seen.recorded.get(key);
+    if (quoted !== undefined) {
       findings.push(
-        `register entry ${claim.work} ${claim.value} is cited nowhere — delete it or cite it`,
+        `register entry ${claim.work} ${claim.value} is quoted only inside recorded output`
+        + ` (${[...quoted].join(' ')}) — a recording is evidence, not an assertion, so it`
+        + ' cannot be the only place this repository stands behind a number. Cite it in prose'
+        + ' or delete the entry.',
       );
+      continue;
     }
+    findings.push(
+      `register entry ${claim.work} ${claim.value} is cited nowhere — delete it or cite it`,
+    );
   }
   if (seen.sites === 0) {
     findings.push(
@@ -591,14 +756,28 @@ if (import.meta.main) {
     + ' was right to declare it.'
     + '\n  4. It governs a number only where a source is cited: an author-or-arXiv form, or'
     + " prose already quoting one of that source's registered numbers. A number beside a bare"
-    + ' product name is NOT governed, nor one outside its citation\'s reach, nor a masked'
-    + ' number — years, `k=v` parameters, `SC(n)` counts, `file.ts:line`, volume:page, locator'
-    + ' ordinals, our own `2.4(b)` references. This gate, its register and its test are'
-    + ' skipped entirely, because their content IS example citations.'
-    + '\n  5. It cannot detect a compressed or paraphrased QUOTATION. That failure sank a model'
+    + ' product name is NOT governed, nor a masked number — years, `k=v` parameters, `SC(n)`'
+    + ' counts, `file.ts:line`, volume:page, locator ordinals, our own `2.4(b)` references.'
+    + ' This gate, its register and its test are skipped entirely, because their content IS'
+    + ' example citations.'
+    + `\n  5. REACH is ${String(REACH)} characters AND the structure holding the citation. A`
+    + ' claim standing further than that from the citation it belongs to, or in the paragraph,'
+    + ' row or list item beside it with no citation of its own, is NOT governed. The bound is'
+    + ' what stops a machine-written document, which has no paragraphs, from being read as one.'
+    + `\n  6. ${String(seen.recordings.size)} file(s) were read as RECORDINGS, and none of the`
+    + ' prose checks ran on them, because captured output asserts nothing and cannot be'
+    + ' corrected without being falsified: '
+    + `${[...seen.recordings].join(', ')}. They earn no credit either — a register entry whose`
+    + ' only home is a recording is a finding, so the category cannot green anything.'
+    + '\n  7. It cannot detect a compressed or paraphrased QUOTATION. That failure sank a model'
     + ' quotation in this very audit and needs the recorded source, not a register.'
-    + `\n  6. ${String(worklist.length)} of ${String(CLAIMS.length)} numbers are second-hand or`
+    + `\n  8. ${String(worklist.length)} of ${String(CLAIMS.length)} numbers are second-hand or`
     + ' unlocated. `--list-claims` prints the worklist; being on it is not an error, it is the'
-    + ' point.',
+    + ' point.'
+    + '\n  9. A citation inside a STRING LITERAL is not read: `citable` keeps comments only.'
+    + " That blind spot is load-bearing — this repository's user-facing tool messages quote the"
+    + ' literature, and `scripts/axis-ergonomics/{corpus,surface,validate}.ts` carried the'
+    + ' bare-parity defect in exactly that position, found only because a recording echoed one'
+    + ' of them into a file this gate does read.',
   );
 }

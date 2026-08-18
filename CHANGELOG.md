@@ -185,6 +185,35 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- The literature citation gate no longer reads a machine-written document as one
+  paragraph. Its reach was bounded by the paragraph holding the citation, and a
+  recorded run — 206KB of captured model replies with no blank line in it — is
+  one paragraph, so a single `Self-MoA` mention governed every integer in the
+  file: array indices, JSON structure, and the `-08` out of an ISO timestamp,
+  369 findings and not one of them real. Reach is now the structure AND 4000
+  characters, measured against the corpus so the same 133 claim sites and 54
+  register entries stay governed, and no unit is wider than the reach — a
+  minified document has no sentences either, and one 200KB "sentence" put every
+  number in it beside any citation in it. The bound is printed on the green path
+  with the distance in it.
+- Captured output is now a declared category rather than prose. A recording
+  declares itself by the timestamp its writer stamps at the head of the
+  document, never by living under `runs/` — a path glob would make the gate
+  blind to every future document written there. A recording asserts nothing and
+  cannot be corrected without being falsified, so no locator is demanded of it;
+  it earns no credit either, and a register entry whose only home is a recording
+  is a finding. The exempted files are named, with their count, in the gate's
+  own blind-spot list on the green path.
+- `scripts/axis-ergonomics/{corpus,surface,validate}.ts` no longer describe
+  Self-MoA's homogeneous-versus-mixed result as measured "at identical compute".
+  The paper claims no cost parity — its six mixed proposers span 132B-141B MoE
+  downward, so token cost differs — and what it holds fixed is the proposal
+  count and topology, six proposals and one aggregator. That is what
+  `SwarmConfig.models` in `packages/core` had already been corrected to say, and
+  what `MODELS_FIELD_DESCRIPTION` claims to quote verbatim. The gate cannot see
+  it: a citation inside a string literal is not read, and this one surfaced only
+  because a recording echoed the tool's own refusal into a file the gate does
+  read. That blind spot is now stated on the green path too.
 - A shell command or file write no longer fails because the shadow-git
   checkpoint before it met a directory the agent may not read. Staging a
   working directory the agent does not own — a system temp root, a project

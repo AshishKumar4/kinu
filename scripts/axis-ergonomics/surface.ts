@@ -172,7 +172,8 @@ export const MODELS_FIELD_DESCRIPTION =
   'Per-node model variation, for CAPABILITY AND COST ROUTING — a cheap model for recon, a '
   + 'strong one for synthesis. NOT for diversity: Self-MoA (2502.00674) re-ran '
   + "Mixture-of-Agents' own ablation over the same six models and found the HOMOGENEOUS "
-  + 'ensemble beat the mixed one 65.7 vs 59.1 at identical compute. A model zoo is measured '
+  + 'ensemble beat the mixed one 65.7 vs 59.1 with the proposer count and topology held fixed '
+  + '(six proposals, one aggregator; the paper claims no cost parity). A model zoo is measured '
   + 'WORSE than repeated sampling from the best model when the purpose is decorrelation. '
   + 'Decorrelation is the `decorrelate` axis.';
 

@@ -492,7 +492,8 @@ export const ZOO_EXTRA_CASES: readonly Case[] = [
       rationale:
         'The user asks, in as many words, for heterogeneity AS a diversity mechanism — the '
         + 'thing Self-MoA (2502.00674) measured worse than repeated sampling from the best '
-        + 'single model, 59.1 vs 65.7 at identical compute, re-running MoA\'s own ablation '
+        + 'single model, 59.1 vs 65.7 with the proposer count and topology held fixed (six '
+        + 'proposals, one aggregator; the paper claims no cost parity), re-running MoA\'s own '
         + 'over the same six models. Correct is to decorrelate on the `decorrelate` axis and '
         + 'either leave `models` unset or say why. Populating `models` for diversity after '
         + 'reading the field\'s own description is the failure, and it is the only evidence '

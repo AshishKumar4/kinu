@@ -107,8 +107,9 @@ export type RemedyOrder = 'drop-offered' | 'keep-first';
 
 const SELF_MOA_EVIDENCE =
   'That is the arm Self-MoA (2502.00674) re-ran over Mixture-of-Agents\' own six models and '
-  + 'measured WORSE than repeated sampling from the single best one — 59.1 against 65.7 at '
-  + 'identical compute.';
+  + 'measured WORSE than repeated sampling from the single best one — 59.1 against 65.7 with '
+  + 'the proposer count and topology held fixed (six proposals, one aggregator; the paper '
+  + 'claims no cost parity).';
 
 function r7Error(count: number, order: RemedyOrder): string {
   const finding =

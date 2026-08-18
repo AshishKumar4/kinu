@@ -205,10 +205,17 @@ export const LADDER: readonly Gate[] = [
       + 'trusted rather than verified. It governs a number only where a source is cited by '
       + 'author-or-arXiv form or by one of its own registered figures, so a number beside a bare '
       + 'product name is ungoverned — deliberately, since `GEPA` and `LATS` are modules here as '
-      + 'often as papers. It cannot see a compressed QUOTATION, which is the one defect in this '
-      + 'family that needed a human and the recorded source. It prints all of this on the GREEN '
-      + 'path, because a blind spot visible only in red output is invisible exactly when the '
-      + 'tree is clean.',
+      + 'often as papers. Reach is 4000 characters AND the structure holding the citation, so a '
+      + 'claim further than that from its citation is ungoverned; the bound exists because a '
+      + 'machine-written document has no paragraphs, and paragraph reach read one 206KB run '
+      + 'recording as a single paragraph. Captured output declared by its own leading `ranAt` is '
+      + 'read for quotations only and never judged — it asserts nothing and cannot be corrected '
+      + 'without being falsified — but it earns no credit either, so a register entry whose only '
+      + 'home is a recording is a finding. A citation inside a STRING LITERAL is not read at all, '
+      + 'which is where the bare-parity defect in `scripts/axis-ergonomics/` was sitting. It '
+      + 'cannot see a compressed QUOTATION, which is the one defect in this family that needed a '
+      + 'human and the recorded source. It prints all of this on the GREEN path, because a blind '
+      + 'spot visible only in red output is invisible exactly when the tree is clean.',
   },
   {
     run: 'bun run gate:install-scripts',
@@ -283,7 +290,10 @@ export const LADDER: readonly Gate[] = [
       + 'parity adjective, a deleted `up to`, an unnamed confusable unit, a locator '
       + 'naming the wrong table, a withdrawn number re-asserted — plus the six false '
       + 'positives that shaped its corpus decision, each of which demanded a paper '
-      + 'locator for one of our own numbers.',
+      + 'locator for one of our own numbers, and the REACH bound proven in both '
+      + 'directions: a recorded 206KB blob yields nothing, the same bytes undeclared '
+      + 'still refuse the parity adjective inside them, a claim three paragraphs from '
+      + 'its citation is still governed, and one past the bound is not.',
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts.',
   },
   {
