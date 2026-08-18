@@ -161,7 +161,7 @@ export async function spawnBranchFacet(
   return {
     explore: (history, tools, languages, mode, siblings) =>
       stub.explore(history, tools, languages, mode, siblings ?? []),
-    generateReflection: (task) => stub.generateReflection(task),
+    generateReflection: (task, outcome) => stub.generateReflection(task, outcome),
   };
 }
 

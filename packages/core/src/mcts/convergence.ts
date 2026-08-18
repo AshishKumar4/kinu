@@ -14,7 +14,7 @@ import type { SearchNode } from '../types/mcts.js';
 import type { ConvergenceResult } from '../types/evaluation.js';
 import type { SessionWriter } from './record-node.js';
 import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery.js';
-import { captureAlternateTakes } from './takes.js';
+import { captureAlternateTakes, findNearTiedRivals } from './takes.js';
 import { selectWinnerByTest } from './test-selection.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
@@ -52,6 +52,45 @@ export async function converge(
   const winner = selectedId === argmaxWinner.id
     ? argmaxWinner
     : population.find((n) => n.id === selectedId) ?? argmaxWinner;
+
+  // A search that could not tell its branches apart did not converge on one.
+  //
+  // With no value signal every node carries the same number, so `ORDER BY value
+  // DESC` degenerates to row order and the "winner" is whichever row SQLite
+  // returned first — while the result still cleared `minAcceptable` and
+  // reported success. Measured against this selector: at zero signal a 42-node
+  // tree returns a node no better than one of 42 independent samples, and the
+  // agreement between what it picked and the genuinely best node is 0%.
+  //
+  // The test is exact equality across DISTINCT approaches, not an epsilon: two
+  // near-tied branches are a real near-tie the takes ledger exists to record,
+  // whereas two textually different proposals scoring byte-identically means
+  // the scorer is not a function of the proposal. `findNearTiedRivals` supplies
+  // the population — it already drops the root, same-path refinements and
+  // textual duplicates — but its epsilon window is one-sided and keeps rivals
+  // scoring ABOVE the winner, which is the normal state after the execution
+  // tie-break promotes a lower-value passer. Only the exact ties count.
+  const indistinguishable = findNearTiedRivals(population, winner, 0)
+    .filter((rival) => rival.value === winner.value);
+  if (indistinguishable.length > 0) {
+    if (mode === 'build') {
+      await rt.memory.append(
+        'memory/MEMORY.md',
+        `\n### Undifferentiated search (${isoDate()})\n` +
+        `Task: ${winner.task.slice(0, 200)}\n` +
+        `${indistinguishable.length + 1} distinct approaches all scored ${winner.value.toFixed(2)}; ` +
+        `nothing in this search could tell them apart, so no winner was earned.\n`,
+      );
+      await rt.memory.index('memory/MEMORY.md');
+    }
+    abandonSearchTree(rt.storage.sql, rootId);
+    return {
+      winnerId: winner.id,
+      winnerValue: winner.value,
+      converged: false,
+      trajectory: [],
+    };
+  }
 
   // BUG-4: Below-threshold → converge reports failure, not hallucinated success
   if (winner.value < minAcceptable) {

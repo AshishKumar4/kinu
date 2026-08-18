@@ -16,7 +16,7 @@
 import type { SearchNode } from '../types/mcts.js';
 import type { LLM, Executor } from '../types/primitives.js';
 import { findNearTiedRivals } from './takes.js';
-import { generateAssertions, runForVerdict } from './evaluation.js';
+import { checkFraction, generateAssertionSuite, runForVerdict } from './evaluation.js';
 
 export interface TestSelectionDeps {
   executor: Executor;
@@ -51,27 +51,29 @@ export async function selectWinnerByTest(
     (node.code_used ?? '').trim().length > 0 && node.code_language === language);
   if (runnable.length < 2) return winner.id;
 
-  // One harness, written against the task using the value-argmax winner's code
-  // as the reference shape, then run against EACH candidate's own code.
-  const assertions = await generateAssertions(
+  // One check suite, written against the task using the value-argmax winner's
+  // code as the reference shape, then run against EACH candidate's own code.
+  const checks = await generateAssertionSuite(
     deps.judge, winner.task, runnable[0]!.code_used!.trim(), language);
-  if (!assertions) return winner.id;
+  if (checks.length === 0) return winner.id;
 
   const verdicts = await Promise.all(
-    runnable.map(async (n) => ({
-      node: n,
-      passed: (await runForVerdict(deps.executor, n.code_used!.trim(), assertions, language)).passed,
-    })),
+    runnable.map(async (n) => {
+      const execution = await runForVerdict(deps.executor, n.code_used!.trim(), checks, language);
+      // The measured share, not the pass bit. All-pass and all-fail used to be
+      // dead ends that fell back to value order; a suite of independent checks
+      // separates "two of four" from "none of four", so a near-tie the judge
+      // could not resolve is now resolved by how much of the task each
+      // candidate actually satisfies.
+      return { node: n, share: checkFraction(execution) ?? (execution.passed ? 1 : 0) };
+    }),
   );
 
-  const passers = verdicts.filter((v) => v.passed);
-  // No separation (all pass or all fail) → keep value order.
-  if (passers.length === 0 || passers.length === verdicts.length) return winner.id;
-
-  // The argmax winner already passes → confirmed; don't churn the answer.
-  if (passers.some((v) => v.node.id === winner.id)) return winner.id;
-
-  // The winner FAILED the discriminating test but a near-tied rival PASSED —
-  // promote the highest-value passer (verdicts preserve the value order).
-  return passers[0]!.node.id;
+  // Verdicts preserve value order, so the first maximum is the highest-value
+  // candidate among the best performers — a tie on share keeps today's answer.
+  const best = Math.max(...verdicts.map((v) => v.share));
+  const leader = verdicts[0]!;
+  // No separation: nothing measured beats the argmax winner's own share.
+  if (leader.share >= best) return winner.id;
+  return verdicts.find((v) => v.share === best)!.node.id;
 }

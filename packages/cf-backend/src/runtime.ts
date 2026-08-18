@@ -1095,13 +1095,13 @@ function createInlineBranch(agent: AgentHost, env: Env): BranchHandle {
       const text = result.text.trim();
       return { text, usage: normalizeUsage(result.usage) };
     },
-    // No trace table on this path — the reflection is about the task alone,
-    // and the shared prompt drops the attempt heading rather than showing an
-    // empty one.
-    generateReflection: async (task) => {
+    // No trace table on this path — the reflection is about the task and the
+    // environment's verdict alone, and the shared prompt drops the attempt
+    // heading rather than showing an empty one.
+    generateReflection: async (task, outcome) => {
       const result = await generateText({
         model: getModel(),
-        messages: [{ role: "user" as const, content: reflectionPrompt(task, '') }],
+        messages: [{ role: "user" as const, content: reflectionPrompt(task, '', outcome) }],
         ...effortFor('reflection'),
       });
       return { text: result.text.trim(), usage: normalizeUsage(result.usage) };

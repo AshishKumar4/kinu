@@ -512,8 +512,12 @@ export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolActi
 export const BUILTIN_TOOL_SPECS = {
   execute_tools: {
     name: 'execute_tools',
-    // llm.query is deliberately NOT here — it exists only on the CF backend,
-    // so the prompt advertises it via a backend-gated line instead.
+    // llm.query is deliberately NOT in this summary: it needs a model resolver
+    // to spawn sub-calls, which cf always has and a static-model CLI session
+    // does not (cli-backend/local-session.ts wires createRLMProvider only when
+    // one exists). So the prompt advertises it through the `rlmAvailable`-gated
+    // line instead of here, where it would be claimed unconditionally. It is
+    // NOT cf-only — both backends build it (core/src/rlm.ts).
     summary:
       'Run JavaScript against active executor namespaces, codemode.* providers, tools.<name> crafted tools, and agent helpers.',
     whenToUse: 'Use when a step needs real logic: loops, branching, several calls whose results feed each other, crafted tool calls, and anything that has to hold state between calls.',

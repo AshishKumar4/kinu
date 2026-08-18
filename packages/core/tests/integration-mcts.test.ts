@@ -223,6 +223,77 @@ describe('MCTS integration', () => {
     expect(result.winnerId).toBe(passing.id);
   });
 
+  // LATS §5.2: the environment's reply to a candidate solution — the assert
+  // suite and the compiler — is added to the context as an OBSERVATION. The
+  // engine already runs the code to pick a score band; these two tests pin that
+  // the verdict reaches the two places the paper puts it, and nowhere else.
+  test("a failed branch's execution verdict reaches the trajectory its children inherit", async () => {
+    const { rt } = createTestRuntime({
+      llmResponses: { 'scoring ONE candidate': '{"score": 0.5}' },
+    });
+    rt.executor = markerExecutor();
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'approach\n```js\nconst broken = FAIL_MARKER;\n```' }),
+      generateReflection: async () => ({ text: 'n/a' }),
+    });
+
+    initTables(rt);
+    const session = createMockSession();
+    await runMCTS(rt, session, 'implement the widget', { budget: 1, branches: 1 });
+
+    const child = rt.storage.sql<SearchNode>`
+      SELECT * FROM search_nodes WHERE parent_id IS NOT NULL`[0]!;
+    // The exact read the next expansion makes (engine.ts: priorHistory).
+    const inherited = session.getHistory(child.msg_id).map((m) => m.content).join('\n');
+    expect(inherited).toContain('FAILED');
+    expect(inherited).toContain('marker assertion failed');
+    // The proposal is still there — the observation is added to the action, not
+    // substituted for it.
+    expect(inherited).toContain('const broken = FAIL_MARKER;');
+    // And the search_nodes column keeps meaning "the branch's proposal text",
+    // which is what the alternate-takes ledger compares (mcts/takes.ts).
+    expect(child.observation).not.toContain('marker assertion failed');
+  });
+
+  test('the post-mortem is asked about the verdict, and a branch that never executed carries none', async () => {
+    const outcomes: Array<string | undefined> = [];
+    const { rt } = createTestRuntime({
+      llmResponses: { 'scoring ONE candidate': '{"score": 0.1}' },
+    });
+    rt.executor = markerExecutor();
+    let branchCounter = 0;
+    rt.spawnBranch = async () => {
+      const i = branchCounter++;
+      return {
+        explore: async () => ({
+          text: i === 0
+            ? 'approach 0\n```js\nconst broken = FAIL_MARKER;\n```'
+            : 'approach 1, prose only — no implementation offered',
+        }),
+        generateReflection: async (_task: string, outcome?: string) => {
+          outcomes.push(outcome);
+          return { text: 'n/a' };
+        },
+      };
+    };
+
+    initTables(rt);
+    const session = createMockSession();
+    await runMCTS(rt, session, 'implement the widget', { budget: 1, branches: 2 });
+
+    // Judge 0.1 puts both branches under reflectionThreshold (0.35), so both
+    // reflect: the executed one with its verdict, the prose one with none.
+    expect(outcomes.length).toBe(2);
+    expect(outcomes.filter((o) => o?.includes('marker assertion failed')).length).toBe(1);
+    expect(outcomes.filter((o) => o === undefined).length).toBe(1);
+
+    // A branch that never reached the environment gets no invented observation.
+    const prose = rt.storage.sql<SearchNode>`
+      SELECT * FROM search_nodes WHERE parent_id IS NOT NULL AND code_used IS NULL`[0]!;
+    expect(session.getHistory(prose.msg_id).map((m) => m.content).join('\n'))
+      .not.toContain('Observation:');
+  });
+
   test('every branch reaches the grounded evaluator (one call per branch)', async () => {
     let candidateCalls = 0;
     const llm: LLM = {

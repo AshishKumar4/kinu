@@ -212,14 +212,14 @@ export class ExplorationAgent extends Agent<Env> {
   }
 
   @callable()
-  async generateReflection(task: string): Promise<BranchReflection> {
+  async generateReflection(task: string, outcome?: string): Promise<BranchReflection> {
     const traces = this.sql<{ text: string }>`SELECT text FROM traces ORDER BY step`;
     const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(null, 'low');
     const request: Parameters<typeof generateText>[0] = {
       model,
       messages: [{
         role: "user" as const,
-        content: reflectionPrompt(task, traces.map(t => t.text).join("\n")),
+        content: reflectionPrompt(task, traces.map(t => t.text).join("\n"), outcome),
       }],
     };
     if (providerOptions) request.providerOptions = providerOptions;

@@ -82,7 +82,16 @@ export interface BranchHandle {
      *  so backends/tests that don't enforce diversity still satisfy the type. */
     siblings?: readonly string[],
   ): Promise<BranchExploration>;
-  generateReflection(task: string): Promise<BranchReflection>;
+  /**
+   * Write a post-mortem on this branch's own attempt.
+   *
+   * `outcome` is the environment's verdict the engine already read while
+   * scoring — "the proposed code ran and FAILED: …". Omitted when nothing was
+   * executed (prose, plan mode, an unrunnable language): a branch that never
+   * reached the environment has no verdict to be shown, and inventing one
+   * would put a claim nobody observed into MEMORY.md.
+   */
+  generateReflection(task: string, outcome?: string): Promise<BranchReflection>;
 }
 
 /** Factory for creating isolated branch agents — injected by the backend */

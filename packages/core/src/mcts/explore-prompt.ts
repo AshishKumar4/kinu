@@ -79,10 +79,16 @@ export function explorePrompt({ mode, context, craftedTools, siblings, languages
  * whole trace into a prompt asking for one sentence. `attempt` is empty on a
  * substrate with no trace table, which drops the line rather than showing the
  * model an empty heading.
+ *
+ * `outcome` is the environment's verdict on the attempt — LATS reflects on the
+ * trajectory AND its reward (§4.2). Absent when nothing was executed, in which
+ * case the branch is being asked about prose and the line is dropped rather
+ * than filled with a guess.
  */
-export function reflectionPrompt(task: string, attempt: string): string {
+export function reflectionPrompt(task: string, attempt: string, outcome?: string): string {
   const bounded = evidenceWindow(attempt, EVIDENCE_BUDGETS.reflection);
   return `Task: ${evidenceWindow(task, EVIDENCE_BUDGETS.reflection)}\n`
     + (bounded ? `Attempt: ${bounded}\n` : '')
+    + (outcome ? `Outcome: ${outcome}\n` : '')
     + `\nWhat specifically went wrong? One sentence.`;
 }

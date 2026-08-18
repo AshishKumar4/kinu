@@ -2,7 +2,44 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus uses Monte Carlo Tree Search (LATS variant, [arXiv:2310.04406](https://arxiv.org/abs/2310.04406)) to explore multiple solution approaches in parallel. Each branch is an isolated Durable Object (Facet) with its own SQLite database.
+Proteus uses Monte Carlo Tree Search to explore multiple solution approaches in parallel. Each branch is an isolated Durable Object (Facet) with its own SQLite database.
+
+## Which paper this is
+
+**LATS ([arXiv:2310.04406](https://arxiv.org/abs/2310.04406)), the programming
+instantiation — §5.2, not the ReAct one.** The distinction is the whole reason
+the citation is defensible, so it is stated rather than implied.
+
+LATS's headline domains (HotPotQA, WebShop) build nodes out of ReAct steps: an
+action goes to an environment, an observation comes back, and the trajectory
+grows one interaction at a time. Proteus does not do that, and a reader who
+checks the paper against `explore()` — a single `generateText` with no
+`ToolSet` — will conclude the citation is wrong. It is not, because LATS's
+programming setup is itself not ReAct-shaped. Verbatim, §5.2:
+
+> We use individual solutions as the action space and test suite and compiler
+> feedback as the external observation. […] For LATS, since each action
+> corresponds to a complete solution, we skip the simulation step of LATS and
+> directly use the percentage of passed tests as the backpropagated reward.
+
+That is what runs here: one action is one complete candidate solution, the
+environment is `rt.executor` plus a judge-generated assert suite
+(`generateAssertions`), simulation is skipped, and the execution verdict picks
+the backpropagated reward's band. Selection, expansion, evaluation,
+backpropagation and reflection are the §4.2 operations.
+
+Two honest qualifications:
+
+- **`plan` mode has no environment.** `executionPolicy: 'judge-only'` means
+  nothing is run and the value function is the judge alone. A plan-mode search
+  is Tree of Thoughts ([arXiv:2305.10601](https://arxiv.org/abs/2305.10601))
+  with UCT and backpropagation — LATS's own §5.4 CoT variant, and the setting
+  the paper says is the weaker one. Read a plan-mode score as an opinion.
+- **Reward is banded around the pass fraction, not the raw fraction.** LATS
+  backpropagates `passed_test_count / len(tests)` directly. We use it to
+  position inside the fail band, and let a pass into a separate, strictly higher
+  band — so a branch that runs clean can never be outscored by one that does
+  not, whatever a judge thinks. See "Scoring".
 
 ## Search Flow
 
@@ -87,25 +124,44 @@ runs a smaller search (budget 2, branches 2), and an operator can override
 iterations, depth, branches, judge samples, eval-call ceiling, and the
 exploration weight per workspace through `agent_config`.
 
-## Scoring — execution picks the band, the judge positions inside it
+## Scoring — execution picks the band, and inside the fail band it positions too
 
 The single scorer (`mcts/evaluation.ts`) is used by every backend. Execution
 outcome and judge score are **not** averaged: whether the branch's code ran and
-passed selects a score band, and the judge only decides where inside that band
-the branch lands.
+passed selects a score band, and only then is anything asked where inside that
+band the branch lands.
 
 | Branch produced | Score | Range |
 |---|---|---|
-| Code that ran and **passed** | `0.60 + 0.40 · j` | 0.60 – 1.00 |
-| Code that ran and **failed** | `0.05 + 0.25 · j` | 0.05 – 0.30 |
+| Code that ran and **passed** every check | `0.60 + 0.40 · j` | 0.60 – 1.00 |
+| Code that ran and failed some, with a check suite | `0.05 + 0.25 · f` | 0.05 – 0.30 |
+| Code that ran and failed, no check suite | `0.05 + 0.25 · j` | 0.05 – 0.30 |
 | Prose only, no sibling wrote code | `0.75 · j` | 0.00 – 0.75 |
 | Prose only, a sibling **did** write code | `0.30 · j` | 0.00 – 0.30 |
 
-`j` is the **median** of up to `judgeSamples` judge calls; samples that fail to
-parse are dropped rather than scored zero, and if every sample fails the branch
-falls to its band floor. An empty trajectory scores a hard 0 without spending a
-judge call. Assertions are generated once (one LLM call) and only when at least
-two eval calls remain in the budget.
+`f` is the **measured** share of generated checks the code satisfied —
+`passedChecks / totalChecks` — and it is LATS's backpropagated reward
+(`passed_test_count / len(tests)`). `j` is the **median** of up to
+`judgeSamples` judge calls; samples that fail to parse are dropped rather than
+scored zero, and if every sample fails the branch falls to its band floor. An
+empty trajectory scores a hard 0 without spending a judge call.
+
+**Why the fail band is positioned by `f` and not by `j`.** The judge is asked
+nothing there. A whole suite appended into one run stops at the first throw, so
+"three of four aspects correct" and "nothing works" produced the identical
+observation and were separated only by judge noise — a binary reward, which this
+repo measured degenerates a search toward best-of-n
+(`test-utils/src/eval-outcome.ts`) and which FunSearch names as a scope
+condition ("a 'rich' scoring feedback … as opposed to a binary signal"). The
+judge keeps the pass band, where `f` is 1 by construction and carries nothing.
+
+The suite is generated once (one LLM call, only when at least two eval calls
+remain in the budget) and asks for up to `MAX_GENERATED_CHECKS` = 4 independent
+checks, matching LATS's four generated tests. Each runs as its own execution:
+executor calls cost no tokens, so the fraction is bought with sandbox
+round-trips rather than spend. No suite means no `f`, and the judge positions
+instead — `passedChecks`/`totalChecks` are then **absent**, which is not the
+same claim as a fraction of zero.
 
 This is why a branch cannot talk its way to a good score: the ceiling for prose
 when a sibling actually produced running code is 0.30, below
@@ -153,16 +209,61 @@ through the same `evaluation.ts` and the reward is execution-grounded either
 way. `ExplorationAgent`'s MCTS-mode `@callable()` methods are:
 
 - `explore(history, craftedTools, languages, mode, siblingAngles)` — propose one approach under the parent's trusted work mode
-- `generateReflection(task)` — explain what went wrong (for pruned branches)
+- `generateReflection(task, outcome?)` — explain what went wrong (for pruned branches), given the environment's verdict on the attempt
 
 plus `setOwner` / `setSharedParent` for bootstrap. Siblings are pushed apart by
 `mcts/diversity.ts`, which hands each branch index a different framing angle, so
 three branches don't converge on the same idea.
 
-The same class also serves **head mode** for `agents({action:'fork'})` —
-`initHead` / `runAsHead` / `abortHead` drive a multi-step agentic loop over a
-restricted tool surface. See [ARCHITECTURE.md](./ARCHITECTURE.md) for why that
-class deliberately stays outside the `ActorAgent` hierarchy.
+### The observation loop
+
+A node is recorded **after** it is evaluated, not before, because a node's
+observation is the environment's reply to its action and cannot be written
+before the environment has answered. The execution verdict therefore reaches
+the two places LATS puts it, for no extra model call:
+
+- **The trajectory a child inherits.** The next expansion under this node reads
+  `session.getHistory(node.msg_id)`, and the recorded message is now
+  `[Node id] <proposal>` followed by `Observation: the proposed code ran against
+  generated assertions and FAILED: <error>`. Without it, deepening the tree
+  re-reads what the parent *proposed* and is never told that it threw — so
+  search could not fix a concrete runtime error, only re-guess around it.
+- **The post-mortem.** `generateReflection` receives that same verdict, so the
+  lesson written to `MEMORY.md` is about how the attempt ended rather than about
+  what it intended.
+
+`search_nodes.observation` still holds the branch's own proposal text — that is
+what the alternate-takes ledger compares (`mcts/takes.ts`) — and a branch that
+never reached the environment (prose, plan mode, an unrunnable language) carries
+no observation line rather than an invented one.
+
+### Why branches are toolless, and where the tool-using ones live
+
+A branch is deliberately one model call with no `ToolSet` and no runtime. That
+is not an unfinished version of a subagent: it is the other half of a pair.
+`agents({action:'fork'})` dispatches over a strategy registry
+(`core/src/strategy/`), and `heads` is the registered strategy whose branches
+**are** full agentic loops — the same `ExplorationAgent` class in head mode,
+scored by this same `evaluation.ts` through `HeadController.scoreHeads`.
+
+The two differ on the axis that matters for search:
+
+| | `mcts` | `heads` |
+|---|---|---|
+| Branch | one `generateText`, no tools | multi-step loop, `execute_tools`/`run`/`file`/`web` |
+| Isolation | structural — separate DO/process, no filesystem (`StorageIsolation.lean`) | prompt-level — heads share the canonical workspace and are *asked* to make their own git worktree |
+| Branches per run | tens (budget × branches, re-expanded by UCT) | a handful, spawned once |
+| Relationship | rivals; most are pruned | collaborators; all are merged |
+
+Pointing MCTS expansion at `runAsHead` would collapse that pair. Tens of
+concurrent heads mutate one shared workspace with no structural isolation, and
+"grade a branch by what it changed" is unanswerable when every branch changed
+the same tree — while the file-level isolation that would fix it is exactly the
+per-branch workspace the toolless design does not need.
+
+`initHead` / `runAsHead` / `abortHead` are the head-mode `@callable()`s on the
+same class. See [ARCHITECTURE.md](./ARCHITECTURE.md) for why that class
+deliberately stays outside the `ActorAgent` hierarchy.
 
 ## Pruning and convergence
 
@@ -174,11 +275,26 @@ reflection that explains the failure is written first, at the slightly higher
 
 Winner selection (`mcts/convergence.ts`) takes the argmax over `terminal` and
 `open` nodes by value, then applies a **test-based tie-break**: rivals within
-`takesEpsilon` (0.1) of the leader are run against one shared generated
-assertion harness, and if the leader fails where a near-tied rival passes, the
-passer is promoted. If the winner still scores below `minAcceptableScore` (0.3)
-the search reports `converged: false`, writes a failure lesson, and marks the
-open nodes failed rather than shipping a bad answer.
+`takesEpsilon` (0.1) of the leader are run against one shared generated check
+suite and compared on the share each satisfied, so a near-tie the judge could
+not resolve is settled by how much of the task each candidate actually did.
+(Comparing shares rather than a pass bit is what makes the tie-break usable at
+all — all-pass and all-fail used to be dead ends that fell back to value order.)
+
+Two conditions then refuse to declare a winner:
+
+- **Below the bar.** The winner scores under `minAcceptableScore` (0.3).
+- **Undifferentiated.** Two or more textually distinct approaches carry the
+  *exact* same value. With no value signal every node holds the same number, so
+  `ORDER BY value DESC` is row order and the "winner" is whichever row came
+  back first — while the shared value happily clears the bar. Exact equality,
+  not an epsilon: a near-tie is a real result the alternate-takes ledger exists
+  to record, whereas two different proposals scoring byte-identically means the
+  scorer is not a function of the proposal.
+
+Either way the search reports `converged: false`, writes a lesson naming which
+condition fired, and marks the open nodes failed rather than shipping an answer
+it did not earn.
 
 ## search_nodes Table
 
