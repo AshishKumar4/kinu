@@ -18,6 +18,11 @@
  * budget must never touch the table, never run a query, and never see a
  * refusal. The first describe proves that by counting every statement the
  * ledger issues while a full search runs unbudgeted.
+ *
+ * That negative is also why the last describe exists. The mission port is a CAP
+ * and it is a no-op without a label, so for an unlabelled search the rollout
+ * usage the engine captures off the wire used to be captured and then dropped.
+ * The report sink is the LEDGER, and it is asked unconditionally.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -33,6 +38,8 @@ import {
 import type { LLM, SqlExecutor, RawSqlExec, SqlValue } from '../src/types/primitives.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
 import type { Usage } from '../src/usage.js';
+import { usageTotal } from '../src/usage.js';
+import type { ModelCallReport, ModelCallSink } from '../src/events/model-call.js';
 
 /** A ledger over real SQLite that records every statement issued through it. */
 function countingLedger() {
@@ -87,10 +94,17 @@ function branchingRuntime() {
   return { rt, rollouts: () => rollouts, reflections: () => reflections };
 }
 
-async function search(rt: AgentRuntime, mission: MissionScope | null, budget = 3, branches = 2) {
+async function search(
+  rt: AgentRuntime,
+  mission: MissionScope | null,
+  budget = 3,
+  branches = 2,
+  reportModelCall?: ModelCallSink,
+) {
   return runMCTS(rt, createMockSession(), 'choose an approach', {
     budget, branches, judgeSamples: 1, maxEvalLLMCalls: 1,
     mission: mission ?? undefined,
+    reportModelCall,
   });
 }
 
@@ -296,5 +310,70 @@ describe('a declared budget reaches the search between expansions', () => {
     expect(snapshot.spent.tokens).toBe(0);
     expect(snapshot.calls).toBe(0);
     ledger.db.close();
+  });
+});
+
+describe('every rollout is reported, labelled or not', () => {
+  const ROLLOUT_TOKENS = PER_ROLLOUT.input + PER_ROLLOUT.output;
+  const REFLECTION_TOKENS = PER_REFLECTION.input + PER_REFLECTION.output;
+
+  test('a search under NO mission reports every rollout and reflection as mcts spend', async () => {
+    const reports: ModelCallReport[] = [];
+    const { rt, rollouts, reflections } = branchingRuntime();
+
+    await search(rt, null, 3, 2, (report) => reports.push(report));
+
+    // The search really ran, and no ledger was involved — this is the exact
+    // shape whose spend used to vanish.
+    expect(rollouts()).toBe(6);
+    expect(reflections()).toBeGreaterThan(0);
+    expect(reports.length).toBe(rollouts() + reflections());
+    expect(reports.every((r) => r.source === 'mcts')).toBe(true);
+    expect(reports.filter((r) => usageTotal(r.usage) === ROLLOUT_TOKENS).length).toBe(rollouts());
+    expect(reports.filter((r) => usageTotal(r.usage) === REFLECTION_TOKENS).length).toBe(reflections());
+  });
+
+  test('a branch whose provider reported nothing still reports the CALL, with an empty usage', async () => {
+    // The distinction the two channels exist for: the cap declines to charge a
+    // measurement it does not have, and the ledger still counts the call — so a
+    // silent provider stays distinguishable from a free one.
+    const ledger = countingLedger();
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    governor.declare('mission', { tokens: 10_000_000 }, {});
+
+    const reports: ModelCallReport[] = [];
+    const { rt } = branchingRuntime();
+    let explores = 0;
+    rt.spawnBranch = async () => ({
+      explore: async () => { explores++; return { text: 'an approach', usage: {} }; },
+      generateReflection: async () => ({ text: 'no lesson', usage: {} }),
+    });
+
+    await search(rt, localMissionScope(governor, ['mission']), 3, 2, (r) => reports.push(r));
+
+    expect(explores).toBeGreaterThan(0);
+    expect(reports.length).toBeGreaterThanOrEqual(explores);
+    expect(reports.every((r) => r.source === 'mcts' && usageTotal(r.usage) === undefined)).toBe(true);
+    // Same calls, and the ledger charged none of them.
+    expect(governor.snapshot('mission')[0]!.calls).toBe(0);
+    ledger.db.close();
+  });
+
+  test('a branch that FAILED reports nothing — an absent usage there is a failure, not a silence', async () => {
+    const reports: ModelCallReport[] = [];
+    const { rt } = branchingRuntime();
+    let reflections = 0;
+    rt.spawnBranch = async () => ({
+      explore: async () => { throw new Error('branch down'); },
+      generateReflection: async () => { reflections++; return { text: 'it died', usage: PER_REFLECTION }; },
+    });
+
+    await search(rt, null, 3, 2, (report) => reports.push(report));
+
+    // The reflections on those dead branches DID complete a call and are
+    // reported; the explorations never happened and are not.
+    expect(reflections).toBeGreaterThan(0);
+    expect(reports.length).toBe(reflections);
+    expect(reports.every((r) => usageTotal(r.usage) === REFLECTION_TOKENS)).toBe(true);
   });
 });

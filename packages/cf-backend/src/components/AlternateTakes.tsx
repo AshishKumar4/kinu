@@ -8,13 +8,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
-import { ArrowLeftIcon, ArrowRightIcon, GitBranchIcon, CheckCircleIcon, WarningCircleIcon, XIcon } from "@phosphor-icons/react";
+import {
+  ArrowLeftIcon, ArrowRightIcon, CaretDownIcon, CaretRightIcon, GitBranchIcon,
+  CheckCircleIcon, WarningCircleIcon, XIcon,
+} from "@phosphor-icons/react";
 import type { AlternateTakeSet, TakePickOutcome } from "@proteus/core";
-import { takeEvidence } from "@proteus/core";
+import { branchHeadId, takeEvidence } from "@proteus/core";
 import type { BranchRun } from "@/hooks/use-proteus";
+import type { Rpc } from "@/lib/protocol";
 import { Modal } from "@/components/ui/Modal";
 import { ScoreBar } from "@/components/ui/score-bar";
 import { MarkdownContent } from "@/components/surfaces/shared";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { TranscriptBody, useNodeTranscript } from "@/components/NodeTranscript";
 import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "./alternate-takes-logic";
 
 export function TakesChip({ set, onPick }: {
@@ -159,19 +165,40 @@ function TakesComparison({ set, onPick, onClose }: {
   );
 }
 
-/** Steer-as-Branch progress chip — rendered near the streaming answer while
- *  the branch head runs, becoming the takes affordance (the SAME TakesChip /
- *  comparison) on settle, or an honest one-line reason on failure. */
-export function BranchRunChip({ run, takes, onPick, onDismiss }: {
+/**
+ * Steer-as-Branch progress chip — rendered near the streaming answer while the
+ * branch head runs, becoming the takes affordance (the SAME TakesChip /
+ * comparison) on settle, or an honest one-line reason on failure.
+ *
+ * "Show what it did" opens the branch's own transcript in place. A branch run
+ * has exactly one head and its id is DERIVED from the run id
+ * ({@link branchHeadId}), so the chip can name the node without first listing
+ * the run — the whole reason that id is derived rather than random. It reads
+ * through the same `getNodeTranscript` and renders the same {@link
+ * TranscriptBody} the Exploration panel does; a chip that could only say
+ * "Branching…" left the reader with no way to see what they had spent a turn on.
+ */
+export function BranchRunChip({ run, takes, rpc, headActivity, onPick, onDismiss }: {
   run: BranchRun;
   /** The settled set (hydrated from listAlternateTakes by the run's turnId). */
   takes?: AlternateTakeSet;
+  rpc: Rpc;
+  /** Per-branch write counter — what makes an open branch transcript live. */
+  headActivity: ReadonlyMap<string, number>;
   onPick: (takeId: string, nodeId: string) => Promise<TakePickOutcome>;
   onDismiss: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   const task = run.task.length > 80 ? `${run.task.slice(0, 80)}…` : run.task;
+  const headId = branchHeadId(run.branchId);
+  const { view, resource, reload } = useNodeTranscript({
+    runId: open ? run.branchId : null,
+    nodeId: open ? headId : null,
+    rpc,
+    headActivity,
+  });
   return (
-    <div className="flex justify-start animate-fade-in py-0.5">
+    <div className="flex flex-col items-start gap-1 animate-fade-in py-0.5">
       <div className="inline-flex items-center gap-2 max-w-full px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
         {run.status === "running" && (
           <>
@@ -193,12 +220,41 @@ export function BranchRunChip({ run, takes, onPick, onDismiss }: {
             <span className="truncate">Branch discarded: {run.message ?? "no comparison available"}</span>
           </>
         )}
+        <button type="button" onClick={() => setOpen(!open)}
+          className="p-text-3 hover:p-text cursor-pointer shrink-0 inline-flex items-center gap-1"
+          aria-expanded={open} title="Read every step this branch took">
+          {open ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />}
+          {open ? "Hide" : "Show what it did"}
+        </button>
         {run.status !== "running" && (
           <button onClick={onDismiss} className="p-text-3 hover:p-text cursor-pointer shrink-0" aria-label="Dismiss branch chip">
             <XIcon size={11} />
           </button>
         )}
       </div>
+      {open && (
+        <div className="w-full max-h-96 flex flex-col rounded-lg border p-border p-surface overflow-hidden">
+          {resource.status === "error" && (
+            <LoadFailure what="this branch's transcript" message={resource.message} onRetry={reload}
+              className="shrink-0 border-b p-border px-4 py-2" />
+          )}
+          {/* No `onSelect`: a branch run is one head deep, so its search path has
+              no ancestor to leave for. */}
+          {view ? <TranscriptBody view={view} />
+            : resource.status === "loading" ? (
+              <div className="flex items-center justify-center gap-2 py-6 text-[12px] p-text-2">
+                <Loader size="sm" />Reading the branch…
+              </div>
+            ) : (
+              // The run id IS the journal's root id and the head id is derived
+              // from it, so "nothing recorded" here means the branch died before
+              // its first write — not that the chip looked in the wrong place.
+              <div className="px-4 py-6 text-center text-[11px] p-text-3">
+                Nothing is recorded for this branch yet.
+              </div>
+            )}
+        </div>
+      )}
     </div>
   );
 }

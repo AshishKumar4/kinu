@@ -391,6 +391,15 @@ export class ExplorationAgent extends Agent<Env> {
           model,
           schema: MergeOutputSchema,
           prompt,
+          // The merge synthesis is the one model call in a recursive split whose
+          // cost lands nowhere else: `head_merge_results.cost_total_tokens` is
+          // the sum of the HEADS, not of the call that merged them. Reported to
+          // the root over the same cross-DO port the journal above uses, because
+          // that is where the workspace's total is assembled.
+          spend: {
+            source: 'judge',
+            report: (report) => { void parent.reportFacetModelCall(report); },
+          },
         };
         if (providerOptions) options.providerOptions = providerOptions;
         return generateJson(options);

@@ -22,7 +22,8 @@ import {
 } from '@proteus/compaction';
 import type {
   ChatOptions, ChatEvent,
-  AgentRuntime, LLMProviderConfig, CompletedTurn, TurnContinuity, FiberCtx,
+  LLMProviderConfig, CompletedTurn, TurnContinuity, FiberCtx,
+  ModelCallSink,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
@@ -67,7 +68,7 @@ import {
   persistMeasuredPromptTokens, applyOverflowRecovery,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   PROGRAMMATIC_MESSAGE_ID_PREFIX,
-  ExtensionHost, StepInjections,
+  ExtensionHost, UserSteerDrain,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
   createAgentsCodemodeProvider, createReleaseCodemodeProvider, type CodemodeProvider,
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
@@ -111,8 +112,9 @@ import {
   getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   type EvolutionChangelogView,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
+  priceCall, WORKSPACE_RUN_ID,
 } from '@proteus/core';
-import { makeSqlExec } from './runtime.js';
+import { makeSqlExec, type CLIRuntime } from './runtime.js';
 import { discoverAgentsMd } from './agents-md.js';
 import { createNodeCraftedExecute } from './craft-executor.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
@@ -228,7 +230,7 @@ export interface LocalDurableWebhook {
 }
 
 export interface LocalAgentSessionOpts {
-  rt: AgentRuntime;
+  rt: CLIRuntime;
   /** Raw bun:sqlite handle — backs the EventsHub SqlExec adapter. */
   db: LocalSessionDb;
   /** The ai-SDK chat model runChat drives. Build via resolveChatModel(llmConfig). */
@@ -281,7 +283,7 @@ interface QueueItem {
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
 export class LocalAgentSession implements BackendHost {
-  private readonly rt: AgentRuntime;
+  private readonly rt: CLIRuntime;
   private readonly fallbackModel: LanguageModel;
   private readonly fallbackModelSpec: string;
   private readonly modelResolver: LocalModelResolver | null;
@@ -315,6 +317,37 @@ export class LocalAgentSession implements BackendHost {
   readonly budget: MissionGovernor;
   /** The run the in-flight turn belongs to; null between turns. */
   private currentRunId: string | null = null;
+  /**
+   * Where every non-turn model call in this workspace reports what it cost.
+   *
+   * The turn loop's own spend reaches this same log as `step_finish`. The judge,
+   * the fast tier, the reflection seam and the heads' merge synthesis are
+   * invisible to that row, and each of them used to drop the provider's usage on
+   * the line that received it — so a workspace total read off `step_finish`
+   * alone was the orchestrator's turns while looking like it was everything.
+   *
+   * One row per COMPLETED call, `usage` included even when the provider said
+   * nothing (`{}`): unmeasured spend is visible as unmeasured, never as free.
+   */
+  private readonly modelCallSink: ModelCallSink = (report) => {
+    const event: Extract<RunEventInput, { type: 'model_call' }> = {
+      type: 'model_call', source: report.source, usage: report.usage,
+    };
+    if (report.spec !== undefined) event.spec = report.spec;
+    if (report.modelId !== undefined) event.modelId = report.modelId;
+    // Priced only when the call ran on the model the catalog session has
+    // actually resolved. A judge deliberately runs on a DIFFERENT model from the
+    // actor, so charging it the actor's rate would invent a number; an absent
+    // `usd` says "not priced here", which the workspace total reads as such.
+    const pricing = report.spec === this.effectiveModelSpec() ? this.modelCatalog.pricing() : null;
+    const usd = pricing ? priceCall(report.usage, pricing) : undefined;
+    if (usd !== undefined) event.usd = usd;
+    // Half of these producers fire BETWEEN runs — an evolution pass on a fiber,
+    // a workspace title before the first turn exists — and the log is keyed by
+    // run, so those calls are filed under the reserved workspace run rather than
+    // dropped. Dropping them is the dishonesty this row type exists to remove.
+    this.recordRunEvent(event, this.currentRunId ?? WORKSPACE_RUN_ID);
+  };
   private readonly triggerRegistry: TriggerRegistry;
   /** Durable reply sinks for the events this session admits — the same table
    *  and TTLs the cloud backend writes, with no dispatcher in front of them:
@@ -391,10 +424,10 @@ export class LocalAgentSession implements BackendHost {
   private pumpPromise: Promise<void> | null = null;
   /** The in-flight turn's abort handle — interrupt() aborts it. */
   private currentAbort: AbortController | null = null;
-  /** Mid-turn steers awaiting the next step boundary (Hermes steer-drain:
-   *  everything pending merges into ONE user message per drain, injected after
-   *  the latest tool results so role alternation stays provider-safe). */
-  private pendingSteers: Array<{ text: string; files?: ReadonlyArray<PromptFile> }> = [];
+  /** Mid-turn steers awaiting the next step boundary — the shared core
+   *  drain, whose USER semantics (persist verbatim, hand back on interrupt,
+   *  rerun as a user-origin turn) both backends now get from one place. */
+  private readonly userSteer = new UserSteerDrain({ turnInFlight: () => this.pumping });
   /** Steer-as-Branch redirects launched against the in-flight turn — each runs
    *  as one budgeted head and settles into Alternate Takes at turn end. */
   private pendingBranches: PendingBranch[] = [];
@@ -490,6 +523,11 @@ export class LocalAgentSession implements BackendHost {
     const headRuntimeOptions: Parameters<typeof createCLIHeadRuntime>[0] = {
       model: this.fallbackModel,
       providerFamily: parseModelSpec(this.fallbackModelSpec).provider,
+      // The merge runs on `model` above — the model THIS spec resolved — so the
+      // spec is this session's to attach and not head-runtime's: that seam holds
+      // a `LanguageModel`, which does not carry the spec it was built from.
+      reportModelCall: (report) =>
+        this.modelCallSink({ ...report, spec: this.fallbackModelSpec }),
       parentRuntime: this.rt,
       cwd: this.cwd,
       webSearch: this.getWebSearchProvider(),
@@ -566,6 +604,11 @@ export class LocalAgentSession implements BackendHost {
       },
     });
     this.rt.setTurnFileLedgerProvider?.(() => this.orch.acc.files);
+    // The runtime's judge / fast / reflection seams were built before this
+    // session existed (createCLIRuntime), so this is the moment their reports
+    // find a ledger. A runtime holds ONE sink: the live session's, exactly as it
+    // holds one turn file ledger and one approval channel.
+    this.rt.setModelCallSink?.(this.modelCallSink);
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
@@ -1014,8 +1057,9 @@ export class LocalAgentSession implements BackendHost {
    *  The user steer-drain's USER semantics (each steer persists as a verbatim
    *  user row for the walk-back fork, interrupt() hands pending steers back to
    *  the composer, leftover steers rerun as a user-origin turn) are properties
-   *  of `pendingSteers`, which signals do not touch: they ride the core seam's
-   *  own buffer, are never persisted, and settle back into turns of their own.
+   *  of core's `UserSteerDrain`, which signals do not touch: they ride the core
+   *  seam's own buffer, are never persisted, and settle back into turns of
+   *  their own.
    *  Two independent splices land at the same step tail as two adjacent
    *  user-role messages, which every provider adapter groups into one turn. */
   turnInFlight(): boolean {
@@ -1043,10 +1087,7 @@ export class LocalAgentSession implements BackendHost {
    * Returns false when no turn is active — callers should send() normally.
    */
   steer(input: string | { text: string; files: ReadonlyArray<PromptFile> }): boolean {
-    if (!this.pumping) return false;
-    const { text, files } = normalizePromptInput(input);
-    this.pendingSteers.push({ text, files });
-    return true;
+    return this.userSteer.accept(normalizePromptInput(input)) === 'mid-turn';
   }
 
   /**
@@ -1077,7 +1118,7 @@ export class LocalAgentSession implements BackendHost {
    *  user (the composer restore), never lose them silently: the chat already
    *  rendered them as sent. */
   interrupt(): string[] {
-    const dropped = this.pendingSteers.splice(0).map((steer) => steer.text);
+    const dropped = this.userSteer.interrupt().map((steer) => steer.text);
     this.currentAbort?.abort();
     return dropped;
   }
@@ -1628,20 +1669,10 @@ export class LocalAgentSession implements BackendHost {
     const abort = new AbortController();
     this.currentAbort = abort;
 
-    // Steer-drain bookkeeping (Hermes conversation_loop pattern): at each step
-    // boundary all pending steers merge into ONE user message appended after
-    // the latest tool results (Anthropic groups tool+user into a single turn,
-    // so role alternation holds). The splice-at-entry-index math — base
-    // coordinates from the step-0 message count, re-applied every step — is
-    // the shared core StepInjections (the cf backend's background-event
-    // injection rides the same class).
-    const injections = new StepInjections<{ message: ModelMessage; texts: string[] }>();
-    const prepareStepMessages = (ctx: { stepNumber: number; messages: ModelMessage[] }): ModelMessage[] | undefined => {
-      const drained = this.pendingSteers.splice(0);
-      return injections.drain(ctx, drained.length > 0
-        ? [{ message: steerUserMessage(drained), texts: drained.map((steer) => steer.text) }]
-        : []);
-    };
+    // Steer-drain bookkeeping (Hermes conversation_loop pattern) is the shared
+    // core UserSteerDrain — a fresh turn resets its splice coordinates while
+    // keeping steers typed for the turn that is about to run.
+    this.userSteer.beginTurn();
 
     // The compaction extension + the steer-drain ride the public extension
     // seam — the same host external plugins register on. One hook path, not
@@ -1650,7 +1681,7 @@ export class LocalAgentSession implements BackendHost {
     // shift the indices the user-steer drain replays into durable history.
     const extensions = new ExtensionHost()
       .register(this.compactionExtension)
-      .register({ name: 'proteus.steering', prepareStep: prepareStepMessages })
+      .register({ name: 'proteus.steering', prepareStep: (ctx) => this.userSteer.prepareStep(ctx) })
       .register(this.orch.turnExtension);
     const cache = this.cacheIdentity();
     const effort = this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat;
@@ -1775,7 +1806,7 @@ export class LocalAgentSession implements BackendHost {
           case 'done': {
             // Replay the drained steers into the durable history at the exact
             // positions the model saw them (StepInjections.replayInto).
-            for (const msg of injections.replayInto(ev.responseMessages)) this.history.push(msg);
+            for (const msg of this.userSteer.replayInto(ev.responseMessages)) this.history.push(msg);
             if (!fullText.trim() && ev.text.trim()) fullText = ev.text;
             break;
           }
@@ -1786,7 +1817,7 @@ export class LocalAgentSession implements BackendHost {
       // rendered them as sent — a failed stream must not erase them from the
       // live context (their exact splice positions died with the stream, so
       // they append in drain order).
-      for (const injection of injections.recorded) this.history.push(injection.message);
+      for (const msg of this.userSteer.recordedMessages()) this.history.push(msg);
       this.orch.acc.hadError = true;
       const message = err instanceof Error ? err.message : String(err);
       runError = message.slice(0, 500);
@@ -1821,8 +1852,8 @@ export class LocalAgentSession implements BackendHost {
 
       // Steers that never saw a step boundary (the model was already finishing)
       // run as the IMMEDIATE next turn — ahead of any programmatic injects.
-      if (this.pendingSteers.length > 0) {
-        const leftover = this.pendingSteers.splice(0);
+      const leftover = this.userSteer.takeLeftover();
+      if (leftover.length > 0) {
         this.queue.unshift({
           text: leftover.map((steer) => steer.text).join('\n\n'),
           files: leftover.flatMap((steer) => steer.files ?? []),
@@ -1846,7 +1877,10 @@ export class LocalAgentSession implements BackendHost {
           ? `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${item.idempotencyKey ?? crypto.randomUUID()}`
           : crypto.randomUUID(),
         item.text,
-        injections.recorded.flatMap((injection) => injection.texts),
+        // `drainedTexts()` IS the `injections.recorded.flatMap(…)` this line used
+        // to spell out (user-steer.ts:115-117): the drain OWNS that buffer now,
+        // so the local `StepInjections` it read from no longer exists here.
+        this.userSteer.drainedTexts(),
         fullText,
       );
 
@@ -2433,11 +2467,16 @@ export class LocalAgentSession implements BackendHost {
   }
 
   private rebuildModelBoundState(model: LanguageModel): void {
+    // Captured, not re-read: this is the spec `model` was resolved from, so it is
+    // what prices the merge call this runtime makes. A later model switch rebuilds
+    // the whole runtime, which is what keeps the pair honest.
+    const spec = this.effectiveModelSpec();
     // Branching heads — in-process runtime + controller (drives think strategy=heads).
     // The agent's VFS backs the shared findings scratch sibling heads write to.
     this._headRuntime = createCLIHeadRuntime({
       model,
-      providerFamily: parseModelSpec(this.effectiveModelSpec()).provider,
+      providerFamily: parseModelSpec(spec).provider,
+      reportModelCall: (report) => this.modelCallSink({ ...report, spec }),
       parentRuntime: this.rt,
       cwd: this.cwd,
       webSearch: this.getWebSearchProvider(),
@@ -2508,21 +2547,6 @@ export class LocalAgentSession implements BackendHost {
     this.rawTools = surface.raw;
     this.tools = surface.wrapped;
   }
-}
-
-/** Merge drained steers into ONE user ModelMessage — text joined in arrival
- *  order, attachments carried as file parts (the runChat user-message shape). */
-function steerUserMessage(drained: ReadonlyArray<{ text: string; files?: ReadonlyArray<PromptFile> }>): ModelMessage {
-  const text = drained.map((steer) => steer.text).join('\n\n');
-  const files = drained.flatMap((steer) => steer.files ?? []);
-  if (files.length === 0) return { role: 'user', content: text };
-  return {
-    role: 'user',
-    content: [
-      ...files.map((f) => ({ type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename })),
-      { type: 'text' as const, text },
-    ],
-  };
 }
 
 export { serializeContentForHeads } from '@proteus/core';

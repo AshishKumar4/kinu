@@ -337,7 +337,12 @@ export {
 } from './turn-failure.js';
 
 // LLM (Vercel AI SDK wrapper — shared across backends)
-export { createVercelAILLM, collectStepText, createChatModel, createCompletionLLM, estimateTokens } from './llm.js';
+export {
+  createVercelAILLM, collectStepText, createChatModel, createCompletionLLM, estimateTokens,
+  // The chars-per-token estimate, exported so a surface that shows one imports
+  // the policy instead of retyping the number beside it.
+  CHARS_PER_TOKEN,
+} from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig, LLMUsage } from './llm.js';
 // The ONE normalized provider usage report, and the absence-preserving
 // arithmetic over it. Every surface that counts tokens speaks this.
@@ -371,6 +376,11 @@ export {
   readMissionLabels,
   readMissionLimits,
   localMissionPort,
+  // The ONE catalog pricing of a usage report. Exported because a surface that
+  // prices a call must price it exactly as the ledger debits it — two
+  // implementations would make the same call cost different amounts depending
+  // on who asked.
+  priceCall,
   localMissionScope,
   type MissionBudgetPort,
   type MissionScope,
@@ -672,11 +682,18 @@ export {
 // into the Alternate Takes pipeline against the live turn's answer.
 export {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, STEER_BRANCH_RUN_ID_PREFIX,
-  newBranchId, isSteerBranchRunId,
+  newBranchId, isSteerBranchRunId, branchHeadId,
   startBranchHead, settleBranchIntoTakes, settlePendingBranch, settlePendingBranches,
   type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle,
   type BranchSettleOutcome, type PendingBranch,
 } from './steer-branch.js';
+// The user steer-drain — a message typed while a turn runs, spliced into its
+// next step. Not a signal: it persists verbatim, comes back on interrupt, and
+// reruns as a user-origin turn (see user-steer.ts).
+export {
+  UserSteerDrain, steerUserMessage,
+  type UserSteer, type UserSteerOutcome, type SteerStatusEvent,
+} from './orchestrator/user-steer.js';
 
 // Schemas
 export { initSearchTables } from './mcts/schemas.js';
@@ -924,6 +941,14 @@ export {
   cacheHitRate,
   summarizeSteps,
   CACHE_HIT_EMA_ALPHA,
+  SPEND_SOURCES,
+  SPEND_SOURCE_LABEL,
+  SPEND_SOURCE_DETAIL,
+  WORKSPACE_RUN_ID,
+  type ModelCallReport,
+  type ModelCallSpend,
+  type ModelCallSink,
+  type SpendSource,
   type RunEventListener,
   type RunEventQuery,
 } from './events/index.js';
@@ -1305,6 +1330,10 @@ export {
 export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/timeline.js';
 export { getRunEvents, getRunSummaries, listRuns } from './read-models/runs.js';
 export type { RunListEntry, RunSummary } from './read-models/runs.js';
+export { workspaceSpend } from './read-models/workspace-spend.js';
+export type {
+  ProducerSpend, SpendCoverage, WorkspaceSpend, WorkspaceSpendDeps,
+} from './read-models/workspace-spend.js';
 export {
   censusToolFailures, classifyToolFailure, toolFailureKey,
 } from './read-models/tool-failures.js';
@@ -1335,6 +1364,10 @@ export type {
 } from './read-models/fork-params.js';
 export { listForkRuns, readForkRun } from './read-models/fork-runs.js';
 export type { ForkRunSummary, ForkRunStatus, ForkSettle } from './read-models/fork-runs.js';
+export { readNodeTranscript } from './read-models/node-transcript.js';
+export type {
+  NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,
+} from './read-models/node-transcript.js';
 export { buildPendingActions } from './read-models/pending-actions.js';
 export { getAgentStatus, getChatHistoryPage, getToolList } from './read-models/status.js';
 export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './read-models/page.js';

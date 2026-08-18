@@ -76,6 +76,9 @@ export interface WorkSurfaceProps {
   onSearchMemory: (q: string) => void;
   // Exploration — the tree of the search in flight, pushed by the engine.
   mctsTrees: ReadonlyMap<string, ForkNode>;
+  /** Per-branch journal-write counter, pushed by `head_activity` — what makes an
+   *  open branch's transcript grow while that branch works. */
+  headActivity: ReadonlyMap<string, number>;
   /** A turn is in flight — the live surfaces revalidate while it is. */
   isStreaming: boolean;
   // Environment (mounts + terminals)
@@ -196,6 +199,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           {surface === "Exploration" && (
             <ExplorationSurface
               liveTrees={props.mctsTrees}
+              headActivity={props.headActivity}
               isStreaming={props.isStreaming}
               backgroundJobs={props.backgroundJobs}
               rpc={props.rpc}

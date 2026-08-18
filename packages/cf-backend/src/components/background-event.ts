@@ -99,6 +99,15 @@ export function messageSignalId<Metadata>(metadata: Metadata): string | null {
   return parsed.output[SIGNAL_ID_METADATA_KEY] || null;
 }
 
+/** Whether a durable user row is one the agent was STEERED with mid-turn (the
+ *  actor stamps `proteusSteer` when it persists a drained steer). It is a real
+ *  user message either way — this only decides whether the thread explains why
+ *  it appears inside another turn's work. */
+export function isSteeredMessage<Metadata>(metadata: Metadata): boolean {
+  const parsed = v.safeParse(v.looseObject({ proteusSteer: v.optional(v.boolean()) }), metadata);
+  return parsed.success && parsed.output.proteusSteer === true;
+}
+
 /** One live background-event card: an event that has happened, and whether the
  *  agent has read it yet. */
 export interface SignalCard {

@@ -17,6 +17,7 @@ import {
   createProviderProxyFetch,
   createProviderRegistry,
   listModelsDevProviderModels,
+  normalizeUsage,
   parseModelSpec,
   PROXY_DENIED_CRED_KEYS,
   providerProxyCredentialsURL,
@@ -33,10 +34,11 @@ import {
   type ModelProvider,
   type ProviderDeps,
   type ProviderInfo,
+  type ModelCallSpend,
 } from '@proteus/core';
 import type { OAuthCredential } from '@proteus/core';
 import { generateText, streamText } from 'ai';
-import type { LanguageModel } from 'ai';
+import type { LanguageModel, LanguageModelUsage } from 'ai';
 import type { LLM } from '@proteus/core';
 import { createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude-cli-provider.js';
 import { createOpenCodeProvider, type OpenCodeProviderOptions } from './opencode-provider.js';
@@ -170,6 +172,23 @@ export interface LocalModelResolverConfig {
   opencode?: OpenCodeProviderOptions;
 }
 
+/** One shape for both paths of the seam below, so a source label and a spec
+ *  cannot be attached one way in `stream` and another in `complete`. Reported
+ *  even when the provider said nothing — `normalizeUsage` returns `{}` and the
+ *  CALL still lands, which is what keeps a silent provider distinguishable from
+ *  a free one. */
+function reportCall(
+  spend: ModelCallSpend,
+  spec: string,
+  usage: LanguageModelUsage,
+  modelId: string | undefined,
+): void {
+  const reported = normalizeUsage(usage);
+  spend.report(modelId !== undefined && modelId.length > 0
+    ? { source: spend.source, spec, usage: reported, modelId }
+    : { source: spend.source, spec, usage: reported });
+}
+
 /**
  * The workspace LLM seam over the local registry.
  *
@@ -177,13 +196,31 @@ export interface LocalModelResolverConfig {
  * evolution calls reach the chat vendor's small tier (core's selectFastModel)
  * without a second provider path: same resolver, same credentials, one
  * different model id. Omitted = the workspace's configured chat model.
+ *
+ * Every judge, classifier, reflection, craft-generalization and sleep-time
+ * compute call in a local workspace comes through here, and each of them used to
+ * discard the provider's usage report on the line that received it — so `spend`
+ * is the whole difference between a workspace total that counts them and one
+ * that silently omits them. Only a COMPLETED call reports: a call that threw
+ * produced no usage and, as far as this seam can see, was not billed, so
+ * counting it would depress the coverage fraction with requests that genuinely
+ * cost nothing.
  */
-export function createLocalProviderLLM(opts: LocalModelResolverConfig & { spec?: string | null }): LLM {
+export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
+  spec?: string | null;
+  /** The sink AND the label, in one field: this factory backs `rt.llm`'s
+   *  reflection, `rt.fastLlm`'s mechanical tier and `rt.judgeModel`'s grading,
+   *  so only the consumer knows which producer a call belongs to. Optional, and
+   *  it stays optional: a seam with no sink wired is a seam whose spend is
+   *  unattributed, which the coverage fraction states rather than hides. */
+  spend?: ModelCallSpend;
+}): LLM {
   const resolver = createLocalModelResolver(opts);
   const spec = resolver.normalizeSpecSync(opts.spec ?? null);
   const providerOptions = reasoningEffortOptions('low', parseModelSpec(spec).provider);
   const maxOutputTokens = opts.llm.maxTokens;
   const model = () => resolver.resolveModel(spec);
+  const spend = opts.spend;
   return {
     async *stream(input) {
       const request: Parameters<typeof streamText>[0] = {
@@ -198,6 +235,11 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & { spec?:
       if (providerOptions) request.providerOptions = providerOptions;
       const result = streamText(request);
       for await (const chunk of result.textStream) yield chunk;
+      // Usage is knowable only once the stream has drained, so the report lands
+      // here. A consumer that abandons the generator never reaches this line and
+      // reports nothing — honest, because the cost of a stream nobody finished
+      // is not something this seam ever learns.
+      if (spend) reportCall(spend, spec, await result.totalUsage, (await result.response).modelId);
     },
     async complete(prompt) {
       const request: Parameters<typeof generateText>[0] = {
@@ -207,6 +249,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & { spec?:
       if (maxOutputTokens !== undefined) request.maxOutputTokens = maxOutputTokens;
       if (providerOptions) request.providerOptions = providerOptions;
       const result = await generateText(request);
+      if (spend) reportCall(spend, spec, result.totalUsage, result.response.modelId);
       return result.text.trim();
     },
   };

@@ -97,6 +97,9 @@ export function createMCTSStrategy(): ExplorationStrategy {
         // from the report that comes back with it and stops opening expansions
         // once the ledger is spent.
         mission: ctx.mission,
+        // Asked of every rollout whether or not a mission labelled this search:
+        // the debit above is a cap, this is the ledger.
+        reportModelCall: ctx.reportModelCall,
       });
       // The winner's trajectory is the agent-readable answer.
       const text = result.trajectory.map(m => `${m.role}: ${m.content}`).join('\n');

@@ -565,6 +565,13 @@ describe('the app document policy', () => {
     expect(appDocumentCsp(new URL(APP), null)).toContain("connect-src 'self' wss://proteus.example.com");
   });
 
+  // KaTeX_Size3-Regular.woff2 is under Vite's inline threshold, so the bundle
+  // carries it as `data:font/woff2;base64,…`. Unset, `font-src` falls back to
+  // `default-src 'self'` and the browser refuses it.
+  test('the inlined maths font survives the font-src rule', () => {
+    expect(appDocumentCsp(new URL(APP), null)).toContain("font-src 'self' data:");
+  });
+
   test('non-document responses are left alone', () => {
     const json = new Response('{}', { headers: { 'content-type': 'application/json' } });
     expect(withAppSecurityHeaders(json, new URL(APP), null)).toBe(json);

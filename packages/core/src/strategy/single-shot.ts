@@ -14,7 +14,7 @@ export function createSingleShotStrategy(): ExplorationStrategy {
     advertised: false,
     async explore(ctx: StrategyContext): Promise<StrategyResult> {
       const t0 = Date.now();
-      const { text, usage } = await generateText({
+      const result = await generateText({
         // maxIterations is the LOOP count, NOT the generation length — reusing
         // it here capped output at ~10 tokens (the old think tool's default budget),
         // which is why single-shot returned empty text.
@@ -23,14 +23,30 @@ export function createSingleShotStrategy(): ExplorationStrategy {
         maxOutputTokens: ctx.budget?.maxOutputTokens,
         abortSignal: ctx.signal,
       });
+      const spent = normalizeUsage(result.usage);
+      // `reflection` — the least wrong of the ten, and deliberately not one of
+      // the three that look closer. Not `agent`: this call is not a turn step.
+      // Not `head`: this strategy writes no `head_journal` row, and that bucket
+      // is aggregated from the journal by a single writer. Not `mcts`: naming a
+      // strategy the caller did not run is worse than naming none. What is left
+      // is what this arm actually is — the baseline the harness compares other
+      // strategies against, which is measurement spend, not the agent's work.
+      ctx.reportModelCall?.({
+        source: 'reflection',
+        usage: spent,
+        modelId: result.response.modelId,
+      });
+      const text = result.text.trim();
       return {
         strategy: 'single-shot',
-        best: { text: text.trim(), score: 1, source: 'single-shot' },
-        all: [{ text: text.trim(), score: 1, source: 'single-shot' }],
+        best: { text, score: 1, source: 'single-shot' },
+        all: [{ text, score: 1, source: 'single-shot' }],
         cost: {
           // Absent when the provider reported nothing — `cost.tokens` is
-          // optional precisely so a baseline run cannot read as free.
-          tokens: usageTotal(normalizeUsage(usage)),
+          // optional precisely so a baseline run cannot read as free. A scalar
+          // for the strategy's own caller; the sink above carries the same
+          // report field by field, which is what the workspace total needs.
+          tokens: usageTotal(spent),
           durationMs: Date.now() - t0,
           iterations: 1,
         },

@@ -17,7 +17,7 @@ import type { ForkRunSummary, HeadRunView } from '@proteus/core';
 import type { BackgroundJob } from '../src/lib/protocol.ts';
 import {
   FORK_IDLE_REVALIDATE_MS, FORK_REVALIDATE_MS, forkRunsRevalidateMs, hasLiveForkRun,
-  hasActiveForkWork, headRunToTree, findHead, selectForkRun,
+  hasActiveForkWork, headRunToTree, selectForkRun,
 } from '../src/components/surfaces/fork-runs.ts';
 import { isCompeted, principalVariation, maxVisits } from '../src/components/fork-tree-model.ts';
 
@@ -130,20 +130,47 @@ describe('fork revalidation policy', () => {
     expect(fullPage).toContain('useExactForkRun(state.rpc, runId, hasActiveWork)');
   });
 
-  test('selecting a branch opens it rather than filling a side panel', () => {
+  test('a branch opens BESIDE the canvas, never over it', () => {
     const embedded = readFileSync(
       join(import.meta.dir, '..', 'src/components/surfaces/ExplorationSurface.tsx'), 'utf8',
     );
-    // A branch click sets the opened branch, and the opened branch REPLACES the
-    // canvas — the traversal the owner asked for, not a metadata card beside it.
-    expect(embedded).toContain('onOpenBranch(node.id)');
+    // A branch click sets the selection, and the selection opens a THIRD pane.
+    // It used to replace the canvas — `opened ? <ForkBranchView …> : <ForkCanvas …>`
+    // — which answered "what did this branch do" by taking away the tree that
+    // gave the answer its place. Both are mounted now, so neither ternary may
+    // come back.
     expect(embedded).toContain('<ForkBranchView');
-    expect(embedded).toContain(': <ForkCanvas');
-    // The pane the branch view replaced is gone, not left beside it.
+    expect(embedded).toContain('<ForkCanvas');
+    expect(embedded).not.toContain(': <ForkCanvas');
+    // Three columns at the width that fits them: runs, canvas, branch.
+    expect(embedded).toMatch(/@6xl:grid-cols-\[[^\]]+_[^\]]+_[^\]]+\]/);
+    // Closed, not navigated back: there is nothing to go back to.
+    expect(embedded).toContain('onClose={() => setSelection(null)}');
     expect(embedded).not.toContain('BranchInspector');
-    // A branch's live trace is the journal's, read while the run is live.
-    expect(embedded).toContain('rpc<HeadRunView | null>("getHeadRun", [run.id])');
-    expect(embedded).toContain('{head && <HeadTrace head={head} />}');
+    // A branch's behaviour is read through the ONE transcript component, which
+    // renders every step with the main chat's own `MessageView`. The card this
+    // replaced (`HeadTrace`/`StepRow`, clamping reasoning to three lines and
+    // tool output to 160 characters) is gone rather than left beside it.
+    expect(embedded).toContain('<NodeTranscript');
+    // The second renderer is deleted, not merely unreferenced. `useForkRunDetail`
+    // legitimately still reads `getHeadRun` — the CANVAS folds a merged run's
+    // journal into a tree — so what is pinned here is the absence of the trace
+    // components, which is the duplication that mattered.
+    expect(embedded).not.toContain('HeadTrace');
+    expect(embedded).not.toContain('StepRow');
+
+    const transcript = readFileSync(
+      join(import.meta.dir, '..', 'src/components/NodeTranscript.tsx'), 'utf8',
+    );
+    // One renderer, not two: the steps go through the chat's component, and the
+    // user affordances are absent because they are simply not passed.
+    expect(transcript).toContain('import { MessageView } from "@/pages/WorkspacePage"');
+    expect(transcript).toContain('<MessageView');
+    for (const affordance of ['onFork', 'onFeedback', 'onRestoreFiles', 'onPickTake']) {
+      expect(transcript).not.toContain(`${affordance}=`);
+    }
+    // One read model, not a client-side choice of store.
+    expect(transcript).toContain('rpc<NodeTranscriptView | null>("getNodeTranscript", [runId, nodeId])');
   });
 });
 
@@ -210,11 +237,5 @@ describe('a merge is a tree of depth 1', () => {
 
   test('the merge narrative rides on the root, where the root is what is selected', () => {
     expect(headRunToTree(headRun()).observation).toBe('X, with Y’s guard rail');
-  });
-
-  test('a node maps back to the head behind it; the root maps to none', () => {
-    const run = headRun();
-    expect(findHead(run, 'head-1')?.errorMessage).toBe('Y blew up');
-    expect(findHead(run, 'root-1')).toBeNull();
   });
 });

@@ -17,11 +17,18 @@
  *
  * The page is the fork list's page. Every other field is derived from the forks
  * on it, so nothing here is bounded a second time and there is no second window
- * to disagree with.
+ * to disagree with — INCLUDING the merged half. A merged fork's branches are
+ * journalled rather than in `search_nodes`, and the surface used to fetch them
+ * as a separately bounded `getHeadRuns` read: page two of the canvas then held
+ * merged forks whose branches were outside that window, so they drew as "no
+ * branches were ever written" while the journal held them. Both halves of a
+ * fork now arrive on the page the fork is on.
  */
 
 import type { SqlExecutor } from '../types/primitives.js';
 import type { SearchNode } from '../types/mcts.js';
+import { HeadJournal } from '../heads/journal.js';
+import type { HeadRunView } from '../heads/types.js';
 import { listForkRuns, type ForkRunSummary } from './fork-runs.js';
 import { readForkRunParams, type ForkRunParams } from './fork-params.js';
 import { readSearchTree } from './search-tree.js';
@@ -36,6 +43,9 @@ export interface ExplorationCanvasRun {
   /** This fork's tree, in the order {@link readSearchTree} delivers it. Empty
    *  for a merged fork: its branches are journalled, not in `search_nodes`. */
   readonly tree: readonly SearchNode[];
+  /** This fork's journalled branches — the merged half of the same question.
+   *  Null for a competed fork, whose branches are {@link tree}. */
+  readonly head: HeadRunView | null;
 }
 
 /** A page of the canvas. Thirty is what the bare `LIMIT` was, kept so the first
@@ -56,10 +66,12 @@ export function readExplorationCanvas(
     const params = new Map(
       readForkRunParams(sql, runs.map((run) => run.id)).map((entry) => [entry.rootId, entry]),
     );
+    const journal = new HeadJournal(sql);
     return runs.map((run) => ({
       run,
       params: params.get(run.id) ?? null,
       tree: run.settle === 'competed' ? readSearchTree(sql, run.id) : [],
+      head: run.settle === 'merged' ? journal.readRun(run.id) : null,
     }));
   });
 }

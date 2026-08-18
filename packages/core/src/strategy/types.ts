@@ -9,6 +9,7 @@
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { MissionScope } from '../mission-budget.js';
+import type { ModelCallSink } from '../events/model-call.js';
 import type { LanguageModel } from 'ai';
 import type { WorkMode } from '../prompting/surface.js';
 import type { JsonValue } from '../utils/json.js';
@@ -62,6 +63,20 @@ export interface StrategyContext {
    * facet, which the wrapper cannot reach. Absent = unbudgeted.
    */
   mission?: MissionScope;
+  /**
+   * Where the model calls this exploration makes are reported.
+   *
+   * Threaded exactly like `mission` above and for the same reason — the work is
+   * not reachable from the governed `ctx.rt.llm` — but answering a different
+   * question. The mission port is a CAP that stops opening new work once a
+   * declared budget is spent, and it is a no-op when no mission label exists;
+   * this is the LEDGER, and a search nobody labelled costs exactly as much as
+   * one somebody did. So a strategy reports through this unconditionally, while
+   * it charges the mission only when there is a mission.
+   *
+   * Absent = unreported, which the coverage fraction states rather than hides.
+   */
+  reportModelCall?: ModelCallSink;
   signal?: AbortSignal;
 }
 

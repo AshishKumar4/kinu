@@ -36,7 +36,8 @@
  */
 import {
   addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
-  usageReported, type LLMProviderConfig, type Usage,
+  RunEventRecorder, usageReported, workspaceSpend,
+  type LLMProviderConfig, type SqlExecutor, type Usage,
 } from '@proteus/core';
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import { appendFileSync } from 'node:fs';
@@ -243,9 +244,22 @@ export function liveChatModel(llm: LLMProviderConfig): LanguageModel {
  *
  * "State the cost per run" cannot be answered by a constant: it depends on how
  * many steps the model chose to take, and these suites let it take up to 500.
- * So every `generateText` call in a live suite feeds its usage here, each suite
- * process appends its own total to `PROTEUS_EVAL_SPEND_FILE`, and the eval tier
- * sums the files into the one number a run reports.
+ * So every live suite feeds this meter, each suite process appends its own total
+ * to `PROTEUS_EVAL_SPEND_FILE`, and the eval tier sums the files into the one
+ * number a run reports.
+ *
+ * TWO FEEDS, ONE METER, because there are two kinds of live suite and only two.
+ * A suite that calls `generateText` itself holds the SDK result and reports per
+ * call (`recordLiveModelSpend`). A suite that drives a `LocalAgentSession` never
+ * sees a result, so it reports per episode off the store the session wrote
+ * (`recordLiveModelEpisode`). Both write the same counters — a second meter for
+ * the second kind is how one tier learns to report a number the other cannot.
+ *
+ * A ZERO IS NEVER SILENT. `calls: 0` used to mean both "nothing ran" and
+ * "nothing was measured", and the behavioural tier printed the second while
+ * spending ~584,751 neurons. `episodesUnmeasured` is the difference: a suite that
+ * drove work registers it whether or not the spend could be accounted for, so
+ * only a suite that genuinely ran nothing reports a clean zero.
  *
  * A call whose usage the provider did not report still increments `calls` and
  * `callsWithoutUsage`, and contributes NOTHING to the token total. That gap is
@@ -261,17 +275,28 @@ export interface LiveModelSpend {
   readonly callsWithoutUsage: number;
   /** Accumulated with `addUsage`, so a field no call reported stays absent. */
   readonly usage: Usage;
+  /**
+   * Episodes this suite drove whose store accounted for NO model call at all.
+   *
+   * The difference between "this tier cost nothing" and "this tier was not
+   * measured", which `calls: 0` alone cannot express and which cost the owner a
+   * behavioural tier reporting `0 model call(s)` over ~584,751 real neurons. A
+   * suite that drives episodes registers each one here, so a zero it did not
+   * earn arrives labelled instead of clean.
+   */
+  readonly episodesUnmeasured: number;
 }
 
 /** The env var naming the file a suite process appends its total to. */
 export const LIVE_MODEL_SPEND_FILE_ENV = 'PROTEUS_EVAL_SPEND_FILE';
 
-// The process's running total. Three plain bindings rather than one mutable
-// object, so `usage` keeps its `Usage` type through accumulation and
-// `liveModelSpend()` is the single place the reported shape is assembled.
+// The process's running total. Plain bindings rather than one mutable object, so
+// `usage` keeps its `Usage` type through accumulation and `liveModelSpend()` is
+// the single place the reported shape is assembled.
 let spendCalls = 0;
 let spendCallsWithoutUsage = 0;
 let spendUsage: Usage = {};
+let spendEpisodesUnmeasured = 0;
 
 /** Record one model call. Pass the AI SDK's `result.usage`. */
 export function recordLiveModelSpend(usage?: LanguageModelUsage): void {
@@ -284,21 +309,115 @@ export function recordLiveModelSpend(usage?: LanguageModelUsage): void {
   spendUsage = addUsage(spendUsage, reported);
 }
 
-export function liveModelSpend(): LiveModelSpend {
-  return { calls: spendCalls, callsWithoutUsage: spendCallsWithoutUsage, usage: spendUsage };
+/**
+ * The bound on model-call rows read out of one episode's store.
+ *
+ * An episode is capped at `PROTEUS_MAX_STEPS` model steps (500 by default), and
+ * every other producer in a workspace fires at most a few times per step, so
+ * this is three orders of magnitude above anything one episode can write. It
+ * exists so `workspaceSpend`'s window cannot silently truncate an episode into a
+ * floor — a total whose window you cannot see is a total you cannot check — and
+ * `complete` below is what proves the window was not the binding constraint.
+ */
+const EPISODE_SPEND_WINDOW = 100_000;
+
+/**
+ * Record what ONE driven episode spent, read off the store its session wrote.
+ *
+ * WHY THE STORE AND NOT A SINK. A suite that calls `generateText` itself holds
+ * the SDK result, so it reports per call through `recordLiveModelSpend` above. A
+ * suite that drives a `LocalAgentSession` never sees a result: the session's own
+ * turn steps land in the run-event log as `step_finish`, which
+ * `events/model-call.ts` deliberately leaves OUTSIDE the `ModelCallSink` so a
+ * judge's cold prompt cannot corrupt the turn loop's prefix-cache EMA. So a sink
+ * subscription would have collected this workspace's judges and fast tier and
+ * omitted the agent's own turns — which are the 13.4M prompt tokens the whole
+ * gap was made of. `workspaceSpend` is the one seam that unions both row kinds
+ * plus the head journal, so it is what this reads. No second meter, no second
+ * definition of what a workspace spent.
+ *
+ * AN EPISODE ALWAYS COUNTS. A store that accounts for no call at all does not
+ * add a silent zero: it increments `episodesUnmeasured`, because an episode that
+ * ran and cannot say what it cost is a hole in the measurement and has to read
+ * as one.
+ */
+export function recordLiveModelEpisode(sql: SqlExecutor): void {
+  const spend = workspaceSpend({ events: new RunEventRecorder(sql), sql }, {
+    windowLimit: EPISODE_SPEND_WINDOW,
+  });
+  // Unreachable at this window for a step-capped episode, and a throw rather
+  // than a shrug because the alternative is publishing a floor as a total —
+  // the exact confusion this function exists to remove.
+  if (!spend.complete) {
+    throw new Error(
+      `episode spend truncated at ${String(EPISODE_SPEND_WINDOW)} rows, so its total would be a `
+      + 'floor reported as a measurement — raise EPISODE_SPEND_WINDOW',
+    );
+  }
+  if (spend.total.calls === 0) {
+    spendEpisodesUnmeasured += 1;
+    return;
+  }
+  spendCalls += spend.total.calls;
+  spendCallsWithoutUsage += spend.total.callsWithoutUsage;
+  spendUsage = addUsage(spendUsage, spend.total.usage);
 }
 
-/** One line stating this process's spend, and the same appended to the
- *  aggregate file when the eval tier asked for one. Called from a suite's
- *  teardown so a run that made no calls says exactly that. */
+export function liveModelSpend(): LiveModelSpend {
+  return {
+    calls: spendCalls,
+    callsWithoutUsage: spendCallsWithoutUsage,
+    usage: spendUsage,
+    episodesUnmeasured: spendEpisodesUnmeasured,
+  };
+}
+
+/**
+ * Reset the meter, without publishing anything.
+ *
+ * For a suite that drives episodes against a SCRIPTED model. `bun test ./tests/`
+ * is one process over every file in the tree, so the meter is shared across
+ * files, and a scripted wiring suite that left its fake tokens in it would hand
+ * them to whichever live suite reported next — a cost report is the last place a
+ * fabricated number belongs. A scripted suite therefore clears what it recorded
+ * in its own teardown instead of reporting it.
+ */
+export function resetLiveModelSpend(): void {
+  spendCalls = 0;
+  spendCallsWithoutUsage = 0;
+  spendUsage = {};
+  spendEpisodesUnmeasured = 0;
+}
+
+/**
+ * One line stating what THIS SUITE spent, and the same appended to the aggregate
+ * file when the eval tier asked for one. Called from a suite's teardown, so a run
+ * that made no calls says which kind of no it was: nothing driven, or driven and
+ * unaccounted.
+ *
+ * REPORTING DRAINS, and it has to. `bun test ./tests/` runs six reporting suites
+ * in ONE process against this one module-level meter, each appending its own line
+ * in its own teardown — and `scripts/eval-spend.ts` SUMS those lines. Cumulative
+ * reporting therefore made every line after the first a running total of its
+ * predecessors, so the tier's published cost was an over-count (the last suite
+ * claiming everyone's spend, and the sum counting the first suite once per
+ * reporter) while each line looked like a per-suite measurement. Draining makes a
+ * line mean "what has been recorded since the last report", which for one report
+ * per suite teardown is that suite's own spend — and makes the sum the run's.
+ */
 export function reportLiveModelSpend(suite: string): LiveModelSpend {
   const total = liveModelSpend();
   console.warn(
     `[spend] ${suite} — ${total.calls} model call(s), `
     + `${total.usage.input ?? 'unreported'} in / ${total.usage.output ?? 'unreported'} out tokens`
-    + (total.callsWithoutUsage > 0 ? `, ${total.callsWithoutUsage} without reported usage` : ''),
+    + (total.callsWithoutUsage > 0 ? `, ${total.callsWithoutUsage} without reported usage` : '')
+    + (total.episodesUnmeasured > 0
+      ? `, ${total.episodesUnmeasured} episode(s) UNMEASURED — this suite drove work whose `
+        + 'spend it could not account for, so the totals above are not this suite\'s cost'
+      : ''),
   );
   const path = process.env[LIVE_MODEL_SPEND_FILE_ENV]?.trim();
   if (path) appendFileSync(path, `${JSON.stringify({ suite, ...total })}\n`);
+  resetLiveModelSpend();
   return total;
 }

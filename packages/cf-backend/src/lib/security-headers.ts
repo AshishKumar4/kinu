@@ -65,6 +65,14 @@ export function appDocumentCsp(url: URL, previewOrigin: string | null): string {
     // Agent output and message attachments carry remote image URLs; images
     // execute nothing.
     "img-src 'self' data: blob: https:",
+    // KaTeX's maths fonts, pulled in by `index.css`. Every one of them is over
+    // Vite's 4096-byte inline threshold and ships as a hashed asset — except
+    // KaTeX_Size3-Regular.woff2 at 3624 bytes, which Vite emits INLINE as
+    // `data:font/woff2;base64,…`. With `font-src` unset, `default-src 'self'`
+    // applied and the browser refused exactly that one font. `data:` rather
+    // than raising the inline threshold: a font is not script, and the app must
+    // not depend on a bundler's size cut-off staying on one side of a limit.
+    "font-src 'self' data:",
     `frame-src ${frameSrc}`,
   ].join('; ');
 }

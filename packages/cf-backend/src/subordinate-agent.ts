@@ -12,7 +12,7 @@ import {
   type WorkMode,
   type SubordinateReportStatus,
   // Read models — the same control-plane implementations the orchestrator uses.
-  cancelCurrentWork, getStoredModelSpec, setModel, type CancelWorkOutcome,
+  cancelCurrentWork, getStoredModelSpec, setModel, type CancelWorkOutcome, type UserSteerOutcome,
   // report.* — codemode projection of the native `report` tool.
   createReportCodemodeProvider, type CodemodeProvider,
 } from '@proteus/core';
@@ -274,6 +274,15 @@ export class SubordinateAgent extends ActorAgent {
     }, spec);
   }
 
+  /** Steer the subordinate's running turn — the same shared drain the
+   *  orchestrator exposes, because the composer is one component and a
+   *  subordinate chat is a chat. */
+  @callable()
+  async steerTurn(text: string): Promise<{ landed: UserSteerOutcome }> {
+    this.ensureSchema();
+    return { landed: this.acceptUserSteer(text) };
+  }
+
   @callable()
   async cancelCurrentWork(): Promise<CancelWorkOutcome> {
     this.ensureSchema();
@@ -281,6 +290,7 @@ export class SubordinateAgent extends ActorAgent {
       jobRunner: this.jobRunner,
       activeToolControllers: this._activeToolControllers,
       broadcast: (payload) => this.broadcast(payload),
+      interruptSteers: () => this.interruptUserSteers(),
     });
   }
 

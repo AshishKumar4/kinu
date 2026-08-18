@@ -7,6 +7,8 @@
  * Formal spec: MCTS/Backpropagation.lean — initial_valid, init_values_equal_at_first_step.
  */
 
+import type { ModelCallSink } from '../events/model-call.js';
+
 export type NodeStatus = 'open' | 'terminal' | 'failed' | 'pruned';
 
 /** A row in the search_nodes SQLite table */
@@ -128,6 +130,19 @@ export interface MCTSConfig {
    * refusal.
    */
   mission?: import('../mission-budget.js').MissionScope;
+  /**
+   * Where every rollout's usage is reported, as `mcts` spend.
+   *
+   * Separate from `mission` above, and asked UNCONDITIONALLY, because the two
+   * answer different questions: the mission port is a CAP that stops opening
+   * expansions once a declared budget is spent, and it is a no-op when no
+   * mission label exists. A search nobody labelled still costs what it costs, so
+   * its rollouts were captured from the branch report and then dropped. This is
+   * the ledger that keeps them.
+   *
+   * Absent = unreported, which the coverage fraction states rather than hides.
+   */
+  reportModelCall?: ModelCallSink;
   /** Called as the search progresses — phase transitions, branch failures and
    *  iteration completion. Use for real-time UI updates. */
   onProgress?: (event: MCTSProgressEvent) => void;

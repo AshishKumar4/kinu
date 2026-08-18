@@ -24,6 +24,7 @@ import {
   DefaultExecutionRouter, createInlineExecutor, formatExecResult,
   withApprovalGatedShell,
   selectFastModel, createAgentConfigStore, initAgentConfigTable,
+  type ModelCallSink,
 } from '@proteus/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
@@ -74,6 +75,24 @@ export interface CLIRuntimeConfig {
   hostRoot?: string | null;
   /** Shadow-git checkpoints kept per working directory (the one retention knob). */
   checkpointKeep?: number;
+}
+
+/**
+ * The local runtime plus the one channel a session installs after the fact.
+ *
+ * `rt.llm`, `rt.fastLlm` and `rt.judgeModel` are built by `createCLIRuntime`,
+ * before any session exists — but the ledger their usage reports belong in is
+ * the SESSION's durable run-event log, the recorder that also forwards every row
+ * to the frontends as it is written. So the sink is late-bound, exactly like the
+ * shell approval channel and the turn file ledger are.
+ *
+ * Optional so that a plain `AgentRuntime` still satisfies this type: a surface
+ * that hands a session a runtime it did not build here binds nothing, and its
+ * non-turn spend is unattributed — which the workspace total's coverage fraction
+ * states rather than hides.
+ */
+export interface CLIRuntime extends AgentRuntime {
+  setModelCallSink?(sink: ModelCallSink | null): void;
 }
 
 /** The bun:sqlite surface every local SQL adapter here needs. */
@@ -240,7 +259,7 @@ function adaptCraftStore(store: AgentUtilsCraftStore): CoreCraftStore {
 export function createCLIRuntime(
   db: Database,
   config: CLIRuntimeConfig,
-): AgentRuntime {
+): CLIRuntime {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
 
@@ -265,11 +284,25 @@ export function createCLIRuntime(
     void sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
   }
 
+  // The three model seams below are built here, before a session exists, so each
+  // reports through one stable closure over a slot the session fills in
+  // (setModelCallSink). Until it does, a report has nowhere to go: an unbound
+  // runtime is unattributed spend, never free spend.
+  //
+  // The SOURCE is stated here rather than inside the factory, because this is
+  // the layer that knows which producer each seam is: one factory serves all
+  // three, and to it they are the same call.
+  let modelCallSink: ModelCallSink | null = null;
+  const report: ModelCallSink = (call) => modelCallSink?.(call);
+
   const llm = createLocalProviderLLM({
     llm: config.llm,
     credentials: config.providerCredentials,
     codexAuthStore: config.codexAuthStore,
     onCodexRefresh: config.onCodexRefresh,
+    // `rt.llm.complete` is the evolution engine's own reflection seam — the
+    // turn loop drives its chat model directly and reports as `step_finish`.
+    spend: { source: 'reflection', report },
   });
   // The mechanical-work tier: the chat vendor's own small model, for the
   // evolution engine's classification/labelling/short-reflection calls. Same
@@ -298,6 +331,7 @@ export function createCLIRuntime(
     llm: config.llm, credentials: config.providerCredentials,
     codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
     spec: fast.spec,
+    spend: { source: 'fast', report },
   });
 
   // Cross-model judge only when one is actually configured. Leaving this
@@ -305,7 +339,11 @@ export function createCLIRuntime(
   // (mcts/evaluation.ts judge ensemble, local-session auto-judge) instead of
   // hiding it here.
   const judgeModel = config.judge
-    ? createLocalProviderLLM({ llm: config.judge, credentials: config.providerCredentials, codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh })
+    ? createLocalProviderLLM({
+      llm: config.judge, credentials: config.providerCredentials,
+      codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
+      spend: { source: 'judge', report },
+    })
     : undefined;
 
   const schedule: Schedule = {
@@ -398,7 +436,10 @@ export function createCLIRuntime(
     executionRouter.register(createLocalLaptopExecutor(hostRoot, hostShell, checkpoints, limits));
   }
 
-  return buildRuntime({
+  // `Object.assign` onto the built runtime rather than a spread, so the one
+  // channel `buildRuntime` has no slot for is added to the same object every
+  // other seam already holds a reference to.
+  return Object.assign(buildRuntime({
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
     agentId, agentName, memory, craftStore, judgeModel, fastLlm,
     spawnBranch: spawn, abortBranch: abort,
@@ -413,6 +454,8 @@ export function createCLIRuntime(
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
+  }), {
+    setModelCallSink: (sink: ModelCallSink | null) => { modelCallSink = sink; },
   });
 }
 

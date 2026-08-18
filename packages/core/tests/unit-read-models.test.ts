@@ -586,11 +586,31 @@ describe('background-job control plane', () => {
       onCancelled: () => order.push('settled'),
     });
 
-    expect(outcome).toEqual({ ok: true, cancelledJobs: [], abortedTools: 1 });
+    expect(outcome).toEqual({ ok: true, cancelledJobs: [], abortedTools: 1, returnedSteers: [] });
     expect(live.signal.aborted).toBe(true);
     // The backend settles its own turn state BEFORE clients hear about it.
     expect(order).toEqual(['settled', 'broadcast']);
     expect(JSON.parse(broadcasts[0]!)).toMatchObject({ type: 'work_cancelled', abortedTools: 1 });
+    db.close();
+  });
+
+  test('an interrupt hands the pending mid-turn steers back instead of eating them', () => {
+    const { db, runner } = jobPlane();
+    const order: string[] = [];
+
+    const outcome = cancelCurrentWork({
+      jobRunner: runner,
+      activeToolControllers: new Set(),
+      broadcast: () => order.push('broadcast'),
+      // What UserSteerDrain.interrupt() returns: what the model never saw.
+      interruptSteers: () => { order.push('interrupt'); return ['also check staging', 'and the logs']; },
+      onCancelled: (settled) => order.push(`settled:${settled.returnedSteers.length}`),
+    });
+
+    expect(outcome.returnedSteers).toEqual(['also check staging', 'and the logs']);
+    // The drop happens before the backend settles, so the settle hook — the
+    // place a backend broadcasts the return — already has the texts.
+    expect(order).toEqual(['interrupt', 'settled:2', 'broadcast']);
     db.close();
   });
 

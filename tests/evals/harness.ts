@@ -60,7 +60,7 @@ import { LocalAgentSession } from '../../packages/cli-backend/src/local-session.
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
 import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
 import {
-  hardTaskFor, scoreTrajectory, seedHardTask, verifyHardTask,
+  hardTaskFor, recordLiveModelEpisode, scoreTrajectory, seedHardTask, verifyHardTask,
   type EvalArmState, type EvalScoreRow, type HardTask,
 } from '@proteus/test-utils';
 
@@ -100,13 +100,25 @@ export interface BehaviourOutput {
   [key: string]: JsonValue;
 }
 
-/** Project the persisted rows onto the wire shape. Fresh literals, so the
- *  index-signature target is satisfied without a cast. */
+/**
+ * Project the persisted rows onto the wire shape. Fresh literals, so the
+ * index-signature target is satisfied without a cast.
+ *
+ * `measured` IS carried, and that is not cosmetic. This projection originally
+ * dropped it, so the raw counts behind every ratio — the reference the candidate
+ * was divided by, the target, the floor — reached the run record only inside the
+ * `detail` STRING. The first live pilot's numbers had to be recovered by parsing
+ * English out of a sentence. A ratio whose baseline does not survive beside it is
+ * a ratio nobody can re-derive, which is the whole reason `measured` exists.
+ */
 function toScoreJson(rows: readonly EvalScoreRow[]): BehaviourScoreJson[] {
-  return rows.map((row) => ({
-    name: row.name, asserts: row.asserts, eligible: row.eligible,
-    passed: row.passed, rate: row.rate, detail: row.detail,
-  }));
+  return rows.map((row) => {
+    const json: BehaviourScoreJson = {
+      name: row.name, asserts: row.asserts, eligible: row.eligible,
+      passed: row.passed, rate: row.rate, detail: row.detail,
+    };
+    return row.measured === undefined ? json : { ...json, measured: { ...row.measured } };
+  });
 }
 
 /**
@@ -478,6 +490,16 @@ export async function runBehaviourTask(
   });
   await session.send(task.task);
   await session.settleBackgroundWork();
+
+  // WHAT THIS EPISODE COST, registered BEFORE the degenerate check below, because
+  // a trajectory that produced nothing gradable still burned the tokens it took
+  // to produce nothing: an `inert` episode whose spend is dropped on the throw is
+  // the same lie in a smaller font. This suite drives a session rather than
+  // calling `generateText`, so the store is the only place its usage exists —
+  // `recordLiveModelEpisode` reads it through the workspace-spend seam, which is
+  // why the behavioural tier no longer reports `0 model call(s)` over an episode
+  // that spent hundreds of thousands of neurons.
+  recordLiveModelEpisode(makeSql(db));
 
   const totals = readLedgerTotals(db);
 

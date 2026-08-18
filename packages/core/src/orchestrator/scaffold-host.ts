@@ -21,6 +21,8 @@
 import { safeValidateTypes } from '@ai-sdk/provider-utils';
 import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { evidenceWindow } from '../prompts/evidence-window.js';
+import type { ModelCallSpend } from '../events/model-call.js';
+import { normalizeUsage } from '../usage.js';
 import { decodeJsonValue } from '../utils/json.js';
 import type {
   ScaffoldHistoryEntry,
@@ -47,6 +49,13 @@ export interface ScaffoldBridgeOpts {
    *  effortFor('scaffold_mutation')). `{}` when the backend adds none — safe
    *  to spread unconditionally. */
   streamOptions?: Pick<Parameters<typeof streamText>[0], 'providerOptions'>;
+  /** Where this loop reports what it cost, and as whose spend — `scaffold` for a
+   *  live or candidate scaffold driving its own inference. One field, both
+   *  halves, like every other seam that hands its result to more than one kind of
+   *  caller. It runs up to `defaultMaxSteps` model calls per invocation and none
+   *  of them is a turn step, so before this it was the largest producer the panel
+   *  could not see. Absent means a scaffold's spend is attributed to nothing. */
+  spend?: ModelCallSpend;
 }
 
 export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOptions['llmStream'] {
@@ -64,6 +73,19 @@ export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOp
       ...opts.streamOptions,
     });
     for await (const chunk of result.textStream) yield chunk;
+    // After the drain, because that is when usage exists — and `totalUsage`
+    // rather than `usage`, because this is a genuine multi-step loop and the
+    // last step's report would omit every step before it. A caller that
+    // abandons the generator mid-loop reports nothing, which is honest: this
+    // seam never learns what an unfinished stream cost.
+    const spend = opts.spend;
+    if (spend) {
+      spend.report({
+        source: spend.source,
+        usage: normalizeUsage(await result.totalUsage),
+        modelId: (await result.response).modelId,
+      });
+    }
   };
 }
 

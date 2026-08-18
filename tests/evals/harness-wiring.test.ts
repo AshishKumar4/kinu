@@ -22,7 +22,7 @@
  *                       fires in either runtime — it is the reachability floor
  *                       for the scorer, not a guard on the runtime swap.
  */
-import { describe, test, expect, afterAll } from 'bun:test';
+import { describe, test, expect, afterAll, beforeAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -40,7 +40,8 @@ import { createWorkspace } from '../../packages/core/src/identity/index.js';
 import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
 import {
-  HARD_TASKS, REFERENCE_FILE, SOLUTION_FILE, hardTaskCases, type EvalArmState,
+  HARD_TASKS, liveModelSpend, recordLiveModelEpisode, resetLiveModelSpend,
+  REFERENCE_FILE, SOLUTION_FILE, hardTaskCases, type EvalArmState,
 } from '@proteus/test-utils';
 
 import {
@@ -48,6 +49,7 @@ import {
   requireSandboxedExecutors, runBehaviourTask, UnsandboxedRuntimeError,
   type BehaviourScoreJson,
 } from './harness.js';
+import { parseSpend, renderSpend } from '../../scripts/eval-spend.js';
 
 const LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -151,7 +153,16 @@ const opened: Database[] = [];
 // The harness hands back every store it opened and closes none of them, because
 // the live suite reads them after the last task. Nothing else closes these, so a
 // plain close is correct and a swallowed failure here would hide a leak.
+//
+// The meter is cleared for a different reason: every case in this file drives a
+// real episode against a SCRIPTED model, and `bun test ./tests/` shares one
+// process — and therefore one meter — with the live suites. Left in place, these
+// fake tokens would be claimed by whichever live suite reported next and would
+// land in the tier's published cost. Measured before this line existed: the
+// skipped `Delegation Evals` teardown printed this file's `42 model call(s),
+// 210 in / 294 out`.
 afterAll(() => {
+  resetLiveModelSpend();
   for (const db of opened) db.close();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -456,16 +467,17 @@ describe('tool-failure attribution over a real turn', () => {
  * row — and it proves it before a single paid episode, because the cost of
  * discovering this from a live run is a live run.
  *
- * The cheapest task by reference cost is used: the seam is the same for all seven,
- * and 79,998 oracle calls is the fastest way to exercise it.
+ * The cheapest task by target cost is used and is chosen at runtime: the seam is
+ * identical for all of them, and naming one here would make a corpus edit fail in
+ * a file that is about wiring.
  */
 describe('hard-task wiring — env resolves to a seeded task and a scored outcome', () => {
-  const task = HARD_TASKS.find((t) => t.id === 'hard-minmax-pair');
-  if (!task) throw new Error('hard-minmax-pair is missing from the corpus');
+  const task = HARD_TASKS.reduce((cheapest, t) =>
+    (t.problem.targetOps < cheapest.problem.targetOps ? t : cheapest));
   const evalCase = hardTaskCases().find((c) => c.id === task.id);
-  if (!evalCase) throw new Error('hard-minmax-pair produced no eval case');
+  if (!evalCase) throw new Error(`${task.id} produced no eval case`);
   const reference = task.seed.find((f) => f.path === REFERENCE_FILE);
-  if (!reference) throw new Error('hard-minmax-pair seeds no reference');
+  if (!reference) throw new Error(`${task.id} seeds no reference`);
 
   test('the reference is readable, the stub is replaceable, and the result is measured', async () => {
     // Content taken from the task, never retyped: if the seeded reference and the
@@ -484,8 +496,18 @@ describe('hard-task wiring — env resolves to a seeded task and a scored outcom
     // is that the candidate was measured at all: a broken seam reports "no usable
     // solution" with candOps 0, and this reports the reference's own cost.
     expect(outcome.rate).toBe(0);
-    expect(outcome.detail).toContain('79998 oracle calls vs reference 79998');
-    expect(outcome.detail).toContain('(1.00x)');
+    expect(outcome.detail).toMatch(/^(\d+) oracle calls vs reference \1 \(1\.00x\)/);
+
+    // The raw counts must survive as STRUCTURE, not only inside the sentence.
+    // `toScoreJson` dropped `measured` originally, so the first live pilot's
+    // numbers had to be recovered by parsing English out of `detail`. A ratio
+    // whose baseline does not survive beside it cannot be re-derived.
+    expect(outcome.measured).toMatchObject({
+      refOps: expect.any(Number),
+      candOps: expect.any(Number),
+      targetOps: task.problem.targetOps,
+      lowerBoundOps: task.problem.lowerBoundOps,
+    });
   }, 60_000);
 
   test('leaving the seeded stub in place scores 0 with the reason, not a missing row', async () => {
@@ -524,4 +546,125 @@ describe('hard-task wiring — env resolves to a seeded task and a scored outcom
     // Nowhere near the default 500-step budget, so this episode was not truncated.
     expect(cap.passed).toBe(0);
   }, 30_000);
+});
+
+/**
+ * WHAT THE EPISODE COST, proven on a scripted model so the proof itself is free.
+ *
+ * The behavioural tier used to report `0 model call(s), unreported in / unreported
+ * out tokens` for runs that spent hundreds of thousands of neurons — one measured
+ * live run cost ~584,751 and had to be recomputed by hand out of `turn_end.usage`
+ * in the retained stores. The cause was structural rather than arithmetic:
+ * `recordLiveModelSpend` is fed by the five suites that call `generateText`
+ * themselves and hold the SDK result, and this tier drives a `LocalAgentSession`
+ * instead, so nothing ever reached the meter and `calls` was pinned at 0 by
+ * construction.
+ *
+ * These assert the two halves that make that unrepeatable: an episode's spend
+ * arrives in the meter from the store the session wrote, and a zero can no longer
+ * be produced by silence. Both run on `scripted()`, whose steps report a fixed
+ * usage, so the numbers below are arithmetic on a known input rather than a live
+ * bill — the whole point being that discovering this from a live run costs a live
+ * run.
+ */
+describe('episode spend — the meter is fed by the session, not by silence', () => {
+  // Every case above drove an episode into the same process-global meter, so this
+  // block starts from a known zero and asserts ABSOLUTES. Delta arithmetic against
+  // whatever the file happened to have accumulated would make these assertions
+  // weaker the more cases the file grew.
+  beforeAll(() => { resetLiveModelSpend(); });
+
+  test('a driven episode contributes its real measured usage to the meter', async () => {
+    await run('wiring-spend', [
+      { tool: 'file', input: { action: 'write', path: 'a.txt', content: '1' } },
+      { tool: 'file', input: { action: 'write', path: 'b.txt', content: '2' } },
+    ]);
+    const spent = liveModelSpend();
+
+    // THE REGRESSION, in one line: this was 0 for every behavioural episode ever
+    // run. Not a fixed count — the session closes a step per scripted tool call
+    // plus the answering step, and a bound rather than an equality keeps this
+    // asserting "the spend arrived" instead of pinning the turn loop's step
+    // shape, which is not what this file is about.
+    expect(spent.calls).toBeGreaterThan(0);
+
+    // `scripted()` reports inputTokens 5 / outputTokens 7 on every step, so the
+    // tokens are the step count times a known rate: the meter is carrying the
+    // provider's own numbers through, not a placeholder that happens to be
+    // non-zero.
+    expect(spent.usage.input).toBe(spent.calls * 5);
+    expect(spent.usage.output).toBe(spent.calls * 7);
+
+    // Every step of a scripted episode reports usage, so nothing here is a floor
+    // and nothing is unaccounted. Those two are what a real provider's silence
+    // would move, and they must be quiet when it does not.
+    expect(spent.callsWithoutUsage).toBe(0);
+    expect(spent.episodesUnmeasured).toBe(0);
+  }, 30_000);
+
+  test('an episode that spends and reports nothing is labelled, never a clean 0', () => {
+    const callsBefore = liveModelSpend().calls;
+    // A store with the FULL workspace schema and no model-call rows in it. Not a
+    // schema-less file: an unreadable store is a broken workspace and would throw,
+    // and the shape this has to catch is the one the whole bug wore — a store that
+    // reads cleanly and answers "nothing" for both "cost nothing" and "was never
+    // wired to the meter".
+    const empty = new Database(join(dir, 'unaccounted.db'));
+    opened.push(empty);
+    initWorkspaceSchema(makeWorkspaceSchemaSql(empty));
+    recordLiveModelEpisode(makeSql(empty));
+    const spent = liveModelSpend();
+
+    // The episode did NOT silently add a zero to the call count...
+    expect(spent.calls).toBe(callsBefore);
+    // ...it is on the books as a hole, which is the sentence `calls: 0` could
+    // never say on its own.
+    expect(spent.episodesUnmeasured).toBe(1);
+  });
+
+  /**
+   * THE SURFACE THE OWNER READS: the meter -> the JSONL line a suite teardown
+   * appends -> the rendered tier cost. Run LAST in this block on purpose, so it
+   * renders the accumulation of the measured episode above PLUS the unaccounted
+   * one — the mixed state a live run actually arrives in, and the state whose
+   * rendering was previously a bare `0`.
+   *
+   * Rendered from the in-memory meter rather than by calling
+   * `reportLiveModelSpend` and reading its file: that would publish this file's
+   * scripted tokens into whatever `PROTEUS_EVAL_SPEND_FILE` the eval tier has
+   * exported, which is the tier's real cost report. The `JSON.stringify` here IS
+   * the line `reportLiveModelSpend` writes, so the serialization is still under
+   * test — without a test writing to the run's ledger of what it spent.
+   */
+  test('the rendered tier cost states both the measured spend and the hole', () => {
+    const total = liveModelSpend();
+    // Named as a precondition rather than left to fail as a render bug: this case
+    // reads the state the two above left behind, so if the block is ever
+    // reordered the failure says so instead of pointing at `renderSpend`.
+    expect(total.calls, 'the measured episode must have run before this case')
+      .toBeGreaterThan(0);
+    expect(total.episodesUnmeasured, 'the unaccounted episode must have run before this case')
+      .toBe(1);
+
+    const line = JSON.stringify({ suite: 'Behaviour Evals', ...total });
+    const rendered = renderSpend(parseSpend(`${line}\n`));
+    // Printed so the run's own output is the evidence: this block is what
+    // `bun scripts/eval-spend.ts` puts in front of the owner.
+    console.log(`\n${rendered}\n`);
+
+    // The measured tokens survived the JSONL round trip — a `usage` that failed to
+    // serialize would render as `unreported` while the meter held real numbers, so
+    // its presence is asserted before its value is used to search the output.
+    const measuredInput = total.usage.input;
+    expect(measuredInput, 'the measured episode reported input tokens').toBeDefined();
+    expect(rendered).toContain(`${String(total.calls)} model call(s)`);
+    expect(rendered).toContain(`${String(measuredInput)} input`);
+    // And the hole is named on both the suite line and the total. `not.toContain`
+    // on the zero was tried here and removed: `40 model call(s)` contains the
+    // substring `0 model call(s)`, so it would have gone red on an episode that
+    // happened to close a multiple of ten steps. The clean zero is refused by a
+    // fixed-input case in scripts/eval.test.ts, where the count cannot drift.
+    expect(rendered).toContain('1 EPISODE(S) UNACCOUNTED');
+    expect(rendered).toContain('NOT A TOTAL');
+  });
 });

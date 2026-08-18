@@ -25,6 +25,12 @@ tester.run("anti-slop/no-sentinel-catch", noSentinelCatchRule, {
     "load().catch((error) => log.warn('load failed', { event: 'x.load_failed', error }));",
     "load().catch((error) => { throw new Error('load failed', { cause: error }); });",
     "load().catch(reportLoadFailure);",
+    // A `then` rejection handler that records is fine; only a blind one is the defect.
+    "load().then(setDevices, (error) => log.warn('list failed', { event: 'x.list_failed', error }));",
+    // One-argument `then` has no rejection handler at all.
+    "load().then(setDevices);",
+    // Three arguments is not a shape we recognise.
+    "shim.then(ok, () => null, extra);",
     // `catch` with two arguments is not a promise rejection handler shape we recognise.
     "shim.catch(() => null, extra);",
     // Not a sentinel.
@@ -77,9 +83,22 @@ tester.run("anti-slop/no-sentinel-catch", noSentinelCatchRule, {
     },
     { name: "computed member", code: "const v = await load()['catch'](() => null);", errors: [inHandler] },
     {
-      name: "both spellings in one file",
-      code: "function f() { try { g(); } catch { return null; } }\nconst v = load().catch(() => []);",
-      errors: [inCatch, inHandler],
+      // The real instance this arm was added for: UserSettingsPage.tsx dropped every
+      // listDevices() rejection here, so an unreachable UserDO rendered as "no devices".
+      name: "the then-form rejection handler, which reads as a success path",
+      code: "listDevices().then(setDevices, () => {});",
+      errors: [inHandler],
+    },
+    {
+      name: "then-form returning a sentinel",
+      code: "load().then(setRows, (error) => []);",
+      errors: [inHandler],
+    },
+    { name: "computed then", code: "load()['then'](ok, () => null);", errors: [inHandler] },
+    {
+      name: "all three spellings in one file",
+      code: "function f() { try { g(); } catch { return null; } }\nconst v = load().catch(() => []);\nload().then(ok, () => {});",
+      errors: [inCatch, inHandler, inHandler],
     },
   ],
 });

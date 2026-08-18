@@ -102,7 +102,13 @@ describe("workspace titling wiring (OrchestratorAgent)", () => {
     );
     expect(suggest).toContain("system: WORKSPACE_TITLE_SYSTEM_PROMPT");
     expect(suggest).toContain("prompt: workspaceTitlePrompt(mission)");
-    expect(suggest).toContain("parseWorkspaceTitle(text)");
+    // `result.text`, not a destructured `text`: the whole result is held now so
+    // the call's usage can be reported as `fast` workspace spend. Same parser.
+    expect(suggest).toContain("parseWorkspaceTitle(result.text)");
+    // The call reports itself as `fast` workspace spend — before this, titling
+    // was one of 25 producers whose cost reached no ledger at all.
+    expect(suggest).toContain("this.reportModelCall(");
+    expect(suggest).toContain("source: 'fast'");
     expect(suggest).not.toContain("maxOutputTokens");
   });
 });

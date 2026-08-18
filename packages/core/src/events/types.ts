@@ -18,6 +18,7 @@ import type { EscalationSnapshot } from '../execution/escalation.js';
 import type { MissionBudgetRefusal } from '../mission-budget.js';
 import type { HeadFileChangeSet } from '../heads/types.js';
 import type { Usage } from '../usage.js';
+import type { SpendSource } from './model-call.js';
 
 /**
  * What one finished step cost — the provider's own report, plus what we priced
@@ -41,6 +42,7 @@ export type RunEventType =
   | 'turn_start'
   | 'tool_call_end'
   | 'step_finish'
+  | 'model_call'
   | 'head_split'
   | 'head_merge'
   | 'head_abandoned'
@@ -129,6 +131,28 @@ export type RunEvent =
       usd?: number;
       modelId?: string;
       context?: ContextComposition;
+    })
+  /** A model call that was NOT a turn step — a judge, the fast tier, the
+   *  evolution engine, a compaction fold, a scaffold's own loop, a sandbox
+   *  program's `llm.query`, the memory embedder. `source` is which of them
+   *  (`events/model-call.ts`), and it is the reason this is its own row type
+   *  rather than a `source` field on `step_finish`: the step rows feed the
+   *  turn loop's prefix-cache EMA, and a judge's cold prompt in that window
+   *  would read as a cache regression the agent never had.
+   *
+   *  `usage` is absent when the provider reported nothing — a row still lands,
+   *  because the honest reading of a silent call is unmeasured spend, not free
+   *  spend, and the workspace total's coverage fraction is built out of exactly
+   *  these. `usd` is that report at the CALL'S OWN model's catalog rate, absent
+   *  when unpriced; a judge deliberately runs on a different model from the
+   *  actor, so pricing it at the actor's rate would be a fabricated number. */
+  | (RunEventBase & {
+      type: 'model_call';
+      source: SpendSource;
+      usage?: Usage;
+      usd?: number;
+      spec?: string;
+      modelId?: string;
     })
   | (RunEventBase & { type: 'head_split'; rootId: string; headIds: string[]; rationale: string })
   /** A split settled. `headsWithFindings` vs `headCount` is how many forks came

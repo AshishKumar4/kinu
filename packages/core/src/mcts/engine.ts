@@ -203,7 +203,21 @@ export async function runMCTS(
           const exploration = r.status === 'fulfilled'
             ? v.safeParse(BranchExplorationSchema, r.value)
             : null;
-          if (exploration?.success) return exploration.output;
+          if (exploration?.success) {
+            // Reported HERE and not in the charge loop below, because this is the
+            // only place that knows the branch completed a call: a rejected or
+            // malformed one is mapped to empty text, and an absent `usage` on
+            // THAT is a failure rather than a silent provider. Unconditional,
+            // unlike the charge — the mission port is a cap that no-ops without a
+            // label, so an unlabelled search's rollouts were captured off the
+            // wire and then dropped. `{}` when the branch reported no usage: the
+            // call still happened, and the coverage fraction is made of exactly
+            // these. No `spec`/`modelId`: a branch resolves its own model in
+            // another process and reports neither, and inventing one would name
+            // a model this search cannot see.
+            config.reportModelCall?.({ source: 'mcts', usage: exploration.output.usage ?? {} });
+            return exploration.output;
+          }
           report({
             type: 'branch-failed', stage: 'explore', iteration,
             branchId: branchIds[i] ?? '',
@@ -343,6 +357,7 @@ export async function runMCTS(
               const reflection = v.safeParse(BranchReflectionSchema, result);
               if (!reflection.success) return '';
               await charge(reflection.output.usage);
+              config.reportModelCall?.({ source: 'mcts', usage: reflection.output.usage ?? {} });
               return reflection.output.text.trim();
             },
             (error) => {

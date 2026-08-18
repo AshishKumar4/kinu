@@ -18,6 +18,8 @@ import { Database } from 'bun:sqlite';
 
 import { reconcileColumns } from '../src/identity/columns.js';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema.js';
+import { initSearchTables } from '../src/mcts/schemas.js';
+import { initBackgroundJobsTable } from '../src/jobs/store.js';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers.js';
 
 /** `search_nodes` as it stood before `code_used`, `code_language` and `root_id` were added. */
@@ -33,6 +35,20 @@ const LEGACY_SEARCH_NODES = `
     depth       INTEGER NOT NULL DEFAULT 0,
     status      TEXT NOT NULL DEFAULT 'open',
     msg_id      TEXT
+  )
+`;
+
+/** `background_jobs` as it stood before work_mode, input_json and the lease-epoch pair. */
+const LEGACY_BACKGROUND_JOBS = `
+  CREATE TABLE background_jobs (
+    id         TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    label      TEXT,
+    status     TEXT NOT NULL DEFAULT 'running',
+    result     TEXT,
+    error      TEXT,
+    created_at INTEGER NOT NULL,
+    settled_at INTEGER
   )
 `;
 
@@ -132,5 +148,81 @@ describe('reconcileColumns asks rather than guesses', () => {
       reconcileColumns(makeSql(db), makeExecRaw(db), 't', { needed: 'TEXT NOT NULL' }),
     ).toThrow(/NOT NULL column with default value NULL/u);
     expect(columnsOf(db, 't')).toEqual(['id']);
+  });
+});
+
+/**
+ * `initWorkspaceSchema` is not the only way these tables come into existence. MCTS
+ * self-initializes — `mcts/engine.ts` calls `initSearchTables` directly so a subsystem does not
+ * need the unified schema — and a workspace that reaches `search_nodes` down that path gets no
+ * legacy repair from the unified pass. The reconcile therefore lives at each table's own DDL site,
+ * and these pin that: without it every assertion below still passed, because a fresh CREATE has
+ * the columns anyway.
+ */
+describe('a standalone initializer repairs its own table', () => {
+  test('initSearchTables reconciles a legacy table reached without the unified schema', () => {
+    const db = new Database(':memory:');
+    db.run(LEGACY_SEARCH_NODES);
+    db.run(`INSERT INTO search_nodes (id, task) VALUES ('n1', 'inherited work')`);
+
+    initSearchTables(makeExecRaw(db), makeSql(db));
+
+    expect(columnsOf(db, 'search_nodes')).toEqual(
+      expect.arrayContaining(['code_used', 'code_language', 'root_id']),
+    );
+    // `no such column: code_language at offset 74`, verbatim, on the path that has no legacy repair.
+    expect(
+      db
+        .query<{ id: string; code_language: string | null }, []>(
+          `SELECT id, code_language FROM search_nodes`,
+        )
+        .all(),
+    ).toEqual([{ id: 'n1', code_language: null }]);
+  });
+
+  test('initSearchTables builds idx_sn_root_status, which needs the reconciled root_id', () => {
+    const db = new Database(':memory:');
+    db.run(LEGACY_SEARCH_NODES);
+    // The index over `root_id` is created after the reconcile for this reason: on a legacy table it
+    // would otherwise fail with `no such column: root_id` at workspace open.
+    expect(() => { initSearchTables(makeExecRaw(db), makeSql(db)); }).not.toThrow();
+    expect(
+      db.query<{ name: string }, []>(`SELECT name FROM sqlite_master WHERE type='index'`).all(),
+    ).toEqual(expect.arrayContaining([{ name: 'idx_sn_root_status' }]));
+  });
+
+  test('initBackgroundJobsTable reconciles a legacy registry, keeping the rows on it', () => {
+    const db = new Database(':memory:');
+    db.run(LEGACY_BACKGROUND_JOBS);
+    db.run(`INSERT INTO background_jobs (id, kind, created_at) VALUES ('j1', 'run', 7)`);
+
+    initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+
+    expect(columnsOf(db, 'background_jobs')).toEqual(
+      expect.arrayContaining(['work_mode', 'input_json', 'epoch', 'resume_attempts']),
+    );
+    // `work_mode` is NOT NULL, so the added column has to carry a constant default — an epoch of 0
+    // and 'build' are what the reader would have inferred for a row written before either existed.
+    expect(
+      db
+        .query<{ work_mode: string; epoch: number; resume_attempts: number }, []>(
+          `SELECT work_mode, epoch, resume_attempts FROM background_jobs`,
+        )
+        .all(),
+    ).toEqual([{ work_mode: 'build', epoch: 0, resume_attempts: 0 }]);
+  });
+
+  test('both are no-ops on a second call rather than a second ALTER', () => {
+    const db = new Database(':memory:');
+    db.run(LEGACY_SEARCH_NODES);
+    db.run(LEGACY_BACKGROUND_JOBS);
+    const open = (): void => {
+      initSearchTables(makeExecRaw(db), makeSql(db));
+      initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
+    };
+    open();
+    const after = [columnsOf(db, 'search_nodes'), columnsOf(db, 'background_jobs')];
+    expect(open).not.toThrow();
+    expect([columnsOf(db, 'search_nodes'), columnsOf(db, 'background_jobs')]).toEqual(after);
   });
 });

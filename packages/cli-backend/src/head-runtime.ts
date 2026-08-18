@@ -18,9 +18,10 @@ import {
   type HeadRuntime, type HeadGrounding, type SpawnedHead, type HeadInput, type HeadReport, type MergeOutput,
   type WebSearchProvider, type AgentRuntime, type CodemodeProvider,
   type HeadSplitRequest, type HeadSplitResult,
-  type MissionGovernor,
+  type MissionGovernor, type ModelCallSink,
   HeadCapture, runHeadInference, buildHeadToolSet, HeadController, HeadJournal, initHeadsTables,
-  extractJsonObject, MergeOutputSchema, reasoningEffortOptions, resolveMaxSteps, localMissionScope,
+  extractJsonObject, MergeOutputSchema, normalizeUsage, reasoningEffortOptions,
+  resolveMaxSteps, localMissionScope,
 } from '@proteus/core';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -70,6 +71,16 @@ export interface CLIHeadRuntimeDeps {
    *  direct write where the cf backend has to cross a facet boundary for it.
    *  Read per head, for the same reason the governor is. */
   journal: () => HeadJournal;
+  /** Where the MERGE synthesis reports what it cost.
+   *
+   *  Only the merge. A head's OWN inference is aggregated from `head_journal`
+   *  instead, and two writers for one call is how a total learns to
+   *  double-count. The merge is neither of those: `summarizeCost` (core
+   *  heads/controller.ts:611-624) folds only the HEADS' reports, so this call —
+   *  made by the parent, in the parent's process, on the parent's model — is
+   *  counted nowhere else. It reports as `judge`, which is what it is: one
+   *  grading/synthesis pass over what the forks came back with. */
+  reportModelCall?: ModelCallSink;
 }
 
 /** Per-head abort flag — flipped by SpawnedHead.abort (a caller-requested
@@ -86,7 +97,7 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
         async abort(reason: string) { flag.aborted = true; flag.reason = reason; },
       };
     },
-    mergeLLM: (prompt) => mergeViaLLM(deps.model, prompt, deps.providerFamily),
+    mergeLLM: (prompt) => mergeViaLLM(deps, prompt),
   };
   return deps.grounding ? { ...runtime, grounding: deps.grounding } : runtime;
 }
@@ -233,13 +244,22 @@ async function runLocalSplit(
 
 /** The merge synthesis call — return parsed JSON; the HeadController validates it
  *  against MergeOutputSchema and falls back on a bad/throwing response. */
-async function mergeViaLLM(model: LanguageModel, prompt: string, providerFamily?: string): Promise<MergeOutput> {
-  const providerOptions = reasoningEffortOptions('low', providerFamily ?? '');
+async function mergeViaLLM(deps: CLIHeadRuntimeDeps, prompt: string): Promise<MergeOutput> {
+  const providerOptions = reasoningEffortOptions('low', deps.providerFamily ?? '');
   const request: Parameters<typeof generateText>[0] = {
-    model,
+    model: deps.model,
     prompt,
   };
   if (providerOptions) request.providerOptions = providerOptions;
-  const { text } = await generateText(request);
-  return v.parse(MergeOutputSchema, extractJsonObject(text));
+  const result = await generateText(request);
+  // Reported BEFORE the schema check, and deliberately: a reply that arrived and
+  // was billed still cost what it cost, even when the merge then rejects it as
+  // unparseable. A call that THREW reports nothing — it produced no usage and,
+  // as far as this seam can see, was not billed.
+  deps.reportModelCall?.({
+    source: 'judge',
+    usage: normalizeUsage(result.totalUsage),
+    modelId: result.response.modelId,
+  });
+  return v.parse(MergeOutputSchema, extractJsonObject(result.text));
 }

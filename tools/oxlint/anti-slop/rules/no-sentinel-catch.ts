@@ -59,8 +59,10 @@ function rejectionHandlerIsBlind(argument: ESTree.Node): boolean {
 /**
  * Reject a failure path whose only effect is to hand back an indistinguishable empty value.
  *
- * Covers both spellings, because they are the same defect and leaving one uncovered makes it the
- * cheap way around the other: `catch { return null }` and `promise.catch(() => null)`.
+ * Covers all three spellings, because they are the same defect and leaving one uncovered makes it
+ * the cheap way around the others: `catch { return null }`, `promise.catch(() => null)`, and
+ * `promise.then(ok, () => null)` — the last is the easiest to miss in review precisely because the
+ * rejection handler is the second argument to a call that reads as a success path.
  *
  * The escape is not an exemption — it is saying which failure you tolerate:
  *
@@ -96,12 +98,21 @@ export const noSentinelCatchRule = defineRule({
       },
       CallExpression(node) {
         const callee = node.callee;
-        if (callee.type !== "MemberExpression" || node.arguments.length !== 1) return;
-        const named = callee.computed
-          ? callee.property.type === "Literal" && callee.property.value === "catch"
-          : callee.property.type === "Identifier" && callee.property.name === "catch";
-        if (!named) return;
-        const handler = node.arguments[0];
+        if (callee.type !== "MemberExpression") return;
+        const method = callee.computed
+          ? callee.property.type === "Literal"
+            ? callee.property.value
+            : null
+          : callee.property.type === "Identifier"
+            ? callee.property.name
+            : null;
+        // `catch` takes the handler first; `then` takes it second, after the fulfilment handler.
+        const handler =
+          method === "catch" && node.arguments.length === 1
+            ? node.arguments[0]
+            : method === "then" && node.arguments.length === 2
+              ? node.arguments[1]
+              : undefined;
         if (handler === undefined || !rejectionHandlerIsBlind(handler)) return;
         context.report({ node, messageId: "sentinelRejectionHandler" });
       },

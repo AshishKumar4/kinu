@@ -21,8 +21,9 @@ import type { LLMProviderConfig } from '@proteus/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, FORK_STRATEGY_ID, createAgentsCodemodeProvider, createStrategyRegistry,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
-  JsonObjectSchema,
+  JsonObjectSchema, WORKSPACE_RUN_ID,
   type AgentsToolDeps, type StrategyContext, type ModelInfo, type JsonObject, type JsonValue,
+  type ModelCallSink,
   createAgentSelfProvider,
 } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
@@ -2716,6 +2717,77 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const end = session.getRunEvents(run.runId).at(-1);
     expect(end?.type).toBe('run_end');
     expect(end).toMatchObject({ reason: 'error', error: expect.stringContaining('upstream is on fire') });
+
+    await session.end();
+  });
+
+  // The judge, the fast tier, the reflection seam and the heads' merge are built
+  // with the RUNTIME (createCLIRuntime), before a session exists, so the session
+  // installs itself as their ledger afterwards. Capturing what it installed is
+  // therefore how a test reaches those producers at all — there is no other door.
+  /** A one-slot box for the sink the session installs. A bare `let` cannot do
+   *  this job: the assignment happens inside a callback, so TypeScript narrows
+   *  the captured binding to `never` at the call site. */
+  interface SinkSlot { sink: ModelCallSink | null }
+
+  function capturedSink() {
+    const { db, rt } = workspaceRuntime();
+    const captured: SinkSlot = { sink: null };
+    const session = new LocalAgentSession({
+      rt: { ...rt, setModelCallSink: (sink) => { captured.sink = sink; } },
+      db, model: fakeModel('unused'), onEvent: () => {}, noAutoEvolve: true,
+    });
+    return { session, captured };
+  }
+
+  test('a non-turn model call lands as its own row, and a silent provider stays unmeasured', async () => {
+    const { session, captured } = capturedSink();
+    expect(captured.sink).not.toBeNull();
+
+    captured.sink?.({ source: 'judge', usage: { input: 41, output: 7 }, spec: 'anthropic/claude-x' });
+    // A provider that reported nothing STILL writes a row. This is the whole
+    // point: unmeasured spend has to read as unmeasured, never as free.
+    captured.sink?.({ source: 'fast', usage: {} });
+
+    // Between runs, so both are filed under the reserved workspace run rather
+    // than dropped — half these producers never fire inside a turn.
+    const rows = session.getRunEvents(WORKSPACE_RUN_ID).filter((e) => e.type === 'model_call');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      source: 'judge', usage: { input: 41, output: 7 }, spec: 'anthropic/claude-x',
+    });
+    expect(rows[1]).toMatchObject({ source: 'fast', usage: {} });
+    // Never priced at the ACTOR's rate: a judge deliberately runs on another
+    // model, so a usd here would be a number nobody measured.
+    expect(rows[0]).not.toHaveProperty('usd');
+    expect(rows[1]).not.toHaveProperty('usd');
+
+    await session.end();
+  });
+
+  test('a call made during a turn is filed under that run, not the workspace bucket', async () => {
+    const { db, rt } = workspaceRuntime();
+    const captured: SinkSlot = { sink: null };
+    // Reported from inside the model call itself, which is when a real judge or
+    // fast-tier call fires: mid-turn, with a run open.
+    const model = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'fake-model',
+      doStream: async (options) => {
+        captured.sink?.({ source: 'reflection', usage: { input: 3 } });
+        return fakeModel('answered').doStream(options);
+      },
+    });
+    const session = new LocalAgentSession({
+      rt: { ...rt, setModelCallSink: (sink) => { captured.sink = sink; } },
+      db, model, onEvent: () => {}, noAutoEvolve: true,
+    });
+    await session.send('hi');
+
+    const runId = session.listRuns().items[0]!.runId;
+    expect(runId).not.toBe(WORKSPACE_RUN_ID);
+    expect(session.getRunEvents(runId).filter((e) => e.type === 'model_call'))
+      .toMatchObject([{ source: 'reflection', usage: { input: 3 } }]);
+    expect(session.getRunEvents(WORKSPACE_RUN_ID)).toEqual([]);
 
     await session.end();
   });

@@ -23,6 +23,7 @@ import type {
   TurnAccumulator,
   DeferredApprovalChannel,
   WriteObserver,
+  ModelCallSink, SpendSource,
 } from "@proteus/core";
 import {
   nimbusSessionFiles, nimbusSessionShell,
@@ -46,7 +47,7 @@ import { configureContainerEgress, withConfiguredEgress } from "./egress/configu
 import { previewHostSuffix } from "./lib/preview-origin.js";
 import { MemoryStore } from "@proteus/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
-import { generateText } from "ai";
+import { generateText, type LanguageModelUsage } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
 import { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
@@ -286,6 +287,21 @@ export interface CFRuntimeHooks {
    * plane. Used by heads to report only their own direct file mutations while
    * every actor still addresses the same workspace. */
   workspaceObserver?: WriteObserver;
+  /**
+   * Where the non-turn model seams report what they cost.
+   *
+   * The turn loop's spend reaches the durable log as `step_finish`. Everything
+   * this factory builds a model for — the judge, the fast tier, the evolution
+   * engine's reflection, the memory embedder — is invisible to that row, and
+   * before this hook existed every one of them discarded the provider's usage
+   * report on the line that received it. A workspace total that omitted them
+   * silently was the thing the owner could not trust.
+   *
+   * Optional, and it stays optional: a facet that reports nowhere is a facet
+   * whose spend is unattributed, which the coverage fraction states rather than
+   * hides.
+   */
+  reportModelCall?: ModelCallSink;
 }
 
 /**
@@ -319,7 +335,7 @@ export function createCFRuntime(
   // Vectorize-backed semantic memory, scoped to this workspace's namespace.
   // Noop when env.AI / env.MEMORY_VECTORS aren't configured, so hybrid search
   // degrades to FTS5-only. Built before the memory adapter so writes embed.
-  const vectorStore = buildVectorStore(env, actor);
+  const vectorStore = buildVectorStore(env, actor, hooks.reportModelCall);
   // Owns the semantic-index completeness markers, read by the backfill and
   // cleared by the write path when a sync fails.
   // This factory ensures the schema of every store it opens — the memory and
@@ -351,7 +367,7 @@ export function createCFRuntime(
     throw new Error("CF runtime requires env.LOADER binding (worker_loaders in wrangler.jsonc)");
   }
   const executor = createExecutor(envForExec.LOADER);
-  const llm = createDualPathLLM(agent, env, actor, sql);
+  const llm = createDualPathLLM(agent, env, actor, sql, hooks.reportModelCall);
   const schedule = createRealSchedule(agent);
   const identity = createIdentity(agent, access.ctx, vfs, sql, actor.scaffoldPath);
 
@@ -534,8 +550,8 @@ export function createCFRuntime(
   return {
     storage: { vfs, sql, execRaw },
     memory, executor, llm, schedule, identity, craftStore,
-    judgeModel: createJudgeLLM(agent, env, actor, sql),
-    fastLlm: createFastLLM(agent, env, actor, sql),
+    judgeModel: createJudgeLLM(agent, env, actor, sql, hooks.reportModelCall),
+    fastLlm: createFastLLM(agent, env, actor, sql, hooks.reportModelCall),
     spawnBranch: createFacetSpawner(agent, env, actor),
     abortBranch: createFacetAborter(agent),
     releaseBranch: createFacetReleaser(agent),
@@ -646,24 +662,31 @@ function adaptCloudflareSandbox(handle: ProteusSandbox): SandboxHandle {
 // adaptMemory + backfillMemoryVectors live in ./memory-sync (dependency-light,
 // unit-tested against a fake VectorStore).
 
+/** The workspace's semantic-memory embedder. Named because the two construction
+ *  shapes below both reach for it, and a copy in each is a model id two places
+ *  could disagree about. */
+const EMBEDDING_MODEL = '@cf/baai/bge-small-en-v1.5';
+
 /**
  * Build the workspace's semantic memory store. Constructs a Cloudflare-Vectorize
  * store (scoped to this workspace's namespace) only when both env.AI (Workers AI
  * embedder) and env.MEMORY_VECTORS (Vectorize index) are bound; otherwise a noop
  * that makes hybrid search degrade to FTS5-only.
  */
-function buildVectorStore(env: Env, actor: ActorRuntimeIdentity): VectorStore {
+function buildVectorStore(
+  env: Env,
+  actor: ActorRuntimeIdentity,
+  reportModelCall?: ModelCallSink,
+): VectorStore {
   const aiBinding = env.AI;
   const vectorizeBinding = env.MEMORY_VECTORS;
   if (!aiBinding || !vectorizeBinding) {
     return createNoopVectorStore();
   }
   try {
-    const embedder = createWorkersAIEmbedder({
-      aiBinding,
-      model: '@cf/baai/bge-small-en-v1.5',
-      dimensions: 384,
-    });
+    const embedder = reportModelCall
+      ? createWorkersAIEmbedder({ aiBinding, model: EMBEDDING_MODEL, dimensions: 384, reportModelCall })
+      : createWorkersAIEmbedder({ aiBinding, model: EMBEDDING_MODEL, dimensions: 384 });
     const store = createCloudflareVectorStore({
       index: vectorizeBinding,
       embedder,
@@ -760,11 +783,18 @@ function readStoredModelSpec(sql: SqlExecutor): string | null {
   return createAgentConfigStore(sql).getModel();
 }
 
+/**
+ * Only a COMPLETED call reports. A seam that threw produced no usage and, as far
+ * as anything here can see, was not billed — counting it as an unmeasured call
+ * would depress the workspace's coverage fraction with requests that genuinely
+ * cost nothing, which is the mirror of the error this whole change removes.
+ */
 function createDualPathLLM(
   agent: AgentHost,
   env: Env,
   actor: ActorRuntimeIdentity,
   sql: SqlExecutor,
+  report?: ModelCallSink,
 ): LLM {
   return {
     async *stream() { yield ""; },
@@ -776,15 +806,34 @@ function createDualPathLLM(
           appTitle: 'Proteus',
           workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
         });
-        const model = reg.resolveModel(reg.normalizeSpecSync(readStoredModelSpec(sql)));
+        const spec = reg.normalizeSpecSync(readStoredModelSpec(sql));
         const result = await generateText({
-          model, prompt,
+          model: reg.resolveModel(spec), prompt,
           ...effortFor('reflection'),
         });
+        reportCall(report, 'reflection', spec, result);
         return result.text.trim();
       } catch { return "(reflection unavailable)"; }
     },
   };
+}
+
+/** One shape for the three seams below, so a source label and a spec cannot be
+ *  attached one way here and another way there. */
+function reportCall(
+  report: ModelCallSink | undefined,
+  source: SpendSource,
+  spec: string,
+  result: { usage?: LanguageModelUsage; response?: { modelId?: string } },
+): void {
+  if (!report) return;
+  const usage = normalizeUsage(result.usage);
+  const modelId = result.response?.modelId;
+  // Two whole literals rather than one built up: `modelId` is absent when the
+  // provider did not name the model, and absent has to mean absent.
+  report(modelId !== undefined && modelId.length > 0
+    ? { source, spec, usage, modelId }
+    : { source, spec, usage });
 }
 
 /**
@@ -803,6 +852,7 @@ function createFastLLM(
   env: Env,
   actor: ActorRuntimeIdentity,
   sql: SqlExecutor,
+  report?: ModelCallSink,
 ): LLM | undefined {
   const config = createAgentConfigStore(sql);
   const registry = createAgentProviderRegistry({
@@ -821,10 +871,12 @@ function createFastLLM(
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       try {
+        const spec = selected().spec;
         const result = await generateText({
-          model: registry.resolveModel(selected().spec), prompt,
+          model: registry.resolveModel(spec), prompt,
           ...effortFor('reflection'),
         });
+        reportCall(report, 'fast', spec, result);
         return result.text.trim();
       } catch { return "(reflection unavailable)"; }
     },
@@ -847,6 +899,7 @@ function createJudgeLLM(
   env: Env,
   actor: ActorRuntimeIdentity,
   sql: SqlExecutor,
+  report?: ModelCallSink,
 ): LLM {
   return {
     async *stream() { yield ""; },
@@ -867,6 +920,7 @@ function createJudgeLLM(
         model: registry.resolveModel(spec), prompt,
         ...effortFor('judge'),
       });
+      reportCall(report, 'judge', spec, result);
       return result.text.trim();
     },
   };

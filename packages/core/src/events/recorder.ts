@@ -18,6 +18,7 @@ import type { RunEvent, RunEventInput, RunEventType } from './types.js';
 import { JsonValueSchema } from '../utils/json.js';
 import { UsageSchema } from '../usage.js';
 import { ESCALATION_OUTCOMES } from '../execution/escalation.js';
+import { SPEND_SOURCES, WORKSPACE_RUN_ID } from './model-call.js';
 
 /** A stored model message, validated by the AI SDK's OWN schema rather than a
  *  hand-written copy of its part unions — the same predicate the compaction
@@ -62,6 +63,10 @@ const RunEventSchema = v.variant('type', [
     reason: v.optional(v.string()), messages: v.optional(v.array(StoredModelMessageSchema)),
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),
     modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema) }),
+  v.object({ ...BaseFields, type: v.literal('model_call'),
+    source: v.picklist(SPEND_SOURCES), usage: v.optional(UsageSchema),
+    usd: v.optional(v.number()), spec: v.optional(v.string()),
+    modelId: v.optional(v.string()) }),
   v.object({ ...BaseFields, type: v.literal('head_split'), rootId: v.string(),
     headIds: v.array(v.string()), rationale: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_merge'), rootId: v.string(),
@@ -334,11 +339,25 @@ export class RunEventRecorder {
    * `before` bounds the scan strictly below a position from {@link runSeq};
    * null starts at the newest. This is the storage half only — the page fold
    * belongs to `read-models/runs.ts`, which owns the contract.
+   *
+   * {@link WORKSPACE_RUN_ID} is excluded here and only here: it is not a run,
+   * it is where a model call that happened between runs is filed, so a run list
+   * that showed it would invent a run the agent never had. Every other reader is
+   * keyed by an explicit runId and therefore never sees it by accident; the
+   * workspace spend read-model asks for it on purpose. The exclusion is a WHERE
+   * rather than a HAVING so the pseudo-run's rows never reach the grouping —
+   * which is also why it cannot perturb a page anchor: `MAX(rowid)` per real run
+   * is computed from that run's own rows either way.
+   *
+   * Dropping that clause while keeping this signature breaks no type and passes
+   * every gate. Its only symptom is a fabricated run at the top of the owner's
+   * history, which is why `unit-run-events.test.ts` pins both halves together.
    */
   listRunsBefore(before: number | null, count: number): RunListEntry[] {
     return this.sql<RunListEntry>`
       SELECT run_id AS runId, MAX(ts) AS lastTs, COUNT(*) AS eventCount
       FROM run_events
+      WHERE run_id != ${WORKSPACE_RUN_ID}
       GROUP BY run_id
       HAVING ${before} IS NULL OR MAX(rowid) < ${before}
       ORDER BY MAX(rowid) DESC

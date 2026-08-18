@@ -384,7 +384,7 @@ export function createSandboxExecutor(
  * there on first use. Come here only for what the workspace cannot honour:
  *   - RUNNING a prebuilt native Linux binary (Nimbus is wasm32-wasi and JS),
  *   - real parallelism across cores (Nimbus threads are cooperative), 2 vCPU,
- *   - more memory or disk than the isolate has: 6185 MiB / 7.3G here,
+ *   - more than a couple of GB of RAM (this VM reports 6185 MiB / 7.3G total),
  *   - work that must not share the workspace's durable fate.
  * NOT for docker, python3, make, gcc, clang or tsc — probed ABSENT (exit 127)
  * in this image. NOT for inbound ports or long processes: the workspace has

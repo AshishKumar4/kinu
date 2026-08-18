@@ -65,6 +65,20 @@ export interface BranchRun {
   message?: string;
 }
 
+/** One mid-turn steer as the chat renders it — driven entirely by the server's
+ *  steer_status broadcasts, so every open tab agrees about whether the model
+ *  has it yet.
+ *
+ *  `queued` and `landed` are deliberately separate: "we took your words" and
+ *  "the model is reading them" are different facts, and collapsing them is how
+ *  a composer ends up silently swallowing input. A `returned` steer is removed
+ *  outright — an interrupt dropped it and it goes back to the composer. */
+export interface SteerRun {
+  steerId: string;
+  text: string;
+  status: "queued" | "landed";
+}
+
 export interface ForkLineage {
   sourceWorkspaceId: string;
   sourceWorkspaceName: string;
@@ -199,6 +213,11 @@ const SocketMessageSchema = v.variant("type", [
     type: v.literal("branch_status"), branchId: v.string(), task: v.optional(v.string()),
     status: v.optional(v.string()), takeSetId: v.optional(v.string()),
     turnId: v.optional(v.string()), message: v.optional(v.string()),
+  }),
+  v.object({ type: v.literal("head_activity"), headId: v.string() }),
+  v.object({
+    type: v.literal("steer_status"), steerId: v.string(), text: v.string(),
+    status: v.picklist(["queued", "landed", "returned"]),
   }),
   v.looseObject({ type: v.literal("signal_card") }),
   v.object({ type: v.literal("plan_updated"), plan: PlanReviewSchema }),
@@ -505,6 +524,23 @@ export function useProteus(target?: string | ProteusActorAddress) {
   const [changelogUnseen, setChangelogUnseen] = useState(0);
   // Steer-as-Branch runs — the split progress chips near the streaming answer.
   const [branchRuns, setBranchRuns] = useState<BranchRun[]>([]);
+  // Per-branch write counter, bumped by the `head_activity` broadcast. Counts
+  // rather than timestamps: an open transcript only has to notice that ITS
+  // branch moved, and a counter says that unambiguously without a clock the two
+  // ends would have to agree on. Keyed by head id — a Map because the keys are
+  // whatever branches this workspace has run.
+  const [headActivity, setHeadActivity] = useState<ReadonlyMap<string, number>>(new Map());
+  const bumpHeadActivity = useCallback((headId: string) => {
+    setHeadActivity((previous) => {
+      const next = new Map(previous);
+      next.set(headId, (previous.get(headId) ?? 0) + 1);
+      return next;
+    });
+  }, []);
+  // Mid-turn steers — what the user typed while the agent was working, shown in
+  // the thread from the moment the server takes it until the durable user row
+  // it becomes arrives in `messages`.
+  const [steerRuns, setSteerRuns] = useState<SteerRun[]>([]);
   // Chat-turn error — the turn failed (provider error, stream break) and the
   // error card in the thread shows the honest body. Fed by BOTH channels a
   // terminal error can arrive on: useChat's live stream error, and the
@@ -697,12 +733,33 @@ export function useProteus(target?: string | ProteusActorAddress) {
     setPendingActions((prev) => prev.filter((a) => a.kind !== "unseen_changes"));
   }, []);
 
-  const abortChat = useCallback(() => {
+  /**
+   * Stop this turn. Resolves with the mid-turn steers the abort DROPPED, so the
+   * surface that clicked Stop can put them back in its composer — the server
+   * hands them over rather than eating them, and only the tab that asked for
+   * the stop should end up with the text in its draft (every other tab learns
+   * they were returned from the `steer_status` broadcast).
+   */
+  const abortChat = useCallback(async (): Promise<string[]> => {
     stop();
-    rpc("cancelCurrentWork", [])
-      .then(() => { if (!isSubordinate) void refreshBackgroundJobs(); })
-      .catch(() => { if (!isSubordinate) void refreshBackgroundJobs(); });
+    try {
+      const outcome = await rpc<{ returnedSteers?: string[] }>("cancelCurrentWork", []);
+      return outcome.returnedSteers ?? [];
+    } finally {
+      if (!isSubordinate) void refreshBackgroundJobs();
+    }
   }, [stop, rpc, refreshBackgroundJobs, isSubordinate]);
+
+  /**
+   * Send a message WITHOUT stopping the running turn: the server splices it into
+   * the turn's next step. `"idle"` means the turn had already finished and
+   * nothing was buffered — the caller must send it as an ordinary message,
+   * which is the whole reason this reports which happened instead of a boolean.
+   */
+  const steerChat = useCallback(async (text: string): Promise<"mid-turn" | "idle"> => {
+    const { landed } = await rpc<{ landed: "mid-turn" | "idle" }>("steerTurn", [text]);
+    return landed;
+  }, [rpc]);
 
   // Listen for MCTS progress broadcasts from the server. We attach to the
   // outer `agent` EventTarget — NOT the inner `_ws` private field — so the
@@ -749,6 +806,22 @@ export function useProteus(target?: string | ProteusActorAddress) {
               message: msg.message,
             },
           ]);
+        } else if (msg.type === "head_activity") {
+          // A branch recorded a step or filed its report. Same push-the-fact
+          // shape as `pending_actions_changed`: an open transcript re-reads the
+          // journal it already renders from, so the stream and the store cannot
+          // drift, and a reader with nothing open pays nothing.
+          bumpHeadActivity(msg.headId);
+        } else if (msg.type === "steer_status") {
+          // `returned` is a removal: the abort dropped it and the composer has
+          // it back, so leaving a bubble in the thread would claim the agent
+          // was given something it never saw.
+          setSteerRuns((prev) => msg.status === "returned"
+            ? prev.filter((s) => s.steerId !== msg.steerId)
+            : [
+              ...prev.filter((s) => s.steerId !== msg.steerId),
+              { steerId: msg.steerId, text: msg.text, status: msg.status },
+            ]);
         } else if (msg.type === "signal_card") {
           const card = parseSignalCardEvent(msg);
           if (card) setSignalCards((current) => applySignalCard(current, card));
@@ -772,7 +845,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
     };
     agent.addEventListener("message", handler);
     return () => agent.removeEventListener("message", handler);
-  }, [agent, refreshBackgroundJobs, refreshPendingActions, setConsentResolutionError, setMctsTreeFromRows, isSubordinate]);
+  }, [agent, bumpHeadActivity, refreshBackgroundJobs, refreshPendingActions, setConsentResolutionError, setMctsTreeFromRows, isSubordinate]);
 
   const resolveConsent = useCallback((consentId: string, decision: ConsentDecision) => resolvePendingConsent(
     consentId,
@@ -1172,6 +1245,14 @@ export function useProteus(target?: string | ProteusActorAddress) {
     branchRuns,
     dismissBranchRun: (branchId: string) =>
       setBranchRuns((prev) => prev.filter((b) => b.branchId !== branchId)),
+    /** Per-branch write counter — what makes an open node transcript live. A
+     *  reader whose branch id ticked re-reads the journal; every other reader
+     *  sees an unchanged number and does nothing. */
+    headActivity,
+    /** Mid-turn steers the server has taken, queued → landed. Dropped ones are
+     *  removed by the server's `returned` broadcast, not by the surface. */
+    steerRuns,
+    steerChat,
     /**
      * Fork this agent at a message. Returns the new agent's navigation URL
      * on success, or throws on error ('agent busy', 'fork point not found',
