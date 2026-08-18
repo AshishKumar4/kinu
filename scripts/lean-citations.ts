@@ -31,7 +31,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { isTextSource, readMatching } from './sources';
 
@@ -52,6 +52,11 @@ const LEAN_PATH = /(?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean/g;
  * theorem. The cost is one blind spot — an underscore-free theorem that gets
  * renamed — and `CITATION_OPAQUE` below is the ratchet that stops it growing.
  */
+/** A citation naming a LINE rather than a theorem: `Foo.lean:470` or a range
+ *  `Foo.lean:470-478`. Only the first number is checked, because a range whose start
+ *  is in the file and whose end is not is the same finding. */
+const CITED_LINE = /((?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean):([1-9][0-9]*)/g;
+
 const CITED_NAMES =
   /((?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean)(?::([a-z][A-Za-z0-9_']*)|[ \t]*(?:—|–|--)[ \t]*((?:[a-z][A-Za-z0-9_']*)(?:[ \t]*,\s*[a-z][A-Za-z0-9_']*)*))/g;
 
@@ -146,6 +151,7 @@ for (const name of Object.keys(CITATION_OPAQUE)) {
 const corpus = readMatching(isTextSource);
 let modulesCited = 0;
 let namesCited = 0;
+let linesCited = 0;
 for (const [file, text] of corpus) {
   // `lean/` is the other side of the citation and is checked by the traceability
   // gate. This file is excluded because its own docstring quotes the citations it
@@ -163,6 +169,24 @@ for (const [file, text] of corpus) {
       if (resolveCitation(path) === null) {
         fail(`${file}: cites a Lean module that does not exist: ${path}`);
       }
+    }
+  }
+
+  // A `Foo.lean:470` citation is the other way a Lean reference rots, and it rots
+  // FASTER than a name: a theorem keeps its name across edits and loses its line
+  // number on the next insertion above it. §10.1's S7 row cites three theorems by
+  // line, and `check-traceability.mjs` already range-checks its own `tsRef`s this
+  // way, so the Lean side gets the same treatment rather than a weaker one.
+  for (const match of flat.matchAll(CITED_LINE)) {
+    const module = resolveCitation(match[1]);
+    if (module === null) continue;   // already reported by the module scan above
+    linesCited += 1;
+    const lineCount = readFileSync(join(repoRoot, module), 'utf8').split('\n').length;
+    if (Number(match[2]) > lineCount) {
+      fail(
+        `${file}: cites ${match[1]}:${match[2]}, but ${module} has ${String(lineCount)} lines`
+        + ' — the citation outlived the line it names',
+      );
     }
   }
 
@@ -205,6 +229,7 @@ if (findings.length > 0) {
   process.exit(1);
 }
 console.log(
-  `lean-citations: OK — ${String(declarations.size)} theorems, ${String(modulesCited)} module`
-  + ` and ${String(namesCited)} theorem citations across ${String(corpus.size)} files`,
+  `lean-citations: OK — ${String(declarations.size)} theorems, ${String(modulesCited)} module,`
+  + ` ${String(namesCited)} theorem and ${String(linesCited)} line citations across`
+  + ` ${String(corpus.size)} files`,
 );

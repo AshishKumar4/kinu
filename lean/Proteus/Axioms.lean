@@ -181,15 +181,12 @@ import Proteus
 #print axioms Proteus.Exploration.Publication.sealed_is_absorbing
 #print axioms Proteus.Exploration.Publication.sealed_publishes_nothing
 #print axioms Proteus.Exploration.Publication.breach_freezes_the_store
-#print axioms Proteus.Exploration.Publication.open_publish_writes
 #print axioms Proteus.Exploration.Publication.retry_does_not_clear
 #print axioms Proteus.Exploration.Publication.good_measurement_does_not_clear
-#print axioms Proteus.Exploration.Publication.admissible_rederivation_reopens
 #print axioms Proteus.Exploration.Publication.refuted_replacement_does_not_clear
 #print axioms Proteus.Exploration.Publication.unaudited_rederivation_does_not_clear
 #print axioms Proteus.Exploration.Publication.rederivation_restores_publication
 #print axioms Proteus.Exploration.Publication.retroPublish_requires_same_verifier
-#print axioms Proteus.Exploration.Publication.retroPublish_after_clearance_writes
 #print axioms Proteus.Exploration.Publication.breach_does_not_halt
 #print axioms Proteus.Exploration.Publication.sealed_still_scores
 #print axioms Proteus.Exploration.Publication.breach_records_suspension
@@ -213,6 +210,23 @@ import Proteus
 #print axioms Proteus.Exploration.Publication.sealed_never_succeeds
 #print axioms Proteus.Exploration.Publication.the_three_withholdings_are_distinct
 #print axioms Proteus.Exploration.Publication.discriminating_run_succeeds
+#print axioms Proteus.Exploration.Publication.surface_enumeration_is_total
+#print axioms Proteus.Exploration.Publication.surface_enumeration_has_six
+#print axioms Proteus.Exploration.Publication.admits_ignores_surface
+#print axioms Proteus.Exploration.Publication.admits_iff_not_uncleared
+#print axioms Proteus.Exploration.Publication.every_surface_is_writable
+#print axioms Proteus.Exploration.Publication.every_surface_is_retro_writable
+#print axioms Proteus.Exploration.Publication.admissible_rederivation_admits
+#print axioms Proteus.Exploration.Publication.sealed_still_reports
+#print axioms Proteus.Exploration.Publication.suppression_none_is_not_zero
+#print axioms Proteus.Exploration.Publication.cleared_seal_discloses_nothing
+#print axioms Proteus.Exploration.Publication.sealed_publish_counts_the_refusal
+#print axioms Proteus.Exploration.Publication.inert_refusal_is_not_a_suppression
+#print axioms Proteus.Exploration.Publication.suppression_counts_every_refusal
+#print axioms Proteus.Exploration.Publication.suppressedCells_counts_each_cell_once
+#print axioms Proteus.Exploration.Publication.suppressedCells_le_improvements
+#print axioms Proteus.Exploration.Publication.suppressedCells_monotone
+#print axioms Proteus.Exploration.Publication.suppression_quantities_are_independent
 
 /-! ### Proteus/Exploration/Settle.lean -/
 
