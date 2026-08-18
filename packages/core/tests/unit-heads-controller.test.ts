@@ -684,7 +684,16 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
     expect(observed!.depth).toBe(1);               // 3 - 2 = 1
     // Fan-out does not divide a child's working room: two siblings each get the
     // parent's envelope, not half of it.
-    expect(observed!.budget.maxWallClockMs).toBe(60_000);
+    //
+    // A RANGE, not `=== 60_000`. The derivation subtracts the wall clock elapsed
+    // since `spawnedAt`, so exact equality holds only while ZERO milliseconds
+    // pass between this test building the budget and the controller reading the
+    // clock — it was asserting that the machine was idle, not that the envelope
+    // was undivided, and failed ~1 in 7 under load. Half would be 30_000, so
+    // the lower bound is what proves undividedness; the upper bound is what
+    // stops a child being handed more room than its parent.
+    expect(observed!.budget.maxWallClockMs).toBeGreaterThan(59_000);
+    expect(observed!.budget.maxWallClockMs).toBeLessThanOrEqual(60_000);
   });
 });
 
