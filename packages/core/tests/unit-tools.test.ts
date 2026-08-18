@@ -456,35 +456,42 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(captured).toEqual({ status: 'completed', content: 'Fix landed; tests added.' });
   });
 
-  test('run in workspace mode falls back gracefully when no shell provided', async () => {
-    // Test runtime has no rt.shell — `run` must return an error string rather
-    // than throwing. This lets test harnesses exercise the tool shape without
-    // providing a real shell dependency.
-    // A runtime with no shell at all: every real one has the workspace's, so
-    // this is the degraded case the fallback exists for.
+  test('run with no workspace shell REFUSES with a classification, not a bare string', async () => {
+    // It used to answer `'Error: no workspace shell available in this runtime.'`
+    // — accurate prose carrying no class, so a reader could not tell this apart
+    // from a timeout or an OOM. `unsupported`: this runtime has no shell, and
+    // retrying cannot change that.
     const { rt } = createTestRuntime();
     const t = tools({ ...rt, shell: undefined });
     const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
     const result = await tool.execute({ command: 'echo hi' });
-    expect(result).toContain('Error');
+    const parsed = v.parse(v.object({ reason: v.string(), error: v.string() }), JSON.parse(result));
+    expect(parsed.reason).toBe('unsupported');
+    expect(parsed.error).toContain('no workspace shell');
+    // The discriminator LEADS, where no clamp can reach it.
+    expect(result.indexOf('"reason"')).toBeLessThan(result.indexOf('"error"'));
   });
 
   test('run with an unprovisioned runtime returns structured runtime_not_provisioned', async () => {
     // The UI parses this exact JSON shape (parseProvisionError in
     // WorkspacePage.tsx) to render the amber install-card. Silent fallback to
     // workspace would defeat the install-card flow, so the contract is:
-    // `{error:'runtime_not_provisioned', runtime, message}`.
+    // `{error:'runtime_not_provisioned', runtime, message}` — with the
+    // classification added AHEAD of it, which the UI's `v.object` ignores.
     const { rt } = createTestRuntime();
     const t = tools(rt);
     const tool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.run) };
     for (const runtime of ['sandbox', 'nimbus', 'laptop'] as const) {
       const result = await tool.execute({ command: 'echo hi', runtime });
       const parsed = v.parse(v.object({
-        error: v.string(), runtime: v.string(), message: v.string(),
+        reason: v.string(), error: v.string(), runtime: v.string(), message: v.string(),
       }), JSON.parse(result));
       expect(parsed.error).toBe('runtime_not_provisioned');
       expect(parsed.runtime).toBe(runtime);
       expect(parsed.message.length).toBeGreaterThan(0);
+      // `unavailable`, not `unsupported`: a sandbox provisions on first use and a
+      // laptop comes back when its daemon does, so this is a retry.
+      expect(parsed.reason).toBe('unavailable');
     }
   });
 

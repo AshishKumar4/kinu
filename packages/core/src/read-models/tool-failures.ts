@@ -18,13 +18,21 @@
  *
  * Nothing here guesses. Every reason is one the producing code computed and
  * wrote: `file` puts its `FileToolFailureReason` on the result (tools/
- * file-tool.ts), the `agents` fork puts `bad_input` on a call whose arguments
- * do not describe a fork (tools/agents-tool.ts), and an exec-shaped result
- * carries its exit code in the
- * `Error (exit N)` prefix this codebase's own renderer produced (execution/
- * exec-result.ts:72). A row that fits neither is reported as `unclassified`
- * rather than filed under a guess — an instrument that cannot explain a failure
- * must say so, because a wrong attribution costs more than an absent one.
+ * file-tool.ts), the `agents` fork puts `bad_input` on a call whose arguments do
+ * not describe a fork (tools/agents-tool.ts), the `run` tool puts an `ErrorCode`
+ * on every refusal it returns (tools/builtins.ts), and an exec-shaped result
+ * carries its exit code in the `Error (exit N)` prefix this codebase's own
+ * renderer produced (execution/exec-result.ts:72). A row that fits none of those
+ * is reported as `unclassified` rather than filed under a guess — an instrument
+ * that cannot explain a failure must say so, because a wrong attribution costs
+ * more than an absent one.
+ *
+ * The reason vocabulary is SHARED with `obs/error.ts` rather than restated here.
+ * It used to be a local picklist, and the cost showed up immediately: the `run`
+ * tool's unprovisioned-runtime refusal carried no reason this file recognised, so
+ * a runtime that was never there — a platform gap the agent did nothing to cause
+ * — was reported as `returned_error` with `refused: false`, in the `broke`
+ * bucket, indicting the tool for correctly declining.
  */
 
 import * as v from 'valibot';
@@ -32,37 +40,52 @@ import { isFailingResultText } from '../execution/exec-result.js';
 import { citesApprovalDenial } from '../safety/approval-gate.js';
 import { FAILURE_WITHOUT_ERROR, type RunEvent } from '../events/types.js';
 import { JsonObjectSchema, parseJsonValue, type JsonValue } from '../utils/json.js';
-import { tolerate } from '../obs/index.js';
+import { CODE_IS_REFUSAL, ERROR_CODES, tolerate } from '../obs/index.js';
 
 /**
- * The reason vocabulary a tool writes onto its own result. `file` owns most of
- * it (tools/file-tool.ts), and it is read off ANY tool's payload: the `agents`
- * fork writes `bad_input` for a call whose arguments do not describe a fork
- * (tools/agents-tool.ts), so this is not one tool's private list.
- */
-const ToolReasonSchema = v.picklist([
-  'empty_anchor', 'not_found', 'ambiguous', 'overlap', 'no_change',
-  'unread', 'stale', 'missing', 'io', 'bad_input',
-]);
-
-/**
- * Reasons a failure is the tool doing its job. Each one is a refusal the tool
- * made deliberately, having established that proceeding would be wrong:
+ * The file plane's own refusal reasons — the ones that are not error CLASSES but
+ * decisions the text surgery made about an anchor:
  *
- *   not_found / ambiguous / empty_anchor / overlap — the anchor does not
- *     identify one span, so a splice would be a guess at where to write.
+ *   not_found / ambiguous / empty_anchor / overlap — the anchor does not identify
+ *     one span, so a splice would be a guess at where to write.
  *   no_change — the replacement equals what it replaces.
  *   unread / stale — the read-before-write contract: the caller does not know
  *     what it would discard.
- *   bad_input — the arguments do not describe an operation.
  *
- * `missing` and `io` are NOT here: a path that does not exist and a filesystem
- * that refused are things that went wrong, not decisions the tool made.
+ * Every one is the tool doing its job, which is why the list is named for its
+ * verdict. `missing`, `io` and `bad_input` are NOT here — they are `ErrorCode`s,
+ * shared with every other tool, and two of the three are not refusals at all.
  */
-const RefusalReasonSchema = v.picklist([
-  'empty_anchor', 'not_found', 'ambiguous', 'overlap', 'no_change',
-  'unread', 'stale', 'bad_input',
-]);
+const FILE_REFUSAL_REASONS = [
+  'empty_anchor', 'not_found', 'ambiguous', 'overlap', 'no_change', 'unread', 'stale',
+] as const;
+
+/**
+ * The reason vocabulary a tool writes onto its own result: every `ErrorCode`,
+ * plus the file plane's anchor reasons. Read off ANY tool's payload, so it is not
+ * one tool's private list.
+ */
+const ToolReasonSchema = v.picklist([...ERROR_CODES, ...FILE_REFUSAL_REASONS]);
+
+/**
+ * Whether a reason means the tool declined correctly rather than broke.
+ *
+ * The `ErrorCode` half is SPREAD from `obs/error.ts` rather than restated, so a
+ * new code cannot reach this reader undecided: `CODE_IS_REFUSAL` is total over
+ * `ErrorCode`, and adding a member there without a verdict does not compile.
+ * Every key is a member of `ToolReasonSchema`'s own picklist, which is what makes
+ * the lookup below total without an index signature.
+ */
+const REASON_IS_REFUSAL = {
+  ...CODE_IS_REFUSAL,
+  empty_anchor: true,
+  not_found: true,
+  ambiguous: true,
+  overlap: true,
+  no_change: true,
+  unread: true,
+  stale: true,
+} satisfies Readonly<Record<v.InferOutput<typeof ToolReasonSchema>, boolean>>;
 
 /**
  * Exit codes that mean the tool never ran the work, as opposed to running it
@@ -103,14 +126,15 @@ export interface ToolFailure {
    *  no actions (`run`) or a call whose args did not survive as an object. */
   readonly action: string | null;
   /**
-   * Why. `file` reasons come from the tool; `exit_<N>` is a command that ran
-   * and exited N; `command_not_found` / `not_executable` / `timeout` are the
-   * shell's own codes; `threw` is a tool that raised out of its own execute;
-   * `returned_error` is a tool that answered with an error body instead of
-   * raising one; `failed_without_error` is a tool that reported failure and said
-   * nothing — a defect in the tool's own contract, and the class that used to be
-   * recorded as a clean call; `unclassified` is a failure this cannot explain,
-   * reported rather than filed under a guess.
+   * Why. An `ErrorCode` when the tool classified its own failure (`file`'s
+   * reasons, the `run` tool's refusals — obs/error.ts); `exit_<N>` is a command
+   * that ran and exited N; `command_not_found` / `not_executable` / `timeout` are
+   * the shell's own codes; `threw` is a tool that raised out of its own execute;
+   * `returned_error` is a tool that answered with an error body carrying no
+   * classification; `failed_without_error` is a tool that reported failure and
+   * said nothing — a defect in the tool's own contract, and the class that used
+   * to be recorded as a clean call; `unclassified` is a failure this cannot
+   * explain, reported rather than filed under a guess.
    */
   readonly reason: string;
   /** True when the tool declined correctly rather than breaking. A command
@@ -121,9 +145,16 @@ export interface ToolFailure {
    *  test, a failing build. On a repair task this is the agent finding what it
    *  was sent to find, and it is not a defect in the harness or the tool. */
   readonly workFailed: boolean;
-  /** True when the workspace has no such program (exit 127). A PLATFORM gap —
-   *  Proteus never asks Nimbus to install a runtime — so it is neither a tool
-   *  defect nor the work failing. See {@link RUNTIME_ABSENT_REASON}. */
+  /**
+   * True when the environment the call addressed is not there: a program the
+   * workspace does not have (exit 127, {@link RUNTIME_ABSENT_REASON}), or a
+   * runtime that was never provisioned (`unavailable`).
+   *
+   * A PLATFORM gap in both spellings — Proteus never asks Nimbus to install a
+   * runtime, and it never pre-provisions a sandbox — so it is neither a tool
+   * defect nor the work failing, which is why it is its own part of the census
+   * and reads as "runtime absent" in the eval report.
+   */
   readonly runtimeMissing: boolean;
 }
 
@@ -166,8 +197,9 @@ export function classifyToolFailure(
 ): ToolFailure | null {
   const args = v.safeParse(JsonObjectSchema, row.args);
   const action = args.success ? v.safeParse(v.string(), args.output.action) : null;
-  // `runtimeMissing` defaults false here so only the one branch that can prove
-  // it — the shell's own 127 — ever sets it.
+  // `runtimeMissing` defaults false here so only a branch that can PROVE it —
+  // the shell's own 127, or a tool that classified its own failure
+  // `unavailable` — ever sets it.
   const base = {
     tool: row.name, action: action?.success ? action.output : null, runtimeMissing: false,
   };
@@ -186,11 +218,15 @@ export function classifyToolFailure(
   if (!threw && !failingResult && !failingObject) return null;
 
   if (objectReason?.success) {
+    const reason = objectReason.output;
     return {
       ...base,
-      reason: objectReason.output,
-      refused: v.is(RefusalReasonSchema, objectReason.output),
+      reason,
+      refused: REASON_IS_REFUSAL[reason] === true,
       workFailed: false,
+      // The tool said the environment was not there. Same fact as an exit 127
+      // and the same bucket — a platform gap, not a defect and not the work.
+      runtimeMissing: reason === 'unavailable',
     };
   }
 
@@ -201,7 +237,7 @@ export function classifyToolFailure(
     // the work failing. It is the clearest correct refusal there is: the command
     // never ran because policy said it must not.
     if (citesApprovalDenial(text)) {
-      return { ...base, reason: 'approval_denied', refused: true, workFailed: false };
+      return { ...base, reason: 'denied', refused: true, workFailed: false };
     }
     const named = EXEC_REASON_BY_EXIT.get(exit);
     return {

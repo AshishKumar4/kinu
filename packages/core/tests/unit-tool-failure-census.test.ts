@@ -27,11 +27,15 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { toolExecute } from '@proteus/test-utils';
 import {
-  censusToolFailures, classifyToolFailure, toolFailureKey, FAILURE_WITHOUT_ERROR,
+  buildBuiltinTools, censusToolFailures, classifyToolFailure,
+  toolFailureKey, FAILURE_WITHOUT_ERROR,
 } from '../src/index.js';
+import { createRecordingLogger, type RecordingLogger } from '../src/obs/index.js';
+import { parseJsonValue } from '../src/utils/json.js';
+import { createTestRuntime } from './helpers.js';
 import type { RunEvent } from '../src/events/types.js';
-
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
 
 let nextIndex = 0;
@@ -208,7 +212,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
         + '• pipe-to-bash (deny): Downloads and executes a remote script\n',
     }));
     expect(failure).toMatchObject({
-      tool: 'run', reason: 'approval_denied',
+      tool: 'run', reason: 'denied',
       refused: true, workFailed: false, runtimeMissing: false,
     });
   });
@@ -382,5 +386,92 @@ describe('the census over a run', () => {
     ]);
     expect(census).toMatchObject({ byKey: [], refused: 0, workFailed: 0, broke: 0 });
     expect(census.failures).toHaveLength(0);
+  });
+});
+
+describe('the classification the `run` tool actually produced reaches the reader', () => {
+  /**
+   * The vertical slice, end to end and with nothing hand-written in the middle:
+   * the real `run` tool computes the refusal, the real payload crosses the ledger
+   * in BOTH backend shapes, and the real reader attributes it.
+   *
+   * Before the classification existed this row was `returned_error` with
+   * `refused: false` — filed in `broke`, the one bucket that is a candidate
+   * defect. A runtime that Proteus never provisioned is a platform gap the agent
+   * did nothing to cause, and it was being counted against the tool.
+   */
+  async function refuseEscalation(runtime: string): Promise<{
+    payload: string;
+    logger: RecordingLogger;
+  }> {
+    const { rt } = createTestRuntime();
+    const logger = createRecordingLogger();
+    const tools = buildBuiltinTools({ rt, logger });
+    const run = { execute: toolExecute<{ command: string; runtime: string }, string>(tools.run) };
+    return { payload: await run.execute({ command: 'pytest -q', runtime }), logger };
+  }
+
+  test('an unprovisioned runtime is `unavailable`, a platform gap, on both backends', async () => {
+    const { payload } = await refuseEscalation('sandbox');
+    for (const [backend, result] of [
+      // The cf sink stores the tool's structured output as an object; the CLI sink
+      // renders the SAME output through `JSON.stringify` first. Both are read, or
+      // the attribution is a per-backend false zero.
+      ['cf', parseJsonValue(payload)],
+      ['cli', payload],
+    ] as const) {
+      const failure = classifyToolFailure(call({
+        name: 'run', toolCallId: `t-${backend}`, args: { command: 'pytest -q' }, result,
+      }));
+      expect(failure).toMatchObject({
+        tool: 'run',
+        reason: 'unavailable',
+        // Not the tool declining and not the work failing: the environment was
+        // never there. Exactly where an exit 127 lands, for the same reason.
+        refused: false,
+        workFailed: false,
+        runtimeMissing: true,
+      });
+    }
+  });
+
+  test('the refusal is counted as a runtime gap, not as a broken tool', async () => {
+    const { payload } = await refuseEscalation('laptop');
+    const census = censusToolFailures([call({
+      name: 'run', toolCallId: 't1', args: { command: 'pytest -q' }, result: payload,
+    })]);
+    expect({
+      refused: census.refused, workFailed: census.workFailed,
+      runtimeMissing: census.runtimeMissing, broke: census.broke,
+    }).toEqual({ refused: 0, workFailed: 0, runtimeMissing: 1, broke: 0 });
+    expect(census.byKey).toEqual([['run·unavailable', 1]]);
+  });
+
+  test('the same decision is logged under a stable dotted event name', async () => {
+    // The log and the ledger row are two readers of ONE classification. A log line
+    // that said something the row did not would be a second source of truth.
+    const { logger } = await refuseEscalation('sandbox');
+    expect(logger.emitted).toEqual([{
+      event: 'run.escalation_refused',
+      code: 'unavailable',
+      cause: 'runtime_not_provisioned',
+      fields: { runtime: 'sandbox' },
+    }]);
+  });
+
+  test('a shell-less workspace is `unsupported`, which is a different fact', async () => {
+    // `unavailable` retries and `unsupported` does not, so pooling them would read
+    // a permanent capability gap as a cold start.
+    const { rt } = createTestRuntime();
+    const logger = createRecordingLogger();
+    const tools = buildBuiltinTools({ rt: { ...rt, shell: undefined }, logger });
+    const run = { execute: toolExecute<{ command: string }, string>(tools.run) };
+    const payload = await run.execute({ command: 'pytest -q' });
+    expect(classifyToolFailure(call({
+      name: 'run', toolCallId: 't1', args: { command: 'pytest -q' }, result: payload,
+    }))).toMatchObject({
+      reason: 'unsupported', refused: true, workFailed: false, runtimeMissing: false,
+    });
+    expect(logger.emitted.map((line) => line.event)).toEqual(['run.shell_absent']);
   });
 });

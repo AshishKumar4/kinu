@@ -34,7 +34,16 @@ const SQLITE_TABLE_EXISTS = /\bthere is already another table or index with this
 /** `"x" cannot be parsed as a URL.` — WHATWG URL's TypeError, which carries no `code` in browsers. */
 const UNPARSEABLE_URL = /cannot be parsed as a URL/u;
 
-function errnoCode(error: Error): string | null {
+/**
+ * The one reader of a caught error's `code` property. Exported for `error.ts`,
+ * which classifies a wider errno set than this module tolerates — a second
+ * reader of the same property would be a second answer to "does this error even
+ * have a code", and `String()` rather than a `typeof` narrow is load-bearing: a
+ * DOMException's `code` is a legacy NUMBER, and its name is what identifies it.
+ *
+ * Not re-exported from `obs/index.ts`: inside this module, not part of the seam.
+ */
+export function errnoCode(error: Error): string | null {
   if (!('code' in error)) return null;
   const code = error.code;
   return code === undefined || code === null ? null : String(code);
