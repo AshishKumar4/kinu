@@ -86,7 +86,13 @@ const isSuiteFile = (file: string): boolean =>
  * of a defect here.
  */
 const EXEMPT = [
+  // The throwaway PROTEUS_HOME and the global release live here; holding it to
+  // "call the helper" would be circular. Its prefix is catalogued, so preflight
+  // still counts it. The two entries beside it are three lines each and mint
+  // nothing — they exist only to register their own runner's `afterAll`.
+  'scripts/test-scratch-home.ts',
   'scripts/test-preload.ts',
+  'scripts/test-preload-vitest.ts',
   'scripts/scratch-ownership.test.ts',
   'packages/test-utils/src/scratch.ts',
 ] as const;

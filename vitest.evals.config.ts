@@ -54,7 +54,12 @@ export default defineConfig({
     // before this line existed, `PROTEUS_HOME` was UNSET under this config — so
     // a live eval run wrote checkpoint stores into the developer's real home,
     // which is the same defect that once put ~580 of them there.
-    setupFiles: ['./scripts/test-preload.ts'],
+    // The VITEST entry, not `bun test`'s. Both are three lines over the same
+    // `scripts/test-scratch-home.ts`; they differ only in which runner's
+    // `afterAll` they register, and pointing this at the bun one throws `Cannot
+    // use afterAll() outside of the test runner` and fails the tier at
+    // collection.
+    setupFiles: ['./scripts/test-preload-vitest.ts'],
     // One task is a full agent episode against a remote model: minutes, not
     // seconds. A default 5s timeout would report the tier as broken.
     testTimeout: 1_800_000,
