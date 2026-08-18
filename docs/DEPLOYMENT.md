@@ -69,6 +69,133 @@ For a source checkout, use `bun run cli -- setup` and `bun run cli -- ...`.
 The CLI app origin defaults to `https://proteus.ashishkumarsingh.com`; use
 `--origin` or `PROTEUS_ORIGIN` only for alternate deployments.
 
+## Zero to production
+
+Everything below assumes an EMPTY Cloudflare account. Three commands do the
+work, and a fourth proves it:
+
+```bash
+bun run infra:provision      # D1, its schema, R2 buckets, the Vectorize index
+bun run deploy               # the Worker, its DO namespaces, container, routes, cron
+bun run infra:provision      # the secrets — `wrangler secret put` needs the Worker to exist
+bun run gate:infra           # every declared resource exists and is bound
+```
+
+The two provision runs are not a workaround: `wrangler secret put` refuses on a
+Worker that does not exist yet, so on a fresh account the root secret can only
+be installed after the first deploy. The first run says so rather than appearing
+to have succeeded, and the second creates nothing the first created.
+
+`bun run deploy` remains the only supported production deploy path. Provisioning
+creates the account-level resources the deploy binds and never deploys anything
+itself.
+
+### Before you start
+
+Provisioning cannot obtain any of these, and a fresh account fails without them.
+`bun run infra:provision` prints the same list, every run, with the command that
+re-checks each one.
+
+| Prerequisite | Why nothing here can create it |
+| --- | --- |
+| A Cloudflare account on the **Workers Paid** plan | SQLite Durable Objects, Containers, `worker_loaders` and 7-day Workers Logs retention are all plan-gated. No wrangler command reports or changes a plan. |
+| The `account_id`, in `packages/cf-backend/wrangler.jsonc` | It names the account; it does not create one. |
+| A wrangler login (`npx wrangler login`) with Workers, D1, R2, Vectorize, Containers and Email scopes | Every command below rides it. `npx wrangler whoami` lists what you have. |
+| A **zone** you control, and the DNS records under it | `zone_name` in `routes` assumes an active zone. wrangler has no DNS command at all. |
+| A proxied wildcard DNS record `*.proteus` on that zone | The `pattern + zone_name` route matches requests; it does not make the hostname resolve. Without it every preview URL is NXDOMAIN while the route reads as present. |
+| An **AI Gateway** in the same account, named in `AI_GATEWAY_URL` | wrangler 4.97 has no `ai-gateway` command, and the wrangler OAuth session carries no `aig` scope — the REST API answers 403. Dashboard only. |
+| OAuth applications at Google, GitHub and/or Cloudflare | Created on three other websites. See § OAuth Setup for the exact redirect URLs and scopes. |
+| Email Routing onboarding for `EMAIL_DOMAIN` | MX records, a verified destination, and a rule delivering to this Worker. The `send_email` binding is OUTBOUND only. See `docs/EMAIL-INGRESS.md`. |
+
+### What each command does
+
+**`bun run infra:provision`** reads the inventory out of `wrangler.jsonc` —
+there is no second list — and creates what is missing, in dependency order:
+D1 databases, their migrations, R2 buckets, the Vectorize index. It prints
+`CREATED` or `existed` per resource, so a second run is visibly a no-op. A
+resource whose lookup FAILED is refused rather than created: "the network was
+down" and "it does not exist" are different states, and creating a bucket on the
+first one is how an account ends up with two answers to which bucket holds the
+snapshots. Everything wrangler cannot create is printed as a manual worklist,
+every run, green or not.
+
+**`bun run gate:infra`** checks that every declared resource exists **and that
+the deployed Worker is bound to it**, and exits non-zero when it is not. It is
+deploy gate 43 and runs on every `bun run deploy`. It reports a count rather
+than dying on the first problem — "production declares 22 resources; 19 observed
+present, 1 absent, 0 unreadable, 2 unobservable by any CLI" — because the next
+move depends on which one. It takes an environment: `bun run gate:infra` checks
+production, `bun scripts/infra-verify.ts staging` checks staging, and each run
+names the environments it did not check.
+
+**`bun run infra:teardown <environment>`** deletes what provisioning created, in
+reverse dependency order, and refuses without a typed sentence naming the
+environment (`destroy proteus production`). It prints WHAT IS INSIDE every
+data-bearing resource before asking. It will not delete a resource another
+environment binds — `proteus-backups` and `nimbus-runtime-cache` are held by
+both, so tearing down one environment retains them and says who still holds
+them. Nothing imports it and no other command can reach it.
+
+### Every value the Worker reads, and where it comes from
+
+Derived from `Env` in `packages/cf-backend/env.d.ts` and pinned: a new field
+that neither a binding nor a `vars` entry supplies fails `bun run gate:infra`
+until somebody records how it is obtained. `wrangler secret list` returns names
+only — Cloudflare never returns a value, and nothing here asks for one.
+
+| Value | Handling | Required | Absent means |
+| --- | --- | --- | --- |
+| `CREDENTIAL_ENCRYPTION_KEY` | **prompt** — paste one, or press enter and provisioning generates 32 random bytes and displays them **once** | yes, everywhere | Every signed-in surface answers 503 while public routes answer 200, so the site looks healthy. |
+| `CLOUDFLARE_OAUTH_CLIENT_SECRET` | **prompt** | where `CLOUDFLARE_OAUTH_CLIENT_ID` is a var | Chat falls back to the platform gateway and bills the **platform** account instead of each user's. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | **prompt** | where `GOOGLE_OAUTH_CLIENT_ID` is a var | Google is not on `/login`. **Absent on production today.** |
+| `GITHUB_OAUTH_CLIENT_SECRET` | **prompt** | where `GITHUB_OAUTH_CLIENT_ID` is a var | GitHub is not on `/login`. **Absent on production today.** |
+| `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | **out of band** — the outgoing key, during a rotation | no | Nothing. It is the read-only half of a rotation. |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | **out of band** — an R2 API token from the dashboard; wrangler cannot mint one | no | Snapshots move through the `BACKUP_BUCKET` binding and restore by extracting rather than mounting. All four presigned-mode values are all-or-nothing. |
+| `BACKUP_BUCKET_NAME`, `CLOUDFLARE_R2_ACCOUNT_ID` | **config var** — plain values in `vars`, not secrets | no | As above. |
+| `GOOGLE_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_ID` | **config var**, beside their secrets | no | That provider is not on `/login`. |
+| `GOOGLE_OAUTH_SCOPES`, `GITHUB_OAUTH_SCOPES`, `CLOUDFLARE_OAUTH_SCOPES` | **config var** — overrides only | no | The provider default applies (`CLOUDFLARE_WORKERS_AI_SCOPES` in `lib/cloudflare-oauth.ts`). |
+| `PROTEUS_MAX_STEPS` | **config var** | no | Core's default per-turn tool-call ceiling applies. |
+
+There is deliberately no "generate it silently" handling. The only value this
+repository could mint unattended is the root secret, and a key the program
+invents and never shows anyone is a key nobody can restore from — losing it
+means every user reconnects every provider. So it is a prompt, at a terminal,
+displayed exactly once.
+
+### What the binding manifest cannot express
+
+`wrangler.jsonc` is the inventory, and these are the dependencies it has no
+field for. Each was verified against the live account on 2026-08-18 rather than
+inferred, and `scripts/infra-manifest.ts` carries the same list with the command
+that re-checks each one.
+
+- **The AI Gateway `proteus-ai-gateway`** exists only as a substring of the
+  `AI_GATEWAY_URL` var. Neither creatable nor readable by anything here.
+- **The Vectorize index's geometry.** The manifest names `proteus-memory` and
+  stops; creating it needs `--dimensions=384 --metric=cosine`, and an index at
+  the wrong width binds fine and rejects every insert. Provisioning reads the
+  dimension back out of the embedder in `packages/cf-backend/src/runtime.ts` so
+  the two cannot drift; the metric appears only in a wrangler.jsonc comment.
+- **The proxied wildcard DNS record** and **the zone itself.** wrangler has no
+  DNS command, and the zone DNS API answers 403 under the wrangler OAuth token.
+  Verification resolves a probe hostname instead.
+- **Email Routing.** Measured 2026-08-18: routing and sending are enabled on
+  `ashishkumarsingh.com`, its catch-all forwards to a mailbox, and its three
+  custom rules point at a different Worker. **No rule delivers to `proteus`**, so
+  Mission Inbox inbound mail does not arrive today even though the binding, the
+  var and the `email()` handler are all present and correct.
+- **The cron trigger.** `wrangler deploy` writes it from `triggers.crons`; no
+  wrangler command reads it back. A declared blind spot.
+- **The container image being pullable and matching `@cloudflare/sandbox` in
+  `package.json`.** Measured 2026-08-18: production runs 0.12.7 and matches;
+  staging still runs 0.11.0 against a staging manifest that declares 0.12.7,
+  because a container image is only reconciled by a deploy of that environment.
+- **An R2 lifecycle rule on the `backups/` prefix.** Not expressible in
+  `wrangler.jsonc`; without it the bucket grows without bound, since the Sandbox
+  SDK enforces snapshot TTL at restore time only.
+- **The Workers Paid plan**, and **the account**.
+
+
 ## Cloudflare Deployment
 
 ### 1. Configure wrangler.jsonc
@@ -368,7 +495,11 @@ has no root `node_modules`, installs the locked dependency graph with
    self-test and scan; Layergate conformance and its fault-localization matrix;
    and the full Lean proof, consistency, and traceability gate. The costly
    159-task corpus validation remains a separately preserved provenance run,
-   not a per-deploy check. Any failure exits before Vite, archive generation, or
+   not a per-deploy check. The last gate is the only one that talks to
+   Cloudflare: `bun run gate:infra` checks that every resource `wrangler.jsonc`
+   declares for **production** exists and that the deployed Worker is bound to
+   it. Everything above it proves the source is deployable; that one proves the
+   account is. Any failure exits before Vite, archive generation, or
    Wrangler. There is no production-deploy skip variable.
 2. **Build** — `vite build`, then `scripts/build-cli-source-archive.sh` (CLI
    source tarball, `.sha256`,

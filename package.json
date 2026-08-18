@@ -47,7 +47,10 @@
     "gate:dependency-advisories": "bun scripts/dependency-advisory-gate.ts",
     "gate:scratch-ownership": "bun scripts/scratch-ownership.ts",
     "gate:literature-citations": "bun scripts/literature-citations.ts",
-    "gate:agents-fields": "bun scripts/agents-fields.ts"
+    "gate:agents-fields": "bun scripts/agents-fields.ts",
+    "gate:infra": "bun scripts/infra-verify.ts",
+    "infra:provision": "bun scripts/infra-provision.ts",
+    "infra:teardown": "bun scripts/infra-teardown.ts"
   },
   "knip": {
     "ignoreExportsUsedInFile": true,

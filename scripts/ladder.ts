@@ -276,7 +276,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/infra.test.ts',
     tier: 'push',
     seconds: 1.7,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
@@ -293,8 +293,17 @@ export const LADDER: readonly Gate[] = [
       + 'locator for one of our own numbers, and the REACH bound proven in both '
       + 'directions: a recorded 206KB blob yields nothing, the same bytes undeclared '
       + 'still refuse the parity adjective inside them, a claim three paragraphs from '
-      + 'its citation is still governed, and one past the bound is not.',
-    blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts.',
+      + 'its citation is still governed, and one past the bound is not. '
+      + 'For infra, the three states a resource lookup can be in kept apart — a required '
+      + 'resource absent, an OPTIONAL one absent, and a lookup that FAILED, the last of which '
+      + 'fails the gate even on an optional resource because "we could not look" is not softened '
+      + 'by the Worker tolerating the loss — plus provisioning issuing no argv at all on a second '
+      + 'run, teardown refusing a phrase that names another deployment, and the two pins '
+      + '(SUPPLY against the derived `Env` census, UNOBSERVABLE against the rows that came back '
+      + 'blind) proven red in both directions.',
+    blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts. For infra, '
+      + 'everything that needs an account: no test here proves a `wrangler d1 create` creates a '
+      + 'database.',
   },
   {
     run: 'bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts',
@@ -628,6 +637,36 @@ export const LADDER: readonly Gate[] = [
       + '(the property types are derived from it) and asserted under full deps in '
       + 'unit-agents-tool.test.ts, so this gate deliberately does not build a tool.',
   },
+  {
+    run: 'bun run gate:infra',
+    tier: 'deploy',
+    seconds: 43,
+    catches: 'a resource the binding manifest declares and the account does not hold, and a '
+      + 'resource that exists while the deployed Worker is not bound to it. Nobody could show '
+      + 'that a fresh account could be stood up at all: every external resource production binds '
+      + 'was created by hand at some point, and nothing anywhere was the list. The inventory is '
+      + 'DERIVED from wrangler.jsonc — 22 resources in production — so it cannot be short by one '
+      + 'bucket, and requiredness is DERIVED from `env.d.ts`\'s `?`, which is the Worker\'s own '
+      + 'statement about what it tolerates losing. It keeps three states apart where every other '
+      + 'tool here keeps two: present, absent, and LOOKUP FAILED — the last always a failure, '
+      + 'because creating a bucket on "the network was down" is how an account ends up with two '
+      + 'answers to which bucket holds the snapshots. Secrets are checked by PRESENCE against a '
+      + 'census pinned to `Env`, so a new secret is unclassifiable-and-red rather than absent-and '
+      + '-quiet; that pin is what would have caught NIMBUS_RUNTIME_CACHE being typed `string` for '
+      + 'months while being an R2 bucket. On its first live run it found four real things: no '
+      + 'Email Routing rule delivers to this Worker (Mission Inbox receives nothing while every '
+      + 'binding is present and correct), staging\'s deployed version predates the MonitorDO '
+      + 'migration, staging has no root secret, and Google and GitHub sign-in are dark for want '
+      + 'of two secrets nobody had recorded as missing.',
+    blind: 'anything no CLI can observe, which it refuses to hide: the AI Gateway (wrangler 4.97 '
+      + 'has no `ai-gateway` command and the OAuth session has no `aig` scope) and the cron '
+      + 'trigger (writable, never readable) are DECLARED blind spots pinned by equality, so the '
+      + 'list can only shrink and only on purpose, and an undeclared one fails. Also blind to '
+      + 'whether a resource that exists is CORRECT beyond its name — a Vectorize geometry '
+      + 'mismatch is reported, an R2 lifecycle rule is not — and, deliberately, to every '
+      + 'environment but the one named: staging is reported as not-checked with the command that '
+      + 'checks it.',
+  },
 ];
 
 /**
@@ -657,6 +696,12 @@ export function deployGates(
  * packages, 41 of 42 CLI files, the root suites and both Layergate runs.
  */
 export const CI_EXEMPT = {
+  'bun run gate:infra':
+    'needs a Cloudflare session. CI has none, and giving it one would put an account credential '
+    + 'with write scope on every pull request. Without a session the gate reports BLOCKED and '
+    + 'non-zero rather than skipping, so it cannot be run there and read as a pass — which is '
+    + 'why it lives at the deploy tier, immediately after `wrangler whoami` has proved there is '
+    + 'a session to use.',
   'bun run verify:lean':
     'needs the elan toolchain and a 15-minute Lean build. It runs in the path-filtered '
     + 'lean-verify workflow on pull requests and as a main-push gate, which is where '
