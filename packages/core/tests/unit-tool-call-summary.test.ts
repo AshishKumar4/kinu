@@ -12,11 +12,11 @@ describe('tool call summaries — the unified agents tool', () => {
     })).toBe('4 forks: "compare X vs Y"');
     expect(summarizeToolCall('agents', { action: 'fork', task: 'find the fix', settle: 'mcts' }))
       .toBe('fork settle=mcts: "find the fix"');
-    expect(summarizeToolCall('agents', { action: 'staff', agent: 'scout', role: 'researcher — landscape' }))
-      .toBe('staff scout — "researcher — landscape"');
-    expect(summarizeToolCall('agents', { action: 'staff', role: 'researcher' })).toBe('staff researcher');
-    expect(summarizeToolCall('agents', { action: 'staff', scope: 'workspace', mission: 'summarize papers' }))
-      .toBe('staff workspace — "summarize papers"');
+    expect(summarizeToolCall('agents', { action: 'hire', agent: 'scout', role: 'researcher — landscape' }))
+      .toBe('hire scout — "researcher — landscape"');
+    expect(summarizeToolCall('agents', { action: 'hire', role: 'researcher' })).toBe('hire researcher');
+    expect(summarizeToolCall('agents', { action: 'hire', scope: 'workspace', mission: 'summarize papers' }))
+      .toBe('hire workspace — "summarize papers"');
     expect(summarizeToolCall('agents', { action: 'ask', agent: 'scout', message: 'Audit the CLI surface' }))
       .toBe('ask scout — "Audit the CLI surface"');
     expect(summarizeToolCall('agents', { action: 'send', agent: 'scout', topic: 'fyi' }))

@@ -13,10 +13,15 @@
  * beforeStep / tool hooks) — lives here, once.
  *
  * Tool gating is structural: an actor whose profile wires no `team` deps has
- * no staffing actions on its `agents` tool. No flags.
+ * no hiring actions on its `agents` tool. No flags.
  */
 
-import { type AgentContext, type Connection, type ConnectionContext } from "agents";
+import { type AgentContext, type Connection, type ConnectionContext, type SubAgentClass } from "agents";
+// Type-only, so it is erased and the base class carries no runtime import of
+// its own subclass. The VALUE comes from `subordinateFacet()`, which each
+// concrete root supplies.
+import type { SubordinateAgent } from './subordinate-agent.js';
+import type { SubordinateActivityEvent } from './lib/protocol.js';
 import { parseProtocolMessage } from "agents/chat";
 import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate.js";
 import { createWorkersTracer } from "./obs/cf-tracer.js";
@@ -127,6 +132,13 @@ import {
   type ParentRpcWrite,
   // Subordinate teams + cross-workspace peers + the report spine
   type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
+  SubordinateRosterStore, createTeamToolDeps, receiveSubordinateEvent,
+  type SubordinatesChangedEvent, type SubordinateReportStatus, type SubordinateReportOrigin,
+  slugifyName,
+  // The subordinate tree's depth cap — derived per child, never stated by one
+  DELEGATION_MAX_DEPTH,
+  delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
+  type DynamicDelegate,
   readSoul, bootstrapScaffold,
   parseModelSpec, catalogModelInfo,
   // Model-capability attachment sanitization (the PDF-400 fix)
@@ -331,9 +343,13 @@ function compactionLogDetail<Data>(message: string, data?: Data): string {
  *  actor class does not wire neither exists in the ToolSet nor is advertised
  *  in the prompt (actorActiveTools). */
 export interface ActorToolDeps {
-  /** In-workspace subordinate management — orchestrator-only. */
+  /** In-workspace subordinate management. Wired by `teamProfile()` on EVERY
+   *  actor that still has tree left below it — a subordinate tree is recursive
+   *  — and absent at the depth cap. */
   team?: TeamToolDeps;
-  /** Cross-workspace peer messaging — orchestrator-only. */
+  /** Cross-workspace peer messaging — orchestrator-only, because
+   *  `hire scope=workspace` mints the root of a fresh tree (see
+   *  AgentsToolDeps.peers in core tools/agents-tool.ts). */
   peers?: PeersToolDeps;
   /** Subordinate → parent progress spine — subordinate-only. */
   report?: ReportToolDeps;
@@ -365,7 +381,7 @@ export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
 /** The `agents` actions this actor profile supports, for the prompt's
  *  Delegation ladder — the same gating rule the tool's enum uses. Fork is
  *  universal on cf (every ActorAgent owns the strategy registry + facet
- *  substrate); staffing and peer converse ride the actor profile. */
+ *  substrate); hiring and peer converse ride the actor profile. */
 export function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
   return agentsActionsFor({ fork: {}, team: deps.team, peers: deps.peers });
 }
@@ -431,6 +447,24 @@ export abstract class ActorAgent extends Think<Env> {
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
     this.invalidateModelCaches();
+    // …then push it down this actor's own subtree. Facets present the PARENT
+    // workspace's identity, so the token travels down rather than being read
+    // back out of a DO — nothing name-addressable ever hands the secret to a
+    // caller. Recursive by construction: each hire re-enters here for its own
+    // hires, so a reissued token reaches the whole tree, not just its first row.
+    const facet = this.subordinateFacet();
+    for (const entry of this.subordinateRoster.list()) {
+      try {
+        const stub = await this.subAgent(facet, entry.name);
+        await stub.installWorkspaceCapability(token);
+      } catch (err) {
+        diagnostics.failure('capability.subordinate_push_failed', toProteusError({
+          doing: 'pushing the workspace capability token to a subordinate',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { subordinate: entry.name });
+      }
+    }
     return { ok: true };
   }
 
@@ -464,8 +498,8 @@ export abstract class ActorAgent extends Think<Env> {
   protected abstract ensureSchema(): void;
 
   /** Tool deps only this actor class wires. Structural absence is the gating
-   *  mechanism (the same way staffing is absent on the CLI backend): an actor
-   *  that returns {} has no staffing/peer actions and no release tool. */
+   *  mechanism (the same way hiring is absent on the CLI backend): an actor
+   *  that returns {} has no roster/peer actions and no release tool. */
   protected abstract actorToolDeps(): ActorToolDeps;
 
   /** Codemode providers beyond the shared set. Spliced between `rlm` and
@@ -496,6 +530,244 @@ export abstract class ActorAgent extends Think<Env> {
    * through onMessage, so subclasses can keep bootstrap methods available to
    * trusted worker callers while denying the same method to client sockets. */
   protected isClientRpcMethodDenied(_method: string): boolean { return false; }
+
+  // ── The subordinate tree ────────────────────────────────────────────
+  // Hoisted here from the orchestrator when `hire` became recursive: an actor
+  // that can hold a roster is not a kind of actor, it is every actor with tree
+  // left below it. The orchestrator is depth 0, a subordinate reads its own
+  // depth off the immutable identity row its parent seeded, and both run the
+  // identical roster/ingress/broadcast machinery — there is no second
+  // implementation to drift.
+
+  /** This actor's position in the workspace's subordinate tree, and the room
+   *  left below it. The orchestrator answers with the root budget; a facet
+   *  actor answers from durable storage, so an eviction cannot reset it. */
+  protected abstract delegationBudget(): DelegationBudget;
+
+  /** The facet class a hire runs as. Supplied by each concrete root because the
+   *  base class must not import its own subclass — the TYPE is imported (and
+   *  erased), the VALUE comes from here. */
+  protected abstract subordinateFacet(): SubAgentClass<SubordinateAgent>;
+
+  /**
+   * The roster half of the actor profile — wired only while this actor has room
+   * below it.
+   *
+   * At the cap the deps are ABSENT rather than present-and-refusing, so
+   * hire/ask/send/list/dismiss are not in the tool enum, not in the codemode
+   * namespace and not in the prompt's ladder. That is this repo's structural
+   * containment doctrine and the stronger of the two mechanisms in use: a tool
+   * that is not there cannot be attempted. It is also what oh-my-pi does
+   * (`canSpawnAtDepth` drops `task` below its cap) rather than what dsh does
+   * (keeps the tool and throws a typed SubagentDepthError).
+   *
+   * The classified refusal in core's dispatch is NOT a second opinion on the
+   * same question — it covers the one window absence cannot: a ToolSet is cached
+   * across turns and a facet's identity is seeded after it is constructed, so a
+   * build that ran before the seed could offer `hire` to an actor that turns out
+   * to be at the cap. Absence for the steady state, a reason for the seam that
+   * absence cannot reach; and the prompt states the cap for an actor sitting on
+   * it, so silence is never the whole answer.
+   */
+  protected teamProfile(): Pick<ActorToolDeps, 'team'> {
+    return delegationExhausted(this.delegationBudget()) ? {} : { team: this.getTeamToolDeps() };
+  }
+
+  private _subordinateRoster: SubordinateRosterStore | null = null;
+
+  protected get subordinateRoster(): SubordinateRosterStore {
+    if (!this._subordinateRoster) {
+      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql);
+      this._subordinateRoster.ensureSchema();
+    }
+    return this._subordinateRoster;
+  }
+
+  /** This actor's hires, for the per-step dynamic context. */
+  protected subordinateDelegates(): DynamicDelegate[] {
+    return this.subordinateRoster.list().map((entry) => ({
+      kind: 'subordinate' as const,
+      name: entry.name,
+      phase: entry.status,
+      task: entry.currentTask,
+    }));
+  }
+
+  protected broadcastSubordinatesChanged(event?: SubordinatesChangedEvent): void {
+    this.broadcast(JSON.stringify(event ?? {
+      type: 'subordinates_changed',
+      subordinates: this.subordinateRoster.list(),
+    }));
+  }
+
+  protected broadcastSubordinateEvent(
+    event: Omit<SubordinateActivityEvent, 'type' | 'id'> & { id?: string },
+  ): void {
+    this.broadcast(JSON.stringify({
+      type: 'subordinate_event',
+      id: event.id ?? nanoid(),
+      kind: event.kind,
+      subordinate: event.subordinate,
+      status: event.status,
+      content: event.content,
+      task: event.task,
+      timestamp: event.timestamp,
+    } satisfies SubordinateActivityEvent));
+  }
+
+  /** A facet is reachable only while its own roster still lists it. */
+  override async onBeforeSubAgent(
+    request: Request,
+    child: { className: string; name: string },
+  ): Promise<Request | Response | void> {
+    if (child.className !== this.subordinateFacet().name) {
+      return new Response('Not found', { status: 404 });
+    }
+    const rosterEntry = this.subordinateRoster.get(child.name);
+    if (!rosterEntry || rosterEntry.status === 'dismissed'
+      || !this.hasSubAgent(child.className, child.name)) {
+      return new Response('Not found', { status: 404 });
+    }
+    return request;
+  }
+
+  protected getTeamToolDeps(): TeamToolDeps {
+    const facet = this.subordinateFacet();
+    return createTeamToolDeps({
+      delegation: this.delegationBudget(),
+      roster: this.subordinateRoster,
+      now: () => Date.now(),
+      inheritedContext: () => this.readInheritedContext(),
+      createName: (role) => {
+        const base = slugifyName(role).slice(0, 48) || 'subordinate';
+        return `${base}-${nanoid(6)}`;
+      },
+      broadcast: (event) => this.broadcastSubordinatesChanged(event),
+      broadcastTask: (event) => this.broadcastSubordinateEvent({
+        kind: 'task',
+        ...event,
+      }),
+      runtime: {
+        spawn: async (input) => {
+          const ownerUserId = this.getOwnerUserId();
+          if (!ownerUserId) throw new Error('Agent has no owner yet — subordinate creation needs an owned workspace.');
+          const stub = await this.subAgent(facet, input.name);
+          const capabilityToken = await this.workspaceCapabilityToken();
+          try {
+            const identity = {
+              name: input.name,
+              displayName: input.displayName,
+              role: input.role,
+              mission: input.mission,
+              model: input.model,
+              capabilityToken: capabilityToken ?? undefined,
+            };
+            await stub.setSubordinateIdentity(identity);
+          } catch (error) {
+            // A cleanup path that discards its own failure cannot be trusted to
+            // have cleaned up. `deleteSubAgent` is what WIPES the half-seeded
+            // facet's storage, so a swallowed failure here leaves a permanent
+            // database inside this DO charged against the quota every facet
+            // shares — reported with the seeding failure as its cause, never
+            // hidden behind it.
+            try {
+              await this.deleteSubAgent(facet, input.name);
+            } catch (cleanupError) {
+              throw new Error(
+                `Subordinate ${input.name} failed to seed and its storage could not be reclaimed: `
+                + `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+                { cause: error },
+              );
+            }
+            throw error;
+          }
+        },
+        assign: async (name, input) => {
+          const stub = await this.subAgent(facet, name);
+          const task = {
+            kind: 'task',
+            body: input.body,
+            mode: input.mode,
+            deliverable: input.deliverable,
+            deadlineHint: input.deadlineHint,
+            inheritedContext: input.inheritedContext,
+          } as const;
+          return stub.enqueueSubordinateTask(task);
+        },
+        status: async (name) => (await this.subAgent(facet, name)).getSubordinateStatus(),
+        message: async (name, content, mode) => {
+          return (await this.subAgent(facet, name))
+            .enqueueSubordinateTask({ kind: 'message', body: content, mode });
+        },
+        dismiss: async (name, keepHistory) => {
+          if (!keepHistory) await this.deleteSubAgent(facet, name);
+        },
+      },
+    });
+  }
+
+  /**
+   * Facet bootstrap authority. Worker-side DO RPC only. The child verifies its
+   * supplied owner/workspace against this source before persisting its immutable
+   * identity row — and takes its DEPTH from here, never from its own arguments.
+   *
+   * This is the one place a child's depth is decided, which is what makes the cap
+   * unbypassable by a subordinate that simply does not check: the number it would
+   * have to lie about is one it never supplies. The seeding authority refuses at
+   * the cap too, so even a stale ToolSet that offered `hire` cannot produce a
+   * child past it.
+   */
+  async getSubordinateBootstrapIdentity(): Promise<{
+    parentWorkspace: string;
+    ownerUserId: string;
+    model: string | null;
+    depth: number;
+  }> {
+    // Deliberately carries no capability token: this method is reachable by any
+    // holder of a stub to this workspace, so it must never hand out a secret.
+    // The token reaches subordinates by push (setSubordinateIdentity +
+    // installWorkspaceCapability), never by read-back.
+    this.ensureSchema();
+    const ownerUserId = this.getOwnerUserId();
+    if (!ownerUserId) throw new Error('Workspace must be owned before creating subordinates.');
+    const own = this.delegationBudget();
+    if (delegationExhausted(own)) {
+      throw new Error(
+        `Delegation depth cap reached: this agent is at depth ${own.depth} of ${DELEGATION_MAX_DEPTH} `
+        + 'and cannot seed a subordinate below it.',
+      );
+    }
+    return {
+      parentWorkspace: this.workspaceName(),
+      ownerUserId,
+      model: this.config.getModel(),
+      depth: deriveChildDelegationBudget(own).depth,
+    };
+  }
+
+  /** Subordinate progress ingress. Worker-side DO RPC only: the method is not
+   * `@callable`, and the public route exposes only the subordinate's own chat
+   * surface. Reports use the same EventLog → drain rail as mission inbox. */
+  async receiveSubordinateEvent(input: {
+    fromSubordinate: string;
+    status: SubordinateReportStatus;
+    content: string;
+    origin: SubordinateReportOrigin;
+    mode: WorkMode;
+  }): Promise<{ id: string; admitted: boolean }> {
+    this.ensureSchema();
+    return receiveSubordinateEvent({
+      log: this.eventLog,
+      roster: this.subordinateRoster,
+      vfs: this.rt.storage.vfs,
+      transaction: (body) => this.ctx.storage.transactionSync(body),
+      announce: (report) => {
+        this.broadcastSubordinatesChanged();
+        this.broadcastSubordinateEvent({ ...report, kind: 'report' });
+      },
+      onAdmitted: () => { this.orch.scheduleDrain(); },
+    }, input, Date.now());
+  }
 
   override maxSteps = resolveMaxSteps(this.env.PROTEUS_MAX_STEPS);
 
@@ -1523,7 +1795,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** The unified `agents` tool's deps: the fork substrate is universal on cf
    *  actors — the SAME shared factory the CLI wires (core fork-deps), with
    *  the host-injected infrastructure recomputed per fork call; the
-   *  staffing/peer halves ride this actor's profile (actorToolDeps). Rebuilt
+   *  roster/peer halves ride this actor's profile (actorToolDeps). Rebuilt
    *  with the toolset (getRawTools), so the fork model refreshes exactly
    *  when the toolset does. */
   private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
@@ -2102,7 +2374,7 @@ export abstract class ActorAgent extends Think<Env> {
         // durable row.
         escalations: this.acc.escalations,
         // The unified `agents` delegation tool — fork substrate (heads / mcts
-        // settle) is universal; staff/ask/send actions appear only when this
+        // settle) is universal; hire/ask/send actions appear only when this
         // actor's profile wires the team/peers transports. Owner resolution
         // stays lazy per action, so the cached toolset stays valid across
         // claimOwner.

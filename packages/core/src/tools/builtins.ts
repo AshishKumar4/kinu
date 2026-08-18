@@ -24,7 +24,7 @@
  *                       Gated on deps.agents; each ACTION is further gated on
  *                       the deps group that powers it (fork / team / peers),
  *                       so a CLI session gets fork only and a subordinate
- *                       actor never sees staff. See tools/agents-tool.ts.
+ *                       actor never sees hire. See tools/agents-tool.ts.
  *   5. memory         — the ONE durable-state tool: prose notes (save / search,
  *                       auto-hybrid FTS5 + Vectorize when a VectorStore is
  *                       wired), the typed keyed world model (remember / recall
@@ -617,7 +617,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   });
 
   // ── agents — the ONE delegation tool ──────────────────────────────────
-  // Fork dispatch (heads / mcts settle), subordinate staffing and peer
+  // Fork dispatch (heads / mcts settle), subordinate hiring and peer
   // messaging behind a single action surface. Registered when any deps group
   // is wired; per-action gating lives in createAgentsTool.
   if (deps.agents && (deps.agents.fork || deps.agents.team || deps.agents.peers)) {

@@ -75,7 +75,7 @@ const MEMBER_DESCRIPTIONS = {
 
 /** camelCase member name for each snake_case action — the codemode
  *  vocabulary matches every other namespace here (workspace.readFile,
- *  agents.staff), while the dispatcher keeps the original action strings. */
+ *  agents.hire), while the dispatcher keeps the original action strings. */
 const MEMBER_NAMES = {
   board: 'board',
   bind_source: 'bindSource',

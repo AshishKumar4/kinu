@@ -10,6 +10,7 @@ import {
   BUILTIN_TOOL_SPECS,
   compilePromptSurface,
   currentDateForPrompt,
+  DELEGATION_INHERITANCE,
   DELEGATION_RUNGS,
   modelSupportsTools,
   AGENT_STANCE_SPECS,
@@ -51,7 +52,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt.indexOf('Delegate once the shape'))
       .toBeLessThan(prompt.indexOf('- Ephemeral fork'));
     expect(prompt).toMatch(/- Ephemeral fork \(action=fork\) — /);
-    expect(prompt).toMatch(/- Persistent subordinate \(action=staff\) — /);
+    expect(prompt).toMatch(/- Persistent subordinate \(action=hire\) — /);
     // The old split surface is gone entirely.
     expect(prompt).not.toContain('`think`');
     expect(prompt).not.toContain('`team`');
@@ -91,10 +92,10 @@ describe('buildSystemPromptSync', () => {
     });
     expect(both).toContain('## Delegation');
     expect(both).toMatch(/- Ephemeral fork \(action=fork\) — /);
-    expect(both).toMatch(/- Persistent subordinate \(action=staff\) — /);
-    expect(both).toMatch(/staff the needed roles.*ask each an independent workstream.*integrate/i);
+    expect(both).toMatch(/- Persistent subordinate \(action=hire\) — /);
+    expect(both).toMatch(/hire the needed roles.*ask each an independent workstream.*integrate/i);
 
-    // A subordinate / CLI session gets fork but never staff: one rung, no
+    // A CLI session gets fork but never hire: one rung, no
     // staffing loop, no peer converse.
     const forkOnly = buildSystemPromptSync(rt, {
       availableTools: ['agents'],
@@ -104,7 +105,7 @@ describe('buildSystemPromptSync', () => {
     expect(forkOnly).toContain('## Delegation');
     expect(forkOnly).toMatch(/- Ephemeral fork \(action=fork\) — /);
     expect(forkOnly).not.toMatch(/- Persistent subordinate/);
-    expect(forkOnly).not.toContain('staff the needed roles');
+    expect(forkOnly).not.toContain('hire the needed roles');
     expect(forkOnly).not.toContain('OTHER workspace agents');
   });
 
@@ -139,7 +140,7 @@ describe('buildSystemPromptSync', () => {
 
   test('the agents schema description leads with positive delegation triggers', () => {
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
-      /Use when: One delegation ladder keyed on how long the helper needs to live/,
+      /Use when: One delegation ladder\. Its two rungs differ on two axes at once: how long the helper lives, and what context it starts from/,
     );
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents.indexOf('one subordinate per independent workstream'))
       .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.agents.indexOf('full turn'));
@@ -155,19 +156,19 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_RUNGS.fork);
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_RUNGS.staff);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_RUNGS.hire);
     expect(prompt).not.toContain(DELEGATION_RUNGS.fork);
-    expect(prompt).not.toContain(DELEGATION_RUNGS.staff);
+    expect(prompt).not.toContain(DELEGATION_RUNGS.hire);
   });
 
-  test('completion never evicts: the staff rung teaches that finished subordinates STAY', () => {
+  test('completion never evicts: the hire rung teaches that finished subordinates STAY', () => {
     // The eviction bug: the old doctrine said "retire it when done", so the
     // orchestrator dismissed subordinates the moment they reported completed —
     // wiping their context. Persistence is now the doctrine in both surfaces.
-    expect(DELEGATION_RUNGS.staff).toMatch(/reports and STAYS/);
-    expect(DELEGATION_RUNGS.staff).toMatch(/dismiss only a subordinate whose role is permanently over/);
-    expect(DELEGATION_RUNGS.staff).not.toMatch(/retire it when done/);
-    expect(DELEGATION_RUNGS.staff).not.toMatch(/cheap to create and dismiss/);
+    expect(DELEGATION_RUNGS.hire).toMatch(/reports and STAYS/);
+    expect(DELEGATION_RUNGS.hire).toMatch(/dismiss only a subordinate whose role is permanently over/);
+    expect(DELEGATION_RUNGS.hire).not.toMatch(/retire it when done/);
+    expect(DELEGATION_RUNGS.hire).not.toMatch(/cheap to create and dismiss/);
     // The prompt no longer says it a second time: the roster/re-engage/dismiss
     // sentence that stood in the Delegation section was this rung paraphrased,
     // and the rungs live in the schema every family reads.
@@ -283,15 +284,25 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toMatch(/scored by executing what each proposes/);
   });
 
-  test('the prompt says forks cannot see each other, which is why a fork task must stand alone', () => {
+  test('forks cannot see each other, stated where a fork brief is written and nowhere twice', () => {
     // heads/controller.ts spawns every head concurrently with the SAME
     // inherited context and no channel between them, so a plan where one fork
     // consumes another's finding silently gets nothing. `whenNotToUse` already
     // forbids forks that RACE on a mutable resource; this is the other half —
     // the visibility fact that makes dependent fork tasks a mistake.
+    //
+    // 2026-08-17: it moved from the prompt onto `forks[].task` itself, as half of
+    // DELEGATION_INHERITANCE.fork.brief. Same fact, read at the moment the brief
+    // is being typed instead of thousands of tokens earlier, and now beside the
+    // inheritance fact it is the complement of: a fork sees your turns, and does
+    // not see this turn continuing or its siblings.
+    expect(DELEGATION_INHERITANCE.fork.brief).toMatch(/what its siblings are doing/);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_INHERITANCE.fork.rung);
     const { rt } = createTestRuntime();
-    expect(buildSystemPromptSync(rt))
-      .toMatch(/Forks cannot see each other's work and meet only at the merge/);
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).not.toMatch(/Forks cannot see each other's work/);
+    // What the prompt keeps is the half no schema carries: the artifact trail.
+    expect(prompt).toMatch(/leave durable findings under `shared\/findings\/`/);
   });
 
   test('per-fork models are discoverable, and named as a case rather than a default', () => {
@@ -312,7 +323,7 @@ describe('buildSystemPromptSync', () => {
   test('the agents example shows the nested forks array shape', () => {
     // The one argument shape on this surface a name does not give away, and
     // the one the trajectory data shows invented wrong (`fork_specs` for
-    // `forks`). staff's arguments are flat and its `role` property carries its
+    // `forks`). hire's arguments are flat and its `role` property carries its
     // own example, so the spec's single example slot goes to fork.
     const { rt } = createTestRuntime();
     const example = BUILTIN_TOOL_SPECS.agents.example;
@@ -990,7 +1001,7 @@ describe('buildSystemPromptSync', () => {
       // argument shape rather than by describing one — deliberate, and the
       // only place the specs' `example` field is rendered.
       // 2026-08-11: the `agents` example became the fork call (+92 chars, the
-      // nested forks array is longer than staff's flat role/mission). It sits
+      // nested forks array is longer than hire's flat role/mission). It sits
       // close to this ceiling on purpose — the next example that grows should
       // be a reviewed decision, which is what this gate is for.
       // 2026-08-12: RAISED 2100 → 2350 for the `tasks` line. The index costs
@@ -1044,7 +1055,7 @@ describe('buildSystemPromptSync', () => {
       // because four passages left: the turn-budget explanation moved into the
       // clamp's own marker (tools/clamp.ts) where it fires at the trip; the
       // peer-addressing line was DELEGATION_CONVERSE paraphrased; the roster/
-      // dismiss tail was DELEGATION_RUNGS.staff paraphrased; the report line
+      // dismiss tail was DELEGATION_RUNGS.hire paraphrased; the report line
       // was the `report` schema's whenToUse/whenNotToUse paraphrased.
       // 2026-08-11: RAISED 1870 → 2250 (back to its pre-2026-08-11 ceiling).
       // A trigger alone did not move settle=mcts — 1 use in 89 trials — so the
@@ -1070,7 +1081,18 @@ describe('buildSystemPromptSync', () => {
       // hand-authored briefs to settle=mcts, or asks for merge with none, loses
       // the call outright. Both facts are one clause each: `forks` is what merge
       // runs and is required there, and mcts takes none.
-      'Delegation': 2530,
+      // 2026-08-17: RAISED 2530 → 2597 (+67 chars NET measured, ~16 o200k
+      // tokens). The ladder was keyed on lifetime alone, and the axis that
+      // actually decides which rung a task wants — what context the helper
+      // starts from — was in neither index bullet. Both now carry it: a fork
+      // runs on the caller's context (so its brief is one line), a hire starts
+      // blank (so its mission is the whole brief). Gross +174, of which 107 was
+      // paid back by deleting "Forks cannot see each other's work and meet only
+      // at the merge, so each fork's task has to stand on its own" — that fact
+      // now rides `forks[].task` itself (DELEGATION_INHERITANCE.fork.brief),
+      // where it is read as the brief is being written rather than thousands of
+      // tokens earlier.
+      'Delegation': 2597,
       // 2026-08-12: RAISED 260 → 680. Defect-B fix (background polling): the
       // section used to say only "stop the turn; the backend will wake you" —
       // one clause the owner's bench evidence shows the model reads as
@@ -1127,7 +1149,7 @@ describe('buildSystemPromptSync', () => {
       const prompt = buildSystemPromptSync(rt, { model: { id } });
       expect(prompt).toMatch(/## Delegation/);
       expect(prompt).toMatch(/- Ephemeral fork \(action=fork\) — /);
-      expect(prompt).toMatch(/- Persistent subordinate \(action=staff\) — /);
+      expect(prompt).toMatch(/- Persistent subordinate \(action=hire\) — /);
       expect(prompt).toMatch(/settle=mcts keeps one/);
     }
   });

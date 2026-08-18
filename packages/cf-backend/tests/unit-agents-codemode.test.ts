@@ -40,6 +40,7 @@ import {
   type SubordinateHandoff,
   type WebSearchProvider,
 } from '@proteus/core';
+import { ROOT_DELEGATION_BUDGET } from '@proteus/core';
 import * as v from 'valibot';
 import type { AgentProviderRegistry } from '../src/providers/agent-registry.js';
 
@@ -146,6 +147,7 @@ function fullDeps(): AgentsToolDeps {
   return {
     ...forkOnlyDeps(),
     team: {
+      delegation: ROOT_DELEGATION_BUDGET,
       list: async () => [],
       create: async () => ({
         name: 'n',
@@ -222,7 +224,7 @@ describe('agents.* in the cf codemode tool', () => {
   test('the namespace is declared in the sandbox types the model reads', () => {
     const description = executeToolsDescription(fullDeps);
     expect(description).toContain('export declare const agents: {');
-    for (const member of ['fork(input', 'staff(input', 'ask(input', 'send(input', 'reply(input', 'list(input', 'dismiss(input']) {
+    for (const member of ['fork(input', 'hire(input', 'ask(input', 'send(input', 'reply(input', 'list(input', 'dismiss(input']) {
       expect(description).toContain(member);
     }
     // Its neighbours are untouched — this is one more namespace, not a rewrite.
@@ -233,7 +235,7 @@ describe('agents.* in the cf codemode tool', () => {
     const deps = forkOnlyDeps();
     const description = executeToolsDescription(() => deps);
     expect(description).toContain('fork(input');
-    expect(description).not.toContain('staff(input');
+    expect(description).not.toContain('hire(input');
     expect(description).not.toContain('dismiss(input');
     // The cost of forking in-sandbox is in the docstring, not only the prompt.
     expect(description).toContain('NOT resumable from here');

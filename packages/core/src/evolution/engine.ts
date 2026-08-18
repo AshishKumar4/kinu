@@ -962,7 +962,7 @@ export class EvolutionEngine {
       `Response: "${summary}"\n` +
       `${toolSummary}\n` +
       `${renderDelegationFeatures(delegationFeatures(turn))}\n` +
-      `Delegation rubric: On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero delegation a lesson to decompose and staff subordinates or fork; credit effective staffing/forking on accepted turns; flag delegation overhead when spawned subordinates contributed nothing.\n` +
+      `Delegation rubric: On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero delegation a lesson to decompose and hire subordinates or fork; credit effective hiring/forking on accepted turns; flag delegation overhead when spawned subordinates contributed nothing.\n` +
       `${turn.hadError ? 'An error occurred.\n' : ''}` +
       `${followup ? `The user then replied: "${evidenceWindow(followup, EVIDENCE_BUDGETS.outcomeFollowup)}"\n` : ''}\n` +
       `In one sentence, what specifically should be done differently next time?`,

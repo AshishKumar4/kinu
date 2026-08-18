@@ -12,7 +12,7 @@
  * @proteus/core so the CLI surface shares them verbatim.
  */
 
-import { callable, type AgentContext } from "agents";
+import { callable, type AgentContext, type SubAgentClass } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { writeNimbusWorkspaceSoul } from "./nimbus-route.js";
 import { getSandbox } from "@cloudflare/sandbox";
@@ -20,7 +20,6 @@ import { generateText, convertToModelMessages } from "ai";
 import type {
   ActivitySnapshot,
   WorkspaceAgent,
-  SubordinateActivityEvent,
 } from "./lib/protocol.js";
 import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster.js";
 import { nextAlarmTime } from "./lib/cron.js";
@@ -103,11 +102,11 @@ import {
   type ExperienceActionInput,
   // Release execution engine — the driver beneath the governance ledger
   ReleaseEngine, createSandboxReleaseExec,
-  type TeamToolDeps, type SubordinateReportStatus, type SubordinateRosterEntry,
+  type SubordinateRosterEntry,
   // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
-  slugifyName,
+  ROOT_DELEGATION_BUDGET, type DelegationBudget,
   readSoul, readMission, summarizeSoul, writeSoul, workspaceGenesisSignal,
   // Automatic workspace titling (first turn + legacy slug heal)
   applyWorkspaceTitle, isPlaceholderMission, isPlaceholderWorkspaceTitle, parseWorkspaceTitle,
@@ -124,7 +123,6 @@ import {
   // The session tree — `messages` as a projection of the SDK's message DAG
   reconcileSessionTree,
   type DynamicContext,
-  type DynamicDelegate,
   // Ingress — core owns the gates; this actor owns the transports in front
   // of them (the DO alarm, the Worker's webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
@@ -134,7 +132,6 @@ import {
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers,
   EmailInbox, planOwnerNotification, readEmailAllowlist, setEmailAllowlist,
   type EmailAdmission, type IncomingEmail,
-  receiveSubordinateEvent,
   PeerHub, type PeerMessage, type ReceiveResult,
   // ── Read models: the folds a surface asks for, one implementation each ──
   getAgentStatus, getChatHistoryPage, getToolList, readLatestSearchTree, readSearchTree,
@@ -172,10 +169,6 @@ import { ActorAgent, type ActorToolDeps } from "./actor-agent.js";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model.js";
 import { SubordinateAgent } from "./subordinate-agent.js";
 import {
-  SubordinateRosterStore,
-  createTeamToolDeps,
-  type SubordinateReportOrigin,
-  type SubordinatesChangedEvent,
   createAgentSelfProvider,
   createReleaseCodemodeProvider,
   DeviceConsentRegistry,
@@ -293,21 +286,6 @@ export class OrchestratorAgent extends ActorAgent {
     this.host.broadcast({ type: 'plan_updated', plan });
   }
 
-  override async onBeforeSubAgent(
-    request: Request,
-    child: { className: string; name: string },
-  ): Promise<Request | Response | void> {
-    if (child.className !== SubordinateAgent.name) {
-      return new Response('Not found', { status: 404 });
-    }
-    const rosterEntry = this.subordinateRoster.get(child.name);
-    if (!rosterEntry || rosterEntry.status === 'dismissed'
-      || !this.hasSubAgent(child.className, child.name)) {
-      return new Response('Not found', { status: 404 });
-    }
-    return request;
-  }
-
   private async completeEventBatch(turnId: string, assistantText: string): Promise<boolean> {
     try {
       const replies = await dispatchEmailRepliesForTurn(
@@ -331,16 +309,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   private _engine: EvolutionEngine | null = null;
-  private _subordinateRoster: SubordinateRosterStore | null = null;
   private _emailOutbox: EmailOutbox | null = null;
-
-  private get subordinateRoster(): SubordinateRosterStore {
-    if (!this._subordinateRoster) {
-      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql);
-      this._subordinateRoster.ensureSchema();
-    }
-    return this._subordinateRoster;
-  }
 
   /** Outbound-email intent log: write-ahead + idempotency for mission-inbox
    *  replies and owner notifications (SPEC §7.4). */
@@ -357,12 +326,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  the base class contributes) and the decisions parked on the user. */
   protected override dynamicContextSnapshot(): DynamicContext {
     const base = super.dynamicContextSnapshot();
-    const subordinates: DynamicDelegate[] = this.subordinateRoster.list().map((entry) => ({
-      kind: 'subordinate' as const,
-      name: entry.name,
-      phase: entry.status,
-      task: entry.currentTask,
-    }));
+    const subordinates = this.subordinateDelegates();
     const deafInbox = this.emailInbox.dropNotice(Date.now());
     const context: DynamicContext = {
       ...base,
@@ -378,27 +342,6 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
 
-  private broadcastSubordinatesChanged(event?: SubordinatesChangedEvent): void {
-    this.broadcast(JSON.stringify(event ?? {
-      type: 'subordinates_changed',
-      subordinates: this.subordinateRoster.list(),
-    }));
-  }
-
-  private broadcastSubordinateEvent(
-    event: Omit<SubordinateActivityEvent, 'type' | 'id'> & { id?: string },
-  ): void {
-    this.broadcast(JSON.stringify({
-      type: 'subordinate_event',
-      id: event.id ?? nanoid(),
-      kind: event.kind,
-      subordinate: event.subordinate,
-      status: event.status,
-      content: event.content,
-      task: event.task,
-      timestamp: event.timestamp,
-    } satisfies SubordinateActivityEvent));
-  }
   /** Turns of new execution traces since the last auto-GEPA pass (in-memory
    *  cadence; resets on eviction, which just delays the next pass slightly). */
   private _turnsSinceGepa = 0;
@@ -621,27 +564,6 @@ export class OrchestratorAgent extends ActorAgent {
     return this.workspaceCapabilityHash();
   }
 
-  /** Install the capability token the UserDO minted for this workspace, then
-   *  push it to every live subordinate. Facets present the PARENT workspace's
-   *  identity, so the token is pushed to them rather than read back out of this
-   *  DO — nothing name-addressable ever hands the secret to a caller. */
-  override async installWorkspaceCapability(token: string): Promise<{ ok: true }> {
-    this.ensureSchema();
-    const result = await super.installWorkspaceCapability(token);
-    for (const entry of this.subordinateRoster.list()) {
-      try {
-        const stub = await this.subAgent(SubordinateAgent, entry.name);
-        await stub.installWorkspaceCapability(token);
-      } catch (err) {
-        diagnostics.failure('capability.subordinate_push_failed', toProteusError({
-          doing: 'pushing the workspace capability token to a subordinate',
-          cause: err,
-          otherwise: 'unavailable',
-        }), { subordinate: entry.name });
-      }
-    }
-    return result;
-  }
 
   /** Read the owner userId from workspace_identity; '' (empty) means unclaimed. */
   protected getOwnerUserId(): string | null {
@@ -701,79 +623,6 @@ export class OrchestratorAgent extends ActorAgent {
         return { agent: agentName, created, ...outcome };
       },
     };
-  }
-
-  private getTeamToolDeps(): TeamToolDeps {
-    return createTeamToolDeps({
-      roster: this.subordinateRoster,
-      now: () => Date.now(),
-      inheritedContext: () => this.readInheritedContext(),
-      createName: (role) => {
-        const base = slugifyName(role).slice(0, 48) || 'subordinate';
-        return `${base}-${nanoid(6)}`;
-      },
-      broadcast: (event) => this.broadcastSubordinatesChanged(event),
-      broadcastTask: (event) => this.broadcastSubordinateEvent({
-        kind: 'task',
-        ...event,
-      }),
-      runtime: {
-        spawn: async (input) => {
-          const ownerUserId = this.getOwnerUserId();
-          if (!ownerUserId) throw new Error('Agent has no owner yet — subordinate creation needs an owned workspace.');
-          const stub = await this.subAgent(SubordinateAgent, input.name);
-          const capabilityToken = await this.workspaceCapabilityToken();
-          try {
-            const identity = {
-              name: input.name,
-              displayName: input.displayName,
-              role: input.role,
-              mission: input.mission,
-              model: input.model,
-              capabilityToken: capabilityToken ?? undefined,
-            };
-            await stub.setSubordinateIdentity(identity);
-          } catch (error) {
-            // A cleanup path that discards its own failure cannot be trusted to
-            // have cleaned up. `deleteSubAgent` is what WIPES the half-seeded
-            // facet's storage, so a swallowed failure here leaves a permanent
-            // database inside this DO charged against the quota every facet
-            // shares — reported with the seeding failure as its cause, never
-            // hidden behind it.
-            try {
-              await this.deleteSubAgent(SubordinateAgent, input.name);
-            } catch (cleanupError) {
-              throw new Error(
-                `Subordinate ${input.name} failed to seed and its storage could not be reclaimed: `
-                + `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
-                { cause: error },
-              );
-            }
-            throw error;
-          }
-        },
-        assign: async (name, input) => {
-          const stub = await this.subAgent(SubordinateAgent, name);
-          const task = {
-            kind: 'task',
-            body: input.body,
-            mode: input.mode,
-            deliverable: input.deliverable,
-            deadlineHint: input.deadlineHint,
-            inheritedContext: input.inheritedContext,
-          } as const;
-          return stub.enqueueSubordinateTask(task);
-        },
-        status: async (name) => (await this.subAgent(SubordinateAgent, name)).getSubordinateStatus(),
-        message: async (name, content, mode) => {
-          return (await this.subAgent(SubordinateAgent, name))
-            .enqueueSubordinateTask({ kind: 'message', body: content, mode });
-        },
-        dismiss: async (name, keepHistory) => {
-          if (!keepHistory) await this.deleteSubAgent(SubordinateAgent, name);
-        },
-      },
-    });
   }
 
   /** This workspace's own stores plus a client for the owner's library, every
@@ -882,11 +731,22 @@ export class OrchestratorAgent extends ActorAgent {
    *  experience transfer, and the release lane. */
   protected actorToolDeps(): ActorToolDeps {
     return {
-      team: this.getTeamToolDeps(),
+      ...this.teamProfile(),
       releases: this.getReleaseToolDeps(),
       peers: this.getPeersToolDeps(),
       submitPlan: { submit: (edits) => this.submitPlanEdits(edits) },
     };
+  }
+
+  /** The root of the workspace's subordinate tree: depth 0, the whole cap below
+   *  it. A constant and not a stored value — the orchestrator IS the root, so
+   *  there is nothing an eviction could lose. */
+  protected delegationBudget(): DelegationBudget {
+    return ROOT_DELEGATION_BUDGET;
+  }
+
+  protected subordinateFacet(): SubAgentClass<SubordinateAgent> {
+    return SubordinateAgent;
   }
 
   /** `agent.*` (self-steering) and `release.*` (the governed release lane —
@@ -3576,52 +3436,6 @@ export class OrchestratorAgent extends ActorAgent {
   async receivePeerMessage(msg: PeerMessage): Promise<ReceiveResult> {
     this.ensureSchema();
     return this.peerHub.receive(msg);
-  }
-
-  /** Facet bootstrap authority. Worker-side DO RPC only. The child verifies
-   *  its supplied owner/workspace against this source before persisting its
-   *  immutable identity row. */
-  async getSubordinateBootstrapIdentity(): Promise<{
-    parentWorkspace: string;
-    ownerUserId: string;
-    model: string | null;
-  }> {
-    // Deliberately carries no capability token: this method is reachable by any
-    // holder of a stub to this workspace, so it must never hand out a secret.
-    // The token reaches subordinates by push (setSubordinateIdentity +
-    // installWorkspaceCapability), never by read-back.
-    this.ensureSchema();
-    const ownerUserId = this.getOwnerUserId();
-    if (!ownerUserId) throw new Error('Workspace must be owned before creating subordinates.');
-    return {
-      parentWorkspace: this.name,
-      ownerUserId,
-      model: this.config.getModel(),
-    };
-  }
-
-  /** Subordinate progress ingress. Worker-side DO RPC only: the method is not
-   * `@callable`, and the public route exposes only the subordinate's own chat
-   * surface. Reports use the same EventLog → drain rail as mission inbox. */
-  async receiveSubordinateEvent(input: {
-    fromSubordinate: string;
-    status: SubordinateReportStatus;
-    content: string;
-    origin: SubordinateReportOrigin;
-    mode: WorkMode;
-  }): Promise<{ id: string; admitted: boolean }> {
-    this.ensureSchema();
-    return receiveSubordinateEvent({
-      log: this.eventLog,
-      roster: this.subordinateRoster,
-      vfs: this.rt.storage.vfs,
-      transaction: (body) => this.ctx.storage.transactionSync(body),
-      announce: (report) => {
-        this.broadcastSubordinatesChanged();
-        this.broadcastSubordinateEvent({ ...report, kind: 'report' });
-      },
-      onAdmitted: () => { this.orch.scheduleDrain(); },
-    }, input, Date.now());
   }
 
   // ── Mission Inbox: email ingress + owner notifications ─────────

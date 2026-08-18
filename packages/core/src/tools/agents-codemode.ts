@@ -16,7 +16,7 @@
  * sub-agent path are shared, not mirrored. Which members exist is decided by
  * `agentsActionsFor(deps)` — the identical structural gate the tool's action
  * enum and the prompt's Delegation ladder read. An actor with no team deps has
- * no `agents.staff` in its sandbox because the member is never created.
+ * no `agents.hire` in its sandbox because the member is never created.
  *
  * Deliberately NOT projected: the workspace-clone `forkAgent` RPC (fork the
  * whole agent DO at a message — the UI's fork-chat). It rejects while a turn is
@@ -89,11 +89,12 @@ const AGENTS_CODEMODE_MEMBERS = {
     budget_label?: string;
   }): Promise<{ strategy: string; text: string; score: number; trace: unknown; cost: unknown; mission_budget?: unknown } | { error: string; reason?: "bad_input" }>;`,
 
-  staff: `  /** Create a persistent named helper that keeps its own context across turns.
-   *  Default scope:"subordinate" staffs THIS workspace (role + mission
-   *  required); scope:"workspace" creates a specialist workspace of its own,
-   *  sends it \`message\`, and awaits the result. */
-  staff(input: {
+  hire: `  /** Create a persistent named helper that keeps its own context across turns.
+   *  It starts FRESH — it did not see this conversation — so the mission is its
+   *  whole brief. Default scope:"subordinate" hires into THIS workspace (role +
+   *  mission required); scope:"workspace" creates a specialist workspace of its
+   *  own, sends it \`message\`, and awaits the result. */
+  hire(input: {
     role?: string;
     mission: string;
     agent?: string;
@@ -133,7 +134,7 @@ const AGENTS_CODEMODE_MEMBERS = {
 /** One-line member descriptions for the provider record. */
 const AGENTS_CODEMODE_DESCRIPTIONS = {
   fork: 'Spawn 2-6 ephemeral forks of yourself that settle into one answer (merge, or settle:"mcts"). Not resumable from inside the sandbox.',
-  staff: 'Create a persistent named helper: a subordinate here, or scope:"workspace" for a specialist workspace of its own.',
+  hire: 'Create a persistent named helper that starts with a blank context: a subordinate here, or scope:"workspace" for a specialist workspace of its own.',
   ask: 'Hand an agent work and expect the answer back (a subordinate reports later as an event; a peer reply is awaited).',
   send: 'Fire-and-forget message to any agent by name.',
   reply: 'Answer an incoming agent message event by its event_id.',

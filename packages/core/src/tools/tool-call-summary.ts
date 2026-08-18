@@ -117,9 +117,9 @@ function summarizeAgents(input: JsonObject): string {
       const task = quoted(str(input, "task"), 56);
       return task ? `${label}: ${task}` : label;
     }
-    case "staff":
+    case "hire":
       return str(input, "scope") === "workspace"
-        ? actionOn("staff workspace", agent, str(input, "mission"))
+        ? actionOn("hire workspace", agent, str(input, "mission"))
         : actionOn(action, agent || str(input, "role"), agent ? str(input, "role") : "");
     case "ask":
     case "send":  return actionOn(action, agent, str(input, "topic") || str(input, "message"));
@@ -353,10 +353,10 @@ function describeAgents(input: JsonObject): string {
       const forks = Array.isArray(input.forks) ? input.forks.length : 0;
       return forks > 0 ? `Delegated to ${forks} parallel ${forks === 1 ? "fork" : "forks"}` : "Delegated to a fork";
     }
-    case "staff":
+    case "hire":
       return str(input, "scope") === "workspace"
-        ? "Staffed the workspace"
-        : agent ? `Staffed ${agent}` : "Staffed a subordinate";
+        ? "Hired a workspace"
+        : agent ? `Hired ${agent}` : "Hired a subordinate";
     case "ask":     return agent ? `Asked ${agent}` : "Asked a subordinate";
     case "send":    return agent ? `Messaged ${agent}` : "Messaged a subordinate";
     case "reply":   return "Replied to a subordinate";

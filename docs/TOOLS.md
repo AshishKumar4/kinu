@@ -10,7 +10,7 @@ live in `packages/core/src/tools/registry.ts`; neither the CF orchestrator nor
 the CLI chat loop hand-builds tools anymore. Only `execute_tools`, `run`, `file`,
 `memory` and `tasks` are unconditional; every other tool is registered only when
 the backend wires its deps. That gating is structural rather than
-flagged, and it is how a subordinate gets `report` and never gets the `staff`
+flagged, and it is how a subordinate gets `report` and never gets the `reply`
 action of `agents`.
 
 ## Top-Level Tools
@@ -20,7 +20,7 @@ action of `agents`.
 | `execute_tools` | Codemode sandbox — LLM writes JS with `workspace.*`, `codemode.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `release.*`, and `tools.<name>` crafted-tool APIs |
 | `run` | One shell command in one explicitly selected runtime |
 | `file` | The one file plane — `read` a file, `edit` exact text inside it, `write` it whole — over the same workspace filesystem every other surface addresses |
-| `agents` | The whole delegation surface — `fork \| staff \| ask \| send \| reply \| list \| dismiss` |
+| `agents` | The whole delegation surface — `fork \| hire \| ask \| send \| reply \| list \| dismiss` |
 | `memory` | The one durable-state tool — `save \| search` prose memory, `remember \| recall \| forget` typed keyed facts, `sessions` to recall past session transcripts |
 | `tasks` | The agent's own task list — `add` titles (with a `parent` for subtasks), `update` one item's status, `list` it back. One row per item in `agent_tasks`; the open half renders into the live context block every step, and into the Tasks tab |
 | `web` | Live web access — `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
@@ -150,7 +150,8 @@ one tolerated smart quote in the anchor silently rewrites every unrelated line.
 That is the corruption class this tool exists to remove. A miss fails loudly and
 the agent re-reads: one round trip, honest.
 
-`hashline` (oh-my-pi's line-anchored patch DSL) was considered and rejected: it
+`hashline` (the line-anchored patch DSL of oh-my-pi — `can1357/oh-my-pi`, the hard
+fork of pi, not upstream pi) was considered and rejected: it
 costs ~6 KB of always-on system prompt teaching a 17-rule DSL plus a
 line-numbered read format, a snapshot store and 3-way merge, and its published
 gains concentrate on weak models. Exact match captures most of the benefit at no
@@ -194,7 +195,7 @@ The rungs themselves:
 2. **Ephemeral fork** (`fork`) — spawns 2–6 copies of you on the same
    workspace, sandbox and files; each runs its own multi-step tool loop
    concurrently; findings merge back into this turn and the forks disappear.
-3. **Persistent subordinate** (`staff`) — long-lived, keeps its own context
+3. **Persistent subordinate** (`hire`) — long-lived, starts from a blank context, keeps its own
    across turns, stays in the roster.
 
 `mcts` is **not** a rung. It is a settle policy over the same fork primitive:
@@ -213,7 +214,7 @@ and `list` address agents by name, and the name decides the transport:
 - **A subordinate** is a `SubordinateAgent` — a Durable Object facet of the same
   workspace that runs the *full* turn loop on its own workstream. It shares the
   workspace's authoritative Nimbus session directly, so a subordinate and the
-  orchestrator are looking at the same tree. `staff` takes a role plus a mission
+  orchestrator are looking at the same tree. `hire` takes a role plus a mission
   (the mission runs as its first turn); `ask` hands it further work; `send`
   injects a conversational note; `dismiss` retires it, keeping its context
   archived unless `keep_history: false` is passed.

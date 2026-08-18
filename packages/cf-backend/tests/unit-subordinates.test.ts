@@ -23,7 +23,13 @@ describe('subordinate wiring', () => {
     expect(subordinate).toContain('const bootstrap = await parent.getSubordinateBootstrapIdentity();');
     expect(subordinate).toContain('parentWorkspace: bootstrap.parentWorkspace');
     expect(subordinate).toContain('ownerUserId: bootstrap.ownerUserId');
-    expect(orchestrator).toContain('inheritedContext: () => this.readInheritedContext()');
+    // The depth comes from the same answer, and from nowhere else: the child
+    // supplies no depth to be trusted with.
+    expect(subordinate).toContain('depth: bootstrap.depth');
+    // The team runtime is ActorAgent's now — a subordinate tree is recursive, so
+    // an actor that can hold a roster is every actor with depth left, not a kind.
+    expect(actor).toContain('inheritedContext: () => this.readInheritedContext()');
+    expect(orchestrator).not.toContain('createTeamToolDeps({');
   });
 
   test('a subordinate holds the parent workspace capability token, pushed never pulled', () => {
@@ -37,8 +43,8 @@ describe('subordinate wiring', () => {
     expect(actor).toContain('async installWorkspaceCapability(token: string)');
 
     // Push, both at spawn and whenever the parent's token is (re)issued.
-    expect(orchestrator).toContain('const capabilityToken = await this.workspaceCapabilityToken();');
-    expect(orchestrator).toContain('await stub.installWorkspaceCapability(token);');
+    expect(actor).toContain('const capabilityToken = await this.workspaceCapabilityToken();');
+    expect(actor).toContain('await stub.installWorkspaceCapability(token);');
     expect(subordinate).toContain('if (input.capabilityToken) await this.installWorkspaceCapability(input.capabilityToken);');
 
     // Never pull: the bootstrap RPC any stub-holder can reach must not carry a
@@ -138,10 +144,10 @@ describe('subordinate wiring', () => {
   // the transaction opens). What is this backend's is the transaction it hands
   // over: on a DO the admit + roster write must share one storage transaction.
   test('the parent ingress runs core’s sequence inside the DO storage transaction', () => {
-    const orchestrator = source('orchestrator.ts');
-    const ingress = orchestrator.slice(
-      orchestrator.indexOf('async receiveSubordinateEvent('),
-      orchestrator.indexOf('// ── Mission Inbox'),
+    const actor = source('actor-agent.ts');
+    const ingress = actor.slice(
+      actor.indexOf('async receiveSubordinateEvent('),
+      actor.indexOf('override maxSteps'),
     );
     expect(ingress).toContain('return receiveSubordinateEvent({');
     expect(ingress).toContain('transaction: (body) => this.ctx.storage.transactionSync(body),');
@@ -167,29 +173,28 @@ describe('subordinate wiring', () => {
 
   test('the subordinate withholds an owner-driven turn, and the parent drops what it is not waiting on', () => {
     const subordinate = source('subordinate-agent.ts');
-    const orchestrator = source('orchestrator.ts');
 
     expect(subordinate).toContain(
       'const ownerDriven = !programmaticUserMessage && !this.lastUserTurnIsProgrammatic();');
     expect(subordinate).toContain(
       'if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText }))');
-    expect(subordinate).toContain('if (!this.lastUserTurnIsProgrammatic()) return {};');
+    expect(subordinate).toContain('if (!this.lastUserTurnIsProgrammatic()) return deps;');
     expect(subordinate).toContain('return report ? [createReportCodemodeProvider(() => report)] : [];');
 
     // The parent half — the drop, and that it happens before any file is
     // written — is core's (core/tests/unit-subordinates.test.ts).
-    expect(orchestrator).toContain('origin: SubordinateReportOrigin;');
+    expect(source('actor-agent.ts')).toContain('origin: SubordinateReportOrigin;');
   });
 
   test('the live roster stays a push channel; only the report rail is gated', () => {
-    const orchestrator = source('orchestrator.ts');
+    const actor = source('actor-agent.ts');
     // subordinates_changed is the webUI's roster feed and is emitted from the
     // team policy on every spawn/assign/message/dismiss, independently of
     // whether any report was admitted.
-    expect(orchestrator).toContain('broadcast: (event) => this.broadcastSubordinatesChanged(event),');
-    const changed = orchestrator.slice(
-      orchestrator.indexOf('private broadcastSubordinatesChanged('),
-      orchestrator.indexOf('private broadcastSubordinateEvent('),
+    expect(actor).toContain('broadcast: (event) => this.broadcastSubordinatesChanged(event),');
+    const changed = actor.slice(
+      actor.indexOf('protected broadcastSubordinatesChanged('),
+      actor.indexOf('protected broadcastSubordinateEvent('),
     );
     expect(changed).not.toContain('parentAdmitsSubordinateReport');
   });

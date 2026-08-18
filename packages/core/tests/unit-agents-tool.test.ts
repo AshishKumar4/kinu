@@ -3,7 +3,7 @@
 //   fork    — dispatch through the StrategyRegistry (settle merge → heads,
 //             settle mcts → the MCTS strategy), defaultOptions deep-merge,
 //             budget passthrough, error envelopes.
-//   staff   — subordinate spawn (and scope=workspace → peer spawnWorkspace).
+//   hire    — subordinate spawn (and scope=workspace → peer spawnWorkspace).
 //   ask/send/reply/list/dismiss — one addressing scheme across subordinates
 //             and peer workspace agents, timeout clamping, the reserved
 //             reply topic, and the PERSISTENCE semantic (dismiss archives by
@@ -18,7 +18,8 @@ import * as v from 'valibot';
 import {
   agentsActionsFor, buildBuiltinTools, createAgentsTool, createStrategyRegistry,
   createSingleShotStrategy, renderAgentsToolDescription, strategyOption,
-  AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS, DELEGATION_RUNGS,
+  AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS, DELEGATION_INHERITANCE, DELEGATION_RUNGS,
+  delegationBudgetAtDepth, ROOT_DELEGATION_BUDGET,
   FORK_STRATEGY_ID, PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
   classifyToolFailure, JsonObjectSchema,
   type AgentsToolInput,
@@ -26,6 +27,7 @@ import {
   type StrategyContext, type SubordinateRosterEntry, type TeamToolDeps,
   type SubordinateDelivery, type SubordinateHandoff,
 } from '../src/index.ts';
+import { CODE_IS_REFUSAL, ERROR_CODES } from '../src/obs/index.js';
 
 interface Call { action: string; input: object }
 type AgentsTestResult = object | string | number | boolean | null | undefined;
@@ -78,6 +80,16 @@ function actionEnum(input: { value: unknown }): string[] {
   }), input.value).jsonSchema.properties.action.enum;
 }
 
+/** The action enum's own description — where the ladder's per-actor facts ride
+ *  (which verbs exist, and how much delegation depth is left). */
+function actionDescription(input: { value: unknown }): string {
+  return v.parse(v.object({
+    jsonSchema: v.object({
+      properties: v.object({ action: v.object({ description: v.string() }) }),
+    }),
+  }), input.value).jsonSchema.properties.action.description;
+}
+
 const rosterEntry: SubordinateRosterEntry = {
   name: 'researcher', displayName: 'Researcher', role: 'competitive research',
   createdBy: 'orchestrator', status: 'idle', currentTask: null,
@@ -93,6 +105,7 @@ const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHando
 function makeTeam(overrides: Partial<TeamToolDeps> = {}) {
   const calls: Call[] = [];
   const deps: TeamToolDeps = {
+    delegation: ROOT_DELEGATION_BUDGET,
     list: async () => [rosterEntry],
     create: async (input) => ({
       name: input.name ?? 'researcher',
@@ -160,9 +173,9 @@ describe('agents tool — registration and dep-gating', () => {
     expect(agentsActionsFor(deps)).toEqual(['fork']);
     const t = agentsTool(deps);
     expect(actionEnum({ value: t.inputSchema })).toEqual(['fork']);
-    // The docstring drops the staff rung and the converse verbs entirely.
+    // The docstring drops the hire rung and the converse verbs entirely.
     expect(t.description).toContain(DELEGATION_RUNGS.fork);
-    expect(t.description).not.toContain(DELEGATION_RUNGS.staff);
+    expect(t.description).not.toContain(DELEGATION_RUNGS.hire);
     expect(t.description).not.toContain('reply answers');
   });
 
@@ -175,9 +188,9 @@ describe('agents tool — registration and dep-gating', () => {
     expect(t.description).toBe(BUILTIN_TOOL_DESCRIPTIONS.agents);
   });
 
-  test('team-without-peers gates the peer-only pieces (no reply, no scope, no workspace staffing)', () => {
+  test('team-without-peers gates the peer-only pieces (no reply, no scope, no workspace hiring)', () => {
     const deps = withBuildMode({ team: makeTeam().deps });
-    expect(agentsActionsFor(deps)).toEqual(['staff', 'ask', 'send', 'list', 'dismiss']);
+    expect(agentsActionsFor(deps)).toEqual(['hire', 'ask', 'send', 'list', 'dismiss']);
     const t = agentsTool(deps);
     expect(actionEnum({ value: t.inputSchema })).not.toContain('reply');
     expect(actionEnum({ value: t.inputSchema })).not.toContain('fork');
@@ -186,8 +199,79 @@ describe('agents tool — registration and dep-gating', () => {
 
   test('an unavailable action is a sharp error, not a deps call', async () => {
     const t = agentsTool({ fork: forkDeps() });
-    expect(await t.execute({ action: 'staff', role: 'r', mission: 'm' }))
-      .toEqual({ error: 'action "staff" is not available here. Available: fork' });
+    expect(await t.execute({ action: 'hire', role: 'r', mission: 'm' }))
+      .toEqual({
+        reason: 'unsupported',
+        error: 'action "hire" is not available here. Available: fork',
+      });
+  });
+});
+
+// ── the delegation depth cap, at the seam ───────────────────────────────────
+// The cap's PRIMARY mechanism is absence: an actor at it is wired no `team`
+// deps, so `hire` is not in the enum (see the surface tests above, and
+// cf-backend's teamProfile()). These cover the seam — the window absence cannot
+// reach, since a ToolSet is cached across turns and a facet's identity is seeded
+// after it is built.
+
+describe('agents tool — delegation depth', () => {
+  const depthDeps = (depth: number, extra: Partial<AgentsToolDeps> = {}) => {
+    const team = makeTeam();
+    return {
+      team,
+      deps: withBuildMode({ team: { ...team.deps, delegation: delegationBudgetAtDepth(depth) }, ...extra }),
+    };
+  };
+
+  test('depth 4 is reachable and depth 5 is refused, at the boundary', async () => {
+    // Room left below depth 3, so this hire PRODUCES the depth-4 subordinate.
+    const below = depthDeps(3);
+    expect(await agentsTool(below.deps).execute({ action: 'hire', role: 'r', mission: 'm' }))
+      .toEqual({ name: 'researcher', displayName: 'Researcher' });
+    expect(below.team.calls).toMatchObject([{ action: 'spawn' }]);
+
+    // Depth 4 is the deepest that exists; the hire it would make is depth 5.
+    const atCap = depthDeps(4);
+    const refusal = await agentsTool(atCap.deps).execute({ action: 'hire', role: 'r', mission: 'm' });
+    expect(refusal).toEqual({ reason: 'denied', error: expect.stringContaining('depth 4') });
+    expect(refusal).toMatchObject({ error: expect.stringContaining('depth 5') });
+    // Refused BEFORE the substrate: nothing was spawned, so a refusal cannot
+    // leave a half-made subordinate behind.
+    expect(atCap.team.calls).toEqual([]);
+  });
+
+  test('the refusal lands in refused, not in broke', async () => {
+    const { deps } = depthDeps(4);
+    const refusal = v.parse(
+      v.object({ reason: v.picklist([...ERROR_CODES]), error: v.string() }),
+      await agentsTool(deps).execute({ action: 'hire', role: 'r', mission: 'm' }),
+    );
+    expect(CODE_IS_REFUSAL[refusal.reason]).toBe(true);
+  });
+
+  // The escape the cap has to close: a WORKSPACE is the root of its own tree
+  // with the whole cap below it, so an actor that could mint one would reset its
+  // own depth to 0. It is closed structurally — `peers` is never wired below the
+  // orchestrator — and the refusal says so rather than reading as a defect.
+  test('a subordinate cannot mint a fresh root to escape its own subtree', async () => {
+    const { deps, team } = depthDeps(2);
+    const refusal = await agentsTool(deps).execute({
+      action: 'hire', scope: 'workspace', mission: 'a tree of my own', message: 'go',
+    });
+    expect(refusal).toMatchObject({ reason: 'denied' });
+    expect(refusal).toMatchObject({ error: expect.stringContaining('only the workspace orchestrator') });
+    expect(team.calls).toEqual([]);
+    // …and the roster path stays open: the point is that it cannot leave its
+    // subtree, not that it cannot delegate.
+    expect(await agentsTool(deps).execute({ action: 'hire', role: 'r', mission: 'm' }))
+      .toEqual({ name: 'researcher', displayName: 'Researcher' });
+  });
+
+  test('the remaining depth is advertised where head-tools advertises nesting room', () => {
+    expect(agentsTool(depthDeps(0).deps).description).toBeTruthy();
+    const enumDescription = (depth: number) => actionDescription({ value: agentsTool(depthDeps(depth).deps).inputSchema });
+    expect(enumDescription(0)).toContain('3 level(s) further');
+    expect(enumDescription(3)).toContain('lands on the depth cap and cannot hire its own');
   });
 });
 
@@ -269,7 +353,21 @@ describe('agents tool — fork dispatch', () => {
     const brief = forks.items.properties.task.description;
     expect(brief).toMatch(/complete on its own/);
     expect(brief).toMatch(/the observable result that means it is done/);
-    expect(brief).toMatch(/sees this workspace but not this conversation and not its siblings/);
+    // The inheritance half is DELEGATION_INHERITANCE.fork.brief, byte-for-byte —
+    // the same per-action source the fork RUNG composes, so the two surfaces
+    // cannot disagree about what a fork can see. They did: this field used to say
+    // a fork "sees this workspace but not this conversation", which is false —
+    // heads are spawned with up to 50 of the parent's stored messages AS their
+    // conversation. What a fork actually cannot see is this turn continuing and
+    // its siblings, and that is what it says now.
+    expect(brief).toContain(DELEGATION_INHERITANCE.fork.brief);
+    expect(brief).toMatch(/build on what you already established rather than restating it/);
+    expect(brief).not.toMatch(/not this conversation/);
+    // …and the hire brief is its OPPOSITE, from the same record: neither field
+    // can be handed the other's rule, which is the whole point of keying it on
+    // the action instead of writing one paragraph for both.
+    expect(DELEGATION_INHERITANCE.hire.brief).toMatch(/did not watch this conversation/);
+    expect(DELEGATION_INHERITANCE.hire.brief).toMatch(/rather than assuming shared ground/);
     expect(forks.items.properties.rationale.description).toMatch(/read at the merge to weigh what came back/);
     // The batch slot carries the shared background ONCE — oh-my-pi's `context`
     // role — while staying literally the task, because settle=mcts reads this
@@ -571,14 +669,14 @@ describe('agents tool — the forks/settle contract', () => {
   });
 });
 
-// ── staff / ask / send — subordinates ───────────────────────────────────────
+// ── hire / ask / send — subordinates ────────────────────────────────────────
 
 describe('agents tool — subordinate actions', () => {
-  test('the host-stamped Plan mode reaches staff, ask, and send without a model field', async () => {
+  test('the host-stamped Plan mode reaches hire, ask, and send without a model field', async () => {
     const team = makeTeam();
     const tool = agentsTool({ mode: 'plan', team: team.deps });
 
-    await tool.execute({ action: 'staff', role: 'researcher', mission: 'Map without editing' });
+    await tool.execute({ action: 'hire', role: 'researcher', mission: 'Map without editing' });
     await tool.execute({ action: 'ask', agent: 'researcher', message: 'Inspect the design' });
     await tool.execute({ action: 'send', agent: 'researcher', message: 'Stay read-only' });
 
@@ -589,11 +687,11 @@ describe('agents tool — subordinate actions', () => {
     ]);
   });
 
-  test('staff forwards role/mission (+ optional agent name/model) to team.spawn', async () => {
+  test('hire forwards role/mission (+ optional agent name/model) to team.spawn', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
     const result = await t.execute({
-      action: 'staff', role: 'researcher', mission: 'Map the landscape', model: 'openai/gpt-5',
+      action: 'hire', role: 'researcher', mission: 'Map the landscape', model: 'openai/gpt-5',
     });
     expect(result).toEqual({ name: 'researcher', displayName: 'Researcher' });
     expect(calls[0].input).toEqual({ role: 'researcher', mission: 'Map the landscape', model: 'openai/gpt-5', mode: 'build' });
@@ -706,7 +804,7 @@ describe('agents tool — subordinate actions', () => {
     expect(calls[0].action).toBe('assign');
   });
 
-  test('list returns the unified roster; empty roster hints staff', async () => {
+  test('list returns the unified roster; empty roster hints hire', async () => {
     const { deps } = makeTeam();
     const t = agentsTool({ team: deps });
     expect(await t.execute({ action: 'list' })).toEqual({ subordinates: [rosterEntry] });
@@ -716,7 +814,7 @@ describe('agents tool — subordinate actions', () => {
       subordinates: v.array(v.unknown()), note: v.optional(v.string()),
     }), await empty.execute({ action: 'list' }));
     expect(emptyResult.subordinates).toEqual([]);
-    expect(emptyResult.note).toContain('staff');
+    expect(emptyResult.note).toContain('hire');
   });
 
   test('list with a subordinate name returns its live status view', async () => {
@@ -741,7 +839,7 @@ describe('agents tool — subordinate actions', () => {
   test('missing required args are sharp errors, not deps calls', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
-    expect(await t.execute({ action: 'staff', role: 'r' })).toEqual({ error: 'staff requires role and mission' });
+    expect(await t.execute({ action: 'hire', role: 'r' })).toEqual({ error: 'hire requires role and mission' });
     expect(await t.execute({ action: 'ask', agent: 'x' })).toEqual({ error: 'ask requires agent and message' });
     expect(await t.execute({ action: 'send', message: 'x' })).toEqual({ error: 'send requires agent and message' });
     expect(await t.execute({ action: 'dismiss' })).toEqual({ error: 'dismiss requires agent' });
@@ -761,7 +859,7 @@ describe('agents tool — subordinate actions', () => {
   });
 });
 
-// ── ask / send / reply / staff scope=workspace — peers ──────────────────────
+// ── ask / send / reply / hire scope=workspace — peers ───────────────────────
 
 describe('agents tool — peer workspace actions', () => {
   test('ask to a non-roster name routes to the peer transport and returns the reply', async () => {
@@ -805,11 +903,11 @@ describe('agents tool — peer workspace actions', () => {
     expect(calls[1].input).toEqual({ eventId: 'pe1', message: 'here you go' });
   });
 
-  test('staff scope=workspace forwards mission as purpose + message (the old spawn_workspace, verbatim transport)', async () => {
+  test('hire scope=workspace forwards mission as purpose + message (the old spawn_workspace, verbatim transport)', async () => {
     const { deps, calls } = makePeers();
     const t = agentsTool({ peers: deps });
     const result = await t.execute({
-      action: 'staff', scope: 'workspace', mission: 'summarize research papers', message: 'Summarize X',
+      action: 'hire', scope: 'workspace', mission: 'summarize research papers', message: 'Summarize X',
     });
     expect(result).toMatchObject({ agent: 'specialist', created: true, status: 'replied' });
     expect(calls[0].input).toMatchObject({
@@ -832,8 +930,8 @@ describe('agents tool — peer workspace actions', () => {
     expect(await t.execute({ action: 'ask', agent: 'scout' })).toEqual({ error: 'ask requires agent and message' });
     expect(await t.execute({ action: 'send', message: 'x' })).toEqual({ error: 'send requires agent and message' });
     expect(await t.execute({ action: 'reply', message: 'x' })).toEqual({ error: 'reply requires event_id and message' });
-    expect(await t.execute({ action: 'staff', scope: 'workspace', message: 'x' }))
-      .toEqual({ error: 'staff scope=workspace requires mission and message' });
+    expect(await t.execute({ action: 'hire', scope: 'workspace', message: 'x' }))
+      .toEqual({ error: 'hire scope=workspace requires mission and message' });
     expect(calls).toEqual([]);
   });
 

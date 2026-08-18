@@ -22,7 +22,7 @@ The turn pipeline itself is `core/orchestrator`. A turn arrives either from a pe
   <img alt="A turn arrives from a user message or a programmatic wake and is queued one at a time. It is assembled once — system prompt plus transformed history, where the compaction ladder fires — then runs a step loop that re-weaves dynamic context, marks the cache tail and calls tools. Signals splice into the running step or queue the next turn. On settle the turn is snapshotted, recorded and reviewed, and pending events wake the next turn." src="docs/diagrams/turn.svg" width="900">
 </picture>
 
-Delegation is one tool, and its actions are ordered by how long the helper needs to live. `fork` spawns ephemeral copies that settle back into the same turn; `staff` creates a subordinate that outlives it; the rest talk to what already exists. MCTS lives *inside* the fork rung as a settle policy (the one that scores rival approaches by executing their proposed code) rather than standing beside it as a third kind of helper.
+Delegation is one tool, and its actions are ordered by how long the helper needs to live. `fork` spawns ephemeral copies that settle back into the same turn; `hire` creates a subordinate that outlives it; the rest talk to what already exists. MCTS lives *inside* the fork rung as a settle policy (the one that scores rival approaches by executing their proposed code) rather than standing beside it as a third kind of helper.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/delegation-dark.svg">
@@ -33,7 +33,7 @@ Delegation is one tool, and its actions are ordered by how long the helper needs
 
 ## Key Features
 
-- **Delegation as one ladder** — the `agents` tool covers all of it: `fork` for 2–6 ephemeral copies that merge back into this turn, `staff` for durable subordinates that outlive it, and `ask`/`send`/`reply`/`list`/`dismiss` for agents that already exist (subordinates here, or the owner's *other* workspaces as peers). A busy agent is never blocked on; the message is spliced into the turn it is already running.
+- **Delegation as one ladder** — the `agents` tool covers all of it: `fork` for 2–6 ephemeral copies that merge back into this turn, `hire` for durable subordinates that outlive it, and `ask`/`send`/`reply`/`list`/`dismiss` for agents that already exist (subordinates here, or the owner's *other* workspaces as peers). A busy agent is never blocked on; the message is spliced into the turn it is already running.
 - **MCTS parallel exploration** — score-based selection, backpropagation, pruning and winner selection, with each branch scored by executing the code it proposed rather than by rating itself. A branch is an isolated Durable Object facet in the cloud, a child process with its own SQLite file locally.
 - **3-timescale evolution** — turn-level (quality → reflection), session-level (pattern consolidation → scaffold mutation), lifetime (full MCTS exploration)
 - **CraftStore** — learns reusable tools from conversations. EMA scoring with time decay. FTS5-indexed for search.

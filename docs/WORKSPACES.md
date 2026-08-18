@@ -26,7 +26,7 @@ agents are the actors that work inside it.
 │   │  AGENTS  (actors)                                               │  │
 │   │   orchestrator — the DEFAULT agent, always present. Answers     │  │
 │   │     chat, runs tools, evolves the workspace.                    │  │
-│   │   subordinates — DURABLE teammates staffed by `agents`.        │  │
+│   │   subordinates — DURABLE teammates hired by `agents`.          │  │
 │   │     Each is its own facet running the full turn loop on an      │  │
 │   │     independent workstream, sharing the workspace's canonical   │  │
 │   │     files and reporting assigned work back as events.           │  │
@@ -67,7 +67,7 @@ agents are the actors that work inside it.
     heads use private scratch and address the canonical parent through
     `parent.*`. Their findings merge back. MCTS rollouts use the same facet
     class in a separate toolless mode and do not acquire that runtime.
-  - **Subordinates** (`agents`, `action: 'staff'`) are durable. Each is a
+  - **Subordinates** (`agents`, `action: 'hire'`) are durable. Each is a
     `SubordinateAgent` facet with its own SQL history and full turn loop, using
     the canonical workspace files and the parent's sandbox/laptop planes.
     Assigned tasks and reports ride the `subordinate` ingress. Owner-driven chat

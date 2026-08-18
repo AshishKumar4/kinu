@@ -47,7 +47,7 @@ export function safeJsonParse(s: string): JsonValue {
 /** Map a crafted/builtin tool name to a timeline kind. `think` is the
  *  pre-unification exploration tool — stored run events keep its kind. The
  *  unified `agents` tool stays a plain tool-call span (run events carry no
- *  arguments to tell a fork from a staff/ask); fork runs still surface as
+ *  arguments to tell a fork from a hire/ask); fork runs still surface as
  *  exploration through their head_split / head_merge spans. */
 export function toolKindFor(name: string): TimelineKind {
   if (name === 'run') return 'runtime-exec';

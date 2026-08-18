@@ -257,7 +257,7 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
 
   test('an unrecognized shape gets no label rather than a guess', () => {
     const { runner, store } = setup();
-    const id = runner.create('agents', { action: 'staff', agent: 'x' }, 'build', new AbortController());
+    const id = runner.create('agents', { action: 'hire', agent: 'x' }, 'build', new AbortController());
     expect(store.get(id)?.label).toBeNull();
   });
 });

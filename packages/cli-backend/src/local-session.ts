@@ -2320,7 +2320,7 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** This session's delegation deps. `team` / `peers` are deliberately absent:
-   *  staffing and peer messaging need a cross-agent transport, and local agents
+   *  hiring and peer messaging need a cross-agent transport, and local agents
    *  are one-per-process SQLite sessions with no daemon to route between them.
    *  Absent deps → those actions are structurally missing from the `agents`
    *  tool, from the `agents.*` sandbox namespace, and from the prompt ladder.

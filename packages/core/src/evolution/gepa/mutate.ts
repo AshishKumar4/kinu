@@ -55,7 +55,7 @@ export function renderReflectionPrompt<I, E>(opts: {
 }): string {
   const desc = opts.artifactDescription ?? 'candidate artifact';
   const processRubric = desc === 'scaffold source'
-    ? '\n\nProcess rubric: For corrected/frustrated requests with 2+ independent parts, consider long zero-team/think linear grinds for decomposition and staffing/heads; reinforce effective team/think on accepted turns; treat non-contributing spawns as delegation overhead.'
+    ? '\n\nProcess rubric: For corrected/frustrated requests with 2+ independent parts, consider long zero-team/think linear grinds for decomposition and hiring/heads; reinforce effective team/think on accepted turns; treat non-contributing spawns as delegation overhead.'
     : '';
 
   const outcomeById = new Map(opts.rollout.outcomes.map(o => [o.instanceId, o.outcome]));

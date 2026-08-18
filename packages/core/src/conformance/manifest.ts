@@ -70,7 +70,17 @@ const SUBORDINATE_SCOPED = (what: string): string =>
 const NO_USER_PLANE = (what: string): string =>
   `${what} rides the owner's UserDO; a local session has no user plane to serve it`;
 const ORCHESTRATOR_IS_SINK = 'the orchestrator IS the report sink; only subordinate actors report upward';
-const CLI_HAS_NO_STAFF = 'local sessions have no subordinate roster; the fork rung is the whole local ladder';
+const CLI_HAS_NO_ROSTER = 'local sessions have no subordinate roster; the fork rung is the whole local ladder';
+/** A subordinate tree is recursive: a subordinate holds the same roster surface
+ *  its parent does, bounded by DELEGATION_MAX_DEPTH rather than by absence. The
+ *  bound is a DERIVED budget — at the cap the team deps are not wired and these
+ *  actions vanish for that actor — so "wired" here means wired wherever depth
+ *  remains, which is the only state the conformance observer can build. */
+const TEAM_RECURSES = {
+  'cf-orchestrator': WIRED,
+  'cf-subordinate': WIRED,
+  cli: { absent: CLI_HAS_NO_ROSTER },
+} satisfies RootStatuses;
 
 const NIMBUS_BASE = {
   'cf-orchestrator': { absent: 'the hosted workspace lives in its NIMBUS_SESSION Durable Object' },
@@ -98,42 +108,28 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     report: {
       'cf-orchestrator': { absent: ORCHESTRATOR_IS_SINK },
       'cf-subordinate': WIRED,
-      cli: { absent: `${ORCHESTRATOR_IS_SINK}, and ${CLI_HAS_NO_STAFF}` },
+      cli: { absent: `${ORCHESTRATOR_IS_SINK}, and ${CLI_HAS_NO_ROSTER}` },
     },
   },
 
   'agents-action': {
     fork: EVERYWHERE,
-    staff: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('staffing') },
-      cli: { absent: CLI_HAS_NO_STAFF },
-    },
-    ask: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the team/peer transports') },
-      cli: { absent: CLI_HAS_NO_STAFF },
-    },
-    send: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the team/peer transports') },
-      cli: { absent: CLI_HAS_NO_STAFF },
-    },
+    hire: TEAM_RECURSES,
+    ask: TEAM_RECURSES,
+    send: TEAM_RECURSES,
     reply: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('peer reply channels') },
+      // The one team-adjacent action a subordinate does NOT get, and the reason
+      // is the depth cap: `hire scope=workspace` rides the peer transport and
+      // creates the ROOT of a fresh tree, so a subordinate holding peers could
+      // escape its own subtree in one call (tools/agents-tool.ts, AgentsToolDeps
+      // .peers). Cross-workspace reach is also an ownership boundary its parent
+      // owns and it is not party to.
+      'cf-subordinate': { absent: 'cross-workspace reach would let a subordinate mint a fresh tree root and escape its own depth cap; the peer boundary is its parent\'s to cross' },
       cli: { absent: NO_USER_PLANE('peer messaging') },
     },
-    list: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the roster') },
-      cli: { absent: CLI_HAS_NO_STAFF },
-    },
-    dismiss: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the roster') },
-      cli: { absent: CLI_HAS_NO_STAFF },
-    },
+    list: TEAM_RECURSES,
+    dismiss: TEAM_RECURSES,
   },
 
   'memory-action': {
@@ -253,16 +249,18 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     vfs_append_module_state: NIMBUS_BASE,
     vfs_append_pid_revocations: NIMBUS_BASE,
     vfs_append_acked_gaps: NIMBUS_BASE,
-    // ── cf-orchestrator-local planes ──
+    // ── the roster plane, held by every actor that can hire ──
     workspace_subordinates: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the roster') },
-      cli: { absent: CLI_HAS_NO_STAFF },
+      // Created by SubordinateRosterStore's own ensureSchema on first read, so
+      // it exists on a subordinate that has hired and on one that has not.
+      'cf-subordinate': WIRED,
+      cli: { absent: CLI_HAS_NO_ROSTER },
     },
     subordinate_identity: {
       'cf-orchestrator': { absent: 'lives on each subordinate DO, seeded by setSubordinateIdentity' },
       'cf-subordinate': WIRED,
-      cli: { absent: CLI_HAS_NO_STAFF },
+      cli: { absent: CLI_HAS_NO_ROSTER },
     },
     // The webhook gate — auth, replay window, rate limit — is core's, so a
     // local session provisions the same window table the cloud one does. What

@@ -1,4 +1,4 @@
-import { callable, type AgentContext } from 'agents';
+import { callable, type AgentContext, type SubAgentClass } from 'agents';
 import { SUBORDINATE_RPC_SURFACE, sealRpcSurface } from './rpc-surface.js';
 import { convertToModelMessages } from 'ai';
 import type { ChatResponseResult } from '@cloudflare/think';
@@ -15,6 +15,7 @@ import {
   cancelCurrentWork, getStoredModelSpec, setModel, type CancelWorkOutcome, type UserSteerOutcome,
   // report.* — codemode projection of the native `report` tool.
   createReportCodemodeProvider, type CodemodeProvider,
+  type DelegationBudget,
 } from '@proteus/core';
 import {
   ActorAgent,
@@ -69,8 +70,48 @@ export class SubordinateAgent extends ActorAgent {
   private reportedThisTurn = false;
 
   private get identity(): SubordinateIdentityStore {
-    if (!this._identity) this._identity = new SubordinateIdentityStore(this.ctx.storage.sql);
+    if (!this._identity) this._identity = new SubordinateIdentityStore(this.ctx.storage.sql, this.boundSql);
     return this._identity;
+  }
+
+  /**
+   * This subordinate's own room in the tree, read from the identity row its
+   * parent seeded — DURABLE, which is the point. A Durable Object is evicted
+   * routinely, so a depth held only in memory would reset on resume and let a
+   * woken subordinate rebuild the whole tree beneath itself; storage is what
+   * makes the cap a cap rather than a property of trees that never sleep.
+   * An unseeded facet reads as exhausted (support.ts delegationBudget), so
+   * "nobody has told me where I am" can never come out as "I am the root".
+   */
+  protected delegationBudget(): DelegationBudget {
+    return this.identity.delegationBudget();
+  }
+
+  /** A subordinate hires the same facet class it is. */
+  protected subordinateFacet(): SubAgentClass<SubordinateAgent> {
+    return SubordinateAgent;
+  }
+
+  /**
+   * A stub for this facet's IMMEDIATE parent: the workspace orchestrator at
+   * depth 1, the subordinate that hired it deeper in.
+   *
+   * The branch reads `parentPath`, which the framework records at facet
+   * creation, so it cannot disagree with where this facet actually hangs —
+   * `parentAgent` verifies the class against that same path and throws
+   * otherwise. Nothing here reads `identity.parentWorkspace`: that names the
+   * WORKSPACE, which past depth 1 is not the parent, and using it as one is what
+   * would send a nested subordinate's reports to the orchestrator instead of to
+   * whoever asked for the work.
+   */
+  private async parentActor() {
+    const parentClass = this.parentPath.at(-1)?.className;
+    if (parentClass === undefined) {
+      throw new Error('A subordinate must be a facet of the agent that hired it.');
+    }
+    return parentClass === SubordinateAgent.name
+      ? await this.parentAgent(SubordinateAgent)
+      : await this.parentAgent(OrchestratorAgent);
   }
 
   protected getOwnerUserId(): string | null {
@@ -112,9 +153,21 @@ export class SubordinateAgent extends ActorAgent {
     return this._engine;
   }
 
+  /**
+   * Two halves with different lifetimes, and that is why they gate differently.
+   *
+   * `report` is a per-TURN relationship — it exists on a turn its parent drove,
+   * because an owner-driven chat with this subordinate is private to that chat.
+   * The roster half is a standing CAPABILITY of the actor: a subordinate manages
+   * the helpers it hired whoever is talking to it, so gating it on the parent's
+   * turn would strand its own subtree the moment the owner opened its chat. It
+   * gates on DEPTH instead, in `teamProfile()`.
+   */
   protected actorToolDeps(): ActorToolDeps {
-    if (!this.lastUserTurnIsProgrammatic()) return {};
+    const deps: ActorToolDeps = { ...this.teamProfile() };
+    if (!this.lastUserTurnIsProgrammatic()) return deps;
     return {
+      ...deps,
       report: {
         report: async (input) => {
           const result = await this.sendReport(input.status, input.content, 'report_tool');
@@ -156,6 +209,11 @@ export class SubordinateAgent extends ActorAgent {
     // The one plane this root alone carries: its own identity row, seeded by
     // setSubordinateIdentity (declared per-root in core/conformance/manifest.ts).
     this.identity.ensureSchema();
+    // The roster of this subordinate's OWN hires. Declared per-root in
+    // core/conformance/manifest.ts (workspace_subordinates, wired on both cf
+    // roots) and created here for the same reason the orchestrator creates it in
+    // its own ensureSchema: a root's tables exist before anything reads them.
+    this.subordinateRoster.ensureSchema();
     this._schemaReady = true;
   }
 
@@ -166,14 +224,18 @@ export class SubordinateAgent extends ActorAgent {
     }
     this.ensureSchema();
     if (input.name !== this.name) throw new Error('subordinate identity name must match its facet name');
-    const parent = await this.parentAgent(OrchestratorAgent);
+    const parent = await this.parentActor();
     const bootstrap = await parent.getSubordinateBootstrapIdentity();
     const existing = this.identity.read();
     if (existing && (existing.name !== input.name
       || existing.parentWorkspace !== bootstrap.parentWorkspace
-      || existing.ownerUserId !== bootstrap.ownerUserId)) {
+      || existing.ownerUserId !== bootstrap.ownerUserId
+      || existing.depth !== bootstrap.depth)) {
       throw new Error('subordinate identity is immutable');
     }
+    // Every field here comes from the PARENT's answer, `depth` included. The
+    // input carries no depth to ignore, and the parent refuses at the cap, so a
+    // subordinate cannot be seeded past it however it was asked for.
     this.identity.seed({
       name: input.name,
       displayName: input.displayName,
@@ -181,6 +243,7 @@ export class SubordinateAgent extends ActorAgent {
       mission: input.mission,
       parentWorkspace: bootstrap.parentWorkspace,
       ownerUserId: bootstrap.ownerUserId,
+      depth: bootstrap.depth,
     });
     this.config.setDisplayName(input.displayName);
     if (input.capabilityToken) await this.installWorkspaceCapability(input.capabilityToken);
@@ -308,9 +371,10 @@ export class SubordinateAgent extends ActorAgent {
   ): Promise<{ id: string; admitted: boolean }> {
     const identity = this.identity.read();
     if (!identity) throw new Error('Subordinate identity is not initialized.');
-    const parent = this.env.OrchestratorAgent.get(
-      this.env.OrchestratorAgent.idFromName(identity.parentWorkspace),
-    );
+    // The agent that HIRED this one, which past depth 1 is not the workspace
+    // orchestrator. Its roster is the one holding this name, so it is the only
+    // ingress that can admit the report against the task it asked for.
+    const parent = await this.parentActor();
     return parent.receiveSubordinateEvent({
       fromSubordinate: identity.name,
       status,

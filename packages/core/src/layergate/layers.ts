@@ -1177,16 +1177,19 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'delegation',
-    owns: 'the process evidence a turn leaves behind — how much work was staffed out versus ground through inline',
+    owns: 'the process evidence a turn leaves behind — how much work was delegated out versus ground through inline',
     subjects: ['delegationFeatures', 'renderDelegationFeatures'],
     probes: [
       {
         id: 'delegation/tool-call-counts',
-        asserts: 'staffing / fork / messaging / execute_tools calls are counted by agents action — and legacy tool names — separately from total steps',
+        asserts: 'hiring / fork / messaging / execute_tools calls are counted by agents action — and legacy tool AND action names — separately from total steps',
         observe: (s) => s.delegationFeatures({
           steps: 7,
           durationMs: 95_000,
           toolCalls: [
+            { name: 'agents', args: { action: 'hire' }, result: null },
+            // The pre-2026-08-17 spelling of the same action. A read model over
+            // stored turns must keep counting it, so the probe measures it.
             { name: 'agents', args: { action: 'staff' }, result: null },
             { name: 'team', args: {}, result: null },
             { name: 'agents', args: { action: 'fork' }, result: null },

@@ -169,7 +169,7 @@ export function executionPathSignals(calls: ReadonlyArray<ToolCallRecord>): Exec
 }
 
 /** The unified `agents` tool folds the old think/team/peers surfaces into one
- *  name; the delegation evidence still separates fork / staffing / messaging
+ *  name; the delegation evidence still separates fork / hiring / messaging
  *  by ACTION — and keeps counting the legacy tool names so stored turns from
  *  before the unification report the same signal. */
 function agentsAction(call: ToolCallRecord): string | null {
@@ -178,8 +178,20 @@ function agentsAction(call: ToolCallRecord): string | null {
   return input.success ? input.output.action ?? null : null;
 }
 
-const STAFFING_ACTIONS = new Set(['staff', 'list', 'dismiss']);
-const MESSAGING_ACTIONS = new Set(['ask', 'send', 'reply']);
+/** `staff` is the pre-2026-08-17 name of `hire` and is kept for the same reason
+ *  the legacy TOOL names below are: this reader runs over STORED turns, and a
+ *  row written before the rename must report the same signal it did when it was
+ *  written. It is history tolerance in a read model, not an alias on the
+ *  model-facing surface — nothing accepts `staff` as an action any more. */
+const STAFFING_ACTIONS = { hire: true, staff: true, list: true, dismiss: true } satisfies Record<string, true>;
+const MESSAGING_ACTIONS = { ask: true, send: true, reply: true } satisfies Record<string, true>;
+
+/** Whether an action read off a stored row is in one of the tables above. The
+ *  action is `string | null` off the wire, so the lookup narrows rather than
+ *  indexing a known-key record with an unknown key. */
+function hasKey<Table extends object>(table: Table, action: string | null): boolean {
+  return action !== null && action in table;
+}
 
 /** Deterministic process evidence derived from an existing completed turn. */
 export function delegationFeatures(turn: TurnProcessRecord): DelegationFeatures {
@@ -187,9 +199,9 @@ export function delegationFeatures(turn: TurnProcessRecord): DelegationFeatures 
     turn.toolCalls.filter(predicate).length;
   return {
     stepCount: turn.steps,
-    teamCalls: count((call) => call.name === 'team' || STAFFING_ACTIONS.has(agentsAction(call) ?? '')),
+    teamCalls: count((call) => call.name === 'team' || hasKey(STAFFING_ACTIONS, agentsAction(call))),
     thinkCalls: count((call) => call.name === 'think' || agentsAction(call) === 'fork'),
-    peerCalls: count((call) => call.name === 'peers' || MESSAGING_ACTIONS.has(agentsAction(call) ?? '')),
+    peerCalls: count((call) => call.name === 'peers' || hasKey(MESSAGING_ACTIONS, agentsAction(call))),
     executeToolsCalls: count((call) => call.name === 'execute_tools'),
     wallClockMs: turn.durationMs,
     ...executionPathSignals(turn.toolCalls),
@@ -209,7 +221,7 @@ export function renderDelegationFeatures(features: DelegationFeatures): string {
     features.redundantCalls > 0 ? `${features.redundantCalls} redundant` : null,
     features.backtrackCalls > 0 ? `${features.backtrackCalls} backtracking` : null,
   ].filter((part): part is string => part !== null);
-  return `Turn process: ${features.stepCount} sequential steps, ${features.teamCalls} staffing, ` +
+  return `Turn process: ${features.stepCount} sequential steps, ${features.teamCalls} hiring, ` +
     `${features.thinkCalls} fork, ${features.peerCalls} messaging, ` +
     `${features.executeToolsCalls} execute_tools, ${compactDuration(features.wallClockMs)} wall clock` +
     (path.length > 0 ? `. Wasted motion: ${path.join(', ')} tool calls` : '');

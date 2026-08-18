@@ -23,6 +23,7 @@ import {
   createAgentsCodemodeProvider, createStrategyRegistry, FORK_STRATEGY_ID,
   type AgentsToolDeps, type ExplorationStrategy, type StrategyContext,
 } from '../src/index.js';
+import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth.js';
 import { composePrepareStep } from '../src/prompting/prepare-step.js';
 import type { SubordinateHandoff } from '../src/index.js';
 
@@ -116,6 +117,7 @@ function forkableDeps(opts: {
     mode: 'build',
     fork: { registry, rt, model: new MockLanguageModelV3() },
     team: {
+      delegation: ROOT_DELEGATION_BUDGET,
       list: async () => [],
       create: async (input) => ({
         name: input.name ?? 'helper',
@@ -125,7 +127,7 @@ function forkableDeps(opts: {
           createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
         },
       }),
-      spawn: async (input) => { spawns.push(`staff:${input.role}`); return { name: 'helper', displayName: 'Helper' }; },
+      spawn: async (input) => { spawns.push(`hire:${input.role}`); return { name: 'helper', displayName: 'Helper' }; },
       assign: async (input) => { spawns.push(`ask:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
       status: async () => ({}),
       message: async (input) => { spawns.push(`send:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
@@ -203,7 +205,7 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
 
     for (const [member, input] of [
       ['fork', { task: 'x', forks: TWO_FORKS }],
-      ['staff', { role: 'r', mission: 'm' }],
+      ['hire', { role: 'r', mission: 'm' }],
       ['ask', { agent: 'helper', message: 'm' }],
       ['send', { agent: 'helper', message: 'm' }],
     ] as const) {

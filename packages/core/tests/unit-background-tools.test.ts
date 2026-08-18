@@ -135,7 +135,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     expect(out).toMatchObject({ background: true, jobId: 'job-run', kind: 'run' });
   });
 
-  test('a non-fork agents action (staff/ask/list) is not detachable — always runs inline, on either surface', async () => {
+  test('a non-fork agents action (hire/ask/list) is not detachable — always runs inline, on either surface', async () => {
     let ran = false;
     const raw: ToolSet = {
       agents: tool({

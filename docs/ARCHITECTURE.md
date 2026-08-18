@@ -64,7 +64,7 @@ graph TB
     A["Agent&lt;Env&gt; — agents SDK"]
     T["Think — @cloudflare/think"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · Think hook bridge"]
-    O["OrchestratorAgent<br/>agents: fork · staff · ask/send/reply · list/dismiss<br/>codemode: release · plan submit"]
+    O["OrchestratorAgent<br/>agents: fork · hire · ask/send/reply · list/dismiss<br/>codemode: release · plan submit"]
     S["SubordinateAgent<br/>agents: fork · report on assigned turns"]
     E["ExplorationAgent<br/>hand-built head tools only"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
@@ -87,7 +87,7 @@ hook bridge. A subclass supplies only a four-member profile — `getOwnerUserId`
 **Tool gating is structural, not prompt-only.** Every full-loop actor gets the
 ordinary built-ins. The `agents` schema is derived from the capabilities its
 profile wires: every actor can fork, while only the orchestrator wires durable
-staffing and peer transport. `report` is present only for a subordinate's
+hiring and peer transport. `report` is present only for a subordinate's
 parent-assigned turn. Release is a codemode provider only on the orchestrator
 and is omitted from Plan-mode tool construction; `submit_plan` is present only
 for an orchestrator Plan turn.
@@ -111,7 +111,7 @@ owner from the `facet_owner` row its parent seeds.
 
 ## Subordinates
 
-`agents({action:'staff', ...})` calls
+`agents({action:'hire', ...})` calls
 `orchestrator.subAgent(SubordinateAgent, name)` and immediately seeds the
 facet's identity. That identity is single-row and
 immutable after seeding: re-seeding with a different name, parent workspace, or
@@ -136,7 +136,7 @@ dismissed.
 
 The system prompt (`core/src/prompt.ts`) carries the matching doctrine — the
 delegation ladder that steers the agent to decompose multi-part or multi-hour
-work and staff one subordinate per independent workstream, keeping the
+work and hire one subordinate per independent workstream, keeping the
 coordination and integration turn for itself, rather than grinding through
 everything inline.
 

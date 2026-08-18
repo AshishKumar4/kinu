@@ -60,10 +60,15 @@ describe('actor substrate — facet feasibility contract', () => {
   });
 
   test('the parent facet gate admits only active, registered subordinate facets', () => {
-    const orchestrator = src('orchestrator.ts');
-    expect(orchestrator).toContain('override async onBeforeSubAgent(');
-    expect(orchestrator).toContain('child.className !== SubordinateAgent.name');
-    expect(orchestrator).toContain("rosterEntry.status === 'dismissed'");
-    expect(orchestrator).toContain('!this.hasSubAgent(child.className, child.name)');
+    // The gate is ActorAgent's, because a subordinate is now on both sides of
+    // the relationship: it hires facets of its own, so it needs the same gate its
+    // parent has. The class it admits comes from `subordinateFacet()` rather than
+    // a named import, which is how the base class avoids importing its subclass.
+    const actor = src('actor-agent.ts');
+    expect(actor).toContain('override async onBeforeSubAgent(');
+    expect(actor).toContain('child.className !== this.subordinateFacet().name');
+    expect(actor).toContain("rosterEntry.status === 'dismissed'");
+    expect(actor).toContain('!this.hasSubAgent(child.className, child.name)');
+    expect(src('orchestrator.ts')).not.toContain('onBeforeSubAgent(');
   });
 });

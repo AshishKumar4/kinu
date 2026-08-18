@@ -422,6 +422,7 @@ export {
   type AgentStanceSpec,
   type TasksToolAction,
   DELEGATION_FRAME,
+  DELEGATION_INHERITANCE,
   DELEGATION_RUNGS,
   DELEGATION_CONVERSE,
   renderToolSchemaDescription,
@@ -466,6 +467,17 @@ export {
   type SubordinateRuntime,
   type SubordinatesChangedEvent,
 } from './subordinates/support.js';
+// The subordinate tree's depth cap — derived per child, never stated by one.
+export {
+  DELEGATION_MAX_DEPTH,
+  ROOT_DELEGATION_BUDGET,
+  delegationBudgetAtDepth,
+  delegationDepthRefusal,
+  delegationExhausted,
+  deriveChildDelegationBudget,
+  type DelegationBudget,
+  type DelegationDepthRefusal,
+} from './subordinates/depth.js';
 export {
   buildBuiltinTools, PEER_REPLY_TOPIC,
   type AgentsToolDeps, type AgentsForkDeps,

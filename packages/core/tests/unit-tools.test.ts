@@ -51,6 +51,7 @@ import {
   type AgentRuntime,
   TurnEscalationLedger,
 } from '../src/index.js';
+import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth.js';
 
 interface RecordedReleaseCheck {
   changeId: string;
@@ -158,6 +159,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       phase: { busy: false, lastActivityAt: null, workingOn: null },
     };
     const stubTeam: TeamToolDeps = {
+      delegation: ROOT_DELEGATION_BUDGET,
       list: async () => [],
       create: async () => ({
         name: 's',

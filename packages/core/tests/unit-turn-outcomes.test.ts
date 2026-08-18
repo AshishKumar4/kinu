@@ -523,7 +523,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
     const instance = buildOutcomeEvalSplit(sql, 2).train[0];
     expect(instance.evidence).toContain('Outcome: corrected');
     expect(instance.evidence).toContain(
-      'Turn process: 2 sequential steps, 1 staffing, 0 fork, 0 messaging, 1 execute_tools',
+      'Turn process: 2 sequential steps, 1 hiring, 0 fork, 0 messaging, 1 execute_tools',
     );
   });
 

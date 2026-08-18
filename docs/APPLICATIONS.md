@@ -208,7 +208,7 @@ graph TB
 ### Collaboration exists, but the coordination quality is unproven
 
 This limitation used to read "no multi-agent collaboration at all," and that is
-no longer true. A workspace can staff durable `SubordinateAgent` facets through
+no longer true. A workspace can hire durable `SubordinateAgent` facets through
 the unified `agents` tool — each with its own turn loop, sharing the workspace's
 files — and reach the owner's other workspaces through the same surface. What is
 not yet shown
@@ -268,7 +268,7 @@ in-workspace subordinates and cross-workspace handoff. What's left of the
 original idea:
 - Share crafted tools via a global CraftStore (using R2 for cross-DO storage)
 - Coordinate MCTS exploration across agents for larger search spaces
-- Measure whether staffing actually beats working linearly
+- Measure whether hiring actually beats working linearly
 
 ### Evaluation Benchmarks
 
