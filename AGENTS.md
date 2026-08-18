@@ -68,11 +68,19 @@ The invariant is enforced, not just documented: every package's suite carries
 whenever `@proteus/*` resolves outside the tree it is running in
 (`packages/test-utils/src/workspace-resolution.ts`).
 
+Branches get pruned; the `archive/*` tags are what make that safe. Before deleting
+anything under `refs/tags/archive/`, read [docs/BRANCH-ARCHIVE.md](docs/BRANCH-ARCHIVE.md).
+Four of the five tags pin file content that exists nowhere in `main`'s history —
+three of them as the only copy, one of those 57 core source blobs — and no test or
+gate fires when a tag disappears.
+
 ## Deploy Discipline
 
 - `bun run deploy` (`scripts/deploy.sh`) is the only production deploy path. Never deploy production with a bare `wrangler deploy` — it skips the CLI-download asset check and the post-deploy smoke gate, and production has shipped assetless that way (every fresh install died on a checksum mismatch while the site looked fine).
 - One assets directory: `packages/cf-backend/dist/client`. `dist/proteus/assets/` is the Worker's code-split chunk output, not an assets dir — nothing written there is served. See docs/DEPLOYMENT.md § Static assets.
 - `GET /api/health` reports `{version, sha, builtAt}` for the deployed build, read back out of the asset bundle. Check it after any deploy or rollback; `ok: false` means the asset half did not land.
+- **The Worker's gzip bundle is the binding build budget, and it is measured, not assumed.** After a vite build, `bunx wrangler deploy --dry-run` in `packages/cf-backend` prints the authoritative `Total Upload / gzip` figure the deploy API enforces — Vite's per-chunk `gzip:` line covers one chunk and understates the total by more than 2x. Two readings, same method: **6,254.64 KiB gzip on 2026-08-04** (spike branch, Nimbus 0.1.x) and **6,983.03 KiB gzip on 2026-08-18** (`ea5ac711`, Nimbus `worker@0.2.3`) — **+728 KiB in fourteen days**, against the paid **10 MB** gzip cap. So roughly **68% of the cap is consumed and ~3 MB is free**. That delta spans both main's own growth and the Nimbus 0.1.x→0.2.x pin bump and cannot be split without a third measurement. Raw upload 27,153 KiB against the 64 MB pre-compression cap is not close. Most of the floor is structural: `server.ts:85-95` re-exports `NimbusSession` plus eight sibling Nimbus entrypoint classes, and an exported entrypoint cannot be tree-shaken, so the Worker pays for Nimbus's whole session machinery whether or not a request touches it. Re-measure on both sides of anything that adds a dependency, a DO class, or top-level work. A Worker over the cap fails validation at upload — the same shape of failure as the assetless deploy above, where the site looks fine
+- Startup time is **not** the constraint, contrary to a spike write-up still in the tree: 185–252 ms measured 2026-08-04 against Cloudflare's limit of **1 second**, about a fifth of it. The limit was raised from 400 ms on 2025-10-10, so **do not cite 400 ms** — `docs/NIMBUS-SPIKE-MEASUREMENTS-2026-08-04.md` compares against it and says so in its own header correction. That file is the preserved evidence for both budgets
 
 ## Working Style
 
