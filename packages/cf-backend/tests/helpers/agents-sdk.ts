@@ -52,6 +52,24 @@ export function mockAgentsSdk(): void {
        *  test that observes broadcasts overrides it on the instance
        *  (unit-mcts-broadcast.test.ts). */
       broadcast(_message: string | ArrayBuffer | ArrayBufferView, _without?: string[]): void {}
+      /** Ancestor chain + self, root-first. Copied from the SDK's own getter
+       *  (`agents/dist/index.js:4205`: `[...this._parentPath, { className:
+       *  this.constructor.name, name: this.name }]`) rather than approximated,
+       *  because the tracing seam renders it into every span's
+       *  `proteus.self_path` and it is the ONLY discriminator that exists — a
+       *  facet's `ctx.id` reports under its root's `durableObjectId`. A
+       *  stand-in that answered `[]` would make every span read `root`, which
+       *  is the one value that cannot occur in production. Top-level here, so
+       *  `_parentPath` is empty. */
+      get selfPath(): ReadonlyArray<{ className: string; name: string }> {
+        return [{ className: this.constructor.name, name: String(this.name) }];
+      }
+      /** Present for the same reason `selfPath` is: the SDK exposes it, and a
+       *  missing member is an `undefined` at use rather than a load error. */
+      get parentPath(): ReadonlyArray<{ className: string; name: string }> {
+        return [];
+      }
+      readonly name: string = '';
     },
     /** The real decorator only attaches RPC metadata. */
     callable: () => <Method>(method: Method): Method => method,
@@ -96,13 +114,92 @@ export function mockAgentsSdk(): void {
   // stamps attributes on. The stub runs the body and accepts the attributes, so
   // the traced path is the one under test — the SDK also has a no-tracer
   // fallback, and a mock that triggered it would leave that path unexercised.
+  //
+  // The stub RECORDS, and that placement is the point: `tracing.enterSpan` is the
+  // platform boundary, so everything above it — `createWorkersTracer`,
+  // `createAgentTracing`, the call sites — is production code running unmodified.
+  // A test that substituted our own `Tracer` would be asserting about the
+  // substitute. Nesting comes from the call stack, with a span held open until an
+  // async body SETTLES, exactly as workerd holds it, so the recorded `parent` is
+  // the one the runtime would nest under.
   mock.module('cloudflare:workers', () => ({
     RpcTarget: class {},
     WorkerEntrypoint: class {},
     DurableObject: class {},
     tracing: {
-      enterSpan: <T>(_name: string, fn: (span: { setAttribute: () => void }) => T): T =>
-        fn({ setAttribute: () => {} }),
+      enterSpan: <T>(name: string, fn: (span: NativeSpanStub) => T): T => {
+        const index = nativeSpans.length;
+        const attributes = new Map<string, string | number | boolean>();
+        nativeSpans.push({ name, parent: openSpans.at(-1) ?? null, attributes });
+        openSpans.push(index);
+        const close = (): void => {
+          const top = openSpans.lastIndexOf(index);
+          if (top >= 0) openSpans.splice(top, 1);
+        };
+        let closesLater = false;
+        try {
+          const result = fn({
+            isTraced: true,
+            setAttribute: (key: string, value: string | number | boolean) => { attributes.set(key, value); },
+          });
+          if (result instanceof Promise) {
+            closesLater = true;
+            void result.finally(close);
+          }
+          return result;
+        } finally {
+          if (!closesLater) close();
+        }
+      },
     },
   }));
+}
+
+interface NativeSpanStub {
+  readonly isTraced: boolean;
+  setAttribute(key: string, value: string | number | boolean): void;
+}
+
+/** One span the platform stub was asked to open. */
+export interface NativeSpanRecord {
+  readonly name: string;
+  /** Index in `nativeSpans` of the span this opened inside, or null at a root. */
+  readonly parent: number | null;
+  readonly attributes: ReadonlyMap<string, string | number | boolean>;
+}
+
+const nativeSpans: NativeSpanRecord[] = [];
+const openSpans: number[] = [];
+
+/** Spans opened since the last `resetNativeSpans`, in open order. An EMPTY array
+ *  is the shape of instrumentation that was never reached, which is the defect a
+ *  tracing test exists to catch — so assert a non-zero length before anything
+ *  else. */
+export function recordedNativeSpans(): readonly NativeSpanRecord[] {
+  return nativeSpans;
+}
+
+export function resetNativeSpans(): void {
+  nativeSpans.length = 0;
+  openSpans.length = 0;
+}
+
+/** The recorded spans as an indented tree, parents before children. What a
+ *  reader actually needs from a trace, and what a flat list of names cannot
+ *  show. */
+export function renderNativeSpanTree(): string {
+  const lines: string[] = [];
+  const walk = (parent: number | null, depth: number): void => {
+    nativeSpans.forEach((span, index) => {
+      if (span.parent !== parent) return;
+      const shown = [...span.attributes]
+        .filter(([key]) => key !== 'proteus.self_path')
+        .map(([key, value]) => `${key.replace('proteus.', '')}=${String(value)}`)
+        .join(' ');
+      lines.push(`${'  '.repeat(depth)}${span.name}${shown === '' ? '' : `  [${shown}]`}`);
+      walk(index, depth + 1);
+    });
+  };
+  walk(null, 0);
+  return lines.join('\n');
 }

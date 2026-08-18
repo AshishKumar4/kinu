@@ -7,11 +7,11 @@ import {
 } from '@proteus/core';
 import { tolerate } from '@proteus/core/obs';
 import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@proteus/cli-backend';
-import { setCloudCredential } from '../cloud-api.js';
-import { loadConfigFile, resolveCloudSession, saveConfigFile, setDefaultModel, updateConfigFile, type ProteusConfig } from '../config.js';
-import { ACCENT, DIM, OK, WARN } from '../display.js';
-import { ask, askSecret, canPrompt, confirm } from '../prompt.js';
-import { authCommand, openBrowser } from './auth.js';
+import { setCloudCredential } from '../cloud-api';
+import { loadConfigFile, resolveCloudSession, saveConfigFile, setDefaultModel, updateConfigFile, type ProteusConfig } from '../config';
+import { ACCENT, DIM, OK, WARN } from '../display';
+import { ask, askSecret, canPrompt, confirm } from '../prompt';
+import { authCommand, openBrowser } from './auth';
 
 /**
  * Where a provider secret is written.

@@ -32,9 +32,9 @@ import {
   runScaffold,
   type ScaffoldDefaultInferenceChunk,
   type ScaffoldRunOptions,
-} from './executor.js';
-import { projectJsonValue } from '../utils/json.js';
-import { scaffoldEventsToUIStream } from './ui-stream.js';
+} from './executor';
+import { projectJsonValue } from '../utils/json';
+import { scaffoldEventsToUIStream } from './ui-stream';
 
 /** Structural mirror of Think's StreamableResult — core cannot import the
  *  backend SDK (layering), and the seam only needs this shape. */

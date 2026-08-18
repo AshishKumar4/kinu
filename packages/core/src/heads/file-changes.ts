@@ -29,8 +29,8 @@
  */
 
 import * as v from 'valibot';
-import { diffLines, type FileStatus } from '../vfs/diff.js';
-import type { WriteEvent, WriteObserver } from '../vfs/observe.js';
+import { diffLines, type FileStatus } from '../vfs/diff';
+import type { WriteEvent, WriteObserver } from '../vfs/observe';
 
 /** One file a head changed, as a review would state it. */
 export interface HeadFileChange {

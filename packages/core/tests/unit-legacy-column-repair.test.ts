@@ -16,11 +16,11 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 
-import { reconcileColumns } from '../src/identity/columns.js';
-import { initWorkspaceSchema } from '../src/identity/workspace-schema.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initBackgroundJobsTable } from '../src/jobs/store.js';
-import { makeExecRaw, makeSql, makeSqlExec } from './helpers.js';
+import { reconcileColumns } from '../src/identity/columns';
+import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initBackgroundJobsTable } from '../src/jobs/store';
+import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
 
 /** `search_nodes` as it stood before `code_used`, `code_language` and `root_id` were added. */
 const LEGACY_SEARCH_NODES = `

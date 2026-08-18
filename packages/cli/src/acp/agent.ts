@@ -24,8 +24,9 @@ import {
   type ToolKind,
 } from '@agentclientprotocol/sdk';
 import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@proteus/core';
-import type { AgentClient, AgentClientEvent } from '../agent-client.js';
-import { toAgentPrompt } from './prompt.js';
+import { diagnostics, toProteusError } from '@proteus/core/obs';
+import type { AgentClient, AgentClientEvent } from '../agent-client';
+import { toAgentPrompt } from './prompt';
 import * as v from 'valibot';
 
 /** Opens the AgentClient backing one ACP session. The command supplies the
@@ -165,7 +166,11 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
         // Notifications are fire-and-forget; a client that has gone away must not take down the
         // turn that is still running. Reported on stderr because stdout carries the protocol — an
         // undelivered update silently truncates what the editor shows of the turn.
-        console.error(`proteus acp: session/update was not delivered: ${error instanceof Error ? error.message : String(error)}`);
+        diagnostics.failure(
+          'acp.session_update_undelivered',
+          toProteusError({ doing: 'delivering an acp session/update notification', cause: error, otherwise: 'io' }),
+          { sessionId },
+        );
       }
     })();
   };

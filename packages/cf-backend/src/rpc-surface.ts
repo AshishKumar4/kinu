@@ -53,12 +53,12 @@
  * such feature deliberately left off every surface.
  */
 
-import { AGENT_RPC_ACCESS } from './cli/rpc-gate.js';
-import type { ActorAgent } from './actor-agent.js';
-import type { ExplorationAgent } from './exploration.js';
-import type { OrchestratorAgent } from './orchestrator.js';
-import type { SubordinateAgent } from './subordinate-agent.js';
-import type { UserDO } from './user/user-do.js';
+import { AGENT_RPC_ACCESS } from './cli/rpc-gate';
+import type { ActorAgent } from './actor-agent';
+import type { ExplorationAgent } from './exploration';
+import type { OrchestratorAgent } from './orchestrator';
+import type { SubordinateAgent } from './subordinate-agent';
+import type { UserDO } from './user/user-do';
 
 /**
  * The names the Workers runtime and the two SDKs dispatch on a stub, which
@@ -302,12 +302,21 @@ export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, 
  * one of those calls rejected with "does not implement the method", which is
  * the same silence a depth-2 head had before the routing was fixed at all.
  *
+ * `getSubordinateBootstrapIdentity` and `receiveSubordinateEvent` are here for
+ * exactly that reason and moved here from ORCHESTRATOR_METHODS when `hire`
+ * became recursive: a subordinate tree makes an intermediate SUBORDINATE the
+ * parent that seeds a child and admits its reports, so both names are reached on
+ * a parent stub that is not the orchestrator's. Leaving them on the
+ * orchestrator-only list would have failed closed at depth 2 — a nested hire
+ * whose seeding call rejects, and reports that reach nobody.
+ *
  * Everything else this class declares — including every `protected` member a
  * subclass relies on — stays an ordinary method and stays unreachable, because
  * the seal shadows rather than removes.
  */
 const ACTOR_AGENT_RPC_SURFACE = [
   'deleteWorkspaceFile',
+  'getSubordinateBootstrapIdentity',
   'headJournalCacheMerge',
   'headJournalInsertSpawn',
   'headJournalRecordReport',
@@ -318,6 +327,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'missionGuard',
   'onCredentialsChanged',
   'readWorkspaceFile',
+  'receiveSubordinateEvent',
   'reportFacetModelCall',
   'statWorkspaceFile',
   'writeWorkspaceFile',
@@ -351,7 +361,6 @@ const ORCHESTRATOR_METHODS = [
   'getRunEvents',
   'getRunEventsWire',
   'getShadowStatus',
-  'getSubordinateBootstrapIdentity',
   'getToolList',
   'getWorkspaceCapabilityHash',
   'listPeersFromMcp',
@@ -360,7 +369,6 @@ const ORCHESTRATOR_METHODS = [
   'listRuns',
   'rawCopyFromFork',
   'receivePeerMessage',
-  'receiveSubordinateEvent',
   'recordHeadStep',
   'runScaffoldOnce',
   'runScaffoldOnceWire',
@@ -386,8 +394,12 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
 /**
  * What the parent orchestrator may call on a subordinate facet. A subordinate
  * carries its parent's capability token, so its reachable surface is kept to
- * the four calls the parent actually makes; its chat surface arrives over the
- * SDK's sub-agent WebSocket bridge and is dispatched on `this`, not on a stub.
+ * the calls the parent actually makes; its chat surface arrives over the SDK's
+ * sub-agent WebSocket bridge and is dispatched on `this`, not on a stub.
+ *
+ * The parent half of a nested tree — seeding a child, admitting its reports — is
+ * on ACTOR_AGENT_RPC_SURFACE, because a subordinate is now on both sides of that
+ * relationship.
  */
 const SUBORDINATE_METHODS = [
   'enqueueSubordinateTask',

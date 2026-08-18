@@ -24,10 +24,10 @@ import * as v from 'valibot';
 import {
   addUsage, computeGain, decodeJsonValue, fmtPp, pairedBinaryComparison, parseJsonValue,
   usageReported,
-} from '../packages/core/src/index.js';
-import type { JsonValue, PairedOutcome, Usage } from '../packages/core/src/index.js';
-import { openRunRetention, resolveArtifactRoot } from './bench-retention.js';
-import { parseArgv } from './bench.js';
+} from '../packages/core/src/index';
+import type { JsonValue, PairedOutcome, Usage } from '../packages/core/src/index';
+import { openRunRetention, resolveArtifactRoot } from './bench-retention';
+import { parseArgv } from './bench';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 

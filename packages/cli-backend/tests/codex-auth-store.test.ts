@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@proteus/test-utils';
-import { CODEX_CRED_KEY, createFileCodexAuthStore } from '../src/codex-auth-store.js';
+import { CODEX_CRED_KEY, createFileCodexAuthStore } from '../src/codex-auth-store';
 import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@proteus/core';
 import * as v from 'valibot';
 

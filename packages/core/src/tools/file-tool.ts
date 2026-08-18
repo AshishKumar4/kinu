@@ -17,18 +17,18 @@
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
-import type { Memory, VFS } from '../types/primitives.js';
-import type { TurnContextBudget } from '../context-budget.js';
-import { isVfsError, vfsAddressingHint } from '../vfs/errno.js';
-import { ensureDir, vfsDirname } from '../utils/vfs-helpers.js';
-import { memoryIndexPath } from '../memory/note.js';
+import type { Memory, VFS } from '../types/primitives';
+import type { TurnContextBudget } from '../context-budget';
+import { isVfsError, vfsAddressingHint } from '../vfs/errno';
+import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
+import { memoryIndexPath } from '../memory/note';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, FILE_TOOL_ACTIONS, unknownActionError, type FileToolAction,
-} from './registry.js';
-import { applyFileEdits, readFileSlice, BOM, type FileEdit } from './file-edit.js';
-import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from './file-ledger.js';
-import { DEFAULT_TOOL_RESULT_MAX_CHARS } from './clamp.js';
-import type { JsonValue } from '../utils/json.js';
+} from './registry';
+import { applyFileEdits, readFileSlice, BOM, type FileEdit } from './file-edit';
+import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from './file-ledger';
+import { DEFAULT_TOOL_RESULT_MAX_CHARS } from './clamp';
+import type { JsonValue } from '../utils/json';
 
 export interface FileToolDeps {
   /** The agent's canonical workspace filesystem (rt.storage.vfs). */

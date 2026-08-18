@@ -7,14 +7,14 @@
 // `workspace.exec`, an executor's `exec`), not just the renderer.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@proteus/test-utils';
-import { formatExecResult } from '../src/execution/exec-result.js';
-import { createInlineExecutor } from '../src/execution/inline.js';
-import { createNimbusExecutor } from '../src/execution/nimbus.js';
-import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor.js';
-import { buildBuiltinTools } from '../src/tools/builtins.js';
-import { createTestRuntime } from './helpers.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { Shell } from '../src/types/primitives.js';
+import { formatExecResult } from '../src/execution/exec-result';
+import { createInlineExecutor } from '../src/execution/inline';
+import { createNimbusExecutor } from '../src/execution/nimbus';
+import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
+import { buildBuiltinTools } from '../src/tools/builtins';
+import { createTestRuntime } from './helpers';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { Shell } from '../src/types/primitives';
 
 type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 

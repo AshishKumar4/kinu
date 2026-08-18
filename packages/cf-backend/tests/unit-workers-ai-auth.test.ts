@@ -7,12 +7,12 @@
 // refresh-and-retry, and an expired-but-refreshable credential still
 // advertises Workers AI (so the connect CTA stays a fallback, not a ritual).
 import { describe, test, expect } from 'bun:test';
-import { userCredentialSource } from './helpers/user-credentials.js';
+import { userCredentialSource } from './helpers/user-credentials';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { generateText } from 'ai';
-import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
-import { CloudflareOAuthTokenError, refreshCloudflareCredential } from '../src/lib/cloudflare-oauth.ts';
+import { createAgentProviderRegistry } from '../src/providers/agent-registry';
+import { CloudflareOAuthTokenError, refreshCloudflareCredential } from '../src/lib/cloudflare-oauth';
 import { asFetchFunction } from '@proteus/core';
 
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';

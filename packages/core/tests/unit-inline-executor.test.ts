@@ -9,17 +9,17 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { createTestRuntime } from './helpers.js';
-import { createInlineExecutor } from '../src/execution/inline.js';
-import { DefaultExecutionRouter } from '../src/execution/router.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
-import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode.js';
-import { VIEW_DATA_SOURCES, initViewTables, listViews, readView } from '../src/views/index.js';
-import { createFileTool, type FileToolInput } from '../src/tools/file-tool.js';
-import { TurnFileLedger } from '../src/tools/file-ledger.js';
-import { TurnContextBudget } from '../src/context-budget.js';
+import { createTestRuntime } from './helpers';
+import { createInlineExecutor } from '../src/execution/inline';
+import { DefaultExecutionRouter } from '../src/execution/router';
+import { initCraftScoreTables } from '../src/craft/schemas';
+import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode';
+import { VIEW_DATA_SOURCES, initViewTables, listViews, readView } from '../src/views/index';
+import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
+import { TurnFileLedger } from '../src/tools/file-ledger';
+import { TurnContextBudget } from '../src/context-budget';
 import { toolExecute } from '@proteus/test-utils';
-import type { JsonValue } from '../src/utils/json.js';
+import type { JsonValue } from '../src/utils/json';
 
 const ToolSummarySchema = v.object({
   name: v.string(),
@@ -218,7 +218,13 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     await exec.tools.readFile.execute('victim.txt');
     expect(String(await exec.tools.writeFile.execute('victim.txt', 'replacement'))).toContain('Written');
     expect(await vfs.readFile('victim.txt', { encoding: 'utf8' })).toBe('replacement');
-    expect(exec.types).toContain("Promise<string | { error: string; reason?: 'unread' | 'stale' | 'io' }>");
+    // The declared codemode type is the promise the model reads, so it has to
+    // name the whole vocabulary a refusal can carry. The union it used to name
+    // was three of ten reasons the dispatcher already returned.
+    expect(exec.types).toContain('function writeFile(path: string, content: string): Promise<string | Refusal>;');
+    for (const reason of ['unread', 'stale', 'io', 'missing', 'not_found', 'ambiguous', 'bad_input']) {
+      expect(exec.types).toContain(`'${reason}'`);
+    }
   });
 
   test('relative and absolute name the same file — one namespace, no prefixes', async () => {

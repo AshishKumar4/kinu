@@ -13,9 +13,9 @@ import {
   initWorkspaceBaselineTable, initWorkspaceSchema, readSoul, summarizeSoul,
   getCurrentScaffoldVersion, memoryBytes,
 } from '@proteus/core';
-import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from './runtime.js';
-import type { LocalProviderCredentials } from './model-resolver.js';
-import type { LocalCodexAuthStore } from './codex-auth-store.js';
+import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from './runtime';
+import type { LocalProviderCredentials } from './model-resolver';
+import type { LocalCodexAuthStore } from './codex-auth-store';
 import type { Database } from 'bun:sqlite';
 
 export interface WorkspaceInfo {

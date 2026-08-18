@@ -19,14 +19,15 @@ import {
   type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
   type Evidence, type Decision, type ArtifactRef,
   budgetExhausted,
-} from './types.js';
-import type { ToolCallRecord } from '../evolution/types.js';
-import type { MissionBudgetRefusal, MissionScope } from '../mission-budget.js';
-import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from '../usage.js';
-import { nanoid } from '../utils/nanoid.js';
-import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summary.js';
-import { HeadFileChanges } from './file-changes.js';
-import { isJsonObject, projectJsonValue, type JsonObject } from '../utils/json.js';
+} from './types';
+import type { ToolCallRecord } from '../evolution/types';
+import type { MissionBudgetRefusal, MissionScope } from '../mission-budget';
+import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from '../usage';
+import { nanoid } from '../utils/nanoid';
+import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summary';
+import { HeadFileChanges } from './file-changes';
+import { isJsonObject, projectJsonValue, type JsonObject } from '../utils/json';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /**
  * The mutable findings a head accumulates as it runs — evidence/decisions
@@ -499,7 +500,11 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
           try {
             await deps.reportStep?.(seq, traced);
           } catch (err) {
-            console.warn(`[proteus] head ${input.id} could not record step ${seq}:`, err);
+            diagnostics.failure(
+              'head.step_trace_failed',
+              toProteusError({ doing: 'record a head step trace', cause: err, otherwise: 'io' }),
+              { headId: input.id, seq },
+            );
           }
         }
         const usage = normalizeUsage(step.usage);

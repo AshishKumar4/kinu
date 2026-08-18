@@ -15,12 +15,12 @@ import {
   initAlternateTakesTable, initHeadsTables, initMctsSearchTable, initRunEventTables,
   initSearchTables, listForkRuns, type JsonObject, type SqlExecutor,
 } from '@proteus/core';
-import { createTestSql, type TestSql } from '../src/sql.js';
+import { createTestSql, type TestSql } from '../src/sql';
 import {
   BEHAVIOUR_SCORERS, completionHonesty, craftReuse, delegationConversion, editLanding,
   recoveryDurability, scoreDelegation, scoreExploration, scoreSettleVisibility,
   spillRetrieval, steeringConversion, toolOutcomes,
-} from '../src/agent-evals.js';
+} from '../src/agent-evals';
 
 /**
  * Every table the Exploration reader touches. Note that `initSearchTables`

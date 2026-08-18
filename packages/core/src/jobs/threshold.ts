@@ -10,7 +10,7 @@
 // result." When too many jobs are already in flight the detach is refused
 // instead: the work is cancelled and the model is told why.
 import * as v from 'valibot';
-import { tolerate } from '../obs/index.js';
+import { tolerate } from '../obs/index';
 
 /** Who owns the session, which is what makes a detach cheap or expensive.
  *  Not a toggle — every session has exactly one of these, fixed at construction. */

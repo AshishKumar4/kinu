@@ -40,12 +40,12 @@ import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
 
-import { initWorkspaceSchema, type LLMProviderConfig } from '../../packages/core/src/index.js';
-import { createWorkspace } from '../../packages/core/src/identity/index.js';
-import { LocalAgentSession } from '../../packages/cli-backend/src/local-session.js';
-import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
-import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
-import { requireSandboxedExecutors } from './harness.js';
+import { initWorkspaceSchema, type LLMProviderConfig } from '../../packages/core/src/index';
+import { createWorkspace } from '../../packages/core/src/identity/index';
+import { LocalAgentSession } from '../../packages/cli-backend/src/local-session';
+import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
+import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
+import { requireSandboxedExecutors } from './harness';
 import {
   liveChatModel, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend, scoreDelegation,
   scratchDir, UNCONFIGURED_LLM,

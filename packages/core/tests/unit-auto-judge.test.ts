@@ -9,8 +9,8 @@ import {
   DEFAULT_SHADOW_CONFIG, DEFAULT_AUTO_JUDGE_CONFIG, SCAFFOLD_TURN_TIMEOUT_MS,
   type JudgeOutput,
   type StructuredJudgeFn,
-} from '../src/index.js';
-import { createTestRuntime } from './helpers.js';
+} from '../src/index';
+import { createTestRuntime } from './helpers';
 
 const noOpLlmStream = async function* () { yield ''; };
 

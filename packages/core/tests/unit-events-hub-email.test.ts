@@ -9,13 +9,13 @@ import {
   buildDrainBatch,
   type IngressDescriptor, type EmailPayload, type ProteusEvent,
   type ReplyDispatcher, type AlarmScheduler,
-} from '../src/events/hub/index.ts';
+} from '../src/events/hub/index';
 import {
   EmailInbox, EMAIL_INBOUND_RATE_PER_MIN, initWebhookRateLimitTables, setEmailAllowlist,
   type SqlExec,
-} from '../src/index.js';
+} from '../src/index';
 import { createMemoryVfs } from '@proteus/test-utils';
-import { makeSqlExec } from './helpers.js';
+import { makeSqlExec } from './helpers';
 
 function makeSql(): SqlExec {
   return makeSqlExec(new Database(':memory:'));

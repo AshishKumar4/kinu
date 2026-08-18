@@ -17,7 +17,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { closeSync, openSync, readSync } from 'node:fs';
-import { ACCENT, DIM } from './display.js';
+import { ACCENT, DIM } from './display';
 
 export class NonInteractiveError extends Error {
   constructor(message = 'This step needs an interactive terminal. Re-run from a terminal, or pass flags to skip prompts.') {

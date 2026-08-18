@@ -1,8 +1,8 @@
 // Eval runner — drives N cases × 2 strategies, asks a judge LLM for verdicts,
 // returns aggregated EvalSummary. Stateless — caller owns persistence (writes
 // to eval_results table or whatever the host wants).
-import type { ExplorationStrategy, StrategyContext } from '../strategy/types.js';
-import type { EvalCase, EvalRun, JudgeFn, EvalResult } from './types.js';
+import type { ExplorationStrategy, StrategyContext } from '../strategy/types';
+import type { EvalCase, EvalRun, JudgeFn, EvalResult } from './types';
 
 export interface RunEvalPairOpts {
   cases: EvalCase[];

@@ -8,15 +8,15 @@
  * directly.
  */
 
-import type { EventLog } from '../hub/log.js';
-import type { VFS } from '../../types/primitives.js';
-import { spillEventContent } from '../hub/content-spill.js';
-import type { SubordinateReportStatus } from '../hub/types.js';
-import type { WorkMode } from '../../prompting/surface.js';
+import type { EventLog } from '../hub/log';
+import type { VFS } from '../../types/primitives';
+import { spillEventContent } from '../hub/content-spill';
+import type { SubordinateReportStatus } from '../hub/types';
+import type { WorkMode } from '../../prompting/surface';
 import {
   admitSubordinateReport, normalizeReportContent, parentAdmitsSubordinateReport,
   type SubordinateReportOrigin, type SubordinateRosterStore,
-} from '../../subordinates/support.js';
+} from '../../subordinates/support';
 
 export interface SubordinateEventInput {
   fromSubordinate: string;

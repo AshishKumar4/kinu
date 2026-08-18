@@ -19,10 +19,10 @@ import {
   writeWorkspaceArchive,
   type ArchiveCursor,
   type SqlValue,
-} from '../src/index.js';
-import { makeSql, makeExecRaw } from './helpers.js';
-import { createWorkspaceBundle } from './helpers.js';
-import { SessionSearchStore } from "../src/memory/session-search.js";
+} from '../src/index';
+import { makeSql, makeExecRaw } from './helpers';
+import { createWorkspaceBundle } from './helpers';
+import { SessionSearchStore } from "../src/memory/session-search";
 
 function fresh() {
   const db = new Database(':memory:');

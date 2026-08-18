@@ -315,3 +315,354 @@ requirements:
     remainingEvidence:
       - No covering integration test writes a payload larger than the production chunk size
       - WP-F4 differential multi-chunk fixtures
+  PR-EXPL-001:
+    statement: The objective's direction admits exactly two values, strict betterness is irreflexive, asymmetric, transitive and total up to ties, a verifier's return type cannot report a fault, and an adversary bound is declarable but refused as a floor.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Exploration.isBetter_irrefl
+      - Proteus.Exploration.isBetter_asymm
+      - Proteus.Exploration.isBetter_trans
+      - Proteus.Exploration.isBetter_total
+      - Proteus.Exploration.measurement_cannot_report_fault
+      - Proteus.Exploration.adversary_is_declarable_and_refused
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:45
+      - packages/core/src/strategy/objective.ts:104
+      - packages/core/src/strategy/objective.ts:187
+      - packages/core/src/strategy/objective.ts:451
+    remainingEvidence:
+      - The model uses exact Int values while TypeScript and a SQLite REAL column compare IEEE-754 doubles
+      - No differential fixture connects isBetter's three intended call sites to these constructor-shape witnesses
+  PR-FLOOR-001:
+    statement: A floor's margin is negative exactly when the best known honest cost would itself breach the floor, so the section 4.5 C1 and C2 checks are one predicate on two numbers, and the majority-vote floor provably escapes both.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.floorRoom_neg_iff_bestKnown_breaches
+      - Proteus.Exploration.floorAdmissible_rejects_negative_margin
+      - Proteus.Exploration.floorAdmissible_rejects_breaching_baseline
+      - Proteus.Exploration.floorAdmissible_rejects_adversary
+      - Proteus.Exploration.old_majority_floor_escapes_c1
+      - Proteus.Exploration.fixed_majority_floor_has_more_room
+      - Proteus.Exploration.c1_refuses_a_refuted_floor
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:187
+      - packages/core/src/strategy/objective.ts:238
+      - packages/core/src/strategy/objective.ts:256
+    remainingEvidence:
+      - The model reasons on floorMargin's numerator only, so the division and its IEEE-754 behaviour are outside the proof
+      - No runtime precondition yet implements C2 against the measured baseline
+      - The majority-vote witnesses hardcode tasks.ts numbers rather than reading the corpus
+  PR-PUBLISH-001:
+    statement: From a sealed publication state no finite sequence of the run's own actions writes a records-store row, which is section 10.1 S7 as reachability rather than as a guard.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Publication.runOf_nil
+      - Proteus.Exploration.Publication.runOf_cons
+      - Proteus.Exploration.Publication.breach_seals
+      - Proteus.Exploration.Publication.publish_requires_open
+      - Proteus.Exploration.Publication.retroPublish_requires_open
+      - Proteus.Exploration.Publication.sealed_is_absorbing
+      - Proteus.Exploration.Publication.sealed_publishes_nothing
+      - Proteus.Exploration.Publication.breach_freezes_the_store
+      - Proteus.Exploration.Publication.open_publish_writes
+      - Proteus.Exploration.Publication.retry_does_not_clear
+      - Proteus.Exploration.Publication.good_measurement_does_not_clear
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:288
+      - packages/core/src/strategy/objective.ts:256
+      - packages/core/src/strategy/objective.ts:467
+    remainingEvidence:
+      - The step function is a single sequential fold, so two runs racing on one objective's seal are not modelled and this is the model's largest gap
+      - No records-store DDL or write path exists yet for the postconditions to refine
+      - A store-level conditional write on the seal is what would close the concurrent case and it is unspecified
+  PR-PUBLISH-002:
+    statement: Only a recorded re-derivation carrying an admissible replacement floor and a stated adjudication clears a seal, retroactive publication additionally requires verifier-digest equality, and an identity-keyed seal provably cannot discriminate a corrected floor from the breached one.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Publication.identityKey_is_floor_blind
+      - Proteus.Exploration.Publication.sealKey_discriminates
+      - Proteus.Exploration.Publication.admissible_rederivation_reopens
+      - Proteus.Exploration.Publication.refuted_replacement_does_not_clear
+      - Proteus.Exploration.Publication.unaudited_rederivation_does_not_clear
+      - Proteus.Exploration.Publication.rederivation_restores_publication
+      - Proteus.Exploration.Publication.retroPublish_requires_same_verifier
+      - Proteus.Exploration.Publication.retroPublish_after_clearance_writes
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:311
+      - packages/core/src/strategy/objective.ts:318
+      - packages/core/src/strategy/objective.ts:509
+      - packages/core/src/strategy/objective.ts:420
+    remainingEvidence:
+      - Digest injectivity is a hypothesis on the theorems rather than a proved property of SHA-256
+      - No implementation of FloorRederivation or of the retroactive re-evaluation path exists yet
+      - The requirement that a replacement floor pass C1 is this model's reading of 'the same burden', not a literal clause of the spec
+  PR-PUBLISH-003:
+    statement: A floor breach suspends the floor and stops publication without halting the run or stopping scoring, which is section 4.4's continuation rule.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Publication.breach_does_not_halt
+      - Proteus.Exploration.Publication.sealed_still_scores
+      - Proteus.Exploration.Publication.breach_records_suspension
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:288
+      - packages/core/src/strategy/objective.ts:256
+    remainingEvidence:
+      - The continuation rule is under active review by SpecAudit and these three theorems are the exact clauses that would fail if it moves
+      - No engine code yet continues a run past a breach
+  PR-FAULT-001:
+    statement: After a verifier fault no finite trace scores, records or publishes anything, which is section 3.4's crash-is-not-zero asymmetry as reachability.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Publication.fault_halts
+      - Proteus.Exploration.Publication.fault_writes_nothing
+      - Proteus.Exploration.Publication.halted_is_absorbing
+      - Proteus.Exploration.Publication.halted_does_nothing
+      - Proteus.Exploration.Publication.fault_freezes_the_run
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:172
+      - packages/core/src/strategy/objective.ts:104
+    remainingEvidence:
+      - Lean cannot see a catch that converts a thrown fault into an unmeasurable, which is where the production hazard lives
+      - The harness path that must not absorb a throw is unwritten for the exploration surface
+  PR-OBSERVE-001:
+    statement: No reachable state contains a recorded node without an observation, because the record action takes the observation as an argument.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Publication.recorded_nodes_are_observed
+      - Proteus.Exploration.Publication.init_nodes_are_observed
+      - Proteus.Exploration.Publication.no_unobserved_node_is_reachable
+      - Proteus.Exploration.Publication.unobserved_node_is_representable
+    tsRefs:
+      - packages/core/src/mcts/engine.ts:253
+      - packages/core/src/mcts/engine.ts:316
+    remainingEvidence:
+      - That the observation is the environment's reply rather than the node's own claim is a property of the TypeScript surface that Lean can only restate
+      - No refinement connects the modelled record action to the engine's own recording step
+  PR-DISCRIM-001:
+    statement: A run that writes a records-store row has measured two different values on two different artifacts, which is section 10.1 S1 with its counterfactual conjunct replaced by section 3.8 B1.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Publication.isDiscriminating_eq
+      - Proteus.Exploration.Publication.constantList_false_witness
+      - Proteus.Exploration.Publication.inertValues_false_witness
+      - Proteus.Exploration.Publication.discriminating_gives_two_values
+      - Proteus.Exploration.Publication.published_implies_discriminated
+      - Proteus.Exploration.Publication.retroPublished_implies_discriminated
+      - Proteus.Exploration.Publication.non_discriminating_run_publishes_nothing
+      - Proteus.Exploration.Publication.discrimination_is_not_relevance
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:66
+      - packages/core/src/strategy/objective.ts:88
+      - packages/core/src/strategy/objective.ts:467
+    remainingEvidence:
+      - S1's literal second conjunct, that the verifier COULD have failed, is counterfactual and remains unmodelled under PR-DISCRIM-003
+      - An objective that varies and still measures the wrong quantity satisfies every theorem here, as discrimination_is_not_relevance states
+      - No implementation of B1 exists yet
+  PR-DISCRIM-002:
+    statement: Section 3.8 B1 needs its own k and its own distinctness to be sound: below two distinct measured candidates variation is inexpressible rather than absent, and an identity-free reading admits a nondeterministic verifier's noise as discrimination.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Publication.single_candidate_is_insufficient_not_inert
+      - Proteus.Exploration.Publication.two_equal_candidates_are_inert
+      - Proteus.Exploration.Publication.identity_free_b1_accepts_verifier_noise
+      - Proteus.Exploration.Publication.baseline_supplies_the_second_value
+      - Proteus.Exploration.Publication.unmeasurable_does_not_discriminate
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:66
+      - packages/core/src/strategy/objective.ts:410
+    remainingEvidence:
+      - These are findings against an unimplemented check, so nothing in the tree yet exhibits or fixes the defects
+      - Whether the measured baseline is counted among the distinct candidates is a decision the spec has not taken explicitly
+  PR-REPORT-001:
+    statement: A run's report is total and a reported success names a measured value, while a sealed, inert or evidence-poor run cannot report success and the three withholding outcomes are distinct.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Publication.bestOf_mem
+      - Proteus.Exploration.Publication.success_was_measured
+      - Proteus.Exploration.Publication.inert_cannot_succeed
+      - Proteus.Exploration.Publication.insufficient_cannot_succeed
+      - Proteus.Exploration.Publication.sealed_never_succeeds
+      - Proteus.Exploration.Publication.the_three_withholdings_are_distinct
+      - Proteus.Exploration.Publication.discriminating_run_succeeds
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:288
+      - packages/core/src/strategy/swarm.ts:217
+    remainingEvidence:
+      - The report shape is this model's construction; section 3.7 specifies the return contract but no code emits these outcomes
+      - insufficientEvidence is a fourth outcome this model introduced and the spec does not yet name it
+  PR-SETTLE-001:
+    statement: settleOf is total over the score and advance axes and its four clauses are exact fibres, so no archive or pareto region can settle to a scalar winner and settle depends on no other field.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Exploration.Settle.settle_is_total
+      - Proteus.Exploration.Settle.settle_total_over_axes
+      - Proteus.Exploration.Settle.settleOf_archive_iff
+      - Proteus.Exploration.Settle.settleOf_front_iff
+      - Proteus.Exploration.Settle.settleOf_merge_iff
+      - Proteus.Exploration.Settle.archive_never_settles_best
+      - Proteus.Exploration.Settle.pareto_never_settles_best
+      - Proteus.Exploration.Settle.settleOf_best_iff
+      - Proteus.Exploration.Settle.settleOf_depends_only_on_score_and_advance
+      - Proteus.Exploration.Settle.settleOf_is_not_constant
+      - Proteus.Exploration.Settle.every_settle_kind_is_reachable
+    tsRefs:
+      - packages/core/src/strategy/swarm.ts:74
+      - packages/core/src/strategy/swarm.ts:230
+      - packages/core/src/strategy/swarm.ts:83
+    remainingEvidence:
+      - Totality is definitional for a function on inductive types, so the fibre equivalences rather than totality carry the content
+      - Nothing connects these fibres to the section 6.6 coverage fixture, which does not exist yet
+      - The model says nothing about whether a run whose settle is archive actually returns an archive
+  PR-ARCHIVE-001:
+    statement: A function-typed descriptor partitions candidates totally and disjointly while a judged or partial descriptor provably refutes the partition, and a coverage report never names a cell nothing landed in.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Archive.functional_descriptor_partitions
+      - Proteus.Exploration.Archive.judged_descriptor_breaks_partition
+      - Proteus.Exploration.Archive.partial_descriptor_breaks_partition
+      - Proteus.Exploration.Archive.bucketOf_in_grid
+      - Proteus.Exploration.Archive.bucketOf_mem_grid
+      - Proteus.Exploration.Archive.bucketOf_partitions
+      - Proteus.Exploration.Archive.covered_has_a_member
+      - Proteus.Exploration.Archive.member_is_covered
+      - Proteus.Exploration.Archive.coverageCount_le_grid
+      - Proteus.Exploration.Archive.all_of_filter_length_eq
+      - Proteus.Exploration.Archive.full_coverage_fills_every_cell
+      - Proteus.Exploration.Archive.full_coverage_says_nothing_about_quality
+      - Proteus.Exploration.Archive.collapsed_archive_reports_partial_coverage
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:467
+      - packages/core/src/strategy/swarm.ts:57
+      - packages/core/src/strategy/swarm.ts:167
+    remainingEvidence:
+      - Descriptor extraction is unspecified, so the positive result rests on an antecedent only bucketOf discharges
+      - The model certifies binning and says nothing about quality, which full_coverage_says_nothing_about_quality proves rather than promises
+      - The novelty rejection test that covers the quality gap is specified but unimplemented
+  PR-RECORDS-001:
+    statement: For a scalar objective a cell's best never worsens across any finite sequence of writes provided the re-record update keeps the better value and the capacity is at least one, and the overwrite reading of section 5.2 is refuted by counterexample.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Records.notWorse_refl
+      - Proteus.Exploration.Records.notWorse_trans
+      - Proteus.Exploration.Records.best_nil
+      - Proteus.Exploration.Records.best_none_iff
+      - Proteus.Exploration.Records.best_cons
+      - Proteus.Exploration.Records.best_cons_none
+      - Proteus.Exploration.Records.best_cons_some
+      - Proteus.Exploration.Records.best_mem
+      - Proteus.Exploration.Records.best_notWorse_mem
+      - Proteus.Exploration.Records.best_notWorse_of_witness
+      - Proteus.Exploration.Records.mergeValue_notWorse
+      - Proteus.Exploration.Records.insertRow_monotone
+      - Proteus.Exploration.Records.insertRow_unique_digest
+      - Proteus.Exploration.Records.overwrite_breaks_monotonicity
+      - Proteus.Exploration.Records.merge_survives_the_same_input
+      - Proteus.Exploration.Records.isBetter_flip
+      - Proteus.Exploration.Records.removeFirst_subset
+      - Proteus.Exploration.Records.mem_removeFirst_of_ne
+      - Proteus.Exploration.Records.length_removeFirst
+      - Proteus.Exploration.Records.constant_of_best_eq_worst
+      - Proteus.Exploration.Records.removeWorst_monotone
+      - Proteus.Exploration.Records.write_monotone
+      - Proteus.Exploration.Records.writes_monotone
+      - Proteus.Exploration.Records.better_candidate_displaces
+      - Proteus.Exploration.Records.tie_does_not_displace
+      - Proteus.Exploration.Records.eviction_can_destroy_the_population
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:451
+      - packages/core/src/strategy/objective.ts:467
+      - packages/core/src/strategy/objective.ts:395
+    remainingEvidence:
+      - Writes are sequential, so two runs displacing one cell concurrently are not modelled and a store write is a read-modify-write
+      - The model uses exact Int values while the store would keep a SQLite REAL
+      - S2 constrains only a cell's best, and eviction_can_destroy_the_population shows a policy satisfying it while destroying the population carry:'elites' needs
+      - No records-store table or write path exists yet
+  PR-RECORDS-002:
+    statement: A vector objective admits no monotone best because Pareto domination has incomparable pairs, so the strongest available property is that no front member is lost except to a dominator.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Records.someStrictlyBetter_irrefl
+      - Proteus.Exploration.Records.dominates_irrefl
+      - Proteus.Exploration.Records.dominates_admits_incomparable
+      - Proteus.Exploration.Records.single_component_is_argmax
+      - Proteus.Exploration.Records.front_subset
+      - Proteus.Exploration.Records.front_undominated
+      - Proteus.Exploration.Records.front_insert_no_loss
+      - Proteus.Exploration.Records.front_can_shrink
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:395
+      - packages/core/src/strategy/objective.ts:420
+      - packages/core/src/strategy/swarm.ts:57
+    remainingEvidence:
+      - Section 10.1 S2 quantifies over one direction and one isBetter, so it does not type-check against VectorObjective and the spec has not been amended
+      - The front property is strictly weaker than S2 and no code implements either
+      - ObjectiveIdentity and ExplorationRecord.value remain scalar-shaped after VectorObjective was added
+  PR-PROPOSAL-001:
+    statement: An accepted branch proposal always lands within the depth cap, the remaining budget and the declared width range and never widens the search's decorrelation policy, for every proposal including adversarial ones.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Arbitration.accepted_iff
+      - Proteus.Exploration.Arbitration.accepted_children_within_depth
+      - Proteus.Exploration.Arbitration.accepted_within_budget
+      - Proteus.Exploration.Arbitration.accepted_width_in_range
+      - Proteus.Exploration.Arbitration.accepted_respects_decorrelate
+      - Proteus.Exploration.Arbitration.archive_refuses_at_node
+      - Proteus.Exploration.Arbitration.arbitrate_at_zero_depth_always_refuses
+      - Proteus.Exploration.Arbitration.every_proposal_gets_a_verdict
+      - Proteus.Exploration.Arbitration.a_legal_proposal_is_accepted
+      - Proteus.Exploration.Arbitration.every_refusal_is_reachable
+      - Proteus.Exploration.Arbitration.an_adversarial_proposal_is_refused
+    tsRefs:
+      - packages/core/src/strategy/swarm.ts:250
+      - packages/core/src/strategy/swarm.ts:277
+      - packages/core/src/strategy/swarm.ts:195
+      - packages/core/src/strategy/swarm.ts:205
+    remainingEvidence:
+      - That a tool which can only refuse is omitted from the assembled surface is a tool-assembly property Lean does not see and a containment test covers
+      - The arbiter is this model's definition; no engine code arbitrates proposals yet
+      - What an accepted verdict actually spawns is unmodelled, so S3's production truth still rests on uct.ts
+  PR-ISOLATION-001:
+    statement: A transition in which a node acquires its own storage does not satisfy the branch-side actions of the existing MCTS transition relation, and the frame condition that proof consumes is not removable.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Isolation.agent_node_is_not_a_branch_explore
+      - Proteus.Exploration.Isolation.agent_node_is_not_a_branch_evaluate
+      - Proteus.Exploration.Isolation.dropping_the_frame_condition_breaks_isolation
+      - Proteus.Exploration.Isolation.agent_node_step_is_representable
+    tsRefs:
+      - packages/cf-backend/src/exploration.ts:6
+      - packages/core/src/strategy/swarm.ts:19
+    remainingEvidence:
+      - This requirement deliberately proves NO agent-node isolation property; unit:'trajectory' is blocked on per-node workspace isolation which does not exist
+      - An agent-node region needs a new action with a fresh provably-disjoint storage id per node and its own preservation proof
+      - PR-MCTS-003's caveat that branch postconditions are hand-asserted rather than refined applies here unchanged
+  PR-DISCRIM-003:
+    statement: Whether a verifier COULD have failed on inputs it was not given is the counterfactual half of section 10.1 S1 and has no abstract model.
+    status: specified-not-modeled
+    theorems: []
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:108
+      - packages/core/src/strategy/objective.ts:137
+    remainingEvidence:
+      - A counterfactual about a verifier's behaviour on unseen inputs needs a semantics for the verifier, which the abstract model does not have
+      - Section 3.8 B1 supplies an observable surrogate, modelled under PR-DISCRIM-001, and the two claims are not the same claim
+  PR-PUBLISH-004:
+    statement: Whether the publication seal is respected when two runs act concurrently on one objective is unmodelled, because the step relation is a single sequential fold.
+    status: specified-not-modeled
+    theorems: []
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:288
+      - packages/core/src/strategy/objective.ts:467
+    remainingEvidence:
+      - A concurrent model, or a store-level conditional write on the seal, is required and neither exists
+      - The records store is a read-modify-write surface, so this is where the gap would bite first
+  PR-EXPL-002:
+    statement: Conditions under which a fallible verifier with nonzero discrimination eventually improves the incumbent or the run reports gain decay remain specified with no probabilistic Lean model.
+    status: specified-not-modeled
+    theorems: []
+    tsRefs:
+      - packages/core/src/strategy/objective.ts:351
+      - packages/core/src/strategy/swarm.ts:83
+    remainingEvidence:
+      - The claim needs a distribution over candidate quality and a discrimination parameter, neither of which the abstract model has
+      - The useful half even unproved is that a run must report gain decay rather than imply the surface is exhausted, and nothing reports it yet

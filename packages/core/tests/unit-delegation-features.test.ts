@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
   delegationFeatures, renderDelegationFeatures, executionPathSignals,
-} from '../src/evolution/delegation-features.js';
-import type { ToolCallRecord } from '../src/evolution/types.js';
-import type { JsonObject } from '../src/utils/json.js';
+} from '../src/evolution/delegation-features';
+import type { ToolCallRecord } from '../src/evolution/types';
+import type { JsonObject } from '../src/utils/json';
 
 const call = (name: string, args: JsonObject = {}): ToolCallRecord =>
   ({ name, args, result: null });
@@ -12,11 +12,14 @@ const write = (path: string): ToolCallRecord =>
   call('execute_tools', { code: `await workspace.writeFile("${path}", body);` });
 
 describe('delegationFeatures', () => {
-  test('counts agents actions — and legacy tool names — from a completed turn record', () => {
+  test('counts agents actions — and legacy tool AND action names — from a completed turn record', () => {
     // Live turns call the unified `agents` tool; stored turns from before the
-    // unification carry think/team/peers. Both count into the same buckets.
+    // unification carry think/team/peers, and turns stored before 2026-08-17
+    // carry `staff` where `hire` is now written. All of them count into the same
+    // buckets, because this reader runs over history it did not write.
     const toolCalls: ToolCallRecord[] = [
       call('execute_tools', { code: 'a()' }),
+      call('agents', { action: 'hire', role: 'r' }),
       call('agents', { action: 'staff', role: 'r' }),
       call('agents', { action: 'fork', task: 't' }),
       call('team', { action: 'status' }),
@@ -26,7 +29,7 @@ describe('delegationFeatures', () => {
 
     expect(delegationFeatures({ toolCalls, steps: 41, durationMs: 372_000 })).toEqual({
       stepCount: 41,
-      teamCalls: 2,
+      teamCalls: 3,
       thinkCalls: 1,
       peerCalls: 1,
       executeToolsCalls: 1,
@@ -42,7 +45,7 @@ describe('delegationFeatures', () => {
       toolCalls: [], steps: 41, durationMs: 372_000,
     }));
     expect(line).toBe(
-      'Turn process: 41 sequential steps, 0 staffing, 0 fork, 0 messaging, 0 execute_tools, 6.2min wall clock',
+      'Turn process: 41 sequential steps, 0 hiring, 0 fork, 0 messaging, 0 execute_tools, 6.2min wall clock',
     );
   });
 

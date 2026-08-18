@@ -6,6 +6,6 @@
 // runner — `bun:test`'s, which throws if called under any other.
 import { afterAll } from 'bun:test';
 
-import { release } from './test-scratch-home.ts';
+import { release } from './test-scratch-home';
 
 afterAll(release);

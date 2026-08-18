@@ -12,7 +12,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTestRuntime, createTestSql, toolExecute } from '@proteus/test-utils';
-import { mockAgentsSdk } from './helpers/agents-sdk.js';
+import { mockAgentsSdk } from './helpers/agents-sdk';
 import {
   HeadCapture,
   HeadController,
@@ -309,9 +309,9 @@ describe('head containment is structural', () => {
   ] as const;
 
   async function classes() {
-    const { ActorAgent } = await import('../src/actor-agent.js');
-    const { ExplorationAgent } = await import('../src/exploration.js');
-    const { SubordinateAgent } = await import('../src/subordinate-agent.js');
+    const { ActorAgent } = await import('../src/actor-agent');
+    const { ExplorationAgent } = await import('../src/exploration');
+    const { SubordinateAgent } = await import('../src/subordinate-agent');
     return { ActorAgent, ExplorationAgent, SubordinateAgent };
   }
 

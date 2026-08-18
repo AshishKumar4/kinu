@@ -1,4 +1,4 @@
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
@@ -6,9 +6,9 @@ import {
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
   type JsonValue,
 } from '@proteus/core';
-import { handleUserRequest } from '../src/user/routes.js';
-import type { AuthIdentity } from '../src/auth/session.js';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import { handleUserRequest } from '../src/user/routes';
+import type { AuthIdentity } from '../src/auth/session';
+import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 describe('device consent prompt data', () => {

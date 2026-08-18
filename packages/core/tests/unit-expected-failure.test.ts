@@ -10,7 +10,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 
-import { classify, tolerate, tolerateAsync, type ExpectedFailure } from '../src/obs/expected-failure.js';
+import { classify, tolerate, tolerateAsync, type ExpectedFailure } from '../src/obs/expected-failure';
 
 /**
  * Runs `provoke` and returns the Error it raised. Every engine below raises an Error subclass, so

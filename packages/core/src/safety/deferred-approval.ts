@@ -45,16 +45,17 @@
  * minutes, in memory, with the caller blocked).
  */
 
-import type { DynamicApproval } from '../prompting/volatile-context.js';
-import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
-import type { SignalDeliverer } from '../types/signals.js';
+import type { DynamicApproval } from '../prompting/volatile-context';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { SignalDeliverer } from '../types/signals';
 import * as v from 'valibot';
 import {
   formatApproval, gatedGrants, reviewCommand,
   type ApprovalGrant, type DeferredApprovalChannel, type ShellApprovalRequest,
-} from './approval-gate.js';
-import { reconcileColumns } from '../identity/columns.js';
-import { nanoid } from '../utils/nanoid.js';
+} from './approval-gate';
+import { reconcileColumns } from '../identity/columns';
+import { nanoid } from '../utils/nanoid';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** The `proteusEvent` kind a decision wakes the agent under — its own name,
  *  not `background_job`'s: the card the owner sees, and the provenance stamped
@@ -435,8 +436,11 @@ export class DeferredApprovalQueue {
   private notify(event: DeferredApprovalNotice): void {
     try { this.deps.announce?.(event); }
     catch (err) {
-      console.warn('[proteus] deferred-approval announce failed:',
-        err instanceof Error ? err.message : err);
+      diagnostics.failure(
+        'approval.deferred_announce_failed',
+        toProteusError({ doing: 'announce a deferred-approval notice', cause: err, otherwise: 'io' }),
+        { notice: event.kind },
+      );
     }
   }
 }

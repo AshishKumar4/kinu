@@ -20,24 +20,24 @@
 
 import { safeValidateTypes } from '@ai-sdk/provider-utils';
 import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
-import { evidenceWindow } from '../prompts/evidence-window.js';
-import type { ModelCallSpend } from '../events/model-call.js';
-import { normalizeUsage } from '../usage.js';
-import { decodeJsonValue } from '../utils/json.js';
+import { evidenceWindow } from '../prompts/evidence-window';
+import type { ModelCallSpend } from '../events/model-call';
+import { normalizeUsage } from '../usage';
+import { decodeJsonValue } from '../utils/json';
 import type {
   ScaffoldHistoryEntry,
   ScaffoldHistoryPage,
   ScaffoldHistoryQuery,
   ScaffoldHistoryReader,
   ScaffoldRunOptions,
-} from '../scaffold/executor.js';
+} from '../scaffold/executor';
 
 export type {
   ScaffoldHistoryEntry,
   ScaffoldHistoryPage,
   ScaffoldHistoryQuery,
   ScaffoldHistoryReader,
-} from '../scaffold/executor.js';
+} from '../scaffold/executor';
 
 export interface ScaffoldBridgeOpts {
   model: LanguageModel;

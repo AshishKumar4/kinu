@@ -23,8 +23,8 @@
 // because cost is the only thing being optimized and a cross-vendor hop would
 // need credentials the workspace may not have.
 
-import type { ModelProvider } from './types.js';
-import { parseModelSpec } from './types.js';
+import type { ModelProvider } from './types';
+import { parseModelSpec } from './types';
 
 export interface FastModelSelection {
   /** `<provider>/<modelId>` the mechanical calls should run on. */

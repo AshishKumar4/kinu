@@ -7,9 +7,9 @@
  * and the bootstrap function that writes it.
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import { initScaffoldTables } from './schemas.js';
-import { nowMs } from '../utils/date.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import { initScaffoldTables } from './schemas';
+import { nowMs } from '../utils/date';
 
 export const INITIAL_SCAFFOLD_SOURCE = `\
 // scaffold/agent.js — v0 (initial bootstrap)

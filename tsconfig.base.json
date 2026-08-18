@@ -1,6 +1,8 @@
 {
+  "//": "Nothing here emits: every project sets `noEmit` and no `outDir` exists in the tree. The three runtimes read the TypeScript directly — Vite/wrangler bundle the Worker, Bun runs the CLI and the suites from source, and the deploy ships a source archive. So `moduleResolution: bundler` is not a preference, it is the only resolver that describes what actually happens, and an import specifier names a module rather than a build output. `allowImportingTsExtensions` is deliberately ABSENT: it belongs only to the two projects holding raw-Node files (tools/oxlint/anti-slop, scripts), and its absence here is what makes tsc reject a `.ts` specifier everywhere else.",
   "compilerOptions": {
     "strict": true,
+    "verbatimModuleSyntax": true,
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",

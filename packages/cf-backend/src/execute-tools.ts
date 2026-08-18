@@ -22,9 +22,9 @@ import {
   renderExecuteToolsDescription,
   type WebSearchProvider, type CodemodeProvider,
 } from "@proteus/core";
-import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry.js";
-import type { AgentProviderRegistry } from "./providers/agent-registry.js";
-import type { CFRuntime } from "./runtime.js";
+import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry";
+import type { AgentProviderRegistry } from "./providers/agent-registry";
+import type { CFRuntime } from "./runtime";
 
 export interface ExecuteToolsOptions {
   /** env.LOADER — the WorkerLoader every sandboxed execute runs inside. */

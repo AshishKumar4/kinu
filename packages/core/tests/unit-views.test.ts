@@ -10,13 +10,13 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { makeSql } from './helpers.js';
+import { makeSql } from './helpers';
 import {
   RESERVED_VIEW_TITLES, VIEW_DATA_SOURCES, VIEW_LIMITS,
   createView, deleteView, initViewTables, listViewVersions, listViews, parseViewSpec,
   readView, resolveViewPath, revertView, viewSlug,
-} from '../src/views/index.js';
-import type { VFS } from '../src/types/primitives.js';
+} from '../src/views/index';
+import type { VFS } from '../src/types/primitives';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -187,7 +187,7 @@ describe('view path resolution', () => {
     expect(resolveViewPath({ a: 1 }, '__proto__')).toBeUndefined();
     expect(resolveViewPath({ a: 1 }, 'constructor')).toBeUndefined();
     // Inherited properties are not own properties, so they do not resolve.
-    const inherited: import('../src/utils/json.js').JsonObject = Object.create({ inherited: 'leak' });
+    const inherited: import('../src/utils/json').JsonObject = Object.create({ inherited: 'leak' });
     expect(resolveViewPath(inherited, 'inherited')).toBeUndefined();
   });
 });

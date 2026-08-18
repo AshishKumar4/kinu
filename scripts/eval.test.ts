@@ -1,10 +1,10 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseArgs, partitionRunnable, runBenchmark } from './eval.ts';
-import { parseSpend, renderSpend, totalSpend, type SpendLine } from './eval-spend.ts';
-import { parseCorpus } from '../packages/core/src/index.js';
-import type { EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn } from '../packages/core/src/index.js';
+import { parseArgs, partitionRunnable, runBenchmark } from './eval';
+import { parseSpend, renderSpend, totalSpend, type SpendLine } from './eval-spend';
+import { parseCorpus } from '../packages/core/src/index';
+import type { EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn } from '../packages/core/src/index';
 import { createTestRuntime } from '@proteus/test-utils';
 import { MockLanguageModelV3 } from 'ai/test';
 

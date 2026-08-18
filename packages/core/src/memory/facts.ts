@@ -7,9 +7,9 @@
 // and an observation timestamp. Top-K recent facts are auto-rendered into
 // the system prompt every turn.
 
-import type { SqlExecutor } from '../types/primitives.js';
+import type { SqlExecutor } from '../types/primitives';
 import * as v from 'valibot';
-import { parseJsonValue, type JsonValue } from '../utils/json.js';
+import { parseJsonValue, type JsonValue } from '../utils/json';
 
 export interface Fact {
   key: string;

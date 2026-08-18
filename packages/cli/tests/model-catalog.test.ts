@@ -7,7 +7,7 @@ import {
   normalizeModelEntries,
   validateModelSpec,
   type AgentModelEntry,
-} from '../src/model-catalog.js';
+} from '../src/model-catalog';
 
 const FEED: AgentModelEntry[] = [
   { spec: 'workers-ai/@cf/meta/llama-4', label: 'Llama 4', provider: 'workers-ai' },

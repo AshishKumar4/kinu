@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mockAgentsSdk } from './helpers/agents-sdk.js';
+import { mockAgentsSdk } from './helpers/agents-sdk';
 
 /**
  * Transport security at the Worker entry.
@@ -21,7 +21,7 @@ mockAgentsSdk();
 
 // Dynamic: a static import hoists above mockAgentsSdk(), and the entry's whole
 // DO graph reaches `cloudflare:*` modules that exist only inside workerd.
-const { default: worker } = await import('../src/server.js');
+const { default: worker } = await import('../src/server');
 
 const APP_HOST = 'app.example.com';
 /** Production shape: the preview suffix IS the app host, so every preview

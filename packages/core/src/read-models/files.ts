@@ -12,7 +12,7 @@
  */
 
 import { normalizePath } from '@proteus/agent-utils';
-import type { VFS } from '../types/primitives.js';
+import type { VFS } from '../types/primitives';
 
 /** Just enough of the router to find one executor's files, and to ask that
  *  environment where its own relative paths resolve. */

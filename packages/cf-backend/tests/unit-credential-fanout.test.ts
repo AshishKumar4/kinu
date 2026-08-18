@@ -1,10 +1,10 @@
 // Credential mutations must notify the user's active agents so each drops
 // its cached provider/model state (orchestrator.onCredentialsChanged) —
 // previously the hook existed but nothing ever invoked it.
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
-import { handleUserRequest } from '../src/user/routes.js';
-import type { AuthIdentity } from '../src/auth/session.js';
+import { handleUserRequest } from '../src/user/routes';
+import type { AuthIdentity } from '../src/auth/session';
 import type { JsonValue } from '@proteus/core';
 
 const IDENTITY: AuthIdentity = {

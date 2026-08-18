@@ -26,10 +26,10 @@ import {
 } from '@proteus/core';
 import { tolerate } from '@proteus/core/obs';
 import { createInlineWorkspace } from '@proteus/core/identity';
-import { agentDbPath, agentDir, ensureAgentHome, requireStoredAuthConfig } from '../config.js';
-import { resolveAgentTarget } from '../agent-target.js';
-import { callAgentRpc } from '../cloud-api.js';
-import { formatBytes, printError, OK, ACCENT, DIM } from '../display.js';
+import { agentDbPath, agentDir, ensureAgentHome, requireStoredAuthConfig } from '../config';
+import { resolveAgentTarget } from '../agent-target';
+import { callAgentRpc } from '../cloud-api';
+import { formatBytes, printError, OK, ACCENT, DIM } from '../display';
 import * as v from 'valibot';
 
 interface RestoredArchiveCounts {

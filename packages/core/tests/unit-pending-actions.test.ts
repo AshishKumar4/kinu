@@ -11,10 +11,10 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { buildPendingActions, type PendingActionInputs } from '../src/read-models/pending-actions.js';
-import { VIEW_DATA_SOURCES } from '../src/views/sources.js';
-import type { BackgroundJob } from '../src/jobs/store.js';
-import type { DeferredApproval } from '../src/safety/deferred-approval.js';
+import { buildPendingActions, type PendingActionInputs } from '../src/read-models/pending-actions';
+import { VIEW_DATA_SOURCES } from '../src/views/sources';
+import type { BackgroundJob } from '../src/jobs/store';
+import type { DeferredApproval } from '../src/safety/deferred-approval';
 
 function job(over: Partial<BackgroundJob>): BackgroundJob {
   return {

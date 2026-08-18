@@ -24,10 +24,10 @@
  *   7. parent writes MergeResult.mergedNarrative back into conversation
  */
 
-import type { ToolCallRecord } from '../evolution/types.js';
-import type { HeadFileChange } from './file-changes.js';
-import type { EvaluationGrounding } from '../types/evaluation.js';
-import type { Usage } from '../usage.js';
+import type { ToolCallRecord } from '../evolution/types';
+import type { HeadFileChange } from './file-changes';
+import type { EvaluationGrounding } from '../types/evaluation';
+import type { Usage } from '../usage';
 
 /** What a head did to the shared filesystem — see heads/file-changes.ts. */
 export type { HeadFileChange };
@@ -375,4 +375,4 @@ export function budgetExhausted(b: HeadBudget) {
   }
   return { exhausted: false };
 }
-import type { WorkMode } from '../prompting/surface.js';
+import type { WorkMode } from '../prompting/surface';

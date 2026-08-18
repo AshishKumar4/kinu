@@ -31,8 +31,8 @@ import {
   DYNAMIC_CONTEXT_HEADER,
   TURN_CONTEXT_HEADER,
   type PromptExecutorInfo,
-} from '../src/index.ts';
-import type { ActiveSkillSet, ParsedSkill } from '../src/skills/types.ts';
+} from '../src/index';
+import type { ActiveSkillSet, ParsedSkill } from '../src/skills/types';
 import { createTestRuntime } from '@proteus/test-utils';
 
 const idleSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, configured: true, active: false, status: 'idle' };

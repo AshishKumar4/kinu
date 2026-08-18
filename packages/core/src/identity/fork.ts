@@ -38,13 +38,13 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExecutor, VFS } from '../types/primitives.js';
-import { PLATFORM_CATALOG } from '../platform-catalog.js';
-import { uiMessageText } from '../utils/ui-message.js';
-import { SOUL_PATH, summarizeSoul } from './soul.js';
+import type { SqlExecutor, VFS } from '../types/primitives';
+import { PLATFORM_CATALOG } from '../platform-catalog';
+import { uiMessageText } from '../utils/ui-message';
+import { SOUL_PATH, summarizeSoul } from './soul';
 import {
   CHAT_SESSION_ID, forkAncestry, sessionTreeAncestryBytes,
-} from './session-tree.js';
+} from './session-tree';
 
 /**
  * Text bytes one snapshot may carry.

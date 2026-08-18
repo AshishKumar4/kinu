@@ -17,7 +17,7 @@
  * until the daemon mirror is updated.
  */
 
-import type { CheckpointTurnMeta } from './types.js';
+import type { CheckpointTurnMeta } from './types';
 
 /** Ref namespace inside each bare store — one ref per snapshot. */
 export const CHECKPOINT_REF_PREFIX = 'refs/proteus';

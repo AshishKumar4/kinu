@@ -8,7 +8,7 @@
  * test fixtures in unit tests).
  */
 
-import type { JsonObject } from '../utils/json.js';
+import type { JsonObject } from '../utils/json';
 
 /** A stored secret. Discriminated by `kind`. */
 export type Credential =

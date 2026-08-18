@@ -7,8 +7,8 @@ import { Database } from 'bun:sqlite';
 import {
   initRunEventTables, RunEventRecorder, WORKSPACE_RUN_ID,
   type RunEvent,
-} from '../src/index.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+} from '../src/index';
+import { makeSql, makeExecRaw } from './helpers';
 
 function setup() {
   const db = new Database(':memory:');

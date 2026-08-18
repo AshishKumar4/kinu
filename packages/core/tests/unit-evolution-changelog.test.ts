@@ -25,9 +25,9 @@ import {
   modifyScaffold, applyPromotionDecision, getPendingScaffold,
   EvolutionEngine,
   type AgentRuntime, type EvolutionEvent,
-} from '../src/index.ts';
-import { describePathology } from '../src/evolution/pathology.ts';
-import { createTestRuntime } from './helpers.ts';
+} from '../src/index';
+import { describePathology } from '../src/evolution/pathology';
+import { createTestRuntime } from './helpers';
 
 const V0_CODE = 'async function* run(rt, task) { yield "v0"; }';
 const V1_CODE = 'async function* run(rt, task) { yield "v1-pending"; }';
@@ -221,6 +221,63 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(outcomes!.evidence).toContain('1 accepted');
     expect(outcomes!.evidence).toContain('1 corrected');
     expect(outcomes!.revert).toBeUndefined();
+  });
+
+  test('the digest attributes each verdict to the source that produced it', () => {
+    const { rt } = setup();
+    const sql = rt.storage.sql;
+    // `execution` is the runtime's own verdict on a headless turn: no user saw
+    // it, let alone followed up. The digest used to report the whole batch as
+    // "from real user follow-ups", which invented a person for these two.
+    recordTurnOutcome(sql, {
+      outcome: 'accepted', confidence: 1, source: 'execution',
+      userMessage: 'ship it', assistantResponse: 'shipped',
+    });
+    recordTurnOutcome(sql, {
+      outcome: 'corrected', confidence: 1, source: 'execution',
+      userMessage: 'again', assistantResponse: 'threw',
+    });
+    recordTurnOutcome(sql, {
+      outcome: 'accepted', confidence: 0.9, source: 'classifier',
+      userMessage: 'fix it', assistantResponse: 'fixed', followup: 'thanks',
+    });
+
+    const outcomes = buildChangelog(sql).find((e) => e.kind === 'outcomes')!;
+    expect(outcomes.summary).toContain('Graded 3 turns');
+    expect(outcomes.summary).toContain('2 by whether their tool calls ran');
+    expect(outcomes.summary).toContain('1 from how the user replied');
+    expect(outcomes.summary).not.toContain('real user follow-ups');
+    // The outcome tally is unchanged — provenance is a separate question from
+    // what the verdicts were.
+    expect(outcomes.evidence).toBe('2 accepted · 1 corrected');
+  });
+
+  test('each graded turn expands to the reason behind its verdict', () => {
+    const { rt } = setup();
+    const sql = rt.storage.sql;
+    recordTurnOutcome(sql, {
+      outcome: 'corrected', confidence: 0.75, source: 'classifier',
+      userMessage: 'add pagination to the chat list', assistantResponse: 'done',
+      followup: 'no, the other list',
+      evidence: 'the user named a different list than the one that changed', now: 100,
+    });
+    // No reason on record: the source IS the reason, and the item has to read
+    // as one rather than as a verdict with its evidence missing.
+    recordTurnOutcome(sql, {
+      outcome: 'accepted', confidence: 1, source: 'explicit',
+      userMessage: 'ship it', assistantResponse: 'shipped', now: 200,
+    });
+
+    const items = buildChangelog(sql).find((e) => e.kind === 'outcomes')!.items!;
+    expect(items.map((i) => i.summary)).toEqual([
+      'accepted — "ship it"',
+      'corrected — "add pagination to the chat list"',
+    ]);
+    expect(items[1].evidence).toBe(
+      "the user's reply read as corrected"
+      + ' — the user named a different list than the one that changed · confidence 75%',
+    );
+    expect(items[0].evidence).toBe('thumbs up from the user');
   });
 
   test('every ledger present and empty produces an empty digest', () => {

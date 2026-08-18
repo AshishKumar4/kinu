@@ -12,10 +12,10 @@
  */
 
 import * as v from 'valibot';
-import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types.js';
-import { unknownActionError } from './registry.js';
-import type { ReportToolDeps } from './builtins.js';
-import type { JsonValue } from '../utils/json.js';
+import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types';
+import { unknownActionError } from './registry';
+import type { ReportToolDeps } from './builtins';
+import type { JsonValue } from '../utils/json';
 
 const StatusSchema = v.picklist(SUBORDINATE_REPORT_STATUSES);
 const ContentSchema = v.pipe(v.string(), v.trim(), v.minLength(1));

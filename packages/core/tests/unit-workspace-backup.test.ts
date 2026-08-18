@@ -18,7 +18,7 @@ import {
   snapshotIntegrityFailure, snapshotObjectKeys, withContainerStartDeadline,
   workspaceBackupOptions, workspaceRestoreMode,
   type DirectoryBackup, type WorkspaceSnapshotPorts, type WorkspaceSnapshotState,
-} from "../src/index.ts";
+} from "../src/index";
 
 const MOUNTED = [
   "proc /proc proc rw,relatime 0 0",

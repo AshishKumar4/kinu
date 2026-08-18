@@ -8,24 +8,24 @@ import {
   isCloudAuthConfigured,
   isLocalModelConfigured,
   suggestAgentIdentityFromMission,
-} from '../agent-create.js';
-import { listKnownAgents, syncCloudAgentRefs, type ListedAgent } from '../agent-list.js';
-import { listCloudAvailableModels } from '../cloud-api.js';
+} from '../agent-create';
+import { listKnownAgents, syncCloudAgentRefs, type ListedAgent } from '../agent-list';
+import { listCloudAvailableModels } from '../cloud-api';
 import {
   loadConfigFile,
   resolveCloudOrigin,
   setDefaultModel,
   setDefaultReasoningEffort,
   type AgentMode,
-} from '../config.js';
-import { createConfiguredLocalModelResolver } from '../local-model-resolver.js';
-import { EMPTY_MODEL_MENU, normalizeModelMenu, type AgentModelEntry, type AgentModelMenu } from '../model-catalog.js';
-import { requireInteractiveTerminal } from '../prompt.js';
-import { VERSION } from '../display.js';
-import { DeviceConnectOverlay, ModelPickerOverlay } from './overlays.js';
-import { clipText } from './format.js';
-import { useDeviceConnectPrompt } from './use-device-connect.js';
-import { tuiColors } from './theme.js';
+} from '../config';
+import { createConfiguredLocalModelResolver } from '../local-model-resolver';
+import { EMPTY_MODEL_MENU, normalizeModelMenu, type AgentModelEntry, type AgentModelMenu } from '../model-catalog';
+import { requireInteractiveTerminal } from '../prompt';
+import { VERSION } from '../display';
+import { DeviceConnectOverlay, ModelPickerOverlay } from './overlays';
+import { clipText } from './format';
+import { useDeviceConnectPrompt } from './use-device-connect';
+import { tuiColors } from './theme';
 
 export type HomeTuiAction =
   | { type: 'open-agent'; name: string }

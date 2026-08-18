@@ -3,7 +3,7 @@ import {
   createAgentConfigStore, initAgentConfigTable, AGENT_CONFIG_KEYS,
   DEFAULT_AUTO_GEPA_EVERY_N_TURNS, DEFAULT_GEPA_EVAL_BUDGET,
   setReasoningEffort,
-} from '../src/index.ts';
+} from '../src/index';
 import { createTestSql } from '@proteus/test-utils';
 
 function setup() {
@@ -321,6 +321,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setAutoGepaEveryNTurns(10),
     (c) => c.setChangelogSeenAt(1_750_000_000_000),
     (c) => c.countClosedSessionWindow(),
+    (c) => c.countIsolateGeneration(),
     (c) => c.setGepaEvalBudget(16),
     (c) => c.setMctsOverrides({
       explorationWeight: 1.2, budget: 8, maxDepth: 4,

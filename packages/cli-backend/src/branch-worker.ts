@@ -30,13 +30,17 @@ import {
   type JsonValue,
   type LLMProviderConfig,
 } from '@proteus/core';
+import { diagnostics, ProteusError } from '@proteus/core/obs';
 import * as v from 'valibot';
-import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver.js';
-import { createFileCodexAuthStore } from './codex-auth-store.js';
+import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver';
+import { createFileCodexAuthStore } from './codex-auth-store';
 
 const dbPath = process.argv[2];
 if (!dbPath) {
-  console.error('[branch-worker] No database path provided');
+  diagnostics.failure(
+    'branch.worker_missing_db_path',
+    new ProteusError('bad_input', 'branch worker started without a database path'),
+  );
   process.exit(1);
 }
 
@@ -65,7 +69,7 @@ const branchWorkerMessageSchema = v.variant('method', [
   }),
   v.object({
     method: v.literal('reflect'),
-    args: v.object({ task: v.string() }),
+    args: v.object({ task: v.string(), outcome: v.optional(v.string()) }),
   }),
 ]);
 const branchWorkerEnvelopeSchema = v.object({ method: v.string() });
@@ -151,16 +155,18 @@ process.on('message', async (rawMessage: JsonValue) => {
         break;
       }
       case 'reflect': {
-        const { task } = msg.args;
+        const { task, outcome } = msg.args;
         // Read the branch's own trace table (mirror cf generateReflection): the
         // reflection is about the attempt this branch actually made, not the
-        // bare task string.
+        // bare task string — and `outcome` carries the environment's verdict on
+        // it, which lives on the engine side and never reaches this process
+        // any other way.
         const traces = db.query<{ text: string }, []>('SELECT text FROM traces ORDER BY step').all();
         const attempt = traces.map(t => t.text).join('\n');
         const { model, providerOptions } = resolveLowEffortModel();
         const request: Parameters<typeof generateText>[0] = {
           model,
-          messages: [{ role: 'user', content: reflectionPrompt(task, attempt) }],
+          messages: [{ role: 'user', content: reflectionPrompt(task, attempt, outcome) }],
         };
         if (providerOptions) request.providerOptions = providerOptions;
         const { text, usage } = await generateText(request);

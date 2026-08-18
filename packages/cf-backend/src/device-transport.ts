@@ -16,8 +16,8 @@ import {
   type DeviceCheckpointHint, type DeviceStatus, type DeviceTransport, type JsonValue,
 } from '@proteus/core';
 import * as v from 'valibot';
-import { shellQuote } from './cli/install-command.js';
-import type { UserCaller } from './user/workspace-capability.js';
+import { shellQuote } from './cli/install-command';
+import type { UserCaller } from './user/workspace-capability';
 
 /** How long the cached device-status snapshot stays fresh before status()
  *  kicks a background re-check against the user hub. */

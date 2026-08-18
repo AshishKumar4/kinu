@@ -23,19 +23,19 @@
  * one spawn/join implementation, with one more caller.
  */
 import * as v from 'valibot';
-import type { CodemodeProvider } from '../rlm.js';
-import { readMissionLimits, type MissionGovernor } from '../mission-budget.js';
-import { nextCronFire } from '../events/hub/cron.js';
-import { BACKGROUND_POLICY } from '../jobs/index.js';
-import type { BackgroundJob } from '../jobs/store.js';
-import type { ProposedTask } from '../curriculum/proposer.js';
-import type { ModifyResult } from '../scaffold/modify.js';
-import type { ScaffoldVersionView } from '../evolution/control.js';
-import type { ReplayEvalSummary } from '../evolution/replay.js';
-import type { TimerTrigger } from '../events/ingress/triggers.js';
-import { nanoid } from '../utils/nanoid.js';
-import { TOOL_REACH } from './registry.js';
-import { decodeJsonValue, JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json.js';
+import type { CodemodeProvider } from '../rlm';
+import { readMissionLimits, type MissionGovernor } from '../mission-budget';
+import { nextCronFire } from '../events/hub/cron';
+import { BACKGROUND_POLICY } from '../jobs/index';
+import type { BackgroundJob } from '../jobs/store';
+import type { ProposedTask } from '../curriculum/proposer';
+import type { ModifyResult } from '../scaffold/modify';
+import type { ScaffoldVersionView } from '../evolution/control';
+import type { ReplayEvalSummary } from '../evolution/replay';
+import type { TimerTrigger } from '../events/ingress/triggers';
+import { nanoid } from '../utils/nanoid';
+import { TOOL_REACH } from './registry';
+import { decodeJsonValue, JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 

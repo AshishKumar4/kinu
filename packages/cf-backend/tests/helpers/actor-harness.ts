@@ -20,13 +20,13 @@ import type { AgentContext } from 'agents';
 import type { ToolSet } from 'ai';
 import type { SqlExecRow, SqlValue } from '@proteus/core';
 import * as v from 'valibot';
-import { mockAgentsSdk } from './agents-sdk.js';
-import { platformGatewayEnv } from './platform-gateway.js';
+import { mockAgentsSdk } from './agents-sdk';
+import { platformGatewayEnv } from './platform-gateway';
 
 mockAgentsSdk();
 
-const { OrchestratorAgent } = await import('../../src/orchestrator.js');
-const { SubordinateAgent } = await import('../../src/subordinate-agent.js');
+const { OrchestratorAgent } = await import('../../src/orchestrator');
+const { SubordinateAgent } = await import('../../src/subordinate-agent');
 
 /** The scaffold precondition a turn checks, declared satisfied — the harness
  *  workspace is empty, so nothing has written one. The soul is not declared:

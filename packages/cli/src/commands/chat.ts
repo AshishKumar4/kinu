@@ -1,12 +1,12 @@
 import { existsSync } from 'node:fs';
-import { agentDbPath, resolveAgentRef } from '../config.js';
-import { resolveAgentTarget } from '../agent-target.js';
-import { createAgentClient } from '../client-factory.js';
-import { runChatLoop } from '../chat-loop.js';
-import { ensureLocalDaemonRunning } from './daemon.js';
-import { printError, ACCENT, DIM } from '../display.js';
-import { listKnownAgents } from '../agent-list.js';
-import { ask } from '../prompt.js';
+import { agentDbPath, resolveAgentRef } from '../config';
+import { resolveAgentTarget } from '../agent-target';
+import { createAgentClient } from '../client-factory';
+import { runChatLoop } from '../chat-loop';
+import { ensureLocalDaemonRunning } from './daemon';
+import { printError, ACCENT, DIM } from '../display';
+import { listKnownAgents } from '../agent-list';
+import { ask } from '../prompt';
 
 export async function chatCommand(name: string | undefined, opts: {
   model?: string; baseUrl?: string; auth?: string; classic?: boolean;
@@ -17,7 +17,7 @@ export async function chatCommand(name: string | undefined, opts: {
     if (!opts.classic && process.stdin.isTTY && process.stdout.isTTY) {
       // Lazy: opentui captures the terminal — it must never load on
       // non-TUI command paths (e.g. the installer's setup prompts).
-      const { runHomeTui } = await import('../tui/home-app.js');
+      const { runHomeTui } = await import('../tui/home-app');
       const action = await runHomeTui(opts);
       if (action.type === 'open-agent') await chatCommand(action.name, opts);
       return;
@@ -59,7 +59,7 @@ export async function chatCommand(name: string | undefined, opts: {
   if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) {
     await runChatLoop({ client });
   } else {
-    const { runTuiChat } = await import('../tui/chat-app.js');
+    const { runTuiChat } = await import('../tui/chat-app');
     await runTuiChat({ client, hydrateHistory });
   }
 }

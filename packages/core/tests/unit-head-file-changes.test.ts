@@ -8,10 +8,10 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { observeWrites } from '../src/vfs/observe.js';
-import { HeadFileChanges, formatHeadFileChanges } from '../src/heads/file-changes.js';
-import type { VFS } from '../src/types/primitives.js';
-import { makeVfsError } from '../src/vfs/errno.js';
+import { observeWrites } from '../src/vfs/observe';
+import { HeadFileChanges, formatHeadFileChanges } from '../src/heads/file-changes';
+import type { VFS } from '../src/types/primitives';
+import { makeVfsError } from '../src/vfs/errno';
 
 /** An in-memory VFS leaf, with a read counter so "one baseline read per path"
  *  is measured rather than assumed. */

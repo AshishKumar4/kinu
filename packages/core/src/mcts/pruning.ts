@@ -26,8 +26,8 @@
  * retire, and abort the branch agents of, another search's live nodes.
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import { DEFAULT_CONFIG } from '../config.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import { DEFAULT_CONFIG } from '../config';
 
 export async function pruneLowValueBranches(
   rt: AgentRuntime,

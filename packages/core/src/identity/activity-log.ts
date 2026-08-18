@@ -12,7 +12,7 @@
  * surfaced as what it is — a log.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
+import type { SqlExecutor } from '../types/primitives';
 
 export interface ActivityLogEntry {
   readonly event: string;

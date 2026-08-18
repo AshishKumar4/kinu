@@ -1,7 +1,7 @@
 // The getWorkspaceAgents contract: a workspace always has its default
 // orchestrator agent, listed first; durable subordinate facets follow it.
 import { describe, expect, test } from 'bun:test';
-import { buildWorkspaceAgents, teamPeers } from '../src/lib/workspace-roster.js';
+import { buildWorkspaceAgents, teamPeers } from '../src/lib/workspace-roster';
 
 const self = { name: 'jarvis', displayName: 'Jarvis' };
 

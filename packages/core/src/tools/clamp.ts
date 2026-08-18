@@ -14,10 +14,10 @@
 
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
-import type { VFS } from '../types/primitives.js';
-import { nanoid } from '../utils/nanoid.js';
-import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget.js';
-import { assertJsonValue, parseJsonValue, type JsonValue } from '../utils/json.js';
+import type { VFS } from '../types/primitives';
+import { nanoid } from '../utils/nanoid';
+import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
+import { assertJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
 
 /** Workspace VFS directory full outputs are offloaded to. */
 export const TOOL_OUTPUT_DIR = SPILL_DIRS.toolOutput;

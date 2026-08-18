@@ -9,13 +9,13 @@
 // `rt.shell`, exactly as a backend's runtime.ts does at construction.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@proteus/test-utils';
-import { buildBuiltinTools } from '../src/tools/builtins.js';
-import { createTestRuntime } from './helpers.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
+import { buildBuiltinTools } from '../src/tools/builtins';
+import { createTestRuntime } from './helpers';
+import type { AgentRuntime } from '../src/types/agent-runtime';
 import {
   withApprovalGatedShell,
   type ShellApprovalRequest, type ShellApprovalOutcome, type ShellApprovalPolicy,
-} from '../src/index.js';
+} from '../src/index';
 
 type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 

@@ -13,7 +13,7 @@
 // real JWT in any test file would have passed it.
 import { readFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { isTextSource, trackedFiles } from './sources.ts';
+import { isTextSource, trackedFiles } from './sources';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const IGNORE_FILE = '.secretscanignore';

@@ -8,7 +8,7 @@ import type { Command } from 'commander';
 import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall } from '@proteus/core';
 import type { SearchNode, ReasoningEffort, JsonObject } from '@proteus/core';
 import type { WorkspaceInfo } from '@proteus/core/identity';
-import { guideFailure, type ProviderFailure } from './provider-guidance.js';
+import { guideFailure, type ProviderFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
 
 // ── Brand ────────────────────────────────────────────────────────

@@ -21,12 +21,12 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { HeadInput, HeadReport } from '@proteus/core';
-import type { FacetHost } from '../src/facet-spawn.ts';
-import { mockAgentsSdk } from './helpers/agents-sdk.js';
+import type { FacetHost } from '../src/facet-spawn';
+import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
 const { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet, spawnHeadFacet } =
-  await import('../src/facet-spawn.ts');
+  await import('../src/facet-spawn');
 
 function headReportFor(id: string): HeadReport {
   return {

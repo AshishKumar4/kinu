@@ -14,24 +14,24 @@
 
 import * as readline from 'node:readline';
 import { renderChangelogText } from '@proteus/core';
-import { EMPTY_MODEL_MENU } from './model-catalog.js';
-import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client.js';
-import { describeBranchStatus, executeSlashCommand, isBranchStatusEvent, performUndo, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands.js';
-import { describePromptAttachment, resolvePromptAttachments } from './attachments.js';
-import { watchTerminalConsents } from './consent-watch.js';
+import { EMPTY_MODEL_MENU } from './model-catalog';
+import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client';
+import { describeBranchStatus, executeSlashCommand, isBranchStatusEvent, performUndo, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands';
+import { describePromptAttachment, resolvePromptAttachments } from './attachments';
+import { watchTerminalConsents } from './consent-watch';
 import {
   connectDevice,
   describeConnectOutcome,
   deviceStatusLine,
   dismissDeviceConnectPrompt,
   shouldOfferDeviceConnect,
-} from './device-connect.js';
-import { requireAuthConfig } from './config.js';
-import { renderSessionBrowser, selectSession } from './tui/session-browser.js';
+} from './device-connect';
+import { requireAuthConfig } from './config';
+import { renderSessionBrowser, selectSession } from './tui/session-browser';
 import {
   printToolCall, printToolResult, printEvolutionEvent, createTypingIndicator, formatFailure,
   ACCENT, DIM, MUTED, ERR, OK, WARN,
-} from './display.js';
+} from './display';
 
 export interface ChatLoopOpts {
   client: AgentClient;

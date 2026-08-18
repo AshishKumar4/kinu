@@ -22,7 +22,7 @@ import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js'
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { createWorkspace, nextWorkspaceGeneration } from '@proteus/core/workspace';
-import { nimbusSql, localTransactions } from '../packages/cli-backend/src/runtime.js';
+import { nimbusSql, localTransactions } from '../packages/cli-backend/src/runtime';
 
 const PROBES = [
   'node --version',

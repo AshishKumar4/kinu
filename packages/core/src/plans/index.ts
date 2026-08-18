@@ -18,4 +18,4 @@ export {
   type PlanReviewStatus,
   type PlanReviewStoreOptions,
   type SubmitPlanToolDeps,
-} from './review.js';
+} from './review';

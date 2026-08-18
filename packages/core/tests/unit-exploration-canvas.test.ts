@@ -23,14 +23,14 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initMctsSearchTable } from '../src/mcts/search-store.js';
-import { initHeadsTables } from '../src/heads/schema.js';
-import { readSearchTree } from '../src/read-models/search-tree.js';
-import { readForkRunParams } from '../src/read-models/fork-params.js';
-import { readExplorationCanvas, type ExplorationCanvasRun } from '../src/read-models/exploration-canvas.js';
-import type { Page, SeekCursor } from '../src/read-models/page.js';
+import { makeSql, makeExecRaw } from './helpers';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initMctsSearchTable } from '../src/mcts/search-store';
+import { initHeadsTables } from '../src/heads/schema';
+import { readSearchTree } from '../src/read-models/search-tree';
+import { readForkRunParams } from '../src/read-models/fork-params';
+import { readExplorationCanvas, type ExplorationCanvasRun } from '../src/read-models/exploration-canvas';
+import type { Page, SeekCursor } from '../src/read-models/page';
 
 function freshDb() {
   const db = new Database(':memory:');

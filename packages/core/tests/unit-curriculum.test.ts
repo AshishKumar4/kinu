@@ -1,10 +1,10 @@
 import { describe, test, expect } from 'bun:test';
 import {
   proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
-} from '../src/curriculum/proposer.ts';
+} from '../src/curriculum/proposer';
 import { createScriptedLLM, createJSONLLM } from '@proteus/test-utils';
-import { createTestRuntime, makeSqlExec } from './helpers.js';
-import { initWorkspaceSchema } from '../src/identity/workspace-schema.js';
+import { createTestRuntime, makeSqlExec } from './helpers';
+import { initWorkspaceSchema } from '../src/identity/workspace-schema';
 
 function setup() {
   const { rt, db } = createTestRuntime();

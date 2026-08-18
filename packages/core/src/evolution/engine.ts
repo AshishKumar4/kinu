@@ -34,28 +34,28 @@
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { LLM } from '../types/primitives.js';
-import type { SessionWriter } from '../mcts/record-node.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { LLM } from '../types/primitives';
+import type { SessionWriter } from '../mcts/record-node';
 import type {
   CompletedTurn,
   CompletedSession,
   EvolutionEvent,
   EvolutionListener,
   EvolutionConfig,
-} from './types.js';
-import { DEFAULT_EVOLUTION_CONFIG } from './types.js';
-import { isoDate } from '../utils/date.js';
-import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../prompts/structured.js';
-import { tolerate } from '../obs/index.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
-import { upsertCraftedTool } from '../craft/conflict.js';
-import { periodicCraftConsolidation } from '../craft/consolidation.js';
-import { updateCraftScores } from '../craft/ema.js';
-import { initCraftScoreTables } from '../craft/schemas.js';
-import { createCraftLedger, type CraftLedger } from '../craft/in-episode.js';
-import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery.js';
-import { readSoul, summarizeSoul } from '../identity/soul.js';
+} from './types';
+import { DEFAULT_EVOLUTION_CONFIG } from './types';
+import { isoDate } from '../utils/date';
+import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../prompts/structured';
+import { tolerate } from '../obs/index';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { upsertCraftedTool } from '../craft/conflict';
+import { periodicCraftConsolidation } from '../craft/consolidation';
+import { updateCraftScores } from '../craft/ema';
+import { initCraftScoreTables } from '../craft/schemas';
+import { createCraftLedger, type CraftLedger } from '../craft/in-episode';
+import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
+import { readSoul, summarizeSoul } from '../identity/soul';
 import {
   type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
   initTurnOutcomeTables, isTrivialTurn, isNegativeOutcome, classifyTurnOutcome,
@@ -65,44 +65,45 @@ import {
   listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
   recordLesson, corroborateLessonsForTurn,
-} from './outcomes.js';
+} from './outcomes';
 import {
   bindPendingImports, settleImportsForTurn, type ImportedExperienceRow,
-} from '../experience/imports.js';
-import { initReplayTables, runReplayEval, type ReplayEvalSummary } from './replay.js';
+} from '../experience/imports';
+import { initReplayTables, runReplayEval, type ReplayEvalSummary } from './replay';
 import {
   initSessionWindowTable, createSessionWindowStore, type SessionWindowStore,
-} from './session-window.js';
-import { formatScoreInterval, lossInterval } from '../utils/stats.js';
-import { buildChangelog } from './changelog.js';
-import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
-import { renderScaffoldHandbook } from './scaffold-handbook.js';
+} from './session-window';
+import { formatScoreInterval, lossInterval } from '../utils/stats';
+import { buildChangelog } from './changelog';
+import { delegationFeatures, renderDelegationFeatures } from './delegation-features';
+import { renderScaffoldHandbook } from './scaffold-handbook';
 import {
   clusterPathologies, labelPathologyClusters, renderPathologyBlock,
   describePathology, parsePathologyTag, PATHOLOGY_TAG_EXAMPLE,
   type PathologyCluster,
-} from './pathology.js';
+} from './pathology';
 
 // Re-exported here for back-compat: the mapping predates the outcomes module.
 export { feedbackToQuality };
 
-import { modifyScaffold } from '../scaffold/modify.js';
-import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor.js';
-import { SCAFFOLD_FORBIDDEN_DESCRIPTION } from '../scaffold/safety-patterns.js';
+import { modifyScaffold } from '../scaffold/modify';
+import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor';
+import { SCAFFOLD_FORBIDDEN_DESCRIPTION } from '../scaffold/safety-patterns';
 import {
   listScaffoldArchive, listRejectedProposals, selectEvolutionBase,
   type EvolutionBaseSelection, type ScaffoldArchiveEntry,
-} from '../scaffold/archive.js';
-import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow.js';
-import { tableExists } from '../identity/schema.js';
+} from '../scaffold/archive';
+import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow';
+import { tableExists } from '../identity/schema';
 
 const GeneralizedToolSchema = v.object({
   name: v.optional(v.string()),
   description: v.optional(v.string()),
   code: v.optional(v.string()),
 });
-import { runMCTS } from '../mcts/engine.js';
-import { createAgentConfigStore, initAgentConfigTable, type AgentConfigStore } from '../config/store.js';
+import { runMCTS } from '../mcts/engine';
+import { createAgentConfigStore, initAgentConfigTable, type AgentConfigStore } from '../config/store';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** The archive context handed to the proposal prompt: which version the
  *  proposal branches from + the variants it may cite as stepping stones. */
@@ -393,6 +394,9 @@ export class EvolutionEngine {
           assistantResponse: turn.assistantResponse,
           followup,
           scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql),
+          // The classifier's one-sentence reason, or the execution verdict's
+          // observation — stored so the ledger can say WHY, not just count.
+          evidence,
         });
       }
       turn.feedback = outcomeToFeedback(outcome);
@@ -655,7 +659,10 @@ export class EvolutionEngine {
     try {
       await this.config.shadowTrialRunner();
     } catch (err) {
-      console.warn('[proteus] shadow trial drain failed:', err instanceof Error ? err.message : err);
+      diagnostics.failure(
+        'evolution.shadow_trial_drain_failed',
+        toProteusError({ doing: 'drain the due shadow trials', cause: err, otherwise: 'unavailable' }),
+      );
     }
   }
 
@@ -955,7 +962,7 @@ export class EvolutionEngine {
       `Response: "${summary}"\n` +
       `${toolSummary}\n` +
       `${renderDelegationFeatures(delegationFeatures(turn))}\n` +
-      `Delegation rubric: On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero delegation a lesson to decompose and staff subordinates or fork; credit effective staffing/forking on accepted turns; flag delegation overhead when spawned subordinates contributed nothing.\n` +
+      `Delegation rubric: On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero delegation a lesson to decompose and hire subordinates or fork; credit effective hiring/forking on accepted turns; flag delegation overhead when spawned subordinates contributed nothing.\n` +
       `${turn.hadError ? 'An error occurred.\n' : ''}` +
       `${followup ? `The user then replied: "${evidenceWindow(followup, EVIDENCE_BUDGETS.outcomeFollowup)}"\n` : ''}\n` +
       `In one sentence, what specifically should be done differently next time?`,

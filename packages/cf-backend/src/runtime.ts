@@ -42,35 +42,36 @@ import {
   type VectorStore,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
+import { diagnostics, toProteusError } from "@proteus/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
-import { configureContainerEgress, withConfiguredEgress } from "./egress/configure.js";
-import { previewHostSuffix } from "./lib/preview-origin.js";
+import { configureContainerEgress, withConfiguredEgress } from "./egress/configure";
+import { previewHostSuffix } from "./lib/preview-origin";
 import { MemoryStore } from "@proteus/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
 import { generateText, type LanguageModelUsage } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
-import { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
+import { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet } from "./facet-spawn";
 import {
   createHubDeviceTransport,
   type DeviceHubClient,
   type HubDeviceTransportOpts,
-} from "./device-transport.js";
+} from "./device-transport";
 import {
   createAgentProviderRegistry,
   type UserCredentialClient,
   type UserCredentialSource,
-} from "./providers/agent-registry.js";
-import { resolveJudgeModelSelection } from "./providers/judge-model.js";
-import { ownerCaller, type UserCaller } from "./user/workspace-capability.js";
-import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
+} from "./providers/agent-registry";
+import { resolveJudgeModelSelection } from "./providers/judge-model";
+import { ownerCaller, type UserCaller } from "./user/workspace-capability";
+import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
 import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@proteus/core";
-import type { ProteusSandbox } from "./proteus-sandbox.js";
+import type { ProteusSandbox } from "./proteus-sandbox";
 import {
   createNimbusWorkspaceSandbox,
   nimbusPreviewConfigured,
   nimbusPreviewUrl,
-} from "./nimbus-route.js";
+} from "./nimbus-route";
 import * as v from 'valibot';
 
 /**
@@ -112,10 +113,6 @@ export function bindAgentSql(agent: Pick<Agent<Env>, 'sql'>): SqlExecutor {
   // SqlExecutor are the same tagged-template protocol; SqlExecutor additionally
   // admits ArrayBuffer, which Durable Object SQLite accepts at runtime.
   return agent.sql.bind(agent) as SqlExecutor;
-}
-
-function errorMessage<Thrown>(thrown: Thrown): string {
-  return thrown instanceof Error ? thrown.message : String(thrown);
 }
 
 /**
@@ -192,7 +189,11 @@ async function listOwnerEgressVault(
     const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(userId));
     return [...await vault.listEgressSecrets(await ownerCaller(env))];
   } catch (err) {
-    console.warn("[proteus] egress vault unreadable, no secret is injectable:", errorMessage(err));
+    diagnostics.failure('egress.vault_unreadable', toProteusError({
+      doing: "reading the owner's egress vault",
+      cause: err,
+      otherwise: 'unavailable',
+    }), { workspace: actor.workspaceName });
     return [];
   }
 }
@@ -503,9 +504,17 @@ export function createCFRuntime(
       // previews alone: exec, files and the release engine keep working, and
       // port exposure refuses with the preview-specific reason.
       executionRouter.register(createSandboxExecutor(handle, previewSuffix));
-      console.log(`[proteus] SandboxExecutor registered (${previewSuffix ? `previews=*.${previewSuffix}` : "previews off — PREVIEW_HOST_SUFFIX unset"} id=${sandboxId} transport=websocket)`);
+      diagnostics.event('sandbox.executor_registered', {
+        sandboxId,
+        transport: 'websocket',
+        previews: previewSuffix ?? '',
+      });
     } catch (err) {
-      console.warn("[proteus] Failed to register SandboxExecutor:", errorMessage(err));
+      diagnostics.failure('sandbox.executor_registration_failed', toProteusError({
+        doing: 'registering the sandbox executor',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { sandboxId });
       executionRouter.register(createSandboxExecutor());
     }
   } else {
@@ -540,8 +549,11 @@ export function createCFRuntime(
         // consented subtree, never widen it. Recorded rather than discarded —
         // `false` alone cannot distinguish "no full-filesystem tier" from "the hub
         // could not be reached", and only one of those is a fault.
-        console.warn('[proteus] device full-filesystem consent unverifiable, scoping to subtree:',
-          error instanceof Error ? error.message : String(error));
+        diagnostics.failure('device.fs_consent_unverifiable', toProteusError({
+          doing: "reading the device's full-filesystem consent tier",
+          cause: error,
+          otherwise: 'unavailable',
+        }), { workspace: actor.workspaceName });
         return false;
       }
     },
@@ -694,10 +706,14 @@ function buildVectorStore(
       // and query to this workspace so memories never leak across agents.
       namespace: actor.workspaceName,
     });
-    console.log(`[proteus] VectorStore (Cloudflare Vectorize) registered (namespace=${actor.workspaceName})`);
+    diagnostics.event('vector.store_registered', { namespace: actor.workspaceName });
     return store;
   } catch (err) {
-    console.warn('[proteus] VectorStore construction failed; falling back to noop:', errorMessage(err));
+    diagnostics.failure('vector.store_construction_failed', toProteusError({
+      doing: 'constructing the Vectorize memory store',
+      cause: err,
+      otherwise: 'unavailable',
+    }), { namespace: actor.workspaceName });
     return createNoopVectorStore();
   }
 }
@@ -984,7 +1000,11 @@ function createFacetSpawner(agent: AgentHost, env: Env, actor: ActorRuntimeIdent
         capabilityToken: await actor.capabilityToken(),
       });
     } catch (err) {
-      console.warn(`[proteus] subAgent failed for branch ${branchId}: ${errorMessage(err)}. Using inline fallback.`);
+      diagnostics.failure('mcts.branch_facet_spawn_failed', toProteusError({
+        doing: 'spawning a branch facet',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { branchId });
       return createInlineBranch(agent, env);
     }
   };
@@ -1013,15 +1033,19 @@ function createFacetAborter(agent: AgentHost): (branchId: string) => Promise<voi
  * Reported rather than thrown, and this is the one place in the module where
  * that is the LOUDER choice: `mcts/engine.ts` releases through
  * `Promise.allSettled`, which discards rejections, so throwing here would
- * produce silence at exactly the moment a database was stranded. `error`, not
- * `warn` — the quota this leaks into resets the whole workspace on overflow.
+ * produce silence at exactly the moment a database was stranded. A leaked facet
+ * database spends the quota whose overflow resets the whole workspace.
  */
 function createFacetReleaser(agent: AgentHost): (branchId: string) => Promise<void> {
   return async (branchId: string) => {
     try {
       await deleteExplorationFacet(agent, branchId);
     } catch (err) {
-      console.error(`[proteus] branch facet ${branchId} storage was not reclaimed: ${errorMessage(err)}`);
+      diagnostics.failure('mcts.branch_facet_storage_leaked', toProteusError({
+        doing: "reclaiming a branch facet's storage",
+        cause: err,
+        otherwise: 'io',
+      }), { branchId });
     }
   };
 }
@@ -1071,13 +1095,13 @@ function createInlineBranch(agent: AgentHost, env: Env): BranchHandle {
       const text = result.text.trim();
       return { text, usage: normalizeUsage(result.usage) };
     },
-    // No trace table on this path — the reflection is about the task alone,
-    // and the shared prompt drops the attempt heading rather than showing an
-    // empty one.
-    generateReflection: async (task) => {
+    // No trace table on this path — the reflection is about the task and the
+    // environment's verdict alone, and the shared prompt drops the attempt
+    // heading rather than showing an empty one.
+    generateReflection: async (task, outcome) => {
       const result = await generateText({
         model: getModel(),
-        messages: [{ role: "user" as const, content: reflectionPrompt(task, '') }],
+        messages: [{ role: "user" as const, content: reflectionPrompt(task, '', outcome) }],
         ...effortFor('reflection'),
       });
       return { text: result.text.trim(), usage: normalizeUsage(result.usage) };

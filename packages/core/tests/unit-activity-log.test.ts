@@ -1,8 +1,8 @@
 // Reading back the agent's own running commentary.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { initAllTables, readActivityLog } from '../src/index.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { initAllTables, readActivityLog } from '../src/index';
+import { makeSql, makeExecRaw } from './helpers';
 
 function setup() {
   const db = new Database(':memory:');

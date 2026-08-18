@@ -6,7 +6,7 @@
  * (the unified schema). Both are safe because of IF NOT EXISTS.
  */
 
-import type { RawSqlExec } from '../types/primitives.js';
+import type { RawSqlExec } from '../types/primitives';
 
 export function initCraftScoreTables(execRaw: RawSqlExec): void {
   execRaw(`

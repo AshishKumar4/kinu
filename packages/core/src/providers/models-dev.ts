@@ -1,9 +1,9 @@
 import type {
   ModelCapability, ModelInfo, ModelInputModality, ModelPricing, ProviderDeps,
-} from './types.js';
+} from './types';
 import * as v from 'valibot';
-import { MODEL_INPUT_MODALITIES } from './types.js';
-import { cloneModelInfos, nonEmptyString, positiveInteger } from './util.js';
+import { MODEL_INPUT_MODALITIES } from './types';
+import { cloneModelInfos, nonEmptyString, positiveInteger } from './util';
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
 const DEFAULT_TTL_MS = 5 * 60_000;

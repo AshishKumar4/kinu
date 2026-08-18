@@ -1,11 +1,11 @@
 // Route-level behavior for scoped `pta_…` CI access tokens: exec/read scopes
 // gate exactly the surfaces they name, everything sensitive stays
 // interactive-session-only, and minting is step-up gated.
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
-import { handleCliRequest } from '../src/cli/routes.js';
+import { handleCliRequest } from '../src/cli/routes';
 import type { JsonValue } from '@proteus/core';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';

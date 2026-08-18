@@ -9,14 +9,14 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { makeSql, makeExecRaw } from './helpers';
 import {
   CRAFT_INVOCATION_QUALITY, CRAFT_NEUTRAL_PRIOR,
   craftCreatesTool, craftFailureBlame, craftFailureMarker, craftInvocationError, craftInvocationSites,
   createCraftLedger, seedCraftScore, stripNonCode,
-} from '../src/craft/in-episode.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
-import { feedbackToQuality } from '../src/evolution/outcomes.js';
+} from '../src/craft/in-episode';
+import { initCraftScoreTables } from '../src/craft/schemas';
+import { feedbackToQuality } from '../src/evolution/outcomes';
 
 describe('craftInvocationSites — what the runtime saw called', () => {
   test('finds a call under either sandbox namespace', () => {

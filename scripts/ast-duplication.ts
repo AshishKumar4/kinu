@@ -49,12 +49,12 @@
 
 import { createHash } from 'node:crypto';
 
-import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet.ts';
-import { readSources } from './sources.ts';
+import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
+import { readSources } from './sources';
 import {
   blockBodyOf, declaredName, functionOwner, identifierCalleeName, identifierText,
   literalText, memberCalleeName, methodKind, parse, type SyntaxNode, walk,
-} from './syntax.ts';
+} from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
 const LOCK = `${root}scripts/ast-duplication.lock.json`;

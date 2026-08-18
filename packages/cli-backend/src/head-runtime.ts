@@ -23,12 +23,13 @@ import {
   extractJsonObject, MergeOutputSchema, normalizeUsage, reasoningEffortOptions,
   resolveMaxSteps, localMissionScope,
 } from '@proteus/core';
+import { diagnostics, toProteusError } from '@proteus/core/obs';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { makeSql, makeExecRaw, buildCLIHeadRuntime } from './runtime.js';
-import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
-import { proteusHome } from './home.js';
+import { makeSql, makeExecRaw, buildCLIHeadRuntime } from './runtime';
+import { createNodeExecuteToolFactory } from './execute-tools-factory';
+import { proteusHome } from './home';
 import * as v from 'valibot';
 
 export interface CLIHeadRuntimeDeps {
@@ -150,8 +151,15 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
   try {
     return deps.resolveModel(input.model);
   } catch (err) {
-    console.warn(`[proteus] head ${input.id} could not resolve model "${input.model}": `
-      + `${err instanceof Error ? err.message : String(err)} — running the session's model instead.`);
+    diagnostics.failure(
+      'head.model_resolve_failed',
+      toProteusError({
+        doing: "resolving the model this head named — running the session's model instead",
+        cause: err,
+        otherwise: 'bad_input',
+      }),
+      { headId: input.id, model: input.model },
+    );
     return deps.model;
   }
 }

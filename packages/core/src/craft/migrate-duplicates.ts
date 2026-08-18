@@ -16,14 +16,13 @@
  * Safe under DO single-writer semantics.
  */
 
-import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
+import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 
 export interface MigrationReport {
   ranMigration: boolean;
   mergedGroups: number;
   rowsDeletedCraftedTools: number;
   rowsDeletedCraftScores: number;
-  details: Array<{ lowerName: string; kept: string; dropped: string[] }>;
 }
 
 export function migrateCraftedToolDuplicates(
@@ -35,7 +34,6 @@ export function migrateCraftedToolDuplicates(
     mergedGroups: 0,
     rowsDeletedCraftedTools: 0,
     rowsDeletedCraftScores: 0,
-    details: [],
   };
 
   // Ensure marker table exists
@@ -109,11 +107,6 @@ export function migrateCraftedToolDuplicates(
     }
 
     report.mergedGroups++;
-    report.details.push({
-      lowerName: g.lower_name,
-      kept: keep.name,
-      dropped: drop.map(d => d.name),
-    });
   }
 
   void sql`INSERT INTO _v2_codegen_migration_done (id) VALUES (1)`;

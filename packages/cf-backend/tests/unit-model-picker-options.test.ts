@@ -3,8 +3,8 @@ import { describe, test, expect } from 'bun:test';
 import { formatContextWindow } from '@proteus/core';
 import {
   badgeCapabilities, groupModelMenu, modelMatchesQuery,
-} from '../src/components/model-picker-options.ts';
-import type { ModelMenuEntry } from '../src/lib/user-api.ts';
+} from '../src/components/model-picker-options';
+import type { ModelMenuEntry } from '../src/lib/user-api';
 
 const MODELS: ModelMenuEntry[] = [
   { spec: 'workers-ai/@cf/moonshotai/kimi-k2.6', label: 'Kimi K2.6', provider: 'workers-ai', capabilities: ['tools', 'streaming'], contextWindow: 131072 },

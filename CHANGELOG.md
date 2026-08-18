@@ -142,6 +142,47 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - `daemon.log` is capped at 1 MiB with one predecessor kept, and
   `proteus daemon logs` reads across the roll.
 
+- Every executor tool now names the CLASS of its own failure. `sandbox`,
+  `nimbus`, `laptop`, `parent` and `workspace` used to answer a descriptive
+  string — `exec error: …`, `No device connected.`, `Sandbox executor not
+  configured.` — which carried no cause chain and no discriminator, so a caller
+  could not tell a timeout from a denial from an OOM. They answer
+  `{"reason":"<class>","error":"…"}` instead, reason first, on the same string
+  channel; the declared codemode types say so, so LLM-generated code inside
+  `execute_tools` can branch on `reason` rather than matching prose. `parent` is
+  the deliberate exception and stays as it was: `makeVfsError` already puts the
+  parent's errno on its throws and the classifier reads errnos, so a code there
+  would be one whose value never varies.
+
+  Three private prose matchers are gone with it — `cf-backend`'s
+  `executorOutputIsError` (the Executors-tab terminal) and
+  `read-models/workspace-diff.ts`'s `isExecutorFailure` both listed prefixes no
+  executor writes any more, and both now call the one shared predicate,
+  `isFailingResultText`.
+
+- Four platform conditions stop being counted as tool defects. An unconfigured
+  sandbox binding and an unattached laptop were the worst of them: their prose
+  was not a failure to any reader, so `run { runtime: … }` recorded outcome
+  `ok`, the tool-failure census counted a clean call, and the Executors terminal
+  drew exit 0 — a platform gap read as success, which nobody goes looking for.
+  Sandbox admission refusals that outlive their retries (503 at the ten-instance
+  ceiling, 429 on the container start-rate burst) are `unavailable` rather than
+  `io`, so the platform's own capacity ceiling is no longer a candidate defect in
+  the tool that hit it. And the misevolution veto answered `{ ok: false, error }`
+  with no reason, so the census filed the gate *working* under `broke`; it is
+  `denied` now.
+
+- Four reads stop claiming absence they never established. `nimbus.listPorts`
+  answered `'[]'` when the session handle had no port API at all;
+  `sandbox.exists` and `laptop.exists` answered false for a call that was never
+  made, and `laptop.exists` swallowed its error to do it; `workspace.readdir`
+  answered `[]`. Each refuses with a class instead.
+
+- `parent.exec` honours the abort signal it was already parsing and dropping. It
+  was the one executor whose exec could never end as `cancelled` — one class of
+  the nine unreachable on one of the five tools — and the comment above it
+  claimed the behaviour the code did not have.
+
 ### Fixed
 
 - A shell command or file write no longer fails because the shadow-git

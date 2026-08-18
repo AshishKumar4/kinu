@@ -21,6 +21,7 @@ reading them.
 | `tolerate` / `classify` — the tolerable-failure signatures | built | `obs/expected-failure.ts` |
 | `Tracer` / `ScopedSpan` / `tracer.span(...)` — the span seam | built, **not wired** | `obs/tracer.ts`, `cf-backend/src/obs/cf-tracer.ts` |
 | `ErrorCode` / `ProteusError` / `toProteusError` | built | `obs/error.ts` |
+| `refusalText` — the refusal on the string channel | built, **all five executor tools converted** | `execution/exec-result.ts` |
 | `Logger` / `ReservedLogField` — the typed logger and its ban | built | `obs/log.ts` |
 | `Result<T, ProteusError>` via `neverthrow` | **rejected**, see below | — |
 
@@ -203,6 +204,69 @@ shape. It was not added, on evidence:
 projects it onto the wire. That is the same two-mode discipline `Result` offers,
 without a type that dies at the first serialization.
 
+## The five executor tools
+
+`sandbox.ts`, `nimbus.ts`, `parent.ts`, `device-tunnel-executor.ts` and `inline.ts`
+now classify their own failures. The shape is `refusalText(error)` in
+`execution/exec-result.ts`, which is `JSON.stringify(refusalOf(error))` — a refusal
+payload on the string channel those tools already answer on. It lives beside
+`isFailingResultText` because that predicate is what reads it back, so producer and
+recogniser cannot disagree about the shape.
+
+Returned, not thrown, and that is the reason: these tools are also called from
+LLM-generated code inside `execute_tools`, where a throw ends the whole block while
+a payload lets the generated code branch on `reason`. The declared codemode types
+say so per namespace.
+
+### What the classification distinguishes, per tool
+
+| Tool | The distinction it buys |
+| --- | --- |
+| `sandbox.ts` | Admission control (503 at the ten-instance ceiling, 429 on the start-rate burst, the eviction window) apart from a transport fault. Both were one prose string; the first is `unavailable` and a platform gap, the second is `io` and a candidate defect. Plus `unavailable` for an absent binding. |
+| `nimbus.ts` | An absent binding (`unavailable`) apart from a session handle that has no such surface (`unsupported`) — a retry versus a permanence, and on the CF backend Nimbus *is* the workspace, so this is every call. |
+| `device-tunnel-executor.ts` | No device attached (`unavailable`) apart from the device answering "no" (`io`). This was the worst of the five: the old prose reached no reader as a failure at all. |
+| `inline.ts` | `denied` for the misevolution veto — a gate refusing, which used to be filed as a defect in the tool it protected — and `bad_input` for arguments that never described an operation. Its `exec` still throws a shell failure with the chain intact, which is correct and unchanged. |
+| `parent.ts` | **Nothing new, and here is why.** `makeVfsError` puts the parent's `code` on the error and `classifyErrorCode` reads errnos, so `ENOENT` already arrives as `missing` without this file naming anything, and everything both backends collapse into `EIO` arrives as the catching seam's `otherwise`, which is `io` for every caller it has. A code here would be one whose value never varies. What *was* missing is `cancelled`: the abort signal was parsed and dropped, so one class of the nine was unreachable on one of the five tools. It races the RPC now. |
+
+### Platform conditions that were being counted as tool defects
+
+Four found, all fixed, all pinned by `unit-tool-failure-census.test.ts`:
+
+1. **An unconfigured sandbox binding** answered prose. The router registers the
+   not-configured stub (`cf-backend/src/runtime.ts:509,512`), so the tool is
+   reachable — and prose beginning `Sandbox executor not configured` is not a
+   failure to `isFailingResultText`, so the escalation recorded outcome `ok` and the
+   census never saw the call. **Worse than a wrong bucket: invisible.**
+2. **No device connected** — same shape, same invisibility, on `laptop`.
+3. **Sandbox admission refusals that outlived their retries** would have become
+   `io`, i.e. the platform's own capacity ceiling counted as a defect in this tool.
+4. **The misevolution veto** answered `{ ok: false, error }` with no reason, so the
+   census read `returned_error` and filed the gate *working* under `broke`.
+
+### Reads that could not tell empty from failed
+
+`AGENTS.md` rule 3, four instances, all in the five: `nimbus.listPorts` answered
+`'[]'` when the handle had no port API; `sandbox.exists` and `laptop.exists`
+answered `'false'`/`false` for a call never made — and `laptop.exists` swallowed its
+error to do it; `workspace.readdir` answered `[]`. Each now refuses.
+
+### The census mapping
+
+`refused` ← `bad_input`, `denied`, `unsupported`. `runtimeMissing` ← `unavailable`.
+`broke` ← `missing`, `timeout`, `cancelled`, `oom`, `io`. **Nothing maps to
+`workFailed`**, and that is an invariant rather than an omission: a classified
+refusal always means the work did not run, while the work running and failing
+arrives as `Error (exit N)` and is read off the exit code. The table is
+`satisfies Record<ErrorCode, …>` in the test, so a new code cannot be added without
+a verdict. Verified red by flipping `CODE_IS_REFUSAL.denied` and the `unavailable`
+→ `runtimeMissing` rule: 8 of 37 cases fail.
+
+`cf-backend`'s `executorOutputIsError` is gone. It was a third prose matcher
+(`exec error:`, `read error:`, …) listing prefixes no executor writes any more, and
+it never matched the two shapes that mattered — the Executors-tab terminal drew an
+unconfigured sandbox and an unattached laptop as exit 0. It calls
+`isFailingResultText` now.
+
 ## What is NOT converted
 
 The slice is one seam taken end to end. Everything below is deliberately untouched,
@@ -214,11 +278,18 @@ and this list is the boundary the next person inherits.
   what steers the model's next step — and `read-models/tool-failures.ts` reads the
   exit code off it. Converting it means changing what the MODEL sees, which is a
   prompt-behaviour change and not an observability one.
-- **The other executor tools** — `sandbox.ts`, `nimbus.ts`, `parent.ts`,
-  `device-tunnel-executor.ts`, `inline.ts` — still return strings from their `exec`
-  and still throw unclassified from everything else. `execution/types.ts:111`
-  already calls this out ("its LLM tools, which return error strings and lossy
-  listings"). Each is the same shape as the `run` escalation path and can follow it.
+- **`views/store.ts`** answers `{ ok: false, error }` with no reason — `No view
+  named "x"` is a `missing` and an unparseable spec is a `bad_input`, and both reach
+  the census as `returned_error` in `broke`. `inline.ts`'s own view refusals are
+  classified; the store's are not, and the declared codemode type says exactly that
+  rather than promising a `reason` the store does not write.
+- **The `ExecutorProvider` PORT surface** — `exposePort`/`unexposePort`/
+  `listExposedPorts` — is a typed `{ supported, reason }` union, not a string a
+  caller has to parse, so it is a different problem from this one. One defect in it
+  is worth naming: `sandbox.listExposedPorts` and `nimbus.listExposedPorts` answer
+  `[]` when the handle or the preview host is absent, which is "no ports exposed"
+  standing in for "cannot be asked" — the same class as the four fixed above, on a
+  surface whose consumers are the workspace UI rather than the model.
 - **~1,180 `console.*` calls in `packages/core/src`** are not migrated to `Logger`.
   Converting them is mechanical and enormous, it would touch every module, and it
   is worth doing per-slice as each seam is otherwise edited rather than as one

@@ -4,17 +4,17 @@ import * as v from 'valibot';
 import { git, gitEnv, initRepo, scratchDir } from '@proteus/test-utils';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createWorkspace } from '../src/identity/create.js';
+import { createWorkspace } from '../src/identity/create';
 import {
   getExecutorDiff,
   getWorkspaceDiff,
   initWorkspaceBaselineTable,
   resetWorkspaceBaseline,
-} from '../src/read-models/workspace-diff.js';
-import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types.js';
-import type { SqlValue } from '../src/types/primitives.js';
-import { MAX_LINES_PER_FILE } from '../src/vfs/diff.js';
-import { collectWorkspaceTextFiles, createTestRuntime, makeAgentDatabase } from './helpers.js';
+} from '../src/read-models/workspace-diff';
+import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types';
+import type { SqlValue } from '../src/types/primitives';
+import { MAX_LINES_PER_FILE } from '../src/vfs/diff';
+import { collectWorkspaceTextFiles, createTestRuntime, makeAgentDatabase } from './helpers';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
 

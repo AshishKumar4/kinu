@@ -14,9 +14,9 @@ import {
   renderConformanceFindings,
   AGENTS_TOOL_ACTIONS, BUILTIN_TOOLS,
   type ConformanceManifest, type ObservedSurface, type RootStatuses,
-} from '../src/index.ts';
-import { renderForLLM } from '../src/events/hub/index.ts';
-import type { ProteusEvent } from '../src/events/hub/index.ts';
+} from '../src/index';
+import { renderForLLM } from '../src/events/hub/index';
+import type { ProteusEvent } from '../src/events/hub/index';
 
 // ── Falsifiability: every finding kind can fire ─────────────────────────────
 
@@ -127,8 +127,8 @@ describe('normalizeObservedTables', () => {
 
 describe('observedActionEnum', () => {
   test('reads the action enum from an ai-sdk jsonSchema wrapper', () => {
-    const tool = { inputSchema: { jsonSchema: { properties: { action: { enum: ['fork', 'staff'] } } } } };
-    expect([...observedActionEnum(tool)].sort()).toEqual(['fork', 'staff']);
+    const tool = { inputSchema: { jsonSchema: { properties: { action: { enum: ['fork', 'hire'] } } } } };
+    expect([...observedActionEnum(tool)].sort()).toEqual(['fork', 'hire']);
   });
   test('an absent schema observes as empty, not as everything', () => {
     expect(observedActionEnum(undefined).size).toBe(0);

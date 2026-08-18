@@ -17,13 +17,13 @@
  * unlikely, and it is why `hardTaskCases` returns cases instead of being a file.
  */
 import type { EvalCase, VFS } from '@proteus/core';
-import { outcomeRow, ratioOutcome, type VerifierContext } from '../eval-outcome.js';
-import type { EvalScoreRow } from '../eval-run.js';
-import type { HardTask } from './cost-model.js';
-import { HARD_TASKS } from './tasks.js';
+import { outcomeRow, ratioOutcome, type VerifierContext } from '../eval-outcome';
+import type { EvalScoreRow } from '../eval-run';
+import type { HardTask } from './cost-model';
+import { HARD_TASKS } from './tasks';
 
-export * from './cost-model.js';
-export { HARD_TASKS } from './tasks.js';
+export * from './cost-model';
+export { HARD_TASKS } from './tasks';
 
 /**
  * The `EvalCase.env` value that marks a case as belonging to this tier.

@@ -40,9 +40,9 @@ import type { OAuthCredential } from '@proteus/core';
 import { generateText, streamText } from 'ai';
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import type { LLM } from '@proteus/core';
-import { createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude-cli-provider.js';
-import { createOpenCodeProvider, type OpenCodeProviderOptions } from './opencode-provider.js';
-import type { LocalCodexAuthStore } from './codex-auth-store.js';
+import { createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude-cli-provider';
+import { createOpenCodeProvider, type OpenCodeProviderOptions } from './opencode-provider';
+import type { LocalCodexAuthStore } from './codex-auth-store';
 import * as v from 'valibot';
 
 const cloudMenuSchema = v.object({

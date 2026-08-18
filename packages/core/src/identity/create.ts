@@ -9,23 +9,23 @@
  * - The workspace identity (stable UUID) — the ownership root
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
-import type { LLMProviderConfig } from '../llm.js';
-import { initAllTables } from './schema.js';
-import { seedSoul } from './soul.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { LLMProviderConfig } from '../llm';
+import { initAllTables } from './schema';
+import { seedSoul } from './soul';
 import {
   createInlineCraftStore, createInlineExecutor, createInlineMemory,
   createInlineSchedule, createInlineWorkspace, wrapDatabase, type AgentDatabase,
-} from './inline-primitives.js';
-import { INITIAL_SCAFFOLD_SOURCE } from '../scaffold/bootstrap.js';
-import { nanoid } from '../utils/nanoid.js';
-import { nowMs } from '../utils/date.js';
-import { createVercelAILLM } from '../llm.js';
-import { buildRuntime } from '../runtime-builder.js';
-import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from '../read-models/workspace-diff.js';
+} from './inline-primitives';
+import { INITIAL_SCAFFOLD_SOURCE } from '../scaffold/bootstrap';
+import { nanoid } from '../utils/nanoid';
+import { nowMs } from '../utils/date';
+import { createVercelAILLM } from '../llm';
+import { buildRuntime } from '../runtime-builder';
+import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from '../read-models/workspace-diff';
 
-export { wrapDatabase, type AgentDatabase } from './inline-primitives.js';
+export { wrapDatabase, type AgentDatabase } from './inline-primitives';
 
 export interface WorkspaceBirthConfig {
   name: string;

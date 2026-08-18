@@ -35,7 +35,7 @@ import {
   type DeviceConsentDecision,
   type ForkPoint,
   type PendingDeviceConsent,
-} from '../agent-client.js';
+} from '../agent-client';
 import {
   commandsForClient,
   describeBranchStatus,
@@ -47,25 +47,25 @@ import {
   resolveCommandDraft,
   setModelPreference,
   type SlashOutcome,
-} from '../slash-commands.js';
-import { describePromptAttachment, resolvePromptAttachments } from '../attachments.js';
-import { watchDeviceConsents } from '../consent-watch.js';
-import { contextWindowForSpec, EMPTY_MODEL_MENU, type AgentModelEntry, type AgentModelMenu } from '../model-catalog.js';
-import { requireInteractiveTerminal } from '../prompt.js';
-import { guideFailure } from '../provider-guidance.js';
-import { openBrowser } from '../commands/auth.js';
-import type { CliSessionInfo } from '../session.js';
-import { StatusBar } from './status-bar.js';
-import { MessageList, type DisplayMessage } from './messages.js';
-import { StatusView } from './help-view.js';
-import { ChangelogOverlay, CommandHintOverlay, DeviceConnectOverlay, DeviceConsentOverlay, ModelPickerOverlay, PhaseLine, TakesOverlay, WalkbackOverlay } from './overlays.js';
-import { useDeviceConnectPrompt } from './use-device-connect.js';
-import { estimateContextTokens } from './context-status.js';
-import { useStreamingBuffer } from './streaming-buffer.js';
-import { renderSessionBrowser, selectSession } from './session-browser.js';
-import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from './input-state.js';
-import { clipText } from './format.js';
-import { tuiColors } from './theme.js';
+} from '../slash-commands';
+import { describePromptAttachment, resolvePromptAttachments } from '../attachments';
+import { watchDeviceConsents } from '../consent-watch';
+import { contextWindowForSpec, EMPTY_MODEL_MENU, type AgentModelEntry, type AgentModelMenu } from '../model-catalog';
+import { requireInteractiveTerminal } from '../prompt';
+import { guideFailure } from '../provider-guidance';
+import { openBrowser } from '../commands/auth';
+import type { CliSessionInfo } from '../session';
+import { StatusBar } from './status-bar';
+import { MessageList, type DisplayMessage } from './messages';
+import { StatusView } from './help-view';
+import { ChangelogOverlay, CommandHintOverlay, DeviceConnectOverlay, DeviceConsentOverlay, ModelPickerOverlay, PhaseLine, TakesOverlay, WalkbackOverlay } from './overlays';
+import { useDeviceConnectPrompt } from './use-device-connect';
+import { estimateContextTokens } from './context-status';
+import { useStreamingBuffer } from './streaming-buffer';
+import { renderSessionBrowser, selectSession } from './session-browser';
+import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from './input-state';
+import { clipText } from './format';
+import { tuiColors } from './theme';
 
 export interface ChatAppOpts {
   client: AgentClient;

@@ -17,10 +17,10 @@ import {
   parseGatewayTarget,
   type GatewayTarget,
 } from '@proteus/core';
-import { createWorkersAIProvider } from '../src/providers/workers-ai.ts';
-import { createMyGatewayProvider } from '../src/providers/my-gateway.ts';
-import { createAIGatewayProvider, resolvePlatformGateway } from '../src/providers/ai-gateway.ts';
-import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway.js';
+import { createWorkersAIProvider } from '../src/providers/workers-ai';
+import { createMyGatewayProvider } from '../src/providers/my-gateway';
+import { createAIGatewayProvider, resolvePlatformGateway } from '../src/providers/ai-gateway';
+import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway';
 
 const providerDeps = (env: Parameters<typeof resolvePlatformGateway>[0]) => ({
   env,

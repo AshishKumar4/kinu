@@ -1,7 +1,7 @@
 // ULID monotonic mode — `ORDER BY id` must equal creation order even within
 // one millisecond (the peer outbox's per-receiver ordering rides on this).
 import { describe, test, expect } from 'bun:test';
-import { ulid, ulidTime, ulidCompare } from '../src/events/hub/ulid.ts';
+import { ulid, ulidTime, ulidCompare } from '../src/events/hub/ulid';
 
 describe('ulid', () => {
   test('a same-millisecond burst stays strictly increasing', () => {

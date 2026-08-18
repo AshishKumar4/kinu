@@ -4,9 +4,9 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { emaUpdate, effectiveScore, filterByEffectiveScore } from '../src/craft/ema.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { emaUpdate, effectiveScore, filterByEffectiveScore } from '../src/craft/ema';
+import { initCraftScoreTables } from '../src/craft/schemas';
+import { makeSql, makeExecRaw } from './helpers';
 
 describe('EMA scoring', () => {
   test('emaUpdate with alpha=0.3', () => {

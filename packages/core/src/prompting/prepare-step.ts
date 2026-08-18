@@ -26,12 +26,12 @@
  */
 
 import type { ModelMessage, SystemModelMessage } from 'ai';
-import type { TurnContextMeter } from '../context-meter.js';
-import type { ExtensionHost } from '../extension.js';
-import { MissionBudgetExhausted, type MissionGovernor } from '../mission-budget.js';
-import { markCacheTail, type PromptCacheStrategy } from './cache-breakpoints.js';
-import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune.js';
-import type { DynamicContext, DynamicContextLedger } from './volatile-context.js';
+import type { TurnContextMeter } from '../context-meter';
+import type { ExtensionHost } from '../extension';
+import { MissionBudgetExhausted, type MissionGovernor } from '../mission-budget';
+import { markCacheTail, type PromptCacheStrategy } from './cache-breakpoints';
+import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune';
+import type { DynamicContext, DynamicContextLedger } from './volatile-context';
 
 /** The in-flight turn's cache plan for marker strategies. `system` is the
  *  cache-eligible system override for backends whose turn-level system

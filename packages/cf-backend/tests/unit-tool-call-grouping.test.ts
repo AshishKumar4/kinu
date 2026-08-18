@@ -7,7 +7,7 @@
 import { describe, test, expect } from 'bun:test';
 import type { ReasoningUIPart, TextUIPart, ToolUIPart, UIMessage } from 'ai';
 import type { JsonValue } from '@proteus/core';
-import { groupMessageParts } from '../src/components/tool-call-grouping.ts';
+import { groupMessageParts } from '../src/components/tool-call-grouping';
 import { describeCommand, describeToolCall, summarizeToolRun } from '@proteus/core';
 
 type Part = UIMessage['parts'][number];
@@ -131,7 +131,7 @@ describe('what a call does, from its own arguments', () => {
     expect(describeToolCall('agents', { action: 'fork', forks: [{}] })).toBe('Delegated to 1 parallel fork');
     expect(describeToolCall('agents', { action: 'fork' })).toBe('Delegated to a fork');
     expect(describeToolCall('agents', { action: 'ask', agent: 'scout' })).toBe('Asked scout');
-    expect(describeToolCall('agents', { action: 'staff', scope: 'workspace' })).toBe('Staffed the workspace');
+    expect(describeToolCall('agents', { action: 'hire', scope: 'workspace' })).toBe('Hired a workspace');
   });
 
   test('an unknown action or unknown tool describes nothing', () => {

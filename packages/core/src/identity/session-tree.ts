@@ -33,8 +33,8 @@
  * no second store and writes its own edges.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import { uiMessageText } from '../utils/ui-message.js';
+import type { SqlExecutor } from '../types/primitives';
+import { uiMessageText } from '../utils/ui-message';
 
 /**
  * Bound on an ancestry walk, and the cycle guard. Matches the bound `agents`'

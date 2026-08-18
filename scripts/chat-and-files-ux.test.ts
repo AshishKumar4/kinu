@@ -27,7 +27,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Browser, Page } from 'puppeteer';
 
-import { withGallery } from './gallery-harness.ts';
+import { withGallery } from './gallery-harness';
 
 /** One live-tail message, as the browser laid it out. */
 interface TailFrame {

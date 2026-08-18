@@ -1,12 +1,12 @@
 // Step-up gate on the web trigger-creation route (events/routes.ts) —
 // the same isFreshAuthTime rule the CLI webhook route enforces.
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
-import { STEP_UP_WINDOW_MS, isFreshAuthTime } from '../src/auth/session.js';
-import { mockAgentsSdk } from './helpers/agents-sdk.js';
+import { STEP_UP_WINDOW_MS, isFreshAuthTime } from '../src/auth/session';
+import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
-const { handleHubRequest } = await import('../src/events/routes.js');
+const { handleHubRequest } = await import('../src/events/routes');
 
 interface WebhookOptions {
   readonly label: string;

@@ -16,25 +16,25 @@
  */
 
 import type { ModelMessage } from 'ai';
-import { ExtensionHost } from '../extension.js';
-import { DynamicContextLedger } from '../prompting/volatile-context.js';
-import { TurnAccumulator } from '../orchestrator/turn-accumulator.js';
-import { CraftCycle } from '../orchestrator/craft-cycle.js';
-import type { CraftLedger } from '../craft/in-episode.js';
-import { TurnContextBudget } from '../context-budget.js';
-import { TurnFileLedger } from '../tools/file-ledger.js';
-import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry.js';
-import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow.js';
-import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store.js';
-import type { BackendHost } from '../types/backend-host.js';
-import type { ProteusEvent, ReadableProteusEvent } from '../events/hub/types.js';
-import type { LexicalHit } from '../memory/hybrid-search.js';
-import type { ScaffoldArchiveEntry } from '../scaffold/archive.js';
-import type { ParsedSkill } from '../skills/types.js';
-import type { PipelineSubjects } from './subjects.js';
+import { ExtensionHost } from '../extension';
+import { DynamicContextLedger } from '../prompting/volatile-context';
+import { TurnAccumulator } from '../orchestrator/turn-accumulator';
+import { CraftCycle } from '../orchestrator/craft-cycle';
+import type { CraftLedger } from '../craft/in-episode';
+import { TurnContextBudget } from '../context-budget';
+import { TurnFileLedger } from '../tools/file-ledger';
+import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry';
+import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow';
+import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store';
+import type { BackendHost } from '../types/backend-host';
+import type { ProteusEvent, ReadableProteusEvent } from '../events/hub/types';
+import type { LexicalHit } from '../memory/hybrid-search';
+import type { ScaffoldArchiveEntry } from '../scaffold/archive';
+import type { ParsedSkill } from '../skills/types';
+import type { PipelineSubjects } from './subjects';
 import * as v from 'valibot';
-import type { RunEventInput } from '../events/types.js';
-import type { AgentSignal } from '../types/signals.js';
+import type { RunEventInput } from '../events/types';
+import type { AgentSignal } from '../types/signals';
 
 /** A single deterministic observation of the pipeline. Generic over the
  *  subjects record so a dependent package (e.g. @proteus/compaction) can
@@ -1177,16 +1177,19 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'delegation',
-    owns: 'the process evidence a turn leaves behind — how much work was staffed out versus ground through inline',
+    owns: 'the process evidence a turn leaves behind — how much work was delegated out versus ground through inline',
     subjects: ['delegationFeatures', 'renderDelegationFeatures'],
     probes: [
       {
         id: 'delegation/tool-call-counts',
-        asserts: 'staffing / fork / messaging / execute_tools calls are counted by agents action — and legacy tool names — separately from total steps',
+        asserts: 'hiring / fork / messaging / execute_tools calls are counted by agents action — and legacy tool AND action names — separately from total steps',
         observe: (s) => s.delegationFeatures({
           steps: 7,
           durationMs: 95_000,
           toolCalls: [
+            { name: 'agents', args: { action: 'hire' }, result: null },
+            // The pre-2026-08-17 spelling of the same action. A read model over
+            // stored turns must keep counting it, so the probe measures it.
             { name: 'agents', args: { action: 'staff' }, result: null },
             { name: 'team', args: {}, result: null },
             { name: 'agents', args: { action: 'fork' }, result: null },

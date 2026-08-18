@@ -4,7 +4,7 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, usageTotal,
 } from '@proteus/core';
 import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport } from '@proteus/core';
-import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver.js';
+import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver';
 import { asFetchFunction } from '@proteus/core';
 import * as v from 'valibot';
 

@@ -10,11 +10,11 @@
  */
 
 import * as v from 'valibot';
-import type { EventLog } from '../hub/log.js';
-import type { TriggerRegistry } from '../hub/triggers.js';
-import type { TriggerRow, TrustLevel } from '../hub/types.js';
-import { nextCronFire } from '../hub/cron.js';
-import { JsonObjectSchema, type JsonObject } from '../../utils/json.js';
+import type { EventLog } from '../hub/log';
+import type { TriggerRegistry } from '../hub/triggers';
+import type { TriggerRow, TrustLevel } from '../hub/types';
+import { nextCronFire } from '../hub/cron';
+import { JsonObjectSchema, type JsonObject } from '../../utils/json';
 
 export interface TimerTriggerOpts {
   cron?: string;

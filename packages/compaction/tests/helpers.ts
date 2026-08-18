@@ -3,7 +3,7 @@
 import type { AssistantModelMessage, ModelMessage, ToolCallPart, ToolModelMessage, ToolResultPart } from 'ai';
 import type {
   ArchiveIndexStore, ArchiveRange, EnginePorts, Logger, PlanSnapshot, PlanStore, TranscriptStore,
-} from '../src/index.js';
+} from '../src/index';
 
 export function user(text: string): ModelMessage {
   return { role: 'user', content: text };

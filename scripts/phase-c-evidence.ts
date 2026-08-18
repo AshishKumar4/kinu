@@ -20,7 +20,7 @@
 
 import { appendFileSync, writeFileSync } from 'node:fs';
 import * as v from 'valibot';
-import { JsonValueSchema, parseJsonValue, type JsonValue } from '../packages/core/src/index.js';
+import { JsonValueSchema, parseJsonValue, type JsonValue } from '../packages/core/src/index';
 
 const BASE_URL = process.env.PROTEUS_BASE_URL ?? 'http://localhost:5173';
 const AGENT_NAME = 'phase-c-' + Date.now();

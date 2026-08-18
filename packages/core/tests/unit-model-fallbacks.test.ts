@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   ModelCatalogSession, contextWindowForModel, resolvePromptModelProfile,
   type ModelInfo,
-} from '../src/index.ts';
+} from '../src/index';
 
 // These are the FALLBACK paths used when the live models.dev catalog is
 // unreachable (the catalog's reported contextWindow/capabilities always win).

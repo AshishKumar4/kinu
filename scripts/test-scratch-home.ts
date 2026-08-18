@@ -27,7 +27,7 @@
 import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { releaseScratch } from '../packages/test-utils/src/scratch.ts';
+import { releaseScratch } from '../packages/test-utils/src/scratch';
 
 const home = mkdtempSync(join(tmpdir(), 'proteus-test-home-'));
 process.env.PROTEUS_HOME = home;

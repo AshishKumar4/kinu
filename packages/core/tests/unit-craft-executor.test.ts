@@ -10,7 +10,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@proteus/test-utils';
-import { createTestRuntime } from './helpers.js';
+import { createTestRuntime } from './helpers';
 import {
   buildBuiltinTools,
   craftFailureMarker,
@@ -18,7 +18,7 @@ import {
   type CreateExecuteToolFactory,
   type CraftedToolExecute,
   type JsonValue,
-} from '../src/index.js';
+} from '../src/index';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
 

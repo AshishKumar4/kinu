@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { agentDbPath, resolveAgentRef, type AgentMode } from './config.js';
+import { agentDbPath, resolveAgentRef, type AgentMode } from './config';
 
 export interface AgentTarget {
   requestedName: string;

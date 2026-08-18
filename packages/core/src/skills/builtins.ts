@@ -8,8 +8,8 @@
  * result into `BUILTIN_SKILLS`. No magic, no decorators — just an array.
  */
 
-import { parseSkillFile } from './parse.js';
-import type { ParsedSkill } from './types.js';
+import { parseSkillFile } from './parse';
+import type { ParsedSkill } from './types';
 
 // ── audit-implementation ─────────────────────────────────────────
 

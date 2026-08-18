@@ -22,7 +22,7 @@ export {
   type ConformanceRoot,
   type ObservedSurface,
   type RootStatuses,
-} from './manifest.js';
+} from './manifest';
 export {
   compareSurface,
   normalizeObservedTables,
@@ -32,4 +32,4 @@ export {
   type ConformanceFinding,
   type ConformanceFindingKind,
   type ConformanceReport,
-} from './compare.js';
+} from './compare';

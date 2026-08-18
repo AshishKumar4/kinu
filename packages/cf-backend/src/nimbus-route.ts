@@ -1,10 +1,10 @@
 import { Nimbus } from '@nimbus-sh/sdk';
 import { SOUL_PATH, type ArchiveFileSource } from '@proteus/core';
 import { createHash, createHmac } from 'node:crypto';
-import { previewHostSuffix } from './lib/preview-origin.js';
-import { timingSafeEqual } from './lib/crypto.js';
-import { buildNimbusPreviewHost, encodeBase32, parseNimbusPreviewLabel } from './lib/nimbus-preview-host.js';
-import { sanitizePreviewRequestHeaders } from './lib/preview-request.js';
+import { previewHostSuffix } from './lib/preview-origin';
+import { timingSafeEqual } from './lib/crypto';
+import { buildNimbusPreviewHost, encodeBase32, parseNimbusPreviewLabel } from './lib/nimbus-preview-host';
+import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 
 const NIMBUS_SUBJECT = 'workspace';
 

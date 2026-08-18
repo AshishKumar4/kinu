@@ -7,23 +7,23 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { makeSql, makeExecRaw } from './helpers';
 import {
   initTurnOutcomeTables, recordTurnOutcome, recordOutcomeLabels, recordEnsembleLabels,
   ensembleLabels, type OutcomeLabel, type TurnOutcome,
-} from '../src/evolution/outcomes.js';
+} from '../src/evolution/outcomes';
 import {
   buildEnsembleJudgePrompt, describeEnsembleGap, ensembleReport, panelStrata, panelVerdict,
   renderEnsembleReport, runEnsemble, STAND_IN_THRESHOLDS,
   type ComparedTurn, type EnsembleJudge, type EnsemblePanel,
-} from '../src/evolution/ensemble.js';
-import { allocateLabelBudget, renderLabelingFile } from '../src/evolution/calibration.js';
+} from '../src/evolution/ensemble';
+import { allocateLabelBudget, renderLabelingFile } from '../src/evolution/calibration';
 import {
   classifierAccuracy, resampledAccuracy,
   type AccuracyStratum, type ClassifierAccuracy, type PredictionStratum,
-} from '../src/evolution/ppi.js';
-import { seededRandom } from '../src/utils/stats.js';
-import type { LLM } from '../src/types/primitives.js';
+} from '../src/evolution/ppi';
+import { seededRandom } from '../src/utils/stats';
+import type { LLM } from '../src/types/primitives';
 
 type Sql = ReturnType<typeof makeSql>;
 

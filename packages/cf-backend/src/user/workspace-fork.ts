@@ -1,6 +1,6 @@
 import type { ForkSnapshot } from '@proteus/core';
-import type { UserCaller } from './workspace-capability.js';
-import type { WorkspaceEntry } from './user-do.js';
+import type { UserCaller } from './workspace-capability';
+import type { WorkspaceEntry } from './user-do';
 
 export interface CloudForkRegistry {
   reserveWorkspace(

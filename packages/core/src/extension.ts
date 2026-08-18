@@ -17,7 +17,8 @@
  */
 
 import type { ModelMessage, ToolSet } from 'ai';
-import type { JsonObject } from './utils/json.js';
+import type { JsonObject } from './utils/json';
+import { diagnostics, toProteusError } from './obs/index';
 
 export interface TurnStartContext {
   readonly system: string;
@@ -182,9 +183,10 @@ export class ExtensionHost {
           current = next;
         }
       } catch (err) {
-        console.warn(
-          `[proteus] extension "${ext.name}" transformContext failed (skipped):`,
-          err instanceof Error ? err.message : err,
+        diagnostics.failure(
+          'extension.transform_context_failed',
+          toProteusError({ doing: 'run an extension transformContext hook', cause: err, otherwise: 'io' }),
+          { extension: ext.name },
         );
       }
     }

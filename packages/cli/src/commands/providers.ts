@@ -1,9 +1,9 @@
 import { checkClaudeAvailability, checkOpenCodeAvailability } from '@proteus/cli-backend';
-import { deleteCloudCredential, listCloudCredentials, type CloudCredentialSummary } from '../cloud-api.js';
-import { loadConfigFile, resolveCloudSession, updateConfigFile, type ProteusConfig } from '../config.js';
-import { ACCENT, DIM, OK, WARN } from '../display.js';
-import { authCommand } from './auth.js';
-import { setupCommand } from './setup.js';
+import { deleteCloudCredential, listCloudCredentials, type CloudCredentialSummary } from '../cloud-api';
+import { loadConfigFile, resolveCloudSession, updateConfigFile, type ProteusConfig } from '../config';
+import { ACCENT, DIM, OK, WARN } from '../display';
+import { authCommand } from './auth';
+import { setupCommand } from './setup';
 import * as v from 'valibot';
 
 type ProviderAction = 'list' | 'connect' | 'disconnect';

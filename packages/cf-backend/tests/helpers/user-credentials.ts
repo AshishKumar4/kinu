@@ -6,10 +6,10 @@
 // describe the store in its natural shape and this wraps it with a caller —
 // owner-session by default, or a workspace capability token when the test is
 // specifically about attenuation.
-import type { UserCredentialSource } from '../../src/providers/agent-registry.js';
-import type { CredentialSummary } from '../../src/user/user-do.js';
-import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability.js';
-import { TEST_USER_ENV } from './user-do.js';
+import type { UserCredentialSource } from '../../src/providers/agent-registry';
+import type { CredentialSummary } from '../../src/user/user-do';
+import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability';
+import { TEST_USER_ENV } from './user-do';
 
 export type CredentialSummaryDouble = CredentialSummary;
 

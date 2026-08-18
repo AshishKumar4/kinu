@@ -38,16 +38,16 @@
  */
 
 import * as v from 'valibot';
-import type { RawSqlExec, SqlExecutor } from '../../types/primitives.js';
-import { nanoid } from '../../utils/nanoid.js';
-import { nowMs } from '../../utils/date.js';
+import type { RawSqlExec, SqlExecutor } from '../../types/primitives';
+import { nanoid } from '../../utils/nanoid';
+import { nowMs } from '../../utils/date';
 import {
   computeParetoFront,
-} from './pareto.js';
-import { DEFAULT_GEPA_BUDGET } from './types.js';
+} from './pareto';
+import { DEFAULT_GEPA_BUDGET } from './types';
 import type {
   EvalInstance, GepaBudget, GepaCandidate, GepaResult, GepaIterationState,
-} from './types.js';
+} from './types';
 
 const GepaRunStatusSchema = v.picklist(['running', 'completed', 'aborted']);
 const ScoreMapSchema = v.record(v.string(), v.number());

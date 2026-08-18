@@ -37,8 +37,8 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import * as v from 'valibot';
-import { assertMeasured, finding } from './gate-ratchet.ts';
-import { isRunnableSuite, trackedFiles } from './sources.ts';
+import { assertMeasured, finding } from './gate-ratchet';
+import { isRunnableSuite, trackedFiles } from './sources';
 
 const root = new URL('..', import.meta.url).pathname;
 

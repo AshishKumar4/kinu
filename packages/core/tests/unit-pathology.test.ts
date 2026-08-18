@@ -11,8 +11,8 @@ import {
   classifyResponseMode, buildPathologyLabelPrompt,
   type ComplaintClass,
   type PathologyInput,
-} from '../src/evolution/pathology.js';
-import type { LLM } from '../src/types/primitives.js';
+} from '../src/evolution/pathology';
+import type { LLM } from '../src/types/primitives';
 
 function input(over: Partial<PathologyInput>): PathologyInput {
   return {

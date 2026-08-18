@@ -16,14 +16,14 @@ import {
   createMockExecutor,
   createMemorySchedule,
   createMockSession,
-} from './helpers.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { Identity } from '../src/types/primitives.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
-import { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from '../src/scaffold/bootstrap.js';
-import { runMCTS } from '../src/mcts/engine.js';
+} from './helpers';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { Identity } from '../src/types/primitives';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initCraftScoreTables } from '../src/craft/schemas';
+import { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from '../src/scaffold/bootstrap';
+import { runMCTS } from '../src/mcts/engine';
 
 function createFullCLIRuntime() {
   const db = new Database(':memory:');

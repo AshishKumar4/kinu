@@ -10,21 +10,21 @@ import {
   LONGHORIZON_ANSWER_FILE, buildLongHorizonQuestions, decodeLongHorizonSpec,
   encodeLongHorizonSpec, parseJsonValue, renderLongHorizonAnswerFile, SealedSplit, splitOf,
   type AttemptOutcome, type BenchTask, type JsonValue,
-} from '../packages/core/src/index.js';
-import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, panelArm, panelProviders, parseArgv, parseCommon } from './bench.js';
-import { BENCH_SUITES, loadBenchCorpus } from './bench-corpus.js';
-import { loadLongHorizonCorpus, materializeLongHorizon } from './bench-longhorizon.js';
-import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox.js';
+} from '../packages/core/src/index';
+import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, panelArm, panelProviders, parseArgv, parseCommon } from './bench';
+import { BENCH_SUITES, loadBenchCorpus } from './bench-corpus';
+import { loadLongHorizonCorpus, materializeLongHorizon } from './bench-longhorizon';
+import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox';
 import {
   VALIDATION_DIAGNOSTICS_FILE, loadValidationDiagnostics, runValidation,
-} from './bench-validation.js';
+} from './bench-validation';
 import {
   ARTIFACT_DIRNAME, assertDurableArtifactRoot, openRunRetention, readGitIdentity,
   readRetainedAttempts, resolveArtifactRoot,
-} from './bench-retention.js';
+} from './bench-retention';
 import { gitEnv } from '@proteus/test-utils';
-import { parseAgentWorkerInput, parseWorkerOutput } from './bench-worker-protocol.js';
-import { buildPilotReport, validatePilotReport } from './bench-pilot.js';
+import { parseAgentWorkerInput, parseWorkerOutput } from './bench-worker-protocol';
+import { buildPilotReport, validatePilotReport } from './bench-pilot';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const scratch: string[] = [];

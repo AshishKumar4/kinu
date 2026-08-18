@@ -13,9 +13,9 @@
 // platform with no fenced DO callback (Queues/alarms are at-least-once) this
 // epoch check IS the fence.
 
-import { reconcileColumns } from '../identity/columns.js';
-import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
-import type { WorkMode } from '../prompting/surface.js';
+import { reconcileColumns } from '../identity/columns';
+import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import type { WorkMode } from '../prompting/surface';
 
 export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 

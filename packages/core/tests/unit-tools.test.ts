@@ -26,7 +26,7 @@ import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@proteus/test-utils';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime } from './helpers.js';
+import { createTestRuntime } from './helpers';
 import {
   buildBuiltinTools,
   BUILTIN_TOOLS,
@@ -50,7 +50,8 @@ import {
   type TeamToolDeps,
   type AgentRuntime,
   TurnEscalationLedger,
-} from '../src/index.js';
+} from '../src/index';
+import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 
 interface RecordedReleaseCheck {
   changeId: string;
@@ -158,6 +159,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       phase: { busy: false, lastActivityAt: null, workingOn: null },
     };
     const stubTeam: TeamToolDeps = {
+      delegation: ROOT_DELEGATION_BUDGET,
       list: async () => [],
       create: async () => ({
         name: 's',

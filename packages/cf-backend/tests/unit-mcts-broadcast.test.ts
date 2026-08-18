@@ -18,7 +18,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { orchestratorHarness } from './helpers/actor-harness.js';
+import { orchestratorHarness } from './helpers/actor-harness';
 
 interface Broadcast {
   type: string; rootId: string; phase: string;

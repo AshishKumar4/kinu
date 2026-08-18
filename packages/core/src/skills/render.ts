@@ -22,8 +22,8 @@
  * tool is suddenly missing.
  */
 
-import type { ParsedSkill, ActiveSkillSet, ActivationReason } from './types.js';
-import { skillPath } from './discover.js';
+import type { ParsedSkill, ActiveSkillSet, ActivationReason } from './types';
+import { skillPath } from './discover';
 
 /** Char cap shared by all active skill bodies in one prompt. Skill bodies are
  *  agent-authored and uncapped at the store, so without this a single big

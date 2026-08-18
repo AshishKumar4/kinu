@@ -2,11 +2,11 @@
 // the picture (which line the search paid for, how big a node is, what a label
 // says, which branches are foldable) without a DOM to render them into.
 import { describe, test, expect } from 'bun:test';
-import type { ForkNode } from '../src/lib/protocol.js';
+import type { ForkNode } from '../src/lib/protocol';
 import {
   ancestorIds, cleanNodeLabel, findForkNode, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX,
   NODE_R_MIN, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats, truncate,
-} from '../src/components/fork-tree-model.js';
+} from '../src/components/fork-tree-model';
 
 let seq = 0;
 function node(over: Partial<ForkNode> = {}): ForkNode {

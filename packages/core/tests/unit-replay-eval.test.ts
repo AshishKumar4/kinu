@@ -4,14 +4,14 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw, createMockLLM, createTestRuntime } from './helpers.js';
-import { initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes.js';
-import { initReplayTables, runReplayEval, listReplayEvals } from '../src/evolution/replay.js';
-import { wilsonInterval } from '../src/utils/stats.js';
-import { EvolutionEngine } from '../src/evolution/engine.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
+import { makeSql, makeExecRaw, createMockLLM, createTestRuntime } from './helpers';
+import { initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
+import { initReplayTables, runReplayEval, listReplayEvals } from '../src/evolution/replay';
+import { wilsonInterval } from '../src/utils/stats';
+import { EvolutionEngine } from '../src/evolution/engine';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initCraftScoreTables } from '../src/craft/schemas';
 
 function setup() {
   const db = new Database(':memory:');

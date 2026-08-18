@@ -12,7 +12,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
-import { TestLanguageModelV2 } from './test-language-model.js';
+import { TestLanguageModelV2 } from './test-language-model';
 import type {
   LanguageModelV2CallOptions,
   LanguageModelV2Usage,
@@ -26,11 +26,11 @@ import {
   type ModelCallSink,
   createAgentSelfProvider,
 } from '@proteus/core';
-import { createCLIRuntime } from '../src/runtime.js';
-import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session.js';
-import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver.js';
-import { createNodeExecuteToolFactory } from '../src/execute-tools-factory.js';
-import { discoverAgentsMd } from '../src/agents-md.js';
+import { createCLIRuntime } from '../src/runtime';
+import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
+import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
+import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
+import { discoverAgentsMd } from '../src/agents-md';
 import * as v from 'valibot';
 
 /** The resolver members these tests do not exercise — spelled out once so a
@@ -1359,13 +1359,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fq', 'bg:think', '{"phase":"running","jobId":"bgjob-quiet","kind":"think"}', 1)`);
     await session.recoverBackgroundJobs();
 
-    const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); };
+    const stderrLines: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => { stderrLines.push(args.map(String).join(' ')); };
     try {
       await session.settleBackgroundWork();
     } finally {
-      console.warn = originalWarn;
+      console.error = originalError;
     }
 
     const notice = events.find((e) => e.type === 'evolution' && e.event === 'bg_jobs_abandoned');
@@ -1378,7 +1378,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // The event stream alone is not enough: `proteus exec`'s human renderer
     // drops evolution events, so the operator has to hear it on stderr — the
     // one channel every surface shows and no NDJSON consumer parses.
-    expect(warnings.some((line) => line.includes('bgjob-quiet'))).toBe(true);
+    expect(stderrLines.some((line) => line.includes('bgjob-quiet'))).toBe(true);
   });
 
   test('end() releases the session when a fiber will never settle', async () => {
@@ -2915,10 +2915,10 @@ describe('agents.* codemode namespace — node sandbox', () => {
   test('ungated actions are structurally absent from the local sandbox', async () => {
     const { deps } = scriptedFork();
     const result = await sandboxWith(deps)(
-      'return { members: Object.keys(agents), staff: typeof agents.staff, fork: typeof agents.fork };',
+      'return { members: Object.keys(agents), hire: typeof agents.hire, fork: typeof agents.fork };',
     );
-    // Local sessions wire fork only — no daemon routes staffing or peer mail.
-    expect(result).toEqual({ result: { members: ['fork'], staff: 'undefined', fork: 'function' } });
+    // Local sessions wire fork only — no daemon routes hiring or peer mail.
+    expect(result).toEqual({ result: { members: ['fork'], hire: 'undefined', fork: 'function' } });
   });
 
   test('a live session turn gets the namespace, gated to what it actually wired', async () => {
@@ -2927,16 +2927,16 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // workspace, which is how sandbox code returns anything durable anyway.
     const { rt, session, events } = setup('done', executeToolsModel(`
       await workspace.writeFile('/workspace/probe/agents.json', JSON.stringify({
-        members: Object.keys(agents), fork: typeof agents.fork, staff: typeof agents.staff,
+        members: Object.keys(agents), fork: typeof agents.fork, hire: typeof agents.hire,
       }));
       return 'probed';
     `));
     await session.send('what can you delegate to?');
     expect(events.some((e) => e.type === 'tool-result' && e.toolName === 'execute_tools' && e.success)).toBe(true);
-    // Local sessions wire fork only — no daemon routes staffing or peer mail.
+    // Local sessions wire fork only — no daemon routes hiring or peer mail.
     const probe = await rt.storage.vfs.readFile('/workspace/probe/agents.json', { encoding: 'utf8' });
     expect(JSON.parse(String(probe))).toEqual({
-      members: ['fork'], fork: 'function', staff: 'undefined',
+      members: ['fork'], fork: 'function', hire: 'undefined',
     });
     await session.end();
   });

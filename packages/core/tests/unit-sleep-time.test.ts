@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { runSleepTimeCompute, applySleepTimeUpdate } from '../src/index.ts';
+import { runSleepTimeCompute, applySleepTimeUpdate } from '../src/index';
 import { createTestFactsStore, createJSONLLM, createScriptedLLM } from '@proteus/test-utils';
 
 describe('Sleep-time compute', () => {

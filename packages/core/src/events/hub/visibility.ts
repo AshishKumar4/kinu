@@ -23,12 +23,12 @@
 
 import { createHash, createHmac } from 'node:crypto';
 import * as v from 'valibot';
-import { evidenceWindow } from '../../prompts/evidence-window.js';
-import type { PayloadPolicy, ProteusEvent } from './types.js';
+import { evidenceWindow } from '../../prompts/evidence-window';
+import type { PayloadPolicy, ProteusEvent } from './types';
 import {
   isJsonObject, JsonObjectSchema, parseJsonValue,
   type JsonObject, type JsonValue,
-} from '../../utils/json.js';
+} from '../../utils/json';
 
 // ── Secret-shape heuristics for `redact` ─────────────────────────
 

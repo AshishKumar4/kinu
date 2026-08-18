@@ -1,17 +1,17 @@
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { testOwner } from './helpers/user-do.js';
+import { testOwner } from './helpers/user-do';
 import { generateText } from 'ai';
 import { createMockFetch } from '@proteus/test-utils';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { OwnedModelServices } from '../src/owned-model-services.ts';
+import { OwnedModelServices } from '../src/owned-model-services';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
 import type { LanguageModel } from 'ai';
-import type { CredentialHeaders } from '../src/user/credential-headers.js';
-import type { UserCaller } from '../src/user/workspace-capability.js';
-import { platformGatewayEnv } from './helpers/platform-gateway.js';
+import type { CredentialHeaders } from '../src/user/credential-headers';
+import type { UserCaller } from '../src/user/workspace-capability';
+import { platformGatewayEnv } from './helpers/platform-gateway';
 import type { ProviderEnv } from '@proteus/core';
 
 /** `LanguageModel` is `string | LanguageModelV3`; a resolver hands back the

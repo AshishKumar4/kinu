@@ -20,9 +20,9 @@
  * prefix their only writer stamps (`STEER_BRANCH_RUN_ID_PREFIX`).
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import { seekPage, StaleCursorError, type Page, type SeekCursor } from './page.js';
-import { STEER_BRANCH_RUN_ID_PREFIX } from '../steer-branch.js';
+import type { SqlExecutor } from '../types/primitives';
+import { seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
+import { STEER_BRANCH_RUN_ID_PREFIX } from '../steer-branch';
 
 /** How the fork settled: `merged` synthesised its heads, `competed` scored
  *  branches against each other and kept a winner. */

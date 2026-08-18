@@ -13,8 +13,8 @@ import { createTestSql } from "@proteus/test-utils";
 
 // @cloudflare/codemode (the DWE import) needs the workerd-only module.
 mock.module("cloudflare:workers", () => ({ RpcTarget: class {}, WorkerEntrypoint: class {}, DurableObject: class {} }));
-const { selectInjectableCraftedTools, buildToolsPreamble, injectPreamble } = await import("../src/crafted-tool-registry.js");
-const { craftedDispatcherEntry } = await import("../src/execute-tools.js");
+const { selectInjectableCraftedTools, buildToolsPreamble, injectPreamble } = await import("../src/crafted-tool-registry");
+const { craftedDispatcherEntry } = await import("../src/execute-tools");
 
 function makeCraftStore(tools: Array<{ name: string; code: string; description?: string }>): CraftStore {
   const rows: CraftedTool[] = tools.map((t) => ({

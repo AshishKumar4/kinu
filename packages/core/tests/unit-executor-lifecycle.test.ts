@@ -6,7 +6,7 @@ import {
   isSandboxTransientError,
   type NimbusSandboxHandle,
   type SandboxHandle,
-} from "../src/index.ts";
+} from "../src/index";
 
 function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknown[] } {
   const calls: string[] = [];

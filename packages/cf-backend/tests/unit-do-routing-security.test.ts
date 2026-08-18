@@ -5,8 +5,8 @@ import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath,
-} from '../src/agent-routing.js';
-import { deriveUserId } from '../src/auth/session.js';
+} from '../src/agent-routing';
+import { deriveUserId } from '../src/auth/session';
 
 /**
  * F1 account-takeover regression.
@@ -135,12 +135,25 @@ describe('F1 defense 2 — @callable surface reduction (worker-side stubs preser
     for (const m of [
       'rawCopyFromFork', 'claimOwner', 'acceptWebhookDelivery', 'acceptEmailDelivery',
       'receivePeerMessage', 'listPeersFromMcp', 'runTaskFromMcp', 'saveNoteFromMcp', 'sendPeerFromMcp',
-      // Installs this workspace's proof of identity to the owner's UserDO — a
-      // browser socket must never reach it.
-      'installWorkspaceCapability',
     ]) {
       expect(src).not.toContain(`@callable()\n  async ${m}`);
       expect(src).toContain(`async ${m}(`);
     }
+  });
+
+  test('the same holds for the privileged methods every actor carries', () => {
+    // `installWorkspaceCapability` installs this workspace's proof of identity to
+    // the owner's UserDO — a browser socket must never reach it. It is declared
+    // once on ActorAgent (the orchestrator's override folded into it when the
+    // capability push became recursive down a subordinate tree), so both roots
+    // get the one implementation and the one exposure decision. The two
+    // subordinate-tree calls moved the same way and for the same reason: a
+    // subordinate is now the parent in that relationship too.
+    const src = source('src/actor-agent.ts');
+    for (const m of ['installWorkspaceCapability', 'getSubordinateBootstrapIdentity', 'receiveSubordinateEvent']) {
+      expect(src).not.toContain(`@callable()\n  async ${m}`);
+      expect(src).toContain(`async ${m}(`);
+    }
+    expect(source('src/orchestrator.ts')).not.toContain('installWorkspaceCapability(token: string)');
   });
 });

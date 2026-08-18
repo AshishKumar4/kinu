@@ -14,6 +14,12 @@ import {
   spillEventContent,
   SubordinateIdentityStore,
   SubordinateRosterStore,
+  DELEGATION_MAX_DEPTH,
+  ROOT_DELEGATION_BUDGET,
+  delegationBudgetAtDepth,
+  delegationDepthRefusal,
+  delegationExhausted,
+  deriveChildDelegationBudget,
   admitSubordinateReport,
   admitSubordinateTask,
   createTeamToolDeps,
@@ -33,12 +39,20 @@ import {
   type SubordinateRosterEntry,
   type SubordinateRuntime,
   type ProteusEvent,
-} from '../src/index.js';
+} from '../src/index';
+import { CODE_IS_REFUSAL } from '../src/obs/index';
 import { createMemoryVfs } from '@proteus/test-utils';
-import { makeSqlExec } from './helpers.js';
+import { makeSql as makeTagged, makeSqlExec } from './helpers';
 
 function makeSql(): SqlExec {
   return makeSqlExec(new Database(':memory:'));
+}
+
+/** One in-memory database as BOTH sql primitives — what
+ *  SubordinateIdentityStore needs, since `reconcileColumns` asks
+ *  `pragma_table_info` through the tagged-template form. */
+function makeIdentityStore(db: Database = new Database(':memory:')): SubordinateIdentityStore {
+  return new SubordinateIdentityStore(makeSqlExec(db), makeTagged(db));
 }
 
 function reportPayload(event: ProteusEvent | undefined): SubordinateReportPayload {
@@ -60,11 +74,12 @@ const identityInput = {
   mission: 'Map the market.',
   parentWorkspace: 'proteus-main',
   ownerUserId: 'owner-123',
+  depth: 1,
 };
 
 describe('subordinate identity', () => {
   test('seed is immutable while allowing an identical parent retry', () => {
-    const identity = new SubordinateIdentityStore(makeSql());
+    const identity = makeIdentityStore();
     identity.ensureSchema();
 
     identity.seed(identityInput);
@@ -76,6 +91,104 @@ describe('subordinate identity', () => {
     expect(() => identity.seed({ ...identityInput, ownerUserId: 'attacker' }))
       .toThrow('already initialized');
     expect(identity.read()).toEqual(identityInput);
+  });
+
+  // The depth is what the cap is enforced FROM, so retargeting it must be
+  // refused exactly as retargeting the owner is: a subordinate that could
+  // re-seed itself shallower would hand itself a fresh subtree.
+  test('depth is part of the immutable identity, not a settable field', () => {
+    const identity = makeIdentityStore();
+    identity.ensureSchema();
+    identity.seed({ ...identityInput, depth: 3 });
+
+    expect(() => identity.seed({ ...identityInput, depth: 1 }))
+      .toThrow('already initialized');
+    expect(identity.read()?.depth).toBe(3);
+  });
+
+  // The correctness floor: a Durable Object is evicted routinely, so a depth
+  // held in memory would reset on resume and let a woken subordinate rebuild the
+  // whole tree beneath itself. A SECOND store over the SAME database is exactly
+  // what a resumed facet does — a fresh instance, no in-memory state.
+  test('depth survives a resume: a fresh store over the same storage reads it back', () => {
+    const db = new Database(':memory:');
+    const first = makeIdentityStore(db);
+    first.ensureSchema();
+    first.seed({ ...identityInput, depth: 3 });
+    expect(first.delegationBudget()).toEqual({ depth: 3, maxDepth: 1 });
+
+    const resumed = makeIdentityStore(db);
+    resumed.ensureSchema();
+    expect(resumed.read()?.depth).toBe(3);
+    expect(resumed.delegationBudget()).toEqual({ depth: 3, maxDepth: 1 });
+  });
+
+  // Fail CLOSED. "Nobody has told me where I am" must not come out as "I am the
+  // root" — that is the resumed-child bug with an unseeded facet in place of a
+  // stale option.
+  test('an unseeded facet reads as exhausted rather than as the root', () => {
+    const identity = makeIdentityStore();
+    identity.ensureSchema();
+    expect(identity.read()).toBeNull();
+    expect(identity.delegationBudget().maxDepth).toBe(0);
+    expect(delegationExhausted(identity.delegationBudget())).toBe(true);
+  });
+
+  // A row written before nesting existed carries no depth column. Its true depth
+  // is 1 — every subordinate that could exist then was hired by the orchestrator.
+  test('a pre-nesting row reconciles to depth 1, its actual place in the tree', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE subordinate_identity (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      name TEXT NOT NULL, display_name TEXT NOT NULL, role TEXT NOT NULL,
+      mission TEXT NOT NULL, parent_workspace TEXT NOT NULL, owner_user_id TEXT NOT NULL
+    )`);
+    db.exec(`INSERT INTO subordinate_identity VALUES (1, 'researcher', 'Researcher',
+      'market researcher', 'Map the market.', 'proteus-main', 'owner-123')`);
+
+    const identity = makeIdentityStore(db);
+    identity.ensureSchema();
+
+    expect(identity.read()).toEqual(identityInput);
+    expect(identity.delegationBudget()).toEqual({ depth: 1, maxDepth: 3 });
+  });
+});
+
+describe('the delegation depth cap', () => {
+  // Derivation, not a guard: the child's numbers are a function of the parent's,
+  // which is the HeadController shape (heads/types.ts deriveChildBudget).
+  test('a child budget is derived from its parent and runs out at the cap', () => {
+    expect(DELEGATION_MAX_DEPTH).toBe(4);
+    let budget = ROOT_DELEGATION_BUDGET;
+    expect(budget).toEqual({ depth: 0, maxDepth: 4 });
+
+    const chain = [budget];
+    for (let i = 0; i < 4; i += 1) {
+      expect(delegationExhausted(budget)).toBe(false);
+      budget = deriveChildDelegationBudget(budget);
+      chain.push(budget);
+    }
+    // Depth 4 exists and is the deepest that can: it has no room below it.
+    expect(chain.map((b) => b.depth)).toEqual([0, 1, 2, 3, 4]);
+    expect(chain.map((b) => b.maxDepth)).toEqual([4, 3, 2, 1, 0]);
+    expect(delegationExhausted(budget)).toBe(true);
+  });
+
+  test('the refusal names the depth reached and classifies as a refusal, not a defect', () => {
+    const atCap = delegationBudgetAtDepth(4);
+    const refusal = delegationDepthRefusal(atCap);
+    expect(refusal.reason).toBe('denied');
+    expect(CODE_IS_REFUSAL[refusal.reason]).toBe(true);
+    expect(refusal.error).toContain('depth 4');
+    expect(refusal.error).toContain('depth 5');
+    // Names the move that IS available, which "denied" alone cannot.
+    expect(refusal.error).toContain('fork');
+  });
+
+  // A row from a future, larger cap must not read as room. Clamping means a
+  // stored depth can only ever make an actor MORE restricted than this code.
+  test('a depth past the cap clamps to no room rather than to negative room', () => {
+    expect(delegationBudgetAtDepth(9)).toEqual({ depth: 9, maxDepth: 0 });
   });
 });
 const initialRosterEntry: SubordinateRosterEntry = {
@@ -216,6 +329,7 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
     async dismiss(name, keepHistory) { calls.push(`dismiss:${name}:${keepHistory}`); fail('dismiss'); },
   };
   const team = createTeamToolDeps({
+    delegation: ROOT_DELEGATION_BUDGET,
     roster,
     runtime,
     createName: () => 'researcher-a1b2c3',
@@ -413,6 +527,7 @@ describe('team action routing', () => {
       async dismiss(name) { observed.push({ operation: 'dismiss', roster: roster.get(name) }); },
     };
     const team = createTeamToolDeps({
+      delegation: ROOT_DELEGATION_BUDGET,
       roster,
       runtime,
       createName: () => 'researcher-a1b2c3',

@@ -7,12 +7,12 @@
 // stable while new strategies (ToT, GoT, Reflexion, RLM-on-subtask) drop in as
 // registry entries — no tool/UI/orchestrator changes.
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { MissionScope } from '../mission-budget.js';
-import type { ModelCallSink } from '../events/model-call.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { MissionScope } from '../mission-budget';
+import type { ModelCallSink } from '../events/model-call';
 import type { LanguageModel } from 'ai';
-import type { WorkMode } from '../prompting/surface.js';
-import type { JsonValue } from '../utils/json.js';
+import type { WorkMode } from '../prompting/surface';
+import type { JsonValue } from '../utils/json';
 
 export type StrategyOptionValue = JsonValue | object;
 export interface BuiltinStrategyOptions {

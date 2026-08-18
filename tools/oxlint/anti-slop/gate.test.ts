@@ -23,9 +23,11 @@ const expectedRules = [
   "anti-slop/no-unknown-returns",
   "anti-slop/no-unknown-type-aliases",
   "anti-slop/no-unsafe-dictionary-type",
+  "anti-slop/no-untyped-console",
   "anti-slop/no-wait-until-in-durable-object",
   "anti-slop/no-widen-then-assert",
   "anti-slop/require-cause-on-rethrow",
+  "anti-slop/require-runtime-import-extension",
   "anti-slop/require-safety-comment-for-type-assertion",
 ];
 

@@ -6,7 +6,7 @@ import { describe, test, expect, afterEach } from 'bun:test';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readCgroupLimits } from '../src/cgroup-limits.js';
+import { readCgroupLimits } from '../src/cgroup-limits';
 
 const roots: string[] = [];
 

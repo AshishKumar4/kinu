@@ -12,17 +12,23 @@
  */
 
 import * as v from 'valibot';
-import type { EventLog, PublishResult } from '../events/hub/log.js';
-import type { SubordinateReportStatus } from '../events/hub/types.js';
-import type { SerializedMessage } from '../heads/types.js';
-import type { SqlExec } from '../types/primitives.js';
-import type { WorkMode } from '../prompting/surface.js';
+import type { EventLog, PublishResult } from '../events/hub/log';
+import type { SubordinateReportStatus } from '../events/hub/types';
+import type { SerializedMessage } from '../heads/types';
+import type { SqlExec, SqlExecutor } from '../types/primitives';
+import { reconcileColumns } from '../identity/columns';
+import {
+  DELEGATION_MAX_DEPTH,
+  delegationBudgetAtDepth,
+  type DelegationBudget,
+} from './depth';
+import type { WorkMode } from '../prompting/surface';
 import type {
   SubordinateHandoff,
   SubordinateRosterEntry,
   SubordinateStatus,
   TeamToolDeps,
-} from '../tools/agents-tool.js';
+} from '../tools/agents-tool';
 
 export interface SubordinateLiveStatus {
   lastActivity: number | null;
@@ -69,8 +75,28 @@ export interface SubordinateIdentity {
   displayName: string;
   role: string;
   mission: string;
+  /** The WORKSPACE this subordinate belongs to — its exec planes, credentials
+   *  and capability all present this name. Inherited unchanged down a nested
+   *  tree, so it is never the immediate parent's name past depth 1. */
   parentWorkspace: string;
   ownerUserId: string;
+  /**
+   * Where this subordinate sits in its workspace's tree: 1 = hired by the
+   * orchestrator, 2 = hired by one of those, and so on.
+   *
+   * DURABLE on purpose, and it is the reason the depth cap is a cap at all. The
+   * number is computed by the PARENT (deriveChildDelegationBudget) and written
+   * here at seeding; nothing the child sends can set it. Because it is stored
+   * rather than held in memory, an evicted subordinate that is later resumed
+   * reconstructs the same depth instead of re-entering the tree at 0 and
+   * rebuilding it beneath itself — the exact failure the deepseek harness needs
+   * its `max(header.delegationDepth, options.subagentDepth)` floor for
+   * (subagent/src/depth.ts:26-37: "a resumed child arrives with fresh options,
+   * and counting it from zero would let it delegate as if it were top-level").
+   * On a Durable Object eviction is routine, so an in-memory depth would make
+   * the cap hold only for trees that never sleep.
+   */
+  depth: number;
 }
 
 interface IdentityRow {
@@ -80,6 +106,7 @@ interface IdentityRow {
   mission: string;
   parent_workspace: string;
   owner_user_id: string;
+  depth: number;
 }
 
 const IdentityRowSchema: v.GenericSchema<IdentityRow> = v.object({
@@ -89,6 +116,7 @@ const IdentityRowSchema: v.GenericSchema<IdentityRow> = v.object({
   mission: v.string(),
   parent_workspace: v.string(),
   owner_user_id: v.string(),
+  depth: v.number(),
 });
 
 function parseIdentityRow<T>(row: T): IdentityRow | null {
@@ -104,6 +132,7 @@ function mapIdentityRow(row: IdentityRow): SubordinateIdentity {
     mission: row.mission,
     parentWorkspace: row.parent_workspace,
     ownerUserId: row.owner_user_id,
+    depth: row.depth,
   };
 }
 
@@ -113,14 +142,19 @@ function identitiesEqual(a: SubordinateIdentity, b: SubordinateIdentity): boolea
     && a.role === b.role
     && a.mission === b.mission
     && a.parentWorkspace === b.parentWorkspace
-    && a.ownerUserId === b.ownerUserId;
+    && a.ownerUserId === b.ownerUserId
+    && a.depth === b.depth;
 }
 
 /** Immutable facet identity. The parent may retry the exact seed after an RPC
  * interruption, but no caller can retarget an initialized facet to another
- * workspace or owner. */
+ * workspace, owner or DEPTH. */
 export class SubordinateIdentityStore {
-  constructor(private readonly sql: SqlExec) {}
+  /** `tagged` is the same storage as `sql` in the tagged-template form
+   *  `reconcileColumns` needs — it binds the table name into
+   *  `pragma_table_info` rather than adding a column and swallowing the
+   *  duplicate-column error. */
+  constructor(private readonly sql: SqlExec, private readonly tagged: SqlExecutor) {}
 
   ensureSchema(): void {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS subordinate_identity (
@@ -130,8 +164,15 @@ export class SubordinateIdentityStore {
       role             TEXT NOT NULL,
       mission          TEXT NOT NULL,
       parent_workspace TEXT NOT NULL,
-      owner_user_id    TEXT NOT NULL
+      owner_user_id    TEXT NOT NULL,
+      depth            INTEGER NOT NULL DEFAULT 1
     )`);
+    // Every subordinate that existed before nesting was possible was hired by
+    // the workspace orchestrator, so 1 is that row's TRUE depth rather than a
+    // compatibility guess.
+    reconcileColumns(this.tagged, (ddl) => { this.sql.exec(ddl); }, 'subordinate_identity', {
+      depth: 'INTEGER NOT NULL DEFAULT 1',
+    });
   }
 
   seed(identity: SubordinateIdentity): void {
@@ -142,20 +183,21 @@ export class SubordinateIdentityStore {
     }
     this.sql.exec(
       `INSERT INTO subordinate_identity
-         (id, name, display_name, role, mission, parent_workspace, owner_user_id)
-       VALUES (1, ?, ?, ?, ?, ?, ?)`,
+         (id, name, display_name, role, mission, parent_workspace, owner_user_id, depth)
+       VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
       identity.name,
       identity.displayName,
       identity.role,
       identity.mission,
       identity.parentWorkspace,
       identity.ownerUserId,
+      identity.depth,
     );
   }
 
   read(): SubordinateIdentity | null {
     const rows = this.sql.exec(
-      `SELECT name, display_name, role, mission, parent_workspace, owner_user_id
+      `SELECT name, display_name, role, mission, parent_workspace, owner_user_id, depth
        FROM subordinate_identity WHERE id = 1`,
     ).toArray();
     if (rows.length === 0) return null;
@@ -170,6 +212,20 @@ export class SubordinateIdentityStore {
 
   workspaceName(): string | null {
     return this.read()?.parentWorkspace ?? null;
+  }
+
+  /**
+   * This subordinate's delegation budget, read from storage on every call.
+   *
+   * Fails CLOSED on an unseeded facet: no identity row means nothing has told
+   * this actor where it is, and the honest answer to "how much tree may you
+   * build" is none. Defaulting to depth 0 would hand an unseeded facet the
+   * orchestrator's own budget, which is precisely the resumed-child bug one
+   * level over.
+   */
+  delegationBudget(): DelegationBudget {
+    const identity = this.read();
+    return delegationBudgetAtDepth(identity?.depth ?? DELEGATION_MAX_DEPTH);
   }
 }
 
@@ -378,7 +434,7 @@ function optionalText(value: string | undefined): string | undefined {
 
 // 4x the original keyhole (2400/500), the same uniform multiple the evidence
 // window applied everywhere else: a subordinate's whole view of why it was
-// staffed should not be one screen of head-only fragments.
+// hired should not be one screen of head-only fragments.
 const SUBORDINATE_CONTEXT_MAX_CHARS = 9_600;
 const SUBORDINATE_CONTEXT_MAX_MESSAGES = 8;
 const SUBORDINATE_CONTEXT_MESSAGE_MAX_CHARS = 2_000;
@@ -699,6 +755,9 @@ interface SubordinateStatusView {
  * user RPCs. Roster transitions happen before facet admission and are restored
  * exactly if admission fails. Broadcasts happen only after both sides settle. */
 export function createTeamToolDeps(deps: {
+  /** The hiring actor's own place in the tree — derived by ITS parent, never
+   *  chosen here. */
+  delegation: DelegationBudget;
   roster: SubordinateRosterStore;
   runtime: SubordinateRuntime;
   createName(role: string): string;
@@ -781,6 +840,8 @@ export function createTeamToolDeps(deps: {
   };
 
   return {
+    delegation: deps.delegation,
+
     list: async () => deps.roster.list(),
 
     create: async (input) => {

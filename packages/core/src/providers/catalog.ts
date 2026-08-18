@@ -12,14 +12,14 @@
 // models.dev catalog inside customFetch, alongside the credential headers.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import type { DynamicProviderSource } from './registry.js';
-import type { ModelProvider, ProviderDeps } from './types.js';
-import { createAuthedFetch } from './util.js';
+import type { DynamicProviderSource } from './registry';
+import type { ModelProvider, ProviderDeps } from './types';
+import { createAuthedFetch } from './util';
 import {
   getModelsDevProvider,
   listModelsDevProviderModels,
   modelsDevCompatBaseURL,
-} from './models-dev.js';
+} from './models-dev';
 
 /** Catalog provider ids must look like models.dev ids — this also rejects
  *  malformed specs early in canResolve()/resolve(). */

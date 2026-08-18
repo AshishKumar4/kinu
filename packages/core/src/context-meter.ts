@@ -28,8 +28,8 @@
 
 import type { ModelMessage, SystemModelMessage } from 'ai';
 import * as v from 'valibot';
-import { CHARS_PER_TOKEN } from './llm.js';
-import { DYNAMIC_CONTEXT_OPEN_TAG, splitPromptSections } from './prompting/sections.js';
+import { CHARS_PER_TOKEN } from './llm';
+import { DYNAMIC_CONTEXT_OPEN_TAG, splitPromptSections } from './prompting/sections';
 
 /** The four planes that fill a request. Kept coarse on purpose: these are the
  *  four things an operator can actually act on (trim the prompt, drop a tool,

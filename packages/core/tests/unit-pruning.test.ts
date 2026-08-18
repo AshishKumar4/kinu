@@ -9,10 +9,10 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime } from './helpers.js';
-import { pruneLowValueBranches } from '../src/mcts/pruning.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
+import { createTestRuntime } from './helpers';
+import { pruneLowValueBranches } from '../src/mcts/pruning';
+import { initSearchTables } from '../src/mcts/schemas';
+import type { AgentRuntime } from '../src/types/agent-runtime';
 
 function setup() {
   const { rt: base, db } = createTestRuntime();

@@ -42,11 +42,11 @@ import {
   type SessionMessage,
   type SessionWriter,
   type StrategyRegistry,
-} from '../../packages/core/src/index.js';
-import { createWorkspace } from '../../packages/core/src/identity/index.js';
-import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
-import { makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
-import { requireSandboxedExecutors } from './harness.js';
+} from '../../packages/core/src/index';
+import { createWorkspace } from '../../packages/core/src/identity/index';
+import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
+import { makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
+import { requireSandboxedExecutors } from './harness';
 import {
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend,
   scoreExploration, scoreSettleVisibility, UNCONFIGURED_LLM,

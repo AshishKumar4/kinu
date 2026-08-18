@@ -28,7 +28,7 @@ import {
   ACTIVE_SKILLS_MAX_CHARS,
   SkillError, SKILLS_DIR,
   type SkillsVfs, type ParsedSkill,
-} from './index.js';
+} from './index';
 
 // ── In-memory SkillsVfs fixture ──────────────────────────────────
 

@@ -3,10 +3,10 @@ import {
   DEFAULT_ATTEMPT_BUDGET, GAIN_CALIBRATION, attemptPassed, benchConfigHash,
   buildBenchReport, buildGainReport, caseIsUnstable, decideBenchOutcome,
   pairedBinaryComparison, renderBenchSummary, renderGainSummary, runOrder, usageTokens,
-} from '../src/index.ts';
+} from '../src/index';
 import type {
   AttemptOutcome, BenchRunConfig, PairedOutcome, SealedScorecard,
-} from '../src/index.ts';
+} from '../src/index';
 
 const CONFIG: BenchRunConfig = {
   corpus: 'tests/bench/tasks.jsonl',

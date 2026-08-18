@@ -40,8 +40,8 @@
  */
 
 import * as v from 'valibot';
-import { tolerate } from '../obs/index.js';
-import { parseJsonValue } from '../utils/json.js';
+import { refusalOf, tolerate, type ProteusError } from '../obs/index';
+import { parseJsonValue } from '../utils/json';
 
 const ErrorResultSchema = v.object({ error: v.string() });
 
@@ -57,6 +57,29 @@ export const STDERR_LABEL = '--- stderr ---';
 
 /** What a command that wrote nothing anywhere reads as. */
 export const NO_OUTPUT = '(no output)';
+
+/**
+ * A classified failure, rendered onto the STRING channel an executor tool
+ * answers on.
+ *
+ * It lives beside `isFailingResultText` because that predicate is what reads it
+ * back: the JSON refusal is one of the two shapes it recognises, so producer and
+ * recogniser are the same file and cannot disagree about the shape. Before this,
+ * an executor answered a failure with prose — `exec error: …`, `No device
+ * connected.` — which `isFailingResultText` correctly classifies as NOT a
+ * failure, because it is indistinguishable from a command whose OUTPUT happens
+ * to say that. So a sandbox with no binding and a laptop with no device were
+ * both recorded as clean calls.
+ *
+ * Returned rather than thrown, because these tools are also called from
+ * LLM-generated code inside `execute_tools`: a throw ends the whole block, while
+ * a refusal payload lets the generated code branch on `reason` — the same reason
+ * `tools/file-tool.ts` returns its refusals and `run`'s escalation paths return
+ * theirs.
+ */
+export function refusalText(error: ProteusError): string {
+  return JSON.stringify(refusalOf(error));
+}
 
 export function formatExecResult(result: ExecOutcome): string {
   const stdout = result.stdout ?? '';

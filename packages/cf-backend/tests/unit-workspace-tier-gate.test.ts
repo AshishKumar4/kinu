@@ -11,16 +11,16 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do.js';
-import { declaredClassMembers, isInternalMember } from './helpers/declared-members.js';
-import { sha256Hex } from '../src/lib/crypto.js';
+import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
+import { declaredClassMembers, isInternalMember } from './helpers/declared-members';
+import { sha256Hex } from '../src/lib/crypto';
 import {
   CapabilityDeniedError,
   WORKSPACE_CAPABILITY_TIERS,
   setWorkspaceTier,
   type UserCaller,
   type WorkspaceCapability,
-} from '../src/user/workspace-capability.js';
+} from '../src/user/workspace-capability';
 
 const WORKSPACE = 'workspace-a';
 const OTHER_WORKSPACE = 'workspace-b';

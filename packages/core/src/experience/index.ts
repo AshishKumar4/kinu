@@ -15,14 +15,14 @@ export {
   type ExperienceKind,
   type ExperiencePayload,
   type PublishableCandidate,
-} from './types.js';
+} from './types';
 
 export {
   createExperienceLibrary,
   initExperienceLibraryTables,
   type ExperienceLibraryStore,
   type ExperienceSearchOptions,
-} from './library.js';
+} from './library';
 
 export {
   EXPERIENCE_MIN_FACT_CONFIDENCE,
@@ -30,7 +30,7 @@ export {
   listPublishable,
   type PublishRefusal,
   type PublishSources,
-} from './publishable.js';
+} from './publishable';
 
 export {
   bindPendingImports,
@@ -42,7 +42,7 @@ export {
   type ImportSettlement,
   type ImportStatus,
   type ImportedExperienceRow,
-} from './imports.js';
+} from './imports';
 
 export {
   EXPERIENCE_ACTIONS,
@@ -51,4 +51,4 @@ export {
   type ExperienceActionDeps,
   type ExperienceActionInput,
   type ExperienceLibraryClient,
-} from './actions.js';
+} from './actions';

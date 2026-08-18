@@ -3,11 +3,11 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime } from './helpers.js';
-import { checkConflictsBeforeAdding, upsertCraftedTool } from '../src/craft/conflict.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { ExecuteResult, Executor } from '../src/types/primitives.js';
+import { createTestRuntime } from './helpers';
+import { checkConflictsBeforeAdding, upsertCraftedTool } from '../src/craft/conflict';
+import { initCraftScoreTables } from '../src/craft/schemas';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { ExecuteResult, Executor } from '../src/types/primitives';
 
 describe('CraftStore conflict detection', () => {
   test('detects exact name conflict', () => {

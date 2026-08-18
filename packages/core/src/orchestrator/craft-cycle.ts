@@ -24,16 +24,16 @@
  * and whether that reach worked.
  */
 
-import type { ToolResultContext } from '../extension.js';
+import type { ToolResultContext } from '../extension';
 import * as v from 'valibot';
-import type { CraftCycleRecord } from '../events/types.js';
-import type { CraftLedger } from '../craft/in-episode.js';
+import type { CraftCycleRecord } from '../events/types';
+import type { CraftLedger } from '../craft/in-episode';
 import {
   CRAFT_INVOCATION_QUALITY, craftCreatesTool, craftFailureBlame, craftInvocationSites,
-} from '../craft/in-episode.js';
-import { isFailingToolResult } from './turn-steering.js';
-import { isBackgroundOutcomeText } from '../jobs/threshold.js';
-import type { BuiltinToolName } from '../tools/registry.js';
+} from '../craft/in-episode';
+import { isFailingToolResult } from './turn-steering';
+import { isBackgroundOutcomeText } from '../jobs/threshold';
+import type { BuiltinToolName } from '../tools/registry';
 
 /** The one tool crafted tools are reachable from. */
 const EXECUTE_TOOLS: BuiltinToolName = 'execute_tools';

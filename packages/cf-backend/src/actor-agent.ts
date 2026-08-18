@@ -13,12 +13,19 @@
  * beforeStep / tool hooks) — lives here, once.
  *
  * Tool gating is structural: an actor whose profile wires no `team` deps has
- * no staffing actions on its `agents` tool. No flags.
+ * no hiring actions on its `agents` tool. No flags.
  */
 
-import { type AgentContext, type Connection, type ConnectionContext } from "agents";
+import { type AgentContext, type Connection, type ConnectionContext, type SubAgentClass } from "agents";
+// Type-only, so it is erased and the base class carries no runtime import of
+// its own subclass. The VALUE comes from `subordinateFacet()`, which each
+// concrete root supplies.
+import type { SubordinateAgent } from './subordinate-agent';
+import type { SubordinateActivityEvent } from './lib/protocol';
 import { parseProtocolMessage } from "agents/chat";
-import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate.js";
+import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate";
+import { createWorkersTracer } from "./obs/cf-tracer";
+import { createAgentTracing, type AgentTracing } from "@proteus/core/obs";
 import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer,
@@ -30,7 +37,7 @@ import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessag
 import {
   SerializableToolDescriptorSchema,
   type SerializableToolDescriptor,
-} from "./user/mcp.js";
+} from "./user/mcp";
 import type {
   TurnContext, TurnConfig,
   ToolCallResultContext, StepContext, ChunkContext,
@@ -125,6 +132,13 @@ import {
   type ParentRpcWrite,
   // Subordinate teams + cross-workspace peers + the report spine
   type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
+  SubordinateRosterStore, createTeamToolDeps, receiveSubordinateEvent,
+  type SubordinatesChangedEvent, type SubordinateReportStatus, type SubordinateReportOrigin,
+  slugifyName,
+  // The subordinate tree's depth cap — derived per child, never stated by one
+  DELEGATION_MAX_DEPTH,
+  delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
+  type DynamicDelegate,
   readSoul, bootstrapScaffold,
   parseModelSpec, catalogModelInfo,
   // Model-capability attachment sanitization (the PDF-400 fix)
@@ -144,21 +158,21 @@ import {
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject, type JsonValue,
 } from "@proteus/core";
-import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime.js";
-import { createExecuteToolsTool } from "./execute-tools.js";
-import { createCFHeadRuntime } from "./heads/head-runtime.js";
-import type { AgentProviderRegistry } from "./providers/agent-registry.js";
-import { OwnedModelServices } from "./owned-model-services.js";
+import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
+import { createExecuteToolsTool } from "./execute-tools";
+import { createCFHeadRuntime } from "./heads/head-runtime";
+import type { AgentProviderRegistry } from "./providers/agent-registry";
+import { OwnedModelServices } from "./owned-model-services";
 import {
   // Prompt-cache breakpoints — single source in core prompting/cache-breakpoints.ts
   promptCachePlan, hasCacheMarkers, markLastToolForAnthropicCache,
   type PromptCacheStrategy,
 } from "@proteus/core";
 import type { CodemodeProvider, DeferredApprovalChannel } from "@proteus/core";
-import { tolerate } from "@proteus/core/obs";
-import type { UserDO } from "./user/user-do.js";
-import type { UserCaller } from "./user/workspace-capability.js";
-import { sha256Hex } from "./lib/crypto.js";
+import { diagnostics, ProteusError, toProteusError, tolerate } from "@proteus/core/obs";
+import type { UserDO } from "./user/user-do";
+import type { UserCaller } from "./user/workspace-capability";
+import { sha256Hex } from "./lib/crypto";
 import * as v from 'valibot';
 
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
@@ -329,9 +343,13 @@ function compactionLogDetail<Data>(message: string, data?: Data): string {
  *  actor class does not wire neither exists in the ToolSet nor is advertised
  *  in the prompt (actorActiveTools). */
 export interface ActorToolDeps {
-  /** In-workspace subordinate management — orchestrator-only. */
+  /** In-workspace subordinate management. Wired by `teamProfile()` on EVERY
+   *  actor that still has tree left below it — a subordinate tree is recursive
+   *  — and absent at the depth cap. */
   team?: TeamToolDeps;
-  /** Cross-workspace peer messaging — orchestrator-only. */
+  /** Cross-workspace peer messaging — orchestrator-only, because
+   *  `hire scope=workspace` mints the root of a fresh tree (see
+   *  AgentsToolDeps.peers in core tools/agents-tool.ts). */
   peers?: PeersToolDeps;
   /** Subordinate → parent progress spine — subordinate-only. */
   report?: ReportToolDeps;
@@ -363,7 +381,7 @@ export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
 /** The `agents` actions this actor profile supports, for the prompt's
  *  Delegation ladder — the same gating rule the tool's enum uses. Fork is
  *  universal on cf (every ActorAgent owns the strategy registry + facet
- *  substrate); staffing and peer converse ride the actor profile. */
+ *  substrate); hiring and peer converse ride the actor profile. */
 export function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
   return agentsActionsFor({ fork: {}, team: deps.team, peers: deps.peers });
 }
@@ -429,6 +447,24 @@ export abstract class ActorAgent extends Think<Env> {
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
     this.invalidateModelCaches();
+    // …then push it down this actor's own subtree. Facets present the PARENT
+    // workspace's identity, so the token travels down rather than being read
+    // back out of a DO — nothing name-addressable ever hands the secret to a
+    // caller. Recursive by construction: each hire re-enters here for its own
+    // hires, so a reissued token reaches the whole tree, not just its first row.
+    const facet = this.subordinateFacet();
+    for (const entry of this.subordinateRoster.list()) {
+      try {
+        const stub = await this.subAgent(facet, entry.name);
+        await stub.installWorkspaceCapability(token);
+      } catch (err) {
+        diagnostics.failure('capability.subordinate_push_failed', toProteusError({
+          doing: 'pushing the workspace capability token to a subordinate',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { subordinate: entry.name });
+      }
+    }
     return { ok: true };
   }
 
@@ -462,8 +498,8 @@ export abstract class ActorAgent extends Think<Env> {
   protected abstract ensureSchema(): void;
 
   /** Tool deps only this actor class wires. Structural absence is the gating
-   *  mechanism (the same way staffing is absent on the CLI backend): an actor
-   *  that returns {} has no staffing/peer actions and no release tool. */
+   *  mechanism (the same way hiring is absent on the CLI backend): an actor
+   *  that returns {} has no roster/peer actions and no release tool. */
   protected abstract actorToolDeps(): ActorToolDeps;
 
   /** Codemode providers beyond the shared set. Spliced between `rlm` and
@@ -494,6 +530,244 @@ export abstract class ActorAgent extends Think<Env> {
    * through onMessage, so subclasses can keep bootstrap methods available to
    * trusted worker callers while denying the same method to client sockets. */
   protected isClientRpcMethodDenied(_method: string): boolean { return false; }
+
+  // ── The subordinate tree ────────────────────────────────────────────
+  // Hoisted here from the orchestrator when `hire` became recursive: an actor
+  // that can hold a roster is not a kind of actor, it is every actor with tree
+  // left below it. The orchestrator is depth 0, a subordinate reads its own
+  // depth off the immutable identity row its parent seeded, and both run the
+  // identical roster/ingress/broadcast machinery — there is no second
+  // implementation to drift.
+
+  /** This actor's position in the workspace's subordinate tree, and the room
+   *  left below it. The orchestrator answers with the root budget; a facet
+   *  actor answers from durable storage, so an eviction cannot reset it. */
+  protected abstract delegationBudget(): DelegationBudget;
+
+  /** The facet class a hire runs as. Supplied by each concrete root because the
+   *  base class must not import its own subclass — the TYPE is imported (and
+   *  erased), the VALUE comes from here. */
+  protected abstract subordinateFacet(): SubAgentClass<SubordinateAgent>;
+
+  /**
+   * The roster half of the actor profile — wired only while this actor has room
+   * below it.
+   *
+   * At the cap the deps are ABSENT rather than present-and-refusing, so
+   * hire/ask/send/list/dismiss are not in the tool enum, not in the codemode
+   * namespace and not in the prompt's ladder. That is this repo's structural
+   * containment doctrine and the stronger of the two mechanisms in use: a tool
+   * that is not there cannot be attempted. It is also what oh-my-pi does
+   * (`canSpawnAtDepth` drops `task` below its cap) rather than what dsh does
+   * (keeps the tool and throws a typed SubagentDepthError).
+   *
+   * The classified refusal in core's dispatch is NOT a second opinion on the
+   * same question — it covers the one window absence cannot: a ToolSet is cached
+   * across turns and a facet's identity is seeded after it is constructed, so a
+   * build that ran before the seed could offer `hire` to an actor that turns out
+   * to be at the cap. Absence for the steady state, a reason for the seam that
+   * absence cannot reach; and the prompt states the cap for an actor sitting on
+   * it, so silence is never the whole answer.
+   */
+  protected teamProfile(): Pick<ActorToolDeps, 'team'> {
+    return delegationExhausted(this.delegationBudget()) ? {} : { team: this.getTeamToolDeps() };
+  }
+
+  private _subordinateRoster: SubordinateRosterStore | null = null;
+
+  protected get subordinateRoster(): SubordinateRosterStore {
+    if (!this._subordinateRoster) {
+      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql);
+      this._subordinateRoster.ensureSchema();
+    }
+    return this._subordinateRoster;
+  }
+
+  /** This actor's hires, for the per-step dynamic context. */
+  protected subordinateDelegates(): DynamicDelegate[] {
+    return this.subordinateRoster.list().map((entry) => ({
+      kind: 'subordinate' as const,
+      name: entry.name,
+      phase: entry.status,
+      task: entry.currentTask,
+    }));
+  }
+
+  protected broadcastSubordinatesChanged(event?: SubordinatesChangedEvent): void {
+    this.broadcast(JSON.stringify(event ?? {
+      type: 'subordinates_changed',
+      subordinates: this.subordinateRoster.list(),
+    }));
+  }
+
+  protected broadcastSubordinateEvent(
+    event: Omit<SubordinateActivityEvent, 'type' | 'id'> & { id?: string },
+  ): void {
+    this.broadcast(JSON.stringify({
+      type: 'subordinate_event',
+      id: event.id ?? nanoid(),
+      kind: event.kind,
+      subordinate: event.subordinate,
+      status: event.status,
+      content: event.content,
+      task: event.task,
+      timestamp: event.timestamp,
+    } satisfies SubordinateActivityEvent));
+  }
+
+  /** A facet is reachable only while its own roster still lists it. */
+  override async onBeforeSubAgent(
+    request: Request,
+    child: { className: string; name: string },
+  ): Promise<Request | Response | void> {
+    if (child.className !== this.subordinateFacet().name) {
+      return new Response('Not found', { status: 404 });
+    }
+    const rosterEntry = this.subordinateRoster.get(child.name);
+    if (!rosterEntry || rosterEntry.status === 'dismissed'
+      || !this.hasSubAgent(child.className, child.name)) {
+      return new Response('Not found', { status: 404 });
+    }
+    return request;
+  }
+
+  protected getTeamToolDeps(): TeamToolDeps {
+    const facet = this.subordinateFacet();
+    return createTeamToolDeps({
+      delegation: this.delegationBudget(),
+      roster: this.subordinateRoster,
+      now: () => Date.now(),
+      inheritedContext: () => this.readInheritedContext(),
+      createName: (role) => {
+        const base = slugifyName(role).slice(0, 48) || 'subordinate';
+        return `${base}-${nanoid(6)}`;
+      },
+      broadcast: (event) => this.broadcastSubordinatesChanged(event),
+      broadcastTask: (event) => this.broadcastSubordinateEvent({
+        kind: 'task',
+        ...event,
+      }),
+      runtime: {
+        spawn: async (input) => {
+          const ownerUserId = this.getOwnerUserId();
+          if (!ownerUserId) throw new Error('Agent has no owner yet — subordinate creation needs an owned workspace.');
+          const stub = await this.subAgent(facet, input.name);
+          const capabilityToken = await this.workspaceCapabilityToken();
+          try {
+            const identity = {
+              name: input.name,
+              displayName: input.displayName,
+              role: input.role,
+              mission: input.mission,
+              model: input.model,
+              capabilityToken: capabilityToken ?? undefined,
+            };
+            await stub.setSubordinateIdentity(identity);
+          } catch (error) {
+            // A cleanup path that discards its own failure cannot be trusted to
+            // have cleaned up. `deleteSubAgent` is what WIPES the half-seeded
+            // facet's storage, so a swallowed failure here leaves a permanent
+            // database inside this DO charged against the quota every facet
+            // shares — reported with the seeding failure as its cause, never
+            // hidden behind it.
+            try {
+              await this.deleteSubAgent(facet, input.name);
+            } catch (cleanupError) {
+              throw new Error(
+                `Subordinate ${input.name} failed to seed and its storage could not be reclaimed: `
+                + `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+                { cause: error },
+              );
+            }
+            throw error;
+          }
+        },
+        assign: async (name, input) => {
+          const stub = await this.subAgent(facet, name);
+          const task = {
+            kind: 'task',
+            body: input.body,
+            mode: input.mode,
+            deliverable: input.deliverable,
+            deadlineHint: input.deadlineHint,
+            inheritedContext: input.inheritedContext,
+          } as const;
+          return stub.enqueueSubordinateTask(task);
+        },
+        status: async (name) => (await this.subAgent(facet, name)).getSubordinateStatus(),
+        message: async (name, content, mode) => {
+          return (await this.subAgent(facet, name))
+            .enqueueSubordinateTask({ kind: 'message', body: content, mode });
+        },
+        dismiss: async (name, keepHistory) => {
+          if (!keepHistory) await this.deleteSubAgent(facet, name);
+        },
+      },
+    });
+  }
+
+  /**
+   * Facet bootstrap authority. Worker-side DO RPC only. The child verifies its
+   * supplied owner/workspace against this source before persisting its immutable
+   * identity row — and takes its DEPTH from here, never from its own arguments.
+   *
+   * This is the one place a child's depth is decided, which is what makes the cap
+   * unbypassable by a subordinate that simply does not check: the number it would
+   * have to lie about is one it never supplies. The seeding authority refuses at
+   * the cap too, so even a stale ToolSet that offered `hire` cannot produce a
+   * child past it.
+   */
+  async getSubordinateBootstrapIdentity(): Promise<{
+    parentWorkspace: string;
+    ownerUserId: string;
+    model: string | null;
+    depth: number;
+  }> {
+    // Deliberately carries no capability token: this method is reachable by any
+    // holder of a stub to this workspace, so it must never hand out a secret.
+    // The token reaches subordinates by push (setSubordinateIdentity +
+    // installWorkspaceCapability), never by read-back.
+    this.ensureSchema();
+    const ownerUserId = this.getOwnerUserId();
+    if (!ownerUserId) throw new Error('Workspace must be owned before creating subordinates.');
+    const own = this.delegationBudget();
+    if (delegationExhausted(own)) {
+      throw new Error(
+        `Delegation depth cap reached: this agent is at depth ${own.depth} of ${DELEGATION_MAX_DEPTH} `
+        + 'and cannot seed a subordinate below it.',
+      );
+    }
+    return {
+      parentWorkspace: this.workspaceName(),
+      ownerUserId,
+      model: this.config.getModel(),
+      depth: deriveChildDelegationBudget(own).depth,
+    };
+  }
+
+  /** Subordinate progress ingress. Worker-side DO RPC only: the method is not
+   * `@callable`, and the public route exposes only the subordinate's own chat
+   * surface. Reports use the same EventLog → drain rail as mission inbox. */
+  async receiveSubordinateEvent(input: {
+    fromSubordinate: string;
+    status: SubordinateReportStatus;
+    content: string;
+    origin: SubordinateReportOrigin;
+    mode: WorkMode;
+  }): Promise<{ id: string; admitted: boolean }> {
+    this.ensureSchema();
+    return receiveSubordinateEvent({
+      log: this.eventLog,
+      roster: this.subordinateRoster,
+      vfs: this.rt.storage.vfs,
+      transaction: (body) => this.ctx.storage.transactionSync(body),
+      announce: (report) => {
+        this.broadcastSubordinatesChanged();
+        this.broadcastSubordinateEvent({ ...report, kind: 'report' });
+      },
+      onAdmitted: () => { this.orch.scheduleDrain(); },
+    }, input, Date.now());
+  }
 
   override maxSteps = resolveMaxSteps(this.env.PROTEUS_MAX_STEPS);
 
@@ -543,7 +817,11 @@ export abstract class ActorAgent extends Think<Env> {
           try {
             await this.compactionState.plans.save(this.name, null);
           } catch (err) {
-            console.warn('[proteus] clear-history compaction reset failed:', err);
+            diagnostics.failure('compaction.reset_failed', toProteusError({
+              doing: 'clearing the persisted compaction plan after clear-history',
+              cause: err,
+              otherwise: 'io',
+            }), { workspace: this.name });
           }
         }
       }
@@ -650,7 +928,11 @@ export abstract class ActorAgent extends Think<Env> {
       parts: [{ type: 'text' as const, text: steer.text }],
       metadata: { proteusSteer: true },
     }))).catch((err) =>
-      console.warn('[proteus] persisting a mid-turn steer failed:', errorMessage(err)));
+      diagnostics.failure('steer.persist_failed', toProteusError({
+        doing: 'persisting a mid-turn steer as a durable user row',
+        cause: err,
+        otherwise: 'io',
+      }), { steers: steers.length }));
   }
 
   /**
@@ -687,7 +969,11 @@ export abstract class ActorAgent extends Think<Env> {
     if (leftover.length === 0) return;
     void this.host.enqueueTurn({ text: leftover.map((steer) => steer.text).join('\n\n') })
       .catch((err) =>
-        console.warn('[proteus] leftover steer rerun failed:', errorMessage(err)));
+        diagnostics.failure('steer.rerun_failed', toProteusError({
+          doing: 'enqueuing leftover steers as their own user turn',
+          cause: err,
+          otherwise: 'io',
+        }), { steers: leftover.length }));
   }
 
   /** The settled turn's telemetry — the measured compaction trigger, the
@@ -761,13 +1047,16 @@ export abstract class ActorAgent extends Think<Env> {
   private registerCompactionExtension(): void {
     const logger: CompactionLogger = {
       info: (message, data) => this.logActivity('compaction', compactionLogDetail(message, data)),
-      debug: (message, data) => console.log(`[proteus:compaction] ${message}`, data ?? ''),
+      debug: (message) => diagnostics.event('compaction.debug', { message }),
+      // `degraded`/`failed` rather than `warn`/`error`: a level is not an outcome, and these two names
+      // are shared verbatim with `cli-backend/src/local-session.ts`, which adapts the same
+      // `@better-compact/core` Logger port to the same outcomes. One query reads both backends.
       warn: (message, data) => {
-        console.warn(`[proteus:compaction] ${message}`, data ?? '');
+        diagnostics.failure('compaction.degraded', new ProteusError('unavailable', message));
         this.logActivity('compaction_warn', compactionLogDetail(message, data));
       },
       error: (message, data) => {
-        console.error(`[proteus:compaction] ${message}`, data ?? '');
+        diagnostics.failure('compaction.failed', new ProteusError('io', message));
         this.logActivity('compaction_error', compactionLogDetail(message, data));
       },
     };
@@ -830,12 +1119,24 @@ export abstract class ActorAgent extends Think<Env> {
           onToolCallEvent: (ev) => {
             try {
               if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'tool_call_end', ...ev });
-            } catch (err) { console.warn('[proteus] event emit failed at afterToolCall:', err); }
+            } catch (err) {
+              diagnostics.failure('event.tool_call_end_emit_failed', toProteusError({
+                doing: 'recording a tool_call_end run event',
+                cause: err,
+                otherwise: 'io',
+              }));
+            }
           },
           onStepEvent: (ev) => {
             try {
               if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', ...ev });
-            } catch (err) { console.warn('[proteus] event emit failed at onStepFinish:', err); }
+            } catch (err) {
+              diagnostics.failure('event.step_finish_emit_failed', toProteusError({
+                doing: 'recording a step_finish run event',
+                cause: err,
+                otherwise: 'io',
+              }));
+            }
           },
         },
       });
@@ -859,7 +1160,13 @@ export abstract class ActorAgent extends Think<Env> {
       onExhausted: ({ error: _error, ...refusal }) => {
         try {
           if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'budget_exhausted', ...refusal });
-        } catch (err) { console.warn('[proteus] event emit failed at budget exhaustion:', err); }
+        } catch (err) {
+          diagnostics.failure('event.budget_exhausted_emit_failed', toProteusError({
+            doing: 'recording a budget_exhausted run event',
+            cause: err,
+            otherwise: 'io',
+          }));
+        }
       },
     });
     return this._budget;
@@ -971,7 +1278,11 @@ export abstract class ActorAgent extends Think<Env> {
       await this.orch.settleEvolution();
       await this.orch.runDueSessionEvolution();
     })
-      .catch((err) => console.warn('[proteus] evolution settle failed:', errorMessage(err)))
+      .catch((err) => diagnostics.failure('evolution.settle_failed', toProteusError({
+        doing: 'settling the turn and session evolution lanes',
+        cause: err,
+        otherwise: 'unavailable',
+      })))
       .finally(() => { this._evolutionSettling = false; });
   }
 
@@ -1188,11 +1499,19 @@ export abstract class ActorAgent extends Think<Env> {
           void this.keepAliveWhile(() => new Promise<void>((resolve) => {
             setTimeout(() => {
               fn().catch((err) =>
-                console.warn('[proteus] drain timer callback failed:', errorMessage(err)),
+                diagnostics.failure('drain.timer_callback_failed', toProteusError({
+                  doing: 'running the debounced event drain',
+                  cause: err,
+                  otherwise: 'io',
+                })),
               ).finally(resolve);
             }, ms);
           })).catch((err) =>
-            console.warn('[proteus] drain timer keepAlive failed:', errorMessage(err)));
+            diagnostics.failure('drain.timer_keepalive_failed', toProteusError({
+              doing: 'holding the actor alive across the drain debounce window',
+              cause: err,
+              otherwise: 'io',
+            })));
         },
         // Branching-heads runtime (Facet spawner + merge LLM), resolved lazily —
         // heads need the owner for UserDO auth, set by first-turn time. undefined
@@ -1291,7 +1610,11 @@ export abstract class ActorAgent extends Think<Env> {
       if (usd !== undefined) event.usd = usd;
       this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, event);
     } catch (err) {
-      console.warn('[proteus] event emit failed at model_call:', err);
+      diagnostics.failure('event.model_call_emit_failed', toProteusError({
+        doing: 'recording a model_call run event',
+        cause: err,
+        otherwise: 'io',
+      }), { source: report.source });
     }
   }
 
@@ -1355,7 +1678,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (this._scaffoldReady || !this.getOwnerUserId()) return;
     if (!(await this.rt.identity.scaffold.exists())) {
       await bootstrapScaffold(this.rt);
-      console.log('[proteus] Bootstrapped initial scaffold');
+      diagnostics.event('scaffold.bootstrapped', { workspace: this.workspaceName() });
     }
     this._scaffoldReady = true;
   }
@@ -1401,7 +1724,11 @@ export abstract class ActorAgent extends Think<Env> {
         nodeCount: nodes.length, nodes,
       }));
     } catch (err) {
-      console.warn('[proteus] broadcastMctsProgress failed:', err);
+      diagnostics.failure('mcts.progress_broadcast_failed', toProteusError({
+        doing: 'pushing an MCTS search tree to connected surfaces',
+        cause: err,
+        otherwise: 'io',
+      }), { rootId, phase });
     }
   }
 
@@ -1468,7 +1795,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** The unified `agents` tool's deps: the fork substrate is universal on cf
    *  actors — the SAME shared factory the CLI wires (core fork-deps), with
    *  the host-injected infrastructure recomputed per fork call; the
-   *  staffing/peer halves ride this actor's profile (actorToolDeps). Rebuilt
+   *  roster/peer halves ride this actor's profile (actorToolDeps). Rebuilt
    *  with the toolset (getRawTools), so the fork model refreshes exactly
    *  when the toolset does. */
   private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
@@ -1622,10 +1949,39 @@ export abstract class ActorAgent extends Think<Env> {
     return this._boundSql;
   }
 
+  private _tracing: AgentTracing | null = null;
+  /**
+   * The tracing seam, one per construction of this object.
+   *
+   * LAZY, and that is what makes `isolateGen` correct rather than merely present.
+   * The generation is bumped on FIRST use inside an activation, so exactly one
+   * bump happens per construction — including the case a boot-time counter cannot
+   * see, `ctx.facets.abort()`, which reuses the isolate and is how a Proteus fork
+   * most commonly dies. It is deliberately NOT bumped in `onStart`: that runs
+   * inside `ctx.blockConcurrencyWhile`, where every added write stalls every
+   * request on this object and 30s of it RESETS the object
+   * (`do.block_concurrency.cancel_ms`), and an observability counter has no
+   * business on that path.
+   *
+   * `selfPath` rather than `ctx.id`: measured on the deployed runtime, two facets
+   * with distinct ids both reported under the ROOT's `durableObjectId`, so an
+   * id-keyed trace collapses every head and subordinate into one orchestrator
+   * (`do.facet.id_is_root_namespace`).
+   */
+  protected get tracing(): AgentTracing {
+    if (!this._tracing) {
+      this._tracing = createAgentTracing({
+        tracer: createWorkersTracer(),
+        isolateGen: this.config.countIsolateGeneration(),
+        selfPath: this.selfPath,
+      });
+    }
+    return this._tracing;
+  }
+
   protected logActivity(event: string, detail?: string) {
     const elapsed = this._turnT0 > 0 ? Math.round(performance.now() - this._turnT0) : 0;
     const now = Date.now();
-    console.log(`[proteus:${String(elapsed).padStart(6)}ms] ${event}${detail ? ` — ${detail}` : ""}`);
     void this.sql`INSERT INTO activity_log (event, detail, elapsed_ms, created_at)
       VALUES (${event}, ${detail ?? null}, ${elapsed}, ${now})`;
   }
@@ -2018,7 +2374,7 @@ export abstract class ActorAgent extends Think<Env> {
         // durable row.
         escalations: this.acc.escalations,
         // The unified `agents` delegation tool — fork substrate (heads / mcts
-        // settle) is universal; staff/ask/send actions appear only when this
+        // settle) is universal; hire/ask/send actions appear only when this
         // actor's profile wires the team/peers transports. Owner resolution
         // stays lazy per action, so the cached toolset stays valid across
         // claimOwner.
@@ -2048,7 +2404,11 @@ export abstract class ActorAgent extends Think<Env> {
       this.logActivity("gettools_end", `rebuilt — ${Object.keys(tools).length} tools`);
       return tools;
     } catch (err) {
-      console.error("[proteus] getRawTools() FAILED:", err);
+      diagnostics.failure('tool.surface_build_failed', toProteusError({
+        doing: 'assembling the turn tool surface',
+        cause: err,
+        otherwise: 'io',
+      }), { mode });
       throw err;
     }
   }
@@ -2150,7 +2510,11 @@ export abstract class ActorAgent extends Think<Env> {
       if (!runId) return;
       this.eventRecorder.emit(runId, headPhaseRunEvent(event));
     } catch (err) {
-      console.warn('[proteus] event emit failed at head onPhase:', err);
+      diagnostics.failure('event.head_phase_emit_failed', toProteusError({
+        doing: 'recording a head split/merge phase run event',
+        cause: err,
+        otherwise: 'io',
+      }), { runId, phase: event.kind, rootId: event.rootId });
     }
   }
 
@@ -2186,7 +2550,11 @@ export abstract class ActorAgent extends Think<Env> {
     let watermark: number;
     try { watermark = await userDOStub.userMcp_updatedAt(caller); }
     catch (err) {
-      console.warn('[proteus] mcp watermark fetch failed:', errorMessage(err));
+      diagnostics.failure('mcp.watermark_fetch_failed', toProteusError({
+        doing: 'reading the user MCP configuration watermark from UserDO',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { userId });
       return this._cachedMcpTools;
     }
     if (watermark === this._cachedMcpToolsKey && Object.keys(this._cachedMcpTools).length > 0) {
@@ -2214,7 +2582,11 @@ export abstract class ActorAgent extends Think<Env> {
         source: `MCP server "${u.server}"`, reason: u.reason,
       }));
     } catch (err) {
-      console.warn('[proteus] mcp descriptor fetch failed:', errorMessage(err));
+      diagnostics.failure('mcp.descriptor_fetch_failed', toProteusError({
+        doing: 'fetching the user MCP tool descriptors from UserDO',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { userId, watermark });
       return this._cachedMcpTools;
     }
 
@@ -2394,7 +2766,13 @@ export abstract class ActorAgent extends Think<Env> {
     // surfaces the broken-server status via /api/user/mcp/servers polling.
     let mcpTools: ToolSet = {};
     try { mcpTools = await this.buildUserMcpTools(); }
-    catch (err) { console.warn('[proteus] buildUserMcpTools failed:', errorMessage(err)); }
+    catch (err) {
+      diagnostics.failure('mcp.tool_surface_failed', toProteusError({
+        doing: 'building the user MCP tool adapters for this turn',
+        cause: err,
+        otherwise: 'unavailable',
+      }));
+    }
 
     // Expose MCP tool keys to the active-tools allowlist so Think doesn't
     // strip them out. Builtin names + MCP `mcp_<server>_<name>` keys are
@@ -2415,7 +2793,11 @@ export abstract class ActorAgent extends Think<Env> {
       const status = await this.rt.deviceTransport.refreshStatus();
       deviceNotice = observeDevicePresence(this.config, status).notice;
     } catch (err) {
-      console.warn('[proteus] device status refresh failed:', errorMessage(err));
+      diagnostics.failure('device.status_refresh_failed', toProteusError({
+        doing: 'refreshing the device hub presence for this turn',
+        cause: err,
+        otherwise: 'unavailable',
+      }));
     }
 
     // AGENTS.md (agents.md standard) — agent VFS root + the sandbox workspace
@@ -2800,7 +3182,7 @@ export abstract class ActorAgent extends Think<Env> {
         ? null
         : projectJsonValue({ value: ctx.snapshot });
       const summary = JSON.stringify(snapshot).slice(0, 400);
-      console.log(`[proteus] fiber recovered: name=${ctx.name} id=${ctx.id}; snapshot=${summary}`);
+      diagnostics.event('fiber.recovered', { fiber: ctx.name, fiberId: ctx.id });
       // Background-job fiber (bg:*) is operational plumbing, not an evolution
       // event: the runner re-fails + wakes an orphaned 'running' job (a 'settled'
       // one already recorded its outcome + woke), skipping the MEMORY.md note +
@@ -2827,7 +3209,11 @@ export abstract class ActorAgent extends Think<Env> {
         `Snapshot at interruption: ${summary}\n`,
       );
     } catch (err) {
-      console.error('[proteus] onFiberRecovered handler failed:', err);
+      diagnostics.failure('fiber.recovery_failed', toProteusError({
+        doing: 'handling a fiber recovered after eviction',
+        cause: err,
+        otherwise: 'io',
+      }), { fiber: ctx.name, fiberId: ctx.id });
     }
   }
 

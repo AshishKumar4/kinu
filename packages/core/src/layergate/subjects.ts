@@ -14,65 +14,65 @@
  * test verifies every entry really exports its symbol.
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import { buildSystemPromptSync, type SystemPromptOptions } from '../prompt.js';
-import { compilePromptSurface } from '../prompting/surface.js';
-import { renderAgentsMdSection } from '../prompting/agents-md.js';
-import { renderActiveSkillsSection } from '../skills/render.js';
-import { resolveActiveSkills } from '../skills/loader.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import { buildSystemPromptSync, type SystemPromptOptions } from '../prompt';
+import { compilePromptSurface } from '../prompting/surface';
+import { renderAgentsMdSection } from '../prompting/agents-md';
+import { renderActiveSkillsSection } from '../skills/render';
+import { resolveActiveSkills } from '../skills/loader';
 import {
   DynamicContextLedger,
   renderDynamicContextBlock,
   turnLocalContextMessage,
-} from '../prompting/volatile-context.js';
-import { renderFactsBlock } from '../memory/facts.js';
-import { composePrepareStep } from '../prompting/prepare-step.js';
-import { pruneStepToolOutputs } from '../prompting/step-prune.js';
+} from '../prompting/volatile-context';
+import { renderFactsBlock } from '../memory/facts';
+import { composePrepareStep } from '../prompting/prepare-step';
+import { pruneStepToolOutputs } from '../prompting/step-prune';
 import {
   applyCacheBreakpoints,
   cacheableSystem,
   markCacheTail,
   promptCacheOptions,
   resolvePromptCacheStrategy,
-} from '../prompting/cache-breakpoints.js';
-import { contextWindowForModel } from '../context-window.js';
-import { clampSerializedToolResult, clampToolResult } from '../tools/clamp.js';
-import { applyFileEdits, readFileSlice } from '../tools/file-edit.js';
-import { classifyTurnFailure, planOverflowRecovery } from '../turn-failure.js';
+} from '../prompting/cache-breakpoints';
+import { contextWindowForModel } from '../context-window';
+import { clampSerializedToolResult, clampToolResult } from '../tools/clamp';
+import { applyFileEdits, readFileSlice } from '../tools/file-edit';
+import { classifyTurnFailure, planOverflowRecovery } from '../turn-failure';
 import {
   buildCompactionSummaryPrompt,
   stripCheckpointPreamble,
   wrapCompactionSummary,
-} from '../compaction.js';
-import { buildDrainBatch } from '../events/hub/drain.js';
-import { renderForLLM } from '../events/hub/visibility.js';
-import { StepInjections } from '../prompting/step-injections.js';
-import { SignalDelivery } from '../orchestrator/signals.js';
-import { DrainScheduler } from '../orchestrator/drain-scheduler.js';
-import { formatApproval, gateExec, reviewCommand } from '../safety/approval-gate.js';
-import { argumentDigest } from '../safety/argument-digest.js';
-import { checkMisevolution } from '../scaffold/misevolution.js';
-import { decidePromotion } from '../scaffold/shadow.js';
-import { selectEvolutionBase } from '../scaffold/archive.js';
-import { hybridSearch } from '../memory/hybrid-search.js';
-import { reciprocalRankFusion } from '../memory/vector-store.js';
-import { delegationFeatures, renderDelegationFeatures } from '../evolution/delegation-features.js';
+} from '../compaction';
+import { buildDrainBatch } from '../events/hub/drain';
+import { renderForLLM } from '../events/hub/visibility';
+import { StepInjections } from '../prompting/step-injections';
+import { SignalDelivery } from '../orchestrator/signals';
+import { DrainScheduler } from '../orchestrator/drain-scheduler';
+import { formatApproval, gateExec, reviewCommand } from '../safety/approval-gate';
+import { argumentDigest } from '../safety/argument-digest';
+import { checkMisevolution } from '../scaffold/misevolution';
+import { decidePromotion } from '../scaffold/shadow';
+import { selectEvolutionBase } from '../scaffold/archive';
+import { hybridSearch } from '../memory/hybrid-search';
+import { reciprocalRankFusion } from '../memory/vector-store';
+import { delegationFeatures, renderDelegationFeatures } from '../evolution/delegation-features';
 import {
   craftFailureBlame, craftInvocationError, craftInvocationSites,
-} from '../craft/in-episode.js';
-import { renderToolSchemaDescription } from '../tools/registry.js';
+} from '../craft/in-episode';
+import { renderToolSchemaDescription } from '../tools/registry';
 import {
   deviceChangeNotice,
   devicePresence,
   parseDevicePresence,
-} from '../execution/device-status.js';
+} from '../execution/device-status';
 import {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery,
-} from '../orchestrator/turn-lifecycle.js';
+} from '../orchestrator/turn-lifecycle';
 import {
   serializeContentForHeads, inheritedContextFromHistory, narrowInheritedRole,
-} from '../orchestrator/heads-support.js';
+} from '../orchestrator/heads-support';
 
 export interface PipelineSubjects {
   // ── context assembly ──

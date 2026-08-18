@@ -9,7 +9,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   formatInheritedContext,
   DEFAULT_INHERITED_MESSAGES,
-} from '../src/mcts/inherited-context.js';
+} from '../src/mcts/inherited-context';
 
 describe('formatInheritedContext', () => {
   test('empty history yields an empty block', () => {

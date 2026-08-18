@@ -20,8 +20,8 @@ import {
   type ReleaseStatus,
   type ReleaseDeployment,
   type ReleaseSource,
-} from '../release/index.js';
-import type { ReleaseToolAction } from './registry.js';
+} from '../release/index';
+import type { ReleaseToolAction } from './registry';
 
 export interface ReleaseToolDeps {
   board(): Promise<ReleaseBoard>;

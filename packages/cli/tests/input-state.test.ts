@@ -7,7 +7,7 @@ import {
   reduceInput,
   type InputMachineEvent,
   type InputState,
-} from '../src/tui/input-state.js';
+} from '../src/tui/input-state';
 
 function run(state: InputState, ...events: InputMachineEvent[]) {
   let current = state;

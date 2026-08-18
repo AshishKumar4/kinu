@@ -8,13 +8,13 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { createTestRuntime } from './helpers.js';
-import { EvolutionEngine, type EvolutionEvent, type CompletedTurn, type CompletedSession } from '../src/evolution/index.js';
-import { listTurnOutcomes, listLessons, recordLesson } from '../src/evolution/outcomes.js';
-import { alignmentConvergence } from '../src/evolution/alignment.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
+import { createTestRuntime } from './helpers';
+import { EvolutionEngine, type EvolutionEvent, type CompletedTurn, type CompletedSession } from '../src/evolution/index';
+import { listTurnOutcomes, listLessons, recordLesson } from '../src/evolution/outcomes';
+import { alignmentConvergence } from '../src/evolution/alignment';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initCraftScoreTables } from '../src/craft/schemas';
 
 const CLASSIFY = 'Classify what the follow-up reveals';
 
@@ -69,12 +69,12 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(await rt.memory.read('memory/MEMORY.md')).toContain('Lesson');
     const reflectionPrompt = prompts.find((prompt) => prompt.includes('In one sentence')) ?? '';
     expect(reflectionPrompt).toContain(
-      'Turn process: 41 sequential steps, 0 staffing, 0 fork, 0 messaging, 0 execute_tools, 6.2min wall clock',
+      'Turn process: 41 sequential steps, 0 hiring, 0 fork, 0 messaging, 0 execute_tools, 6.2min wall clock',
     );
     expect(reflectionPrompt).toContain(
       'On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero delegation',
     );
-    expect(reflectionPrompt).toContain('credit effective staffing/forking on accepted turns');
+    expect(reflectionPrompt).toContain('credit effective hiring/forking on accepted turns');
     expect(reflectionPrompt).toContain('flag delegation overhead when spawned subordinates contributed nothing');
   });
 

@@ -4,10 +4,10 @@
  * Architecture reference: docs/EVOLUTION.md — "CraftStore Lifecycle"
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import { nowMs } from '../utils/date.js';
-import { checkMisevolution, recordMisevolutionVeto } from '../scaffold/misevolution.js';
-import { DEFAULT_CONFIG } from '../config.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import { nowMs } from '../utils/date';
+import { checkMisevolution, recordMisevolutionVeto } from '../scaffold/misevolution';
+import { DEFAULT_CONFIG } from '../config';
 
 interface CraftCandidate {
   name: string;

@@ -5,10 +5,10 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   buildDrainBatch, initEventsHubTables, EventLog, type IngressDescriptor,
-} from '../src/events/hub/index.ts';
-import type { SqlExec } from '../src/index.js';
-import type { JsonValue } from '../src/utils/json.js';
-import { makeSqlExec } from './helpers.js';
+} from '../src/events/hub/index';
+import type { SqlExec } from '../src/index';
+import type { JsonValue } from '../src/utils/json';
+import { makeSqlExec } from './helpers';
 
 function makeSql(): SqlExec {
   return makeSqlExec(new Database(':memory:'));

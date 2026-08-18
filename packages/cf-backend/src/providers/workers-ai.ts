@@ -9,12 +9,12 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@proteus/core';
 import { DEFAULT_WORKERS_AI_MODEL_ID, listModelsDevProviderModels } from '@proteus/core';
-import { CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth.js';
-import { createCloudflareAIFetch } from './cloudflare-ai-fetch.js';
+import { CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth';
+import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
 import {
   WORKERS_AI_FALLBACK_MODEL_CATALOG,
   WORKERS_AI_PREFERRED_MODEL_IDS,
-} from './workers-ai-catalog.js';
+} from './workers-ai-catalog';
 
 export interface WorkersAIOptions {
   /** Prefix-cache affinity key — routes same-key requests to the same replica. */

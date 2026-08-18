@@ -225,7 +225,7 @@ export type DelegationTrigger = typeof DELEGATION_TRIGGERS[number];
  * Why this scorer does NOT count `agents` tool calls.
  *
  * The obvious independent signal would be a call naming the `agents` tool,
- * narrowed to the actions that actually spawn (`fork`, `staff`) — because the
+ * narrowed to the actions that actually spawn (`fork`, `hire`) — because the
  * steer's own conversion test accepts ANY `agents` call, so
  * `agents({action:'list'})` converts it without delegating anything.
  *

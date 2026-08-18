@@ -24,8 +24,8 @@ import {
   type ReleaseStore,
   type ReleaseToolDeps,
   type SandboxHandle,
-} from '../src/index.js';
-import { makeSqlExec } from './helpers.js';
+} from '../src/index';
+import { makeSqlExec } from './helpers';
 
 // ── Fake sandbox exec seam ─────────────────────────────────────────────────
 

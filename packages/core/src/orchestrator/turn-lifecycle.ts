@@ -13,20 +13,21 @@
  * processTurn/closeRun — with the payload shapes drifting one field at a time.
  */
 
-import type { TurnContextBudget } from '../context-budget.js';
-import type { TurnFileLedger } from '../tools/file-ledger.js';
+import type { TurnContextBudget } from '../context-budget';
+import type { TurnFileLedger } from '../tools/file-ledger';
 import type {
   CompletionGateRecord, CraftCycleRecord, ExecutionRecoveryRecord, RunEventInput, TurnSteeringRecord,
-} from '../events/types.js';
-import type { TurnEscalationLedger } from '../execution/escalation.js';
-import type { CompletedTurn } from '../evolution/types.js';
-import { usageReported, type Usage } from '../usage.js';
-import type { TurnAccumulator } from './turn-accumulator.js';
+} from '../events/types';
+import type { TurnEscalationLedger } from '../execution/escalation';
+import type { CompletedTurn } from '../evolution/types';
+import { usageReported, type Usage } from '../usage';
+import type { TurnAccumulator } from './turn-accumulator';
 import {
   planOverflowRecovery, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   type OverflowRecoveryDecision,
-} from '../turn-failure.js';
-import type { SignalDeliverer } from '../types/signals.js';
+} from '../turn-failure';
+import type { SignalDeliverer } from '../types/signals';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** The recorder slice this spine writes through — structural (both backends
  *  pass their RunEventRecorder). */
@@ -54,7 +55,11 @@ export function openTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
     });
     recorder.emit(runId, { type: 'turn_start', turnIndex: opts.turnIndex });
   } catch (err) {
-    console.warn('[proteus] event emit failed at turn start:', err);
+    diagnostics.failure(
+      'turn.start_events_failed',
+      toProteusError({ doing: 'emit the run/turn start events', cause: err, otherwise: 'io' }),
+      { runId },
+    );
   }
 }
 
@@ -123,7 +128,11 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
     if (opts.error) runEnd.error = opts.error;
     recorder.emit(runId, runEnd);
   } catch (err) {
-    console.warn('[proteus] event emit failed at turn end:', err);
+    diagnostics.failure(
+      'turn.end_events_failed',
+      toProteusError({ doing: 'emit the turn/run end events', cause: err, otherwise: 'io' }),
+      { runId },
+    );
   }
 }
 
@@ -210,7 +219,11 @@ export function applyOverflowRecovery(opts: {
       void opts.signals.deliver({
         kind: OVERFLOW_RETRY_EVENT,
         text: OVERFLOW_RETRY_TEXT,
-      }).catch((error) => console.warn('[proteus] overflow retry enqueue failed:', error));
+      }).catch((error) => diagnostics.failure(
+        'turn.overflow_retry_enqueue_failed',
+        toProteusError({ doing: 'enqueue the context-overflow retry turn', cause: error, otherwise: 'io' }),
+        { sessionKey: opts.sessionKey },
+      ));
     }
   }
   return recovery;

@@ -34,7 +34,7 @@ import {
   ProteusError,
   RESERVED_LOG_FIELDS,
   toProteusError,
-} from '../src/obs/index.js';
+} from '../src/obs/index';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..');

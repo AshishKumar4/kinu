@@ -11,8 +11,8 @@ import { describe, test, expect } from 'bun:test';
 import {
   forkWorkspaceStorage, readForkLineage, readSoul, writeSoul, sessionTreeAncestry,
   snapshotWorkspaceForFork, writeForkSnapshot,
-} from '../src/index.js';
-import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers.js';
+} from '../src/index';
+import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers';
 
 /** Seed a source DB with identity, SOUL.md, N messages, and some crafted tools.
  *  A message with no explicit `parent_id` is linked to the previous one, which

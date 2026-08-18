@@ -18,16 +18,17 @@
 
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
-import type { ExecutorProvider, ExecutorCapability } from './types.js';
-import { readExecSignal } from './signal.js';
-import { formatExecResult } from './exec-result.js';
-import type { VFS } from '../types/primitives.js';
-import { makeVfsError } from '../vfs/errno.js';
-import { shellQuote } from '../utils/shell.js';
-import { vfsDirname } from '../utils/vfs-helpers.js';
-import { base64ToBytes, bytesToBase64 } from '../utils/base64.js';
-import type { JsonValue } from '../utils/json.js';
-import { WORKSPACE_BACKUP_DIR } from './workspace-snapshot.js';
+import type { ExecutorProvider, ExecutorCapability } from './types';
+import { readExecSignal } from './signal';
+import { formatExecResult, refusalText } from './exec-result';
+import { diagnostics, ProteusError, toProteusError } from '../obs/index';
+import type { VFS } from '../types/primitives';
+import { makeVfsError } from '../vfs/errno';
+import { shellQuote } from '../utils/shell';
+import { vfsDirname } from '../utils/vfs-helpers';
+import { base64ToBytes, bytesToBase64 } from '../utils/base64';
+import type { JsonValue } from '../utils/json';
+import { WORKSPACE_BACKUP_DIR } from './workspace-snapshot';
 
 interface SandboxExposeOptions {
   hostname: string;
@@ -124,6 +125,51 @@ export function isSandboxTransientError(error: Error | string): boolean {
 }
 
 /**
+ * The binding is absent from wrangler.jsonc, so this deployment has no container
+ * at all. The stub is still registered (cf-backend/src/runtime.ts:509,512) so the
+ * UI can name it, which means every tool here is reachable and has to answer.
+ *
+ * `unavailable`, and deliberately not `unsupported`: it is the same fact the
+ * `run` tool already spells `unavailable` when a runtime is not registered
+ * (tools/builtins.ts, `runtime_not_provisioned`), and one fact given two codes
+ * splits one platform gap across two parts of the census. It lands in
+ * `runtimeMissing`, whose definition is exactly this — an environment Proteus
+ * never provisioned, neither a defect in the tool nor the work failing.
+ *
+ * It used to land nowhere at all: prose beginning `Sandbox executor not
+ * configured` is not a failure to `isFailingResultText`, so an escalation into an
+ * unconfigured sandbox was recorded as a clean `ok` call.
+ */
+const NOT_CONFIGURED_REFUSAL = refusalText(new ProteusError('unavailable', NOT_CONFIGURED));
+
+/** `unsupported`, not `unavailable`: the container IS here and its exec and file
+ *  surfaces work in full — what is missing is a zone to mint preview hostnames
+ *  on. No retry reaches a `PREVIEW_HOST_SUFFIX` that was never set, and that
+ *  permanence is the whole distinction between the two codes. */
+const PREVIEWS_REFUSAL = refusalText(new ProteusError('unsupported', PREVIEWS_NOT_CONFIGURED));
+
+/**
+ * Classify a failure raised by the container's own RPC.
+ *
+ * `TRANSIENT_MARKERS` is ADMISSION CONTROL, not a broken tool: 503 at the ten-
+ * instance concurrency ceiling, 429 on the container start-rate burst, and the
+ * eviction disconnect window. `withSandboxRetry` has already spent its three
+ * attempts before anything reaches here, so what is left is a container Proteus
+ * could not get — `unavailable`, the same code an unprovisioned runtime gets, in
+ * the platform part of the census. Calling it `io` would count the platform's own
+ * capacity ceiling as a candidate defect in this tool.
+ *
+ * A cause the classifier recognises keeps its own code: an abort, a timeout or the
+ * memory wall is more precise than either answer here.
+ */
+function sandboxFailure(input: { doing: string; cause: unknown }): ProteusError {
+  const transient = isSandboxTransientError(
+    input.cause instanceof Error ? input.cause : String(input.cause),
+  );
+  return toProteusError({ ...input, otherwise: transient ? 'unavailable' : 'io' });
+}
+
+/**
  * Run `fn` with up to `attempts` total tries, retrying only on transient
  * errors. Backoff: 500ms, 1000ms (i.e. 500ms × 2^attempt). Non-transient
  * errors throw immediately. Used to swallow the brief disconnect window
@@ -180,9 +226,11 @@ export function createSandboxExecutor(
     exec: {
       description: 'Run a shell command in the sandbox container.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED;
+        if (!handle) return NOT_CONFIGURED_REFUSAL;
         const command = parseInput(StringSchema, { value: args[0] });
-        if (command === undefined) return 'exec error: command must be a string';
+        if (command === undefined) {
+          return refusalText(new ProteusError('bad_input', 'sandbox exec: command must be a string'));
+        }
         const signal = readExecSignal({ context: args[1] });
         try {
           // The sandbox SDK has no kill for an in-flight exec — abort stops
@@ -195,47 +243,60 @@ export function createSandboxExecutor(
           return normalize(res);
         } catch (err) {
           if (isAbortError(err)) throw err;
-          return `exec error: ${errorMessage({ error: err })}`;
+          return refusalText(sandboxFailure({ doing: `sandbox exec \`${command}\``, cause: err }));
         }
       },
     },
     readFile: {
       description: 'Read a file from the sandbox.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED;
+        if (!handle) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
-        if (path === undefined) return 'read error: path must be a string';
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'sandbox readFile: path must be a string'));
+        }
         try {
           const r = await withSandboxRetry(() => touch(() => handle.readFile(path)));
-          if (r.exitCode && r.exitCode !== 0) return `read error: exit ${r.exitCode}`;
+          // The SDK reports a failed read as an exit code and nothing else, so
+          // `io` is all the evidence supports: `missing` would claim the path is
+          // absent when a permission or a decode failure exits the same way.
+          if (r.exitCode && r.exitCode !== 0) {
+            return refusalText(new ProteusError('io', `sandbox readFile ${path}: exit ${r.exitCode}`));
+          }
           return r.content ?? '';
         } catch (err) {
-          return `read error: ${errorMessage({ error: err })}`;
+          return refusalText(sandboxFailure({ doing: `sandbox readFile ${path}`, cause: err }));
         }
       },
     },
     writeFile: {
       description: 'Write content to a file in the sandbox. Creates parent dirs.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED;
+        if (!handle) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
         const content = parseInput(StringSchema, { value: args[1] });
-        if (path === undefined) return 'write error: path must be a string';
-        if (content === undefined) return 'write error: content must be a string';
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'sandbox writeFile: path must be a string'));
+        }
+        if (content === undefined) {
+          return refusalText(new ProteusError('bad_input', 'sandbox writeFile: content must be a string'));
+        }
         try {
           await withSandboxRetry(() => touch(() => handle.writeFile(path, content)));
           return `wrote ${path}`;
         } catch (err) {
-          return `write error: ${errorMessage({ error: err })}`;
+          return refusalText(sandboxFailure({ doing: `sandbox writeFile ${path}`, cause: err }));
         }
       },
     },
     listFiles: {
       description: 'List files in a directory. Returns newline-separated entries prefixed "d" or "-".',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED;
+        if (!handle) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(OptionalStringSchema, { value: args[0] });
-        if (args[0] !== undefined && path === undefined) return 'list error: path must be a string';
+        if (args[0] !== undefined && path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'sandbox listFiles: path must be a string'));
+        }
         try {
           const r = await withSandboxRetry(() => touch(() => handle.listFiles(path ?? '/', { recursive: false })));
           if (!r?.files?.length) return '';
@@ -247,7 +308,7 @@ export function createSandboxExecutor(
             })
             .join('\n');
         } catch (err) {
-          return `list error: ${errorMessage({ error: err })}`;
+          return refusalText(sandboxFailure({ doing: `sandbox listFiles ${path ?? '/'}`, cause: err }));
         }
       },
     },
@@ -260,23 +321,30 @@ export function createSandboxExecutor(
     deleteFile: {
       description: 'Delete a file or directory.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED;
+        if (!handle) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
-        if (path === undefined) return 'delete error: path must be a string';
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'sandbox deleteFile: path must be a string'));
+        }
         try {
           await withSandboxRetry(() => touch(() => Promise.resolve(handle.deleteFile(path))));
           return `deleted ${path}`;
         } catch (err) {
-          return `delete error: ${errorMessage({ error: err })}`;
+          return refusalText(sandboxFailure({ doing: `sandbox deleteFile ${path}`, cause: err }));
         }
       },
     },
     exists: {
       description: 'Check if a path exists — uses shell test.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED;
+        if (!handle) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
-        if (path === undefined) return 'false';
+        // `'false'` is what this answered, and it is a claim the path is absent
+        // — the one thing a caller that could not be asked must never say
+        // (AGENTS.md: an empty read is distinguishable from a failed read).
+        if (path === undefined) {
+          return refusalText(new ProteusError('bad_input', 'sandbox exists: path must be a string'));
+        }
         const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${JSON.stringify(path)} && echo true || echo false`)));
         const out = (res.stdout ?? res.output ?? '').trim();
         return out.includes('true') ? 'true' : 'false';
@@ -291,12 +359,12 @@ export function createSandboxExecutor(
         '(e.g. `nohup python3 -m http.server <port> --directory /workspace/<app> > /tmp/srv.log 2>&1 &` ' +
         'for static sites, or `nohup node server.js > /tmp/srv.log 2>&1 &` for Node) and retry.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED;
-        if (!previewHostSuffix) return PREVIEWS_NOT_CONFIGURED;
+        if (!handle) return NOT_CONFIGURED_REFUSAL;
+        if (!previewHostSuffix) return PREVIEWS_REFUSAL;
         const p = parseInput(PortSchema, { value: args[0] });
         const name = parseInput(OptionalStringSchema, { value: args[1] });
         if (p === undefined) {
-          return `expose error: invalid port ${String(args[0])}`;
+          return refusalText(new ProteusError('bad_input', `sandbox exposePort: invalid port ${String(args[0])}`));
         }
         // Pre-flight: verify a server is listening on the port inside the
         // container. Without this we hand back a preview URL that 502s
@@ -317,22 +385,33 @@ export function createSandboxExecutor(
           const httpCode = parseInt(codeStr ?? '0', 10);
           const curlExit = parseInt(exitStr ?? '0', 10);
           if (curlExit === 7 || httpCode === 0) {
-            return (
-              `expose error: nothing is listening on port ${p} inside the sandbox. ` +
-              `Start your server FIRST, then call sandbox.exposePort. Examples:\n` +
-              `  • Static site (HTML/CSS/JS): ` +
-              `await sandbox.exec("cd /workspace/<app-dir> && nohup python3 -m http.server ${p} > /tmp/srv-${p}.log 2>&1 &")\n` +
-              `  • Node:                       ` +
-              `await sandbox.exec("cd /workspace/<app-dir> && nohup node server.js > /tmp/srv-${p}.log 2>&1 &")\n` +
-              `Then wait ~1s (await new Promise(r=>setTimeout(r,1000))) and call sandbox.exposePort(${p}) again.`
-            );
+            // `bad_input`, and it is the honest one of three near misses. Nothing
+            // was tried, and what must change is the caller's own request — start
+            // the server, then ask again. `unavailable` would file a container
+            // that is up and healthy under the platform gap that means Proteus
+            // never provisioned one, and `missing` is not a refusal at all, so it
+            // would land a correct decline in the candidate-defect part of the
+            // census (read-models/tool-failures.ts).
+            return refusalText(new ProteusError('bad_input',
+              `nothing is listening on port ${p} inside the sandbox. `
+              + `Start your server FIRST, then call sandbox.exposePort. Examples:\n`
+              + `  • Static site (HTML/CSS/JS): `
+              + `await sandbox.exec("cd /workspace/<app-dir> && nohup python3 -m http.server ${p} > /tmp/srv-${p}.log 2>&1 &")\n`
+              + `  • Node:                       `
+              + `await sandbox.exec("cd /workspace/<app-dir> && nohup node server.js > /tmp/srv-${p}.log 2>&1 &")\n`
+              + `Then wait ~1s (await new Promise(r=>setTimeout(r,1000))) and call sandbox.exposePort(${p}) again.`,
+            ));
           }
         } catch (err) {
           // Probe failed for a non-listener reason (sandbox exec errored).
           // Continue — the SDK exposePort call below will surface its own
           // error if exposure can't be set up; we don't want to gate the
           // happy path on a probe glitch.
-          console.warn(`[sandbox.exposePort] port probe failed (continuing): ${errorMessage({ error: err })}`);
+          diagnostics.failure(
+            'sandbox.port_probe_failed',
+            toProteusError({ doing: 'probe a sandbox port before exposing it', cause: err, otherwise: 'unavailable' }),
+            { port: p },
+          );
         }
         try {
           const opts: SandboxExposeOptions = { hostname: previewHostSuffix };
@@ -340,36 +419,38 @@ export function createSandboxExecutor(
           const exposed = await withSandboxRetry(() => touch(() => handle.exposePort(p, opts)));
           return exposed.url;
         } catch (err) {
-          return `expose error: ${errorMessage({ error: err })}`;
+          return refusalText(sandboxFailure({ doing: `sandbox exposePort ${p}`, cause: err }));
         }
       },
     },
     unexposePort: {
       description: 'Stop exposing a port.',
       execute: async (...args: unknown[]): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED;
+        if (!handle) return NOT_CONFIGURED_REFUSAL;
         const port = parseInput(PortSchema, { value: args[0] });
-        if (port === undefined) return `unexpose error: invalid port ${String(args[0])}`;
+        if (port === undefined) {
+          return refusalText(new ProteusError('bad_input', `sandbox unexposePort: invalid port ${String(args[0])}`));
+        }
         try {
           await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(port))));
           return `unexposed ${port}`;
         } catch (err) {
-          return `unexpose error: ${errorMessage({ error: err })}`;
+          return refusalText(sandboxFailure({ doing: `sandbox unexposePort ${port}`, cause: err }));
         }
       },
     },
     listPorts: {
       description: 'List currently exposed ports. Returns JSON array of {port,url,status}.',
       execute: async (): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED;
-        if (!previewHostSuffix) return PREVIEWS_NOT_CONFIGURED;
+        if (!handle) return NOT_CONFIGURED_REFUSAL;
+        if (!previewHostSuffix) return PREVIEWS_REFUSAL;
         try {
           // SDK method is getExposedPorts — the tool we expose is still
           // named listPorts for backward compat with the codemode namespace.
           const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(previewHostSuffix)));
           return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
         } catch (err) {
-          return `listPorts error: ${errorMessage({ error: err })}`;
+          return refusalText(sandboxFailure({ doing: 'sandbox listPorts', cause: err }));
         }
       },
     },
@@ -391,6 +472,12 @@ export function createSandboxExecutor(
  * both. A cold start costs ~2.8s; concurrency is refused, not queued, at 10
  * instances (503) and on a start-rate burst (429).
  * Full rule: docs/EXECUTION-LAYER-SPEC.md.
+ *
+ * Every call below either answers, or resolves to a refusal
+ * \`{"reason":"<class>","error":"<what happened>"}\`. \`reason\` is the class —
+ * bad_input, unavailable, unsupported, timeout, cancelled, oom, io — so branch on
+ * it rather than matching prose. \`unavailable\` means this deployment has no
+ * container; retrying a different runtime is the move.
  */
 declare namespace sandbox {
   function exec(command: string): Promise<string>;
@@ -399,7 +486,8 @@ declare namespace sandbox {
   function listFiles(path: string): Promise<string>;
   function readdir(path: string): Promise<string>;
   function deleteFile(path: string): Promise<string>;
-  function exists(path: string): Promise<'true'|'false'>;
+  /** "true" or "false" — or a refusal payload, if the container could not be asked. */
+  function exists(path: string): Promise<string>;
   function exposePort(port: number, name?: string): Promise<string>;
   function unexposePort(port: number): Promise<string>;
   function listPorts(): Promise<string>;

@@ -11,13 +11,13 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, createMockSession, makeSql } from './helpers.js';
-import { runMCTS } from '../src/mcts/engine.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
-import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
+import { createTestRuntime, createMockSession, makeSql } from './helpers';
+import { runMCTS } from '../src/mcts/engine';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initCraftScoreTables } from '../src/craft/schemas';
+import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
+import type { AgentRuntime } from '../src/types/agent-runtime';
 
 function initTables(rt: AgentRuntime): void {
   initSearchTables(rt.storage.execRaw, rt.storage.sql);
@@ -124,7 +124,10 @@ async function captureConsole<Result>(fn: () => Promise<Result>): Promise<Consol
   return { stdout, stderr };
 }
 
-const isCheckpointLine = (line: string): boolean => line.startsWith('[proteus] mcts checkpoint');
+/** The heartbeat, as the typed logger emits it: one JSON line whose `event` is the
+ *  stable dotted name. Keyed on the NAME rather than on prose, which is the whole
+ *  point of the name — this predicate is what a Workers Logs query would be. */
+const isCheckpointLine = (line: string): boolean => line.includes('"event":"mcts.checkpoint_reached"');
 
 /** A runtime plus the durable search store — the only configuration that
  *  heartbeats at all, so both channel assertions run against it. */
@@ -142,8 +145,10 @@ describe('MCTS per-iteration checkpoint logging', () => {
     );
     const checkpointLines = stderr.filter(isCheckpointLine);
     expect(checkpointLines).toHaveLength(3);
-    expect(checkpointLines[0]).toContain('iteration=1/3 remaining=2');
-    expect(checkpointLines[2]).toContain('iteration=3/3 remaining=0');
+    // Fields, not prose: `iteration`/`total`/`remaining` are scalars a query can
+    // filter and order on, which the old interpolated `iteration=1/3` string was not.
+    expect(JSON.parse(checkpointLines[0]!).fields).toMatchObject({ iteration: 1, total: 3, remaining: 2 });
+    expect(JSON.parse(checkpointLines[2]!).fields).toMatchObject({ iteration: 3, total: 3, remaining: 0 });
   });
 
   // Regression: the heartbeat used to go to stdout, which under

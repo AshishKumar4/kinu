@@ -40,6 +40,7 @@
 
 import * as v from 'valibot';
 import type { SqlExec } from '@proteus/core';
+import { diagnostics, toProteusError } from '@proteus/core/obs';
 import {
   EGRESS_PLACEHOLDER_BYTES,
   isEgressPlaceholder,
@@ -47,8 +48,8 @@ import {
   type EgressRequestFacts,
   type EgressSecretBinding,
 } from '@proteus/core';
-import { randomToken } from '../lib/crypto.js';
-import type { CredentialCipher } from './credential-envelope.js';
+import { randomToken } from '../lib/crypto';
+import type { CredentialCipher } from './credential-envelope';
 
 /** A binding id is owner-authored and lands in a rule name and a SQL key, so
  *  it is held to the same shape as a credential key. */
@@ -254,8 +255,11 @@ export async function rewrapEgressSecrets(
       deps.sql.exec(`UPDATE user_egress_secrets SET secret = ? WHERE id = ?`, resealed, id);
     } catch (error) {
       clean = false;
-      console.warn(`[proteus] egress secret ${id} could not be re-sealed:`,
-        error instanceof Error ? error.message : String(error));
+      diagnostics.failure('egress.secret_reseal_failed', toProteusError({
+        doing: 'resealing an egress secret under the current key',
+        cause: error,
+        otherwise: 'bad_input',
+      }), { secretId: id });
     }
   }
   return clean;

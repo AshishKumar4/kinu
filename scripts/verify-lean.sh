@@ -5,3 +5,4 @@ cd "$(dirname "$0")/../lean"
 lake build
 bash check-no-false.sh
 node check-traceability.mjs
+bun ../scripts/lean-citations.ts

@@ -18,26 +18,26 @@ import {
   type StepResult,
 } from 'ai';
 import { combineAbortSignals } from '@proteus/agent-utils';
-import { DEFAULT_MAX_STEPS } from './config.js';
+import { DEFAULT_MAX_STEPS } from './config';
 import {
   assertToolsSupportedByModel,
   type PromptModelContext,
-} from './prompting/model-profile.js';
-import { applyCacheBreakpoints, hasCacheMarkers, type CacheRetention } from './prompting/cache-breakpoints.js';
-import type { TurnContextMeter } from './context-meter.js';
-import { composePrepareStep, type StepDynamicContext } from './prompting/prepare-step.js';
-import type { MissionGovernor } from './mission-budget.js';
-import type { AttachmentPolicy } from './prompting/attachment-sanitizer.js';
-import { assembleTurnMessages } from './orchestrator/turn-context.js';
-import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls.js';
-import { contextWindowForModel } from './context-window.js';
-import type { ExtensionHost } from './extension.js';
-import { mergeProviderOptions } from './strategy/effort.js';
-import { describeProviderError } from './providers/util.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window.js';
+} from './prompting/model-profile';
+import { applyCacheBreakpoints, hasCacheMarkers, type CacheRetention } from './prompting/cache-breakpoints';
+import type { TurnContextMeter } from './context-meter';
+import { composePrepareStep, type StepDynamicContext } from './prompting/prepare-step';
+import type { MissionGovernor } from './mission-budget';
+import type { AttachmentPolicy } from './prompting/attachment-sanitizer';
+import { assembleTurnMessages } from './orchestrator/turn-context';
+import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
+import { contextWindowForModel } from './context-window';
+import type { ExtensionHost } from './extension';
+import { mergeProviderOptions } from './strategy/effort';
+import { describeProviderError } from './providers/util';
+import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window';
 import * as v from 'valibot';
-import { JsonObjectSchema, type JsonObject } from './utils/json.js';
-import { normalizeUsage, usageReported, type Usage } from './usage.js';
+import { JsonObjectSchema, type JsonObject } from './utils/json';
+import { normalizeUsage, usageReported, type Usage } from './usage';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }

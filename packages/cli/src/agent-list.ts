@@ -5,8 +5,8 @@ import {
   updateConfigFile,
   type AgentMode,
   type ProteusAgentConfig,
-} from './config.js';
-import { listCloudAgents, type CloudAgent } from './cloud-api.js';
+} from './config';
+import { listCloudAgents, type CloudAgent } from './cloud-api';
 
 export interface ListedAgent {
   name: string;

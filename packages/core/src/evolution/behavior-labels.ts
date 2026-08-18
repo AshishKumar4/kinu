@@ -70,19 +70,19 @@
  * how much nothing carries.
  */
 
-import type { LLM } from '../types/primitives.js';
-import { formatScoreInterval } from '../utils/stats.js';
-import { estimateTokens, estimateUsdCost, meterLLM, type LLMUsage } from '../llm.js';
-import type { LabelingItem } from './calibration.js';
-import { askEnsembleJudge, flagsNegative, panelVerdict, type EnsembleJudge } from './ensemble.js';
+import type { LLM } from '../types/primitives';
+import { formatScoreInterval } from '../utils/stats';
+import { estimateTokens, estimateUsdCost, meterLLM, type LLMUsage } from '../llm';
+import type { LabelingItem } from './calibration';
+import { askEnsembleJudge, flagsNegative, panelVerdict, type EnsembleJudge } from './ensemble';
 import {
   classifyTurnOutcome, isNegativeOutcome, OUTCOME_LABELS,
   type OutcomeLabel,
-} from './outcomes.js';
+} from './outcomes';
 import {
   designWeightedKappa, resampledAccuracy,
   type ClassifierAccuracy, type KappaEstimate,
-} from './ppi.js';
+} from './ppi';
 
 // ── One mined turn ───────────────────────────────────────────────
 

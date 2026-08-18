@@ -18,10 +18,10 @@
  * APPENDS each page.
  */
 
-import type { RunEventQuery, RunEventRecorder, RunListEntry } from '../events/recorder.js';
-import type { RunEvent } from '../events/types.js';
-import { addUsage, usageReported, type Usage } from '../usage.js';
-import { mapPage, seekPage, StaleCursorError, type Page, type SeekCursor } from './page.js';
+import type { RunEventQuery, RunEventRecorder, RunListEntry } from '../events/recorder';
+import type { RunEvent } from '../events/types';
+import { addUsage, usageReported, type Usage } from '../usage';
+import { mapPage, seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
 
 export type { RunListEntry };
 

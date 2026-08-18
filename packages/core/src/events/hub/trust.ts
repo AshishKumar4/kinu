@@ -19,7 +19,7 @@ import {
   type TrustLevel, type Priority, type PayloadPolicy,
   type IngressDescriptor, type EventVariant,
   IngressRejectedError,
-} from './types.js';
+} from './types';
 
 // ── Meet (greatest lower bound) ──────────────────────────────────
 

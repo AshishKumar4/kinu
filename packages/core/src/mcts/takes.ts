@@ -11,14 +11,14 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
-import type { MergeResult } from '../heads/types.js';
-import type { SearchNode } from '../types/mcts.js';
-import { recordTurnOutcome } from '../evolution/outcomes.js';
-import { reconcileColumns } from '../identity/columns.js';
-import { nanoid } from '../utils/nanoid.js';
-import { nowMs } from '../utils/date.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
+import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import type { MergeResult } from '../heads/types';
+import type { SearchNode } from '../types/mcts';
+import { recordTurnOutcome } from '../evolution/outcomes';
+import { reconcileColumns } from '../identity/columns';
+import { nanoid } from '../utils/nanoid';
+import { nowMs } from '../utils/date';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 
 /** Most candidates a take set carries (including the winner). Two near-tied
  *  alternatives are a meaningful choice; ten are noise. */
@@ -385,6 +385,9 @@ export function recordTakePick(
     // A sibling pick IS the correction: the candidate the user actually wanted.
     followup: changedAnswer ? chosen.text : null,
     scaffoldVersion: input.scaffoldVersion ?? null,
+    evidence: changedAnswer
+      ? 'the user picked an alternate take over the delivered answer'
+      : 'the user re-picked the delivered answer over its alternates',
     now,
   });
 

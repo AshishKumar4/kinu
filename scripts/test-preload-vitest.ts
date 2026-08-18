@@ -9,6 +9,6 @@
 // that differs between the two runners is this import.
 import { afterAll } from 'vitest';
 
-import { release } from './test-scratch-home.ts';
+import { release } from './test-scratch-home';
 
 afterAll(release);

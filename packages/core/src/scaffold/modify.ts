@@ -5,15 +5,15 @@
  * only grows); Safety/CapabilitySafety.lean — scaffoldwrite_not_grantable.
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import { DEFAULT_CONFIG } from '../config.js';
-import { nowMs, today } from '../utils/date.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import { DEFAULT_CONFIG } from '../config';
+import { nowMs, today } from '../utils/date';
 import {
   SCAFFOLD_FORBIDDEN_PATTERNS as FORBIDDEN_PATTERNS,
   SCAFFOLD_REQUIRED_SIGNATURE as REQUIRED_SIGNATURE,
-} from './safety-patterns.js';
-import { checkMisevolution, recordMisevolutionVeto } from './misevolution.js';
-import { parsePathologyTag } from '../evolution/pathology.js';
+} from './safety-patterns';
+import { checkMisevolution, recordMisevolutionVeto } from './misevolution';
+import { parsePathologyTag } from '../evolution/pathology';
 
 /** Outcome of one scaffold proposal through the 4-gate pipeline. */
 export interface ModifyResult {

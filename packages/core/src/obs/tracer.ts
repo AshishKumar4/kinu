@@ -97,6 +97,15 @@ export interface RecordedSpan {
   readonly name: string;
   readonly isolateGen: number;
   readonly selfPath: string;
+  /**
+   * Index in `opened` of the span this one opened INSIDE, or null at a root.
+   *
+   * The TREE, which a flat list of names cannot express and which is the only
+   * thing worth asserting about instrumentation: `alarm.tick` and
+   * `alarm.triggers_fired` both appearing in `opened` proves neither that the
+   * second ran inside the first nor that the first covered the second's work.
+   */
+  readonly parent: number | null;
   readonly attributes: ReadonlyMap<string, SpanAttributeValue>;
   readonly failures: readonly string[];
 }
@@ -117,6 +126,15 @@ export interface RecordingTracer extends Tracer {
  */
 export function createRecordingTracer(): RecordingTracer {
   const opened: RecordedSpan[] = [];
+  /** Indices of the spans currently open, innermost last — the same discipline
+   *  `tracing.enterSpan` applies natively, so the recorded parent is the one the
+   *  runtime would nest under. It stays pushed until an async `fn` SETTLES, not
+   *  until it returns a pending promise, because a phase that awaits is still the
+   *  parent of everything opened after the await. The one shape it reads wrongly
+   *  is two spans open CONCURRENTLY under one parent, where the second nests
+   *  under the first; the paths asserted with this fake await in sequence, and a
+   *  concurrent fan-out would need the real runtime's tree anyway. */
+  const stack: number[] = [];
   return {
     opened,
     span<T>(name: string, attributes: SpanOpenAttributes, fn: (span: ScopedSpan) => T): T {
@@ -125,10 +143,12 @@ export function createRecordingTracer(): RecordingTracer {
         [SPAN_ATTR_SELF_PATH, attributes.selfPath],
       ]);
       const failures: string[] = [];
+      const index = opened.length;
       opened.push({
         name,
         isolateGen: attributes.isolateGen,
         selfPath: attributes.selfPath,
+        parent: stack.at(-1) ?? null,
         attributes: captured,
         failures,
       });
@@ -141,7 +161,27 @@ export function createRecordingTracer(): RecordingTracer {
           failures.push(`${error.name}: ${error.message}`);
         },
       };
-      return fn(span);
+      stack.push(index);
+      const close = (): void => {
+        const top = stack.lastIndexOf(index);
+        if (top >= 0) stack.splice(top, 1);
+      };
+      let closesLater = false;
+      try {
+        const result = fn(span);
+        // `instanceof Promise` rather than a structural `then` probe: every
+        // caller of this fake passes an `async` callback or a synchronous one, so
+        // the narrow test is exact here and needs no type assertion. A foreign
+        // thenable would close early and mis-parent what follows — visible as a
+        // wrong `parent`, which is the thing these assertions read.
+        if (result instanceof Promise) {
+          closesLater = true;
+          void result.finally(close);
+        }
+        return result;
+      } finally {
+        if (!closesLater) close();
+      }
     },
   };
 }

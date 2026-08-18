@@ -26,11 +26,11 @@
 import { generateText } from 'ai';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
-import type { ModelCallSink } from './events/model-call.js';
-import { normalizeUsage } from './usage.js';
-import { REASONING_EFFORTS, reasoningEffortOptions } from './strategy/effort.js';
-import { parseModelSpec } from './providers/types.js';
-import { TOOL_REACH } from './tools/registry.js';
+import type { ModelCallSink } from './events/model-call';
+import { normalizeUsage } from './usage';
+import { REASONING_EFFORTS, reasoningEffortOptions } from './strategy/effort';
+import { parseModelSpec } from './providers/types';
+import { TOOL_REACH } from './tools/registry';
 
 /** A provider's host-side result before the executor validates the VM boundary
  *  as JSON. Domain objects are allowed here; functions and symbols are not. */

@@ -7,9 +7,9 @@
  * Pure function. The same input always produces the same key.
  */
 
-import { sha256Hex, stableStringify } from '../../safety/argument-digest.js';
-import type { IngressDescriptor, ProteusEvent, ReadableProteusEvent } from './types.js';
-import { decodeJsonValue } from '../../utils/json.js';
+import { sha256Hex, stableStringify } from '../../safety/argument-digest';
+import type { IngressDescriptor, ProteusEvent, ReadableProteusEvent } from './types';
+import { decodeJsonValue } from '../../utils/json';
 
 /** Map an event to its dedupe key, or null if the variant is not deduped. */
 export function dedupeKeyFor(event: ProteusEvent): string | null {

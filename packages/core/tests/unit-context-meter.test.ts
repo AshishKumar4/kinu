@@ -3,7 +3,7 @@
 // and no measurement invented for a step that had none.
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
-import { measureContext, TurnContextMeter, DYNAMIC_CONTEXT_OPEN_TAG } from '../src/index.ts';
+import { measureContext, TurnContextMeter, DYNAMIC_CONTEXT_OPEN_TAG } from '../src/index';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });

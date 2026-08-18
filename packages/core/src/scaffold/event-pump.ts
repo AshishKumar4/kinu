@@ -10,7 +10,7 @@
  * vocabulary. That bridge lives here once so the two backends cannot drift.
  */
 
-import type { ScaffoldEvent, ScaffoldEmitFn, ScaffoldRunResult } from './executor.js';
+import type { ScaffoldEvent, ScaffoldEmitFn, ScaffoldRunResult } from './executor';
 
 /**
  * Drive a scaffold run and yield its events in order, returning the run's

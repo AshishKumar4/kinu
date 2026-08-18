@@ -16,9 +16,9 @@
  */
 
 import { argumentDigest, type SqlExec } from '@proteus/core';
-import { sendOwnerEmail } from '../email/outbound.js';
-import type { EmailOutbox } from '../email/outbox.js';
-import type { ProbeOutcome } from './probes.js';
+import { sendOwnerEmail } from '../email/outbound';
+import type { EmailOutbox } from '../email/outbox';
+import type { ProbeOutcome } from './probes';
 import * as v from 'valibot';
 
 /** The From identity of alert mail. A dot is not legal in a workspace name, so

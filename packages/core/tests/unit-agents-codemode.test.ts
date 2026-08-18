@@ -36,7 +36,8 @@ import {
   type SubordinateRosterEntry,
   type TeamToolDeps,
   type SubordinateDelivery, type SubordinateHandoff,
-} from '../src/index.ts';
+} from '../src/index';
+import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 
 interface Call { action: string; input: JsonValue }
 
@@ -103,6 +104,7 @@ function makeTeam() {
   return {
     calls,
     deps: {
+      delegation: ROOT_DELEGATION_BUDGET,
       list: async () => [rosterEntry],
       create: async (input) => ({
         name: input.name ?? 'researcher',
@@ -174,7 +176,7 @@ describe('agents.* codemode namespace — dep gating', () => {
 
   test('team-without-peers drops reply, keeps the subordinate verbs', () => {
     const deps = withBuildMode({ team: makeTeam().deps });
-    expect(Object.keys(namespaceOf(() => deps))).toEqual(['staff', 'ask', 'send', 'list', 'dismiss']);
+    expect(Object.keys(namespaceOf(() => deps))).toEqual(['hire', 'ask', 'send', 'list', 'dismiss']);
   });
 
   test('the namespace members ARE the tool action enum — one gate, never two', () => {
@@ -186,7 +188,7 @@ describe('agents.* codemode namespace — dep gating', () => {
 
   test('an ungated action is structurally absent, not a runtime refusal', () => {
     const ns = namespaceOf(() => ({ fork: forkDeps() }));
-    expect(ns.staff).toBeUndefined();
+    expect(ns.hire).toBeUndefined();
     expect(ns.ask).toBeUndefined();
   });
 });
@@ -258,13 +260,13 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(strategyOption(observed?.options, 'heads')).toEqual({ controller, heads: twoForks, mergeStrategy: 'consensus' });
   });
 
-  test('staff / ask / send / reply / list / dismiss reach the same transports', async () => {
+  test('hire / ask / send / reply / list / dismiss reach the same transports', async () => {
     const team = makeTeam();
     const peers = makePeers();
     const deps = withBuildMode({ fork: forkDeps(), team: team.deps, peers: peers.deps });
     const ns = namespaceOf(() => deps);
 
-    expect(await member(ns, 'staff').execute({ role: 'researcher', mission: 'Map the landscape' }))
+    expect(await member(ns, 'hire').execute({ role: 'researcher', mission: 'Map the landscape' }))
       .toEqual({ name: 'researcher', displayName: 'Researcher' });
     expect(await member(ns, 'ask').execute({ agent: 'researcher', message: 'Survey auth', deliverable: 'a note' }))
       .toMatchObject({ status: 'working', agent: 'researcher' });
@@ -362,7 +364,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
   test('a non-object argument is a sharp error, not a deps call', async () => {
     const team = makeTeam();
     const ns = namespaceOf(() => ({ team: team.deps }));
-    expect(await member(ns, 'staff').execute('just a string')).toEqual({ error: 'agents.staff: expects a single options object' });
+    expect(await member(ns, 'hire').execute('just a string')).toEqual({ error: 'agents.hire: expects a single options object' });
     expect(await member(ns, 'dismiss').execute(['researcher'])).toEqual({ error: 'agents.dismiss: expects a single options object' });
     expect(team.calls).toEqual([]);
   });
@@ -381,7 +383,7 @@ describe('agents.* codemode namespace — declared types', () => {
   test('declares exactly the gated members', () => {
     const forkOnly = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
     expect(forkOnly).toContain('fork(input: {');
-    expect(forkOnly).not.toContain('staff(input: {');
+    expect(forkOnly).not.toContain('hire(input: {');
     expect(forkOnly).not.toContain('dismiss(input: {');
 
     const full = createAgentsCodemodeProvider(fullDeps).types ?? '';

@@ -33,8 +33,8 @@
  */
 
 import * as v from 'valibot';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { Executor } from '../types/primitives.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { Executor } from '../types/primitives';
 import {
   assertJsonValue,
   isJsonObject,
@@ -43,7 +43,7 @@ import {
   decodeJsonValue,
   type JsonObject,
   type JsonValue,
-} from '../utils/json.js';
+} from '../utils/json';
 
 type SandboxFunction = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
 interface SandboxFunctions {

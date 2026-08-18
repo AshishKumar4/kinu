@@ -14,10 +14,10 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { EmailOutbox, type OutboundEmailMessage } from '../src/email/outbox.js';
-import { recordProbeRun, listIncidents, type MonitorDeps } from '../src/monitor/incidents.js';
-import { runSyntheticProbes, type ProbeDeps, type ProbeOutcome } from '../src/monitor/probes.js';
-import { sqlExec } from './helpers/user-do.js';
+import { EmailOutbox, type OutboundEmailMessage } from '../src/email/outbox';
+import { recordProbeRun, listIncidents, type MonitorDeps } from '../src/monitor/incidents';
+import { runSyntheticProbes, type ProbeDeps, type ProbeOutcome } from '../src/monitor/probes';
+import { sqlExec } from './helpers/user-do';
 
 // ── A site to probe ──────────────────────────────────────────────
 

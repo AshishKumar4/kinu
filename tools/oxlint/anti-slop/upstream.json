@@ -13,10 +13,15 @@
     "no-ddl-in-catch",
     "no-empty-catch",
     "no-sentinel-catch",
+    "no-untyped-console",
     "no-wait-until-in-durable-object",
-    "require-cause-on-rethrow"
+    "require-cause-on-rethrow",
+    "require-runtime-import-extension"
   ],
   "proteusRuleGates": {
+    "import-extension.gate.test.ts": [
+      "require-runtime-import-extension"
+    ],
     "no-ambient-git.gate.test.ts": [
       "no-ambient-git-in-tests"
     ],
@@ -31,6 +36,9 @@
     ],
     "no-wait-until.gate.test.ts": [
       "no-wait-until-in-durable-object"
+    ],
+    "no-untyped-console.gate.test.ts": [
+      "no-untyped-console"
     ]
   },
   "vendored": {
@@ -40,10 +48,13 @@
     "gate.test.ts": {
       "proteusOnly": true
     },
+    "import-extension.gate.test.ts": {
+      "proteusOnly": true
+    },
     "index.ts": {
       "upstream": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f",
-      "local": "8b649d5d24892dceb32017530b46d0ea0d8fa959b2924a2949a666a07a57bda3",
-      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the four no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, and no-copy-rpc-stub. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
+      "local": "b8f15fd88a2adbaa02510c39ce6b37cc6efedbe3c0f29acfd37366b2f0dc3958",
+      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the four no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, no-copy-rpc-stub, no-untyped-console, and require-runtime-import-extension. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
     },
     "no-ambient-git.gate.test.ts": {
       "proteusOnly": true
@@ -199,6 +210,12 @@
     "rules/require-cause-on-rethrow.ts": {
       "proteusOnly": true
     },
+    "rules/require-runtime-import-extension.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/require-runtime-import-extension.ts": {
+      "proteusOnly": true
+    },
     "rules/require-safety-comment-for-type-assertion.local.test.ts": {
       "proteusOnly": true
     },
@@ -220,6 +237,15 @@
       "upstream": "318f56b17d9063134860fe4c51c2e22cb0a55e7f421a0ff4ccedb5a9e9c2b2d9"
     },
     "tsconfig.json": {
+      "proteusOnly": true
+    },
+    "no-untyped-console.gate.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-untyped-console.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-untyped-console.test.ts": {
       "proteusOnly": true
     }
   }

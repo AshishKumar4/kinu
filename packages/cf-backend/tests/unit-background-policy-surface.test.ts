@@ -7,7 +7,7 @@
 // runner must read it.
 import { describe, test, expect } from 'bun:test';
 import { BACKGROUND_POLICY } from '@proteus/core';
-import { orchestratorHarness } from './helpers/actor-harness.js';
+import { orchestratorHarness } from './helpers/actor-harness';
 import * as v from 'valibot';
 
 type RunnerView = {

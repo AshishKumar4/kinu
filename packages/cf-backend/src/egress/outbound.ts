@@ -61,9 +61,9 @@ import {
   type EgressSecretBinding,
   type ScrubReplacement,
 } from '@proteus/core';
-import type { OrchestratorAgent } from '../orchestrator.js';
-import { ownerCaller, type UserCaller } from '../user/workspace-capability.js';
-import type { EgressInjection, EgressInjectionResult } from '../user/egress-vault.js';
+import type { OrchestratorAgent } from '../orchestrator';
+import { ownerCaller, type UserCaller } from '../user/workspace-capability';
+import type { EgressInjection, EgressInjectionResult } from '../user/egress-vault';
 
 /**
  * The virtual host a container posts its own events to.

@@ -9,9 +9,9 @@
 // inside customFetch via the AuthResolver each call.
 import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo } from './types.js';
-import { createAuthedFetch } from './util.js';
-import { listModelsDevProviderModels } from './models-dev.js';
+import type { ModelProvider, ModelInfo } from './types';
+import { createAuthedFetch } from './util';
+import { listModelsDevProviderModels } from './models-dev';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';

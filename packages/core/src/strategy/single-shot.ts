@@ -1,8 +1,8 @@
 // Trivial strategy — one LLM call, return its answer with score 1.0.
 // Useful as a baseline against MCTS / Heads / ToT in evals.
 import { generateText } from 'ai';
-import type { ExplorationStrategy, StrategyContext, StrategyResult } from './types.js';
-import { normalizeUsage, usageTotal } from '../usage.js';
+import type { ExplorationStrategy, StrategyContext, StrategyResult } from './types';
+import { normalizeUsage, usageTotal } from '../usage';
 
 export function createSingleShotStrategy(): ExplorationStrategy {
   return {

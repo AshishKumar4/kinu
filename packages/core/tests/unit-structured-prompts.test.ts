@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   extractJsonArray, extractJsonObject, jsonArrayOnlyInstruction, jsonObjectOnlyInstruction,
   stripMarkdownFences,
-} from '../src/index.ts';
+} from '../src/index';
 
 describe('structured prompt helpers', () => {
   test('extracts balanced JSON objects with nested braces and strings', () => {

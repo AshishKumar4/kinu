@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { renderFactsBlock } from '../src/memory/facts.ts';
+import { renderFactsBlock } from '../src/memory/facts';
 import { createTestFactsStore } from '@proteus/test-utils';
 
 describe('agent_facts', () => {

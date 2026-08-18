@@ -8,11 +8,11 @@
 //   - POST /forward attaches the credential server-side and streams through
 //   - a target outside the credential's own endpoint is refused (exfiltration)
 //   - the Cloudflare login is never attached to a client-chosen URL
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { handleCliRequest } from '../src/cli/routes.js';
+import { handleCliRequest } from '../src/cli/routes';
 import { asFetchFunction } from '@proteus/core';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';

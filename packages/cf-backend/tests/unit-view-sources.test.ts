@@ -21,7 +21,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RESERVED_VIEW_TITLES, VIEW_DATA_SOURCES, normalizeViewTitle } from '@proteus/core';
-import { AGENT_RPC_ACCESS, requiredRpcAccess } from '../src/cli/rpc-gate.js';
+import { AGENT_RPC_ACCESS, requiredRpcAccess } from '../src/cli/rpc-gate';
 
 const SRC = join(import.meta.dir, '..', 'src');
 const read = (rel: string): string => readFileSync(join(SRC, rel), 'utf8');

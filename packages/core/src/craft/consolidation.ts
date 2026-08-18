@@ -10,11 +10,11 @@
  * consolidation empties the list and mean drops to 0. We add the non-empty guard.
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { CraftScoreEntry } from '../types/craft.js';
-import { effectiveScore } from './ema.js';
-import { isoDate, nowMs } from '../utils/date.js';
-import { DEFAULT_CONFIG } from '../config.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { CraftScoreEntry } from '../types/craft';
+import { effectiveScore } from './ema';
+import { isoDate, nowMs } from '../utils/date';
+import { DEFAULT_CONFIG } from '../config';
 
 const RETIREMENT_THRESHOLD = DEFAULT_CONFIG.craftStore.retirementThreshold;
 const MIN_USES_BEFORE_RETIREMENT = DEFAULT_CONFIG.craftStore.minUsesBeforeRetirement;

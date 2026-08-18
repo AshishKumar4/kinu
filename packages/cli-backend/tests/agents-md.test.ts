@@ -4,7 +4,7 @@ import { describe, test, expect, afterEach } from 'bun:test';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { discoverAgentsMd } from '../src/agents-md.js';
+import { discoverAgentsMd } from '../src/agents-md';
 
 const roots: string[] = [];
 function makeTree(): string {

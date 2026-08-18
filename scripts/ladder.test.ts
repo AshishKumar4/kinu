@@ -25,8 +25,8 @@ import * as v from 'valibot';
 import {
   CI_EXEMPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims, deployGates,
   gatesFor, packageScripts, runnableArgv, trackedTestFiles,
-} from './ladder.ts';
-import { isRunnableSuite } from './sources.ts';
+} from './ladder';
+import { isRunnableSuite } from './sources';
 
 const root = resolve(import.meta.dir, '..');
 const tracked = trackedTestFiles();

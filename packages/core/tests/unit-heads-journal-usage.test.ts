@@ -25,11 +25,11 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { HeadJournal } from '../src/heads/journal.js';
-import { HEAD_USAGE_COLUMNS, initHeadsTables } from '../src/heads/schema.js';
-import { USAGE_FIELDS } from '../src/usage.js';
-import type { HeadInput, HeadReport, MergeResult } from '../src/heads/index.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { HeadJournal } from '../src/heads/journal';
+import { HEAD_USAGE_COLUMNS, initHeadsTables } from '../src/heads/schema';
+import { USAGE_FIELDS } from '../src/usage';
+import type { HeadInput, HeadReport, MergeResult } from '../src/heads/index';
+import { makeSql, makeExecRaw } from './helpers';
 
 /**
  * The pre-change DDL, verbatim — `DEFAULT 0` on the head's token columns,

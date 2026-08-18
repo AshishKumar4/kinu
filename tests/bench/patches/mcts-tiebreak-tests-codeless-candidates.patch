@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/mcts/test-selection.ts b/packages/core/src/mcts/test-selection.ts
+index 56c078cc..3bc8b275 100644
 --- a/packages/core/src/mcts/test-selection.ts
 +++ b/packages/core/src/mcts/test-selection.ts
-@@ -48,7 +48,7 @@
+@@ -48,7 +48,7 @@ export async function selectWinnerByTest(
    const language = candidates.find((node) => (node.code_used ?? '').trim().length > 0)?.code_language;
    if (!language) return winner.id;
    const runnable = candidates.filter((node) =>
 -    (node.code_used ?? '').trim().length > 0 && node.code_language === language);
 +    (node.code_used ?? '').trim().length === 0 && node.code_language === language);
    if (runnable.length < 2) return winner.id;
-
-   // One harness, written against the task using the value-argmax winner's code
+ 
+   // One check suite, written against the task using the value-argmax winner's

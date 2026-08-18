@@ -29,16 +29,16 @@ import { Database } from 'bun:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { minimumPairsForSignificance } from '../../core/src/index.js';
-import { createWorkspace } from '../../core/src/identity/index.js';
-import { initWorkspaceSchema, type LLMProviderConfig } from '../../core/src/index.js';
-import { openWorkspaceCLI, makeWorkspaceSchemaSql } from '../../cli-backend/src/index.js';
-import { TASK_OUTCOME, type VerifierContext } from '../src/eval-outcome.js';
+import { minimumPairsForSignificance } from '../../core/src/index';
+import { createWorkspace } from '../../core/src/identity/index';
+import { initWorkspaceSchema, type LLMProviderConfig } from '../../core/src/index';
+import { openWorkspaceCLI, makeWorkspaceSchemaSql } from '../../cli-backend/src/index';
+import { TASK_OUTCOME, type VerifierContext } from '../src/eval-outcome';
 import {
   HARD_TASKS, HARD_TASK_ENV, REFERENCE_FILE, SOLUTION_FILE,
   hardTaskCases, hardTaskFor, scoreRatio, seedHardTask, verifyHardTask,
   type HardTask, type RatioMeasurement,
-} from '../src/hard-tasks/index.js';
+} from '../src/hard-tasks/index';
 
 // Never called. The unroutable baseURL is deliberate: if anything in this file
 // reaches a model, it must fail rather than quietly bill someone.

@@ -23,8 +23,8 @@
  * their public entry point was already gated.
  */
 import { Agent, type AgentContext } from "agents";
-import { USER_DO_RPC_SURFACE, sealRpcSurface } from "../rpc-surface.js";
-import { parseCliTokenUserId } from "../cli/auth-store.js";
+import { USER_DO_RPC_SURFACE, sealRpcSurface } from "../rpc-surface";
+import { parseCliTokenUserId } from "../cli/auth-store";
 import {
   getActiveAccessTokenScopes,
   listAccessTokens as listAccessTokenRows,
@@ -34,7 +34,7 @@ import {
   type AccessTokenMint,
   type AccessTokenRecord,
   type AccessTokenScope,
-} from "../cli/access-token-store.js";
+} from "../cli/access-token-store";
 import { MCPClientManager } from "agents/mcp/client";
 import {
   DurableObjectOAuthClientProvider,
@@ -77,10 +77,10 @@ import {
   JsonObjectSchema,
   decodeJsonValue,
 } from '@proteus/core';
-import { tolerate } from '@proteus/core/obs';
+import { diagnostics, ProteusError, toProteusError, tolerate } from '@proteus/core/obs';
 import * as v from 'valibot';
-import { initUserTables } from './schema.js';
-import { bindAgentSql } from '../runtime.js';
+import { initUserTables } from './schema';
+import { bindAgentSql } from '../runtime';
 import {
   mintWorkspaceCapability,
   ownerCaller,
@@ -90,19 +90,19 @@ import {
   type UserCaller,
   type WorkspaceCapability,
   type ResolvedCaller,
-} from './workspace-capability.js';
-import { DeviceSocketHub, deviceIdFromSocket } from './device-hub.js';
-import { credentialToHeaders, accessTokenExpiring, isModelInferenceCredentialKey } from './credential-headers.js';
-import { validateCredential, validateCredentialKey, validateWorkspaceName } from './validate.js';
-import { createCredentialCipher, type CredentialCipher } from './credential-envelope.js';
+} from './workspace-capability';
+import { DeviceSocketHub, deviceIdFromSocket } from './device-hub';
+import { credentialToHeaders, accessTokenExpiring, isModelInferenceCredentialKey } from './credential-headers';
+import { validateCredential, validateCredentialKey, validateWorkspaceName } from './validate';
+import { createCredentialCipher, type CredentialCipher } from './credential-envelope';
 import {
   listEgressSecrets, putEgressSecret, resolveEgressInjection,
   revokeEgressSecret, rewrapEgressSecrets,
   type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps,
   type PutEgressSecretInput,
-} from './egress-vault.js';
-import { randomToken, sha256Hex } from '../lib/crypto.js';
-import { resolveWorkspaceTitle } from '../lib/agent-naming.js';
+} from './egress-vault';
+import { randomToken, sha256Hex } from '../lib/crypto';
+import { resolveWorkspaceTitle } from '../lib/agent-naming';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
@@ -114,7 +114,7 @@ import {
   parseMcpHeaders, buildMcpHeaderTransportOpts,
   type McpServerSummary, type McpTransport,
   type SerializableToolDescriptor,
-} from './mcp.js';
+} from './mcp';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   CLOUDFLARE_OAUTH_CRED_KEY,
@@ -131,7 +131,7 @@ import {
   withCloudflareAccount,
   type CloudflareAccount,
   type CloudflareAIGatewaySummary,
-} from '../lib/cloudflare-oauth.js';
+} from '../lib/cloudflare-oauth';
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 /** How long a device token survives without being used. Renewal is automatic
@@ -366,7 +366,11 @@ export class UserDO extends Agent<Env> {
     }));
     const failed = settled.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
     for (const failure of failed) {
-      console.warn('[user-do] capability backfill failed for a workspace:', failure.reason);
+      diagnostics.failure('capability.backfill_failed', toProteusError({
+        doing: "backfilling a workspace's capability token",
+        cause: failure.reason,
+        otherwise: 'unavailable',
+      }));
     }
     // Only a clean sweep retires the marker; a partial one retries next boot.
     if (failed.length === 0) {
@@ -1361,14 +1365,22 @@ export class UserDO extends Agent<Env> {
     let plaintext: string;
     try { plaintext = await (await this.cipher()).open(this.credentialAad(key), row.value); }
     catch (err) {
-      console.warn(`[user-do] credential ${key} is unreadable:`, errorMessage(err));
+      diagnostics.failure('credential.unreadable', toProteusError({
+        doing: 'opening a stored credential',
+        cause: err,
+        otherwise: 'bad_input',
+      }), { credentialKey: key });
       return null;
     }
     // Parsed outside the catch above on purpose: a JSON error message quotes
     // the input it choked on, and that input is the decrypted secret.
     try { return validateCredential(JSON.parse(plaintext)); }
     catch {
-      console.warn(`[user-do] credential ${key} did not decode as JSON`);
+      diagnostics.failure(
+        'credential.malformed',
+        new ProteusError('bad_input', 'a stored credential did not decode as JSON'),
+        { credentialKey: key },
+      );
       return null;
     }
   }
@@ -1417,7 +1429,11 @@ export class UserDO extends Agent<Env> {
           );
         } catch (err) {
           clean = false;
-          console.warn(`[user-do] credential ${row.key} could not be re-sealed:`, errorMessage(err));
+          diagnostics.failure('credential.reseal_failed', toProteusError({
+            doing: 'resealing a stored credential under the current key',
+            cause: err,
+            otherwise: 'bad_input',
+          }), { credentialKey: row.key });
         }
       }
       for (const row of this.sqlx<{ id: string; headers: string }>(
@@ -1431,7 +1447,11 @@ export class UserDO extends Agent<Env> {
           );
         } catch (err) {
           clean = false;
-          console.warn(`[user-do] MCP headers for ${row.id} could not be re-sealed:`, errorMessage(err));
+          diagnostics.failure('mcp.stored_headers_reseal_failed', toProteusError({
+            doing: "resealing an MCP server's stored headers under the current key",
+            cause: err,
+            otherwise: 'bad_input',
+          }), { serverId: row.id });
         }
       }
       // Egress secrets are sealed with the same cipher, so they rotate in the
@@ -1471,7 +1491,11 @@ export class UserDO extends Agent<Env> {
     if (stored === null) return null;
     try { return await (await this.cipher()).open(this.mcpHeadersAad(serverId), stored); }
     catch (err) {
-      console.warn(`[user-do] MCP headers for ${serverId} are unreadable:`, errorMessage(err));
+      diagnostics.failure('mcp.stored_headers_unreadable', toProteusError({
+        doing: "opening an MCP server's stored headers",
+        cause: err,
+        otherwise: 'bad_input',
+      }), { serverId });
       return null;
     }
   }
@@ -1721,12 +1745,20 @@ export class UserDO extends Agent<Env> {
       return next;
     } catch (err) {
       if (err instanceof CloudflareOAuthTokenError && err.oauthError === 'invalid_grant') {
-        console.warn('[user-do] cloudflare refresh token revoked; reconnect required:', err.message);
+        diagnostics.failure('credential.cloudflare_refresh_revoked', toProteusError({
+          doing: 'refreshing the Cloudflare credential',
+          cause: err,
+          otherwise: 'denied',
+        }));
         const { refreshToken: _dead, ...rest } = current;
         await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, rest);
         return 'revoked';
       }
-      console.warn('[user-do] cloudflare refresh failed; keeping current credential:', errorMessage(err));
+      diagnostics.failure('credential.cloudflare_refresh_failed', toProteusError({
+        doing: 'refreshing the Cloudflare credential',
+        cause: err,
+        otherwise: 'unavailable',
+      }));
       return null;
     }
   }
@@ -1745,7 +1777,11 @@ export class UserDO extends Agent<Env> {
       await this.writeCredential(CODEX_CRED_KEY, next);
       return next;
     } catch (err) {
-      console.warn('[user-do] codex refresh failed; keeping current credential:', errorMessage(err));
+      diagnostics.failure('credential.codex_refresh_failed', toProteusError({
+        doing: 'refreshing the Codex credential',
+        cause: err,
+        otherwise: 'unavailable',
+      }));
       return null;
     }
   }
@@ -1875,7 +1911,13 @@ export class UserDO extends Agent<Env> {
     const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
     if (!rows || rows.n === 0) return { servers: 0 };
     try { await this.userMcp().restoreConnectionsFromStorage('proteus-user-mcp'); }
-    catch (err) { console.warn('[user-do] userMcp_warmConnections failed:', errorMessage(err)); }
+    catch (err) {
+      diagnostics.failure('mcp.connection_warmup_failed', toProteusError({
+        doing: 'restoring the user MCP connections on warmup',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { servers: rows.n });
+    }
     return { servers: rows.n };
   }
 
@@ -2011,7 +2053,13 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'mcp.manage');
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
     try { await this.userMcp().removeServer(id); }
-    catch (err) { console.warn('[user-do] removeServer (live):', errorMessage(err)); }
+    catch (err) {
+      diagnostics.failure('mcp.live_server_removal_failed', toProteusError({
+        doing: 'removing a server from the live MCP manager',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { serverId: id });
+    }
     this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
     this._userMcpUpdatedAt = Date.now();
   }
@@ -2077,7 +2125,13 @@ export class UserDO extends Agent<Env> {
     // stored snapshot) — writing the SQL column alone never reaches the wire.
     if (p.headers !== undefined) {
       try { await this.reregisterUserMcpServer(id); }
-      catch (err) { console.warn('[user-do] userMcp_update header re-register:', errorMessage(err)); }
+      catch (err) {
+        diagnostics.failure('mcp.header_rotation_reregister_failed', toProteusError({
+          doing: 'reregistering an MCP server after a header rotation',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { serverId: id });
+      }
     }
   }
 
@@ -2095,7 +2149,13 @@ export class UserDO extends Agent<Env> {
     const mgr = this.userMcp();
     const callbackUrl = mgr.listServers().find((s) => s.id === id)?.callback_url ?? '';
     try { await mgr.removeServer(id); }
-    catch (err) { console.warn('[user-do] reregister removeServer:', errorMessage(err)); }
+    catch (err) {
+      diagnostics.failure('mcp.reregister_teardown_failed', toProteusError({
+        doing: 'tearing down an MCP connection before reregistering it',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { serverId: id });
+    }
 
     const headerOpts = buildMcpHeaderTransportOpts(parseMcpHeaders(await this.openMcpHeaders(id, row.headers))) ?? {};
     let authProvider: AgentMcpOAuthProvider | undefined;
@@ -2150,7 +2210,11 @@ export class UserDO extends Agent<Env> {
       // Cap at 5s so a single slow server can't block a turn indefinitely.
       await this.userMcp().waitForConnections({ timeout: MCP_WARMUP_TIMEOUT_MS });
     } catch (err) {
-      console.warn('[user-do] userMcp_toolDescriptors warmup:', errorMessage(err));
+      diagnostics.failure('mcp.descriptor_warmup_failed', toProteusError({
+        doing: 'warming the MCP connections that serve tool descriptors',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { servers: rows.length });
     }
 
     const out: SerializableToolDescriptor[] = [];

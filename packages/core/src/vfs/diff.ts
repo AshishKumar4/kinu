@@ -10,7 +10,7 @@
  * documentation, and the one that did forget cost 330 MiB in a real isolate
  * (see {@link MAX_LINES_PER_FILE}).
  */
-import { PLATFORM_CATALOG } from '../platform-catalog.js';
+import { PLATFORM_CATALOG } from '../platform-catalog';
 
 export interface DiffLine { kind: 'add' | 'del' | 'ctx'; text: string }
 export interface LineDiff {

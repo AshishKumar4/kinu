@@ -18,9 +18,9 @@
  * orchestrator's view for telemetry, UI, and merge-time gathering.
  */
 
-import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
-import { reconcileColumns } from '../identity/columns.js';
-import { USAGE_FIELDS, type Usage } from '../usage.js';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import { reconcileColumns } from '../identity/columns';
+import { USAGE_FIELDS, type Usage } from '../usage';
 
 /**
  * Every {@link Usage} field's column in `head_journal`, keyed by the field it

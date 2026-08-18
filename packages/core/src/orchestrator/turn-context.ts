@@ -26,9 +26,9 @@
  */
 
 import type { ModelMessage } from 'ai';
-import { sanitizeAttachmentsForModel, type AttachmentPolicy } from '../prompting/attachment-sanitizer.js';
-import { settleUnpairedToolCalls } from '../prompting/interrupted-tool-calls.js';
-import type { ExtensionHost } from '../extension.js';
+import { sanitizeAttachmentsForModel, type AttachmentPolicy } from '../prompting/attachment-sanitizer';
+import { settleUnpairedToolCalls } from '../prompting/interrupted-tool-calls';
+import type { ExtensionHost } from '../extension';
 
 export interface TurnContextInput {
   system: string;

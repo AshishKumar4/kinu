@@ -23,39 +23,40 @@
 
 import { routeAgentRequest } from "agents";
 import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
+import { diagnostics, toProteusError } from "@proteus/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath,
-} from "./agent-routing.js";
-import { handlePcRequest } from "./pc-handler.js";
-import { servePreviewRequest } from "./preview-proxy.js";
-import { handleRunEventsRequest } from "./run-events-routes.js";
-import { handleMcpRequest } from "./mcp-server.js";
-import { handleHealthRequest } from "./health-route.js";
-import { handleUserRequest } from "./user/routes.js";
-import { handleCliRequest } from "./cli/routes.js";
-import { handleAuthRequest } from "./auth/routes.js";
-import { handleLandingRequest } from "./landing-route.js";
-import { handleHubRequest } from "./events/routes.js";
-import { handleFilesRequest } from "./files-routes.js";
-import { handleInboundEmail } from "./email/handler.js";
-import { MONITOR_SINGLETON } from "./monitor/monitor-do.js";
-import { handleNimbusPreviewHostRequest } from "./nimbus-route.js";
+} from "./agent-routing";
+import { handlePcRequest } from "./pc-handler";
+import { servePreviewRequest } from "./preview-proxy";
+import { handleRunEventsRequest } from "./run-events-routes";
+import { handleMcpRequest } from "./mcp-server";
+import { handleHealthRequest } from "./health-route";
+import { handleUserRequest } from "./user/routes";
+import { handleCliRequest } from "./cli/routes";
+import { handleAuthRequest } from "./auth/routes";
+import { handleLandingRequest } from "./landing-route";
+import { handleHubRequest } from "./events/routes";
+import { handleFilesRequest } from "./files-routes";
+import { handleInboundEmail } from "./email/handler";
+import { MONITOR_SINGLETON } from "./monitor/monitor-do";
+import { handleNimbusPreviewHostRequest } from "./nimbus-route";
 import {
   authenticateRequest, AuthError, crossSiteRejection, isPublicPath,
   type AuthIdentity,
-} from "./auth/session.js";
+} from "./auth/session";
 import {
   containPreviewResponse, hostOf, isPreviewHostRequest, previewHostSuffix, previewSuffixMetaName,
-} from "./lib/preview-origin.js";
-import { withAppSecurityHeaders } from "./lib/security-headers.js";
-import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store.js";
-import { parseCliAgentConnectTicketUserId } from "./user/user-do.js";
-import { ownerCaller } from "./user/workspace-capability.js";
-import { CLI_SCOPES_HEADER } from "./cli/rpc-gate.js";
-import { claimOwnedWorkspace } from "./user/workspace-access.js";
-import { err } from "./lib/http.js";
+} from "./lib/preview-origin";
+import { withAppSecurityHeaders } from "./lib/security-headers";
+import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store";
+import { parseCliAgentConnectTicketUserId } from "./user/user-do";
+import { ownerCaller } from "./user/workspace-capability";
+import { CLI_SCOPES_HEADER } from "./cli/rpc-gate";
+import { claimOwnedWorkspace } from "./user/workspace-access";
+import { err } from "./lib/http";
 
 /** Public webhook delivery endpoint match. `/api/workspaces/<name>/webhook/<id>` —
  *  the only `/api/workspaces/<name>/...` route that bypasses browser OAuth (it has
@@ -64,13 +65,13 @@ function isWebhookDeliveryPath(pathname: string): boolean {
   return /^\/api\/workspaces\/[^/]+\/webhook\/[^/]+$/.test(pathname);
 }
 
-export { OrchestratorAgent } from "./orchestrator.js";
+export { OrchestratorAgent } from "./orchestrator";
 // ExplorationAgent is the single Facet class for parallel sub-agent work.
 // MCTS mode: explore() / evaluate() / generateReflection() — short rollouts.
 // Head mode: initHead() / runAsHead() / abortHead() — multi-step branching heads.
-export { ExplorationAgent } from "./exploration.js";
-export { SubordinateAgent } from "./subordinate-agent.js";
-export { ProteusSandbox } from "./proteus-sandbox.js";
+export { ExplorationAgent } from "./exploration";
+export { SubordinateAgent } from "./subordinate-agent";
+export { ProteusSandbox } from "./proteus-sandbox";
 // REQUIRED for outbound interception, and silent if forgotten. The Sandbox DO
 // builds its interception fetchers from `ctx.exports.ContainerProxy`, so
 // without this export `applyOutboundInterception` throws and no egress handler
@@ -78,9 +79,9 @@ export { ProteusSandbox } from "./proteus-sandbox.js";
 // while the secret vault still believed it was substituting. Pinned by
 // tests/unit-egress-interception.test.ts.
 export { ContainerProxy } from "@cloudflare/sandbox";
-export { UserDO } from "./user/user-do.js";
+export { UserDO } from "./user/user-do";
 // Synthetic monitoring's durable state: open incidents + the alert outbox.
-export { MonitorDO } from "./monitor/monitor-do.js";
+export { MonitorDO } from "./monitor/monitor-do";
 export {
   NimbusSession,
   SupervisorRPC,
@@ -234,10 +235,20 @@ export default {
         const monitor = env.MonitorDO.get(env.MonitorDO.idFromName(MONITOR_SINGLETON));
         const result = await monitor.check();
         if (result.failing.length > 0 || result.recovered.length > 0) {
-          console.warn('[proteus-monitor]', JSON.stringify(result));
+          diagnostics.event('monitor.check_settled', {
+            failing: result.failing.length,
+            alerting: result.alerting.length,
+            recovered: result.recovered.length,
+            emails: result.emails,
+            emailSkipped: result.skipped !== undefined,
+          });
         }
       } catch (e) {
-        console.error('[proteus-monitor] check failed:', e instanceof Error ? e.message : e);
+        diagnostics.failure('monitor.check_failed', toProteusError({
+          doing: 'running the synthetic monitoring tick',
+          cause: e,
+          otherwise: 'unavailable',
+        }));
       }
     })());
   },

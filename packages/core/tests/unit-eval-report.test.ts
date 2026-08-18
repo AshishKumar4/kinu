@@ -1,8 +1,8 @@
 import { describe, test, expect } from 'bun:test';
 import {
   buildEvalReport, evaluateGate, renderEvalSummary, DEFAULT_QUALITY_THRESHOLD,
-} from '../src/index.ts';
-import type { EvalResult } from '../src/index.ts';
+} from '../src/index';
+import type { EvalResult } from '../src/index';
 
 function result(
   caseId: string,

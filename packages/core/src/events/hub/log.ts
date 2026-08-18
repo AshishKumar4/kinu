@@ -35,18 +35,18 @@ import {
   type AgentLogRow, type EventId, type EventVariant, type IngressDescriptor,
   type Priority, type ProteusEvent, type ReplyChannelRef, type RevisitCondition,
   type TraceId, type TurnId,
-} from './types.js';
-import { dedupeKeyForDescriptor } from './dedupe.js';
-import { deriveFields } from './trust.js';
-import { applyVisibilityForStorage } from './visibility.js';
-import { ulid } from './ulid.js';
-import type { SqlExec, SqlValue } from '../../types/primitives.js';
+} from './types';
+import { dedupeKeyForDescriptor } from './dedupe';
+import { deriveFields } from './trust';
+import { applyVisibilityForStorage } from './visibility';
+import { ulid } from './ulid';
+import type { SqlExec, SqlValue } from '../../types/primitives';
 import {
   JsonObjectSchema,
   JsonValueSchema,
   parseJsonObject,
   parseJsonValue,
-} from '../../utils/json.js';
+} from '../../utils/json';
 
 const EVENT_SCHEMA_VERSION = 1;
 

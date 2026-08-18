@@ -18,7 +18,7 @@ import {
   type ApprovalGrant,
   type ShellApprovalPolicy,
   type ShellApprovalRequest,
-} from '../src/index.js';
+} from '../src/index';
 
 /** The owner's real machine — where every baseline severity applies. */
 const THEIRS = 'laptop';

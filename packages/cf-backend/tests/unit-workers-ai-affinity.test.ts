@@ -6,9 +6,9 @@
 // provider's customFetch and asserts the header reaches the wire, so the
 // option can never become decorative again.
 import { describe, test, expect } from 'bun:test';
-import { userCredentialSource } from './helpers/user-credentials.js';
+import { userCredentialSource } from './helpers/user-credentials';
 import { generateText } from 'ai';
-import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
+import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { agentAffinityKey, asFetchFunction } from '@proteus/core';
 
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';

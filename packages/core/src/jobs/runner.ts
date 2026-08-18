@@ -11,15 +11,16 @@
 // The @callable control-plane RPCs (jobResult/list/
 // dismiss/clear/retry) stay on each backend and call BackgroundJobStore + here.
 
-import type { Schedule } from '../types/primitives.js';
-import type { SignalDeliverer } from '../types/signals.js';
-import type { EventLog } from '../events/hub/log.js';
-import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold.js';
-import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store.js';
-import { nanoid } from '../utils/nanoid.js';
-import type { WorkMode } from '../prompting/surface.js';
+import type { Schedule } from '../types/primitives';
+import type { SignalDeliverer } from '../types/signals';
+import type { EventLog } from '../events/hub/log';
+import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
+import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
+import { nanoid } from '../utils/nanoid';
+import type { WorkMode } from '../prompting/surface';
 import * as v from 'valibot';
-import { parseJsonValue, type JsonValue } from '../utils/json.js';
+import { parseJsonValue, type JsonValue } from '../utils/json';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** The terminal error a non-recoverable job records when it is interrupted by a
  *  DO eviction (no durable checkpoint / not safe to re-run).
@@ -258,8 +259,11 @@ export class BackgroundJobRunner {
         // the row stays `running` — which is recoverable, but only because
         // recoverOrphans() sweeps the registry at the next start rather than
         // trusting a fiber row to survive.
-        console.warn('[proteus] background-job settlement failed:',
-          err instanceof Error ? err.message : err);
+        diagnostics.failure(
+          'jobs.settlement_failed',
+          toProteusError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
+          { jobId },
+        );
         settled = this.failUnsettled(jobId, err);
       }
       // Only a job that actually reached a terminal status is 'settled'; if even
@@ -312,8 +316,11 @@ export class BackgroundJobRunner {
       this.notifySettled(jobId);
       return true;
     } catch (failErr) {
-      console.warn('[proteus] background-job force-fail failed:',
-        failErr instanceof Error ? failErr.message : failErr);
+      diagnostics.failure(
+        'jobs.force_fail_failed',
+        toProteusError({ doing: 'force-fail a job the settlement path left running', cause: failErr, otherwise: 'io' }),
+        { jobId },
+      );
       return false;
     }
   }
@@ -378,13 +385,21 @@ export class BackgroundJobRunner {
         now: Date.now(),
       });
     } catch (err) {
-      console.warn('[proteus] background-job retry event publish failed:', err instanceof Error ? err.message : err);
+      diagnostics.failure(
+        'jobs.retry_publish_failed',
+        toProteusError({ doing: 'publish the background-job wake retry', cause: err, otherwise: 'io' }),
+        { jobId: job.id, kind: job.kind },
+      );
       throw err;
     }
     try { this.deps.scheduleDrain(); }
     catch (err) {
       // The retry is already durable; another ingress or activation can drain it.
-      console.warn('[proteus] background-job retry scheduling failed:', err instanceof Error ? err.message : err);
+      diagnostics.failure(
+        'jobs.retry_drain_schedule_failed',
+        toProteusError({ doing: 'schedule the drain for a background-job wake retry', cause: err, otherwise: 'io' }),
+        { jobId: job.id },
+      );
     }
   }
 
@@ -547,6 +562,12 @@ export class BackgroundJobRunner {
     const job = this.deps.store.get(jobId);
     if (!job) return;
     try { this.deps.onSettled(job); }
-    catch (err) { console.warn('[proteus] job onSettled sink failed:', err instanceof Error ? err.message : err); }
+    catch (err) {
+      diagnostics.failure(
+        'jobs.settle_sink_failed',
+        toProteusError({ doing: 'deliver the job settle notification', cause: err, otherwise: 'io' }),
+        { jobId },
+      );
+    }
   }
 }

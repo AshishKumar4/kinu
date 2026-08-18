@@ -1,8 +1,8 @@
-import type { AuthIdentity } from './session.js';
-import type { OAuthProviderId } from './providers.js';
-import type { UserDO } from '../user/user-do.js';
-import { randomHex, randomToken, sha256Hex } from '../lib/crypto.js';
-import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability.js';
+import type { AuthIdentity } from './session';
+import type { OAuthProviderId } from './providers';
+import type { UserDO } from '../user/user-do';
+import { randomHex, randomToken, sha256Hex } from '../lib/crypto';
+import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;

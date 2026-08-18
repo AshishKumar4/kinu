@@ -23,7 +23,7 @@
  * a re-read of an open incident look like news.
  */
 
-import { sha256Hex } from '../lib/crypto.js';
+import { sha256Hex } from '../lib/crypto';
 import * as v from 'valibot';
 
 const BuildStampSchema = v.looseObject({

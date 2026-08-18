@@ -26,10 +26,10 @@
  * it.
  */
 
-import { gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate.js';
+import { gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import * as v from 'valibot';
-import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types.js';
-import type { Shell, ShellExecOptions, ShellExecResult } from '../types/primitives.js';
+import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
+import type { Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 
 const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
   stdin: v.optional(v.string()),

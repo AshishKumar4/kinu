@@ -20,9 +20,10 @@
  * in the lookup function (provider registry vs LocalModelResolver).
  */
 
-import { contextWindowForModel } from '../context-window.js';
-import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer.js';
-import type { ModelInfo, ModelPricing } from '../providers/types.js';
+import { contextWindowForModel } from '../context-window';
+import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
+import type { ModelInfo, ModelPricing } from '../providers/types';
+import { diagnostics, toProteusError } from '../obs/index';
 
 export class ModelCatalogSession {
   private cached: { spec: string; info: ModelInfo | null } | null = null;
@@ -76,8 +77,11 @@ export class ModelCatalogSession {
       // deliberately floating. The static fallbacks stay authoritative, but an
       // empty catalog is otherwise indistinguishable from a priced one that
       // reports nothing — so the reason is stated once, with the spec.
-      console.warn(`[proteus] model catalog lookup failed for ${spec}:`,
-        error instanceof Error ? error.message : error);
+      diagnostics.failure(
+        'model.catalog_lookup_failed',
+        toProteusError({ doing: 'look a model up in the provider catalog', cause: error, otherwise: 'unavailable' }),
+        { model: spec },
+      );
     }
   }
 }

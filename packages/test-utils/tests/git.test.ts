@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { git, gitEnv, initRepo } from '../src/git.js';
+import { git, gitEnv, initRepo } from '../src/git';
 
 const scratch: string[] = [];
 afterEach(() => {

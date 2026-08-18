@@ -14,13 +14,14 @@
 // Workers egress is CF data-center IPs — runtime probe needed.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo, ModelInputModality } from './types.js';
-import { MODEL_INPUT_MODALITIES } from './types.js';
-import { asFetchFunction } from './fetch-shim.js';
-import { withRateLimitRetry } from './rate-limit-retry.js';
-import { authCacheKey, cloneModelInfos, nonEmptyString, positiveInteger } from './util.js';
+import type { ModelProvider, ModelInfo, ModelInputModality } from './types';
+import { MODEL_INPUT_MODALITIES } from './types';
+import { asFetchFunction } from './fetch-shim';
+import { withRateLimitRetry } from './rate-limit-retry';
+import { authCacheKey, cloneModelInfos, nonEmptyString, positiveInteger } from './util';
 import * as v from 'valibot';
-import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json.js';
+import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
+import { diagnostics, ProteusError } from '../obs/index';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 export const CODEX_CRED_KEY = 'codex.oauth';
@@ -86,11 +87,13 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     createModel(modelId, deps): LanguageModel {
       const baseFetch = withRateLimitRetry(deps.fetch ?? fetch);
       const customFetch = asFetchFunction(async (input, init) => {
-        const urlStr = input instanceof Request ? input.url : input.toString();
-        const t0 = Date.now();
         const auth = await deps.getAuth(CODEX_CRED_KEY);
         if (!auth) {
-          debugCodex(`no credentials for ${modelId} — refusing to call ${urlStr}`);
+          diagnostics.failure(
+            'credential.codex_absent',
+            new ProteusError('missing', 'no Codex credentials; the model call was refused before it left'),
+            { model: modelId },
+          );
           return new Response(
             JSON.stringify({ error: 'Codex credentials not configured. Connect ChatGPT in /user/settings.' }),
             { status: 401, headers: { 'Content-Type': 'application/json' } },
@@ -103,23 +106,18 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
           return baseFetch(input, { ...requestInit, headers: merged });
         };
         let res = await send(auth.headers);
-        const dt = Date.now() - t0;
-        debugCodex(`${init?.method ?? 'POST'} ${urlStr.replace(/^https?:\/\//, '')} -> ${res.status} (${dt}ms)`);
         if (res.status === 401) {
-          debugCodex('401 from upstream; attempting forceRefresh');
           const refreshed = await deps.getAuth(CODEX_CRED_KEY, { forceRefresh: true });
           if (refreshed) {
             res = await send(refreshed.headers);
-            debugCodex(`retry-after-refresh -> ${res.status}`);
           }
         }
         if (!res.ok) {
-          // Upstream error body, for diagnostics + WAF detection. Read from a
-          // clone so `res` stays intact for the SDK. No catch: a body this
-          // cannot read is a body the SDK cannot read either, and an empty
-          // string here would silently disable the WAF branch below.
+          // Upstream error body, for WAF detection. Read from a clone so `res`
+          // stays intact for the SDK. No catch: a body this cannot read is a
+          // body the SDK cannot read either, and an empty string here would
+          // silently disable the WAF branch below.
           const body = await res.clone().text();
-          debugCodex(`upstream ${res.status} body (first 500 chars): ${body.slice(0, 500)}`);
           // Cloudflare WAF "Attention Required!" challenge page comes back as
           // HTML, not the JSON shape the AI SDK expects. The stream crashes
           // with an opaque parse error. Replace the response body with a
@@ -133,7 +131,11 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
               'Workaround: in /user/settings → API keys, paste an OpenAI API key, then pick an ' +
               '`openai/*` model — that path goes to api.openai.com directly and isn\'t affected by ' +
               'the WAF.';
-            debugCodex('WAF detected — returning structured error to AI SDK');
+            diagnostics.failure(
+              'provider.codex_waf_blocked',
+              new ProteusError('unavailable', 'Codex refused this Worker\'s egress as bot traffic'),
+              { model: modelId },
+            );
             return new Response(
               JSON.stringify({ error: { message: userMsg, type: 'cf_waf_blocked', code: 'codex_unavailable' } }),
               { status: 503, headers: { 'Content-Type': 'application/json' } },
@@ -261,15 +263,4 @@ function contentToText<T>(content: T): string {
     .filter(Boolean)
     .join('\n')
     .trim();
-}
-
-function debugCodex(message: string): void {
-  const parsed = v.safeParse(v.object({
-    process: v.optional(v.object({
-      env: v.optional(v.object({ PROTEUS_PROVIDER_DEBUG: v.optional(v.string()) })),
-    })),
-  }), globalThis);
-  if (parsed.success && parsed.output.process?.env?.PROTEUS_PROVIDER_DEBUG === '1') {
-    console.error(`[codex] ${message}`);
-  }
 }

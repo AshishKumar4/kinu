@@ -23,7 +23,7 @@ import {
   type ApprovalGrant,
   type EgressSecretBinding,
   type ShellApprovalMode,
-} from '../src/index.js';
+} from '../src/index';
 
 /** A placeholder of the real shape: prefix + 43 base64url characters. */
 function placeholder(seed: string): string {

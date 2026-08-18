@@ -6,7 +6,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   CompletionGate, observeCompletionState, completionGateText,
   COMPLETION_GATE_HEADER, COMPLETION_PROBE_COMMANDS, COMPLETION_TASK_ECHO_MAX_CHARS,
-} from '../src/orchestrator/completion-gate.js';
+} from '../src/orchestrator/completion-gate';
 
 const DID_WORK = { completed: true, toolCalls: 4 };
 

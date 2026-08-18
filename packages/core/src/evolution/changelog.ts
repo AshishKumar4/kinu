@@ -12,20 +12,23 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExecutor } from '../types/primitives.js';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { FactsStore } from '../memory/facts.js';
-import { listScaffoldArchive } from '../scaffold/archive.js';
-import { getPendingScaffold, applyPromotionDecision } from '../scaffold/shadow.js';
-import { rollbackScaffold } from '../scaffold/rollback.js';
-import { revertView } from '../views/store.js';
-import { listGepaRuns } from './gepa/persistence.js';
-import { listReplayEvals } from './replay.js';
-import { listTurnOutcomes, TURN_OUTCOMES } from './outcomes.js';
-import { describePathology } from './pathology.js';
-import { formatScoreInterval, lossInterval } from '../utils/stats.js';
-import { parseJsonValue } from '../utils/json.js';
-import { tolerate } from '../obs/index.js';
+import type { SqlExecutor } from '../types/primitives';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { FactsStore } from '../memory/facts';
+import { listScaffoldArchive } from '../scaffold/archive';
+import { getPendingScaffold, applyPromotionDecision } from '../scaffold/shadow';
+import { rollbackScaffold } from '../scaffold/rollback';
+import { revertView } from '../views/store';
+import { listGepaRuns } from './gepa/persistence';
+import { listReplayEvals } from './replay';
+import {
+  listTurnOutcomes, TURN_OUTCOMES, TURN_OUTCOME_SOURCES,
+  type TurnOutcomeSource, type TurnOutcomeRow,
+} from './outcomes';
+import { describePathology } from './pathology';
+import { formatScoreInterval, lossInterval } from '../utils/stats';
+import { parseJsonValue } from '../utils/json';
+import { tolerate } from '../obs/index';
 
 const ScaffoldRunEventSchema = v.object({
   fromVersion: v.optional(v.number()),
@@ -302,7 +305,43 @@ function replayEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
   });
 }
 
-function outcomeEntry(sql: SqlExecutor, since: number | undefined): ChangelogEntry | null {
+/** How a batch of verdicts was reached, honestly per source. A digest that reads
+ *  "from real user follow-ups" over `execution` rows reports a person where the
+ *  only witness was the runtime, and over `session_end` rows reports a reply
+ *  that is precisely what never came. */
+const OUTCOME_BATCH_PHRASE = {
+  explicit: "from the user's thumbs",
+  classifier: 'from how the user replied',
+  session_end: 'from sessions ending unanswered',
+  take_pick: "from the user's picks between takes",
+  execution: 'by whether their tool calls ran',
+} satisfies Record<TurnOutcomeSource, string>;
+
+/** What ONE verdict rests on — the expandable answer to "why did it say that?".
+ *  `row.evidence` is the classifier's own reason or the execution observation;
+ *  a thumb and a session that ended are their own evidence, and rows written
+ *  before the column carry none, so those phrase from the source instead. */
+function outcomeItemEvidence(row: TurnOutcomeRow): string {
+  switch (row.source) {
+    case 'classifier':
+      return `the user's reply read as ${row.outcome}`
+        + (row.evidence ? ` — ${row.evidence}` : '')
+        + ` · confidence ${pct(row.confidence)}`;
+    case 'execution':
+      return row.evidence
+        ?? `the turn's tool calls ${row.outcome === 'accepted' ? 'ran clean' : 'hit an error'}`;
+    case 'explicit':
+      return row.outcome === 'accepted' ? 'thumbs up from the user' : 'thumbs down from the user';
+    case 'take_pick':
+      return row.evidence ?? "the user's pick between alternate takes";
+    case 'session_end':
+      return 'the session ended with no reply to grade';
+  }
+}
+
+function outcomeEntry(
+  sql: SqlExecutor, since: number | undefined, limit: number,
+): ChangelogEntry | null {
   const rows = listTurnOutcomes(sql, { limit: 200 })
     .filter((r) => since === undefined || r.createdAt > since);
   if (rows.length === 0) return null;
@@ -312,12 +351,28 @@ function outcomeEntry(sql: SqlExecutor, since: number | undefined): ChangelogEnt
     .map((k) => [k, count(k)] as const)
     .filter(([, n]) => n > 0)
     .map(([k, n]) => `${n} ${k}`);
+  const provenance = TURN_OUTCOME_SOURCES
+    .map((s) => [s, rows.filter((r) => r.source === s).length] as const)
+    .filter(([, n]) => n > 0)
+    .map(([s, n]) => `${n} ${OUTCOME_BATCH_PHRASE[s]}`);
   return {
     id: `outcomes:${newest}:${rows.length}`,
     kind: 'outcomes',
     at: newest,
-    summary: `Graded ${rows.length} turn${rows.length === 1 ? '' : 's'} from real user follow-ups`,
+    summary: `Graded ${rows.length} turn${rows.length === 1 ? '' : 's'} · ${provenance.join(' · ')}`,
     evidence: parts.join(' · '),
+    // Bounded by the digest's own limit, like every other aggregate: the batch
+    // reads 200 rows to count them honestly, which is not a list anyone reads.
+    items: rows.slice(0, limit).map((row) => {
+      const request = row.userMessage.trim().replace(/\s+/gu, ' ');
+      return {
+        id: `outcome:${row.id}`,
+        kind: 'outcomes' as const,
+        at: row.createdAt,
+        summary: `${row.outcome} — "${request.length > 90 ? `${request.slice(0, 90)}…` : request || '(no recorded request)'}"`,
+        evidence: outcomeItemEvidence(row),
+      };
+    }),
   };
 }
 
@@ -336,7 +391,7 @@ export function buildChangelog(sql: SqlExecutor, opts: BuildChangelogOptions = {
   ].filter((e) => opts.since === undefined || e.at > opts.since);
   const facts = factAggregate(sql, limit, opts.since);
   if (facts) entries.push(facts);
-  const outcomes = outcomeEntry(sql, opts.since);
+  const outcomes = outcomeEntry(sql, opts.since, limit);
   if (outcomes) entries.push(outcomes);
   entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
   return entries.slice(0, limit);

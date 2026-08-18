@@ -15,9 +15,9 @@
  */
 
 import * as v from 'valibot';
-import { nanoid } from '../utils/nanoid.js';
-import { jsonObjectOnlyInstruction } from '../prompts/structured.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
+import { nanoid } from '../utils/nanoid';
+import { jsonObjectOnlyInstruction } from '../prompts/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import {
   type HeadId,
   type HeadInput,
@@ -31,13 +31,14 @@ import {
   DEFAULT_HEAD_BUDGET,
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
-} from './types.js';
-import { headProducedFindings } from './head-summary.js';
-import { MergeOutputSchema, type MergeOutput } from './merge-schema.js';
-import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation.js';
-import type { LLM, Executor } from '../types/primitives.js';
-import type { WorkMode } from '../prompting/surface.js';
-import { addUsage, usageTotal, type Usage } from '../usage.js';
+} from './types';
+import { headProducedFindings } from './head-summary';
+import { MergeOutputSchema, type MergeOutput } from './merge-schema';
+import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation';
+import type { LLM, Executor } from '../types/primitives';
+import type { WorkMode } from '../prompting/surface';
+import { addUsage, usageTotal, type Usage } from '../usage';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** What the merge LLM should return. Validated by MergeOutputSchema. */
 export type MergeLLMFn = (
@@ -416,7 +417,11 @@ export class HeadController {
       // The reason itself, not its `message`: a provider error carries the url
       // and cause that say WHICH judge broke, and AI SDK call errors routinely
       // have an empty message.
-      console.warn(`[proteus] head ${r.id} could not be scored — reporting no grounded signal:`, outcome.reason);
+      diagnostics.failure(
+        'head.score_failed',
+        toProteusError({ doing: 'score a head report', cause: outcome.reason, otherwise: 'unavailable' }),
+        { headId: r.id },
+      );
       return { id: r.id, text: r.summary, status: r.status, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
     });
   }
@@ -555,7 +560,11 @@ export class HeadController {
     const scored = settled.map((outcome, i) => {
       if (outcome.status === 'fulfilled') return outcome.value;
       // The reason itself, not its `message` — see scoreHeads.
-      console.warn('[proteus] a merge sample could not be scored — dropping it from the ensemble:', outcome.reason);
+      diagnostics.failure(
+        'merge.sample_score_failed',
+        toProteusError({ doing: 'score a merge sample', cause: outcome.reason, otherwise: 'unavailable' }),
+        { sampleIndex: i },
+      );
       return { sample: samples[i]!, score: null };
     });
     const usable = scored.filter((x): x is { sample: MergeOutput; score: number } => x.score !== null);

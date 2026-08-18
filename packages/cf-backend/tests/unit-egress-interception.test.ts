@@ -12,11 +12,11 @@ import { readFileSync } from 'node:fs';
 import {
   EGRESS_PLACEHOLDER_PREFIX, type EgressSecretBinding, type SandboxHandle,
 } from '@proteus/core';
-import type { EgressInjectionResult } from '../src/user/egress-vault.js';
+import type { EgressInjectionResult } from '../src/user/egress-vault';
 import type { OutboundHandlerContext } from '@cloudflare/containers';
-import type { ProteusEgressParams } from '../src/egress/outbound.js';
-import { mockAgentsSdk } from './helpers/agents-sdk.js';
-import { jsrpcStub } from './helpers/jsrpc-stub.js';
+import type { ProteusEgressParams } from '../src/egress/outbound';
+import { mockAgentsSdk } from './helpers/agents-sdk';
+import { jsrpcStub } from './helpers/jsrpc-stub';
 
 // `outbound.ts` imports `getAgentByName` from `agents`, whose module graph
 // reaches `cloudflare:email`. One shared mock, then dynamic imports — the same
@@ -24,12 +24,12 @@ import { jsrpcStub } from './helpers/jsrpc-stub.js';
 // it loads nothing.
 mockAgentsSdk();
 
-const { ORCHESTRATOR_RPC_SURFACE } = await import('../src/rpc-surface.js');
+const { ORCHESTRATOR_RPC_SURFACE } = await import('../src/rpc-surface');
 const {
   CONTAINER_EVENT_HOST, CONTAINER_EVENT_PATH, EGRESS_HANDLER, EVENT_HANDLER,
   handleContainerEgress, parseEgressParams,
-} = await import('../src/egress/outbound.js');
-const { configureContainerEgress, withConfiguredEgress } = await import('../src/egress/configure.js');
+} = await import('../src/egress/outbound');
+const { configureContainerEgress, withConfiguredEgress } = await import('../src/egress/configure');
 
 const root = new URL('../', import.meta.url).pathname;
 

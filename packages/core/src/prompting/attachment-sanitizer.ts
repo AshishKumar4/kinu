@@ -24,10 +24,10 @@
  */
 
 import type { AssistantModelMessage, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
-import type { VFS } from '../types/primitives.js';
-import type { ModelInputModality } from '../providers/types.js';
-import { SPILL_DIRS, type TurnContextBudget } from '../context-budget.js';
-import { fnv1a64Bytes } from './volatile-context.js';
+import type { VFS } from '../types/primitives';
+import type { ModelInputModality } from '../providers/types';
+import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
+import { fnv1a64Bytes } from './volatile-context';
 
 /** Media kinds an attachment can be — the input-modality vocabulary minus
  *  'text' (text is trivially accepted by every model). */

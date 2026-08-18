@@ -35,14 +35,15 @@
  *   PATCH  /api/user/mcp/servers/:id               — edit name / headers / allowed_tools
  *   GET    /api/user/mcp/callback                  — OAuth 2.1 redirect handler
  */
-import type { AuthIdentity } from '../auth/session.js';
-import type { UserDO } from './user-do.js';
+import type { AuthIdentity } from '../auth/session';
+import type { UserDO } from './user-do';
 import { DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS, JsonValueSchema } from '@proteus/core';
-import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
-import { listAvailableModels, listProviderCatalog } from './available-models.js';
-import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access.js';
-import { err, json, safeJson } from '../lib/http.js';
-import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from './workspace-capability.js';
+import { diagnostics, toProteusError } from '@proteus/core/obs';
+import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command';
+import { listAvailableModels, listProviderCatalog } from './available-models';
+import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access';
+import { err, json, safeJson } from '../lib/http';
+import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from './workspace-capability';
 import * as v from 'valibot';
 
 const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
@@ -95,13 +96,16 @@ export async function handleUserRequest(
   if (ctx && !warmedMcpUsers.has(identity.userId)) {
     warmedMcpUsers.add(identity.userId);
     const caller = await ownerCaller(env);
-    const reportBootstrapFailure = (what: string) => (err: { message?: string }) => {
+    const reportBootstrapFailure = (step: string) => <Thrown,>(thrown: Thrown): void => {
       warmedMcpUsers.delete(identity.userId);
-      console.warn(`[proteus] user bootstrap ${what} failed for ${identity.userId}:`,
-        err instanceof Error ? err.message : String(err));
+      diagnostics.failure('user.bootstrap_failed', toProteusError({
+        doing: 'bootstrapping the user on first hit in this isolate',
+        cause: thrown,
+        otherwise: 'unavailable',
+      }), { step, userId: identity.userId });
     };
-    ctx.waitUntil(stub.userMcp_warmConnections(caller).catch(reportBootstrapFailure('MCP warm')));
-    ctx.waitUntil(stub.backfillWorkspaceCapabilities(caller).catch(reportBootstrapFailure('workspace-capability backfill')));
+    ctx.waitUntil(stub.userMcp_warmConnections(caller).catch(reportBootstrapFailure('mcp_warm')));
+    ctx.waitUntil(stub.backfillWorkspaceCapabilities(caller).catch(reportBootstrapFailure('capability_backfill')));
   }
 
   // ── Profile ────────────────────────────────────────────────────────

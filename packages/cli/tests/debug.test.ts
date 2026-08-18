@@ -15,7 +15,7 @@ import {
   initBackgroundJobsTable, initHeadsTables, initMctsSearchTable, initRunEventTables, initSearchTables,
 } from '@proteus/core';
 import { makeSql } from '@proteus/cli-backend';
-import { redactSecrets } from '../src/commands/debug.js';
+import { redactSecrets } from '../src/commands/debug';
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];

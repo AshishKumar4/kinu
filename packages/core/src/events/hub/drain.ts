@@ -10,10 +10,10 @@
  * concurrent drain can't double-process them.
  */
 import * as v from 'valibot';
-import type { ProteusEvent } from './types.js';
-import type { WorkMode } from '../../prompting/surface.js';
-import { renderForLLM } from './visibility.js';
-import { JsonObjectSchema } from '../../utils/json.js';
+import type { ProteusEvent } from './types';
+import type { WorkMode } from '../../prompting/surface';
+import { renderForLLM } from './visibility';
+import { JsonObjectSchema } from '../../utils/json';
 
 export interface DrainBatch {
   /** Event ids to bind (markConsumed) before injecting the turn. */

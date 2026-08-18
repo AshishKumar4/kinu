@@ -16,10 +16,10 @@ import {
   formatApprovalGrant,
   type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome,
   type AgentRuntime, type AgentSignal, type Shell,
-} from '../src/index.js';
-import { buildPendingActions } from '../src/read-models/pending-actions.js';
-import { createTestRuntime } from './helpers.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+} from '../src/index';
+import { buildPendingActions } from '../src/read-models/pending-actions';
+import { createTestRuntime } from './helpers';
+import { makeSql, makeExecRaw } from './helpers';
 
 /** Gated on EVERY executor, including the agent's own workspace, because a
  *  force-push rewrites history on a remote nobody here owns — the harm leaves

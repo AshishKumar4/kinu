@@ -14,10 +14,10 @@
  */
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { scaffoldInferenceTransform, type InferenceStreamResult } from '../src/index.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import { JsonObjectSchema, type JsonObject } from '../src/utils/json.js';
-import { createEvalExecutor, createTestRuntime } from './helpers.js';
+import { scaffoldInferenceTransform, type InferenceStreamResult } from '../src/index';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import { JsonObjectSchema, type JsonObject } from '../src/utils/json';
+import { createEvalExecutor, createTestRuntime } from './helpers';
 
 const DELEGATING_SCAFFOLD = `async function run(rt, task) {
   await host.defaultInference();

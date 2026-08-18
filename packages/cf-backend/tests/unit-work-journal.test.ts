@@ -9,10 +9,10 @@
  */
 import { describe, test, expect } from 'bun:test';
 import type { AgentTaskTree, ChangelogEntry } from '@proteus/core';
-import type { BackgroundJob } from '../src/lib/protocol.js';
-import { buildJournal } from '../src/components/surfaces/WorkTab.tsx';
-import { CHANGELOG_REVALIDATE_MS } from '../src/components/surfaces/changelog-entries.tsx';
-import { LIVE_DATA_REFRESH_MS } from '../src/hooks/use-proteus.ts';
+import type { BackgroundJob } from '../src/lib/protocol';
+import { buildJournal } from '../src/components/surfaces/WorkTab';
+import { CHANGELOG_REVALIDATE_MS } from '../src/components/surfaces/changelog-entries';
+import { LIVE_DATA_REFRESH_MS } from '../src/hooks/use-proteus';
 
 function job(over: Partial<BackgroundJob> & { id: string }): BackgroundJob {
   return {

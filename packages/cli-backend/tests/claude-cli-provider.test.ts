@@ -9,10 +9,10 @@ import {
   buildClaudePrompt,
   type ClaudeSpawn,
   type SpawnedClaude,
-} from '../src/claude-cli-provider.js';
-import { createLocalModelResolver } from '../src/model-resolver.js';
-import { createCLIRuntime } from '../src/runtime.js';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
+} from '../src/claude-cli-provider';
+import { createLocalModelResolver } from '../src/model-resolver';
+import { createCLIRuntime } from '../src/runtime';
+import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2Usage } from '@ai-sdk/provider';
 import { scratchPath } from '@proteus/test-utils';
 

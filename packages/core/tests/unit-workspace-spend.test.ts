@@ -11,12 +11,12 @@
 // three stores this reads, and a harness that created fewer tables than a real
 // workspace would be testing a shape no workspace has.
 import { describe, expect, test } from 'bun:test';
-import { RunEventRecorder } from '../src/events/recorder.js';
-import { WORKSPACE_RUN_ID } from '../src/events/model-call.js';
-import { HeadJournal } from '../src/heads/journal.js';
-import { workspaceSpend } from '../src/read-models/workspace-spend.js';
-import type { Usage } from '../src/usage.js';
-import { createTestWorkspace } from './helpers.js';
+import { RunEventRecorder } from '../src/events/recorder';
+import { WORKSPACE_RUN_ID } from '../src/events/model-call';
+import { HeadJournal } from '../src/heads/journal';
+import { workspaceSpend } from '../src/read-models/workspace-spend';
+import type { Usage } from '../src/usage';
+import { createTestWorkspace } from './helpers';
 
 const WINDOW = 50;
 

@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { asFetchFunction } from '@proteus/core';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cloudflareTokenJsonToResponse, cloudflareUserResultToProfile } from '../src/auth/routes.js';
-import { getConfiguredOAuthProviders, listConfiguredOAuthProviders } from '../src/auth/providers.js';
+import { cloudflareTokenJsonToResponse, cloudflareUserResultToProfile } from '../src/auth/routes';
+import { getConfiguredOAuthProviders, listConfiguredOAuthProviders } from '../src/auth/providers';
 import {
   CLOUDFLARE_WORKERS_AI_SCOPES,
   accountIdFromCloudflareCredential,
@@ -13,10 +13,10 @@ import {
   cloudflareWorkersAIBaseURL,
   isCloudflareCredentialUsable,
   withCloudflareAccount,
-} from '../src/lib/cloudflare-oauth.js';
-import { buildCliInstallCommand } from '../src/cli/install-command.js';
-import { handleCliRequest } from '../src/cli/routes.js';
-import { sanitizeReturnTo } from '../src/auth/d1-store.js';
+} from '../src/lib/cloudflare-oauth';
+import { buildCliInstallCommand } from '../src/cli/install-command';
+import { handleCliRequest } from '../src/cli/routes';
+import { sanitizeReturnTo } from '../src/auth/d1-store';
 
 const root = join(import.meta.dir, '..');
 

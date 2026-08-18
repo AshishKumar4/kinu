@@ -16,7 +16,7 @@
  */
 
 import { sanitizeFtsQuery } from '@proteus/agent-utils/memory';
-import type { SqlExecutor } from '../types/primitives.js';
+import type { SqlExecutor } from '../types/primitives';
 
 // session_id 'mcts' holds MCTS tree nodes, not conversation — excluded from
 // search and browse inline below.

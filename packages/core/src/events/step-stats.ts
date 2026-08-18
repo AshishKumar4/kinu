@@ -13,8 +13,8 @@
  * number you cannot check.
  */
 
-import type { StepCost } from './types.js';
-import { addUsage, usageReported, type Usage } from '../usage.js';
+import type { StepCost } from './types';
+import { addUsage, usageReported, type Usage } from '../usage';
 
 /** How much of the newest sample one EMA step absorbs. 0.2 ≈ a nine-step
  *  effective window: fast enough to show a cache break within a turn, slow

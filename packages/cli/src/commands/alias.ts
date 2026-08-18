@@ -1,5 +1,5 @@
-import { deleteAliasShim, loadConfigFile, pathHint, resolveAgentRef, writeAliasShim } from '../config.js';
-import { ACCENT, DIM, OK } from '../display.js';
+import { deleteAliasShim, loadConfigFile, pathHint, resolveAgentRef, writeAliasShim } from '../config';
+import { ACCENT, DIM, OK } from '../display';
 
 export async function aliasCommand(agentName: string, aliasName: string | undefined): Promise<void> {
   const agent = resolveAgentRef(agentName);

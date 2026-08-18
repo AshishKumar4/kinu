@@ -16,7 +16,7 @@ import {
   parentSelectionWeights, rolloutMinibatch, renderReflectionPrompt,
   stripMarkdownFences,
   type EvalInstance, type GepaBudget, type GepaCandidate, type MetricOutcome,
-} from './index.js';
+} from './index';
 
 // ── deterministic RNG ────────────────────────────────────────────
 

@@ -6,9 +6,9 @@ import {
   initExperienceLibraryTables, initReleaseTables, reconcileColumns,
   type SqlExec, type SqlExecutor,
 } from '@proteus/core';
-import { initAccessTokenTable } from '../cli/access-token-store.js';
-import { initEgressVaultTables } from './egress-vault.js';
-import { initWorkspaceCapabilityTables } from './workspace-capability.js';
+import { initAccessTokenTable } from '../cli/access-token-store';
+import { initEgressVaultTables } from './egress-vault';
+import { initWorkspaceCapabilityTables } from './workspace-capability';
 
 /** One-shot migration ledger version. Bump it when adding a migration that
  *  must run exactly once (anything destructive or shape-changing); the

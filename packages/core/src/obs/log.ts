@@ -9,11 +9,26 @@
  *      that is what makes a failure greppable across Workers Logs and the CLI
  *      journal.
  *
- * Neither survived as a convention. `packages/core/src` holds ~1,180 `console.*`
- * calls and the shape they settled on is
+ * Neither survived as a convention. Measured 2026-08-17 with oxlint's own
+ * `no-console` over the five source trees — an AST census, because a regex over
+ * `console\.` counts the twelve occurrences that are prose in a comment or a
+ * string literal and would put the denominator at 662:
+ *
+ *     cli          479   log 463   warn   1   error 15
+ *     cf-backend    99   log  12   warn  73   error 14
+ *     core          55   log   1   warn  47   error  7
+ *     cli-backend   17   log   0   warn   9   error  8
+ *     agent-utils    0
+ *     TOTAL        650   across 86 files
+ *
+ * `packages/core/src` holds 55, not the ~1,180 this comment previously claimed;
+ * that figure was never counted. The shape the diagnostics settled on is
  * `console.warn('[proteus] <prose>', someValue)`: no event name a query could key
  * on, and a second argument that is frequently an object nobody looked inside.
  * Both rules are mechanical, so both are types here.
+ *
+ * The 479 in `packages/cli/src` are NOT diagnostics and are not migrated — see
+ * the boundary stated on `diagnostics` below.
  *
  * ## How the ban works, and why it is not decoration
  *
@@ -51,7 +66,7 @@
  * diagnostic names the field and states the rule.
  */
 
-import { renderCauseChain, type ErrorCode, type ProteusError } from './error.js';
+import { renderCauseChain, type ErrorCode, type ProteusError } from './error';
 
 /**
  * Field names that may never appear on a log line, from AGENTS.md § Errors.
@@ -185,16 +200,32 @@ interface LogLine {
 /**
  * The logger the backends use. One JSON line per event on the platform's own
  * sink, which is what both readers already collect: `console` on workerd reaches
- * Workers Logs, and on the CLI it reaches the journal.
+ * Workers Logs, and on the CLI it reaches the daemon journal, which captures both
+ * streams (`cli/src/commands/daemon.ts` spawns with `stdio: ['ignore', logFd,
+ * logFd]`).
  *
- * `console.error` for a failure and `console.log` for an event, so the severity
- * filter both sinks already have keeps working.
+ * BOTH METHODS WRITE TO `console.error`, and the earlier split — `console.log`
+ * for an event, `console.error` for a failure, to keep the platform's severity
+ * filter working — is gone deliberately. STDOUT IS NOT FREE IN THE CLI PROCESS:
+ * `cli/src/acp/agent.ts` carries ACP JSON-RPC on it, `cli-backend/src/executor.ts`
+ * carries one `{ok,result}` line, and `proteus exec --json` carries the event
+ * JSONL. A `Logger.event` on stdout is a protocol corruption in all three, and
+ * `core` is imported by every one of them, so a split sink makes the safety of a
+ * log line depend on which package the call happens to sit in — a rule to
+ * remember, and this codebase has already watched one logging convention fail for
+ * exactly that reason.
+ *
+ * Nothing is lost by collapsing them, because the severity was never in the
+ * STREAM: `code` is present on a failure line and absent on an event line, so a
+ * query discriminates on the payload. That is strictly more precise than a
+ * stream-derived level, which is also why `LogLine` puts the discriminators
+ * first. On workerd both streams reach Workers Logs identically.
  */
 export function createConsoleLogger(): Logger {
   return {
     event(name: LogEventName, fields?: LogFields): void {
       const line: LogLine = { event: name, fields: fields ?? {} };
-      console.log(JSON.stringify(line));
+      console.error(JSON.stringify(line));
     },
     failure(name: LogEventName, error: ProteusError, fields?: LogFields): void {
       const line: LogLine = {
@@ -207,6 +238,40 @@ export function createConsoleLogger(): Logger {
     },
   };
 }
+/**
+ * The diagnostic sink for the call sites that have no dependency seam to inject
+ * one through — a free function three layers inside `core`, a `.catch()` on a
+ * fire-and-forget, an `onStart` handler. One shared instance rather than a
+ * `createConsoleLogger()` per module: the object is stateless and its
+ * destination is a property of the HOST (`console` reaches Workers Logs on
+ * workerd and the daemon journal on the CLI, which captures both streams —
+ * `commands/daemon.ts` spawns with `stdio: ['ignore', logFd, logFd]`), never of
+ * the call site, so sixty private copies would be sixty allocations of one
+ * identity. `createConsoleLogger` stays exported for the seams that DO inject,
+ * where a test substitutes `createRecordingLogger()` and asserts the event name.
+ *
+ * ## THE BOUNDARY: what is a diagnostic and what is the product
+ *
+ * A diagnostic is written for whoever reads the logs later. `packages/cli/src`
+ * is not that: it is the product's terminal UI. `display.ts` calls itself "single
+ * source of truth for all CLI visual output", every one of its 479 `console.*`
+ * calls carries chalk styling (`OK`, `ERR`, `WARN`, `DIM`, `MUTED`), and
+ * `printError` writes styled prose to stderr because a human is reading it. A
+ * user running `proteus list` expects a rendered table; emitting
+ * `{"event":"workspace.listed","fields":{}}` in its place is not better
+ * traceability, it is a broken CLI. So the ban this file's rule enforces
+ * allowlists `packages/cli/src`, and the three genuine diagnostics that were
+ * hiding inside it were moved here rather than the other 476 being converted.
+ *
+ * The same holds for two MACHINE-facing stdout streams, which are interfaces for
+ * the same reason a table is: `cli-backend/src/executor.ts` writes one
+ * `{ok,result}` JSON line, and `cli/src/acp/agent.ts` writes ACP JSON-RPC.
+ * Nothing else may write to stdout in those processes, and that is why
+ * `createConsoleLogger` writes BOTH methods to `console.error` — see the reason
+ * there. It means `event` is safe from any package, so no call site has to know
+ * which host it will run on.
+ */
+export const diagnostics: Logger = createConsoleLogger();
 
 /** What the recording logger captured for one call. */
 export interface RecordedLog {

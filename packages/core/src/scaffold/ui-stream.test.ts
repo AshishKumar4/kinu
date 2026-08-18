@@ -5,8 +5,8 @@
 
 import { describe, test, expect } from 'bun:test';
 import type { UIMessageChunk } from 'ai';
-import { scaffoldEventsToUIStream } from './ui-stream.js';
-import type { ScaffoldEvent, ScaffoldRunResult, ScaffoldEmitFn } from './executor.js';
+import { scaffoldEventsToUIStream } from './ui-stream';
+import type { ScaffoldEvent, ScaffoldRunResult, ScaffoldEmitFn } from './executor';
 
 /** Build a runner that emits the given events then resolves ok. */
 function scriptedRunner(

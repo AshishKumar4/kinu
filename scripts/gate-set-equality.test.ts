@@ -15,9 +15,9 @@ import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import {
   ENUMERATOR, NON_REPOSITORY_SCANS, auditGateProgram, gateCommands, gatePrograms,
-} from './gate-set-equality.ts';
-import { LADDER, deployGates } from './ladder.ts';
-import { isTestFile, isRunnableSuite, trackedFiles } from './sources.ts';
+} from './gate-set-equality';
+import { LADDER, deployGates } from './ladder';
+import { isTestFile, isRunnableSuite, trackedFiles } from './sources';
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname;
 const at = (file: string): string => readFileSync(REPO_ROOT + file, 'utf8');
@@ -75,7 +75,7 @@ describe('red: the shapes that were shipped fifteen times', () => {
 
   test('a lock written before the corpus was measured is a finding', () => {
     const found = auditGateProgram('scripts/probe.ts', `
-      import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet.ts';
+      import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
       if (import.meta.main) {
         writeLock(keys, LOCK);
         const measured = assertMeasured('probe', [['files', files.length]]);
@@ -88,7 +88,7 @@ describe('red: the shapes that were shipped fifteen times', () => {
 
   test('a gate that publishes with NO measurement at all is a finding twice over', () => {
     const found = auditGateProgram('scripts/probe.ts', `
-      import { reconcile, report, writeLock } from './gate-ratchet.ts';
+      import { reconcile, report, writeLock } from './gate-ratchet';
       if (import.meta.main) {
         if (process.argv.includes('--lock')) writeLock(keys, LOCK);
         else process.exit(report('probe', reconcile(keys, LOCK), detail, 'cmd', '7 things'));
@@ -110,7 +110,7 @@ describe('red: the shapes that were shipped fifteen times', () => {
 describe('green: the corrected form', () => {
   test('the same gate, narrowed by a named predicate, is silent', () => {
     expect(auditGateProgram('scripts/probe.ts', `
-      import { isRunnableSuite, trackedFiles } from './sources.ts';
+      import { isRunnableSuite, trackedFiles } from './sources';
       export function trackedTestFiles(): string[] {
         return trackedFiles().filter(isRunnableSuite);
       }
@@ -119,7 +119,7 @@ describe('green: the corrected form', () => {
 
   test('the same publication, with the measurement upstream of both writers', () => {
     expect(auditGateProgram('scripts/probe.ts', `
-      import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet.ts';
+      import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
       if (import.meta.main) {
         const measured = assertMeasured('probe', [['files', files.length]]);
         if (process.argv.includes('--lock')) writeLock(keys, LOCK);
@@ -142,7 +142,7 @@ describe('silent: the legitimate shapes its first draft mistook for violations',
     // the tracer call sites in it; there is no set to narrow and nothing to share.
     expect(auditGateProgram('scripts/probe.ts', `
       import { readFileSync } from 'node:fs';
-      import { assertMeasured } from './gate-ratchet.ts';
+      import { assertMeasured } from './gate-ratchet';
       const config = readFileSync(root + 'packages/cf-backend/wrangler.jsonc', 'utf8');
       export const environments = () => JSON.parse(config).env;
     `)).toEqual([]);

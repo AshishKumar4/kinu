@@ -7,10 +7,10 @@
 // deadline exists only when a caller names one.
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
-import { createHeadsStrategy } from '../src/strategy/heads.js';
-import { HeadController, HeadJournal, type HeadBudget, type MergeResult } from '../src/heads/index.js';
-import type { StrategyContext, StrategyBudget } from '../src/strategy/types.js';
-import { createTestRuntime } from './helpers.js';
+import { createHeadsStrategy } from '../src/strategy/heads';
+import { HeadController, HeadJournal, type HeadBudget, type MergeResult } from '../src/heads/index';
+import type { StrategyContext, StrategyBudget } from '../src/strategy/types';
+import { createTestRuntime } from './helpers';
 
 function fakeMergeResult(over?: Partial<MergeResult['costSummary']>): MergeResult {
   return {

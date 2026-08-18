@@ -6,7 +6,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { modelVendorFamily, selectEnsembleJudges, selectJudgeModel } from '../src/index.js';
+import { modelVendorFamily, selectEnsembleJudges, selectJudgeModel } from '../src/index';
 
 const noCandidates = async () => [];
 

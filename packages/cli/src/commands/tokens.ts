@@ -7,9 +7,9 @@ import {
   createCliAccessToken,
   listCliAccessTokens,
   revokeCliAccessToken,
-} from '../cloud-api.js';
-import { requireAuthConfig } from '../config.js';
-import { ACCENT, DIM, OK, WARN } from '../display.js';
+} from '../cloud-api';
+import { requireAuthConfig } from '../config';
+import { ACCENT, DIM, OK, WARN } from '../display';
 
 export interface TokensOpts {
   name?: string;

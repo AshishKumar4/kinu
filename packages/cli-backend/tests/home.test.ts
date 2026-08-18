@@ -2,8 +2,8 @@ import { describe, test, expect, afterEach } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { proteusHome } from '../src/home.js';
-import { createHostCheckpoints } from '../src/checkpoints.js';
+import { proteusHome } from '../src/home';
+import { createHostCheckpoints } from '../src/checkpoints';
 
 const original = process.env.PROTEUS_HOME;
 afterEach(() => {

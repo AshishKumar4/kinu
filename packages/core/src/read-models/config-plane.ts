@@ -13,9 +13,9 @@
  */
 
 import * as v from 'valibot';
-import { DEFAULT_CONFIG } from '../config.js';
-import type { AgentConfigStore, ShellApprovalMode } from '../config/store.js';
-import { REASONING_EFFORTS } from '../strategy/effort.js';
+import { DEFAULT_CONFIG } from '../config';
+import type { AgentConfigStore, ShellApprovalMode } from '../config/store';
+import { REASONING_EFFORTS } from '../strategy/effort';
 
 const SHELL_APPROVAL_MODES: readonly ShellApprovalMode[] = ['strict', 'allow_all', 'deny_all'];
 const ReasoningEffortSchema = v.picklist(REASONING_EFFORTS);

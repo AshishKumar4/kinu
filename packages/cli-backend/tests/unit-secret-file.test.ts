@@ -13,7 +13,7 @@ import { describe, test, expect, afterEach } from 'bun:test';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { enforceOwnerOnly, ensureSecretDir, writeSecretFile } from '../src/secret-file.js';
+import { enforceOwnerOnly, ensureSecretDir, writeSecretFile } from '../src/secret-file';
 
 const roots: string[] = [];
 function scratch(): string {

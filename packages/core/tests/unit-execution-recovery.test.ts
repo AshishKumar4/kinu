@@ -13,26 +13,26 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { AgentOrchestrator } from '../src/orchestrator/agent-orchestrator.js';
-import { closeTurnRun } from '../src/orchestrator/turn-lifecycle.js';
-import { EvolutionEngine } from '../src/evolution/engine.js';
-import type { EvolutionEvent } from '../src/evolution/types.js';
+import { AgentOrchestrator } from '../src/orchestrator/agent-orchestrator';
+import { closeTurnRun } from '../src/orchestrator/turn-lifecycle';
+import { EvolutionEngine } from '../src/evolution/engine';
+import type { EvolutionEvent } from '../src/evolution/types';
 import {
   MAX_RECOVERY_FINDINGS, listRecoveryFindings, recordRecoveryFinding, recoveryFindingText,
   type RecoveryFinding,
-} from '../src/evolution/recovery.js';
+} from '../src/evolution/recovery';
 import {
   corroborateLessonsForTurn, initTurnOutcomeTables, listLessons, recordLesson,
-} from '../src/evolution/outcomes.js';
-import { composePrepareStep } from '../src/prompting/prepare-step.js';
+} from '../src/evolution/outcomes';
+import { composePrepareStep } from '../src/prompting/prepare-step';
 import {
   DynamicContextLedger, agentDynamicContext, renderDynamicContextBlock,
-} from '../src/prompting/volatile-context.js';
-import type { BackendHost } from '../src/types/backend-host.js';
-import { EventLog } from '../src/events/hub/log.js';
-import { initEventsHubTables } from '../src/events/hub/schema.js';
-import type { RunEventInput } from '../src/events/types.js';
-import { createTestRuntime, makeExecRaw, makeSql, makeSqlExec } from './helpers.js';
+} from '../src/prompting/volatile-context';
+import type { BackendHost } from '../src/types/backend-host';
+import { EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import type { RunEventInput } from '../src/events/types';
+import { createTestRuntime, makeExecRaw, makeSql, makeSqlExec } from './helpers';
 
 function finding(overrides: Partial<RecoveryFinding> = {}): RecoveryFinding {
   return {

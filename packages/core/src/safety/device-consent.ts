@@ -24,7 +24,7 @@
  * waiting, which arrives as one `announce` callback.
  */
 
-import type { DynamicApproval } from '../prompting/volatile-context.js';
+import type { DynamicApproval } from '../prompting/volatile-context';
 import * as v from 'valibot';
 
 export const DEVICE_CONSENT_SCOPE = 'all_local_actions';

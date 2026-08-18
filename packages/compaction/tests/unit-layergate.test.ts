@@ -9,7 +9,7 @@ import { observePipeline, runLayerGate, runFaultMatrix, LOCALIZATION_OWN_MIN_PP 
 import {
   COMPACTION_LAYERS, COMPACTION_FAULTS, COMPACTION_LOCKED_BASELINE,
   createCompactionLadderSubjects,
-} from '../src/index.js';
+} from '../src/index';
 
 const subjects = createCompactionLadderSubjects();
 const allProbes = COMPACTION_LAYERS.flatMap((layer) => layer.probes);

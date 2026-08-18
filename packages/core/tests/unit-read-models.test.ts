@@ -14,31 +14,31 @@ import { jsonSchema, tool, type ToolSet } from 'ai';
 import {
   collectWorkspaceTextFiles, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
   SDK_SESSION_DDL,
-} from './helpers.js';
-import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store.js';
-import { RunEventRecorder, initRunEventTables } from '../src/events/recorder.js';
-import { createAgentConfigStore } from '../src/config/store.js';
-import { initWorkspaceSchema } from '../src/identity/workspace-schema.js';
-import { getRunTimeline } from '../src/read-models/timeline.js';
-import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs.js';
-import { getAgentStatus, getChatHistoryPage, getToolList } from '../src/read-models/status.js';
-import { StaleCursorError, type SeekCursor } from '../src/read-models/page.js';
-import { uiMessageText } from '../src/utils/ui-message.js';
+} from './helpers';
+import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
+import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
+import { createAgentConfigStore } from '../src/config/store';
+import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { getRunTimeline } from '../src/read-models/timeline';
+import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs';
+import { getAgentStatus, getChatHistoryPage, getToolList } from '../src/read-models/status';
+import { StaleCursorError, type SeekCursor } from '../src/read-models/page';
+import { uiMessageText } from '../src/utils/ui-message';
 import {
   getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
-} from '../src/read-models/workspace-diff.js';
-import { getExecutorFiles, readExecutorFile, writeExecutorFileOp } from '../src/read-models/files.js';
-import type { SqlExecutor, VFS } from '../src/types/primitives.js';
+} from '../src/read-models/workspace-diff';
+import { getExecutorFiles, readExecutorFile, writeExecutorFileOp } from '../src/read-models/files';
+import type { SqlExecutor, VFS } from '../src/types/primitives';
 import {
   cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob, jobResult,
   listBackgroundJobs, retryBackgroundJob, type BackgroundJobControl,
-} from '../src/read-models/background-jobs.js';
+} from '../src/read-models/background-jobs';
 import {
   getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getShellApprovalMode,
   setAlwaysActiveSkills, setEvolutionConfig, setModel, setReasoningEffort, setShellApprovalMode,
-} from '../src/read-models/config-plane.js';
-import { getEvolutionChangelog, markChangelogSeen } from '../src/read-models/evolution-views.js';
-import type { JsonValue } from '../src/utils/json.js';
+} from '../src/read-models/config-plane';
+import { getEvolutionChangelog, markChangelogSeen } from '../src/read-models/evolution-views';
+import type { JsonValue } from '../src/utils/json';
 
 /** A workspace with the real schema — the same entry point both backends run. */
 function workspace() {

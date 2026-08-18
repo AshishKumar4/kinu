@@ -22,12 +22,12 @@
  */
 
 import { getAgentByName } from 'agents';
-import type { OrchestratorAgent } from '../orchestrator.js';
-import { readWebhookBodyText } from './body.js';
+import type { OrchestratorAgent } from '../orchestrator';
+import { readWebhookBodyText } from './body';
 import { normalizeWebhookRateLimitPerMin } from '@proteus/core';
-import { err, json, safeJson } from '../lib/http.js';
-import { isFreshAuthTime } from '../auth/session.js';
-import { decodeJsonWire } from '../lib/orchestrator-wire.js';
+import { err, json, safeJson } from '../lib/http';
+import { isFreshAuthTime } from '../auth/session';
+import { decodeJsonWire } from '../lib/orchestrator-wire';
 import * as v from 'valibot';
 
 const WebhookRequestSchema = v.object({

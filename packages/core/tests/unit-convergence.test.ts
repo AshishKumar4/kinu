@@ -3,11 +3,11 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, createMockSession } from './helpers.js';
-import { converge } from '../src/mcts/convergence.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initAlternateTakesTable, latestAlternateTakeSet, listAlternateTakeSets } from '../src/mcts/takes.js';
+import { createTestRuntime, createMockSession } from './helpers';
+import { converge } from '../src/mcts/convergence';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initAlternateTakesTable, latestAlternateTakeSet, listAlternateTakeSets } from '../src/mcts/takes';
 
 describe('Convergence', () => {
   test('throws when no nodes exist', async () => {
@@ -55,6 +55,51 @@ describe('Convergence', () => {
     expect(statuses.map((r) => r.status)).toEqual(['failed', 'failed']);
   });
 
+  // With no value signal every node carries the same number, so `ORDER BY value
+  // DESC` degenerates to row order: the "winner" is whichever row came back
+  // first, and it used to be handed over as a converged answer because the
+  // shared value cleared minAcceptableScore.
+  test('two DISTINCT approaches scoring identically is not a convergence', async () => {
+    const { rt } = createTestRuntime();
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    const session = createMockSession();
+
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
+        VALUES ('r', 'r', ${null}, 'test task', 0.6, 2, 'open', 0, 'test task')`;
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
+        VALUES ('r', 'a', 'r', 'test task', 0.6, 1, 'open', 1, 'approach A')`;
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
+        VALUES ('r', 'b', 'r', 'test task', 0.6, 1, 'open', 1, 'approach B')`;
+
+    const result = await converge(rt, session, 'r', 0.3, 0.1, 'plan');
+    // 0.6 clears minAcceptableScore — the old code shipped it as a winner.
+    expect(result.winnerValue).toBeCloseTo(0.6, 10);
+    expect(result.converged).toBe(false);
+    expect(result.trajectory).toHaveLength(0);
+  });
+
+  // The guard must not fire on a real result. A genuine ordering — even a very
+  // close one — is what the search is FOR, and the near-tie itself is what the
+  // alternate-takes ledger records rather than a reason to refuse.
+  test('a near-tie that is not an exact tie still converges', async () => {
+    const { rt } = createTestRuntime();
+    initSearchTables(rt.storage.execRaw, rt.storage.sql);
+    initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
+    const session = createMockSession();
+
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
+        VALUES ('r', 'r', ${null}, 'test task', 0.6, 2, 'open', 0, 'test task')`;
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
+        VALUES ('r', 'a', 'r', 'test task', 0.61, 1, 'open', 1, 'approach A')`;
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
+        VALUES ('r', 'b', 'r', 'test task', 0.60, 1, 'open', 1, 'approach B')`;
+
+    const result = await converge(rt, session, 'r', 0.3, 0.1, 'plan');
+    expect(result.converged).toBe(true);
+    expect(result.winnerId).toBe('a');
+  });
+
   test('marks the winner terminal and other open nodes pruned after convergence', async () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw, rt.storage.sql);
@@ -100,7 +145,7 @@ describe('Convergence', () => {
 
   test('DO-NOW #3: a near-tied candidate that PASSES the discriminating test wins over the marginally-higher-value argmax that FAILS it', async () => {
     const { rt } = createTestRuntime({
-      // generateAssertions asks for a verification harness — return a js block
+      // generateAssertionSuite asks for a verification harness — return a js block
       // so the discriminating test actually runs.
       llmResponses: { 'verification harness': '```js\ncheck();\n```' },
     });

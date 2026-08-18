@@ -34,13 +34,13 @@ import {
   HeadController, HeadJournal, MissionGovernor,
   initSearchTables, initScaffoldTables, initCraftScoreTables,
   type LLMProviderConfig, type MergeResult, type WebSearchProvider,
-} from '../packages/core/src/index.js';
-import { createWorkspace } from '../packages/core/src/identity/index.js';
-import { createCLIHeadRuntime } from '../packages/cli-backend/src/head-runtime.js';
-import { createCLIRuntime, makeSql } from '../packages/cli-backend/src/runtime.js';
-import { resolveChatModel } from '../packages/cli-backend/src/local-session.js';
-import { createBenchInferenceProxy } from './bench-inference-proxy.js';
-import { parsePanelWorkerInput, type WorkerOutput } from './bench-worker-protocol.js';
+} from '../packages/core/src/index';
+import { createWorkspace } from '../packages/core/src/identity/index';
+import { createCLIHeadRuntime } from '../packages/cli-backend/src/head-runtime';
+import { createCLIRuntime, makeSql } from '../packages/cli-backend/src/runtime';
+import { resolveChatModel } from '../packages/cli-backend/src/local-session';
+import { createBenchInferenceProxy } from './bench-inference-proxy';
+import { parsePanelWorkerInput, type WorkerOutput } from './bench-worker-protocol';
 
 /** The spec a fork carries is its INDEX into the panel list, not a registry
  *  name: the bench talks to explicit provider configs rather than a credential

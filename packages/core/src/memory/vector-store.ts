@@ -12,8 +12,9 @@
  * it to the actual Vectorize/AI bindings.
  */
 
-import type { JsonObject } from '../utils/json.js';
-import type { ModelCallSink } from '../events/model-call.js';
+import type { JsonObject } from '../utils/json';
+import type { ModelCallSink } from '../events/model-call';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** A Vectorize-shaped binding (subset we need). Duck-typed so core stays dep-free. */
 export interface VectorMutation {
@@ -174,9 +175,10 @@ export function createCloudflareVectorStore(opts: {
   // enough that a hard-down backend is not re-probed once per operation.
   let unavailableUntil = 0;
   const trip = (op: string, input: { error: unknown }): void => {
-    console.warn(
-      `[vector-store] ${op} failed:`,
-      input.error instanceof Error ? input.error.message : input.error,
+    diagnostics.failure(
+      'vector.backend_tripped',
+      toProteusError({ doing: 'reach the vector backend', cause: input.error, otherwise: 'unavailable' }),
+      { operation: op },
     );
     unavailableUntil = Date.now() + VECTOR_BACKEND_COOLDOWN_MS;
   };

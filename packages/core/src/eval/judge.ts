@@ -1,8 +1,8 @@
 // Default LLM-judge implementation for the eval harness. Mirrors the
 // auto-judge pattern (winner-of-two with rationale) but accepts any LLM that
 // implements the StructuredJudgeFn shape from scaffold/auto-judge.
-import { VerdictSchema, type JudgeFn, type Verdict } from './types.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
+import { VerdictSchema, type JudgeFn, type Verdict } from './types';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 
 /** A judge fn that calls a structured-output LLM via the AI SDK. */
 export type LLMJudgeFn = (

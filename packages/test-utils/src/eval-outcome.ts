@@ -33,7 +33,7 @@
  */
 import * as v from 'valibot';
 import type { ExecOutcome, VFS } from '@proteus/core';
-import type { EvalScoreRow } from './eval-run.js';
+import type { EvalScoreRow } from './eval-run';
 
 /**
  * The one primary metric's row name.

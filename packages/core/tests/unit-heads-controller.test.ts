@@ -26,8 +26,8 @@ import {
   type MergeOutput,
   type MergeStrategy,
   initHeadsTables,
-} from '../src/heads/index.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+} from '../src/heads/index';
+import { makeSql, makeExecRaw } from './helpers';
 
 // ── Test runtime wiring ──────────────────────────────────────────────
 

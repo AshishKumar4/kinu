@@ -17,8 +17,8 @@ import {
   parseIgnoreFile,
   scanText,
   suppresses,
-} from './secret-scan.js';
-import { isTextSource, trackedFiles } from './sources.ts';
+} from './secret-scan';
+import { isTextSource, trackedFiles } from './sources';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 

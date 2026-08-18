@@ -1,7 +1,7 @@
 import * as v from 'valibot';
-import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
-import { nanoid } from '../utils/nanoid.js';
-import { JsonArraySchema, isJsonObject, type JsonObject, type JsonValue } from '../utils/json.js';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import { nanoid } from '../utils/nanoid';
+import { JsonArraySchema, isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 
 /**
  * CONFLICTS WITH `do.sqlite.row_bytes` AND IS LEFT UNCHANGED HERE DELIBERATELY.

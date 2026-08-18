@@ -15,11 +15,11 @@ import { Database } from 'bun:sqlite';
 import {
   reconcileSessionTree, sessionTreeAncestry, chatPaneAncestry, snapshotWorkspaceForFork,
   initAllTables, writeSoul,
-} from '../src/index.js';
-import type { SqlExecutor } from '../src/types/primitives.js';
+} from '../src/index';
+import type { SqlExecutor } from '../src/types/primitives';
 import {
   createTestWorkspace, makeSql, makeExecRaw, SDK_SESSION_DDL, type TestWorkspace,
-} from './helpers.js';
+} from './helpers';
 
 /** The production workspace schema plus the SDK's own session store.
  *

@@ -11,7 +11,7 @@
 // it and never picks a mechanism — starting a turn is simply what "next step"
 // means when no turn is running.
 
-import type { JsonObject } from '../utils/json.js';
+import type { JsonObject } from '../utils/json';
 
 /** Why a queued signal never became a turn: 'preempted' = a newer turn
  *  generation won the queue slot; 'failed' = the platform enqueue threw. */

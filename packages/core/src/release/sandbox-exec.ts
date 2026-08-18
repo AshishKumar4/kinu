@@ -8,9 +8,9 @@
  * so a preview URL is only ever returned for a verified listener.
  */
 
-import type { ExecutorProvider } from '../execution/types.js';
-import { withSandboxRetry, type SandboxHandle } from '../execution/sandbox.js';
-import type { ReleaseExec } from './engine.js';
+import type { ExecutorProvider } from '../execution/types';
+import { withSandboxRetry, type SandboxHandle } from '../execution/sandbox';
+import type { ReleaseExec } from './engine';
 
 export function createSandboxReleaseExec(
   handle: SandboxHandle,

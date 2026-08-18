@@ -10,7 +10,7 @@
 // cannot serve the CLI downloads.)
 
 import { ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
-import { readBuildStamp } from './lib/deployed-assets.js';
+import { readBuildStamp } from './lib/deployed-assets';
 
 const FEATURES: ReadonlyArray<string> = [
   'd1-oauth-session-auth',

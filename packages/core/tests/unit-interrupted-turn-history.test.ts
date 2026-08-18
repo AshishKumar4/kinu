@@ -27,9 +27,9 @@
 import { describe, test, expect } from 'bun:test';
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { runChat, INTERRUPTED_TURN, type ChatEvent } from '../src/chat.ts';
-import { INTERRUPTED_TOOL_RESULT } from '../src/prompting/interrupted-tool-calls.ts';
-import { createChatModel } from '../src/llm.ts';
+import { runChat, INTERRUPTED_TURN, type ChatEvent } from '../src/chat';
+import { INTERRUPTED_TOOL_RESULT } from '../src/prompting/interrupted-tool-calls';
+import { createChatModel } from '../src/llm';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 const ORPHAN_ID = 'call_ed15d29f352a4735e6b01b5';

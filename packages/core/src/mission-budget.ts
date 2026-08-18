@@ -43,12 +43,12 @@
  */
 
 import * as v from 'valibot';
-import type { LLM, RawSqlExec, SqlExecutor } from './types/primitives.js';
-import { BLENDED_USD_PER_1K_TOKENS, estimateTokens, estimateUsdCost } from './llm.js';
-import { reconcileColumns } from './identity/columns.js';
-import type { ModelPricing } from './providers/types.js';
-import type { JsonValue } from './utils/json.js';
-import { usageTotal, type Usage } from './usage.js';
+import type { LLM, RawSqlExec, SqlExecutor } from './types/primitives';
+import { BLENDED_USD_PER_1K_TOKENS, estimateTokens, estimateUsdCost } from './llm';
+import { reconcileColumns } from './identity/columns';
+import type { ModelPricing } from './providers/types';
+import type { JsonValue } from './utils/json';
+import { usageTotal, type Usage } from './usage';
 
 /** A cap on a label. Either dimension may be omitted; a label with neither is a
  *  pure accounting scope (it meters, it never refuses). */

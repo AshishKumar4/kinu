@@ -11,7 +11,7 @@ import {
   describePromptAttachment,
   extractPathTokens,
   resolvePromptAttachments,
-} from '../src/attachments.js';
+} from '../src/attachments';
 
 /** The cap is the caller's (its client's) — these cases only need one that is
  *  cheap to exceed on disk. The real backend caps are exercised separately. */

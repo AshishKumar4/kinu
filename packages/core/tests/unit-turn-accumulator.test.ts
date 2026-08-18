@@ -2,12 +2,12 @@
 // (re-arch P2). Verifies the logic the DO used to own inline is preserved.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { TurnAccumulator } from '../src/orchestrator/turn-accumulator.js';
-import { MissionGovernor } from '../src/mission-budget.js';
-import type { Usage } from '../src/usage.js';
-import { makeSql, makeExecRaw } from './helpers.js';
-import { FAILURE_WITHOUT_ERROR } from '../src/events/types.js';
-import { classifyToolFailure } from '../src/read-models/tool-failures.js';
+import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
+import { MissionGovernor } from '../src/mission-budget';
+import type { Usage } from '../src/usage';
+import { makeSql, makeExecRaw } from './helpers';
+import { FAILURE_WITHOUT_ERROR } from '../src/events/types';
+import { classifyToolFailure } from '../src/read-models/tool-failures';
 
 describe('TurnAccumulator', () => {
   test('reset clears all accounting + stamps startedAt', () => {

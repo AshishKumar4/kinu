@@ -15,12 +15,12 @@ import { describe, test, expect } from 'bun:test';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
-import { DEFAULT_MAX_STEPS } from '../src/config.js';
+import { DEFAULT_MAX_STEPS } from '../src/config';
 import {
   budgetExhausted, deriveChildBudget, DEFAULT_HEAD_BUDGET, type HeadBudget, type HeadInput,
-} from '../src/heads/types.js';
-import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference.js';
-import { usageTotal } from '../src/usage.js';
+} from '../src/heads/types';
+import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
+import { usageTotal } from '../src/usage';
 
 describe('budgetExhausted — depth, and a deadline only if one was requested', () => {
   test('a default head is never exhausted by time or spend', () => {
@@ -280,26 +280,26 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
 
 describe('buildHeadSystemPrompt — the head is told the truth about its envelope', () => {
   test('an uncapped head is told there is no limit, not a number to race', async () => {
-    const { buildHeadSystemPrompt } = await import('../src/heads/head-inference.js');
+    const { buildHeadSystemPrompt } = await import('../src/heads/head-inference');
     const prompt = buildHeadSystemPrompt(loopInput());
     expect(prompt).toContain('no time or token limit');
     expect(prompt).not.toContain('wall-clock');
   });
 
   test('a caller-requested deadline IS disclosed', async () => {
-    const { buildHeadSystemPrompt } = await import('../src/heads/head-inference.js');
+    const { buildHeadSystemPrompt } = await import('../src/heads/head-inference');
     const prompt = buildHeadSystemPrompt(loopInput({ maxWallClockMs: 90_000 }));
     expect(prompt).toContain('90000ms wall-clock');
   });
 
   test('remaining recursion depth is stated as the number it actually is', async () => {
-    const { buildHeadSystemPrompt } = await import('../src/heads/head-inference.js');
+    const { buildHeadSystemPrompt } = await import('../src/heads/head-inference');
     const prompt = buildHeadSystemPrompt(loopInput({ maxDepth: 2 }));
     expect(prompt).toContain('split 2 more level(s) deep');
   });
 
   test('a head with no depth left is not told it may split zero levels', async () => {
-    const { buildHeadSystemPrompt } = await import('../src/heads/head-inference.js');
+    const { buildHeadSystemPrompt } = await import('../src/heads/head-inference');
     // The tool is off the surface entirely at depth 0 (head-tools.ts), so the
     // prompt must not advertise a recursion allowance of 0 beside it — and the
     // tool-derived conventions say plainly that recursion is unavailable.

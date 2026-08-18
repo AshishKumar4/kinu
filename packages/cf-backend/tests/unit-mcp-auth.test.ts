@@ -4,13 +4,13 @@
 // step 6b) because external MCP clients can't do browser OAuth — they
 // authenticate with their per-user CLI bearer token, and every request runs
 // the same ownership claim as the rest of the per-agent API.
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
-import { mockAgentsSdk } from './helpers/agents-sdk.js';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import { mockAgentsSdk } from './helpers/agents-sdk';
+import type { UserCaller } from '../src/user/workspace-capability';
 
 mockAgentsSdk();
-const { handleMcpRequest } = await import('../src/mcp-server.js');
+const { handleMcpRequest } = await import('../src/mcp-server');
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 const TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;

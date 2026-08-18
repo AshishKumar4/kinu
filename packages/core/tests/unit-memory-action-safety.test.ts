@@ -19,11 +19,11 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { buildBuiltinTools } from '../src/tools/builtins.js';
+import { buildBuiltinTools } from '../src/tools/builtins';
 import { toolExecute } from '@proteus/test-utils';
-import { createTestRuntime } from './helpers.js';
-import type { Fact, FactsStore } from '../src/memory/facts.js';
-import type { JsonValue } from '../src/utils/json.js';
+import { createTestRuntime } from './helpers';
+import type { Fact, FactsStore } from '../src/memory/facts';
+import type { JsonValue } from '../src/utils/json';
 
 interface MemoryToolProbeInput {
   action: string;

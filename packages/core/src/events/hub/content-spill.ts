@@ -15,9 +15,10 @@
  * a redelivered event renders a byte-identical brief.
  */
 
-import { sha256Hex } from '../../safety/argument-digest.js';
-import type { VFS } from '../../types/primitives.js';
-import { EVENT_BRIEF_MAX_CHARS } from './visibility.js';
+import { sha256Hex } from '../../safety/argument-digest';
+import type { VFS } from '../../types/primitives';
+import { EVENT_BRIEF_MAX_CHARS } from './visibility';
+import { diagnostics, toProteusError } from '../../obs/index';
 
 /** Workspace VFS directory spilled event content is offloaded to. */
 export const EVENT_CONTENT_DIR = '.proteus/event-content';
@@ -48,8 +49,11 @@ export async function spillEventContent(vfs: VFS, content: string): Promise<stri
     }
     return path;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn('[proteus] event content spill failed:', message);
+    diagnostics.failure(
+      'event.content_spill_failed',
+      toProteusError({ doing: 'spill oversized event content to the workspace', cause: err, otherwise: 'io' }),
+      { path },
+    );
     return null;
   }
 }

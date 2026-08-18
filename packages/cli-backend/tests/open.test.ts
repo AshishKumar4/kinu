@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LLMProviderConfig } from '@proteus/core';
 import { createInlineWorkspace } from '@proteus/core/identity';
-import { openWorkspaceCLI } from '../src/open.js';
+import { openWorkspaceCLI } from '../src/open';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',

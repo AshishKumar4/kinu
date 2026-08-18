@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createStreamingBufferController } from '../src/tui/streaming-buffer.js';
+import { createStreamingBufferController } from '../src/tui/streaming-buffer';
 
 describe('TUI streaming buffer', () => {
   test('coalesces token deltas before flushing to React state', () => {

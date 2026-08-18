@@ -16,8 +16,8 @@
  * message that hardcodes one tool's answer fails for the other seven.
  */
 import { describe, test, expect } from 'bun:test';
-import { explainNativeToolReferenceError } from '../src/execution/sandbox-errors.js';
-import { BUILTIN_TOOLS, TOOL_REACH } from '../src/tools/registry.js';
+import { explainNativeToolReferenceError } from '../src/execution/sandbox-errors';
+import { BUILTIN_TOOLS, TOOL_REACH } from '../src/tools/registry';
 
 describe('explainNativeToolReferenceError', () => {
   test('every native tool is pointed at the namespace its reach declares', () => {

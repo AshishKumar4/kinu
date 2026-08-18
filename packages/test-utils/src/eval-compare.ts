@@ -46,8 +46,8 @@ import {
   minimumPairsForSignificance, pairedBinaryComparison, pairedBootstrapCI, requiredPairs,
   type BootstrapOptions, type Interval, type PairedBinaryStats, type PairedOutcome,
 } from '@proteus/core';
-import { observationKey, type EvalObservation, type EvalRunRecord } from './eval-run.js';
-import { TASK_OUTCOME, isCovariateRow } from './eval-outcome.js';
+import { observationKey, type EvalObservation, type EvalRunRecord } from './eval-run';
+import { TASK_OUTCOME, isCovariateRow } from './eval-outcome';
 
 type ScoredObservation = Extract<EvalObservation, { outcome: 'scored' }>;
 

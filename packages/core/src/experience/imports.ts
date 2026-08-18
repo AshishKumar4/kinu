@@ -26,13 +26,13 @@
  * after it was staged, and that turn's verdict settles it.
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
-import { checkMisevolution, recordMisevolutionVeto } from '../scaffold/misevolution.js';
-import { upsertCraftedTool } from '../craft/conflict.js';
-import { createFactsStore } from '../memory/facts.js';
-import { nanoid } from '../utils/nanoid.js';
-import { isoDate, nowMs } from '../utils/date.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import { checkMisevolution, recordMisevolutionVeto } from '../scaffold/misevolution';
+import { upsertCraftedTool } from '../craft/conflict';
+import { createFactsStore } from '../memory/facts';
+import { nanoid } from '../utils/nanoid';
+import { isoDate, nowMs } from '../utils/date';
 import * as v from 'valibot';
 import {
   EXPERIENCE_KINDS,
@@ -41,7 +41,7 @@ import {
   type ExperienceEntry,
   type ExperienceKind,
   type ExperiencePayload,
-} from './types.js';
+} from './types';
 
 export type ImportStatus = 'provisional' | 'corroborated';
 

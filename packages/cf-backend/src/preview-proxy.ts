@@ -12,9 +12,9 @@
  */
 
 import { proxyToSandbox } from "@cloudflare/sandbox";
-import { escapeHtml } from "./lib/http.js";
-import { containPreviewResponse } from "./lib/preview-origin.js";
-import { sanitizePreviewRequestHeaders } from "./lib/preview-request.js";
+import { escapeHtml } from "./lib/http";
+import { containPreviewResponse } from "./lib/preview-origin";
+import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
 
 /**
  * `proxyToSandbox` collapses every forwarding failure — overwhelmingly "the

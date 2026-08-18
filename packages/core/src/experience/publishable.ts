@@ -22,14 +22,14 @@
  *            provisional-until-corroborated.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import type { CraftStore } from '../types/agent-runtime.js';
-import type { FactsStore } from '../memory/facts.js';
-import { effectiveScore } from '../craft/ema.js';
-import { DEFAULT_CONFIG } from '../config.js';
-import { isoDate, nowMs } from '../utils/date.js';
-import { getLesson, listLessons } from '../evolution/outcomes.js';
-import type { ExperienceKind, PublishableCandidate } from './types.js';
+import type { SqlExecutor } from '../types/primitives';
+import type { CraftStore } from '../types/agent-runtime';
+import type { FactsStore } from '../memory/facts';
+import { effectiveScore } from '../craft/ema';
+import { DEFAULT_CONFIG } from '../config';
+import { isoDate, nowMs } from '../utils/date';
+import { getLesson, listLessons } from '../evolution/outcomes';
+import type { ExperienceKind, PublishableCandidate } from './types';
 
 /** A fact below this confidence has not settled enough to be worth another
  *  agent's context. */

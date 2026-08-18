@@ -15,9 +15,9 @@
 
 import type { ToolSet } from 'ai';
 
-import type { BackgroundJob, BackgroundJobStore } from '../jobs/store.js';
-import type { WorkMode } from '../prompting/surface.js';
-import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json.js';
+import type { BackgroundJob, BackgroundJobStore } from '../jobs/store';
+import type { WorkMode } from '../prompting/surface';
+import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
 
 /** The four things the control plane asks of a running job registry —
  *  BackgroundJobRunner's public surface, named at the width this plane uses. */

@@ -27,8 +27,8 @@ import {
   renderCauseChain,
   toProteusError,
   type ErrorCode,
-} from '../src/obs/index.js';
-import { PLATFORM_CATALOG } from '../src/platform-catalog.js';
+} from '../src/obs/index';
+import { PLATFORM_CATALOG } from '../src/platform-catalog';
 
 /**
  * The real error an operation raises, narrowed to `Error` here so every assertion

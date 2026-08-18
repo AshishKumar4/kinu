@@ -14,7 +14,7 @@
  */
 
 import * as v from 'valibot';
-import { JsonValueSchema, type JsonValue } from '../utils/json.js';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
 
 /** The kinds of experience a workspace can transfer. Order is the canonical
  *  one — the CHECK constraint and every enum surface derive from this list. */

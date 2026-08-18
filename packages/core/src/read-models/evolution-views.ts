@@ -10,19 +10,20 @@
  * backend and used the cross-family judge on the other.
  */
 
-import type { AgentConfigStore } from '../config/store.js';
+import type { AgentConfigStore } from '../config/store';
 import {
   buildChangelog, countUnseenChangelog, listUnseenChangelog, type ChangelogEntry,
-} from '../evolution/changelog.js';
-import type { EvolutionEngine } from '../evolution/engine.js';
-import { proposeNextTasks, type ProposedTask } from '../curriculum/proposer.js';
+} from '../evolution/changelog';
+import type { EvolutionEngine } from '../evolution/engine';
+import { proposeNextTasks, type ProposedTask } from '../curriculum/proposer';
 import {
   buildTakeContinuationPrompt, recordTakePick, type TakePickOutcome,
-} from '../mcts/takes.js';
-import { getCurrentScaffoldVersion } from '../scaffold/shadow.js';
-import type { SignalDeliverer } from '../types/signals.js';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { SqlExecutor } from '../types/primitives.js';
+} from '../mcts/takes';
+import { getCurrentScaffoldVersion } from '../scaffold/shadow';
+import type { SignalDeliverer } from '../types/signals';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { SqlExecutor } from '../types/primitives';
+import { diagnostics, toProteusError } from '../obs/index';
 
 export interface EvolutionChangelogView {
   entries: ChangelogEntry[];
@@ -88,7 +89,11 @@ export async function pickAlternateTake(
   try {
     await deps.engine.applyTakePick(record.set.turnId, record.outcome);
   } catch (err) {
-    console.warn('[proteus] applyTakePick lesson corroboration failed:', err instanceof Error ? err.message : err);
+    diagnostics.failure(
+      'evolution.take_pick_corroboration_failed',
+      toProteusError({ doing: 'corroborate the lesson behind an alternate take', cause: err, otherwise: 'unavailable' }),
+      { takeId, nodeId },
+    );
   }
   let continuationQueued = false;
   if (record.changedAnswer) {

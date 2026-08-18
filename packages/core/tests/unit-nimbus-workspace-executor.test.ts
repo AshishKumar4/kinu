@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { createTestRuntime } from './helpers.js';
+import { createTestRuntime } from './helpers';
 import {
   createNimbusWorkspaceExecutor,
   nimbusSessionFiles,
   nimbusSessionShell,
   type NimbusSandboxHandle,
-} from '../src/execution/nimbus.js';
-import { DefaultExecutionRouter } from '../src/execution/router.js';
+} from '../src/execution/nimbus';
+import { DefaultExecutionRouter } from '../src/execution/router';
 
 function fakeBox() {
   const files = new Map<string, Uint8Array>();

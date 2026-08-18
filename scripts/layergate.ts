@@ -21,12 +21,12 @@ import {
   createPipelineSubjects, lockBaseline, LOCKED_BASELINE, LAYERS, FAULTS,
   renderFaultMatrix, renderLayerGateReport, runFaultMatrix, runLayerGate,
   type Baseline, type Fault, type Layer, type LayerGateReport, type PipelineSubjects,
-} from '../packages/core/src/index.js';
+} from '../packages/core/src/index';
 import {
   COMPACTION_LAYERS, COMPACTION_FAULTS, COMPACTION_LOCKED_BASELINE,
   createCompactionLadderSubjects, type CompactionLadderSubjects,
-} from '../packages/compaction/src/index.js';
-import { createTestRuntime } from '../packages/core/tests/helpers.js';
+} from '../packages/compaction/src/index';
+import { createTestRuntime } from '../packages/core/tests/helpers';
 
 const CORE_BASELINE_FILE = join(import.meta.dir, '../packages/core/src/layergate/baseline.ts');
 const COMPACTION_BASELINE_FILE = join(import.meta.dir, '../packages/compaction/src/layergate-baseline.ts');
@@ -64,7 +64,7 @@ function writeBaseline(file: string, header: string[], name: string, baseline: B
 
 if (process.argv.includes('--lock')) {
   const core = await lockBaseline(subjects);
-  writeBaseline(CORE_BASELINE_FILE, ["import type { Baseline } from './gate.js';"], 'LOCKED_BASELINE', core);
+  writeBaseline(CORE_BASELINE_FILE, ["import type { Baseline } from './gate';"], 'LOCKED_BASELINE', core);
   console.log(`Locked ${Object.keys(core).length} core probes → ${CORE_BASELINE_FILE}`);
   const ladder = await lockBaseline(ladderSubjects, COMPACTION_LAYERS);
   writeBaseline(

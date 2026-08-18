@@ -12,12 +12,12 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initMctsSearchTable } from '../src/mcts/search-store.js';
-import { initHeadsTables } from '../src/heads/schema.js';
-import { listForkRuns, readForkRun } from '../src/read-models/fork-runs.js';
-import { newBranchId } from '../src/steer-branch.js';
+import { makeSql, makeExecRaw } from './helpers';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initMctsSearchTable } from '../src/mcts/search-store';
+import { initHeadsTables } from '../src/heads/schema';
+import { listForkRuns, readForkRun } from '../src/read-models/fork-runs';
+import { newBranchId } from '../src/steer-branch';
 
 function freshDb() {
   const db = new Database(':memory:');

@@ -20,7 +20,7 @@
  * match the shape its own DDL already declares.
  */
 
-import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
 /**
  * Add the columns of `definitions` that `table` does not already have.

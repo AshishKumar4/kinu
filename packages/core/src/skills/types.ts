@@ -32,7 +32,7 @@
  * round-trip-corrupt skills authored by newer tools.
  */
 
-import type { JsonObject } from '../utils/json.js';
+import type { JsonObject } from '../utils/json';
 
 /** Discriminated outcome of parsing a SKILL.md file. */
 export type SkillParseResult =

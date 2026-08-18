@@ -37,11 +37,11 @@ import {
   type SpawnedHead,
   type SplitRequest,
   initHeadsTables,
-} from '../src/heads/index.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initMctsSearchTable } from '../src/mcts/search-store.js';
-import { listForkRuns } from '../src/read-models/fork-runs.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+} from '../src/heads/index';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initMctsSearchTable } from '../src/mcts/search-store';
+import { listForkRuns } from '../src/read-models/fork-runs';
+import { makeSql, makeExecRaw } from './helpers';
 
 const TASK = 'Curate and hand-pick the best brand names for the product';
 

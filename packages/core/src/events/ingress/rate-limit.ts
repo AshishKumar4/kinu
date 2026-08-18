@@ -5,7 +5,7 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExec } from '../../types/primitives.js';
+import type { SqlExec } from '../../types/primitives';
 
 const WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT_PER_MIN = 60;

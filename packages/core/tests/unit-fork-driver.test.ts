@@ -11,8 +11,8 @@ import { describe, test, expect } from 'bun:test';
 import {
   forkWorkspace, writeSoul, readForkLineage, writeForkSnapshot,
   type ForkSnapshot, type ForkTransport,
-} from '../src/index.js';
-import { createTestWorkspace } from './helpers.js';
+} from '../src/index';
+import { createTestWorkspace } from './helpers';
 
 async function sourceWorkspace() {
   const { db, sql, vfs } = createTestWorkspace();

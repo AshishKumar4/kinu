@@ -6,8 +6,8 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildOutcomeEvalSplit, recordTurnOutcome } from '../src/index.js';
-import { createTestWorkspace } from './helpers.js';
+import { buildOutcomeEvalSplit, recordTurnOutcome } from '../src/index';
+import { createTestWorkspace } from './helpers';
 
 const control = readFileSync(join(import.meta.dir, '..', 'src', 'evolution', 'control.ts'), 'utf8');
 const gepaCall = (() => {

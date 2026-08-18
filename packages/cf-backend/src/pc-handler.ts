@@ -15,8 +15,8 @@
 
 import PC_AGENT_DAEMON_SOURCE from "../../pc-agent/src/index.js?raw";
 import { DEVICE_CONNECT_PATH } from "@proteus/core";
-import { json, safeJson } from "./lib/http.js";
-import { ownerCaller } from "./user/workspace-capability.js";
+import { json, safeJson } from "./lib/http";
+import { ownerCaller } from "./user/workspace-capability";
 import * as v from "valibot";
 
 const DAEMON_JS_URL = "/pc/daemon.js";

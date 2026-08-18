@@ -21,9 +21,9 @@ import {
   initShadowTables,
   initCraftScoreTables,
   INITIAL_SCAFFOLD_SOURCE,
-} from '../src/index.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import { createTestRuntime } from './helpers.js';
+} from '../src/index';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import { createTestRuntime } from './helpers';
 
 const RATIONALE = 'A rationale comfortably longer than the fifty-character gate-1 minimum length.';
 const CreateToolResultSchema = v.object({

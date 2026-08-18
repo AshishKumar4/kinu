@@ -4,7 +4,7 @@
 // upgrade path used to pass a WebSocket as a DO-RPC argument, which workerd
 // cannot serialize, so the tunnel 500'd on every connect.
 import { describe, expect, test } from 'bun:test';
-import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do.js';
+import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { JsonValue } from '@proteus/core';
@@ -15,7 +15,7 @@ import {
   deviceTag,
   type DeviceSocket,
   type DeviceSocketCtx,
-} from '../src/user/device-hub.js';
+} from '../src/user/device-hub';
 
 interface FakeSocket extends DeviceSocket {
   sent: string[];

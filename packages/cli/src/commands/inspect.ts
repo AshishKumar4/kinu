@@ -4,12 +4,12 @@ import {
   type AlignmentConvergence, type GepaOptimizationResult, type JsonObject, type JsonValue, type SearchNode,
 } from '@proteus/core';
 import * as v from 'valibot';
-import { resolveAgentTarget } from '../agent-target.js';
-import { fetchReport } from './label.js';
-import { runLocalGepa } from '../local-agent-client.js';
-import { requireAuthConfig } from '../config.js';
-import { callAgentRpc, createCloudWebhookTrigger, type CloudWebhookTriggerInput } from '../cloud-api.js';
-import { ACCENT, DIM, ERR, OK, printSearchTree, WARN } from '../display.js';
+import { resolveAgentTarget } from '../agent-target';
+import { fetchReport } from './label';
+import { runLocalGepa } from '../local-agent-client';
+import { requireAuthConfig } from '../config';
+import { callAgentRpc, createCloudWebhookTrigger, type CloudWebhookTriggerInput } from '../cloud-api';
+import { ACCENT, DIM, ERR, OK, printSearchTree, WARN } from '../display';
 import {
   executeLocalExecutor,
   getLocalAgentState,
@@ -26,7 +26,7 @@ import {
   markLocalBackgroundJobsCancelled,
   readLocalMemory,
   searchLocalMemory,
-} from '../local-inspection.js';
+} from '../local-inspection';
 
 interface InspectOpts {
   json?: boolean;

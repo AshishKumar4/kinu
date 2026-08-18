@@ -3,10 +3,10 @@ export {
   wrapDatabase,
   type AgentDatabase,
   type WorkspaceBirthConfig,
-} from './create.js';
-export { createInlineWorkspace } from './inline-primitives.js';
+} from './create';
+export { createInlineWorkspace } from './inline-primitives';
 export {
   openWorkspace,
   type WorkspaceInfo,
   type WorkspaceResumeConfig,
-} from './open.js';
+} from './open';

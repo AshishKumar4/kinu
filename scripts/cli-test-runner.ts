@@ -60,7 +60,7 @@ function cleanup() {
 // ── §1. Create ───────────────────────────────────────────────────
 
 async function testCreate() {
-  const { createCommand } = await import("../packages/cli/src/commands/create.js");
+  const { createCommand } = await import("../packages/cli/src/commands/create");
 
   const dbPath = join(AGENT_HOME, AGENT_NAME, "agent.db");
 
@@ -102,7 +102,7 @@ async function testCreate() {
 // ── §2. List ─────────────────────────────────────────────────────
 
 async function testList() {
-  const { listCommand } = await import("../packages/cli/src/commands/list.js");
+  const { listCommand } = await import("../packages/cli/src/commands/list");
 
   const origLog = console.log;
   let output = "";
@@ -128,7 +128,7 @@ async function testList() {
 // ── §3. Status ───────────────────────────────────────────────────
 
 async function testStatus() {
-  const { statusCommand } = await import("../packages/cli/src/commands/status.js");
+  const { statusCommand } = await import("../packages/cli/src/commands/status");
 
   const origLog = console.log;
   let output = "";
@@ -155,7 +155,7 @@ async function testStatus() {
 // ── §4. Export / Import ──────────────────────────────────────────
 
 async function testExportImport() {
-  const { exportCommand, importCommand } = await import("../packages/cli/src/commands/export-import.js");
+  const { exportCommand, importCommand } = await import("../packages/cli/src/commands/export-import");
 
   const exportPath = join(EXPORT_DIR, "exported.agent.db");
 

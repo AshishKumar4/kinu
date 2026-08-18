@@ -18,7 +18,7 @@ import {
   rejectOutOfScopeRpc,
   requiredRpcAccess,
   rpcAccessScope,
-} from '../src/cli/rpc-gate.js';
+} from '../src/cli/rpc-gate';
 
 const root = join(import.meta.dir, '..');
 
@@ -202,7 +202,7 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
 
   test('the HTTP dispatcher consumes THIS table — no second scope policy anywhere', () => {
     const routes = source('src/cli/routes.ts');
-    expect(routes).toContain("from './rpc-gate.js'");
+    expect(routes).toContain("from './rpc-gate'");
     expect(routes).toContain('requiredRpcAccess(');
     // The old mirrored copies are gone: no per-agent-method scope map may
     // exist outside rpc-gate.ts (the catch-all GET /workspaces/:name/*

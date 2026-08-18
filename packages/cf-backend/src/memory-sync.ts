@@ -13,6 +13,7 @@
 import type { AgentConfigStore, Memory, VectorStore } from "@proteus/core";
 import { AGENT_CONFIG_KEYS } from "@proteus/core";
 import type { IndexedChunk, MemoryStore } from "@proteus/agent-utils/memory";
+import { diagnostics, toProteusError } from '@proteus/core/obs';
 
 /** A chunk FTS5 holds and the vector index does not makes the semantic index
  *  incomplete, so the completeness marker must stop claiming otherwise. Clearing
@@ -26,7 +27,7 @@ function invalidateSemanticIndex(config: AgentConfigStore): void {
 /**
  * Adapt agent-utils' MemoryStore to core's Memory, syncing the semantic index
  * on every write. FTS5 is the source of truth; the vector store is synced from
- * the index delta and its failures only warn — a Vectorize hiccup must not fail
+ * the index delta and its failures are only recorded — a Vectorize hiccup must not fail
  * the memory write (FTS5 already succeeded). The vector calls ARE awaited so the
  * embeddings are durable before the turn continues.
  *
@@ -47,7 +48,11 @@ export function adaptMemory(store: MemoryStore, vectorStore: VectorStore, config
         if (delta.deletedIds.length > 0) await vectorStore.deleteChunks(delta.deletedIds);
         if (delta.upserted.length > 0) await vectorStore.upsertChunks(delta.upserted);
       } catch (err) {
-        console.warn('[proteus] memory vector sync failed:', errorMessage(err));
+        diagnostics.failure('memory.vector_sync_failed', toProteusError({
+          doing: 'syncing the memory chunk delta into the vector index',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { path });
         invalidateSemanticIndex(config);
       }
     },
@@ -81,7 +86,11 @@ export async function backfillMemoryVectors(
   try {
     chunks = store.allChunksAfter(cursor, cap);
   } catch (err) {
-    console.warn('[proteus] memory vector backfill could not read chunks:', errorMessage(err));
+    diagnostics.failure('memory.vector_backfill_read_failed', toProteusError({
+      doing: 'reading memory chunks for the vector backfill',
+      cause: err,
+      otherwise: 'io',
+    }), { cursor });
     return;
   }
   if (chunks.length === 0) {
@@ -96,10 +105,11 @@ export async function backfillMemoryVectors(
     // embed: advancing over a failed page is what let the marker claim a
     // complete semantic index over content it never indexed. The next boot
     // retries this same page.
-    console.warn(
-      `[proteus] memory vector backfill page failed (cursor held at "${cursor}"):`,
-      errorMessage(err),
-    );
+    diagnostics.failure('memory.vector_backfill_page_failed', toProteusError({
+      doing: 'embedding a page of memory chunks for the vector backfill',
+      cause: err,
+      otherwise: 'unavailable',
+    }), { cursor, chunks: chunks.length });
     return;
   }
 
@@ -107,8 +117,4 @@ export async function backfillMemoryVectors(
   if (chunks.length < cap) {
     config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'true');
   }
-}
-
-function errorMessage<Thrown>(thrown: Thrown): string {
-  return thrown instanceof Error ? thrown.message : String(thrown);
 }

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { userCredentialSource } from './helpers/user-credentials.js';
+import { userCredentialSource } from './helpers/user-credentials';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -9,11 +9,11 @@ import {
   parseModelSpec,
 } from '@proteus/core';
 import { createTestRuntime } from '@proteus/test-utils';
-import { createAgentProviderRegistry, type AgentProviderRegistry } from '../src/providers/agent-registry.ts';
-import { pickInitialModel } from '../src/user/workspace-create.ts';
-import type { ModelMenuEntry } from '../src/user/available-models.js';
-import type { CredentialSummary } from '../src/user/user-do.js';
-import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway.js';
+import { createAgentProviderRegistry, type AgentProviderRegistry } from '../src/providers/agent-registry';
+import { pickInitialModel } from '../src/user/workspace-create';
+import type { ModelMenuEntry } from '../src/user/available-models';
+import type { CredentialSummary } from '../src/user/user-do';
+import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway';
 
 /** Minimal in-memory UserDO stub satisfying the methods agent-registry calls. */
 function fakeUserDOStub(

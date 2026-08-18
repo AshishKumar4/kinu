@@ -10,11 +10,11 @@
  * /api/health must report the deployed build stamp — one GET that says whether
  * the asset half of a deploy landed.
  */
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { handleCliRequest } from '../src/cli/routes.js';
-import { handleHealthRequest } from '../src/health-route.js';
+import { handleCliRequest } from '../src/cli/routes';
+import { handleHealthRequest } from '../src/health-route';
 
 const ORIGIN = 'https://proteus.example.com';
 const SPA_SHELL = '<!doctype html>\n<html lang="en"><head><title>Proteus</title></head><body></body></html>';

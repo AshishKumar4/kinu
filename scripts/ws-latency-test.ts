@@ -9,7 +9,7 @@
  * Usage: bun scripts/ws-latency-test.ts [base-url] [agent-name]
  */
 
-import { tolerate } from "../packages/core/src/obs/index.js";
+import { tolerate } from "../packages/core/src/obs/index";
 
 const BASE_URL = process.argv[2] ?? "http://localhost:5173";
 const AGENT_NAME = process.argv[3] ?? "latency-test-agent";

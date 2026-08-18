@@ -10,9 +10,9 @@ import {
   EventLog, initEventsHubTables, buildDrainBatch, dedupeKeyFor,
   type IngressDescriptor, type ProteusEvent,
   type SubordinateTaskPayload, type SubordinateReportPayload,
-} from '../src/events/hub/index.ts';
-import type { SqlExec } from '../src/index.js';
-import { makeSqlExec } from './helpers.js';
+} from '../src/events/hub/index';
+import type { SqlExec } from '../src/index';
+import { makeSqlExec } from './helpers';
 
 function makeSql(): SqlExec {
   return makeSqlExec(new Database(':memory:'));

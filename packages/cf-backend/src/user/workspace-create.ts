@@ -11,12 +11,13 @@ import {
   normalizeUsage,
   type ReasoningEffort,
 } from '@proteus/core';
-import type { OrchestratorAgent } from '../orchestrator.js';
-import { createAgentProviderRegistry } from '../providers/agent-registry.js';
-import type { UserCredentialClient } from '../providers/agent-registry.js';
-import type { UserCaller } from './workspace-capability.js';
-import { listAvailableModels, type ModelMenuEntry } from './available-models.js';
-import type { WorkspaceEntry } from './user-do.js';
+import { diagnostics, toProteusError } from '@proteus/core/obs';
+import type { OrchestratorAgent } from '../orchestrator';
+import { createAgentProviderRegistry } from '../providers/agent-registry';
+import type { UserCredentialClient } from '../providers/agent-registry';
+import type { UserCaller } from './workspace-capability';
+import { listAvailableModels, type ModelMenuEntry } from './available-models';
+import type { WorkspaceEntry } from './user-do';
 
 export interface CloudWorkspaceRegistry extends UserCredentialClient {
   getConfig(caller: UserCaller, key: string): Promise<string | null>;
@@ -83,7 +84,11 @@ export async function createCloudWorkspaceForUser(
       try {
         await userDO.removeWorkspace(caller, entry.name, userId);
       } catch (rollbackErr) {
-        console.warn('[proteus] createCloudWorkspaceForUser rollback failed:', rollbackErr instanceof Error ? rollbackErr.message : rollbackErr);
+        diagnostics.failure('workspace.create_rollback_failed', toProteusError({
+          doing: 'rolling back a partially created workspace',
+          cause: rollbackErr,
+          otherwise: 'unavailable',
+        }), { workspace: entry.name });
       }
     }
     throw err;
@@ -127,7 +132,11 @@ function scheduleCloudAgentDisplayNameGeneration(
 ): void {
   const task = applyGeneratedDisplayName(env, userDO, caller, agentName, mission, modelSpec, options.suggestDisplayName)
     .catch((err) => {
-      console.warn('[proteus] cloud agent display-name generation failed:', err instanceof Error ? err.message : err);
+      diagnostics.failure('workspace.display_name_generation_failed', toProteusError({
+        doing: "generating a new workspace's display name",
+        cause: err,
+        otherwise: 'unavailable',
+      }), { workspace: agentName });
     });
   if (options.waitUntil) options.waitUntil(task);
   else void task;

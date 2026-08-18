@@ -1,4 +1,4 @@
-import { markdownFencedBlocks } from '../prompts/structured.js';
+import { markdownFencedBlocks } from '../prompts/structured';
 
 const LANGUAGE_ALIASES: ReadonlyMap<string, string> = new Map([
   ['js', 'javascript'],

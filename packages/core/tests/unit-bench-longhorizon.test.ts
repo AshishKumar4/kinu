@@ -9,7 +9,7 @@ import {
   longHorizonCorpusChars, longHorizonPartDir, parseLongHorizonAnswerFile,
   renderLongHorizonAnswerFile, scoreLongHorizonAnswers,
   type LongHorizonSpec,
-} from '../src/index.js';
+} from '../src/index';
 
 const digest: LongHorizonSpec = { mode: 'digest', seed: 11, entries: 120, filler: 60, markers: 5, parts: 1 };
 const continuation: LongHorizonSpec = { mode: 'continuation', seed: 12, entries: 200, filler: 40, markers: 6, parts: 4 };

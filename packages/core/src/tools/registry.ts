@@ -125,26 +125,95 @@ export interface BuiltinToolSpec {
 }
 
 // ── Delegation doctrine (single source) ─────────────────────────────────────
-// The `agents` tool is ONE ladder keyed on LIFETIME: fork = an ephemeral fork
-// that merges back this turn, staff = a persistent subordinate that outlives
-// it, ask/send = talking to what already exists. Both the tool docstring and
-// the system prompt's Delegation section render these rungs verbatim, so
-// editing them here is the only place delegation doctrine changes. mcts is a
-// settle policy inside the fork rung — reachable and fully functional, never
-// a third rung.
+// The `agents` tool is ONE ladder whose rungs differ on TWO axes at once:
+// lifetime and CONTEXT. fork = an ephemeral copy of the caller that merges back
+// this turn and runs on the caller's own recent conversation; hire = a
+// persistent subordinate that outlives the turn and starts from a blank
+// context; ask/send = talking to what already exists. The tool docstring
+// renders these rungs verbatim and the prompt's Delegation section indexes
+// them, so editing them here is the only place delegation doctrine changes.
+// mcts is a settle policy inside the fork rung — reachable and fully
+// functional, never a third rung.
+//
+// NAMING, settled 2026-08-17 so it is not re-opened: the persistent rung is
+// `hire`, not `staff` and not `spawn`.
+//   `spawn` is disqualified outright — BOTH rungs spawn something, so the word
+//     is exactly the information the ladder is keyed on, removed.
+//   `staff` carried the lifetime signal but takes the wrong OBJECT: you staff
+//     an organisation and you hire a person, and this action's object is one
+//     person (`role` + `mission` → one subordinate). It was defensible only
+//     while the caller was the workspace orchestrator, where "staff the
+//     workspace" was a readable elision; a subordinate hiring its own helper
+//     has no organisation to staff, and subordinates hire now.
+//   `hire` keeps the lifetime signal (nobody hires for one turn), takes the
+//     object the call actually has, matches the workplace vocabulary the rest
+//     of this surface already uses (role, mission, roster, dismiss), and pairs
+//     with `dismiss` — hire/dismiss is a matched pair on the enum, staff/dismiss
+//     was not.
+// The cutover is total: no alias, no accepted-legacy action. The one place the
+// old token survives is `evolution/delegation-features.ts`, which counts
+// STORED turns and must keep reading history written before this rename — the
+// same history tolerance it already carries for the pre-unification tool names.
 
 /** Every action the `agents` tool can expose. Which ones a given actor
  *  actually gets is decided by the deps its backend wires — see
  *  agentsActionsFor in tools/agents-tool.ts. */
 export const AGENTS_TOOL_ACTIONS = [
-  'fork', 'staff', 'ask', 'send', 'reply', 'list', 'dismiss',
+  'fork', 'hire', 'ask', 'send', 'reply', 'list', 'dismiss',
 ] as const;
 
 export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 
 /** The one question the ladder asks. Prefixes the doctrine in both surfaces. */
 export const DELEGATION_FRAME =
-  'One delegation ladder keyed on how long the helper needs to live.';
+  'One delegation ladder. Its two rungs differ on two axes at once: how long the helper lives, and what context it starts from.';
+
+/**
+ * The CONTEXT axis, one entry per spawn rung — the half of the ladder that
+ * decides which rung a task wants, and the half neither rung used to state.
+ *
+ * Keyed by ACTION rather than written as one paragraph covering both, because
+ * the two rungs need OPPOSITE instructions and a rule the model has to apply
+ * itself gets applied to the wrong one. "You did not see this conversation, so
+ * restate everything" is true of a hire and FALSE of a fork; "build on what you
+ * already know" is true of a fork and false of a hire. The shape is the deepseek
+ * harness's (deepseek-ai/deepseek-harness 0.1.0-rc.7, tool-subagent/src/index.ts
+ * :213-243), where a single provider-declared `inheritsParentContext` boolean
+ * selects between two tool descriptions AND two prompt-parameter descriptions,
+ * with the same reason in its own comment: the restate-everything instruction
+ * "would be false for a fork".
+ *
+ * `rung` goes into the rung's doctrine (selection: which helper do I want).
+ * `brief` goes onto the field that carries the helper's instructions — a fork's
+ * `forks[].task`, a hire's `mission` — because that is where the fact changes
+ * what gets TYPED, and a field description is read at the moment it is filled.
+ * Both halves read from here so the two surfaces cannot drift into disagreeing
+ * about what a helper can see, which is exactly what they did: `forks[].task`
+ * said a fork "sees this workspace but not this conversation" three lines under
+ * a comment stating it inherits the parent's completed turns.
+ *
+ * Measured, not asserted. A fork is spawned with up to INHERITED_CONTEXT_CAP =
+ * 50 of the parent's stored messages as its own conversation
+ * (orchestrator/heads-support.ts; cf-backend actor-agent.ts readInheritedContext).
+ * A hire gets renderSubordinateInheritedContext's bounded digest — 8 messages,
+ * 9600 chars, per-message cuts disclosed (subordinates/support.ts) — plus its
+ * role and mission. So the difference is real and it is a RATIO, not zero
+ * against everything: "it cannot see anything you saw" would be false too.
+ */
+export const DELEGATION_INHERITANCE = {
+  fork: {
+    rung:
+      'Each fork is you, and it starts from YOUR context: your recent turns arrive as its conversation, so it already knows what you know and the brief only has to say which angle it takes.',
+    brief:
+      'It starts from your context — your recent turns arrive as its conversation — so build on what you already established rather than restating it; what it cannot see is this turn as it continues and what its siblings are doing.',
+  },
+  hire: {
+    rung:
+      'A subordinate starts FRESH: it gets its role, its mission and a short digest of your recent messages, and nothing else. It did not watch this conversation, so a mission that assumes it did is the one way hiring fails — write down what it needs.',
+    brief:
+      'It did not watch this conversation and gets only a short digest of your recent messages, so state the goal, the constraints and what finished looks like here rather than assuming shared ground.',
+  },
+} as const;
 
 /** The two spawn rungs of the delegation ladder. Rendered verbatim into the
  *  `agents` schema description, which every family reads for SELECTION; the
@@ -161,7 +230,10 @@ export const DELEGATION_RUNGS = {
     // deepseek harness's `so it does not consume this conversation's context`.
     'Fork (action=fork) to spend someone else\'s context instead of your own — each fork reads, searches and runs in its own window and hands you back only the answer. Two triggers. Breadth: work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
     'Doubt: your first attempt failed, two approaches are both plausible, the step ahead is expensive to undo, or you cannot check your own output — being unsure is itself a reason to fork. ' +
-    'Each fork is you on the same workspace, files and sandbox, running its own multi-step tool loop concurrently (web search/fetch, exec), then merging back and disappearing; takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you. ' +
+    // The CONTEXT axis reads from DELEGATION_INHERITANCE.fork above, which the
+    // fork BRIEF field also composes, so the rung and the field cannot disagree
+    // about what a fork can see.
+    `${DELEGATION_INHERITANCE.fork.rung} It runs on the same workspace, files and sandbox, its own multi-step tool loop concurrently (web search/fetch, exec), then merges back and disappears; takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you. ` +
     // The payoff-before-limitation ORDER is deliberate and preserved: opening
     // on deterrents ("only… do NOT…") drew 0/10 uses in a shell corpus. What
     // changed is precision — "scored against each other by execution" flat
@@ -175,9 +247,12 @@ export const DELEGATION_RUNGS = {
     // forkSettleRefusal), so the difference is a fact about the call and not a
     // nicety.
     'Leave settle unset to run the briefs in `forks` and merge them back into this turn; set settle=mcts to have the search write its own rivals and compete them instead — how you pick between competing approaches, and the right settle for rival scripts that must produce a specific artifact, since a branch whose proposed code runs and passes outranks every branch whose code failed. mcts branches propose text/code rather than running your own tool loop, and it takes no `forks`: briefs handed to it are refused, because merge is the settle that runs them.',
-  staff:
-    'Staff a subordinate (action=staff) whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
-    'A subordinate keeps its own context across turns and stays in your roster: hand it work with ask, steer it with send, read the roster with list. ' +
+  hire:
+    'Hire a subordinate (action=hire) whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
+    // The other half of the CONTEXT axis, from the same per-action source the
+    // `mission` field composes.
+    `${DELEGATION_INHERITANCE.hire.rung} ` +
+    'It then keeps its own context across turns and stays in your roster: hand it work with ask, steer it with send, read the roster with list. ' +
     'A finished subordinate reports and STAYS, resumable with its context intact — dismiss only a subordinate whose role is permanently over.',
 } as const;
 
@@ -185,7 +260,7 @@ export const DELEGATION_RUNGS = {
  *  `agents` docstring. */
 export const DELEGATION_CONVERSE =
   'ask/send message any agent by name — a subordinate in this workspace or one of the owner\'s other workspace agents (ask expects the answer back, send is fire-and-forget); ' +
-  'reply answers an incoming agent message event by its event_id; staff scope=workspace creates a specialist workspace of its own. ' +
+  'reply answers an incoming agent message event by its event_id; hire scope=workspace creates a specialist workspace of its own. ' +
   // The delivery contract, stated because it changes how to delegate: there is
   // no waiting for a helper to free up, and no reason to hold work back.
   'A busy agent is never blocked on — your message is queued immediately for its own mode-homogeneous turn, so send follow-ups as soon as you have them.';
@@ -437,8 +512,12 @@ export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolActi
 export const BUILTIN_TOOL_SPECS = {
   execute_tools: {
     name: 'execute_tools',
-    // llm.query is deliberately NOT here — it exists only on the CF backend,
-    // so the prompt advertises it via a backend-gated line instead.
+    // llm.query is deliberately NOT in this summary: it needs a model resolver
+    // to spawn sub-calls, which cf always has and a static-model CLI session
+    // does not (cli-backend/local-session.ts wires createRLMProvider only when
+    // one exists). So the prompt advertises it through the `rlmAvailable`-gated
+    // line instead of here, where it would be claimed unconditionally. It is
+    // NOT cf-only — both backends build it (core/src/rlm.ts).
     summary:
       'Run JavaScript against active executor namespaces, codemode.* providers, tools.<name> crafted tools, and agent helpers.',
     whenToUse: 'Use when a step needs real logic: loops, branching, several calls whose results feed each other, crafted tool calls, and anything that has to hold state between calls.',
@@ -504,7 +583,7 @@ export const BUILTIN_TOOL_SPECS = {
     summary:
       "Spawn and talk to helper agents: ephemeral forks of yourself, persistent subordinates in this workspace, and the owner's other workspace agents.",
     whenToUse:
-      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.fork} ${DELEGATION_RUNGS.staff} ${DELEGATION_CONVERSE}`,
+      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.fork} ${DELEGATION_RUNGS.hire} ${DELEGATION_CONVERSE}`,
     // The same three facts as positives. This field's LABEL still frames them
     // ("Avoid when: …", renderToolSchemaDescription below), which is the honest
     // place for the framing; the sentences inside it do not have to be
@@ -515,13 +594,13 @@ export const BUILTIN_TOOL_SPECS = {
     whenNotToUse:
       'A single short coherent change is yours to make directly. Forks that would write the same mutable resource belong in one fork that owns it. Every subordinate or peer message wakes that agent for a full turn, so each one carries real work.',
     result:
-      'fork produces the merged answer with per-fork outputs, or under settle=mcts the winning proposal and its score — on a live session the call hands back a background job at spawn and that answer arrives as the wake when it settles; staff/dismiss return roster state. '
+      'fork produces the merged answer with per-fork outputs, or under settle=mcts the winning proposal and its score — on a live session the call hands back a background job at spawn and that answer arrives as the wake when it settles; hire/dismiss return roster state. '
       + 'ask/send return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id.',
     // The fork call, because it is the one shape here a model gets wrong: the
     // trajectory data has `agents` called with an invented `fork_specs` for
     // `forks`, and the nested {task, rationale} objects are the only argument
-    // shape in the whole surface that a name alone does not give away. staff's
+    // shape in the whole surface that a name alone does not give away. hire's
     // arguments are flat and its `role` property carries its own example.
     example: "agents({action:'fork', task:'Why staging 502s under load', forks:[{task:'Read the gateway logs', rationale:'where the failure shows'}, {task:'Diff the last deploy', rationale:'timing points at the release'}]})",
   },

@@ -14,13 +14,13 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestRuntime, createMockSession, makeExecRaw, makeSql } from './helpers.js';
-import { recordNode, type SessionWriter } from '../src/mcts/record-node.js';
-import { backpropagate } from '../src/mcts/backpropagation.js';
-import { converge } from '../src/mcts/convergence.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initActorTables } from '../src/identity/schema.js';
-import type { SqlExecutor } from '../src/types/primitives.js';
+import { createTestRuntime, createMockSession, makeExecRaw, makeSql } from './helpers';
+import { recordNode, type SessionWriter } from '../src/mcts/record-node';
+import { backpropagate } from '../src/mcts/backpropagation';
+import { converge } from '../src/mcts/convergence';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initActorTables } from '../src/identity/schema';
+import type { SqlExecutor } from '../src/types/primitives';
 
 /** Record a node the way the engine does — value/visits are never written, so
  *  the DDL default is what lands in the row. */

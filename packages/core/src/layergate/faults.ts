@@ -16,12 +16,12 @@
  */
 
 import type { ModelMessage } from 'ai';
-import type { PrepareStepContext } from '../extension.js';
-import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context.js';
-import { StepInjections, type RecordedInjection } from '../prompting/step-injections.js';
-import { LAYERS, type Layer } from './layers.js';
-import { observePipeline, scoreAgainstBaseline } from './gate.js';
-import type { PipelineSubjects } from './subjects.js';
+import type { PrepareStepContext } from '../extension';
+import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
+import { StepInjections, type RecordedInjection } from '../prompting/step-injections';
+import { LAYERS, type Layer } from './layers';
+import { observePipeline, scoreAgainstBaseline } from './gate';
+import type { PipelineSubjects } from './subjects';
 
 export interface Fault<S = PipelineSubjects> {
   readonly id: string;

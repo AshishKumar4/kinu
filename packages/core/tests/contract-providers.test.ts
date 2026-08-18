@@ -11,7 +11,7 @@
 // so we only assert on the things THE PROVIDER controls (URL, headers,
 // auth scheme).
 import { describe, test, expect } from 'bun:test';
-import { asFetchFunction } from '../src/providers/fetch-shim.js';
+import { asFetchFunction } from '../src/providers/fetch-shim';
 import { generateText } from 'ai';
 import * as v from 'valibot';
 import {
@@ -20,7 +20,7 @@ import {
   CODEX_CRED_KEY,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
   type ProviderDeps, type AuthResolution,
-} from '../src/index.ts';
+} from '../src/index';
 import {
   createMockFetch, ANTHROPIC_MESSAGE_BODY, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY,
 } from '@proteus/test-utils';

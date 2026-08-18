@@ -1,8 +1,8 @@
 // SessionWindow — the durable evolution window + pending outcome review.
 import { describe, test, expect } from 'bun:test';
 import { createTestSql } from '@proteus/test-utils';
-import { initSessionWindowTable, createSessionWindowStore, type SessionWindowStore } from '../src/evolution/session-window.js';
-import type { CompletedTurn } from '../src/evolution/types.js';
+import { initSessionWindowTable, createSessionWindowStore, type SessionWindowStore } from '../src/evolution/session-window';
+import type { CompletedTurn } from '../src/evolution/types';
 
 function newStore(): SessionWindowStore {
   const { sql, execRaw } = createTestSql();

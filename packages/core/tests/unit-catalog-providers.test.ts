@@ -12,8 +12,8 @@ import {
   listModelsDevProviders,
   modelsDevCompatBaseURL,
   type ProviderDeps, type AuthResolution, type ModelProvider,
-} from '../src/index.ts';
-import { describeProviderError } from '../src/providers/util.js';
+} from '../src/index';
+import { describeProviderError } from '../src/providers/util';
 import { createMockFetch, CHAT_COMPLETION_BODY } from '@proteus/test-utils';
 
 const CATALOG = {

@@ -17,7 +17,7 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExec } from '../../types/primitives.js';
+import type { SqlExec } from '../../types/primitives';
 
 const SqlDefinitionRowSchema = v.object({ sql: v.nullable(v.string()) });
 const TableColumnRowSchema = v.object({ name: v.string() });

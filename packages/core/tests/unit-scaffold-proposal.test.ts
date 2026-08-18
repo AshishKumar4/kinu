@@ -7,13 +7,13 @@
 // tests pin the prompt to the real contract and prove a proposal written
 // against the documented API survives the executor's smoke path.
 import { describe, test, expect } from 'bun:test';
-import { buildScaffoldProposalPrompt, EvolutionEngine } from '../src/evolution/engine.js';
-import { renderScaffoldHandbook } from '../src/evolution/scaffold-handbook.js';
-import { modifyScaffold } from '../src/scaffold/modify.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { readScaffoldVersion } from '../src/scaffold/shadow.js';
-import { runScaffold, SCAFFOLD_HOST_TYPES, type ScaffoldEvent } from '../src/scaffold/executor.js';
-import { createEvalExecutor, createTestRuntime } from './helpers.js';
+import { buildScaffoldProposalPrompt, EvolutionEngine } from '../src/evolution/engine';
+import { renderScaffoldHandbook } from '../src/evolution/scaffold-handbook';
+import { modifyScaffold } from '../src/scaffold/modify';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { readScaffoldVersion } from '../src/scaffold/shadow';
+import { runScaffold, SCAFFOLD_HOST_TYPES, type ScaffoldEvent } from '../src/scaffold/executor';
+import { createEvalExecutor, createTestRuntime } from './helpers';
 
 /** A proposal that follows the prompt's documented contract to the letter. */
 const CONTRACT_PROPOSAL = `\

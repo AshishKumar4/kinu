@@ -19,9 +19,9 @@ import {
   type ExperienceEntry,
   type ExperienceKind,
   type PublishableCandidate,
-} from './index.js';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { FactsStore } from '../memory/facts.js';
+} from './index';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { FactsStore } from '../memory/facts';
 
 /** The owner's library, as reached from a workspace. Every method crosses the
  *  capability boundary on the backend that implements it. */

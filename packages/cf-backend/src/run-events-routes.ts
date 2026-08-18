@@ -15,10 +15,10 @@
  */
 
 import { getAgentByName } from "agents";
-import type { OrchestratorAgent } from "./orchestrator.js";
+import type { OrchestratorAgent } from "./orchestrator";
 import type { RunEventQuery, RunEventType } from "@proteus/core";
 import * as v from 'valibot';
-import { decodeRunEventWire, type RunEventWire } from './lib/orchestrator-wire.js';
+import { decodeRunEventWire, type RunEventWire } from './lib/orchestrator-wire';
 
 const SSE_POLL_MS = 500;
 const SSE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes

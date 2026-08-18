@@ -3,8 +3,8 @@ import { Database } from 'bun:sqlite';
 import {
   initActorTables, initAllTables, initScaffoldTables, initSearchTables,
   initBackgroundJobsTable, migrateWorkspaceStorage, readForkLineage, readLatestSearchTree,
-} from '../src/index.ts';
-import { makeSql, makeExecRaw } from './helpers.js';
+} from '../src/index';
+import { makeSql, makeExecRaw } from './helpers';
 
 function tableNames(db: Database): string[] {
   return db.query<{ name: string }, []>(

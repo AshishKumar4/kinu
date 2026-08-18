@@ -3,7 +3,7 @@
  * Architecture reference: docs/MCTS.md — "search_nodes Table".
  *
  * BUG-1 FIX: value defaults to 0, NOT 0.5.
- * Formal spec: MCTS/Backpropagation.lean:initial_valid (the value=0 initial state is Valid).
+ * Formal spec: MCTS/Backpropagation.lean:initial_in_range (a fresh node starts in range).
  *
  * `root_id` names the search run a node belongs to. Selection, pruning and
  * convergence are scoped by it, so a tree left behind by an interrupted or
@@ -17,8 +17,8 @@
  * were missing it while every reader selected it by name.
  */
 
-import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
-import { reconcileColumns } from '../identity/columns.js';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import { reconcileColumns } from '../identity/columns';
 
 /**
  * Columns `search_nodes` gained after its first release, and the one place they are listed.

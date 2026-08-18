@@ -4,16 +4,16 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder } from '@proteus/core';
-import { createCredentialCipher } from '../src/user/credential-envelope.js';
+import { createCredentialCipher } from '../src/user/credential-envelope';
 import {
   initEgressVaultTables, listEgressSecrets, putEgressSecret,
   resolveEgressInjection, revokeEgressSecret, rewrapEgressSecrets,
   type EgressVaultDeps,
-} from '../src/user/egress-vault.js';
-import { USER_DO_RPC_SURFACE } from '../src/rpc-surface.js';
+} from '../src/user/egress-vault';
+import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, TEST_USER_ENV, sqlExec,
-} from './helpers/user-do.js';
+} from './helpers/user-do';
 
 const SECRET = 'sk_live_0123456789abcdefghij';
 

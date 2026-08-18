@@ -9,10 +9,10 @@ import {
   readCliSessionTranscript,
   resolveRequestedSession,
   transcriptMessages,
-} from "../src/session.js";
-import { renderSessionBrowser, selectSession } from "../src/tui/session-browser.js";
-import { SessionRecorder } from "../src/session-recorder.js";
-import type { AgentClientEvent } from "../src/agent-client.js";
+} from "../src/session";
+import { renderSessionBrowser, selectSession } from "../src/tui/session-browser";
+import { SessionRecorder } from "../src/session-recorder";
+import type { AgentClientEvent } from "../src/agent-client";
 
 const tempDirs: string[] = [];
 

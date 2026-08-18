@@ -36,7 +36,7 @@
  * secret cannot store a credential at all. A secret store whose key is
  * optional is a plaintext store with extra steps.
  */
-import { hmacSha256Hex } from '../lib/crypto.js';
+import { hmacSha256Hex } from '../lib/crypto';
 
 const ENVELOPE_PREFIX = 'pce1.';
 const KEY_ID_LENGTH = 16;

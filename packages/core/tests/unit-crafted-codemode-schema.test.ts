@@ -26,12 +26,12 @@
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime } from './helpers.js';
+import { createTestRuntime } from './helpers';
 import {
   buildBuiltinTools,
   type CraftedToolExecute,
   type CreateExecuteToolFactory,
-} from '../src/index.js';
+} from '../src/index';
 
 type ExecuteToolOptions = Parameters<CreateExecuteToolFactory>[0];
 

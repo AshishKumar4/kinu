@@ -9,9 +9,9 @@
  * Confirmed: sqlite3 "SELECT log(exp(1.0))" → 0.434 (log₁₀(e)), not 1.0.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import type { SearchNode } from '../types/mcts.js';
-import { DEFAULT_CONFIG } from '../config.js';
+import type { SqlExecutor } from '../types/primitives';
+import type { SearchNode } from '../types/mcts';
+import { DEFAULT_CONFIG } from '../config';
 
 /**
  * Select the best open node using UCT with CORRECT natural log.

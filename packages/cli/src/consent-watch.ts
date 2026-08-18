@@ -15,8 +15,8 @@ import type {
   DeviceConsentDecision,
   DeviceConsentSurface,
   PendingDeviceConsent,
-} from './agent-client.js';
-import { DIM, ERR, MUTED, WARN } from './display.js';
+} from './agent-client';
+import { DIM, ERR, MUTED, WARN } from './display';
 
 const CONSENT_POLL_MS = 750;
 

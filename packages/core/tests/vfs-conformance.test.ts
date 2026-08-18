@@ -15,8 +15,8 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import type { VFS } from '../src/types/primitives.js';
-import type { JsonValue } from '../src/utils/json.js';
+import type { VFS } from '../src/types/primitives';
+import type { JsonValue } from '../src/utils/json';
 import {
   sandboxFiles,
   nimbusSessionFiles,
@@ -24,8 +24,8 @@ import {
   type DeviceTransport,
   type NimbusSandboxHandle,
   type SandboxHandle,
-} from '../src/execution/index.js';
-import { createWorkspaceBundle } from './helpers.js';
+} from '../src/execution/index';
+import { createWorkspaceBundle } from './helpers';
 
 /** The byte corpus that must survive a write→read round trip on every mount:
  *  NUL, a UTF-8 BOM (the silent-3-byte-loss trap), high bytes and a lone 0x80

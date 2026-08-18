@@ -37,7 +37,7 @@ import {
 } from '@proteus/core';
 import {
   CONTAINER_EVENT_HOST, EGRESS_HANDLER, EVENT_HANDLER, type ProteusEgressParams,
-} from './outbound.js';
+} from './outbound';
 
 /** The two Container base methods this needs. Narrow, so a test can supply a
  *  recorder and the wiring is checkable without a container. */

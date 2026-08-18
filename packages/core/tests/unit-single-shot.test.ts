@@ -1,7 +1,7 @@
 // Behavior tests for the single-shot baseline strategy.
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
-import { createSingleShotStrategy, type StrategyContext } from '../src/index.ts';
+import { createSingleShotStrategy, type StrategyContext } from '../src/index';
 import { createTestRuntime } from '@proteus/test-utils';
 
 // Build a minimal Vercel-AI-compatible LanguageModel stub. generateText only

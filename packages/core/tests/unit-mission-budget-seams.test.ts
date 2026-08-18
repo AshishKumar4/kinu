@@ -12,27 +12,28 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
-import { createTestRuntime, makeExecRaw, makeSql } from './helpers.js';
+import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import {
   MissionGovernor,
   MissionBudgetExhausted,
   type MissionBudgetRefusal,
   type MissionScope,
-} from '../src/mission-budget.js';
+} from '../src/mission-budget';
 import {
   createAgentsCodemodeProvider, createStrategyRegistry, FORK_STRATEGY_ID,
   type AgentsToolDeps, type ExplorationStrategy, type StrategyContext,
-} from '../src/index.js';
-import { composePrepareStep } from '../src/prompting/prepare-step.js';
-import type { SubordinateHandoff } from '../src/index.js';
+} from '../src/index';
+import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
+import { composePrepareStep } from '../src/prompting/prepare-step';
+import type { SubordinateHandoff } from '../src/index';
 
 /** The admission facts every handoff carries back to the sender. */
 function handoff(): SubordinateHandoff {
   return { eventId: 'evt-1', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } };
 }
-import { TurnAccumulator } from '../src/orchestrator/turn-accumulator.js';
-import { buildDrainBatch } from '../src/events/hub/drain.js';
-import type { ProteusEvent } from '../src/events/hub/types.js';
+import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
+import { buildDrainBatch } from '../src/events/hub/drain';
+import type { ProteusEvent } from '../src/events/hub/types';
 
 function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   const db = new Database(':memory:');
@@ -116,6 +117,7 @@ function forkableDeps(opts: {
     mode: 'build',
     fork: { registry, rt, model: new MockLanguageModelV3() },
     team: {
+      delegation: ROOT_DELEGATION_BUDGET,
       list: async () => [],
       create: async (input) => ({
         name: input.name ?? 'helper',
@@ -125,7 +127,7 @@ function forkableDeps(opts: {
           createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
         },
       }),
-      spawn: async (input) => { spawns.push(`staff:${input.role}`); return { name: 'helper', displayName: 'Helper' }; },
+      spawn: async (input) => { spawns.push(`hire:${input.role}`); return { name: 'helper', displayName: 'Helper' }; },
       assign: async (input) => { spawns.push(`ask:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
       status: async () => ({}),
       message: async (input) => { spawns.push(`send:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
@@ -203,7 +205,7 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
 
     for (const [member, input] of [
       ['fork', { task: 'x', forks: TWO_FORKS }],
-      ['staff', { role: 'r', mission: 'm' }],
+      ['hire', { role: 'r', mission: 'm' }],
       ['ask', { agent: 'helper', message: 'm' }],
       ['send', { agent: 'helper', message: 'm' }],
     ] as const) {

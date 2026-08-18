@@ -1,10 +1,10 @@
 import type { SessionSurface } from '@proteus/core';
-import { requireAuthConfig } from './config.js';
-import type { AgentTarget } from './agent-target.js';
-import type { AgentClient } from './agent-client.js';
-import type { CliSessionOptions } from './session.js';
-import { CloudAgentClient } from './cloud-agent-client.js';
-import { openLocalAgentClient } from './local-agent-client.js';
+import { requireAuthConfig } from './config';
+import type { AgentTarget } from './agent-target';
+import type { AgentClient } from './agent-client';
+import type { CliSessionOptions } from './session';
+import { CloudAgentClient } from './cloud-agent-client';
+import { openLocalAgentClient } from './local-agent-client';
 
 export interface AgentClientFlags {
   model?: string;

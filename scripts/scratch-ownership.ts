@@ -44,8 +44,8 @@
  * mint site is where the name is chosen.
  */
 
-import { readMatching, isTestFile, isParseable } from './sources.ts';
-import { assertMeasured, finding } from './gate-ratchet.ts';
+import { readMatching, isTestFile, isParseable } from './sources';
+import { assertMeasured, finding } from './gate-ratchet';
 import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@proteus/test-utils';
 
 /**

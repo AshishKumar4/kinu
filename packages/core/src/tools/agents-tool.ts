@@ -5,7 +5,7 @@
  *   fork    — 2–6 ephemeral forks of the calling agent (the heads runtime),
  *             each a full multi-step tool loop on the same workspace, settled
  *             by merge (default) or by the MCTS strategy (settle=mcts).
- *   staff   — a persistent named subordinate that keeps its own context
+ *   hire    — a persistent named subordinate that keeps its own context
  *             across turns and stays in the roster until dismissed;
  *             scope=workspace creates a specialist peer workspace instead.
  *   ask     — hand any agent work and expect the answer back: a subordinate's
@@ -17,7 +17,7 @@
  *
  * The machinery underneath is unchanged surface-for-surface from the former
  * think/team/peers tools: fork dispatches through the StrategyRegistry
- * (heads / mcts strategies untouched), staff/ask/send ride TeamToolDeps'
+ * (heads / mcts strategies untouched), hire/ask/send ride TeamToolDeps'
  * facet substrate, and peer messaging rides PeersToolDeps' EventsHub
  * transport. Which actions exist is decided structurally by which deps the
  * backend wires — see agentsActionsFor.
@@ -30,25 +30,32 @@ import {
   BUILTIN_TOOL_SPECS,
   DELEGATION_CONVERSE,
   DELEGATION_FRAME,
+  DELEGATION_INHERITANCE,
   DELEGATION_RUNGS,
   type AgentsToolAction,
-} from './registry.js';
-import { FORK_STRATEGY_ID } from '../strategy/heads.js';
-import { readSpawnStarted } from '../jobs/threshold.js';
-import { localMissionPort, readMissionLimits, type MissionGovernor } from '../mission-budget.js';
+} from './registry';
+import { FORK_STRATEGY_ID } from '../strategy/heads';
+import { readSpawnStarted } from '../jobs/threshold';
+import { localMissionPort, readMissionLimits, type MissionGovernor } from '../mission-budget';
 import type {
   BuiltinStrategyOptions, StrategyContext, StrategyRegistry,
-} from '../strategy/types.js';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { MergeStrategy } from '../heads/types.js';
-import type { WorkMode } from '../prompting/surface.js';
-import { nanoid } from '../utils/nanoid.js';
+} from '../strategy/types';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { MergeStrategy } from '../heads/types';
+import type { WorkMode } from '../prompting/surface';
+import { nanoid } from '../utils/nanoid';
+import {
+  delegationDepthRefusal,
+  delegationExhausted,
+  type DelegationBudget,
+  type DelegationDepthRefusal,
+} from '../subordinates/depth';
 import {
   JsonObjectSchema,
   parseJsonObject,
   type JsonObject,
   type JsonValue,
-} from '../utils/json.js';
+} from '../utils/json';
 
 // ── Team (subordinate agents) deps contract ─────────────────────────────────
 // The deps implementation rides the workspace DO's facet substrate: spawn =
@@ -104,6 +111,17 @@ export interface SubordinateHandoff {
 }
 
 export interface TeamToolDeps {
+  /**
+   * Where the actor holding this roster sits in the subordinate tree, and how
+   * much room is left below it (subordinates/depth.ts).
+   *
+   * On the roster rather than beside it because the two cannot be wired apart:
+   * an actor with a roster HAS a position in the tree, and one without a roster
+   * has no tree to have a position in. As a sibling optional field it was a
+   * capability a backend could forget — the CLI has no roster at all, so it
+   * would have had a contract to under-wire and nothing to gate.
+   */
+  readonly delegation: DelegationBudget;
   /** The workspace's subordinate roster (dismissed entries excluded). */
   list(): Promise<SubordinateRosterEntry[]>;
   /** Create an idle durable subordinate identity. This is the owner-facing
@@ -228,9 +246,20 @@ export interface AgentsToolDeps {
   /** Ephemeral forks (the heads runtime + MCTS settle). Wired wherever the
    *  backend has an exploration substrate — both backends, subordinates too. */
   fork?: AgentsForkDeps;
-  /** Persistent subordinates — workspace-orchestrator only. */
+  /** Persistent subordinates. Wired on every actor that can hold a roster —
+   *  the workspace orchestrator and, since a subordinate tree is recursive,
+   *  every subordinate with depth left below it. */
   team?: TeamToolDeps;
-  /** Cross-workspace peer messaging — workspace-orchestrator only. */
+  /** Cross-workspace peer messaging — workspace-orchestrator only.
+   *
+   *  Deliberately NOT granted to subordinates, and the reason is the depth cap
+   *  rather than tidiness: `hire scope=workspace` creates a WORKSPACE, whose
+   *  orchestrator is the root of a fresh tree with the whole cap below it. A
+   *  subordinate holding `peers` could therefore mint a new root and escape its
+   *  own subtree in one call, making the derivation below decorative. The
+   *  second reason stands on its own — a peer workspace is a boundary its
+   *  parent owns, and a subordinate reaching across it acts on an ownership
+   *  relation it is not party to. */
   peers?: PeersToolDeps;
   /** The actor's mission budget governor. Wired, it makes this the SPAWN seam:
    *  no helper is launched under an exhausted label, and a fork's own declared
@@ -253,7 +282,7 @@ export function agentsActionsFor(deps: { fork?: object; team?: object; peers?: o
   const converse = !!deps.team || !!deps.peers;
   const present = {
     fork: !!deps.fork,
-    staff: converse,
+    hire: converse,
     ask: converse,
     send: converse,
     reply: !!deps.peers,
@@ -271,7 +300,7 @@ export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
   const use = [
     DELEGATION_FRAME,
     ...(deps.fork ? [DELEGATION_RUNGS.fork] : []),
-    ...(deps.team || deps.peers ? [DELEGATION_RUNGS.staff] : []),
+    ...(deps.team || deps.peers ? [DELEGATION_RUNGS.hire] : []),
     ...(deps.peers
       ? [DELEGATION_CONVERSE]
       : deps.team
@@ -318,7 +347,7 @@ export interface AgentsToolInput {
   /** Name the sub-ledger. Defaults to a generated label under the caller's
    *  mission; naming it lets a run keep one budget across several calls. */
   budget_label?: string;
-  // staff / converse
+  // hire / converse
   agent?: string;
   role?: string;
   mission?: string;
@@ -705,7 +734,8 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
   if (!deps.fork) return {};
   const hasMcts = !!deps.fork.registry.get('mcts');
   const properties: ForkSchemaProperties = {
-    // Gains the batch-level role oh-my-pi's `context` slot has: shared
+    // Gains the batch-level role the `context` slot of oh-my-pi (can1357/oh-my-pi,
+    // the hard fork — upstream pi has no sub-agents at all) has: shared
     // background stated ONCE rather than copied into every fork's brief. Still
     // literally the task — settle=mcts reads only this field (mcts/engine.ts
     // runs on ctx.task and never looks at `forks`) — so the wording has to
@@ -727,13 +757,17 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
         properties: {
           // 16 words of guidance ("Be concrete." / "Why this angle matters.")
           // for the most failure-prone artifact in the system. What a brief
-          // must carry follows from what a fork can SEE: the workspace, and
-          // the parent's completed turns as inherited context — never this
-          // conversation as it continues, and never a sibling's work
-          // (heads/controller.ts spawns them with no channel between them).
-          // So the acceptance criterion has to be in the brief: nothing else
+          // must carry follows from what a fork can SEE, and that sentence now
+          // comes from DELEGATION_INHERITANCE.fork.brief — the same per-action
+          // source the rung composes — because the two disagreed: this field
+          // said a fork "sees this workspace but not this conversation" while
+          // the comment above it said the parent's completed turns ARE its
+          // inherited context, which is what the code does. A fork does not see
+          // this turn as it continues, and never a sibling's work
+          // (heads/controller.ts spawns them with no channel between them), so
+          // the acceptance criterion still has to be in the brief: nothing else
           // can tell the fork it is done.
-          task: { type: 'string', description: 'What this fork explores, complete on its own: the files or surfaces to look at, what to change or find out, and the observable result that means it is done. A fork sees this workspace but not this conversation and not its siblings, so everything it needs is here.' },
+          task: { type: 'string', description: `What this fork explores, complete on its own: the files or surfaces to look at, what to change or find out, and the observable result that means it is done. ${DELEGATION_INHERITANCE.fork.brief}` },
           rationale: { type: 'string', description: 'Why this angle matters — one line, read at the merge to weigh what came back.' },
           // The field said how to set it and never what setting it is FOR, so
           // a first-class capability read as a knob. The caveat belongs on the
@@ -766,7 +800,7 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
     options: { type: 'object', description: 'For action=fork: advanced per-settle tuning. Most callers leave unset.' },
     // The opt-in cumulative cap. Offered on fork, where the host genuinely owns
     // the exploration's model calls and can therefore enforce it; a subordinate
-    // runs on its own storage, so `staff` is gated at the spawn seam instead of
+    // runs on its own storage, so `hire` is gated at the spawn seam instead of
     // being handed a cap nothing could hold it to.
     budget_usd: {
       type: 'number', minimum: 0,
@@ -821,14 +855,19 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   const properties: ConverseSchemaProperties = {
     agent: {
       type: 'string',
-      description: `Agent name: ${askTargets}. Target for ask/send/dismiss; optional name for staff (auto-generated from the role when omitted) and detail filter for list.`,
+      description: `Agent name: ${askTargets}. Target for ask/send/dismiss; optional name for hire (auto-generated from the role when omitted) and detail filter for list.`,
     },
-    role: { type: 'string', maxLength: 200, description: 'For action=staff: one freeform role/purpose line (e.g. "researcher — competitive landscape").' },
-    mission: { type: 'string', maxLength: 20000, description: "For action=staff: the helper's mission — it seeds its identity and runs as its first turn." },
-    model: { type: 'string', description: 'For action=staff: optional model spec override (defaults to the workspace model).' },
+    role: { type: 'string', maxLength: 200, description: 'For action=hire: one freeform role/purpose line (e.g. "researcher — competitive landscape").' },
+    // Says what a mission is FOR, because the hire rung's context fact makes it
+    // load-bearing: this text plus a bounded digest of the caller's recent
+    // messages is the subordinate's whole starting knowledge. The sentence is
+    // DELEGATION_INHERITANCE.hire.brief — the fork brief's opposite, from the
+    // same per-action source, so neither field can be handed the other's rule.
+    mission: { type: 'string', maxLength: 20000, description: `For action=hire: the helper's mission — it seeds its identity and runs as its first turn. ${DELEGATION_INHERITANCE.hire.brief}` },
+    model: { type: 'string', description: 'For action=hire: optional model spec override (defaults to the workspace model).' },
     message: {
       type: 'string', maxLength: 20000,
-      description: 'The work or note for ask/send, the answer for reply, or the first delegated task for staff scope=workspace.',
+      description: 'The work or note for ask/send, the answer for reply, or the first delegated task for hire scope=workspace.',
     },
   };
   if (deps.peers) {
@@ -836,10 +875,10 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
       scope: {
         type: 'string',
         enum: ['subordinate', 'workspace'],
-        description: 'For action=staff: subordinate (default) staffs THIS workspace; workspace creates (or reuses by name) a specialist workspace of its own, sends `message` to it, and awaits the result.',
+        description: 'For action=hire: subordinate (default) hires into THIS workspace; workspace creates (or reuses by name) a specialist workspace of its own, sends `message` to it, and awaits the result.',
       },
       topic: { type: 'string', maxLength: 80, description: 'Optional short label for a peer ask/send (default "message").' },
-      timeout_seconds: { type: 'number', description: 'For a peer ask / staff scope=workspace: seconds to wait for the reply (default 120, max 600). On timeout the reply still arrives later as an event.' },
+      timeout_seconds: { type: 'number', description: 'For a peer ask / hire scope=workspace: seconds to wait for the reply (default 120, max 600). On timeout the reply still arrives later as an event.' },
       event_id: { type: 'string', description: 'For action=reply: the agent message event id you were given.' },
     });
   }
@@ -885,16 +924,36 @@ export async function dispatchAgentsAction(
     return (await team.list()).some((entry) => entry.name === name);
   };
 
+  // Structural absence answering for itself. An action this actor does not wire
+  // is not in the enum, so reaching here means the model called for it anyway —
+  // and `unsupported` is what that is: a well-formed call for a capability this
+  // actor does not have (obs/error.ts). Classified rather than bare, because a
+  // correct "not here, here is what is" counted as a tool DEFECT in the ledger
+  // (read-models/tool-failures.ts), and this is the response an actor at the
+  // delegation depth cap gets — the one place absence would otherwise be silent.
   if (!actions.includes(input.action)) {
-    return { error: `action "${input.action}" is not available here. Available: ${actions.join(', ')}` };
+    return {
+      reason: 'unsupported',
+      error: `action "${input.action}" is not available here. Available: ${actions.join(', ')}`,
+    };
   }
   // The spawn seam. Launching a helper is what turns one exhausted run into
   // many, so the cap is checked before the launch — for every action that
   // creates or wakes an agent, not just fork. `list`, `dismiss` and `reply`
   // spend nothing and stay available so a stopped run can still wind itself up.
-  if (input.action === 'fork' || input.action === 'staff' || input.action === 'ask' || input.action === 'send') {
+  if (input.action === 'fork' || input.action === 'hire' || input.action === 'ask' || input.action === 'send') {
     const refusal = deps.budget?.guard('spawn');
     if (refusal) return refusal;
+  }
+  // The DEPTH seam, and the second half of a containment that is already
+  // structural: an actor at the cap is not wired `team` deps at all, so `hire`
+  // is absent from its enum. This covers the one window build-time gating
+  // cannot — a toolset is cached across turns and a subordinate's identity is
+  // seeded after its facet is built, so a build that ran before the seed could
+  // not have known the depth. Depth is fixed for an actor's whole life, so
+  // reaching this is a stale build rather than a budget that ran out mid-turn.
+  if (input.action === 'hire' && team && delegationExhausted(team.delegation)) {
+    return delegationDepthRefusal(team.delegation);
   }
   try {
     const topic = input.topic?.trim() || 'message';
@@ -905,10 +964,20 @@ export async function dispatchAgentsAction(
       case 'fork':
         return await runFork(deps.fork!, input, mode, toolOptions, deps.budget);
 
-      case 'staff': {
+      case 'hire': {
         if ((input.scope ?? 'subordinate') === 'workspace') {
-          if (!peers) return { error: 'staff scope=workspace needs the peer transport, which this actor does not have' };
-          if (!input.mission || !input.message) return { error: 'staff scope=workspace requires mission and message' };
+          // Classified, not a bare `{error}`: this is the escape route the depth
+          // cap closes — a fresh workspace is the root of its own tree with the
+          // whole cap below it — so the one refusal that has to hold must land
+          // in `refused` and not indict the tool in `broke`.
+          if (!peers) {
+            return {
+              reason: 'denied',
+              error: 'hire scope=workspace creates a whole workspace, which only the workspace orchestrator may do — '
+                + 'hire a subordinate here instead (omit scope), or fork.',
+            } satisfies DelegationDepthRefusal;
+          }
+          if (!input.mission || !input.message) return { error: 'hire scope=workspace requires mission and message' };
           const request: Parameters<PeersToolDeps['spawnWorkspace']>[0] = {
             purpose: input.mission,
             message: input.message,
@@ -918,8 +987,8 @@ export async function dispatchAgentsAction(
           if (input.agent) Object.assign(request, { name: input.agent });
           return await peers.spawnWorkspace(request);
         }
-        if (!team) return { error: 'staffing subordinates is not available on this actor' };
-        if (!input.role || !input.mission) return { error: 'staff requires role and mission' };
+        if (!team) return { error: 'hiring subordinates is not available on this actor' };
+        if (!input.role || !input.mission) return { error: 'hire requires role and mission' };
         const request: Parameters<TeamToolDeps['spawn']>[0] = {
           role: input.role,
           mission: input.mission,
@@ -992,7 +1061,7 @@ export async function dispatchAgentsAction(
         const roster: UnifiedRosterResult = {};
         if (subordinates) Object.assign(roster, { subordinates });
         if (peerRoster) Object.assign(roster, { peers: peerRoster });
-        if (empty) Object.assign(roster, { note: 'No helper agents yet — create one with action:"staff".' });
+        if (empty) Object.assign(roster, { note: 'No helper agents yet — create one with action:"hire".' });
         return roster;
       }
 
@@ -1028,7 +1097,17 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
           description: [
             ...(deps.fork ? ['fork = spawn 2–6 ephemeral forks of yourself that settle back into this turn.'] : []),
             ...(team || peers ? [
-              'staff = create a persistent named helper. ask = hand an agent work and get its answer back. send = fire-and-forget message. list = the unified roster.',
+              'hire = create a persistent named helper. ask = hand an agent work and get its answer back. send = fire-and-forget message. list = the unified roster.'
+              // How much tree is left, stated the way head-tools states nesting
+              // room ("You may nest N more level(s)") — the same fact from the
+              // same kind of derived budget, so a caller near the cap can plan
+              // around it instead of discovering it at a refusal. `maxDepth` is
+              // the room below THIS actor, and the hire itself spends one of it.
+              + (team
+                ? team.delegation.maxDepth > 1
+                  ? ` A subordinate you hire can hire its own, ${team.delegation.maxDepth - 1} level(s) further.`
+                  : ' A subordinate you hire lands on the depth cap and cannot hire its own.'
+                : ''),
             ] : []),
             ...(peers ? ['reply = answer an incoming agent message event.'] : []),
             ...(team ? ['dismiss = retire a subordinate (archived by default — its context is kept).'] : []),

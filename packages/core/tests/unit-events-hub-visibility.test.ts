@@ -5,8 +5,8 @@ import * as v from 'valibot';
 import {
   EVENT_BRIEF_MAX_CHARS, applyVisibilityForStorage, eventContentPath,
   renderForLLM, spillEventContent,
-} from '../src/events/hub/index.ts';
-import type { BaseEvent } from '../src/events/hub/index.ts';
+} from '../src/events/hub/index';
+import type { BaseEvent } from '../src/events/hub/index';
 
 const StoredHttpSchema = v.object({
   headers: v.record(v.string(), v.string()),

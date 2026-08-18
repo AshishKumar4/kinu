@@ -2,9 +2,9 @@ import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
   parseCorpus, summarizeEval, createLLMJudge, runEvalPair,
-} from '../src/index.ts';
-import type { EvalCase, EvalResult, ExplorationStrategy, StrategyContext } from '../src/index.ts';
-import { createTestRuntime } from './helpers.js';
+} from '../src/index';
+import type { EvalCase, EvalResult, ExplorationStrategy, StrategyContext } from '../src/index';
+import { createTestRuntime } from './helpers';
 
 const SEED_CORPUS = `# Comment line — ignored
 {"id":"a","task":"What is 2+2?","reference":"4","tags":["math","trivial"]}

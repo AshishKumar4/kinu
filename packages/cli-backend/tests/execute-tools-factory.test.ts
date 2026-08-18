@@ -8,7 +8,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@proteus/core';
 import { toolExecute } from '@proteus/test-utils';
-import { createNodeExecuteToolFactory } from '../src/execute-tools-factory.js';
+import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
 
 interface ExecuteToolResult {
   result: JsonValue | undefined;

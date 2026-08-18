@@ -7,7 +7,7 @@
 import type { AuthResolution, AuthResolver } from '@proteus/core';
 import { asFetchFunction, withRateLimitRetry } from '@proteus/core';
 import { tolerate } from '@proteus/core/obs';
-import { repairSseCachedUsage } from './stream-usage-repair.js';
+import { repairSseCachedUsage } from './stream-usage-repair';
 import * as v from 'valibot';
 
 interface GatewayErrorDetail { code: number | null; message: string | null }

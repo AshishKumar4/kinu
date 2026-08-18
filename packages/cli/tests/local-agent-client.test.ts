@@ -11,9 +11,9 @@ import type { LanguageModel } from 'ai';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
 import type { LLMProviderConfig } from '@proteus/core';
 import { createCLIRuntime, type LocalModelResolver } from '@proteus/cli-backend';
-import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model.js';
-import { LocalAgentClient } from '../src/local-agent-client.js';
-import type { AgentClientEvent } from '../src/agent-client.js';
+import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
+import { LocalAgentClient } from '../src/local-agent-client';
+import type { AgentClientEvent } from '../src/agent-client';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'openai-compat', baseURL: 'http://localhost:0', headers: { Authorization: 'x' }, model: 'fake-model',
@@ -277,7 +277,7 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
   test('lists self-changes, marks seen on view, and reverts by index', async () => {
     const { client, rt } = setup(fakeModel('ok'));
     await client.connect();
-    const { executeSlashCommand } = await import('../src/slash-commands.js');
+    const { executeSlashCommand } = await import('../src/slash-commands');
 
     // Seed real ledgers: one crafted tool + two learned facts in one aggregate.
     rt.craftStore.create({ params: null, name: 'csv_summarizer', description: 'summarize CSVs', code: 'async () => 1', scope: 'local' });
@@ -328,7 +328,7 @@ describe('/takes — Alternate Takes over a real local client', () => {
     const events: AgentClientEvent[] = [];
     client.subscribe((event) => events.push(event));
     await client.connect();
-    const { executeSlashCommand } = await import('../src/slash-commands.js');
+    const { executeSlashCommand } = await import('../src/slash-commands');
     const { initSearchTables, initAlternateTakesTable, captureAlternateTakes } = await import('@proteus/core');
 
     // No takes yet — the command explains instead of opening a comparison.

@@ -4,10 +4,10 @@
  * Architecture reference: docs/MCTS.md — "search_nodes Table"
  *
  * BUG-1 FIX: NodeData.value defaults to 0, NOT 0.5.
- * Formal spec: MCTS/Backpropagation.lean — initial_valid, init_values_equal_at_first_step.
+ * Formal spec: MCTS/Backpropagation.lean — initial_in_range, init_values_equal_at_first_step.
  */
 
-import type { ModelCallSink } from '../events/model-call.js';
+import type { ModelCallSink } from '../events/model-call';
 
 export type NodeStatus = 'open' | 'terminal' | 'failed' | 'pruned';
 
@@ -100,7 +100,7 @@ export type MCTSProgressEvent = MCTSProgressBody & { readonly rootId: string };
 
 export interface MCTSConfig {
   /** Trusted caller mode. Direct/eval callers default to Build. */
-  mode?: import('../prompting/surface.js').WorkMode;
+  mode?: import('../prompting/surface').WorkMode;
   budget: number;
   branches: number;
   maxDepth?: number;
@@ -129,7 +129,7 @@ export interface MCTSConfig {
    * Absent is the default and then nothing is asked: no port call, no query, no
    * refusal.
    */
-  mission?: import('../mission-budget.js').MissionScope;
+  mission?: import('../mission-budget').MissionScope;
   /**
    * Where every rollout's usage is reported, as `mcts` spend.
    *
@@ -152,5 +152,5 @@ export interface MCTSConfig {
    *  tree instead of discarding the search (B6). Absent ⇒ fiber-snapshot resume
    *  only (tests / inline fast path). Typed loosely here to avoid an mcts→store
    *  import cycle; the concrete type is MctsSearchStore. */
-  search?: import('../mcts/search-store.js').MctsSearchStore;
+  search?: import('../mcts/search-store').MctsSearchStore;
 }

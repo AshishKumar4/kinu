@@ -19,9 +19,9 @@ import {
   initShadowTables,
   type ScaffoldDefaultInferenceChunk,
   type StructuredJudgeFn,
-} from '../src/index.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import { createEvalExecutor, createTestRuntime } from './helpers.js';
+} from '../src/index';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import { createEvalExecutor, createTestRuntime } from './helpers';
 
 /** A pending scaffold that delegates to the default loop — the bootstrap
  *  pattern, and the shape most proposals build on. */

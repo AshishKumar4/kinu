@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createCLIRuntime } from '../src/runtime.js';
+import { createCLIRuntime } from '../src/runtime';
 import { scratchDir, scratchPath } from '@proteus/test-utils';
 
 function freshRuntime() {

@@ -27,11 +27,11 @@
  * four into one empty panel is what made a live branch look like lost data.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import type { Usage } from '../usage.js';
-import type { HeadStep } from '../heads/types.js';
-import { HeadJournal } from '../heads/journal.js';
-import { readSearchTree } from './search-tree.js';
+import type { SqlExecutor } from '../types/primitives';
+import type { Usage } from '../usage';
+import type { HeadStep } from '../heads/types';
+import { HeadJournal } from '../heads/journal';
+import { readSearchTree } from './search-tree';
 
 /** Which store recorded this node, and therefore how much there is to show. */
 export type NodeTranscriptOrigin = 'head' | 'rollout';

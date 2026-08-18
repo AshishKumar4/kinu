@@ -24,8 +24,8 @@
 // returned at connect time — and hands the merged set straight to the model.
 // A seam here would have no core caller to serve (deletion test).
 
-import type { HeadRuntime } from '../heads/controller.js';
-import type { JsonObject } from '../utils/json.js';
+import type { HeadRuntime } from '../heads/controller';
+import type { JsonObject } from '../utils/json';
 
 /** A typed event fanned out to connected clients (mcts-progress, device_consent,
  *  workspace_renamed, background-event cards…). Fire-and-forget. */

@@ -9,8 +9,8 @@
  * resume-after-restart — both backends now share this durable writer.
  */
 
-import type { SessionWriter, SessionMessage } from '../mcts/record-node.js';
-import type { SqlExecutor } from '../types/primitives.js';
+import type { SessionWriter, SessionMessage } from '../mcts/record-node';
+import type { SqlExecutor } from '../types/primitives';
 
 export function createDurableMctsSession(sql: SqlExecutor): SessionWriter {
   return {

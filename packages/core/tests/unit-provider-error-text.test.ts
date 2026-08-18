@@ -13,7 +13,7 @@ import { describe, test, expect, spyOn } from 'bun:test';
 import { APICallError, type LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { describeProviderError, runChat } from '../src/index.ts';
+import { describeProviderError, runChat } from '../src/index';
 
 interface CircularProviderError {
   code: undefined;

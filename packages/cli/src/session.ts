@@ -11,8 +11,8 @@ import { randomUUID } from 'node:crypto';
 import { basename, join, resolve } from 'node:path';
 import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '@proteus/core';
 import * as v from 'valibot';
-import { AGENT_HOME } from './config.js';
-import type { AgentTranscriptMessage } from './agent-client.js';
+import { AGENT_HOME } from './config';
+import type { AgentTranscriptMessage } from './agent-client';
 
 export type CliSessionMode = 'record' | 'none';
 

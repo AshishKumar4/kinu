@@ -21,8 +21,8 @@
  * direction it cannot support.
  */
 
-import { wilsonInterval } from '../utils/stats.js';
-import type { SqlExecutor } from '../types/primitives.js';
+import { wilsonInterval } from '../utils/stats';
+import type { SqlExecutor } from '../types/primitives';
 
 /** A rate is worth reading when its 95% interval spans no more than 20 points
  *  per 100 turns (±10). This replaces an arbitrary minimum-n rule: precision

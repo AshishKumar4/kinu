@@ -8,18 +8,18 @@ export type {
   ReleaseDeployment,
   ReleaseSource,
   ReleaseSourceKind,
-} from './types.js';
-export { RELEASE_STATUSES } from './types.js';
+} from './types';
+export { RELEASE_STATUSES } from './types';
 export {
   assertReleaseTransition,
   isEngineOwnedTransitionTarget,
-} from './lifecycle.js';
+} from './lifecycle';
 export {
   approvalTypeForEnvironment,
   deployApprovalDigest,
   deployTargetAsCommand,
   type DeployApprovalBinding,
-} from './approval-digest.js';
+} from './approval-digest';
 export {
   ReleaseEngine,
   parseDeployOutput,
@@ -32,15 +32,15 @@ export {
   type ReleaseLedger,
   type RollbackResult,
   type RunChecksResult,
-} from './engine.js';
-export { createSandboxReleaseExec } from './sandbox-exec.js';
+} from './engine';
+export { createSandboxReleaseExec } from './sandbox-exec';
 export {
   isSecretReleasePath,
   normalizeReleasePath,
   redactReleaseDiff,
   validateReleasePatchPath,
   type ReleasePathValidation,
-} from './path-safety.js';
+} from './path-safety';
 export {
   ReleaseStore,
   createReleaseStore,
@@ -50,4 +50,4 @@ export {
   type ReleaseSqlStore,
   type ReleaseStoreOptions,
   type ReleaseSourceInput,
-} from './sql-store.js';
+} from './sql-store';

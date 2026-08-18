@@ -5,16 +5,16 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw, createTestWorkspace } from './helpers.js';
+import { makeSql, makeExecRaw, createTestWorkspace } from './helpers';
 import {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
   purgeUnclaimedAlternateTakes,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
   buildTakeContinuationPrompt,
-} from '../src/mcts/takes.js';
+} from '../src/mcts/takes';
 import {
   initTurnOutcomeTables, listTurnOutcomes, buildOutcomeEvalSplit, realOutcomeScaffoldRates,
-} from '../src/evolution/outcomes.js';
+} from '../src/evolution/outcomes';
 
 /** The PRODUCTION schema plus this module's own table: the eval split the pick
  *  feeds reconstructs process evidence from the message and run-event ledgers,

@@ -9,9 +9,9 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { createTestRuntime, makeSqlExec } from './helpers.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { FactsStore } from '../src/memory/facts.js';
+import { createTestRuntime, makeSqlExec } from './helpers';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { FactsStore } from '../src/memory/facts';
 import {
   createExperienceLibrary,
   runExperienceAction,
@@ -31,7 +31,7 @@ import {
   type ExperienceSearchOptions,
   type PublishableCandidate,
   type SqlExec,
-} from '../src/index.js';
+} from '../src/index';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 

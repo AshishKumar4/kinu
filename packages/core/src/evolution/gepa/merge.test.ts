@@ -6,7 +6,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   findComplementaryPair, renderMergePrompt, proposeMerge, runGepa,
   type GepaCandidate, type EvalInstance, type MetricOutcome,
-} from './index.js';
+} from './index';
 
 function seededRng(seed: number): () => number {
   let s = seed;

@@ -37,11 +37,11 @@
  * doctrine-shaped fix this exists to replace.
  */
 
-import type { CompletionGateRecord } from '../events/types.js';
-import type { VFS } from '../types/primitives.js';
-import type { ExecOutcome } from '../execution/exec-result.js';
-import { formatExecResult } from '../execution/exec-result.js';
-import { clampToolResult } from '../tools/clamp.js';
+import type { CompletionGateRecord } from '../events/types';
+import type { VFS } from '../types/primitives';
+import type { ExecOutcome } from '../execution/exec-result';
+import { formatExecResult } from '../execution/exec-result';
+import { clampToolResult } from '../tools/clamp';
 
 /** `proteusEvent` on the turn the gate enqueues — its provenance in the run
  *  log, and how the turn pump recognises the confirming turn as its own. */

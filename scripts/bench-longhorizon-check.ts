@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import {
   LONGHORIZON_ANSWER_FILE, buildLongHorizonQuestions, decodeLongHorizonSpec,
   scoreLongHorizonAnswers,
-} from '../packages/core/src/bench/longhorizon.js';
+} from '../packages/core/src/bench/longhorizon';
 
 const encoded = process.argv[2];
 if (!encoded) {

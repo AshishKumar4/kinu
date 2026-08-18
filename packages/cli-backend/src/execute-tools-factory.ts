@@ -26,9 +26,10 @@ import type {
   ExecutorProvider,
   JsonValue,
 } from '@proteus/core';
+import { diagnostics, toProteusError } from '@proteus/core/obs';
 import { decodeJsonValue, explainNativeToolReferenceError, renderExecuteToolsDescription } from '@proteus/core';
 import { tool, jsonSchema } from 'ai';
-import { addImplicitReturn } from './executor.js';
+import { addImplicitReturn } from './executor';
 import * as v from 'valibot';
 
 export interface NodeExecuteToolFactoryDeps {
@@ -203,7 +204,10 @@ function containRejection<T>(run: () => Promise<T>): Promise<T> {
   try { call = run(); }
   catch (error) { call = Promise.reject(error); }
   void call.catch((error) => {
-    console.warn(`[proteus] execute_tools: an unawaited call rejected: ${errorMessage({ error })}`);
+    diagnostics.failure(
+      'executor.unawaited_call_rejected',
+      toProteusError({ doing: 'running a tool call the model left unawaited', cause: error, otherwise: 'io' }),
+    );
   });
   return call;
 }

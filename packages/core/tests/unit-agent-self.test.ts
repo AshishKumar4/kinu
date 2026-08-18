@@ -2,10 +2,10 @@
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as v from "valibot";
-import { MissionGovernor } from "../src/mission-budget.js";
-import { createAgentSelfProvider, type AgentSelfHost } from "../src/tools/agent-self.js";
-import type { BackgroundJob } from "../src/jobs/store.js";
-import { makeExecRaw, makeSql } from "./helpers.js";
+import { MissionGovernor } from "../src/mission-budget";
+import { createAgentSelfProvider, type AgentSelfHost } from "../src/tools/agent-self";
+import type { BackgroundJob } from "../src/jobs/store";
+import { makeExecRaw, makeSql } from "./helpers";
 
 const RunningJobReadSchema = v.object({
   id: v.string(),

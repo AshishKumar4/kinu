@@ -7,8 +7,8 @@
  * The architecture doc's v1 used `content: "..."` which is a TYPE ERROR.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import { nanoid } from '../utils/nanoid.js';
+import type { SqlExecutor } from '../types/primitives';
+import { nanoid } from '../utils/nanoid';
 
 /** SessionMessage with correct `parts` field (not `content`) */
 export interface SessionMessagePart {
@@ -38,6 +38,18 @@ export interface RecordNodeOpts {
   task: string;
   action: string;
   observation: string;
+  /**
+   * What the ENVIRONMENT said back about this node's proposal — the execution
+   * verdict, absent when nothing was executed. Recorded on the session message
+   * only: `search_nodes.observation` stays the branch's own proposal text,
+   * which is what the alternate-takes ledger compares (mcts/takes.ts).
+   *
+   * This is the half of a LATS expansion the tree was missing. A child
+   * expanded from this node reads its ancestry back through
+   * `session.getHistory(msg_id)`, so without this line the child is told what
+   * its parent PROPOSED and never that the proposal threw.
+   */
+  feedback?: string | null;
   codeUsed: string | null;
   codeLanguage?: string | null;
   depth: number;
@@ -59,9 +71,13 @@ export async function recordNode(
     {
       id: msgId,
       role: 'assistant',
+      // Action and observation are the same string here (the column pair keeps
+      // a 300-char summary beside the full text), so the message carries the
+      // proposal once, then the environment's reply to it.
       parts: [{
         type: 'text',
-        text: `[Node ${opts.nodeId}] ${opts.action}\n\nObservation: ${opts.observation}`,
+        text: `[Node ${opts.nodeId}] ${opts.observation}`
+          + (opts.feedback ? `\n\nObservation: ${opts.feedback}` : ''),
       }],
     },
     opts.parentMsgId,

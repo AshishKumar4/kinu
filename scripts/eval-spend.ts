@@ -21,8 +21,8 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import * as v from 'valibot';
-import { addUsage, UsageSchema } from '../packages/core/src/index.js';
-import type { Usage } from '../packages/core/src/index.js';
+import { addUsage, UsageSchema } from '../packages/core/src/index';
+import type { Usage } from '../packages/core/src/index';
 
 /** One suite process's line. `usage` is the same `Usage` the meter accumulates
  *  (packages/test-utils/src/live-model.ts), parsed rather than trusted, so a line

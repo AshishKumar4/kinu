@@ -4,8 +4,8 @@
 // The task family: a seeded defect in THIS repo, scored by running this repo's
 // own checks. Nothing in the scoring path is LLM-judged; a task passes when a
 // process exits 0.
-import { unitHash } from './stats.js';
-import { normalizeUsage, usageTotal } from '../usage.js';
+import { unitHash } from './stats';
+import { normalizeUsage, usageTotal } from '../usage';
 import type { LanguageModelUsage } from 'ai';
 import * as v from 'valibot';
 

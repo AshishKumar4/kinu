@@ -4,7 +4,7 @@
 // local file write/read silently failed. Guards the coercion on both sides.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createCLIRuntime } from '../src/runtime.js';
+import { createCLIRuntime } from '../src/runtime';
 import { scratchPath } from '@proteus/test-utils';
 
 function freshVfs() {

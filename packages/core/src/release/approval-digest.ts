@@ -14,8 +14,8 @@
  * exactly the value an injection would try to swap.
  */
 
-import { argumentDigest } from '../safety/argument-digest.js';
-import type { ReleaseApproval, ReleaseDeployment } from './types.js';
+import { argumentDigest } from '../safety/argument-digest';
+import type { ReleaseApproval, ReleaseDeployment } from './types';
 
 /** A binding's deployTarget doubles as the deploy command when it reads like
  *  one (has whitespace, e.g. "bunx wrangler deploy"); a bare label like

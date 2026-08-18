@@ -29,9 +29,9 @@
 
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import { tolerate } from '../obs/index.js';
-import { parseJsonValue } from './json.js';
-import type { ChatHistoryEntry } from '../read-models/status.js';
+import { tolerate } from '../obs/index';
+import { parseJsonValue } from './json';
+import type { ChatHistoryEntry } from '../read-models/status';
 
 const UiMessageSchema = v.object({
   parts: v.optional(v.array(v.object({

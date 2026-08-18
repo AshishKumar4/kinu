@@ -16,8 +16,8 @@ import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import * as v from 'valibot';
-import { AttemptOutcomeSchema, parseJsonValue } from '../packages/core/src/index.js';
-import type { AttemptBudget, AttemptOutcome, JsonValue } from '../packages/core/src/index.js';
+import { AttemptOutcomeSchema, parseJsonValue } from '../packages/core/src/index';
+import type { AttemptBudget, AttemptOutcome, JsonValue } from '../packages/core/src/index';
 
 /** Repo-relative default. `.gitignore` already carries `/bench-artifacts/`. */
 export const ARTIFACT_DIRNAME = 'bench-artifacts';

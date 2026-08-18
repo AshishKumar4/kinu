@@ -1,5 +1,5 @@
 // Tiny VFS helpers shared across modules.
-import type { VFS } from '../types/primitives.js';
+import type { VFS } from '../types/primitives';
 
 /** The directory part of a VFS path, POSIX-style: '' for a bare name, '/' for a
  *  top-level one. Shared because `path.slice(0, path.lastIndexOf('/'))` is

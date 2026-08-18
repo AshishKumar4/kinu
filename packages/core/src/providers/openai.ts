@@ -7,9 +7,9 @@
 // the AuthResolver.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo } from './types.js';
-import { createAuthedFetch } from './util.js';
-import { listModelsDevProviderModels } from './models-dev.js';
+import type { ModelProvider, ModelInfo } from './types';
+import { createAuthedFetch } from './util';
+import { listModelsDevProviderModels } from './models-dev';
 
 export const OPENAI_CRED_KEY = 'openai.bearer';
 export const OPENAI_BASE_URL = 'https://api.openai.com/v1';

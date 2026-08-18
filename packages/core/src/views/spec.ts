@@ -21,8 +21,8 @@
  */
 
 import * as v from 'valibot';
-import { RESERVED_VIEW_TITLES, VIEW_DATA_SOURCES, normalizeViewTitle } from './sources.js';
-import { isJsonObject, type JsonValue } from '../utils/json.js';
+import { RESERVED_VIEW_TITLES, VIEW_DATA_SOURCES, normalizeViewTitle } from './sources';
+import { isJsonObject, type JsonValue } from '../utils/json';
 
 /** Bumped only when an old spec would render wrongly under new rules. */
 export const VIEW_SPEC_VERSION = 1;

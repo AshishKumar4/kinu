@@ -22,11 +22,11 @@ import {
   parseMarkdownFrontmatter,
   stringifyMarkdownFrontmatter,
   MarkdownFrontmatterError,
-} from '../utils/markdown-frontmatter.js';
-import type { ParsedSkill, SkillParseResult, SkillSource } from './types.js';
-import { SkillError } from './types.js';
+} from '../utils/markdown-frontmatter';
+import type { ParsedSkill, SkillParseResult, SkillSource } from './types';
+import { SkillError } from './types';
 import * as v from 'valibot';
-import type { JsonObject, JsonValue } from '../utils/json.js';
+import type { JsonObject, JsonValue } from '../utils/json';
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const NAME_MAX_LEN = 64;

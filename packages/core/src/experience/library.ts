@@ -14,8 +14,8 @@
  * repository does not un-publish a release.
  */
 
-import { nanoid } from '../utils/nanoid.js';
-import { nowMs } from '../utils/date.js';
+import { nanoid } from '../utils/nanoid';
+import { nowMs } from '../utils/date';
 import {
   EXPERIENCE_KINDS,
   experienceSearchText,
@@ -23,9 +23,9 @@ import {
   type ExperienceEntry,
   type ExperienceKind,
   type PublishableCandidate,
-} from './types.js';
-import type { SqlExec } from '../types/primitives.js';
-import type { SqlValue } from '../types/primitives.js';
+} from './types';
+import type { SqlExec } from '../types/primitives';
+import type { SqlValue } from '../types/primitives';
 import * as v from 'valibot';
 
 export function initExperienceLibraryTables(sql: SqlExec): void {

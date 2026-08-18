@@ -18,17 +18,17 @@
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
-import { buildStrategyForkDeps, type ForkDepsWiring } from '../src/orchestrator/fork-deps.js';
-import { createMCTSStrategy } from '../src/strategy/mcts.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
-import type { MCTSProgressEvent } from '../src/types/mcts.js';
-import { HeadController } from '../src/heads/controller.js';
-import { HeadJournal } from '../src/heads/journal.js';
-import { MctsSearchStore } from '../src/mcts/search-store.js';
-import type { AgentsForkDeps } from '../src/tools/agents-tool.js';
-import { createTestRuntime, createMockSession } from './helpers.js';
+import { buildStrategyForkDeps, type ForkDepsWiring } from '../src/orchestrator/fork-deps';
+import { createMCTSStrategy } from '../src/strategy/mcts';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initCraftScoreTables } from '../src/craft/schemas';
+import type { MCTSProgressEvent } from '../src/types/mcts';
+import { HeadController } from '../src/heads/controller';
+import { HeadJournal } from '../src/heads/journal';
+import { MctsSearchStore } from '../src/mcts/search-store';
+import type { AgentsForkDeps } from '../src/tools/agents-tool';
+import { createTestRuntime, createMockSession } from './helpers';
 
 function forkWiring(
   rt: ForkDepsWiring['rt'],
@@ -128,10 +128,13 @@ describe('the MCTS strategy reports progress while the search runs', () => {
     initCraftScoreTables(rt.storage.execRaw);
 
     const events: MCTSProgressEvent[] = [];
-    // Node count observed at the moment each 'evaluate' phase was reported —
-    // proof the broadcast a surface receives carries a tree that is actually
-    // advancing, not one that only settles at the end.
-    const nodesAtEvaluate: number[] = [];
+    // Node count observed at the moment each 'iteration-complete' was reported
+    // — proof the broadcast a surface receives carries a tree that is actually
+    // advancing, not one that only settles at the end. Sampled at the END of
+    // the iteration and not at 'evaluate', because a node is recorded with the
+    // observation its evaluation produced: at 'evaluate' the environment has
+    // not answered yet and the children do not exist (mcts/engine.ts).
+    const nodesAtIteration: number[] = [];
 
     const strategy = createMCTSStrategy();
     await strategy.explore({
@@ -146,8 +149,8 @@ describe('the MCTS strategy reports progress while the search runs', () => {
           branches: 2,
           onProgress: (event: MCTSProgressEvent) => {
             events.push(event);
-            if (event.type === 'phase' && event.phase === 'evaluate') {
-              nodesAtEvaluate.push(
+            if (event.type === 'iteration-complete') {
+              nodesAtIteration.push(
                 rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM search_nodes`[0]?.n ?? 0,
               );
             }
@@ -159,10 +162,10 @@ describe('the MCTS strategy reports progress while the search runs', () => {
     expect(events.length).toBeGreaterThan(0);
     expect(events.some((e) => e.type === 'phase' && e.phase === 'explore')).toBe(true);
     expect(events.some((e) => e.type === 'iteration-complete')).toBe(true);
-    // The first evaluate already sees the root plus its two fresh branches.
-    expect(nodesAtEvaluate[0]).toBeGreaterThanOrEqual(3);
+    // The first completed iteration has banked the root plus its two branches.
+    expect(nodesAtIteration[0]).toBeGreaterThanOrEqual(3);
     // And the tree keeps growing across iterations rather than arriving whole.
-    expect(nodesAtEvaluate.at(-1)).toBeGreaterThan(nodesAtEvaluate[0] ?? 0);
+    expect(nodesAtIteration.at(-1)).toBeGreaterThan(nodesAtIteration[0] ?? 0);
   });
 
   test('a strategy call with no sink runs identically — the option is optional', async () => {

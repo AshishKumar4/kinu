@@ -24,9 +24,9 @@
  */
 
 import * as v from 'valibot';
-import type { LLM } from '../types/primitives.js';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
-import type { JsonObject } from '../utils/json.js';
+import type { LLM } from '../types/primitives';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import type { JsonObject } from '../utils/json';
 
 /** WHY the user pushed back. Ordered: the first match wins, so explicit
  *  lexical evidence outranks the inferred `repeat`, and `other` is the honest

@@ -25,7 +25,7 @@
  * therefore counted, and its silence is what the coverage fraction is made of.
  */
 
-import type { Usage } from '../usage.js';
+import type { Usage } from '../usage';
 
 /**
  * Which producer issued a model call. The attribution axis of a workspace's

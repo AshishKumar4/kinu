@@ -40,16 +40,16 @@ import {
   type JsonObject, type JsonValue, type Usage,
 } from '@proteus/core';
 import * as v from 'valibot';
-import { resolveAgentTarget } from '../agent-target.js';
-import { requireAuthConfig } from '../config.js';
-import { callAgentRpc } from '../cloud-api.js';
-import { ACCENT, DIM, ERR, OK, WARN } from '../display.js';
+import { resolveAgentTarget } from '../agent-target';
+import { requireAuthConfig } from '../config';
+import { callAgentRpc } from '../cloud-api';
+import { ACCENT, DIM, ERR, OK, WARN } from '../display';
 import {
   getLocalAgentInfo, getLocalChangelog, getLocalChatHistory, getLocalFacts,
   getLocalScaffoldVersions, listLocalGepaRuns, listLocalHeads, listLocalJobs,
   listLocalMcts, listLocalMctsSearchRuns, listLocalRunEvents, listLocalRuns,
   listLocalTriggers, readLocalMemory, getLocalReleaseBoard, getLocalToolSurface,
-} from '../local-inspection.js';
+} from '../local-inspection';
 
 export interface DebugOpts {
   json?: boolean;

@@ -10,7 +10,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { UIMessage } from 'ai';
-import { mergeTranscript, type ChatHistoryEntry } from '../src/index.js';
+import { mergeTranscript, type ChatHistoryEntry } from '../src/index';
 
 const stored = (id: string, content = id): ChatHistoryEntry =>
   ({ id, role: 'assistant', content, createdAt: '2026-01-01 00:00:00' });

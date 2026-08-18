@@ -6,7 +6,7 @@ import {
   wrapCompactionSummary,
   stripCheckpointPreamble,
   CONTEXT_CHECKPOINT_PREFIX,
-} from '../src/compaction.ts';
+} from '../src/compaction';
 
 const SECTIONS = [
   '## Active Task',

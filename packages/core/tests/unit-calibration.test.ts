@@ -7,15 +7,15 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { makeSql, makeExecRaw } from './helpers';
 import {
   initTurnOutcomeTables, recordTurnOutcome, recordOutcomeLabels, listOutcomeLabels, goldLabels,
   type TurnOutcome, type OutcomeLabel,
-} from '../src/evolution/outcomes.js';
+} from '../src/evolution/outcomes';
 import {
   allocateLabelBudget, calibrationReport, parseLabelingFile, renderCalibrationReport,
   renderLabelingFile, sampleForLabeling,
-} from '../src/evolution/calibration.js';
+} from '../src/evolution/calibration';
 
 function setup() {
   const db = new Database(':memory:');

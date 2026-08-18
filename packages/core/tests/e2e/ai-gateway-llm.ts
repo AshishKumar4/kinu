@@ -10,7 +10,7 @@
  *   AI_GATEWAY_MODEL     — Model ID (default: @cf/deepseek-ai/deepseek-v4-pro-0813)
  */
 
-import { createVercelAILLM } from '../../src/llm.js';
+import { createVercelAILLM } from '../../src/llm';
 
 function getRequiredEnv(name: string): string {
   const value = process.env[name];

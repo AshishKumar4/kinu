@@ -38,7 +38,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import * as v from 'valibot';
-import { assertMeasured, finding } from './gate-ratchet.ts';
+import { assertMeasured, finding } from './gate-ratchet';
 
 const root = new URL('..', import.meta.url).pathname;
 

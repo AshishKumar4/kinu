@@ -20,14 +20,14 @@
  * but are otherwise untouched; failures get the same actionable mapping as
  * the my-gateway provider.
  */
-import type { UserDO } from './user-do.js';
-import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth.js';
-import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '../providers/cloudflare-ai-fetch.js';
-import { createUserDOAuthResolver } from '../providers/agent-registry.js';
-import { MY_GATEWAY_PROVIDER_ID } from '../providers/my-gateway.js';
-import { listAvailableModels } from './available-models.js';
-import { json } from '../lib/http.js';
-import { ownerCaller } from './workspace-capability.js';
+import type { UserDO } from './user-do';
+import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth';
+import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '../providers/cloudflare-ai-fetch';
+import { createUserDOAuthResolver } from '../providers/agent-registry';
+import { MY_GATEWAY_PROVIDER_ID } from '../providers/my-gateway';
+import { listAvailableModels } from './available-models';
+import { json } from '../lib/http';
+import { ownerCaller } from './workspace-capability';
 import { USER_AI_PROXY_PATH } from '@proteus/core';
 import * as v from 'valibot';
 

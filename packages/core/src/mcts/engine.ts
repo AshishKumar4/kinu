@@ -2,34 +2,40 @@
  * MCTS search engine — the full fiber-backed parallel exploration loop.
  *
  * Architecture reference: docs/MCTS.md — "Search Flow"
- * Paper: LATS arXiv:2310.04406
+ * Paper: LATS arXiv:2310.04406, the PROGRAMMING instantiation (§5.2), where a
+ *   node's action is one complete candidate solution rather than a ReAct step,
+ *   the simulation phase is skipped, and the environment is a generated assert
+ *   suite plus the compiler. Selection/expansion/evaluation/backpropagation/
+ *   reflection follow §4.2. In `plan` mode there is no environment to observe,
+ *   so the search degrades to Tree of Thoughts (arXiv:2305.10601) with UCT.
  * Formal spec: MCTS/StorageIsolation.lean — init_isolated, transition_preserves_isolation
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { MCTSConfig, MCTSPhase, MCTSProgressBody } from '../types/mcts.js';
-import type { MissionScope } from '../mission-budget.js';
-import type { ConvergenceResult } from '../types/evaluation.js';
-import type { SessionWriter } from './record-node.js';
-import { DEFAULT_CONFIG } from '../config.js';
-import { initSearchTables } from './schemas.js';
-import { initAlternateTakesTable } from './takes.js';
-import { selectNode } from './uct.js';
-import { siblingAngles } from './diversity.js';
-import { backpropagate } from './backpropagation.js';
-import { recordNode } from './record-node.js';
-import { converge, abandonSearchTree } from './convergence.js';
-import { evaluateWithMultiModelJudging } from './evaluation.js';
-import { readProposalCode } from '../execution/code-fence.js';
-import { pruneLowValueBranches } from './pruning.js';
-import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery.js';
-import { estimateCost } from './cost.js';
-import { persistableMCTSConfig } from './search-store.js';
-import { initMctsSearchTable } from './search-store.js';
-import { nanoid } from '../utils/nanoid.js';
-import { isoDate } from '../utils/date.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { MCTSConfig, MCTSPhase, MCTSProgressBody } from '../types/mcts';
+import type { MissionScope } from '../mission-budget';
+import type { ConvergenceResult } from '../types/evaluation';
+import type { SessionWriter } from './record-node';
+import { DEFAULT_CONFIG } from '../config';
+import { initSearchTables } from './schemas';
+import { initAlternateTakesTable } from './takes';
+import { selectNode } from './uct';
+import { siblingAngles } from './diversity';
+import { backpropagate } from './backpropagation';
+import { recordNode } from './record-node';
+import { converge, abandonSearchTree } from './convergence';
+import { evaluateWithMultiModelJudging, executionObservation } from './evaluation';
+import { readProposalCode } from '../execution/code-fence';
+import { pruneLowValueBranches } from './pruning';
+import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery';
+import { estimateCost } from './cost';
+import { persistableMCTSConfig } from './search-store';
+import { initMctsSearchTable } from './search-store';
+import { diagnostics } from '../obs/index';
+import { nanoid } from '../utils/nanoid';
+import { isoDate } from '../utils/date';
 import * as v from 'valibot';
-import { UsageSchema, usageReported, usageTotal, type Usage } from '../usage.js';
+import { UsageSchema, usageReported, usageTotal, type Usage } from '../usage';
 
 const BranchExplorationSchema = v.object({
   text: v.string(),
@@ -235,31 +241,6 @@ export async function runMCTS(
           ? null
           : readProposalCode(text, rt.executor.languages));
 
-        // RECORD nodes
-        const childNodeIds: string[] = [];
-        for (let i = 0; i < N_BRANCHES; i++) {
-          const childId = branchIds[i] ?? nanoid();
-          const exploration = explorations[i] ?? { text: '' };
-          const code = offeredCode[i];
-          childNodeIds.push(childId);
-          await recordNode(session, rt.storage.sql, {
-            nodeId: childId,
-            parentNodeId: selected.id,
-            parentMsgId: selected.msg_id,
-            rootId,
-            task,
-            action: exploration.text.slice(0, 300),
-            observation: exploration.text,
-            codeUsed: code?.kind === 'runnable' ? code.code : null,
-            codeLanguage: code?.kind === 'runnable' ? code.language : null,
-            depth: selected.depth + 1,
-          });
-          void rt.storage.sql`
-   UPDATE search_nodes SET branch_agent_key = ${childId}
-            WHERE id = ${childId}
-          `;
-        }
-
         const proposals = explorations.map(e => e.text);
 
         // EVALUATE — the engine-level seam every backend shares: branches only
@@ -268,6 +249,14 @@ export async function runMCTS(
         // rt.judgeModel ?? rt.llm, sibling-relative). Evaluation failures score
         // 0, not neutral 0.5; otherwise failed infrastructure can look like a
         // balanced optimum and converge falsely.
+        //
+        // Runs BEFORE the nodes are recorded, because a node's observation is
+        // the environment's reply to its action and cannot be written before
+        // the environment has answered. Recording first also left a whole
+        // expansion of unscored `open` children behind whenever an abort landed
+        // between the two phases — visits=0 nodes that a resumed search's UCT
+        // argmax then selects and expands under, and that pruning can never
+        // reach (it needs visits >= minVisitsForPrune).
         report({
           type: 'phase', phase: 'evaluate',
           iteration, remainingBudget: phase.budget, branches: N_BRANCHES,
@@ -294,7 +283,12 @@ export async function runMCTS(
           abortBranches,
         );
         throwIfAborted(config.signal);
-        const scores = scoreResults.map((r, i) => {
+        const scores: number[] = [];
+        // What the environment said back to each branch, indexed alongside the
+        // scores. Null for a branch that never reached it — prose, plan mode,
+        // an unrunnable language, or an evaluation that failed outright.
+        const observations: Array<string | null> = [];
+        for (const [i, r] of scoreResults.entries()) {
           if (r.status === 'fulfilled') {
             const language = r.value.unrunnableLanguage;
             if (language !== undefined && !reportedUngroundedLanguages.has(language)) {
@@ -307,14 +301,44 @@ export async function runMCTS(
                 remainingBudget: phase.budget,
               });
             }
-            return r.value.score;
+            scores.push(r.value.score);
+            observations.push(executionObservation(r.value.execution));
+            continue;
           }
           report({
             type: 'branch-failed', stage: 'evaluate', iteration,
-                branchId: branchIds[i] ?? '', error: reasonText({ reason: r.reason }),
+            branchId: branchIds[i] ?? '', error: reasonText({ reason: r.reason }),
           });
-          return 0;
-        });
+          scores.push(0);
+          observations.push(null);
+        }
+
+        // RECORD nodes — action plus the observation it earned, which is the
+        // pair a child expansion inherits through session.getHistory(msg_id).
+        const childNodeIds: string[] = [];
+        for (let i = 0; i < N_BRANCHES; i++) {
+          const childId = branchIds[i] ?? nanoid();
+          const exploration = explorations[i] ?? { text: '' };
+          const code = offeredCode[i];
+          childNodeIds.push(childId);
+          await recordNode(session, rt.storage.sql, {
+            nodeId: childId,
+            parentNodeId: selected.id,
+            parentMsgId: selected.msg_id,
+            rootId,
+            task,
+            action: exploration.text.slice(0, 300),
+            observation: exploration.text,
+            feedback: observations[i] ?? null,
+            codeUsed: code?.kind === 'runnable' ? code.code : null,
+            codeLanguage: code?.kind === 'runnable' ? code.language : null,
+            depth: selected.depth + 1,
+          });
+          void rt.storage.sql`
+   UPDATE search_nodes SET branch_agent_key = ${childId}
+            WHERE id = ${childId}
+          `;
+        }
 
         // BACKPROPAGATE
         for (let i = 0; i < N_BRANCHES; i++) {
@@ -352,7 +376,13 @@ export async function runMCTS(
           // a search whose branches are already recorded and backpropagated —
           // and a malformed resolve is the same untrusted input a malformed
           // exploration is, so it yields no lesson rather than a TypeError.
-          const reflection = await handle.generateReflection(task).then(
+          //
+          // The verdict travels with the question. LATS prompts the reflection
+          // "with the trajectory AND final reward" (§4.2); a branch's own trace
+          // table holds only what it proposed, so asking "what went wrong?"
+          // without the environment's answer asks a model to guess at a runtime
+          // error the engine already read. Null when nothing executed.
+          const reflection = await handle.generateReflection(task, observations[i] ?? undefined).then(
             async (result) => {
               const reflection = v.safeParse(BranchReflectionSchema, result);
               if (!reflection.success) return '';
@@ -406,23 +436,20 @@ export async function runMCTS(
         // Durable, epoch-fenced checkpoint: an eviction after this can re-enter and
         // continue from the remaining budget against the persisted tree (B6).
         search?.checkpoint(rootId, searchEpoch, phase.iteration, phase.budget, Date.now());
-        // The checkpoint above IS this search's one real heartbeat (mirrored
-        // into a queryable row a debug read can already show), but nothing
-        // reached Workers Logs/`wrangler tail` per iteration — a durably
-        // checkpointed search running for hours produced no visible sign of
-        // life at all. Gated on `search` (only durably-checkpointed runs,
-        // matching the checkpoint call itself) so the fiber-snapshot-only /
-        // test path stays silent.
-        //
-        // stderr, not stdout, and for one reason that holds on both surfaces:
-        // on the CLI stdout IS the machine channel (`proteus exec --json`
-        // writes NDJSON there, and a heartbeat interleaved into it is a corrupt
-        // line a CI consumer cannot parse), while Workers Logs capture every
-        // console channel alike, so `wrangler tail` still shows this.
+        // The checkpoint above is durable but silent: nothing reached Workers Logs
+        // or `wrangler tail` per iteration, so a durably-checkpointed search running
+        // for HOURS produced no visible sign of life. Gated on `search`, matching the
+        // checkpoint call itself, so the fiber-snapshot-only and test paths stay
+        // quiet. An `event` and not a `failure`: an iteration completing is not a
+        // failure, and `failure` would demand a classification there is none of.
         if (search) {
-          console.error(`[proteus] mcts checkpoint rootId=${rootId} iteration=${phase.iteration}/${phase.iteration + phase.budget} remaining=${phase.budget}`);
+          diagnostics.event('mcts.checkpoint_reached', {
+            rootId,
+            iteration: phase.iteration,
+            total: phase.iteration + phase.budget,
+            remaining: phase.budget,
+          });
         }
-
         report({
           type: 'iteration-complete',
           iteration: phase.iteration, remainingBudget: phase.budget, scores,

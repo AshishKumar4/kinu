@@ -20,8 +20,8 @@ import { describe, test, expect } from 'bun:test';
 import {
   readForkLineage, readSoul, writeSoul,
   snapshotWorkspaceForFork, writeForkSnapshot, SOUL_PATH,
-} from '../src/index.js';
-import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers.js';
+} from '../src/index';
+import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers';
 
 async function seedSource(src: TestWorkspace) {
   // The SDK creates its store on first append, so a fixture that seeds pane rows

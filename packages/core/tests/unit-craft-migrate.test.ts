@@ -4,8 +4,8 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime } from './helpers.js';
-import { migrateCraftedToolDuplicates, initCraftScoreTables } from '../src/index.js';
+import { createTestRuntime } from './helpers';
+import { migrateCraftedToolDuplicates, initCraftScoreTables } from '../src/index';
 
 describe('Phase F — crafted_tools duplicate migration', () => {
   test('merges case-collision duplicates keeping highest-score row', () => {

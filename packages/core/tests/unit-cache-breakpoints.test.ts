@@ -15,7 +15,7 @@ import {
   ANTHROPIC_MAX_BREAKPOINTS,
   JsonObjectSchema,
   type JsonObject,
-} from '../src/index.ts';
+} from '../src/index';
 
 const EPHEMERAL = { type: 'ephemeral' };
 const ProviderOptionsCarrierSchema = v.object({

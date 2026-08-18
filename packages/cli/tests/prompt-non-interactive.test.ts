@@ -87,7 +87,7 @@ describe("setup without any terminal", () => {
 
 describe("TUI without a terminal", () => {
   test("requireInteractiveTerminal refuses with instructions when stdin is not a TTY", async () => {
-    const { requireInteractiveTerminal } = await import("../src/prompt.js");
+    const { requireInteractiveTerminal } = await import("../src/prompt");
     const stdinDesc = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
     Object.defineProperty(process.stdin, "isTTY", { value: undefined, configurable: true });
     try {

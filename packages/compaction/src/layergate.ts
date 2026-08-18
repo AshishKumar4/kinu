@@ -24,8 +24,8 @@ import {
   transformTurns,
   type BuildPlanInputs,
 } from '@better-compact/core';
-import { proteusCodec, proteusSpec } from './codec.js';
-import { compactionTranscriptPath } from './stores.js';
+import { proteusCodec, proteusSpec } from './codec';
+import { compactionTranscriptPath } from './stores';
 
 export interface CompactionLadderSubjects {
   readonly proteusCodec: typeof proteusCodec;

@@ -28,7 +28,7 @@
  * Proteus surface can literally express trips a veto with a recorded reason.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
+import type { SqlExecutor } from '../types/primitives';
 
 export type MisevolutionSurface = 'scaffold' | 'craft' | 'craft_tool' | 'import';
 

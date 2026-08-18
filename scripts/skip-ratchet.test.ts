@@ -12,7 +12,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   parseJUnit, readSkipLock, reconcileSkips, unmatchedTargets,
   SKIP_RATCHET_TARGETS, SKIP_LOCK_PATH,
-} from './skip-ratchet.ts';
+} from './skip-ratchet';
 
 /** The exact shape Bun's junit reporter emits: a passing testcase is
  *  self-closing, a skipped one carries a `<skipped />` child. */

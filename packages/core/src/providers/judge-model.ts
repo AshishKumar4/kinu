@@ -7,8 +7,8 @@
 // itself, which is the one configuration where the shadow judge's verdict is
 // least trustworthy. This module states the preference order that avoids it.
 
-import type { ProviderRegistry } from './registry.js';
-import { parseModelSpec, type ProviderDeps } from './types.js';
+import type { ProviderRegistry } from './registry';
+import { parseModelSpec, type ProviderDeps } from './types';
 
 /**
  * One spec per AVAILABLE statically-registered provider, in the registry's own

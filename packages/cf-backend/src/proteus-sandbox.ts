@@ -33,12 +33,13 @@ import {
   type BackupOptions, type WorkspaceSnapshotPorts,
   type WorkspaceSnapshotState, type WorkspaceSnapshots,
 } from "@proteus/core";
+import { diagnostics, ProteusError, toProteusError } from "@proteus/core/obs";
 import * as v from "valibot";
 import {
   CONTAINER_EVENT_HOST, EGRESS_HANDLER, EVENT_HANDLER,
   handleContainerEgress, handleContainerEvent, parseEgressParams,
   type ProteusEgressParams,
-} from "./egress/outbound.js";
+} from "./egress/outbound";
 
 /** Storage key for this container's snapshot record. */
 const SNAPSHOT_STATE_KEY = "proteus:workspace-snapshot";
@@ -111,18 +112,22 @@ export class ProteusSandbox extends Sandbox<Env> {
       "ProteusSandbox.onStart",
       WORKSPACE_RESTORE_DEADLINE_MS,
       () => this.#startWorkspace(),
-      (failure) => console.error(
-        "[proteus] container-start work settled after its budget:",
-        failure.reason instanceof Error ? failure.reason.message : String(failure.reason),
-      ),
+      (failure) => diagnostics.failure('sandbox.container_start_overran', toProteusError({
+        doing: 'completing container-start work within its budget',
+        cause: failure.reason,
+        otherwise: 'timeout',
+      })),
     );
   }
 
   async #startWorkspace(): Promise<void> {
     await super.onStart();
     const outcome = await this.#workspaceSnapshots().restore();
-    console.log(`[proteus] workspace restore: ${outcome.kind}`
-      + (outcome.backupId === undefined ? "" : ` ${outcome.backupId} (${outcome.mode})`));
+    diagnostics.event('sandbox.workspace_restore_settled', {
+      outcome: outcome.kind,
+      backupId: outcome.backupId ?? '',
+      mode: outcome.mode ?? '',
+    });
     await this.#armSnapshotSchedule();
   }
 
@@ -141,7 +146,11 @@ export class ProteusSandbox extends Sandbox<Env> {
     // The container's alarm loop reduces a thrown scheduled callback to a
     // console.error, so failures are reported here AND persisted on the record.
     if (outcome.kind === "failed") {
-      console.error(`[proteus] workspace snapshot failed: ${outcome.reason ?? "unknown"}`);
+      diagnostics.failure(
+        'sandbox.workspace_snapshot_failed',
+        new ProteusError('io', outcome.reason ?? 'unknown'),
+        { backupId: outcome.backupId ?? '' },
+      );
     }
     // Tasks are one-shot — the alarm loop deletes the row after running it — so
     // the period is maintained by rearming. Not while the container is down:
@@ -189,7 +198,7 @@ export class ProteusSandbox extends Sandbox<Env> {
       declaredBytes: (id) => this.#declaredBytes(id),
       deleteSnapshot: (id) => this.#deleteSnapshot(id),
       now: () => Date.now(),
-      log: (message) => console.log(`[proteus] ${message}`),
+      log: (message) => diagnostics.event('snapshot.progress', { message }),
     };
   }
 

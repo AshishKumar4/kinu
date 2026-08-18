@@ -9,9 +9,9 @@
 // Provider calls use the Codex CLI-style header bundle. Refresh ownership stays
 // with the credential store that calls createCodexOAuthClient().
 import * as v from 'valibot';
-import type { OAuthCredential } from '../credentials/store.js';
-import { isJsonObject, parseJsonObject, type JsonObject } from '../utils/json.js';
-import { tolerate } from '../obs/index.js';
+import type { OAuthCredential } from '../credentials/store';
+import { isJsonObject, parseJsonObject, type JsonObject } from '../utils/json';
+import { tolerate } from '../obs/index';
 
 export const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 export const CODEX_ISSUER = 'https://auth.openai.com';

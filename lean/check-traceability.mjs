@@ -365,6 +365,25 @@ for (const name of declarations.axioms) {
   if (!axiomOwners.has(name)) fail(`source axiom is not enrolled as a trusted model assumption: ${name}`);
 }
 
+// `scripts/lean-citations.ts` checks the reverse direction — that a source header
+// naming a Lean theorem names one that exists. It needs this scanner's answer and
+// `scripts/sources.ts`'s file enumeration, and it cannot import both: the
+// anti-slop `RAW_NODE_MODULE` boundary is measured over the plugin's own
+// entrypoints, so this file is not allowed to reach into `scripts/`. So the
+// declarations cross as a subprocess's stdout rather than as a second scanner.
+// One scan, two consumers, no duplicated parser.
+if (process.argv.includes("--list-declarations")) {
+  exitOnFailures();
+  const lines = [];
+  for (const path of walkLeanSources(leanRoot)) {
+    for (const name of collectDeclarations([path]).theorems) {
+      lines.push(`${name}\t${relativePath(path)}`);
+    }
+  }
+  process.stdout.write(`${lines.join("\n")}\n`);
+  process.exit(0);
+}
+
 if (manifestOnly) {
   exitOnFailures();
   console.log(

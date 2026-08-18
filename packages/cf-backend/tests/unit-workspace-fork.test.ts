@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ForkSnapshot } from '@proteus/core';
-import { deliverCloudFork, type CloudForkRegistry, type CloudForkTarget } from '../src/user/workspace-fork.js';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import { deliverCloudFork, type CloudForkRegistry, type CloudForkTarget } from '../src/user/workspace-fork';
+import type { UserCaller } from '../src/user/workspace-capability';
 
 const caller = { workspaceToken: 'source-token' } satisfies UserCaller;
 const snapshot = {

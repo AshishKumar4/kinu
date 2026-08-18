@@ -13,7 +13,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { isJsonObject, type JsonValue } from '../utils/json.js';
+import { isJsonObject, type JsonValue } from '../utils/json';
 
 /** Deterministic JSON serializer: object keys sorted, so structurally equal
  *  values always serialize identically regardless of key insertion order. */

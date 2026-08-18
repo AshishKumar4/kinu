@@ -3,7 +3,7 @@
  * evolution events, and system messages.
  */
 
-import { markdownSyntax, tuiColors } from './theme.js';
+import { markdownSyntax, tuiColors } from './theme';
 
 export interface DisplayMessage {
   id: string;

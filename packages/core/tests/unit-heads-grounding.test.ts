@@ -23,9 +23,9 @@ import {
   initHeadsTables,
   initAlternateTakesTable, recordHeadsTakeSet, claimAlternateTakesForTurn,
   listAlternateTakeSets, recordTakePick,
-} from '../src/index.js';
+} from '../src/index';
 import { createJSONLLM } from '@proteus/test-utils';
-import { makeSql, makeExecRaw, createTestWorkspace } from './helpers.js';
+import { makeSql, makeExecRaw, createTestWorkspace } from './helpers';
 
 // ── fakes ────────────────────────────────────────────────────────────
 

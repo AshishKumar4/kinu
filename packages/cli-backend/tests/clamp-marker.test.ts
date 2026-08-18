@@ -8,7 +8,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { buildBuiltinTools, DEFAULT_TOOL_RESULT_MAX_CHARS } from '@proteus/core';
-import { createCLIRuntime } from '../src/runtime.js';
+import { createCLIRuntime } from '../src/runtime';
 import { scratchPath, toolExecute } from '@proteus/test-utils';
 
 function localRuntime() {

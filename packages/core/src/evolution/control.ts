@@ -23,38 +23,39 @@
 import { generateText, type LanguageModel, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { LLM, SqlExecutor } from '../types/primitives.js';
-import type { AgentConfigStore } from '../config/store.js';
-import { clampGepaEvalBudget } from '../config/store.js';
-import type { ModelCallSink } from '../events/model-call.js';
-import { normalizeUsage } from '../usage.js';
-import { effortFor } from '../strategy/effort.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
-import { extractJsonObject, generateJson, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { LLM, SqlExecutor } from '../types/primitives';
+import type { AgentConfigStore } from '../config/store';
+import { clampGepaEvalBudget } from '../config/store';
+import type { ModelCallSink } from '../events/model-call';
+import { normalizeUsage } from '../usage';
+import { effortFor } from '../strategy/effort';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { extractJsonObject, generateJson, jsonObjectOnlyInstruction } from '../prompts/structured';
 import {
   runScaffold, scaffoldEventText, SCAFFOLD_TURN_TIMEOUT_MS,
   type ScaffoldRunOptions, type ScaffoldRunResult,
-} from '../scaffold/executor.js';
-import { modifyScaffold } from '../scaffold/modify.js';
-import { listScaffoldArchive, type ScaffoldArchiveEntry } from '../scaffold/archive.js';
+} from '../scaffold/executor';
+import { modifyScaffold } from '../scaffold/modify';
+import { listScaffoldArchive, type ScaffoldArchiveEntry } from '../scaffold/archive';
 import {
   DEFAULT_SHADOW_CONFIG, MAX_QUEUED_SHADOW_TRIALS, applyPromotionDecision, countQueuedShadowTrials,
   decidePromotion, dropQueuedShadowTrial, getPendingScaffold, listQueuedShadowTrials,
   purgeQueuedShadowTrials, queueShadowTrial, readScaffoldVersion,
-} from '../scaffold/shadow.js';
-import type { ShadowTrialDrain, ShadowTrialTurn } from './types.js';
+} from '../scaffold/shadow';
+import type { ShadowTrialDrain, ShadowTrialTurn } from './types';
 import {
   DEFAULT_AUTO_JUDGE_CONFIG, runAutoShadowEval,
-} from '../scaffold/auto-judge.js';
-import { buildOutcomeEvalSplit, describeSplitDegeneracy, type OutcomeEvalExpectation } from './outcomes.js';
-import { runScaffoldGepa } from './gepa/scaffold-bridge.js';
+} from '../scaffold/auto-judge';
+import { buildOutcomeEvalSplit, describeSplitDegeneracy, type OutcomeEvalExpectation } from './outcomes';
+import { runScaffoldGepa } from './gepa/scaffold-bridge';
 import {
   finishGepaRun, makePersistingHook, startGepaRun,
-} from './gepa/persistence.js';
-import type { EvalInstance, MetricOutcome } from './gepa/types.js';
-import type { ScoreInterval } from '../utils/stats.js';
-import { nanoid } from '../utils/nanoid.js';
+} from './gepa/persistence';
+import type { EvalInstance, MetricOutcome } from './gepa/types';
+import type { ScoreInterval } from '../utils/stats';
+import { nanoid } from '../utils/nanoid';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /**
  * The inference surface a candidate scaffold runs against.
@@ -235,7 +236,10 @@ export function queueTurnShadowTrial(
       context: turn.context,
     });
   } catch (err) {
-    console.warn('[proteus] shadow trial queue failed:', err instanceof Error ? err.message : err);
+    diagnostics.failure(
+      'evolution.shadow_trial_queue_failed',
+      toProteusError({ doing: 'queue a shadow trial', cause: err, otherwise: 'io' }),
+    );
     return 'failed';
   }
 }
@@ -292,15 +296,15 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
       } catch (err) {
         // A trial that throws is a trial we cannot score, not a queue we should
         // wedge on: drop it below and carry on with the rest.
-        console.warn('[proteus] shadow trial failed:', err instanceof Error ? err.message : err);
+        diagnostics.failure(
+          'evolution.shadow_trial_failed',
+          toProteusError({ doing: 'run a queued shadow trial', cause: err, otherwise: 'unavailable' }),
+          { trialId: trial.id },
+        );
       }
       dropQueuedShadowTrial(control.sql, trial.id);
       if (applied) {
         purgeQueuedShadowTrials(control.sql, null);
-        // stderr for the same reason as every other core diagnostic: stdout is
-        // the CLI's machine channel (`proteus exec --json`), and Workers Logs
-        // capture stderr just the same.
-        console.error(`[proteus] promotion gate chose ${applied} for scaffold v${pending.version} after ${trials} trial(s)`);
         return { trials, applied };
       }
     }

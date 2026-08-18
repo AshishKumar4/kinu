@@ -1,7 +1,7 @@
 // Per-model context windows — the static fallback table + the catalog lookup
 // that feed the compaction extension's transformContext trigger.
 import { describe, test, expect } from "bun:test";
-import { userCredentialSource } from './helpers/user-credentials.js';
+import { userCredentialSource } from './helpers/user-credentials';
 import { createAgentProviderRegistry } from "../src/providers/agent-registry";
 import { WORKERS_AI_FALLBACK_MODEL_CATALOG } from "../src/providers/workers-ai-catalog";
 import {

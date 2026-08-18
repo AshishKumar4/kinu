@@ -2,9 +2,9 @@ import {
   requireAuthConfig,
   setDefaultModel,
   setDefaultReasoningEffort,
-} from '../config.js';
+} from '../config';
 import { isReasoningEffort, type ModelMenu, type ReasoningEffort } from '@proteus/core';
-import { resolveAgentTarget } from '../agent-target.js';
+import { resolveAgentTarget } from '../agent-target';
 import {
   cancelLocalJob,
   cancelLocalTrigger,
@@ -16,7 +16,7 @@ import {
   listLocalTriggers,
   setLocalStoredModel,
   setLocalReasoningEffort,
-} from '../local-inspection.js';
+} from '../local-inspection';
 import {
   callAgentRpc,
   CloudBackgroundJobSchema,
@@ -27,15 +27,15 @@ import {
   type CloudModelMenu,
   type CloudWebhookTrigger,
   type CloudWebhookTriggerInput,
-} from '../cloud-api.js';
+} from '../cloud-api';
 import * as v from 'valibot';
-import { ACCENT, DIM, OK, WARN } from '../display.js';
-import { createConfiguredLocalModelResolver } from '../local-model-resolver.js';
+import { ACCENT, DIM, OK, WARN } from '../display';
+import { createConfiguredLocalModelResolver } from '../local-model-resolver';
 import {
   normalizeModelMenu,
   validateModelSpec,
   type AgentModelEntry,
-} from '../model-catalog.js';
+} from '../model-catalog';
 
 interface ControlOpts {
   model?: string;

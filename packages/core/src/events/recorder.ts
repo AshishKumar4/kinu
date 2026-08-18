@@ -13,12 +13,13 @@
 
 import * as v from 'valibot';
 import { modelMessageSchema, type ModelMessage } from 'ai';
-import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
-import type { RunEvent, RunEventInput, RunEventType } from './types.js';
-import { JsonValueSchema } from '../utils/json.js';
-import { UsageSchema } from '../usage.js';
-import { ESCALATION_OUTCOMES } from '../execution/escalation.js';
-import { SPEND_SOURCES, WORKSPACE_RUN_ID } from './model-call.js';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { RunEvent, RunEventInput, RunEventType } from './types';
+import { JsonValueSchema } from '../utils/json';
+import { UsageSchema } from '../usage';
+import { ESCALATION_OUTCOMES } from '../execution/escalation';
+import { SPEND_SOURCES, WORKSPACE_RUN_ID } from './model-call';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** A stored model message, validated by the AI SDK's OWN schema rather than a
  *  hand-written copy of its part unions — the same predicate the compaction
@@ -178,7 +179,13 @@ export class RunEventRecorder {
     const ev = stampRunEvent(input, idx, runId);
     this.persist(ev);
     for (const l of this.listeners) {
-      try { l(ev); } catch (err) { console.warn('[run-events] listener threw:', err); }
+      try { l(ev); } catch (err) {
+        diagnostics.failure(
+          'event.listener_failed',
+          toProteusError({ doing: 'notify a run-event listener', cause: err, otherwise: 'io' }),
+          { runId, eventType: ev.type },
+        );
+      }
     }
     return ev;
   }

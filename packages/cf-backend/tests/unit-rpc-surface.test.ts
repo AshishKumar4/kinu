@@ -15,7 +15,7 @@
  * rejects them with `The RPC receiver does not implement the method "x".` —
  * the same error it gives for a name that was never declared.
  */
-import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do.js';
+import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import {
   AGENTS_FACET_RPC_SURFACE,
@@ -26,9 +26,9 @@ import {
   USER_DO_RPC_SURFACE,
   rpcReachableNames,
   sealRpcSurface,
-} from '../src/rpc-surface.js';
-import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate.js';
-import { declaredClassMembers, isInternalMember } from './helpers/declared-members.js';
+} from '../src/rpc-surface';
+import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
+import { declaredClassMembers, isInternalMember } from './helpers/declared-members';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodeJsonValue, type JsonValue } from '@proteus/core';

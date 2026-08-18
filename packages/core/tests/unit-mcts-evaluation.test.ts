@@ -4,10 +4,10 @@
 //   Layer 2: judge ensemble — k samples, median, parse-failures dropped;
 //            prose-only branches are judge-only at reduced confidence.
 import { describe, test, expect } from 'bun:test';
-import { evaluateWithMultiModelJudging } from '../src/index.ts';
-import { isParseFailure } from '../src/mcts/evaluation.ts';
+import { evaluateWithMultiModelJudging } from '../src/index';
+import { executionObservation, isParseFailure } from '../src/mcts/evaluation';
 import { createScriptedLLM, createJSONLLM } from '@proteus/test-utils';
-import type { Executor, LLM } from '../src/index.ts';
+import type { Executor, LLM } from '../src/index';
 
 function exec(verdict: { error?: string } = {}, languages: readonly [string, ...string[]] = ['javascript']): Executor {
   return {
@@ -617,5 +617,104 @@ describe('a non-responding judge cannot hang the search', () => {
     expect(result.execution?.passed).toBe(true);
     expect(result.judgeSamplesUsed).toBe(0);
     expect(result.score).toBeGreaterThanOrEqual(0.6); // PASS_FLOOR — execution carries it
+  });
+});
+
+/**
+ * LATS backpropagates `passed_test_count / len(tests)` (programming/mcts.py).
+ * Ours used to backpropagate a bit, so every failing branch landed at
+ * FAIL_FLOOR + FAIL_SPAN·judge and "almost right" was separated from "nothing
+ * works" only by judge noise — the binary reward this repo already measured
+ * degenerates a search toward best-of-n (test-utils/src/eval-outcome.ts).
+ */
+describe('partial credit: the fail band is positioned by MEASURED checks, not the judge', () => {
+  const CHECKS = ['CHECK_A', 'CHECK_B', 'CHECK_C', 'CHECK_D'] as const;
+
+  /** Emits a four-check suite for the harness prompt and a fixed score for the
+   *  scoring prompt, so the judge contributes the SAME number to every branch
+   *  below and cannot be the source of any ordering. */
+  function suiteJudge(score: number): LLM {
+    const suite = CHECKS.map((c) => `\`\`\`js\nif (!globalThis.${c}) throw new Error('${c}');\n\`\`\``).join('\n\n');
+    const reply = (prompt: string) =>
+      prompt.includes('verification harness') ? suite : JSON.stringify({ score });
+    return {
+      async *stream() { yield ''; },
+      async complete(prompt: string) { return reply(prompt); },
+    };
+  }
+
+  /** Executor that fails every check except the first `passing` of them. */
+  function partialExecutor(passing: number): Executor {
+    return {
+      languages: ['javascript'],
+      async execute(source: string) {
+        const index = CHECKS.findIndex((c) => source.includes(`throw new Error('${c}')`));
+        if (index === -1) return { result: undefined };           // the bare run
+        return index < passing
+          ? { result: undefined }
+          : { result: undefined, error: `${CHECKS[index]} failed` };
+      },
+    };
+  }
+
+  const evaluate = (passing: number) => evaluateWithMultiModelJudging({
+    task: 'implement the widget',
+    trajectory: withCode('an approach', 'const widget = 1;'),
+    executor: partialExecutor(passing),
+    judge: suiteJudge(0.5),
+    explorer: suiteJudge(0.5),
+  });
+
+  test('more checks held is a strictly higher score, with the judge held constant', async () => {
+    const [none, half, most] = await Promise.all([evaluate(0), evaluate(2), evaluate(3)]);
+
+    expect(none.execution?.totalChecks).toBe(4);
+    expect(none.execution?.passedChecks).toBe(0);
+    expect(half.execution?.passedChecks).toBe(2);
+    expect(most.execution?.passedChecks).toBe(3);
+
+    // The ordering the old binary verdict could not express.
+    expect(none.score).toBeLessThan(half.score);
+    expect(half.score).toBeLessThan(most.score);
+    // All still inside the fail band: partial credit never reaches a pass.
+    expect(most.score).toBeLessThanOrEqual(0.3);
+    // FAIL_FLOOR + FAIL_SPAN * (passed/total), the judge contributing nothing.
+    expect(none.score).toBeCloseTo(0.05, 10);
+    expect(half.score).toBeCloseTo(0.05 + 0.25 * 0.5, 10);
+    expect(most.score).toBeCloseTo(0.05 + 0.25 * 0.75, 10);
+  });
+
+  test('all four held is a pass, and the judge positions inside the pass band', async () => {
+    const all = await evaluate(4);
+    expect(all.execution?.passed).toBe(true);
+    expect(all.execution?.passedChecks).toBe(4);
+    expect(all.score).toBeCloseTo(0.6 + 0.4 * 0.5, 10);
+  });
+
+  test('the child inherits the tally, not just a verdict', async () => {
+    const partial = await evaluate(2);
+    const observation = executionObservation(partial.execution);
+    expect(observation).toContain('passed 2 of 4');
+    expect(observation).toContain('CHECK_C failed');
+  });
+
+  test('no suite means no fraction — the judge positions, and absent is not zero', async () => {
+    const unverifiable: LLM = {
+      async *stream() { yield ''; },
+      async complete(prompt: string) {
+        return prompt.includes('verification harness') ? 'UNVERIFIABLE' : JSON.stringify({ score: 0.8 });
+      },
+    };
+    const result = await evaluateWithMultiModelJudging({
+      task: 'implement the widget',
+      trajectory: withCode('an approach', 'const widget = 1;'),
+      executor: exec({ error: 'boom' }),
+      judge: unverifiable,
+      explorer: unverifiable,
+    });
+    expect(result.execution?.totalChecks).toBeUndefined();
+    expect(result.execution?.assertionsGenerated).toBe(false);
+    // Judge-positioned, exactly as before this change.
+    expect(result.score).toBeCloseTo(0.05 + 0.25 * 0.8, 10);
   });
 });

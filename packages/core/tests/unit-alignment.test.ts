@@ -5,13 +5,13 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers.js';
-import { initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes.js';
-import type { TurnOutcome } from '../src/evolution/outcomes.js';
+import { makeSql, makeExecRaw } from './helpers';
+import { initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
+import type { TurnOutcome } from '../src/evolution/outcomes';
 import {
   alignmentConvergence, renderAlignmentConvergence,
-} from '../src/evolution/alignment.js';
-import type { SqlExecutor } from '../src/types/primitives.js';
+} from '../src/evolution/alignment';
+import type { SqlExecutor } from '../src/types/primitives';
 
 function setup() {
   const db = new Database(':memory:');

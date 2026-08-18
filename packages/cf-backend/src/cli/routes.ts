@@ -1,25 +1,25 @@
 import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, USER_AI_PROXY_PATH, timingSafeEqual, type JsonValue } from '@proteus/core';
-import type { AuthIdentity } from '../auth/session.js';
-import { AuthError, authenticateRequest, isFreshAuthTime } from '../auth/session.js';
-import { publicHtmlHeaders } from '../lib/security-headers.js';
+import type { AuthIdentity } from '../auth/session';
+import { AuthError, authenticateRequest, isFreshAuthTime } from '../auth/session';
+import { publicHtmlHeaders } from '../lib/security-headers';
 import {
   CLI_SOURCE_TARBALL_PATH, CLI_SOURCE_TARBALL_SHA256_PATH, CLI_VERSION_PATH, fetchDeployedAsset,
-} from '../lib/deployed-assets.js';
-import { err, escapeHtml, json, safeJson } from '../lib/http.js';
-import { randomToken } from '../lib/crypto.js';
-import type { OrchestratorAgent } from '../orchestrator.js';
+} from '../lib/deployed-assets';
+import { err, escapeHtml, json, safeJson } from '../lib/http';
+import { randomToken } from '../lib/crypto';
+import type { OrchestratorAgent } from '../orchestrator';
 import {
   CliAuthCodeError, RateLimitError, approveCliAuth, authenticateCliToken,
   inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows, type CliTokenIdentity,
-} from './auth-store.js';
-import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-token-store.js';
-import { isAgentRpcMethod, requiredRpcAccess, rpcAccessScope } from './rpc-gate.js';
-import { buildCliInstallCommand } from './install-command.js';
-import { listAvailableModels } from '../user/available-models.js';
-import { claimOwnedWorkspace, handleCreateWorkspaceRequest } from '../user/workspace-access.js';
-import { handleUserAIProxyRequest } from '../user/ai-proxy.js';
-import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy.js';
-import { OwnerCapabilityUnavailableError, ownerCaller } from '../user/workspace-capability.js';
+} from './auth-store';
+import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-token-store';
+import { isAgentRpcMethod, requiredRpcAccess, rpcAccessScope } from './rpc-gate';
+import { buildCliInstallCommand } from './install-command';
+import { listAvailableModels } from '../user/available-models';
+import { claimOwnedWorkspace, handleCreateWorkspaceRequest } from '../user/workspace-access';
+import { handleUserAIProxyRequest } from '../user/ai-proxy';
+import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy';
+import { OwnerCapabilityUnavailableError, ownerCaller } from '../user/workspace-capability';
 import * as v from 'valibot';
 
 const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });

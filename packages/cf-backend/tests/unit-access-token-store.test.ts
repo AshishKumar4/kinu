@@ -3,7 +3,7 @@
 // SqlExec seam the UserDO provides.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { sqlExec } from './helpers/user-do.js';
+import { sqlExec } from './helpers/user-do';
 import {
   ACCESS_TOKEN_SCOPES,
   getActiveAccessTokenScopes,
@@ -14,7 +14,7 @@ import {
   parseAccessTokenUserId,
   revokeAccessToken,
   verifyAccessToken,
-} from '../src/cli/access-token-store.js';
+} from '../src/cli/access-token-store';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 

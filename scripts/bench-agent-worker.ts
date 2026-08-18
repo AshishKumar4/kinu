@@ -16,13 +16,13 @@ import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   initSearchTables, initScaffoldTables, initCraftScoreTables,
-} from '../packages/core/src/index.js';
-import { createWorkspace } from '../packages/core/src/identity/index.js';
-import { openWorkspaceCLI, resolveChatModel, LocalAgentSession } from '../packages/cli-backend/src/index.js';
-import { makeSql } from '../packages/cli-backend/src/runtime.js';
-import type { SessionEvent } from '../packages/cli-backend/src/index.js';
-import { createBenchInferenceProxy } from './bench-inference-proxy.js';
-import { parseAgentWorkerInput, type WorkerOutput } from './bench-worker-protocol.js';
+} from '../packages/core/src/index';
+import { createWorkspace } from '../packages/core/src/identity/index';
+import { openWorkspaceCLI, resolveChatModel, LocalAgentSession } from '../packages/cli-backend/src/index';
+import { makeSql } from '../packages/cli-backend/src/runtime';
+import type { SessionEvent } from '../packages/cli-backend/src/index';
+import { createBenchInferenceProxy } from './bench-inference-proxy';
+import { parseAgentWorkerInput, type WorkerOutput } from './bench-worker-protocol';
 
 async function main(): Promise<void> {
   const raw = await Bun.stdin.text();

@@ -11,14 +11,14 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { generateText, streamText } from 'ai';
 import type { LanguageModel, StepResult, ToolSet } from 'ai';
 import * as v from 'valibot';
-import type { LLM } from './types/primitives.js';
-import type { ModelCallSpend } from './events/model-call.js';
-import { normalizeUsage } from './usage.js';
-import { parseModelSpec } from './providers/types.js';
-import { withRateLimitRetry } from './providers/rate-limit-retry.js';
+import type { LLM } from './types/primitives';
+import type { ModelCallSpend } from './events/model-call';
+import { normalizeUsage } from './usage';
+import { parseModelSpec } from './providers/types';
+import { withRateLimitRetry } from './providers/rate-limit-retry';
 import {
   reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE, type InferenceStage,
-} from './strategy/effort.js';
+} from './strategy/effort';
 
 export interface LLMProviderConfig {
   /** Display name for the provider (e.g., 'workers-ai', 'anthropic') */

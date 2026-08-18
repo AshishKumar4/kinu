@@ -8,8 +8,8 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { toCraftedToolSource } from '../src/tools/crafted-executor.js';
-import type { CraftedTool } from '../src/types/craft.js';
+import { toCraftedToolSource } from '../src/tools/crafted-executor';
+import type { CraftedTool } from '../src/types/craft';
 
 function tool(patch: Partial<CraftedTool>): CraftedTool {
   return {

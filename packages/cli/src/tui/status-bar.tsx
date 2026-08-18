@@ -2,13 +2,13 @@
  * Status bar — sits at the top of the TUI, shows agent identity and stats.
  */
 
-import type { AgentClientMode } from '../agent-client.js';
+import type { AgentClientMode } from '../agent-client';
 import type { ReasoningEffort } from '@proteus/core';
 import { useTerminalDimensions } from '@opentui/react';
-import { VERSION } from '../display.js';
-import { formatContextUsage, modelDisplayName } from './context-status.js';
-import { clipText } from './format.js';
-import { tuiColors } from './theme.js';
+import { VERSION } from '../display';
+import { formatContextUsage, modelDisplayName } from './context-status';
+import { clipText } from './format';
+import { tuiColors } from './theme';
 
 interface Props {
   name: string;

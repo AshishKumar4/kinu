@@ -80,12 +80,12 @@
 
 import { readFileSync } from 'node:fs';
 
-import { readSources } from './sources.ts';
+import { readSources } from './sources';
 import {
   blockBodyOf, classMembers, declaredName, functionOf, identifierCalleeName, isAsync,
   isFunctionLike, memberCalleeName, parse, returnTypeOf, superClassName,
   type SyntaxNode, walk,
-} from './syntax.ts';
+} from './syntax';
 
 /** Base classes whose `onStart` is the container-start hook rather than a
  *  per-request init gate. Pinned by equality, one entry, because widening it is

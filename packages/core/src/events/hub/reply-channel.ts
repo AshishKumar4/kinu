@@ -20,10 +20,10 @@ import * as v from 'valibot';
 import {
   type ReplyChannelId, type ReplyChannelKind, type ReplyChannelRow,
   type ReplyChannelState, type EventId, type PayloadPolicy,
-} from './types.js';
-import { ulid } from './ulid.js';
-import type { SqlExec } from '../../types/primitives.js';
-import { parseJsonValue, type JsonValue } from '../../utils/json.js';
+} from './types';
+import { ulid } from './ulid';
+import type { SqlExec } from '../../types/primitives';
+import { parseJsonValue, type JsonValue } from '../../utils/json';
 
 const TTL_MS = {
   ws_session: 0,          // 0 → bound to holder, no clock-based expiry

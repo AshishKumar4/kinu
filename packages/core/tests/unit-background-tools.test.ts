@@ -14,8 +14,8 @@ import { jsonSchema, tool, type ToolSet } from 'ai';
 import { toolExecute } from '@proteus/test-utils';
 import {
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS,
-} from '../src/orchestrator/background-tools.js';
-import { readSpawnStarted, BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index.js';
+} from '../src/orchestrator/background-tools';
+import { readSpawnStarted, BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 type TestToolResult = object | string;
@@ -135,7 +135,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     expect(out).toMatchObject({ background: true, jobId: 'job-run', kind: 'run' });
   });
 
-  test('a non-fork agents action (staff/ask/list) is not detachable — always runs inline, on either surface', async () => {
+  test('a non-fork agents action (hire/ask/list) is not detachable — always runs inline, on either surface', async () => {
     let ran = false;
     const raw: ToolSet = {
       agents: tool({

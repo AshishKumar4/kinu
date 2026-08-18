@@ -8,12 +8,12 @@
 
 import type {
   EvalInstance, GepaCandidate, GepaMetric, MetricOutcome, ReflectionLM,
-} from './types.js';
-import { renderInput, truncate } from './text.js';
-import { stripMarkdownFences } from '../../prompts/structured.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../../prompts/evidence-window.js';
+} from './types';
+import { renderInput, truncate } from './text';
+import { stripMarkdownFences } from '../../prompts/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../../prompts/evidence-window';
 
-export { stripMarkdownFences } from '../../prompts/structured.js';
+export { stripMarkdownFences } from '../../prompts/structured';
 
 export interface MutationContext<I = unknown, E = unknown> {
   parent: GepaCandidate;
@@ -55,7 +55,7 @@ export function renderReflectionPrompt<I, E>(opts: {
 }): string {
   const desc = opts.artifactDescription ?? 'candidate artifact';
   const processRubric = desc === 'scaffold source'
-    ? '\n\nProcess rubric: For corrected/frustrated requests with 2+ independent parts, consider long zero-team/think linear grinds for decomposition and staffing/heads; reinforce effective team/think on accepted turns; treat non-contributing spawns as delegation overhead.'
+    ? '\n\nProcess rubric: For corrected/frustrated requests with 2+ independent parts, consider long zero-team/think linear grinds for decomposition and hiring/heads; reinforce effective team/think on accepted turns; treat non-contributing spawns as delegation overhead.'
     : '';
 
   const outcomeById = new Map(opts.rollout.outcomes.map(o => [o.instanceId, o.outcome]));

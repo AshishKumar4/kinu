@@ -14,7 +14,7 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
-import type { LocalProviderCredentials } from './model-resolver.js';
+import type { LocalProviderCredentials } from './model-resolver';
 
 const activeBranches = new Map<string, ChildProcess>();
 
@@ -39,6 +39,8 @@ interface ExploreBranchArgs {
 
 interface ReflectBranchArgs {
   task: string;
+  /** The environment's verdict on this branch's proposal, when it reached one. */
+  outcome?: string;
 }
 
 type BranchRpcArgs = ExploreBranchArgs | ReflectBranchArgs;
@@ -149,7 +151,11 @@ export function createBranchSpawner(
     return {
       explore: (history: Array<{ role: string; content: string }>, tools: CraftedTool[], languages: readonly [string, ...string[]], mode: WorkMode, siblings: readonly string[] = []) =>
         rpc<BranchExploration>('explore', { history, tools, languages, mode, siblings }),
-      generateReflection: (task: string) => rpc<BranchReflection>('reflect', { task }),
+      generateReflection: (task: string, outcome?: string) => {
+        const args: ReflectBranchArgs = { task };
+        if (outcome) args.outcome = outcome;
+        return rpc<BranchReflection>('reflect', args);
+      },
     };
   };
 

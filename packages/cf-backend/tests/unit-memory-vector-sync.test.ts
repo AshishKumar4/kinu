@@ -5,7 +5,7 @@
 // real MemoryStore (bun:sqlite) and a fake VectorStore that records calls.
 import { describe, test, expect, setSystemTime } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createWorkspaceBundle, makeSql } from '../../core/tests/helpers.js';
+import { createWorkspaceBundle, makeSql } from '../../core/tests/helpers';
 import { MemoryStore } from '@proteus/agent-utils/memory';
 import {
   createAgentConfigStore, createCloudflareVectorStore, VECTOR_BACKEND_COOLDOWN_MS,

@@ -18,7 +18,7 @@
 
 import { SPILL_DIRS, type SqlExecutor, type VFS } from '@proteus/core';
 import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
-import type { ArchiveIndexStore, ArchiveRange } from './manifest.js';
+import type { ArchiveIndexStore, ArchiveRange } from './manifest';
 import * as v from 'valibot';
 
 const COMPACTION_DIR = SPILL_DIRS.compaction;

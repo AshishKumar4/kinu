@@ -34,21 +34,21 @@
  */
 
 import * as v from 'valibot';
-import type { EventLog } from '../hub/log.js';
-import type { ReplyChannelStore } from '../hub/reply-channel.js';
-import type { PeerAgentPayload, ReplyChannelRow } from '../hub/types.js';
-import { spillEventContent } from '../hub/content-spill.js';
-import { ulid } from '../hub/ulid.js';
+import type { EventLog } from '../hub/log';
+import type { ReplyChannelStore } from '../hub/reply-channel';
+import type { PeerAgentPayload, ReplyChannelRow } from '../hub/types';
+import { spillEventContent } from '../hub/content-spill';
+import { ulid } from '../hub/ulid';
 import {
   PEER_REPLY_TOPIC,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
-} from '../../tools/agents-tool.js';
-import type { SqlExec, VFS } from '../../types/primitives.js';
-import type { WorkMode } from '../../prompting/surface.js';
+} from '../../tools/agents-tool';
+import type { SqlExec, VFS } from '../../types/primitives';
+import type { WorkMode } from '../../prompting/surface';
 import {
   JsonValueSchema, parseJsonObject,
   type JsonObject, type JsonValue,
-} from '../../utils/json.js';
+} from '../../utils/json';
 
 // ── Wire shapes ──────────────────────────────────────────────────
 

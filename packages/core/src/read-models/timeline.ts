@@ -11,12 +11,12 @@
  * Object happened to grow.
  */
 
-import type { RunEventRecorder } from '../events/recorder.js';
-import type { RunEvent } from '../events/types.js';
-import type { BackgroundJobStore } from '../jobs/store.js';
-import type { SqlExecutor } from '../types/primitives.js';
-import type { Usage } from '../usage.js';
-import { parseJsonValue, type JsonValue } from '../utils/json.js';
+import type { RunEventRecorder } from '../events/recorder';
+import type { RunEvent } from '../events/types';
+import type { BackgroundJobStore } from '../jobs/store';
+import type { SqlExecutor } from '../types/primitives';
+import type { Usage } from '../usage';
+import { parseJsonValue, type JsonValue } from '../utils/json';
 
 export type TimelineKind =
   | 'llm-turn' | 'tool-call' | 'runtime-exec' | 'mcts' | 'scaffold' | 'shadow-eval'
@@ -47,7 +47,7 @@ export function safeJsonParse(s: string): JsonValue {
 /** Map a crafted/builtin tool name to a timeline kind. `think` is the
  *  pre-unification exploration tool — stored run events keep its kind. The
  *  unified `agents` tool stays a plain tool-call span (run events carry no
- *  arguments to tell a fork from a staff/ask); fork runs still surface as
+ *  arguments to tell a fork from a hire/ask); fork runs still surface as
  *  exploration through their head_split / head_merge spans. */
 export function toolKindFor(name: string): TimelineKind {
   if (name === 'run') return 'runtime-exec';

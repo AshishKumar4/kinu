@@ -34,10 +34,10 @@
  */
 import { JsonValueSchema } from '@proteus/core';
 import { tolerate } from '@proteus/core/obs';
-import type { OrchestratorAgent } from '../orchestrator.js';
+import type { OrchestratorAgent } from '../orchestrator';
 import {
   ACCESS_TOKEN_SCOPES, type AccessTokenScope, normalizeAccessTokenScopes,
-} from './access-token-store.js';
+} from './access-token-store';
 import * as v from 'valibot';
 
 /** Worker→DO header carrying the verified connect-ticket scopes. Always

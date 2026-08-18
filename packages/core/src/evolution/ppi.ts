@@ -89,7 +89,7 @@
  * calibration.ts. This module knows only "strata, populations, gold draws".
  */
 
-import { seededRandom, Z_95, type ScoreInterval } from '../utils/stats.js';
+import { seededRandom, Z_95, type ScoreInterval } from '../utils/stats';
 
 /** A proportion with its interval AND its standard error. The error is kept
  *  because corrections downstream propagate it, and recovering it from an

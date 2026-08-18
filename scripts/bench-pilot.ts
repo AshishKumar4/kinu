@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import * as v from 'valibot';
-import { fnv1a64, parseJsonValue } from '../packages/core/src/index.js';
-import type { AttemptBudget, AttemptOutcome, JsonValue, LLMProviderConfig } from '../packages/core/src/index.js';
+import { fnv1a64, parseJsonValue } from '../packages/core/src/index';
+import type { AttemptBudget, AttemptOutcome, JsonValue, LLMProviderConfig } from '../packages/core/src/index';
 
 export const MIN_PILOT_TASKS = 40;
 export const MIN_PILOT_REPEATS = 3;

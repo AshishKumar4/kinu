@@ -11,7 +11,7 @@
 // drive subscription calls, so nothing here is reachable from cf-backend.
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import { JsonObjectSchema, usageTotal } from '@proteus/core';
-import { tolerate } from '@proteus/core/obs';
+import { diagnostics, ProteusError, tolerate } from '@proteus/core/obs';
 import type { JsonObject, ModelProvider, ModelInfo, ProviderDeps, Usage } from '@proteus/core';
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as v from 'valibot';
@@ -423,7 +423,10 @@ async function* parseNdjson(stream: SpawnedClaude['stdout']): AsyncGenerator<Cla
 function parseEventLine(line: string): ClaudeEvent | null {
   const event = tolerate(() => v.parse(JsonObjectSchema, JSON.parse(line)), 'malformed-input');
   if (event !== undefined) return event;
-  console.warn(`[proteus] claude stream-json: skipped a line that is not json: ${line.slice(0, 200)}`);
+  diagnostics.failure(
+    'provider.claude_stream_line_unparsed',
+    new ProteusError('bad_input', `claude stream-json line is not json: ${line.slice(0, 200)}`),
+  );
   return null;
 }
 

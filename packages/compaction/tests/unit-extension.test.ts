@@ -14,11 +14,11 @@ import {
   type CompactionExtensionDeps,
   type CompactionOutcomeEvent,
   type CompactionProfile,
-} from '../src/index.js';
+} from '../src/index';
 import {
   assistant, history, memoryArchive, memoryPorts, toolCall, toolMessage, toolResult, user,
   validSummary, type MemoryArchiveStore, type MemoryPorts,
-} from './helpers.js';
+} from './helpers';
 
 const SESSION = 'agent-test-session';
 

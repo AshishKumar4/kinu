@@ -9,8 +9,8 @@ import {
   releaseSqlFromExec,
   redactReleaseDiff,
   validateReleasePatchPath,
-} from '../src/release/index.js';
-import { makeSqlExec } from './helpers.js';
+} from '../src/release/index';
+import { makeSqlExec } from './helpers';
 
 function makeExec(db: Database) {
   return makeSqlExec(db);

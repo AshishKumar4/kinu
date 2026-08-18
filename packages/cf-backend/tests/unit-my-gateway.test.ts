@@ -9,17 +9,17 @@
 // refresh-on-401 retry, and actionable error mapping for the documented
 // gateway failures (2008 invalid provider / 2021 invalid user credentials).
 import { describe, test, expect } from 'bun:test';
-import { userCredentialSource } from './helpers/user-credentials.js';
+import { userCredentialSource } from './helpers/user-credentials';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { generateText } from 'ai';
-import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
+import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { asFetchFunction, parseJsonObject, type JsonValue } from '@proteus/core';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   cloudflareAccountAPIRoot,
   fetchCloudflareAIGateways,
-} from '../src/lib/cloudflare-oauth.ts';
+} from '../src/lib/cloudflare-oauth';
 
 const ACCOUNT_ROOT = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1';
 const AI_BASE_URL = `${ACCOUNT_ROOT}/ai/v1`;

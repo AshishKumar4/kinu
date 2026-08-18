@@ -75,9 +75,9 @@
 
 import { readFileSync } from 'node:fs';
 
-import { readSources } from './sources.ts';
-import { assertMeasured, finding } from './gate-ratchet.ts';
-import { classMembers, declaredName, literalText, parse, walk, type SyntaxNode } from './syntax.ts';
+import { readSources } from './sources';
+import { assertMeasured, finding } from './gate-ratchet';
+import { classMembers, declaredName, literalText, parse, walk, type SyntaxNode } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
 

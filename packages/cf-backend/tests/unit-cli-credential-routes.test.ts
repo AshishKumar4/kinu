@@ -6,11 +6,11 @@
 //   - interactive session tokens only: a CI token cannot write a provider key
 //   - set and delete reach the store; the store's own validation surfaces
 //   - the listing carries key/kind/timestamps and never a secret
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
-import { handleCliRequest } from '../src/cli/routes.js';
+import { handleCliRequest } from '../src/cli/routes';
 import type { JsonValue } from '@proteus/core';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';

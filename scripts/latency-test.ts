@@ -12,8 +12,8 @@
 
 import { readFileSync } from "fs";
 import * as v from "valibot";
-import { parseJsonValue } from "../packages/core/src/utils/json.js";
-import { tolerate } from "../packages/core/src/obs/index.js";
+import { parseJsonValue } from "../packages/core/src/utils/json";
+import { tolerate } from "../packages/core/src/obs/index";
 
 // Load credentials from .dev.vars
 const devVars = readFileSync("packages/cf-backend/.dev.vars", "utf8");

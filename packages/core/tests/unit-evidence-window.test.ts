@@ -12,12 +12,12 @@ import {
   EVIDENCE_BUDGETS, evidenceWindow,
   initScaffoldTables, initShadowTables, runAutoShadowEval, queueTurnShadowTrial,
   runQueuedShadowTrials, type JudgeOutput, type ScaffoldControl,
-} from '../src/index.js';
-import { renderReflectionPrompt } from '../src/evolution/gepa/mutate.js';
-import type { GepaCandidate } from '../src/evolution/gepa/types.js';
-import { initReplayTables, runReplayEval } from '../src/evolution/replay.js';
-import { buildOutcomeClassifierPrompt, initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes.js';
-import { createTestRuntime, makeExecRaw, makeSql } from './helpers.js';
+} from '../src/index';
+import { renderReflectionPrompt } from '../src/evolution/gepa/mutate';
+import type { GepaCandidate } from '../src/evolution/gepa/types';
+import { initReplayTables, runReplayEval } from '../src/evolution/replay';
+import { buildOutcomeClassifierPrompt, initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
+import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 
 /** A seed candidate carrying `source` — the only field these prompts read. */
 function candidate(source: string): GepaCandidate {

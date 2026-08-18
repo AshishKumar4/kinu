@@ -67,10 +67,10 @@
  * with a wider blast radius.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import { DEFAULT_CONFIG } from '../config.js';
-import { nowMs } from '../utils/date.js';
-import { filterByEffectiveScore, updateCraftScores } from './ema.js';
+import type { SqlExecutor } from '../types/primitives';
+import { DEFAULT_CONFIG } from '../config';
+import { nowMs } from '../utils/date';
+import { filterByEffectiveScore, updateCraftScores } from './ema';
 
 /**
  * What one observed invocation of a crafted tool is worth.

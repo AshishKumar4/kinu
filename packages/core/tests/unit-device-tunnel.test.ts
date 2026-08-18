@@ -3,8 +3,8 @@ import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import {
   DeviceTunnel, TUNNEL_DISCONNECTED, DEVICE_UNRESPONSIVE, type TunnelSocket,
-} from '../src/execution/device-tunnel.js';
-import { JsonValueSchema } from '../src/utils/json.js';
+} from '../src/execution/device-tunnel';
+import { JsonValueSchema } from '../src/utils/json';
 
 const SentFrameSchema = v.object({
   id: v.string(),

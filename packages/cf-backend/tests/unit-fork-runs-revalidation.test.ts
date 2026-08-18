@@ -14,12 +14,12 @@ import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ForkRunSummary, HeadRunView } from '@proteus/core';
-import type { BackgroundJob } from '../src/lib/protocol.ts';
+import type { BackgroundJob } from '../src/lib/protocol';
 import {
   FORK_IDLE_REVALIDATE_MS, FORK_REVALIDATE_MS, forkRunsRevalidateMs, hasLiveForkRun,
   hasActiveForkWork, headRunToTree, selectForkRun,
-} from '../src/components/surfaces/fork-runs.ts';
-import { isCompeted, principalVariation, maxVisits } from '../src/components/fork-tree-model.ts';
+} from '../src/components/surfaces/fork-runs';
+import { isCompeted, principalVariation, maxVisits } from '../src/components/fork-tree-model';
 
 function summary(over: Partial<ForkRunSummary> = {}): ForkRunSummary {
   return {

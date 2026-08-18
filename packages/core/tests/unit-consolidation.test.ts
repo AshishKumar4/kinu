@@ -1,12 +1,13 @@
 /**
  * Unit tests: CraftStore consolidation + BUG-2 non-empty guard.
- * Formal spec: CraftStore.lean — all_below_gives_empty, consolidation_requires_nonempty_guard.
+ * Formal spec: Evolution/FullCraftLifecycle.lean — consolidation_never_empties,
+ * consolidation_nonincreasing, below_threshold_filtered.
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime } from './helpers.js';
-import { periodicCraftConsolidation } from '../src/craft/consolidation.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
+import { createTestRuntime } from './helpers';
+import { periodicCraftConsolidation } from '../src/craft/consolidation';
+import { initCraftScoreTables } from '../src/craft/schemas';
 
 describe('CraftStore consolidation', () => {
   test('does nothing with empty CraftStore', async () => {

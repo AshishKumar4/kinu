@@ -7,9 +7,9 @@
 // from that email. Production must leave that variable unset.
 
 import { DEVICE_CONNECT_PATH } from '@proteus/core';
-import { readD1Bookmark, verifySession } from './d1-store.js';
-import { sha256Hex } from '../lib/crypto.js';
-import type { AccessTokenScope } from '../cli/access-token-store.js';
+import { readD1Bookmark, verifySession } from './d1-store';
+import { sha256Hex } from '../lib/crypto';
+import type { AccessTokenScope } from '../cli/access-token-store';
 
 export const SESSION_COOKIE_NAME = '__Host-proteus_session';
 

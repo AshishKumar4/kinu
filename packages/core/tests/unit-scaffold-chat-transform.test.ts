@@ -12,12 +12,12 @@
  *     and its responseMessages survive onto this seam's single `done`.
  */
 import { describe, test, expect } from 'bun:test';
-import { scaffoldChatTransform, type ChatEvent } from '../src/index.js';
-import type { ScaffoldRunOptions } from '../src/scaffold/executor.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { Executor, ResolvedProvider } from '../src/types/primitives.js';
-import { decodeJsonValue, type JsonObject, type JsonValue } from '../src/utils/json.js';
-import { createTestRuntime } from './helpers.js';
+import { scaffoldChatTransform, type ChatEvent } from '../src/index';
+import type { ScaffoldRunOptions } from '../src/scaffold/executor';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { Executor, ResolvedProvider } from '../src/types/primitives';
+import { decodeJsonValue, type JsonObject, type JsonValue } from '../src/utils/json';
+import { createTestRuntime } from './helpers';
 
 /** Sandbox semantics: provider namespaces visible as globals. */
 function evalExecutor(): Executor {

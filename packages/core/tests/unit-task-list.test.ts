@@ -3,8 +3,8 @@
 // promises, and what `listOpen` (the live-context roster) actually contains.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS } from '../src/tasks/store.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS } from '../src/tasks/store';
+import { makeSql, makeExecRaw } from './helpers';
 
 function newStore(): TaskListStore {
   const db = new Database(':memory:');

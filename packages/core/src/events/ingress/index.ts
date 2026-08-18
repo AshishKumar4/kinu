@@ -16,11 +16,11 @@
  *   container    — the agent's own container reporting about itself, over an
  *                  intercepted virtual host that never leaves the machine
  */
-export * from './container.js';
-export * from './webhook.js';
-export * from './secrets.js';
-export * from './rate-limit.js';
-export * from './triggers.js';
-export * from './email.js';
-export * from './peer.js';
-export * from './subordinate.js';
+export * from './container';
+export * from './webhook';
+export * from './secrets';
+export * from './rate-limit';
+export * from './triggers';
+export * from './email';
+export * from './peer';
+export * from './subordinate';

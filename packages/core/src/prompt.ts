@@ -4,14 +4,14 @@
  * details layered in only when they are actually true for the current turn.
  */
 
-import type { AgentRuntime } from './types/agent-runtime.js';
+import type { AgentRuntime } from './types/agent-runtime';
 import {
   AGENT_STANCE_SPECS,
   BUILTIN_TOOL_SPECS,
   type BuiltinToolName,
-} from './tools/registry.js';
-import { renderActiveSkillsSection, renderSkillsIndexSection } from './skills/render.js';
-import type { ActiveSkillSet, ParsedSkill } from './skills/types.js';
+} from './tools/registry';
+import { renderActiveSkillsSection, renderSkillsIndexSection } from './skills/render';
+import type { ActiveSkillSet, ParsedSkill } from './skills/types';
 import {
   compilePromptSurface,
   executorIsSelectable,
@@ -20,27 +20,27 @@ import {
   type PromptExternalToolInfo,
   type PromptSurface,
   type PromptSurfaceOptions,
-} from './prompting/surface.js';
-import { DEFAULT_SOUL_MD } from './identity/soul.js';
-import { renderAgentsMdSection, type AgentsMdFile } from './prompting/agents-md.js';
-import { BUILTIN_TOOL_LINE } from './prompting/section-templates.js';
-import { WORKSPACE_ROOT } from './vfs/workspace-path.js';
-import { PLATFORM_CATALOG } from './platform-catalog.js';
+} from './prompting/surface';
+import { DEFAULT_SOUL_MD } from './identity/soul';
+import { renderAgentsMdSection, type AgentsMdFile } from './prompting/agents-md';
+import { BUILTIN_TOOL_LINE } from './prompting/section-templates';
+import { WORKSPACE_ROOT } from './vfs/workspace-path';
+import { PLATFORM_CATALOG } from './platform-catalog';
 
-export type { AgentStance } from './tools/registry.js';
+export type { AgentStance } from './tools/registry';
 export type {
   PromptBackend,
   PromptExecutorInfo,
   PromptExternalToolInfo,
   TurnProvenance,
   WorkMode,
-} from './prompting/surface.js';
+} from './prompting/surface';
 export type {
   PromptModelCapability,
   PromptModelContext,
   PromptModelFamily,
   PromptModelProfile,
-} from './prompting/model-profile.js';
+} from './prompting/model-profile';
 
 export interface SystemPromptOptions extends PromptSurfaceOptions {
   /** Override the SOUL.md lookup. Tests and head runtimes use this for isolated prompt construction. */
@@ -379,10 +379,14 @@ function renderAgentStateSection(surface: PromptSurface): string {
       // parts is upstream of picking a tool. Compressed to a clause rather
       // than restated: turn-steering already says this mechanically, but only
       // at 25 steps, which is after the shape was already chosen wrong.
-      lines.push('- Ephemeral fork (action=fork) — copies of you that run their own tool loops in parallel and merge back this turn. Fork when the work already has 2+ independent angles, or when one step is uncertain enough to be worth two attempts at once.');
+      lines.push('- Ephemeral fork (action=fork) — copies of you, running on your context, that run their own tool loops in parallel and merge back this turn. Fork when the work already has 2+ independent angles, or when one step is uncertain enough to be worth two attempts at once.');
     }
-    if (has('staff')) {
-      lines.push('- Persistent subordinate (action=staff) — a helper that outlives this turn and stays in your roster.');
+    if (has('hire')) {
+      // The CONTEXT half of the index, which is the half that decides which rung
+      // a task wants: a fork inherits the caller's window, a hire does not, so
+      // one takes a one-line brief and the other takes a written one. The rung
+      // itself (DELEGATION_RUNGS.hire) carries the mechanism; this is the index.
+      lines.push('- Persistent subordinate (action=hire) — a helper that outlives this turn and stays in your roster. It starts with a blank context, so its mission is the whole brief; hire when the work needs its own memory across turns rather than one answer now.');
     }
     if (has('fork')) {
       lines.push(
@@ -413,10 +417,13 @@ function renderAgentStateSection(surface: PromptSurface): string {
         //     it. Saying "scored by execution" flat is the overstatement this
         //     replaces.
         'settle=mcts keeps one instead, for rival attempts at a single thing: you give it the task and it writes the competing approaches itself, each on a different angle so they do not converge, over several rounds that drop the weak ones and expand what scored well. Execution sets that ranking — a proposal whose code runs and passes places above every proposal whose code failed, and prose that produced no code places below both once a rival produced some; the judge only orders proposals inside the band execution already fixed. Branches propose code rather than running their own tool loops, so mcts fits rivals you can express as code, and it takes no `forks`.',
-        // Heads are spawned concurrently with the same inherited context and
-        // no channel between them (heads/controller.ts) — so a plan where one
-        // fork consumes another's finding silently gets nothing.
-        "Forks cannot see each other's work and meet only at the merge, so each fork's task has to stand on its own. They recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary.",
+        // The sibling-visibility half of this line went to the field that is read
+        // when a brief is being WRITTEN: DELEGATION_INHERITANCE.fork.brief names
+        // both blind spots (this turn as it continues, and what siblings are
+        // doing) on `forks[].task` itself. Repeating it thousands of tokens
+        // earlier bought nothing the field does not already say at the moment it
+        // matters. What stays is the artifact trail, which no schema carries.
+        'Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary.',
       );
     }
     // The rungs are also a codemode namespace, so a multi-step plan is code
@@ -431,13 +438,13 @@ function renderAgentStateSection(surface: PromptSurface): string {
         'The same rungs are callable inside execute_tools as `agents.<action>`, so a multi-step plan can be one script — loop, branch, Promise.all — and `workspace.createTool` saves that script as a reusable workflow. A fork started there rides that call, which does not resume after an eviction.',
       );
     }
-    if (has('staff')) {
+    if (has('hire')) {
       // The loop is the prompt-only half: an ORDER of operations no schema
       // field can hold. The roster/re-engage/dismiss half that followed it was
-      // DELEGATION_RUNGS.staff said a second time, so it went where the rungs
+      // DELEGATION_RUNGS.hire said a second time, so it went where the rungs
       // themselves went.
       lines.push(
-        'Run the coordination loop: staff the needed roles → ask each an independent workstream → integrate their reports as they arrive as events that wake you.',
+        'Run the coordination loop: hire the needed roles → ask each an independent workstream → integrate their reports as they arrive as events that wake you.',
         "Subordinates share this workspace's files and sandbox.",
       );
     }
@@ -448,7 +455,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
     if (hasTool(tools, 'report')) {
       // The frame only. When to report and what turn-end relays are the
       // `report` schema's whenToUse/whenNotToUse, verbatim.
-      lines.push('You are a subordinate agent of this workspace: the workspace is your world, the orchestrator assigns your work, and `report` carries progress back to it.');
+      lines.push('You are a subordinate agent of this workspace: the workspace is your world, whoever hired you assigns your work, and `report` carries progress back to them.');
     }
     parts.push(lines.join('\n'));
   }

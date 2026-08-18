@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { findDrift } from './policy-drift.ts';
-import { readSources } from './sources.ts';
+import { findDrift } from './policy-drift';
+import { readSources } from './sources';
 
 const tree = (files: Record<string, string>): Map<string, string> =>
   new Map(Object.entries(files));

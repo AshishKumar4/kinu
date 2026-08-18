@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import {
   AttemptOutcomeSchema, decodeJsonValue, parseJsonValue, validateWithRetries,
   type AttemptOutcome, type BenchTask, type JsonValue, type SealedSplit, type TaskValidation,
-} from '../packages/core/src/index.js';
+} from '../packages/core/src/index';
 
 export const VALIDATION_DIAGNOSTICS_FILE = 'validation-diagnostics.json';
 

@@ -5,15 +5,15 @@
 // (b) surfaced its result honestly, and (c) is gated by the SAME auth +
 // per-agent ownership as the read tools — a scoped access token can't reach the
 // write surface at all, and an unowned agent is refused before any tool runs.
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import type { JsonObject, JsonValue } from '@proteus/core';
-import type { UserCaller } from '../src/user/workspace-capability.js';
-import { mockAgentsSdk } from './helpers/agents-sdk.js';
+import type { UserCaller } from '../src/user/workspace-capability';
+import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
-const { handleMcpRequest } = await import('../src/mcp-server.js');
+const { handleMcpRequest } = await import('../src/mcp-server');
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;

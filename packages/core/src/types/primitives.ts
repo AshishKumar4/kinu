@@ -8,7 +8,7 @@
 
 import type { SqlExecutor, SqlValue } from '@proteus/agent-utils';
 import type { ToolSet as AiToolSet } from 'ai';
-import type { JsonObject, JsonValue } from '../utils/json.js';
+import type { JsonObject, JsonValue } from '../utils/json';
 
 /**
  * The tagged-template SQL primitive. Both DO sql and better-sqlite3 satisfy it.

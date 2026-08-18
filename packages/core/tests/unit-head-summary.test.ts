@@ -1,6 +1,6 @@
 // Head report-summary capture — the #176 fix for empty per-head merge summaries.
 import { describe, test, expect } from "bun:test";
-import { extractFinalText, synthesizeHeadSummary, extractHeadSteps } from "../src/heads/head-summary.js";
+import { extractFinalText, synthesizeHeadSummary, extractHeadSteps } from "../src/heads/head-summary";
 
 describe("extractFinalText", () => {
   test("uses result.text when the final step has text", () => {

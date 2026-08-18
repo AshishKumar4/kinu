@@ -1,9 +1,9 @@
 import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { AGENT_HOME, BIN_DIR, ensureBinDir, loadConfigFile, resolveCloudOrigin } from '../config.js';
-import { ACCENT, DIM, OK, VERSION, WARN } from '../display.js';
-import { fetchServedVersion, isSameBuild } from '../version-check.js';
-import { updateConfigFile } from '../config.js';
+import { AGENT_HOME, BIN_DIR, ensureBinDir, loadConfigFile, resolveCloudOrigin } from '../config';
+import { ACCENT, DIM, OK, VERSION, WARN } from '../display';
+import { fetchServedVersion, isSameBuild } from '../version-check';
+import { updateConfigFile } from '../config';
 
 export async function updateCommand(target: string | undefined, opts: { origin?: string; force?: boolean }): Promise<void> {
   const what = target ?? 'self';

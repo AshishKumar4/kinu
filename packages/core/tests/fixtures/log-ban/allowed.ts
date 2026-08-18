@@ -9,8 +9,8 @@
  * `LoggableFields`, and nothing but this file would have caught it.
  */
 
-import { ProteusError } from '../../../src/obs/error.js';
-import { createRecordingLogger } from '../../../src/obs/log.js';
+import { ProteusError } from '../../../src/obs/error';
+import { createRecordingLogger } from '../../../src/obs/log';
 
 const log = createRecordingLogger();
 

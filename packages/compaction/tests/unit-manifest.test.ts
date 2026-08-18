@@ -9,7 +9,7 @@ import {
   renderArchiveManifest,
   withArchiveManifest,
   type ArchiveRange,
-} from '../src/index.js';
+} from '../src/index';
 
 function turn(key: string, role: 'user' | 'assistant', text: string): Turn {
   return {

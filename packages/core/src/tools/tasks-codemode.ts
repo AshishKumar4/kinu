@@ -7,13 +7,13 @@
  * SAME TaskListStore instance — a script and a direct tool call see and
  * mutate the identical list, never a shadow copy.
  */
-import type { CodemodeProvider } from '../rlm.js';
+import type { CodemodeProvider } from '../rlm';
 import * as v from 'valibot';
-import { TASK_STATUSES, type TaskListStore } from '../tasks/store.js';
-import type { AgentConfigStore } from '../config/store.js';
-import { AGENT_STANCES, STANCE_CHOICES, TOOL_REACH } from './registry.js';
-import { decodeJsonValue } from '../utils/json.js';
-import { createTasksDispatcher } from './tasks-tool.js';
+import { TASK_STATUSES, type TaskListStore } from '../tasks/store';
+import type { AgentConfigStore } from '../config/store';
+import { AGENT_STANCES, STANCE_CHOICES, TOOL_REACH } from './registry';
+import { decodeJsonValue } from '../utils/json';
+import { createTasksDispatcher } from './tasks-tool';
 
 const TitlesSchema = v.array(v.string());
 const ParentSchema = v.optional(v.string());

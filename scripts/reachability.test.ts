@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { readSources } from './sources.ts';
-import { declaredRpcs, findUnreachable, invokedNames, keyOf } from './reachability.ts';
+import { readSources } from './sources';
+import { declaredRpcs, findUnreachable, invokedNames, keyOf } from './reachability';
 
 /** One DO with one public RPC. Every case below varies only what the second
  *  file does with the name `listDeferredApprovals`. */
