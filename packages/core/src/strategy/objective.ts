@@ -75,6 +75,17 @@ export interface MeasuredValue {
   /** Raw quantities the value was derived from, so a ratio stays re-derivable.
    *  A ratio scored against a constant nobody kept is a ratio nobody can check. */
   readonly measured?: Readonly<Record<string, number>>;
+  /**
+   * Per-instance scores, for an {@link InstancedObjective}. REQUIRED for one and
+   * meaningless for the others.
+   *
+   * `value` is then the AGGREGATE and this is the vector the front is computed
+   * over — the same pair `gepa_candidates` already persists as `aggregate` beside
+   * `scores_json` (evolution/gepa/persistence.ts:78-80). Absent, not empty, when
+   * the objective declares no instances: an empty map would claim every instance
+   * scored zero.
+   */
+  readonly perInstance?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -373,33 +384,68 @@ export interface ScalarObjective {
 }
 
 /**
- * Several scalars measured together, so a Pareto front is expressible.
+ * ONE metric measured over MANY INSTANCES, so a per-instance Pareto front is
+ * expressible. This is GEPA's front, and it is NOT {@link VectorObjective}'s.
  *
- * WITHOUT this, `advance:'pareto'` is unreachable from the surface — one `verify`
- * cannot carry six metrics — while the coverage matrix claims GEPA is expressible.
- * That was a real defect, found by measurement rather than by review: asked for a
- * frontier over six eval metrics, a model reported *"the six specific eval metrics
- * are not provided; the search would need a way to compute each metric for a
- * candidate"* (`AxisErgonomics`, `multi-metric-prompt`). It also broke this spec's
- * own coverage obligation, which requires every axis value to appear in at least
- * one fixture entry.
+ * THE CONFLATION THIS EXISTS TO FIX. An earlier revision made `advance:'pareto'`
+ * require a `VectorObjective` and refuse a scalar — which refused GEPA's own
+ * configuration, i.e. the sole technique that earns the axis value. GEPA's front is
+ * over TASK INSTANCES under ONE metric: arXiv:2507.19457 Algorithm 2 line 4 is
+ * `s*[i] <- max_k S_P[k][i]` with `i` indexing instances, and §2 defines a single
+ * metric. Our own implementation says the same thing and is the first-hand proof:
+ * `gepa_pareto_membership` is keyed `(run_id, instance_id, candidate_id)` with ONE
+ * `score` (evolution/gepa/persistence.ts:89-95), `scores_json` is
+ * `Map<instanceId, number>` (:23), and `computeParetoFront(pool, instanceIds)`
+ * comments "For each instance, find the max score" (gepa/pareto.ts:39).
  *
- * Two independent routes arrived at this field, which is the strongest evidence it
- * is real: the design doc had already noted that AlphaEvolve is FunSearch with a
- * richer evaluator returning a score **dict** — this is that dict.
+ * The spec had the right reading elsewhere and disagreed with itself: §3.6 already
+ * said `advance:'pareto'` needs a gradient ACROSS INSTANCES and cited SEIDR's
+ * lexicase result, lexicase being the canonical per-instance operator. Found by
+ * `SpecAudit`/`SpecEvidence`, severity `wrong`.
+ */
+export interface InstancedObjective {
+  readonly kind: 'instanced';
+  readonly metric: string;
+  readonly unit: string;
+  readonly direction: ObjectiveDirection;
+  readonly scale: ObjectiveScale;
+  readonly target: number;
+  /** At least two. The front's axes ARE these — one metric, compared per instance,
+   *  which is why they share `metric`/`unit`/`direction` rather than each carrying
+   *  their own. A front over one instance is an argmax. */
+  readonly instances: readonly string[];
+  /** Returns a {@link MeasuredValue} whose `perInstance` is populated for every
+   *  declared instance and whose `value` is the aggregate — the same pair
+   *  `gepa_candidates` stores as `scores_json` beside `aggregate` (:78-80). */
+  readonly verify: VerifierSource;
+  readonly floor?: Floor;
+}
+
+/**
+ * Several DIFFERENT metrics measured together — a per-metric front.
  *
- * Each component keeps its own unit, direction, scale, target and floor, because a
- * front over metrics that share a direction by assumption is a front over a
+ * This is AlphaEvolve's score **dict**, which the design doc had already named as
+ * the only thing separating AlphaEvolve from FunSearch, and it is the shape a caller
+ * asking for "the frontier over our six eval metrics" wants
+ * (`AxisErgonomics`, `multi-metric-prompt`: *"the six specific eval metrics are not
+ * provided; the search would need a way to compute each metric for a candidate"*).
+ *
+ * Each component keeps its OWN unit, direction, scale, target and floor — which is
+ * exactly what distinguishes it from {@link InstancedObjective}, whose axes share one
+ * metric. A front over metrics that share a direction by assumption is a front over a
  * quantity nobody declared.
  */
 export interface VectorObjective {
   readonly kind: 'vector';
-  /** At least two. A front over one dimension is an argmax, and `advance:'pareto'`
-   *  over a single component is refused for that reason. */
+  /** At least two. A front over one dimension is an argmax. */
   readonly components: readonly ScalarObjective[];
 }
 
-export type Objective = ScalarObjective | WitnessObjective | VectorObjective;
+export type Objective =
+  | ScalarObjective
+  | InstancedObjective
+  | VectorObjective
+  | WitnessObjective;
 
 /**
  * What makes two runs comparable.
