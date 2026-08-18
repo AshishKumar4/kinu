@@ -34,12 +34,22 @@
  * `--others --exclude-standard` because a brand-new file is the one most likely
  * to violate — `secret-scan.ts` was tracked-only, so a credential in a new file
  * was invisible until it was already in history and the scan fired too late to
- * matter. `.gitignore` still applies, which is what keeps `external/`'s
- * reference clones out.
+ * matter. Ignore rules narrow ONLY those untracked additions (that is what keeps
+ * `external/`'s reference clones out); a TRACKED file is in every corpus
+ * unconditionally, because tracked is what git ships. The 2026-08-18 incident:
+ * a merge from a pre-scrub branch re-added a gitignored transcript as a TRACKED
+ * file carrying two live tokens, and with no working-tree copy the old
+ * enumeration — which dropped any listed path missing from disk — handed every
+ * gate a corpus without it, so `secret-scan` exited 0 while `git ls-files`
+ * showed the leak. Tracked-and-ignored at once is itself an anomaly (someone
+ * gitignored a file without untracking it, or a merge re-added an ignored
+ * path), so enumeration names each such path in a warning.
  */
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { gitEnv } from '../packages/test-utils/src/git.ts';
 import {
   TEST_FILE, TEST_SUFFIX,
 } from '../tools/oxlint/anti-slop/rules/no-ambient-git-in-tests.ts';
@@ -64,26 +74,50 @@ const TEXT_SOURCE = /\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc|md|ya?ml|toml|sh|env|pe
 
 let enumerated: readonly string[] | undefined;
 
+export interface Enumeration {
+  /** Every file a gate governs: all tracked paths, plus untracked additions the
+   *  ignore rules do not cover. */
+  files: readonly string[];
+  /** Tracked paths an ignore rule also matches. Each is an anomaly: ignore rules
+   *  exist to exclude untracked noise, never to hide something git ships. */
+  trackedIgnored: readonly string[];
+}
+
 /**
- * Every file in this repository a gate may hold to a standard: tracked, PLUS new
- * files `.gitignore` does not cover, MINUS anything no longer on disk.
+ * Enumerate one repository. Tracked-ness is authoritative: a tracked path stays
+ * in the corpus whether or not an ignore rule matches it and whether or not a
+ * working-tree copy exists — its index blob is what a push publishes, and
+ * `readRepositoryFile` still reads that blob when the disk copy is gone. Only
+ * untracked additions are narrowed by ignore rules and by presence on disk.
  *
  * `execFileSync` and not `Bun.spawnSync`, deliberately: it THROWS on a non-zero
  * exit. An enumeration that fails quietly hands every caller an empty corpus,
  * and an empty corpus reports a clean tree — so the zero check below is an error
  * rather than a warning. A gate that cannot fail is a gate that cannot measure.
  */
-export function trackedFiles(): readonly string[] {
-  if (enumerated !== undefined) return enumerated;
-  const listed = execFileSync(
-    'git',
-    ['-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
-    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
-  );
-  const files = listed.split('\0').filter((f) => f.length > 0 && existsSync(root + f));
+export function enumerateRepository(repoRoot: string): Enumeration {
+  const list = (...flags: readonly string[]): string[] =>
+    execFileSync('git', ['-C', repoRoot, 'ls-files', '-z', ...flags], {
+      env: gitEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    }).split('\0').filter((f) => f.length > 0);
+  const tracked = list('--cached');
+  const additions = list('--others', '--exclude-standard')
+    .filter((f) => existsSync(join(repoRoot, f)));
+  const trackedIgnored = list('--cached', '--ignored', '--exclude-standard');
+  for (const f of trackedIgnored) {
+    console.error(`sources: WARNING: ${f} is tracked AND gitignored — ignore rules never hide `
+      + 'a tracked file from a gate; either `git rm --cached` it or drop the ignore rule');
+  }
+  const files = [...tracked, ...additions].sort();
   if (files.length === 0) throw new Error('sources: git ls-files enumerated no file');
-  enumerated = files;
-  return files;
+  return { files, trackedIgnored };
+}
+
+/** Every file in this repository a gate may hold to a standard, memoised over
+ *  the repository this module sits in. */
+export function trackedFiles(): readonly string[] {
+  if (enumerated === undefined) enumerated = enumerateRepository(root).files;
+  return enumerated;
 }
 
 /** Product source: the files a gate holds to the standard. Test code is out —
@@ -130,12 +164,24 @@ export const isRawNodeModule = (file: string): boolean => RAW_NODE_MODULE.test(f
  *  committed than one in a `.ts`. */
 export const isTextSource = (file: string): boolean => TEXT_SOURCE.test(file);
 
+/** One file's text, from `repoRoot`. The working tree when a copy exists; the
+ *  INDEX blob when it does not — a tracked file deleted (or never checked out)
+ *  locally still ships on push, so a content gate must still read those exact
+ *  bytes rather than silently narrowing its corpus. */
+export function readRepositoryFile(repoRoot: string, file: string): string {
+  const onDisk = join(repoRoot, file);
+  if (existsSync(onDisk)) return readFileSync(onDisk, 'utf8');
+  return execFileSync('git', ['-C', repoRoot, 'cat-file', 'blob', `:${file}`], {
+    env: gitEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+  });
+}
+
 /** `file -> text` for every enumerated file the predicate accepts. The one place
  *  a gate's corpus is materialised, so "which files did you read" and "which
  *  files do you govern" are the same expression. */
 export function readMatching(predicate: (file: string) => boolean): Map<string, string> {
   const files = trackedFiles().filter(predicate);
-  return new Map(files.map((f) => [f, readFileSync(root + f, 'utf8')]));
+  return new Map(files.map((f) => [f, readRepositoryFile(root, f)]));
 }
 
 /** Product source: the files a gate holds to the standard. */

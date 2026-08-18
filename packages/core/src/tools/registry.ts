@@ -132,8 +132,23 @@ export interface BuiltinToolSpec {
 // context; ask/send = talking to what already exists. The tool docstring
 // renders these rungs verbatim and the prompt's Delegation section indexes
 // them, so editing them here is the only place delegation doctrine changes.
-// mcts is a settle policy inside the fork rung — reachable and fully
-// functional, never a third rung.
+//
+// TREE SEARCH IS `swarm`, AND IT HAS EXACTLY ONE SPELLING. `fork` briefly carried
+// a second one as `settle:'mcts'`, a judged tree reachable from inside the fork
+// rung. It is gone: a configured search of any depth is `action:'swarm'`, which
+// scores every node against the caller's own `objective` through the verifier
+// registry. `fork` has one settlement, a merge, and requires the briefs it runs.
+//
+// WHY THERE ARE STILL THREE RUNGS AND NOT TWO, since `swarm` also spawns several
+// things and picks between them. A swarm node is GRADED, and you cannot grade a
+// node on what it changed when every node changed the same tree: the nodes share
+// one workspace, and `HEAD_FILE_CHANGE_PROVENANCE` already records that
+// shell-command changes are unattributed. So a swarm node is a toolless candidate
+// measured as a whole, while a fork is a real agent holding HEAD_BUILTIN_TOOLS
+// whose findings are SYNTHESISED rather than scored. That is the one capability
+// `swarm` provably cannot host, it is blocked by per-node workspace isolation and
+// by nothing else (EXPLORATION-SPEC §8.6), and when that isolation exists `fork`
+// becomes a swarm configuration and this rung goes.
 //
 // NAMING, settled 2026-08-17 so it is not re-opened: the persistent rung is
 // `hire`, not `staff` and not `spawn`.
@@ -235,24 +250,21 @@ export const DELEGATION_RUNGS = {
     // about what a fork can see.
     `${DELEGATION_INHERITANCE.fork.rung} It runs on the same workspace, files and sandbox, its own multi-step tool loop concurrently (web search/fetch, exec), then merges back and disappears; takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you. ` +
     // The payoff-before-limitation ORDER is deliberate and preserved: opening
-    // on deterrents ("only… do NOT…") drew 0/10 uses in a shell corpus. What
-    // changed is precision — "scored against each other by execution" flat
-    // overstates mcts/evaluation.ts, where execution picks the score BAND and
-    // a judge ensemble places the branch inside it. The prompt now carries the
-    // full mechanism; this field keeps the trigger and the one ranking fact
-    // that follows from the band.
-    // "set settle=mcts to have THEM compete" read as the briefs competing, and
-    // they never do: the two settles take different arguments, and the fork
-    // seam now refuses the mismatch instead of discarding it (agents-tool.ts
-    // forkSettleRefusal), so the difference is a fact about the call and not a
-    // nicety.
-    'Leave settle unset to run the briefs in `forks` and merge them back into this turn; set settle=mcts to have the search write its own rivals and compete them instead — how you pick between competing approaches, and the right settle for rival scripts that must produce a specific artifact, since a branch whose proposed code runs and passes outranks every branch whose code failed. mcts branches propose text/code rather than running your own tool loop, and it takes no `forks`: briefs handed to it are refused, because merge is the settle that runs them.',
+    // on deterrents ("only… do NOT…") drew 0/10 uses in a shell corpus.
+    //
+    // The two-settles sentence that used to close this rung is gone with
+    // `settle:'mcts'`. What replaces it is the fork/swarm boundary, because that
+    // is the choice a caller actually faces now, and it is a fact about the
+    // mechanism rather than a preference: a fork's findings are SYNTHESISED by a
+    // merge model, a swarm's candidates are MEASURED by the caller's verifier.
+    'You supply the angles: `forks` is required, 2-6 briefs, and nothing infers them for you — a fork runs the brief it was given and their findings merge back into this turn. ' +
+    'If instead you want the search to write its own competing approaches and RANK them, that is action=swarm, which measures candidates against an `objective` you declare. The line between them is who decides: a merge reconciles what the forks report, a swarm scores what its candidates produced.',
   // The third rung, and it is NOT a third kind of helper — which is the one thing a
   // reader has to get right, because "spawn several and pick the best" describes a
-  // fork too. What differs is WHO DECIDES: a fork's answer is settled by a merge
-  // model or by a judge ensemble, and a swarm's is settled by the caller's own
-  // verifier running in the workspace. That is why it needs an `objective` and a fork
-  // does not, and why its refusals are about measurement rather than about briefs.
+  // fork too. What differs is WHO DECIDES: a fork's findings are SYNTHESISED by a
+  // merge model, and a swarm's candidates are SCORED by the caller's own verifier
+  // running in the workspace. That is why it needs an `objective` and a fork does
+  // not, and why its refusals are about measurement rather than about briefs.
   swarm:
     'Run a configured search (action=swarm) when the answer can be MEASURED rather than judged: you name the shape with `preset` and what counts with `objective`, and every candidate is scored by your own verifier running in this workspace — not by a model\'s opinion of it. '
     + 'preset=optimise beats a number you can measure (a cost, a runtime, a count) and requires `objective`; preset=ideate is deliberately flat and takes none, so it returns a set of distinct approaches with no ranking; research/audit/redteam bin findings into an archive under a coverage `key`. '
@@ -606,7 +618,7 @@ export const BUILTIN_TOOL_SPECS = {
     whenNotToUse:
       'A single short coherent change is yours to make directly. Forks that would write the same mutable resource belong in one fork that owns it. Every subordinate or peer message wakes that agent for a full turn, so each one carries real work.',
     result:
-      'fork produces the merged answer with per-fork outputs, or under settle=mcts the winning proposal and its score — on a live session the call hands back a background job at spawn and that answer arrives as the wake when it settles; hire/dismiss return roster state. '
+      'fork produces the merged answer with per-fork outputs — on a live session the call hands back a background job at spawn and that answer arrives as the wake when it settles; hire/dismiss return roster state. '
       + 'ask/send return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id. '
       // The result half is stated because a swarm's answer is not the only thing it

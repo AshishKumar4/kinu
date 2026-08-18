@@ -116,18 +116,11 @@ interface Illustrative {
 
 const CITATION_ILLUSTRATIVE: readonly Illustrative[] = [
   {
-    file: 'docs/EXPLORATION-SPEC.md',
-    cites: 'Foo.lean:<line>',
-    reason: "§10.1's own account of this gate's line check, in the passage arguing that"
-      + ' a theorem name is a stabler citation than a line number. Gating it would make'
-      + ' this an instrument for undocumented gates.',
-  },
-  {
     file: 'scripts/lean-citations.ts',
     cites: 'Foo.lean:<line>',
-    reason: "This register quoting the spec's own declared illustration, and"
-      + " `citedToken`'s docstring explaining why the two spellings are separate"
-      + ' entries.',
+    reason: "`citedToken`'s docstring explaining why `Foo.lean:<line>` and"
+      + ' `Foo.lean:470` are separate entries rather than one pattern, and this'
+      + ' register quoting that spelling to say so.',
   },
   {
     file: 'scripts/lean-citations.ts',

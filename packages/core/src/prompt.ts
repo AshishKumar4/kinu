@@ -394,29 +394,12 @@ function renderAgentStateSection(surface: PromptSurface): string {
         // quality tracks the AVERAGE member (Self-MoA, arXiv 2502.00674), so
         // the caveat rides the parameter in agents-tool.ts, where it is read
         // at the moment the field is being filled.
-        // "work that splits into parts you want all of" was the rung's own
-        // 2+-angles trigger said twice, once the settle line below gained a
-        // real contrast to carry ("keeps every piece" against "keeps one").
-        "Merging (the default) keeps every fork's piece: each brief in `forks` (required there) is a real agent with its own tool loop. A fork can take its own `model` — how you put a different vendor on a genuinely open question.",
-        // The MECHANISM of mcts, because a trigger alone did not move it: 1
-        // use in 89 trials. Each clause is a decision, checked against the
-        // engine rather than against how tree search usually works —
-        //   "you give it the task": mcts/engine.ts runs on ctx.task and never
-        //     reads `forks` (strategy/mcts.ts), so the call shape differs from
-        //     merge — and hand-authored briefs are now REFUSED there rather
-        //     than folded into an option nothing reads (agents-tool.ts
-        //     forkSettleRefusal), which is why the shape is stated as a fact.
-        //   "a different angle": mcts/diversity.ts assigns a fixed angle per
-        //     branch and tells each what its siblings drew, so proposals
-        //     diverge by construction rather than by temperature.
-        //   "several rounds": the engine's budget loop selects by UCT,
-        //     backpropagates, prunes below threshold, and re-expands.
-        //   the band: mcts/evaluation.ts — execution picks the band (pass
-        //     [0.60,1.00], fail [0.05,0.30], prose [0,0.75] and [0,0.30] once
-        //     a sibling produced code); the judge ensemble only places within
-        //     it. Saying "scored by execution" flat is the overstatement this
-        //     replaces.
-        'settle=mcts keeps one instead, for rival attempts at a single thing: you give it the task and it writes the competing approaches itself, each on a different angle so they do not converge, over several rounds that drop the weak ones and expand what scored well. Execution sets that ranking — a proposal whose code runs and passes places above every proposal whose code failed, and prose that produced no code places below both once a rival produced some; the judge only orders proposals inside the band execution already fixed. Branches propose code rather than running their own tool loops, so mcts fits rivals you can express as code, and it takes no `forks`.',
+        // A fork has one settlement, so the line that decides the rung is
+        // fork-against-swarm: who writes the candidates, and whether anything
+        // MEASURES them. `forks` reads as a fact rather than a default because
+        // a call with none is refused rather than inferred (agents-tool.ts
+        // forkBriefsRefusal).
+        "A fork keeps every piece: each brief in `forks` — required, nothing infers the angles for you — is a real agent with its own tool loop, and their findings merge back into this turn. A fork can take its own `model` — how you put a different vendor on a genuinely open question. When you want the candidates written for you and MEASURED against an `objective` you declare, that is action=swarm rather than a fork.",
         // The sibling-visibility half of this line went to the field that is read
         // when a brief is being WRITTEN: DELEGATION_INHERITANCE.fork.brief names
         // both blind spots (this turn as it continues, and what siblings are

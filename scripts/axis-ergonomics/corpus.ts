@@ -313,7 +313,7 @@ export const CORPUS: readonly Case[] = [
       rationale:
         'Reflexion. The design states that `carry` is the ONLY axis that distinguishes it '
         + 'from plain retry, and `observe` is what puts the environment\'s verdict — rather '
-        + "than the parent's proposal — into the next prompt (commit 0da703d6). Both axes "
+        + "than the parent's proposal — into the next prompt (commit 47845c27). Both axes "
         + 'are named in the prose. This is the cleanest test of whether `carry` and '
         + '`observe` are legible words.',
     },

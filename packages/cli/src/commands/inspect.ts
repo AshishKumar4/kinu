@@ -191,11 +191,21 @@ export async function gepaCommand(name: string, runId: string | undefined, opts:
   const target = resolveAgentTarget(name);
   if (opts.run) return runGepaPass(name, opts);
   const limit = parseLimit(opts.limit, 20);
+  // One run is a record, not a row: it goes to the record printer rather than
+  // leaning on the row formatter's fallback, so `printRows` has exactly one
+  // legal input shape and a producer that answers with something else is a bug
+  // rather than an alternative.
+  if (runId) {
+    const detail = await readTarget(target, {
+      cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getGepaRun', JsonValueSchema, [runId]),
+      local: () => decodeJsonValue({ value: getLocalGepaRun(target.localName, runId) }),
+    });
+    printData(detail, opts);
+    return;
+  }
   const data = await readTarget(target, {
-    cloud: (auth) => runId
-      ? callAgentRpc(auth.origin, auth.token, target.cloudName, 'getGepaRun', JsonValueSchema, [runId])
-      : callAgentRpc(auth.origin, auth.token, target.cloudName, 'getGepaRuns', JsonValueSchema, [limit]),
-    local: () => decodeJsonValue({ value: runId ? getLocalGepaRun(target.localName, runId) : listLocalGepaRuns(target.localName, limit) }),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getGepaRuns', JsonValueSchema, [limit]),
+    local: () => decodeJsonValue({ value: listLocalGepaRuns(target.localName, limit) }),
   });
   printRows(data, opts, formatGepaRow);
 }
@@ -361,11 +371,21 @@ function printData(data: JsonValue, opts: InspectOpts): void {
   else printPretty(data);
 }
 
+/** Render a list read. Every producer behind this — five cloud RPCs and their
+ *  five local twins — answers with a bare list of rows, so anything else is the
+ *  backend and this formatter disagreeing, and it says so. Dumping the raw JSON
+ *  instead is how `listRecentEvents`' `{ events: [...] }` envelope shipped:
+ *  `proteus inspect events` rendered unformatted against a cloud workspace and
+ *  formatted against a local one, with nothing red anywhere. An empty list is a
+ *  different answer and keeps its own line. */
 function printRows(data: JsonValue, opts: InspectOpts, format: (item: JsonValue) => string): void {
-  const rows = v.safeParse(JsonArraySchema, data);
-  if (opts.json || !rows.success) {
-    printData(data, opts);
+  if (opts.json) {
+    printJson(data);
     return;
+  }
+  const rows = v.safeParse(JsonArraySchema, data);
+  if (!rows.success) {
+    throw new Error('This read answered with something other than a list of rows; re-run with --json to see it.');
   }
   if (rows.output.length === 0) {
     console.log(DIM('No records.'));

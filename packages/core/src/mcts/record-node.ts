@@ -56,6 +56,31 @@ export interface RecordNodeOpts {
 }
 
 /**
+ * The ONE `INSERT INTO search_nodes`, so a second tree writer cannot drift from
+ * the first.
+ *
+ * `msgId` is null for a writer with no session message tree behind it — the
+ * objective-scored swarm tree (`strategy/swarm-run.ts`), whose nodes are complete
+ * answers held by the run rather than conversations reconstructed after an
+ * eviction. NULL rather than a fabricated id: `msg_id` pointing at a message that
+ * does not exist would make `session.getHistory` return an empty ancestry, and
+ * every reader here already branches on the column being absent.
+ */
+export function insertSearchNode(
+  sql: SqlExecutor,
+  node: RecordNodeOpts & { readonly msgId: string | null },
+): void {
+  void sql`
+ INSERT INTO search_nodes
+      (id, parent_id, root_id, task, action, observation, code_used, code_language, depth, msg_id)
+    VALUES
+      (${node.nodeId}, ${node.parentNodeId ?? null}, ${node.rootId},
+       ${node.task}, ${node.action}, ${node.observation},
+       ${node.codeUsed ?? null}, ${node.codeLanguage ?? null}, ${node.depth}, ${node.msgId})
+  `;
+}
+
+/**
  * Record a new MCTS node in both search_nodes and session message tree.
  * Returns the session message ID.
  */
@@ -83,14 +108,7 @@ export async function recordNode(
     opts.parentMsgId,
   );
 
-  void sql`
- INSERT INTO search_nodes
-      (id, parent_id, root_id, task, action, observation, code_used, code_language, depth, msg_id)
-    VALUES
-      (${opts.nodeId}, ${opts.parentNodeId ?? null}, ${opts.rootId},
-       ${opts.task}, ${opts.action}, ${opts.observation},
-       ${opts.codeUsed ?? null}, ${opts.codeLanguage ?? null}, ${opts.depth}, ${msgId})
-  `;
+  insertSearchNode(sql, { ...opts, msgId });
 
   return msgId;
 }

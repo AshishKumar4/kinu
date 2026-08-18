@@ -111,9 +111,7 @@ function summarizeAgents(input: JsonObject): string {
   switch (action) {
     case "fork": {
       const forks = Array.isArray(input.forks) ? input.forks.length : 0;
-      const settle = str(input, "settle");
-      const label = [forks > 0 ? `${forks} forks` : "fork", settle && settle !== "merge" ? `settle=${settle}` : ""]
-        .filter(Boolean).join(" ");
+      const label = forks > 0 ? `${forks} forks` : "fork";
       const task = quoted(str(input, "task"), 56);
       return task ? `${label}: ${task}` : label;
     }

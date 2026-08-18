@@ -1,8 +1,8 @@
 /**
  * One fork, one list — whichever store it landed in.
  *
- * `agents(action:'fork')` sends `settle:'merge'` to the head journal and
- * `settle:'mcts'` to search_nodes. The two stores never meet, so a surface
+ * A fork's heads land in the head journal and a tree search's branches land in
+ * search_nodes. The two stores never meet, so a surface
  * reading one showed an empty pane for forks that had gone to the other and
  * the same user action appeared to vanish. These tests pin the unified list:
  * both mechanisms, one chronological order, one status vocabulary, and the
@@ -29,7 +29,7 @@ function freshDb() {
 }
 
 /**
- * A settle=merge fork, seeded the way the controller writes one: `recordSplit`
+ * A merged fork, seeded the way the controller writes one: `recordSplit`
  * puts the rationale in head_runs, and every head gets a journal row. A
  * TOP-LEVEL split's root id is synthetic — there is deliberately no head row
  * carrying it, which is why the read model groups by head_journal. Pass
@@ -65,7 +65,7 @@ function seedMergedRun(
   }
 }
 
-/** A settle=mcts fork: a root node, N branches, and optionally the ledger row. */
+/** A tree-searched run: a root node, N branches, and optionally the ledger row. */
 function seedCompetedRun(
   db: Database,
   run: {

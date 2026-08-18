@@ -183,8 +183,42 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   the nine unreachable on one of the five tools — and the comment above it
   claimed the behaviour the code did not have.
 
+- **`fork` has one settlement, and tree search is its own action.** `settle` is
+  gone from the `agents` surface, including the `enum: ['merge','mcts']` the
+  advertised JSON Schema carried. A fork runs the briefs it was given and merges
+  them; `forks` is required, and a call supplying none is refused naming
+  `action:'swarm'`. That is where a search writes its own competing candidates
+  and measures them, to whatever `depth` is asked for, against an `objective`
+  the caller declares through the verifier registry. One field had been making
+  one call shape mean two unrelated things: one reading `forks` and merging
+  them, the other ignoring them to rank candidates of its own by a judged
+  ensemble. The MCTS engine is untouched and stays registered — the lifetime
+  evolution cycle calls it directly, and its durable search store still resumes
+  an interrupted tree from the checkpoint — it simply has no route from a
+  model-facing field. A stored job row carrying a `settle` is re-driven as
+  `{action:'swarm', preset:'ideate', task}` rather than refused, and logs
+  `agents.resume.fields_dropped` with `ranking` among the losses, because
+  `ideate` returns its candidates unordered.
+
 ### Fixed
 
+- `proteus events` renders rows against a cloud workspace, not raw JSON. The
+  cloud read answered `{ events: [...] }` where its four sibling list reads and
+  the local events read all answer a bare array, so the row formatter's array
+  parse failed and it dumped the JSON instead — formatted output on one backend,
+  a JSON blob on the other, exit 0 both times. The envelope is gone; the
+  ten-field allowlist over each row stays, and the row type is now derived from
+  core's event so a field renamed there fails the build rather than dropping out
+  of the projection. The `/api/workspaces/<name>/events` HTTP route answers a
+  bare array too, being a passthrough of the same read.
+- The row formatter no longer degrades silently. A single record riding it —
+  `proteus gepa <runId>`, the one legitimate user of its raw-JSON fallback —
+  goes to the record printer, which leaves the formatter one legal input shape,
+  so an answer that is not a list of rows is now a named refusal pointing at
+  `--json`. A new gate reads the formatter's producer inventory out of the
+  commands' own source and runs every one of them on a real orchestrator against
+  the formatter's own predicate; a sixth list command cannot join without being
+  named there.
 - The literature citation gate no longer reads a machine-written document as one
   paragraph. Its reach was bounded by the paragraph holding the citation, and a
   recorded run — 206KB of captured model replies with no blank line in it — is

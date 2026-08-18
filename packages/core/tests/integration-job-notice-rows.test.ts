@@ -109,7 +109,7 @@ function evictedWorkspace() {
   const now = Date.now();
   store.create({
     id: JOB, kind: 'agents', workMode: 'build', now,
-    label: 'fork(settle=mcts): design the generation algorithm',
+    label: 'fork: design the generation algorithm',
   });
   return { db: ws.db, store, now };
 }

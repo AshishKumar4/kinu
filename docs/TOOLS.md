@@ -163,8 +163,10 @@ There is **one** delegation tool. `think`, `team` and `peers` were three tools
 for one decision; they are now three groups of actions on `agents`, gated by
 the deps a backend wires (`agentsActionsFor`).
 
-Delegation is **one ladder keyed on lifetime**, because lifetime is the only
-axis the model actually has to decide on. The system prompt's `## Delegation`
+The spawn rungs are **one ladder keyed on lifetime**, because lifetime is the
+only axis the model has to decide on to pick between them; the measured rung
+sits beside them on its own axis, keyed on whether the answer can be measured
+instead of judged. The system prompt's `## Delegation`
 section (`packages/core/src/prompt.ts`) indexes the rungs and carries the
 operational doctrine no schema does; each rung's *triggers* live in
 `BUILTIN_TOOL_SPECS` (`registry.ts`, the single source) and reach the model
@@ -195,18 +197,30 @@ The rungs themselves:
 2. **Ephemeral fork** (`fork`) — spawns 2–6 copies of you on the same
    workspace, sandbox and files; each runs its own multi-step tool loop
    concurrently; findings merge back into this turn and the forks disappear.
-3. **Persistent subordinate** (`hire`) — long-lived, starts from a blank context, keeps its own
+   `forks` is **required**: a fork runs the briefs it is given, and a call that
+   supplies none is refused (`forkBriefsRefusal`) naming `action:'swarm'` as the
+   place a search writes its own candidates.
+3. **Configured search** (`swarm`) — the measured rung, on the same deps as
+   `fork`. `preset` fixes the shape of the search and `depth` how deep it may
+   go; every candidate is scored against the `objective` the caller declares,
+   by a verifier registered in `strategy/verifier-registry.ts` that runs in this
+   workspace. Tree search of every depth lives here.
+4. **Persistent subordinate** (`hire`) — long-lived, starts from a blank context, keeps its own
    across turns, stays in the roster.
 
-`mcts` is **not** a rung. It is a settle policy over the same fork primitive:
-`fork`'s `settle` defaults to `merge`, and `settle=mcts` switches what the call
-takes and how the result is chosen — the search writes its own competing
-approaches from `task` and scores them against each other by execution, instead
-of running the briefs in `forks` and merging them. Everything about the search
-(UCT selection, backprop, pruning, convergence, search-store resume, sibling
-diversity, execution-grounded rewards) is unchanged and fully reachable; it is
-simply no longer advertised as a co-equal first choice, which is what kept the
-model from ever reaching for a fork at all.
+`fork` and `swarm` are not two settlements of one primitive. `fork` has ONE
+settlement, a merge: it reconciles what the briefs reported. A swarm has no
+settlement to choose — its candidates are measured, and the number decides.
+That is why a swarm needs an `objective` and a fork does not, and why there is
+no route from a swarm to a judged ensemble: ranking by a panel of model opinions
+is not something the surface offers.
+
+The MCTS engine itself is unchanged and still registered (`strategy/mcts.ts` in
+the `StrategyRegistry`; UCT selection, backprop, pruning, convergence,
+search-store resume, sibling diversity, execution-grounded rewards all intact).
+What it no longer has is a model-facing route: it is reached programmatically,
+by the durable search store and by the eval harness. See
+[MCTS.md](./MCTS.md).
 
 Talking to what already exists is not a rung either — `ask`, `send`, `reply`
 and `list` address agents by name, and the name decides the transport:
@@ -219,8 +233,8 @@ and `list` address agents by name, and the name decides the transport:
   injects a conversational note; `dismiss` retires it, keeping its context
   archived unless `keep_history: false` is passed.
 - **A peer** is one of the owner's *other* workspaces, reached over the
-  EventsHub peer transport. This is the one axis that is genuinely not
-  lifetime, which is why it sits outside the ladder. `ask` waits for the reply
+  EventsHub peer transport. Its axis is neither lifetime nor measurement, which
+  is why it sits outside the ladder. `ask` waits for the reply
   (default 120 s, max 600 — a late reply still arrives as an event), `send`
   does not wait, `reply` answers an agent message event by its `event_id`, and
   `hire` with `scope: workspace` creates or reuses a whole specialist
@@ -267,6 +281,18 @@ from the model's original call, no model is listening for a correction, and the
 field was already dropped when the row was first dispatched — so refusing it
 would turn a replayable fork into a hard failure. It is logged
 (`agents.resume.fields_dropped`) rather than dropped silently.
+
+The same filter also TRANSLATES. A stored row carrying a `settle` is a tree
+search, and tree search is now `action:'swarm'`, so the row is re-driven as
+`{action:'swarm', preset:'ideate', task}` — as is a legacy `kind:'think'` row
+whose `strategy` is not `heads`. `ideate` and not a measured preset because it
+writes its own competing approaches from `task` alone, exactly as the stored
+settle did, and because the row carries no `objective`: a measured preset would
+need a metric, a unit, a direction and a verifier the original call never
+supplied. What the replay cannot carry is the RANKING — the judged ensemble that
+ordered those approaches is not reachable from a swarm — so `ranking` is named
+in `agents.resume.fields_dropped` beside the dropped fields. A resumed search
+that quietly stopped ranking is worse than one that said so.
 
 ### The delivery contract
 
@@ -370,15 +396,17 @@ builds the namespace, and every member lands in the same `dispatchAgentsAction`
 the top-level `agents` tool calls, over the same deps — one delegation path with
 one more caller, not a second spawn/join implementation. Which members exist is
 `agentsActionsFor(deps)`, the identical gate behind the tool's action enum: an
-orchestrator gets all seven, a subordinate or a local CLI session gets `fork`
-alone, and a head — handed no delegation deps — has no `agents` namespace at
-all. The workspace-clone `forkAgent` RPC is deliberately not projected.
+orchestrator gets all eight, a subordinate or a local CLI session gets `fork`
+and `swarm` — a swarm rides the same deps as a fork, so no deps set grants one
+without the other — and a head, handed no delegation deps, has no `agents`
+namespace at all. The workspace-clone `forkAgent` RPC is deliberately not
+projected.
 
 One limitation to know: a fork started inside the sandbox rides the enclosing
 `execute_tools` call, and that job kind declines background resume (its side
 effects cannot be safely re-run). Quick orchestration belongs in the sandbox; a
 single long search that must survive an eviction belongs at the top-level tool,
-which resumes from its MCTS checkpoint.
+whose durable job row is re-driven on resume (`resumableForkInput`).
 
 ### Example usage
 
@@ -524,23 +552,24 @@ runtimes are installed. Do not infer capability from older backend labels.
 ## agents fork — the ephemeral-fork rung
 
 `agents` with `action: fork` dispatches through the strategy registry
-(`core/src/strategy/`). With `settle` omitted (or `settle: merge`) it runs
-`FORK_STRATEGY_ID` (`heads`): the briefs in `forks` — **required** for this
-settle — each become an independent fork of the agent running its own
+(`core/src/strategy/`) to `FORK_STRATEGY_ID` (`heads`) — the only strategy the
+action reaches, because a fork has one settlement. The briefs in `forks` —
+**required** — each become an independent fork of the agent running its own
 multi-step tool loop (`HEAD_BUILTIN_TOOLS`, narrowed by the brief's own
 `allowedTools`) over a fork of the parent workspace, merged back into the turn.
 
-`settle: mcts` is a different call shape, not just a different ending: it reads
-`task` alone and writes its own competing approaches, each a single
-`generateText` proposal with **no** tool loop of its own, scored against its
-rivals by execution. See [MCTS.md](./MCTS.md) for the search algorithm.
+The requirement is enforced at the seam (`forkBriefsRefusal` in
+`core/src/tools/agents-tool.ts`) rather than documented: a call that supplies no
+briefs is refused with `reason: 'bad_input'`, and the refusal names
+`action:'swarm'` as the place a search writes its own competing approaches and
+ranks them. Before that refusal existed, such a call announced its spawn,
+detached, and reported the strategy's throw as a wake about spawned work
+failing.
 
-Both directions of that relationship are enforced at the seam
-(`forkSettleRefusal` in `core/src/tools/agents-tool.ts`) rather than documented:
-briefs handed to `settle: mcts` are refused with `reason: 'bad_input'` naming
-the conflict, and so is a `settle: merge` call that supplies no briefs — which
-previously announced its spawn, detached, and reported the strategy's throw as
-a wake about spawned work failing.
+A tree search of any depth is `action:'swarm'` with a `depth`: it reads `task`
+and writes its own candidates, each measured against the `objective` the caller
+declared by a verifier from `strategy/verifier-registry.ts`. It is not a
+settlement of `fork`, and there is no field on `fork` that selects it.
 
 ## experience — cross-workspace transfer
 

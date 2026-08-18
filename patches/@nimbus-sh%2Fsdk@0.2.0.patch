@@ -1,8 +1,16 @@
 diff --git a/dist/sandbox.d.ts b/dist/sandbox.d.ts
-index a3c5a053..f8b1431d 100644
+index a3c5a0539042c7223bbaf21a21b475d4c43d0828..3e9b442015ad452b052308b15965b9fa8f95d4bf 100644
 --- a/dist/sandbox.d.ts
 +++ b/dist/sandbox.d.ts
-@@ -58,6 +58,8 @@ export interface NimbusSandboxOptions {
+@@ -1,6 +1,7 @@
+ /**
+  * @nimbus-sh/sdk/sandbox - programmatic Nimbus sandbox handle.
+  */
++import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+ export type RuntimeSpec = string;
+ export type RuntimeName = 'node' | 'bun' | 'npm' | 'git' | 'python' | 'ruby' | 'clang' | 'shell' | (string & {});
+ export interface NimbusRuntimePolicy {
+@@ -58,10 +59,17 @@ export interface NimbusSandboxOptions {
      root?: string;
  }
  export interface NimbusExecOptions {
@@ -11,7 +19,16 @@ index a3c5a053..f8b1431d 100644
      cwd?: string;
      env?: Record<string, string>;
      timeoutMs?: number;
-@@ -145,6 +147,7 @@ export interface NimbusPort {
+     stdin?: string;
++    /**
++     * Identity the command runs as. Omitted, the spawn inherits the session
++     * user, which is what every programmatic exec has always run as.
++     */
++    cred?: VfsCred;
+ }
+ export interface NimbusExecResult {
+     command: string;
+@@ -145,6 +153,7 @@ export interface NimbusPort {
      port: number;
      pid: number;
      registeredAt: number;
@@ -19,7 +36,7 @@ index a3c5a053..f8b1431d 100644
  }
  export interface NimbusFileStat {
      type: 'file' | 'directory' | string;
-@@ -237,6 +240,7 @@ interface NimbusSessionStub {
+@@ -237,6 +246,7 @@ interface NimbusSessionStub {
          listening: boolean;
          pid: number | null;
          registeredAt: number | null;
@@ -27,7 +44,7 @@ index a3c5a053..f8b1431d 100644
      }>;
      _rpcUnexposePort(port: number): Promise<{
          port: number;
-@@ -372,6 +376,7 @@ export declare class NimbusSandbox {
+@@ -372,6 +382,7 @@ export declare class NimbusSandbox {
              listening: boolean;
              pid: number | null;
              registeredAt: number | null;
@@ -36,7 +53,7 @@ index a3c5a053..f8b1431d 100644
          unexpose: (port: number) => Promise<{
              port: number;
 diff --git a/dist/sandbox.js b/dist/sandbox.js
-index 6a675d9a..a7029f77 100644
+index 6a675d9a4d80f783d8b1e2b0b8c2fce5fb37e2a0..a7029f7700a030870623a20ea7842d4211b5bdce 100644
 --- a/dist/sandbox.js
 +++ b/dist/sandbox.js
 @@ -65,6 +65,7 @@ const PortSchema = z.object({

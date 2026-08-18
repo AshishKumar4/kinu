@@ -221,7 +221,7 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   initPlanReviewTable(execRaw);
   // The agent's own task list, written by the `tasks` tool.
   initTaskListTable(execRaw);
-  // Durable MCTS search checkpoints: an evicted fork(settle=mcts) resumes here.
+  // Durable tree-search checkpoints: an evicted search resumes here.
   initMctsSearchTable(execRaw);
   // Experience-import staging ledger, settled by the shared EvolutionEngine on
   // every root — not only where the `experience` tool happens to be wired.

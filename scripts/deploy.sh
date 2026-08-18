@@ -137,7 +137,7 @@ run_required_gate "CLI backend and conformance suite" bun test packages/cli-back
 run_required_gate "Full production CLI suite" bun test packages/cli/
 run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts
 run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts
-run_required_gate "Secret scanner self-test" bun test scripts/secret-scan.test.ts
+run_required_gate "Secret scanner self-test" bun test scripts/secret-scan.test.ts scripts/sources.test.ts
 run_required_gate "Secret scan" bun scripts/secret-scan.ts
 run_required_gate "Schema drift" bun scripts/schema-drift.ts
 # Traces are a separate switch from logs and wrangler does not inherit
@@ -152,7 +152,7 @@ run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
 # Its DECISION LOGIC is guarded below, though — a gate kept off the path for its
 # cost still needs its own reasoning tested, or the thing that would have caught
 # `--radius` undefined at `:root` is itself unguarded.
-run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts
+run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/infra.test.ts
 run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts
 run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
 run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts
@@ -179,6 +179,12 @@ run_required_gate "Behavioural evals" bun run test:eval
 run_required_gate "Layergate conformance" bun run layergate
 run_required_gate "Layergate fault-localization matrix" bun run layergate --matrix
 run_required_gate "Lean proofs, consistency, and traceability" bun run verify:lean
+# Last, and the only gate here that talks to Cloudflare. Everything above proves
+# the SOURCE is deployable; this proves the ACCOUNT is. Production-scoped on
+# purpose: staging drift is a real defect and not a reason to refuse the deploy
+# in front of you. `npx wrangler whoami` above is its precondition — without a
+# session it reports BLOCKED and non-zero rather than skipping.
+run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra
 
 echo ""
 echo -e "${GREEN}All required pre-deploy gates passed.${NC}"

@@ -274,8 +274,8 @@ export function headRunToTree(run: HeadRunView): ForkNode {
 /* ── what the run was dispatched with ──────────────────────────── */
 
 /**
- * The settle policy by the name the caller writes: `settle:"mcts"` or
- * `settle:"merge"`.
+ * The policy the run was dispatched under, by the name the store recorded it
+ * with: `mcts` for a search, `merge` for a fork.
  *
  * `ForkRunSummary.settle` is `competed`/`merged`, which is the OUTCOME — what
  * happened to the branches. The surface showed only that, so a reader could not

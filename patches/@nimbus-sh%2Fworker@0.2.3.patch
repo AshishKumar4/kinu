@@ -25,7 +25,7 @@ index eb72a2d4d5e537191f0fafcb60a10bb0a9fed51c..4ca2379035bb4a0ad8d4cc5bddb668c0
   * Header the Worker sets to inform the DO of its tenant scope. The DO
   * reads it for audit-logging / RPC-routing; it does NOT use it for
 diff --git a/dist/loaders/process-fabric.d.ts b/dist/loaders/process-fabric.d.ts
-index 364cd427563cc019b9afe8b2454eadefcac5edea..22f06c3663433cf1100f3017ab6213617f3ba0ce 100644
+index 364cd427563cc019b9afe8b2454eadefcac5edea..c0e37349c8c18c915023b9fa0cd4b44d6f3940cc 100644
 --- a/dist/loaders/process-fabric.d.ts
 +++ b/dist/loaders/process-fabric.d.ts
 @@ -258,6 +258,8 @@ export interface HostedProcess {
@@ -54,7 +54,7 @@ index b3904a3672e885d0319c3a785c0d947af06ada38..927534a1ced3aa44e7a99b29a06f5777
              describe: () => hosted.describe(),
          });
 diff --git a/dist/loaders/process-host.d.ts b/dist/loaders/process-host.d.ts
-index 9dbe4afcfa718883e45dea5e51454103f40ea6dc..2d6c61b2efa815eef5995756a09a886acde72e83 100644
+index 9dbe4afcfa718883e45dea5e51454103f40ea6dc..2e8f4a11f55ca8d352d0ec2e6b9854b6309d5d0a 100644
 --- a/dist/loaders/process-host.d.ts
 +++ b/dist/loaders/process-host.d.ts
 @@ -52,12 +52,10 @@
@@ -180,7 +180,7 @@ index df748079d03e0aba0439b451280949ee727e6614..1a6a2b01db8d02df82ad9f5a6fa509f8
          // Track the wiring so `vite stop` and crash-handlers can tear it
          // down without searching the registry.
 diff --git a/dist/session/nimbus-session.d.ts b/dist/session/nimbus-session.d.ts
-index f74cdbb85c3c0ca86be408ac9c954629d3e5bada..6957c8df2c59be40696ddbb29edd5bc4e73c6e6c 100644
+index f74cdbb85c3c0ca86be408ac9c954629d3e5bada..d078422f365c4a482a3541d7c9fe3db1e465e437 100644
 --- a/dist/session/nimbus-session.d.ts
 +++ b/dist/session/nimbus-session.d.ts
 @@ -262,6 +262,7 @@ export declare class NimbusSession extends CloudflareDurableObject {
@@ -224,10 +224,16 @@ index 897b3c9911ea81bd33b6a007a0b095f134c0d6ca..e90a04ffb6d04a91739487dd8374ff6b
      async _rpcDestroy(options) { return _programmatic.rpcDestroy(this, options); }
      // Legacy VFS (direct method calls)
 diff --git a/dist/session/programmatic.d.ts b/dist/session/programmatic.d.ts
-index d7f0ad86f60995f519d414d0daba12e37230ea3f..7969f3c31c0d5afe66478a03f299039ca16be45f 100644
+index d7f0ad86f60995f519d414d0daba12e37230ea3f..3ee1664961d5013a66c5a7d96e2e7c1d74e04bf6 100644
 --- a/dist/session/programmatic.d.ts
 +++ b/dist/session/programmatic.d.ts
-@@ -12,10 +12,10 @@ import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-proces
+@@ -7,15 +7,16 @@
+  */
+ import { type MinShellRegistry } from '@nimbus-sh/core/runtime/installed-runtimes.js';
+ import type { ProcessLogReadOptions } from '@nimbus-sh/core/runtime/process-logs.js';
++import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+ import { type TerminalLike } from '../runtime/process-logs-api.js';
+ import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
  import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
  import type { RuntimeCatalogEnv } from '../runtime/runtime-catalog.js';
  import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
@@ -241,7 +247,7 @@ index d7f0ad86f60995f519d414d0daba12e37230ea3f..7969f3c31c0d5afe66478a03f299039c
      execute(command: string, options?: ProgrammaticShellExecuteOptions): Promise<{
          exitCode: number;
      }>;
-@@ -35,6 +35,7 @@ interface ProgrammaticContext {
+@@ -35,6 +36,7 @@ interface ProgrammaticContext {
      /** Holds a background process's work open for the life of the process. */
      waitUntil?(promise: Promise<unknown>): void;
      storage: {
@@ -249,7 +255,7 @@ index d7f0ad86f60995f519d414d0daba12e37230ea3f..7969f3c31c0d5afe66478a03f299039c
          delete(key: string): Promise<void>;
          deleteAll(): Promise<void>;
          deleteAlarm(): Promise<void>;
-@@ -66,6 +67,7 @@ export interface ProgrammaticHost {
+@@ -66,6 +68,7 @@ export interface ProgrammaticHost {
      viteDevServer: ProgrammaticViteServer | null;
      cirrusReal: ProgrammaticCirrusServer | null;
      _cpRegistry: MinShellRegistry | null;
@@ -257,7 +263,7 @@ index d7f0ad86f60995f519d414d0daba12e37230ea3f..7969f3c31c0d5afe66478a03f299039c
      _viteShimPid: number | null;
      _viteShimPort: number | null;
      _cirrusHmrWsClients?: {
-@@ -100,11 +102,18 @@ export interface ProgrammaticReadyOptions {
+@@ -100,11 +103,23 @@ export interface ProgrammaticReadyOptions {
      preinstall?: string[];
  }
  export interface ProgrammaticExecOptions extends ProgrammaticReadyOptions {
@@ -268,6 +274,11 @@ index d7f0ad86f60995f519d414d0daba12e37230ea3f..7969f3c31c0d5afe66478a03f299039c
      env?: Record<string, string>;
      timeoutMs?: number;
      stdin?: string;
++    /**
++     * Identity the command runs as. Omitted, the spawn inherits the session
++     * user, which is what every programmatic exec has always run as.
++     */
++    cred?: VfsCred;
  }
 +export declare function createProgrammaticShell(self: ProgrammaticHost, pid: number, state: {
 +    cwd: string;
@@ -276,7 +287,7 @@ index d7f0ad86f60995f519d414d0daba12e37230ea3f..7969f3c31c0d5afe66478a03f299039c
  export interface ProgrammaticDestroyOptions {
      reason?: string;
  }
-@@ -114,6 +123,10 @@ export interface ProgrammaticDestroyResult {
+@@ -114,6 +129,10 @@ export interface ProgrammaticDestroyResult {
      destroyedAt: number;
      reason: string | null;
  }
@@ -287,7 +298,7 @@ index d7f0ad86f60995f519d414d0daba12e37230ea3f..7969f3c31c0d5afe66478a03f299039c
  export interface ProgrammaticExecResult {
      command: string;
      exitCode: number;
-@@ -151,6 +164,7 @@ export interface SerializedPort {
+@@ -151,6 +170,7 @@ export interface SerializedPort {
      port: number;
      pid: number;
      registeredAt: number;
@@ -295,7 +306,7 @@ index d7f0ad86f60995f519d414d0daba12e37230ea3f..7969f3c31c0d5afe66478a03f299039c
  }
  export declare function ensureProgrammaticReady(self: ProgrammaticHost, options?: ProgrammaticReadyOptions): Promise<{
      ok: true;
-@@ -227,11 +241,13 @@ export declare function rpcExposePort(self: ProgrammaticHost, port: number): Pro
+@@ -227,11 +247,13 @@ export declare function rpcExposePort(self: ProgrammaticHost, port: number): Pro
      listening: boolean;
      pid: number | null;
      registeredAt: number | null;
@@ -310,7 +321,7 @@ index d7f0ad86f60995f519d414d0daba12e37230ea3f..7969f3c31c0d5afe66478a03f299039c
      recursive?: boolean;
  }): Promise<void>;
 diff --git a/dist/session/programmatic.js b/dist/session/programmatic.js
-index e50b0b3688eca32264b9ef069bb08c35936b9d9f..060aaa0b260387cd18a7a343215c5ea0eb5af238 100644
+index e50b0b3688eca32264b9ef069bb08c35936b9d9f..9a307d33a93f487fb60401baa564672f07046a09 100644
 --- a/dist/session/programmatic.js
 +++ b/dist/session/programmatic.js
 @@ -13,6 +13,7 @@ import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-proces
@@ -453,8 +464,9 @@ index e50b0b3688eca32264b9ef069bb08c35936b9d9f..060aaa0b260387cd18a7a343215c5ea0
          throw new Error('Nimbus shell did not initialize');
      const line = String(command);
 -    const cwd = options.cwd ?? shell.getCwd?.() ?? '/home/user';
+-    const entry = self.processes.spawn(line, [line], cwd, { longRunning: job.background });
 +    const cwd = options.cwd ?? scoped?.cwd ?? parentShell.getCwd?.() ?? '/home/user';
-     const entry = self.processes.spawn(line, [line], cwd, { longRunning: job.background });
++    const entry = self.processes.spawn(line, [line], cwd, { longRunning: job.background, cred: options.cred });
 +    const shell = scoped?.create(entry.pid) ?? parentShell;
      const pid = entry.pid;
      if (job.background)
@@ -680,7 +692,7 @@ index 14a5dadd410ea847ecd74326d4f1ffde33b5dc29..adfbdaddc83b09549cf025d00b84d3df
      // ── /api/_diag/cache — per-tier cache observability ───────────────
      //
 diff --git a/dist/session/rpc.d.ts b/dist/session/rpc.d.ts
-index de2cbd8ac2d6be7a5f813459a2395a05f3ff1c80..9276e836204f00246c9ce20ec8265fcdceafed71 100644
+index de2cbd8ac2d6be7a5f813459a2395a05f3ff1c80..77620be48f462221d3f2524942c9c6811521559a 100644
 --- a/dist/session/rpc.d.ts
 +++ b/dist/session/rpc.d.ts
 @@ -59,6 +59,7 @@ export declare function _rpcInnerDoFetch(self: RpcHost, req: {

@@ -2,12 +2,18 @@
  * The literature gate's own decision logic, proven RED in every direction it claims
  * to govern and green on the corrected text.
  *
- * Every red case below is a defect that was ACTUALLY in this tree tonight, taken
- * from the seven-number audit of `docs/EXPLORATION-SPEC.md` — `+12.5 at matched
- * compute` over a subtraction spanning a no-search row, `58.2 to 83.6` with no unit
- * over a quantity that has two, GEPA's `up to` deleted, and a locator naming the
- * wrong figure. A gate whose rules are only ever exercised by a clean tree cannot
- * tell you whether it still works.
+ * Every red case below is a defect that was ACTUALLY in this tree, taken from the
+ * seven-number audit of `docs/EXPLORATION-SPEC.md` — `+12.5 at matched compute` over
+ * a subtraction spanning a no-search row, a source's own `up to` deleted, and a
+ * locator naming the wrong table. A gate whose rules are only ever exercised by a
+ * clean tree cannot tell you whether it still works.
+ *
+ * ONE RULE IS CURRENTLY UNEXERCISED, named here rather than left to be discovered:
+ * `unitWords`, which refuses a number whose unit has a confusable twin unless the
+ * paragraph says which one is meant. Every claim that declared a confusable unit was
+ * a Chen et al. entry, and that work left the register when the last document citing
+ * it left the repository. The rule is untouched and still runs; the next claim to
+ * declare a confusable unit re-arms its proof.
  *
  * The false positives at the bottom are equally load-bearing, and each one cost a
  * design change: this gate reads prose, and earlier versions demanded a paper
@@ -48,7 +54,7 @@ describe('a number with no locator', () => {
   });
 
   test('and the registered figure beside it passes, so the check is not blanket', () => {
-    expect(audit('Koh et al. 2407.01476 Table 4 reports 37.0% on the same subset.')).toEqual([]);
+    expect(audit('Koh et al. 2407.01476 Table 4 reports 28.5% on the same subset.')).toEqual([]);
   });
 
   test('a source cited with numbers and no register entry at all is refused', () => {
@@ -60,9 +66,9 @@ describe('a number with no locator', () => {
 
 describe('a compute-dependent claim under a bare adjective', () => {
   test('the exact string that hid the Koh defect is refused', () => {
-    // The whole reason this gate exists in this shape. `37.0%` is real, its digits
+    // The whole reason this gate exists in this shape. `28.5%` is real, its digits
     // were never wrong, and every digit-comparing checker would have passed it.
-    const found = audit('Koh et al. 2407.01476 Table 4 gives 37.0% at matched compute.');
+    const found = audit('Koh et al. 2407.01476 Table 4 gives 28.5% at matched compute.');
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('is an adjective where a compute condition belongs');
     expect(found[0]).toContain('node expansions held fixed');
@@ -73,7 +79,7 @@ describe('a compute-dependent claim under a bare adjective', () => {
       'at matched compute', 'at identical compute', 'at equal inference compute',
       'at the same budget', 'compute-matched', 'matched-budget', 'at parity',
     ]) {
-      const found = audit(`Koh et al. 2407.01476 Table 4 gives 37.0% ${adjective}.`);
+      const found = audit(`Koh et al. 2407.01476 Table 4 gives 28.5% ${adjective}.`);
       expect(found.length).toBeGreaterThan(0);
       expect(found.join(' ')).toContain('adjective where a compute condition belongs');
     }
@@ -81,78 +87,53 @@ describe('a compute-dependent claim under a bare adjective', () => {
 
   test('the same sentence passes once it says what was held fixed', () => {
     expect(audit(
-      'Koh et al. 2407.01476 Table 4 gives 37.0% with node expansions held fixed at c=20,'
+      'Koh et al. 2407.01476 Table 4 gives 28.5% with node expansions held fixed at c=20,'
       + ' d=5, b=5 across all five search rows.',
     )).toEqual([]);
   });
 
   test('a claim that does NOT depend on a compute condition is not policed for one', () => {
-    // Chen's Table 3 numbers are end-to-end accuracies, not a budget comparison, so
-    // the adjective rule must not fire on them — a gate that refused every adjective
-    // everywhere would be refusing English.
+    // LATS's generated-assertion count is a setup parameter, not a budget
+    // comparison, so the adjective rule must not fire on it — a gate that refused
+    // every adjective everywhere would be refusing English.
     expect(audit(
-      'Chen et al. 2402.10890 Table 3 puts greedy generation at 62.3 at the same budget.',
+      'LATS 2310.04406 §5.2 generates 4 assertions per candidate at the same budget.',
     )).toEqual([]);
   });
 });
 
 describe('a hedge the source states and our prose drops', () => {
-  test("GEPA's own `up to` may not be deleted", () => {
-    const found = audit('GEPA earns it inside its own budget (+11.33% over beam).');
+  test("Self-MoA's own `up to` may not be deleted", () => {
+    const found = audit('Self-MoA 2502.00674 Table 4 puts quality over diversity by 3.2×.');
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('without the source\'s own "up to"');
   });
 
   test('and passes when the hedge is kept', () => {
-    expect(audit('GEPA earns it inside its own budget (up to +11.33% over beam).')).toEqual([]);
-  });
-});
-
-describe('a unit with a confusable twin', () => {
-  test('the Chen relabel: 58.2 to 83.6 without naming which accuracy is refused', () => {
-    // The original sentence, verbatim from before the fix. Its digits are exact.
-    const found = audit(
-      'Chen et al. measure execution grounding lifting CodeLlama-13B from 58.2 to 83.6 on'
-      + ' Spider, so a plan-mode tree runs where the literature says a tree does not pay.',
-    );
-    expect(found).toHaveLength(2);
-    expect(found[0]).toContain('without naming its unit');
-  });
-
-  test('"discriminator" is not "discrimination" — the thing is not the unit', () => {
-    const found = audit(
-      'Chen et al. 2402.10890 says the discriminator lifts CodeLlama-13B from 58.2 to 83.6.',
-    );
-    expect(found).toHaveLength(2);
-  });
-
-  test('and the corrected paragraph passes, naming the unit once for the paragraph', () => {
     expect(audit(
-      'Chen et al. 2402.10890 Table 2 measures discrimination accuracy, not task accuracy:'
-      + ' environmental observations lift CodeLlama-13B on Spider from 58.2 to 83.6.'
-      + '\nIt is exactly the quantity this claim is about, and 83.6 is still under the bar.',
+      'Self-MoA 2502.00674 Table 4 puts quality over diversity by up to 3.2×.',
     )).toEqual([]);
   });
 });
 
 describe('a locator that does not hold the number', () => {
-  test('prose naming Table 4 for a Table 3 number is refused', () => {
-    const found = audit('Chen et al. 2402.10890 Table 4 gives 62.3 for greedy generation.');
+  test('prose naming Table 4 for a Table 1 number is refused', () => {
+    const found = audit('Self-MoA 2502.00674 Table 4 puts Mixed-MoA at 59.1.');
     expect(found).toHaveLength(1);
-    expect(found[0]).toContain('which the register locates at Table 3');
+    expect(found[0]).toContain('which the register locates at Table 1');
   });
 
   test('the same number under its own locator passes', () => {
-    expect(audit('Chen et al. 2402.10890 Table 3 gives 62.3 for greedy generation.')).toEqual([]);
+    expect(audit('Self-MoA 2502.00674 Table 1 puts Mixed-MoA at 59.1.')).toEqual([]);
   });
 
   test('two locators in one sentence are not compared, and this is a stated blind spot', () => {
-    // `32.0%` lives in Fig. 2 and the re-ranking arm in Appendix A.2 / Fig. 6. Which
+    // `59.1` lives in Table 1 and the quality-over-diversity ratio in Table 4. Which
     // number belongs to which is not readable from the text, so a comparison here
     // would be a guess dressed as a check.
     expect(audit(
-      'Koh et al. 2407.01476 Appendix A.2, Fig. 6 has re-ranking plateau at 30% against'
-      + ' 32.0% for tree search at c=5.',
+      'Self-MoA 2502.00674 Table 1 and Table 4 put Mixed-MoA at 59.1 with quality'
+      + ' dominating diversity by up to 3.2×.',
     )).toEqual([]);
   });
 });
@@ -173,7 +154,7 @@ describe('a withdrawn number', () => {
     expect(audit(
       'Wrong the first time — a matched-compute claim assembled from two unmatched'
       + ' comparisons. I wrote that Koh et al. 2407.01476 Table 4 held the budget fixed and'
-      + ' that no-search 24.5% to judge+SC(20) 37.0% was "+12.5 at matched compute".',
+      + ' that no-search to judge+SC(20) was "+12.5 at matched compute".',
     )).toEqual([]);
   });
 
@@ -212,7 +193,7 @@ describe('the false positives that shaped the corpus decision', () => {
 
   test("a model name's version number is not a measurement", () => {
     expect(audit(
-      "GEPA's Merge flips sign by model (GPT-4.1-Mini 66.36 vs 65.22).",
+      'Agrawal et al. ran GEPA on GPT-4.1-Mini, and a version number is not a result.',
     )).toEqual([]);
   });
 
@@ -242,7 +223,7 @@ describe('the false positives that shaped the corpus decision', () => {
   test('a table row does not inherit the row above it', () => {
     expect(audit([
       '| refused | why, measured |',
-      '| tree selector + judge | Koh et al. 2407.01476 Table 4: 37.0% at SC(20). |',
+      '| tree selector + judge | Koh et al. 2407.01476 Table 4: 28.5% at SC(1). |',
       '| archive + judged descriptor | judge variance in the key is unrecoverable, 3 of 5. |',
     ].join('\n'))).toEqual([]);
   });
@@ -318,7 +299,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
       '## The passage',
       'Koh et al. 2407.01476 Table 4 holds node expansions fixed at c=20, d=5, b=5.',
       passage, passage, passage,
-      'The judged selector still gives 37.0% at matched compute.',
+      'The judged selector still gives 28.5% at matched compute.',
     ].join('\n\n'));
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('adjective where a compute condition belongs');
@@ -329,7 +310,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
       '## The passage',
       'Koh et al. 2407.01476 Table 4 holds node expansions fixed at c=20, d=5, b=5.',
       passage, passage, passage, passage, passage, passage,
-      'The judged selector still gives 37.0% at matched compute.',
+      'The judged selector still gives 28.5% at matched compute.',
     ].join('\n\n'))).toEqual([]);
   });
 
@@ -364,7 +345,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
     // make the gate blind to every future document written there.
     expect(auditProse(
       'scripts/axis-ergonomics/runs/README.md',
-      'Koh et al. 2407.01476 Table 4 gives 37.0% at matched compute.',
+      'Koh et al. 2407.01476 Table 4 gives 28.5% at matched compute.',
       coverage(),
     )).toHaveLength(1);
   });

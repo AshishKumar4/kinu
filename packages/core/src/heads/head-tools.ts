@@ -44,6 +44,26 @@ import type { WebSearchProvider } from '../web/index';
  *  and `skills` are withheld because they would address head-private stores. */
 export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'file', 'web'] as const;
 
+/**
+ * The builtin surface narrowed to an explicit allow-list.
+ *
+ * The mechanism, not a convenience: what makes containment structural is that a
+ * builtin added upstream tomorrow does not silently appear, and that holds only
+ * if every confined surface is built by ONE filter over a NAMED set. Heads pass
+ * {@link HEAD_BUILTIN_TOOLS}; a swarm node passes that set plus its report tool
+ * (EXPLORATION-SPEC §8.1 rule 2). A tool whose deps the caller did not wire is
+ * absent from `builtin` already, so the "absent deps, absent tool" half needs no
+ * check here.
+ */
+export function keepBuiltins(builtin: ToolSet, names: readonly string[]): ToolSet {
+  const kept: ToolSet = {};
+  for (const name of names) {
+    const entry = builtin[name];
+    if (entry) kept[name] = entry;
+  }
+  return kept;
+}
+
 export interface HeadSplitRequest {
   rationale: string;
   heads: Array<{ task: string; rationale: string }>;
@@ -83,11 +103,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     preBuiltExecuteTool: deps.executeTool,
     webSearch: deps.webSearch,
   });
-  const kept: ToolSet = {};
-  for (const name of HEAD_BUILTIN_TOOLS) {
-    const entry = builtin[name];
-    if (entry) kept[name] = entry;
-  }
+  const kept = keepBuiltins(builtin, HEAD_BUILTIN_TOOLS);
 
   const all: ToolSet = {
     // The builtin tools know nothing about heads, so their calls are recorded

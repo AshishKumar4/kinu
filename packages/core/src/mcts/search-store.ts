@@ -122,7 +122,7 @@ export class MctsSearchStore {
   }
 
   /** The most recently-updated still-running search for a task — the resume
-   *  source when an evicted fork(settle=mcts) is re-driven. */
+   *  source when an evicted tree search is re-driven. */
   findResumable(task: string, mode: WorkMode = 'build'): ResumableSearch | null {
     const rows = this.sql<Row>`SELECT root_id, task, root_msg_id, config_json, iteration, budget, status, epoch
       FROM mcts_search_runs WHERE status='running' AND task=${task}

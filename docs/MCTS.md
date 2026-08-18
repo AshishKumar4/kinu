@@ -4,6 +4,30 @@
 
 Proteus uses Monte Carlo Tree Search to explore multiple solution approaches in parallel. Each branch is an isolated Durable Object (Facet) with its own SQLite database.
 
+## How the engine is reached
+
+Not from the `agents` tool. `fork` has one settlement, a merge of the 2-6 briefs
+it requires, and tree search on the model-facing surface is `action:'swarm'` with
+a `depth`, whose candidates are measured against the caller's own `objective`
+through the verifier registry rather than ordered by a judged ensemble. No field
+on `fork` selects this engine.
+
+It is registered rather than vestigial, and reached programmatically:
+
+- `strategy/mcts.ts` is registered in the `StrategyRegistry` on every backend
+  (`orchestrator/fork-deps.ts`), so anything dispatching an
+  `ExplorationStrategy` by id can drive it — the eval harness's A/B runner takes
+  any two of them (`core/eval/runner.ts`).
+- The lifetime evolution cycle calls `runMCTS` directly (`evolution/engine.ts`,
+  under `lifetimeMCTSBudget`).
+- A search interrupted by an eviction or a process exit resumes from its own
+  durable checkpoint. `mcts_search_runs` (`mcts/search-store.ts`) holds the
+  resolved config, the iteration and the remaining budget under a lease epoch,
+  so re-entering the engine on the same task continues that tree rather than
+  starting a new one.
+
+Everything below describes live code.
+
 ## Which paper this is
 
 **LATS ([arXiv:2310.04406](https://arxiv.org/abs/2310.04406)), the programming
@@ -270,10 +294,11 @@ no observation line rather than an invented one.
 
 A branch is deliberately one model call with no `ToolSet` and no runtime. That
 is not an unfinished version of a subagent: it is the other half of a pair.
-`agents({action:'fork'})` dispatches over a strategy registry
-(`core/src/strategy/`), and `heads` is the registered strategy whose branches
-**are** full agentic loops — the same `ExplorationAgent` class in head mode,
-scored by this same `evaluation.ts` through `HeadController.scoreHeads`.
+`agents({action:'fork'})` resolves one strategy from the registry
+(`core/src/strategy/`) — `heads`, whose branches **are** full agentic loops, the
+same `ExplorationAgent` class in head mode, scored by this same `evaluation.ts`
+through `HeadController.scoreHeads`. Heads is the half the tool reaches; this
+engine is the half reached programmatically.
 
 The two differ on the axis that matters for search:
 

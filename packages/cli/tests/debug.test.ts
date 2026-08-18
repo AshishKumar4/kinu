@@ -131,8 +131,16 @@ function seedInvestigationWorkspace(dbPath: string): void {
   // ── Background jobs: the job the run above detached and got polled, PLUS
   // one still running — the exact shape a 12-hour-old job with no visible
   // progress needs a duration/heartbeat readout for. ──
+  // job-1 is the call that run recorded, from before tree search moved to
+  // `action:'swarm'`: its label is the form jobs/runner.ts wrote back then,
+  // `fork(settle=<policy>): <task>`. The bundle reads history, so it has to
+  // keep printing rows naming a settle no current call can produce.
   const jobs = new BackgroundJobStore(sql);
-  jobs.create({ id: 'job-1', kind: 'agents', workMode: 'build', label: 'fork(settle=mcts)', input: `token=${SECRET_PROTEUS_TOKEN}`, now: 5050 });
+  jobs.create({
+    id: 'job-1', kind: 'agents', workMode: 'build',
+    label: 'fork(settle=mcts): pick a migration-backfill approach',
+    input: `token=${SECRET_PROTEUS_TOKEN}`, now: 5050,
+  });
   jobs.settle('job-1', 0, JSON.stringify({ ok: true }), 5050 + 125_000);
   jobs.create({ id: 'job-2', kind: 'agents', workMode: 'build', input: '{}', now: 5060 });
 
@@ -183,7 +191,7 @@ describe('proteus debug — local backend', () => {
     // plus a still-running job's duration made explicit rather than left for
     // the operator to compute from a bare created_at timestamp.
     expect(r.stdout).toContain('took 2m');
-    expect(r.stdout).toContain('fork(settle=mcts)');
+    expect(r.stdout).toContain('fork(settle=mcts): pick a migration-backfill approach');
     expect(r.stdout).toMatch(/job-2 agents running — running \d+d(?: \d+h)?/);
     expect(r.stdout).not.toContain(SECRET_TOKEN);
     expect(r.stdout).not.toContain(SECRET_PROTEUS_TOKEN);

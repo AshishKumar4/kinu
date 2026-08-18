@@ -133,13 +133,6 @@ export const WORKS: readonly Work[] = [
     parameters: ['20', '5', '3', '1', '7', '200'],
   },
   {
-    id: 'chen-discriminator',
-    source: 'Chen et al., When is Tree Search Useful for LLM Planning? It Depends on the'
-      + ' Discriminator, ACL 2024, arXiv:2402.10890',
-    cites: ['Chen et al. 2402.10890', '2402.10890', 'Chen et al.'],
-    parameters: ['90', '10', '20'],
-  },
-  {
     id: 'self-moa',
     source: 'Wang et al., Rethinking Mixture-of-Agents, arXiv:2502.00674',
     cites: ['Self-MoA (2502.00674)', 'Self-MoA, arXiv 2502.00674', '2502.00674', 'Self-MoA'],
@@ -172,17 +165,6 @@ export const WORKS: readonly Work[] = [
     cites: ['ToT', 'Tree of Thoughts', '2305.10601'],
   },
   {
-    id: 'seidr',
-    source: 'SEIDR, arXiv:2503.07693',
-    cites: ['SEIDR', '2503.07693'],
-  },
-  {
-    id: 'pugh-quality-diversity',
-    source: 'Pugh, Soros & Stanley, Quality Diversity: A New Frontier for Evolutionary'
-      + ' Computation, Frontiers in Robotics and AI, 2016',
-    cites: ['Pugh et al.'],
-  },
-  {
     id: 'landis-koch',
     source: 'Landis & Koch, The Measurement of Observer Agreement for Categorical Data,'
       + ' Biometrics 33:159, 1977',
@@ -207,19 +189,6 @@ export const WORKS: readonly Work[] = [
 
 export const CLAIMS: readonly Claim[] = [
   /* ── Koh: the paragraph a whole refusal is stated over ─────────────────── */
-  {
-    work: 'koh-tree-search',
-    value: '24.5%',
-    says: 'no search at all — zero node expansions',
-    where: 'Table 4',
-    unit: 'VWA task success rate, 200-task subset, GPT-4o agent',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2407.01476v2 PDF, 2026-08-18',
-    computeDependent: true,
-    condition: 'nothing is held fixed against the search rows: this row performs zero'
-      + ' expansions, and §5.4 prices search at "up to 20x more LM calls than an agent'
-      + ' without search"',
-  },
   {
     work: 'koh-tree-search',
     value: '28.5%',
@@ -248,39 +217,6 @@ export const CLAIMS: readonly Claim[] = [
   },
   {
     work: 'koh-tree-search',
-    value: '32.5%',
-    says: 'GPT-4o value function marginalised to SC(5)',
-    where: 'Table 4',
-    unit: 'VWA task success rate, 200-task subset, GPT-4o agent',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2407.01476v2 PDF, 2026-08-18',
-    computeDependent: true,
-    condition: 'node expansions held fixed at c=20, d=5, b=5 (Table 4, §5.1)',
-  },
-  {
-    work: 'koh-tree-search',
-    value: '37.0%',
-    says: 'GPT-4o value function marginalised to SC(20) — the best non-oracle row',
-    where: 'Table 4',
-    unit: 'VWA task success rate, 200-task subset, GPT-4o agent',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2407.01476v2 PDF, 2026-08-18',
-    computeDependent: true,
-    condition: 'node expansions held fixed at c=20, d=5, b=5 (Table 4, §5.1)',
-  },
-  {
-    work: 'koh-tree-search',
-    value: '43.5%',
-    says: 'ground-truth reward as the value function — the oracle ceiling',
-    where: 'Table 4',
-    unit: 'VWA task success rate, 200-task subset, GPT-4o agent',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2407.01476v2 PDF, 2026-08-18',
-    computeDependent: true,
-    condition: 'node expansions held fixed at c=20, d=5, b=5 (Table 4, §5.1)',
-  },
-  {
-    work: 'koh-tree-search',
     value: '+8.5',
     says: 'marginalising the same judge SC(1) -> SC(20) at fixed expansions (28.5 -> 37.0)',
     where: 'Table 4',
@@ -290,82 +226,6 @@ export const CLAIMS: readonly Claim[] = [
     computeDependent: true,
     condition: 'node expansions held fixed at c=20, d=5, b=5, and LM calls are NOT:'
       + ' SC(20) is twenty value-function calls per state against one (Table 4, §5.1)',
-  },
-  {
-    work: 'koh-tree-search',
-    value: '+4.5',
-    says: 'SC(5) -> SC(20) on the same judge (32.5 -> 37.0)',
-    where: 'Table 4',
-    unit: 'points of VWA task success rate',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2407.01476v2 PDF, 2026-08-18',
-    computeDependent: true,
-    condition: 'node expansions held fixed at c=20, d=5, b=5; value-function calls rise'
-      + ' 4x (Table 4, §5.1)',
-  },
-  {
-    work: 'koh-tree-search',
-    value: '6.5',
-    says: 'oracle headroom over the best judge (43.5 - 37.0)',
-    where: 'Table 4',
-    unit: 'points of VWA task success rate',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2407.01476v2 PDF, 2026-08-18',
-    computeDependent: true,
-    condition: 'node expansions held fixed at c=20, d=5, b=5; both rows are the same'
-      + ' search (Table 4, §5.1)',
-  },
-  {
-    work: 'koh-tree-search',
-    value: '32.0%',
-    says: 'tree search at the SMALL budget c=5, the arm the paper compares to re-ranking',
-    where: 'Fig. 2',
-    unit: 'VWA task success rate, 200-task subset, GPT-4o agent',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2407.01476v2 PDF, 2026-08-18',
-    computeDependent: true,
-    condition: 'the VALUE FUNCTION is held identical across both arms — the same judge'
-      + ' re-ranks the trajectories it scored inside the tree — while the budget axis'
-      + ' differs by construction, c expansions against n trajectories (Appendix A.2,'
-      + ' Fig. 6). The paper states "this underperforms our approach with search budget'
-      + ' c >= 5" and nowhere claims equal inference compute',
-  },
-  {
-    work: 'koh-tree-search',
-    value: '30%',
-    says: 'trajectory re-ranking through the same value function, plateauing around n=7',
-    where: 'Appendix A.2',
-    unit: 'VWA task success rate, 200-task subset, GPT-4o agent',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2407.01476v2 PDF, 2026-08-18',
-    computeDependent: true,
-    condition: 'the value function is held identical to the tree arm; the budget axis is'
-      + ' n trajectories against c expansions (Appendix A.2, Fig. 6)',
-  },
-  {
-    work: 'koh-tree-search',
-    value: '+2',
-    says: 'tree search at c=5 over re-ranking at its plateau (32.0 - 30)',
-    where: 'Appendix A.2',
-    unit: 'points of VWA task success rate',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2407.01476v2 PDF, 2026-08-18',
-    computeDependent: true,
-    condition: 'the value function is held identical across both arms; the small search'
-      + ' budget c=5 against the re-ranking plateau at n=7 (Appendix A.2, Fig. 6, with'
-      + ' Fig. 2 for c=5)',
-  },
-  {
-    work: 'koh-tree-search',
-    value: '+7',
-    says: 'tree search at c=20 over re-ranking at its plateau (37.0 - 30)',
-    where: 'Appendix A.2',
-    unit: 'points of VWA task success rate',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2407.01476v2 PDF, 2026-08-18',
-    computeDependent: true,
-    condition: 'the value function is held identical across both arms; the tree is at'
-      + ' c=20, four times the small-budget arm (Appendix A.2, Fig. 6)',
   },
   {
     work: 'koh-tree-search',
@@ -384,123 +244,6 @@ export const CLAIMS: readonly Claim[] = [
       + ' document that found this defect in its own citations owes the reader the'
       + ' correction rather than a silent edit — and a withdrawn number that is merely'
       + ' deleted comes back.',
-  },
-
-  /* ── Chen: the number that has two units, one of which argues the opposite ─ */
-  {
-    work: 'chen-discriminator',
-    value: '58.2',
-    says: 'a naive CodeLlama-13B discriminator on Spider, before environmental observations',
-    where: 'Table 2',
-    unit: 'points of DISCRIMINATION accuracy — not task accuracy',
-    unitWords: ['discrimination'],
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2402.10890 PDF, 2026-08-18 — Table 2 caption reads'
-      + ' "Discrimination accuracy of observation-enhanced LLMs"',
-  },
-  {
-    work: 'chen-discriminator',
-    value: '78.7',
-    says: 'the same discriminator with an executability check alone',
-    where: 'Table 2',
-    unit: 'points of DISCRIMINATION accuracy — not task accuracy',
-    unitWords: ['discrimination'],
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2402.10890 PDF, 2026-08-18',
-  },
-  {
-    work: 'chen-discriminator',
-    value: '83.6',
-    says: 'the same discriminator with executability check AND execution results',
-    where: 'Table 2',
-    unit: 'points of DISCRIMINATION accuracy — not task accuracy',
-    unitWords: ['discrimination'],
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2402.10890 PDF, 2026-08-18',
-  },
-  {
-    work: 'chen-discriminator',
-    value: '+25.4',
-    says: 'the absolute gain environmental observations buy on Spider (58.2 -> 83.6)',
-    where: 'Table 2',
-    unit: 'points of DISCRIMINATION accuracy — not task accuracy',
-    unitWords: ['discrimination'],
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2402.10890 PDF, 2026-08-18',
-  },
-  {
-    work: 'chen-discriminator',
-    value: '57.5',
-    says: 'END-TO-END Spider execution accuracy, re-ranking with the naive CodeLlama-13B',
-    where: 'Table 3',
-    unit: 'points of end-to-end execution accuracy',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2402.10890 PDF, 2026-08-18',
-  },
-  {
-    work: 'chen-discriminator',
-    value: '65.5',
-    says: 'END-TO-END Spider execution accuracy, re-ranking with the observation-enhanced'
-      + ' discriminator',
-    where: 'Table 3',
-    unit: 'points of end-to-end execution accuracy',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2402.10890 PDF, 2026-08-18',
-  },
-  {
-    work: 'chen-discriminator',
-    value: '62.3',
-    says: 'greedy generation with NO planning at all — the bar every planning method is'
-      + ' measured against',
-    where: 'Table 3',
-    unit: 'points of end-to-end execution accuracy',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2402.10890 PDF, 2026-08-18 — Table 3 header reads'
-      + ' "Spider (Greedy Gen = 62.3)"',
-  },
-  {
-    work: 'chen-discriminator',
-    value: '62.5',
-    says: 'TREE SEARCH end-to-end on Spider with the observation-enhanced discriminator —'
-      + ' below the 65.5 re-ranking arm',
-    where: 'Table 3',
-    unit: 'points of end-to-end execution accuracy',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2402.10890 PDF, 2026-08-18',
-  },
-  {
-    work: 'chen-discriminator',
-    value: '55.5',
-    says: 'TREE SEARCH end-to-end on Spider with the naive discriminator — below the 57.5'
-      + ' re-ranking arm',
-    where: 'Table 3',
-    unit: 'points of end-to-end execution accuracy',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2402.10890 PDF, 2026-08-18',
-  },
-  {
-    work: 'chen-discriminator',
-    value: '0.9',
-    says: 'WITHDRAWN AS AN ALIGNMENT, not as a number. Chen\'s tau IS ~0.9 as the'
-      + ' discrimination accuracy advanced planning needs before it beats re-ranking. What'
-      + ' is withdrawn is the row-wise alignment `local://mcts-as-lats-design.md` §1 drew'
-      + ' between it and our simulated tau: Chen\'s tau is a SIGN-INVERSION probability —'
-      + ' §5.1, "generate a number p in [0,1). If p < tau, the discriminator returns the'
-      + ' score s. Otherwise, it returns an inverted score 1 - s. In this way, we ensure'
-      + ' that the discriminator\'s accuracy is at most tau" — while ours is additive'
-      + ' Gaussian noise around a true mean, which backpropagation averages away. Sign'
-      + ' inversion produces the commitment failure Chen documents; jitter does not. The'
-      + ' design table printed "tree LOSES to re-ranking" in Chen\'s column on the same rows'
-      + ' its own column printed +0.078, a contradiction rendered as a concordance',
-    where: '§5.1',
-    unit: 'sign-inversion probability bounding discrimination accuracy',
-    hand: 'withdrawn',
-    verifiedBy: 'SpecAudit.SpecEvidence raised the mismatch; LiteratureGate confirmed the'
-      + ' definition against arXiv:2402.10890, 2026-08-18',
-    note: 'The register keeps it so that re-introducing the alignment fails a gate rather'
-      + ' than a reviewer. Chen\'s end-to-end numbers are the honest evidence and they are'
-      + ' registered above: tree search sits below re-ranking at every non-oracle'
-      + ' discriminator.',
   },
 
   /* ── Self-MoA: the second "identical compute" that is not a cost claim ──── */
@@ -543,120 +286,6 @@ export const CLAIMS: readonly Claim[] = [
     hedge: 'up to',
   },
 
-  /* ── GEPA: the hedge the paper states and our prose deleted ─────────────── */
-  {
-    work: 'gepa',
-    value: '+8.17%',
-    says: 'GEPA over the SelectBestCandidate strategy, at its BEST benchmark. The paper'
-      + ' says "up to", and gives the aggregate margin as +6.4%',
-    where: '§6',
-    unit: 'points of task accuracy, Qwen3 8B, four benchmarks',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2507.19457 PDF, 2026-08-18 — verbatim: "the'
-      + ' BeamSearch strategy by upto 11.33%, and SelectBestCandidate strategy by up to'
-      + ' 8.17%, with an aggregate margin of +7.33% and +6.4% across all benchmarks"',
-    hedge: 'up to',
-    computeDependent: true,
-    condition: 'the rollout budget is held fixed across every compared strategy, §6, and'
-      + ' the ablation runs inside GEPA\'s own budget rather than against a re-tuned'
-      + ' baseline',
-  },
-  {
-    work: 'gepa',
-    value: '+11.33%',
-    says: 'GEPA over the BeamSearch strategy, at its BEST benchmark. The paper says "up to",'
-      + ' and gives the aggregate margin as +7.33%',
-    where: '§6',
-    unit: 'points of task accuracy, Qwen3 8B, four benchmarks',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2507.19457 PDF, 2026-08-18',
-    hedge: 'up to',
-    computeDependent: true,
-    condition: 'the rollout budget is held fixed across every compared strategy, §6, with'
-      + ' the per-benchmark rollout totals printed in Table 1',
-  },
-  {
-    work: 'gepa',
-    value: '+6.4%',
-    says: 'the AGGREGATE margin over SelectBestCandidate across all benchmarks — the number'
-      + ' true of the technique, where +8.17% is true of its best column',
-    where: '§6',
-    unit: 'points of task accuracy, aggregated over six benchmarks, Qwen3 8B',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2507.19457 PDF, 2026-08-18 — verbatim: "with an'
-      + ' aggregate margin of +7.33% and +6.4% across all benchmarks, respectively"',
-    computeDependent: true,
-    condition: 'the rollout budget is held fixed across every compared strategy, §6, with'
-      + ' the per-benchmark rollout totals printed in Table 1',
-  },
-  {
-    work: 'gepa',
-    value: '+7.33%',
-    says: 'the AGGREGATE margin over BeamSearch across all benchmarks',
-    where: '§6',
-    unit: 'points of task accuracy, aggregated over six benchmarks, Qwen3 8B',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2507.19457 PDF, 2026-08-18',
-    computeDependent: true,
-    condition: 'the rollout budget is held fixed across every compared strategy, §6, with'
-      + ' the per-benchmark rollout totals printed in Table 1',
-  },
-  {
-    work: 'gepa',
-    value: '54.85',
-    says: 'GEPA without Merge, aggregate over six benchmarks on Qwen3 8B',
-    where: 'Table 1',
-    unit: 'aggregate task accuracy, Qwen3 8B',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2507.19457 PDF, 2026-08-18',
-  },
-  {
-    work: 'gepa',
-    value: '52.40',
-    says: 'GEPA+Merge, same aggregate — the recombination operator LOSES here',
-    where: 'Table 1',
-    unit: 'aggregate task accuracy, Qwen3 8B',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2507.19457 PDF, 2026-08-18',
-  },
-  {
-    work: 'gepa',
-    value: '38.61',
-    says: 'GEPA without Merge on IFBench specifically, the column where Merge costs most',
-    where: 'Table 1',
-    unit: 'IFBench task accuracy, Qwen3 8B',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2507.19457 PDF, 2026-08-18',
-  },
-  {
-    work: 'gepa',
-    value: '28.23',
-    says: 'GEPA+Merge on IFBench — a 10-point loss from the same operator',
-    where: 'Table 1',
-    unit: 'IFBench task accuracy, Qwen3 8B',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2507.19457 PDF, 2026-08-18',
-  },
-  {
-    work: 'gepa',
-    value: '65.22',
-    says: 'GEPA without Merge, aggregate on GPT-4.1 Mini',
-    where: 'Table 2',
-    unit: 'aggregate task accuracy, GPT-4.1 Mini',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2507.19457 PDF, 2026-08-18',
-  },
-  {
-    work: 'gepa',
-    value: '66.36',
-    says: 'GEPA+Merge, aggregate on GPT-4.1 Mini — the same operator WINS here, which is'
-      + ' why the sign is called model-dependent',
-    where: 'Table 2',
-    unit: 'aggregate task accuracy, GPT-4.1 Mini',
-    hand: 'primary',
-    verifiedBy: 'LiteratureGate, arXiv:2507.19457 PDF, 2026-08-18',
-  },
-
   /* ── Second-hand: the audit read these, this gate did not ───────────────── */
   {
     work: 'rainbow-teaming',
@@ -674,75 +303,6 @@ export const CLAIMS: readonly Claim[] = [
       + ' since our prose says "no novelty rejection test", which normally means novelty'
       + ' against the ARCHIVE, while the paper ablates a PARENT-CHILD filter, which is'
       + ' strictly weaker.',
-  },
-  {
-    work: 'rainbow-teaming',
-    value: '0.42',
-    says: 'archive self-BLEU with the similarity filter ON',
-    where: NO_LOCATOR,
-    unit: 'self-BLEU across archive cells, one safety domain, one 7B target',
-    hand: 'artifact',
-    via: 'agent://SpecAudit.SpecEvidence',
-    verifiedBy: 'SpecAudit.SpecEvidence read the paper first-hand; this gate has not',
-    note: 'no locator reached this register — see the 0.6 entry.',
-  },
-  {
-    work: 'rainbow-teaming',
-    value: '0.79',
-    says: 'archive self-BLEU with the similarity filter OFF — the collapse',
-    where: NO_LOCATOR,
-    unit: 'self-BLEU across archive cells, one safety domain, one 7B target',
-    hand: 'artifact',
-    via: 'agent://SpecAudit.SpecEvidence',
-    verifiedBy: 'SpecAudit.SpecEvidence read the paper first-hand; this gate has not',
-    note: 'no locator reached this register — see the 0.6 entry.',
-  },
-  {
-    work: 'rainbow-teaming',
-    value: '7',
-    says: 'attack success points bought by dropping the filter (ASR 0.92 -> 0.99)',
-    where: NO_LOCATOR,
-    unit: 'points of attack success rate, one safety domain, one 7B target',
-    hand: 'artifact',
-    via: 'agent://SpecAudit.SpecEvidence',
-    verifiedBy: 'SpecAudit.SpecEvidence read the paper first-hand; this gate has not',
-    note: 'no locator reached this register — see the 0.6 entry.',
-  },
-  {
-    work: 'pugh-quality-diversity',
-    value: '900',
-    says: 'the number of runs behind the filled-grid-with-poor-bins observation',
-    where: NO_LOCATOR,
-    unit: 'evolutionary runs',
-    hand: 'unverified',
-    verifiedBy: 'nobody',
-    note: 'named by the audit as explicitly NOT verified. It is the sole support for the'
-      + ' judged-descriptor refusal, so a verifier should locate the run count and the'
-      + ' quoted sentence, and confirm the grid claim is about descriptor quality rather'
-      + ' than about fitness.',
-  },
-  {
-    work: 'seidr',
-    value: '0',
-    says: 'the low end of a binary per-instance score — "the score jumps from 0 to 1 as'
-      + ' opposed to climbing up incrementally"',
-    where: NO_LOCATOR,
-    unit: 'binary per-instance score',
-    hand: 'unverified',
-    verifiedBy: 'nobody',
-    note: 'the audit listed SEIDR\'s lexicase result among the claims it did not reach.'
-      + ' It motivates a refusal and a Lean property, so it should be next after'
-      + ' Böhme & Falk.',
-  },
-  {
-    work: 'seidr',
-    value: '1',
-    says: 'the high end of the same binary per-instance score',
-    where: NO_LOCATOR,
-    unit: 'binary per-instance score',
-    hand: 'unverified',
-    verifiedBy: 'nobody',
-    note: 'see the 0 entry.',
   },
   {
     work: 'lats',
@@ -766,17 +326,6 @@ export const CLAIMS: readonly Claim[] = [
     note: 'used to argue our depth cap. A verifier should confirm the depth is 7 in the'
       + ' programming instantiation rather than in the ReAct one, since the spec relies on'
       + ' that distinction elsewhere.',
-  },
-  {
-    work: 'lats',
-    value: '0.21',
-    says: 'exact-match cost of replacing UCT with DFS in LATS\'s own ablation',
-    where: NO_LOCATOR,
-    unit: 'exact match',
-    hand: 'unverified',
-    verifiedBy: 'nobody',
-    note: 'the audit lists this among the unverified. It is the sole evidence for leaving'
-      + ' a DFS selector out of the axis set.',
   },
   {
     work: 'tot',

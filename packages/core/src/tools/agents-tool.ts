@@ -3,8 +3,8 @@
  * to lives behind a single surface where the KIND of helper is a parameter:
  *
  *   fork    — 2–6 ephemeral forks of the calling agent (the heads runtime),
- *             each a full multi-step tool loop on the same workspace, settled
- *             by merge (default) or by the MCTS strategy (settle=mcts).
+ *             each a full multi-step tool loop on the same workspace, whose
+ *             findings are settled back into this turn by a merge.
  *   hire    — a persistent named subordinate that keeps its own context
  *             across turns and stays in the roster until dismissed;
  *             scope=workspace creates a specialist peer workspace instead.
@@ -349,9 +349,8 @@ export interface AgentsToolInput {
   // fork
   task?: string;
   forks?: ForkSpec[];
-  /** How forks are settled. Omit to merge; `mcts` scores them by execution.
-   *  Any other registered strategy id stays dispatchable (eval harness path). */
-  settle?: string;
+  /** How the forks are settled is no longer a field: merge is the only settlement
+   *  `fork` has. Tree search is `action:'swarm'` with a `depth`. */
   merge_strategy?: MergeStrategy;
   budget?: number;
   wall_clock_ms?: number;
@@ -415,7 +414,7 @@ export type AgentsToolInputField = Exclude<keyof AgentsToolInput, 'action'>;
  */
 export const AGENTS_ACTION_FIELDS = {
   fork: [
-    'task', 'forks', 'settle', 'merge_strategy', 'budget', 'wall_clock_ms', 'options',
+    'task', 'forks', 'merge_strategy', 'budget', 'wall_clock_ms', 'options',
     'budget_usd', 'budget_tokens', 'budget_label',
   ],
   // The mission caps sit beside the swarm's own fields because §6.4 puts them there
@@ -489,7 +488,6 @@ const AgentsInputEntries = {
   action: v.picklist(AGENTS_TOOL_ACTIONS),
   task: v.optional(v.string()),
   forks: v.optional(v.array(ForkSpecSchema)),
-  settle: v.optional(v.string()),
   merge_strategy: v.optional(v.picklist(['synthesize', 'best_of', 'consensus'])),
   budget: v.optional(v.number()),
   wall_clock_ms: v.optional(v.number()),
@@ -711,20 +709,27 @@ export function parseAgentsToolInput<T>(input: T): AgentsToolInput {
 }
 
 /**
- * Background-job resume filter, shared by both backends: durable job rows
- * store the tool KIND + input, and only fork work is safely re-runnable (the
- * MCTS search checkpoint / heads re-run path). Returns the fork input to
- * re-execute, translating rows stored by the pre-unification `think` tool
- * (strategy → settle, heads → forks), or null when the job is not resumable.
+ * Background-job resume filter, shared by both backends: durable job rows store the
+ * tool KIND + input, and only exploration work is safely re-runnable. Returns the
+ * input to re-execute, or null when the job is not resumable.
  *
  * Rows are TRANSLATED rather than validated as a model call would be. A row was
  * recorded verbatim from whatever the model sent (jobs/runner.ts stores the raw
- * input), so rows written before the strict parse can carry fields it now
- * refuses — and a row is re-driven, not answered, so a refusal there is a fork
- * lost to a spelling nobody can correct any more. Both branches therefore build
- * the resumed call out of the fork fields alone, and anything left over is
- * logged: dropped, as it was dropped on the original dispatch, but no longer
- * silently.
+ * input), so rows written before today's surface can carry fields it now refuses —
+ * and a row is re-driven, not answered, so a refusal there is work lost to a
+ * spelling nobody can correct any more. A stored row is history, not a prompt.
+ *
+ * TWO TRANSLATIONS, and both log what they could not carry:
+ *
+ *   `settle` — a row stored under one is a TREE SEARCH, and tree search is now
+ *   `action:'swarm'`. Mapped onto `preset:'ideate'`, which is the faithful shape:
+ *   it writes its own competing approaches from `task` alone, exactly as the stored
+ *   settle did. What it does NOT carry is the RANKING — the judged ensemble that
+ *   ordered those approaches is not reachable from a swarm, by design — so the
+ *   re-drive returns the candidates unranked and says so.
+ *
+ *   `kind:'think'` — rows written by the pre-unification tool, whose `heads` are
+ *   `forks` and whose `strategy` is the same tree-search signal as `settle`.
  */
 const LegacyForkInputSchema = v.object({
   strategy: v.optional(v.string()),
@@ -736,10 +741,55 @@ const LegacyForkInputSchema = v.object({
   options: v.optional(JsonObjectSchema),
 });
 
+/** The tree-search signal a stored row may carry, read off the RAW row rather than
+ *  the parse: `settle` is no longer an entry, so `StoredAgentsInputSchema`'s
+ *  `v.object` excludes it before it could be translated. Returns the stored value,
+ *  or null when the row asked for the merge that `fork` still is. */
+function storedTreeSearch<T>(input: T): string | null {
+  const parsed = v.safeParse(v.object({ settle: v.optional(v.string()) }), input);
+  if (!parsed.success) return null;
+  const settle = parsed.output.settle;
+  return settle === undefined || settle === 'merge' ? null : settle;
+}
+
+/**
+ * A stored tree search, re-driven as the one thing that runs a tree today.
+ *
+ * `preset:'ideate'` and not a measured preset, because the row has no `objective`
+ * and none can be invented for it: `optimise` would need a metric, a unit, a
+ * direction and a verifier that the original call never supplied. `ideate` is the
+ * shape that needs none — it writes its own competing approaches from `task` alone,
+ * which is what the stored settle did.
+ *
+ * The RANKING is the loss, and it is a real one: the judged ensemble that ordered
+ * those approaches is deliberately unreachable from a swarm. So the re-drive returns
+ * the candidates unranked, and the line below says that rather than only counting
+ * fields — a resumed search that quietly stopped ranking is worse than one that
+ * refused.
+ */
+function treeSearchReplay<T>(
+  kind: string,
+  input: T,
+  task: string | undefined,
+  settle: string,
+): AgentsToolInput | null {
+  if (task === undefined) return null;
+  const dropped = fieldNames(input)
+    .filter((field) => field !== 'action' && field !== 'task' && field !== 'settle');
+  diagnostics.event('agents.resume.fields_dropped', {
+    kind,
+    fields: [...dropped, `settle=${settle}->action:swarm/preset:ideate`, 'ranking'].join(','),
+    count: dropped.length + 1,
+  });
+  return { action: 'swarm', preset: 'ideate', task };
+}
+
 export function resumableForkInput<T>(kind: string, input: T): AgentsToolInput | null {
   if (kind === 'agents') {
     const parsed = v.safeParse(StoredAgentsInputSchema, input);
     if (!parsed.success || parsed.output.action !== 'fork') return null;
+    const searched = storedTreeSearch(input);
+    if (searched !== null) return treeSearchReplay(kind, input, parsed.output.task, searched);
     const resumed: AgentsToolInput = { action: 'fork' };
     for (const field of AGENTS_ACTION_FIELDS.fork) {
       const value = parsed.output[field];
@@ -761,14 +811,14 @@ export function resumableForkInput<T>(kind: string, input: T): AgentsToolInput |
   const parsed = v.safeParse(LegacyForkInputSchema, input);
   if (!parsed.success) return null;
   const legacy = parsed.output;
-  const settle = legacy.strategy === undefined || legacy.strategy === FORK_STRATEGY_ID
-    ? undefined
-    : legacy.strategy;
+  const searched = legacy.strategy !== undefined && legacy.strategy !== FORK_STRATEGY_ID
+    ? legacy.strategy
+    : null;
+  if (searched !== null) return treeSearchReplay(kind, input, legacy.task, searched);
   const resumed: AgentsToolInput = {
     action: 'fork',
     task: legacy.task,
   };
-  if (settle !== undefined) Object.assign(resumed, { settle });
   if (legacy.heads) Object.assign(resumed, { forks: legacy.heads });
   if (legacy.merge_strategy) Object.assign(resumed, { merge_strategy: legacy.merge_strategy });
   if (legacy.budget !== undefined) Object.assign(resumed, { budget: legacy.budget });
@@ -806,61 +856,24 @@ function forkRefusal(error: string): ForkRefusal {
 }
 
 /**
- * The forks/settle relationship, enforced in both directions before anything
- * spawns. `forks` is read by exactly ONE settle — merge, whose strategy reads
- * them off options.heads (strategy/heads.ts) — and every other settle runs on
- * `ctx.task` alone. Both halves used to be prose and neither was enforced:
+ * `forks` is REQUIRED, enforced before anything spawns.
  *
- *   settle=mcts DISCARDED the briefs. The fold below ran unconditionally and
- *   the MCTS strategy never reads that option (strategy/mcts.ts), so briefs
- *   carrying per-fork `model` and `allowedTools` produced toolless codegen on
- *   the task string, returned as an ordinary success.
+ * It used to be conditional on a `settle`, and neither half of that relationship
+ * was enforced: `settle=merge` WITHOUT briefs got past the spawn announcement
+ * below, so the call detached into a background job and the strategy's throw
+ * arrived as a wake about spawned work failing — naming `heads`, an option the
+ * model has no field for — for a fork that never spawned.
  *
- *   settle=merge WITHOUT briefs got past the spawn announcement below, so the
- *   call detached into a background job and the strategy's throw arrived as a
- *   wake about spawned work failing — naming `heads`, an option the model has
- *   no field for — for a fork that never spawned.
- *
- * REFUSING rather than seeding the search from the briefs is the deliberate
- * choice: a brief is `task` + `rationale` + `model` + `allowedTools`, and an
- * mcts branch is a single generateText call with no ToolSet and no runtime
- * (cf-backend exploration.ts) under one model the engine resolves for the whole
- * search. Seeding could honour the first two fields and would have to discard
- * the other two — this same defect one level down. What the caller wanted
- * (briefs that run tools and get compared) is settle=merge, and the refusal
- * names it.
+ * With merge the only settlement, the relationship is unconditional: a fork runs
+ * the briefs it was given, and a call with none has nothing to run.
  */
-function forkSettleRefusal(
-  deps: AgentsForkDeps,
-  input: AgentsToolInput,
-  settle: string,
-  strategyId: string,
-): ForkRefusal | null {
-  const briefs = input.forks?.length ?? 0;
-  if (strategyId !== FORK_STRATEGY_ID) {
-    const orphaned: string[] = [];
-    if (briefs > 0) orphaned.push('`forks`');
-    if (input.merge_strategy) orphaned.push('`merge_strategy`');
-    if (orphaned.length === 0) return null;
-    const named = orphaned.join(' and ');
-    const alsoLost = briefs > 0
-      ? ', and every per-fork `model` and `allowedTools` goes with the briefs'
-      : '';
-    return forkRefusal(
-      `settle=${settle} reads \`task\` alone — it writes its own competing approaches — so ` +
-      `${named} would be discarded here: only settle=merge reads ${orphaned.length > 1 ? 'them' : 'it'}` +
-      `${alsoLost}. Either drop ${named} and put everything the search needs in \`task\`, or use ` +
-      'settle=merge, where each brief runs as a real fork with its own multi-step tool loop.',
-    );
-  }
-  if (briefs > 0) return null;
-  // Never names a settle this registry does not have.
-  const alternative = deps.registry.get('mcts')
-    ? ' Or use settle=mcts, which takes no `forks` and writes its own competing approaches from `task`.'
-    : '';
+function forkBriefsRefusal(input: AgentsToolInput): ForkRefusal | null {
+  if (input.forks?.length) return null;
   return forkRefusal(
-    'settle=merge runs the forks you supply and this call supplied none. Pass `forks`: 2-6 briefs, ' +
-    'each with its own `task` and `rationale`. Nothing infers the angles for you.' + alternative,
+    'fork runs the forks you supply and this call supplied none. Pass `forks`: 2-6 briefs, '
+    + 'each with its own `task` and `rationale`. Nothing infers the angles for you. If you wanted '
+    + 'the search to write its own competing approaches and rank them, that is `action:\'swarm\'`, '
+    + 'which measures candidates against an `objective` you declare.',
   );
 }
 
@@ -892,15 +905,15 @@ async function runFork(
   budget?: MissionGovernor,
 ): Promise<object> {
   if (!input.task) return forkRefusal('fork requires task');
-  const settle = input.settle ?? 'merge';
-  const strategyId = settle === 'merge' ? FORK_STRATEGY_ID : settle;
-  const strat = deps.registry.get(strategyId);
+  // Merge is the only settlement a fork has, so the strategy is not a caller
+  // choice: `settle` left the surface with `settle:'mcts'`, and tree search is
+  // `action:'swarm'` with a `depth`.
+  const strat = deps.registry.get(FORK_STRATEGY_ID);
   if (!strat) {
-    const settles = ['merge', ...deps.registry.list().filter((s) => s.advertised !== false && s.id !== FORK_STRATEGY_ID).map((s) => s.id)];
-    return forkRefusal(`Unknown settle "${settle}". Available: ${settles.join(', ')}`);
+    return forkRefusal('fork needs the heads strategy and this actor has none registered.');
   }
-  const mismatch = forkSettleRefusal(deps, input, settle, strategyId);
-  if (mismatch) return mismatch;
+  const missing = forkBriefsRefusal(input);
+  if (missing) return missing;
 
   // One-level deep merge: caller tuning sits alongside injected infra
   // (session / controller / onPhase) instead of replacing the whole
@@ -1032,7 +1045,7 @@ async function runFork(
     }
     return output;
   } catch (err) {
-    return { error: `Fork (settle=${settle}) failed: ${err instanceof Error ? err.message : String(err)}` };
+    return { error: `Fork failed: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 
@@ -1134,15 +1147,13 @@ type ForkSchemaProperties = SchemaPropertiesFor<'fork'>;
 
 function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
   if (!deps.fork) return {};
-  const hasMcts = !!deps.fork.registry.get('mcts');
   const properties: ForkSchemaProperties = {
     // Gains the batch-level role the `context` slot of oh-my-pi (can1357/oh-my-pi,
     // the hard fork — upstream pi has no sub-agents at all) has: shared
     // background stated ONCE rather than copied into every fork's brief. Still
-    // literally the task — settle=mcts reads only this field (mcts/engine.ts
-    // runs on ctx.task and never looks at `forks`) — so the wording has to
-    // carry both, and "the concrete task the forks explore together" carried
-    // neither past the word `task` itself.
+    // literally the task — the shared background every brief is read against — so
+    // the wording has to carry both that and the goal, and "the concrete task the
+    // forks explore together" carried neither past the word `task` itself.
     // Two actions read this ONE property, so it names both. The fork half is
     // unchanged; the swarm half is here rather than in `swarmProperties` because a
     // second declaration of the same key would replace this sentence instead of
@@ -1152,11 +1163,9 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
       type: 'array',
       minItems: 2,
       maxItems: 6,
-      // Both halves of the relationship, on the field the model fills, because
-      // both are now enforced: a brief is only ever RUN by settle=merge, and
-      // handing briefs to any other settle is refused instead of silently
-      // discarded (forkSettleRefusal).
-      description: 'For action=fork: the parallel forks to spawn. Required for settle=merge, the settle that runs them — each brief becomes a real agent with its own multi-step tool loop over this workspace. Refused under settle=mcts, which reads `task` alone and writes its own branches, so briefs handed to it would be discarded rather than run.',
+      // Required, and stated on the field the model fills: a fork runs the briefs
+      // it is given and a call with none has nothing to run (forkBriefsRefusal).
+      description: 'For action=fork: the parallel forks to spawn, and they are required — each brief becomes a real agent with its own multi-step tool loop over this workspace, and their findings merge back into this turn. If you want the search to write its own competing approaches instead of supplying them, that is action=swarm.',
       items: {
         type: 'object',
         required: ['task', 'rationale'],
@@ -1203,7 +1212,7 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
       type: 'integer', minimum: 1000,
       description: 'For action=fork: abort the forks after this many ms. Omit unless the work is genuinely time-boxed — forks run to completion by default, and a deadline cuts them off mid-work.',
     },
-    options: { type: 'object', description: 'For action=fork: advanced per-settle tuning. Most callers leave unset.' },
+    options: { type: 'object', description: 'For action=fork: advanced tuning of the merge. Most callers leave unset.' },
     // The opt-in cumulative cap. Offered on fork, where the host genuinely owns
     // the exploration's model calls and can therefore enforce it; a subordinate
     // runs on its own storage, so `hire` is gated at the spawn seam instead of
@@ -1221,20 +1230,6 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
       description: 'For action=fork: name the sub-ledger so several fork calls share one cumulative budget. Omit for a fresh one per call.',
     },
   };
-  if (hasMcts) {
-    properties.settle = {
-      type: 'string',
-      enum: ['merge', 'mcts'],
-      // Settle decides the ARGUMENTS and the mechanism, not just the ending,
-      // and the mechanism is measurably different: a merge fork is a real agent
-      // holding HEAD_BUILTIN_TOOLS (heads/head-tools.ts) narrowed by its own
-      // allowedTools, an mcts branch is one generateText call with no ToolSet
-      // that is handed tools as DATA for codegen and scored by execution
-      // (cf-backend exploration.ts). "They settle into one answer" implied the
-      // tool loop belonged to both.
-      description: 'For action=fork: how forks are settled — which decides what the call takes. Default merge — every brief in `forks` (required there) runs as a real agent with its own multi-step tool loop on this workspace, and their findings merge back into this turn. mcts takes no `forks`: it reads `task` alone and writes its own competing approaches, each a single proposal with no tool loop of its own, scored against the others by execution.',
-    };
-  }
   return properties;
 }
 
@@ -1278,7 +1273,7 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
     },
     label: { type: 'string', maxLength: 120, description: 'For action=swarm with preset:"custom": required provenance. A composed shape recorded repeatedly under one label is the evidence for a new preset.' },
     branches: { type: 'integer', minimum: 1, description: 'For action=swarm: candidates per expansion. Omit to take the preset\'s own width.' },
-    depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion and is the depth that runs today; deeper needs a tree engine that scores by your objective, and the refusal says so rather than substituting a judge.' },
+    depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion; deeper selects down a tree with `advance`, scoring each node against your own `objective`. The literature runs 3-7 (ToT <=3, LATS 7, Koh 5). advance:"none" has no selection step, so it fixes depth at 1 and a deeper cap is refused rather than silently flattened.' },
     models: { type: 'array', items: { type: 'string' }, description: 'For action=swarm: per-node model routing — a cheap model for recon, a strong one for synthesis. NOT for diversity: a mixed panel tracks its AVERAGE member, so a weaker model added for variety measurably subtracts. Diversity is the `decorrelate` axis.' },
     budget_usd: { type: 'number', minimum: 0, description: 'For action=swarm: cumulative USD cap for the whole search, including its measurements. Omit for no cap.' },
     budget_tokens: { type: 'integer', minimum: 1, description: 'For action=swarm: cumulative token cap, same scope as budget_usd.' },

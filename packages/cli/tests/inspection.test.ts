@@ -27,7 +27,24 @@ function runCli(home: string, args: string[], extraEnv: Record<string, string> =
   });
 }
 
-
+/** Same spawn, not blocking the loop — a test that answers the CLI's own HTTP
+ *  request cannot use `spawnSync`, because the server it must reply from lives
+ *  on the loop `spawnSync` holds. */
+async function runCliServed(home: string, args: string[], extraEnv: Record<string, string> = {}) {
+  const proc = Bun.spawn({
+    cmd: [process.execPath, cliBin, ...args],
+    cwd: repoRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, PROTEUS_HOME: home, ...extraEnv },
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { stdout, stderr, exitCode };
+}
 
 function createLocalAgent(home: string, name: string): void {
   const dir = join(home, name);
@@ -343,5 +360,69 @@ describe("CLI inspection commands", () => {
       expect([args, run.exitCode, run.stderr.toString()]).toEqual([args, 0, ""]);
       expect(JSON.parse(run.stdout.toString())).toEqual([]);
     }
+  }, CLI_SPAWN_TIMEOUT_MS);
+});
+
+/**
+ * `proteus events` renders the same rows whichever backend holds the workspace.
+ *
+ * It did not: cf's `listRecentEvents` answered `{ events: [...] }` where every
+ * sibling list read answered a bare array, the row formatter's array parse
+ * failed, and the raw JSON was dumped instead — so a cloud workspace printed
+ * JSON and a local one printed rows, exit 0 either way.
+ *
+ * The cloud half is served locally, so the shape below is a fixture. That the
+ * real orchestrator produces exactly this shape is asserted against a real
+ * actor in cf-backend's unit-inspect-row-shapes.test.ts; here it buys the half
+ * a type could not — what the user actually sees.
+ */
+describe("proteus events rendering", () => {
+  /** The orchestrator's projection of the one event `createLocalAgent` seeds. */
+  const CLOUD_ROW = {
+    id: "event-1", trace_id: "trace-1", caused_by: null, ingress: "chat_ws",
+    variant: "chat", trust: "owner", priority: "normal",
+    payload_visibility: "full", payload: { text: "hello" }, received_at: 4,
+  };
+
+  /** The two answers this read has ever given: a list of rows, and the envelope
+   *  that stopped it being formatted. Named, because the second one is served
+   *  deliberately below rather than being a shape the fixture might drift into. */
+  type EventsAnswer = readonly (typeof CLOUD_ROW)[] | { readonly events: readonly (typeof CLOUD_ROW)[] };
+
+  async function eventsAgainstCloud(home: string, result: EventsAnswer) {
+    const server = Bun.serve({ port: 0, fetch: () => Response.json({ result }) });
+    try {
+      return await runCliServed(home, ["events", "cloudtest"], {
+        PROTEUS_TOKEN: "ptc_test",
+        PROTEUS_ORIGIN: `http://localhost:${server.port}`,
+      });
+    } finally {
+      server.stop(true);
+    }
+  }
+
+  test("a cloud workspace prints the rows a local one prints, character for character", async () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-events-"));
+    tempDirs.push(home);
+    createLocalAgent(home, "localtest");
+
+    const local = await runCliServed(home, ["events", "localtest"]);
+    const cloud = await eventsAgainstCloud(home, [CLOUD_ROW]);
+
+    expect([local.exitCode, local.stderr]).toEqual([0, ""]);
+    expect(local.stdout).toContain("event-1 chat chat_ws");
+    expect([cloud.exitCode, cloud.stderr]).toEqual([0, ""]);
+    expect(cloud.stdout).toBe(local.stdout);
+  }, CLI_SPAWN_TIMEOUT_MS);
+
+  test("an enveloped answer is refused by name rather than dumped as raw JSON", async () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-events-envelope-"));
+    tempDirs.push(home);
+
+    const enveloped = await eventsAgainstCloud(home, { events: [CLOUD_ROW] });
+
+    expect(enveloped.exitCode).toBe(1);
+    expect(enveloped.stderr).toContain("list of rows");
+    expect(enveloped.stdout).toBe("");
   }, CLI_SPAWN_TIMEOUT_MS);
 });

@@ -159,7 +159,7 @@ import {
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   PlanReviewStore, formatPlanWithLineNumbers,
   planReviewAwaitingDecision,
-  JsonValueSchema, type JsonValue,
+  JsonValueSchema, type JsonValue, type ProteusEvent,
   admitPlanReviewAnnotations,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult, type WorkMode,
@@ -231,6 +231,15 @@ const EventVariantSchema = v.picklist([
   'subordinate_report', 'file_changed', 'email', 'internal', 'reply_request',
   'mcp_chat', 'mcp_third_party',
 ]);
+/** One row of the events read: the log's row minus its own plumbing
+ *  (`schema_version`, `dedupe_key`, `reply_channel`), which no operator surface
+ *  shows. Derived from core's event so a field renamed there fails here rather
+ *  than silently dropping out of the projection. */
+type RecentEventRow = Pick<
+  ProteusEvent,
+  'id' | 'trace_id' | 'caused_by' | 'ingress' | 'variant' | 'trust' | 'priority'
+  | 'payload_visibility' | 'payload' | 'received_at'
+>;
 const ArchiveCursorSchema = v.variant('phase', [
   v.object({
     phase: v.literal('sql'), table: v.pipe(v.string(), v.nonEmpty()),
@@ -535,7 +544,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
         enabled: true,
-        // The same sink an agent-initiated fork(settle=mcts) uses — one
+        // The same sink an agent-initiated agents(action:'swarm') uses — one
         // broadcast for every search this workspace runs (ActorAgent).
         onMctsProgress: (event) => this.onMctsProgress(event),
         // Replay-eval rollout: the LIVE scaffold with the real LLM + tool
@@ -3529,29 +3538,36 @@ export class OrchestratorAgent extends ActorAgent {
     }), { subject }));
   }
 
-  /** Recent events for the operator UI's events sidebar. Mirrors
-   *  events_v ordering (received_at desc). */
-  async listRecentEvents(opts?: { variant?: string; since?: number; limit?: number }) {
+  /** Recent events, newest first — `events_v` ordering (received_at desc).
+   *  Reached two ways: `proteus events` over the CLI RPC transport, and
+   *  `GET /api/workspaces/<name>/events` through the wire form below. The CLI
+   *  formats it through the one row formatter its four sibling list reads go
+   *  through, so this answers a bare list of rows and never an envelope. The
+   *  operator UI does not read it — the events it shows are the ones drained
+   *  into a turn, carried on that turn's message. */
+  async listRecentEvents(opts?: {
+    variant?: string;
+    since?: number;
+    limit?: number;
+  }): Promise<RecentEventRow[]> {
     const parsedVariant = v.safeParse(EventVariantSchema, opts?.variant);
     const events = this.eventLog.query({
       variant: parsedVariant.success ? parsedVariant.output : undefined,
       since: opts?.since,
       limit: opts?.limit ?? 100,
     });
-    return {
-      events: events.map((e) => ({
-        id: e.id,
-        trace_id: e.trace_id,
-        caused_by: e.caused_by,
-        ingress: e.ingress,
-        variant: e.variant,
-        trust: e.trust,
-        priority: e.priority,
-        payload_visibility: e.payload_visibility,
-        payload: e.payload,
-        received_at: e.received_at,
-      })),
-    };
+    return events.map((e) => ({
+      id: e.id,
+      trace_id: e.trace_id,
+      caused_by: e.caused_by,
+      ingress: e.ingress,
+      variant: e.variant,
+      trust: e.trust,
+      priority: e.priority,
+      payload_visibility: e.payload_visibility,
+      payload: e.payload,
+      received_at: e.received_at,
+    }));
   }
 
   /** Cross-DO wire form for the Worker HTTP adapter. */

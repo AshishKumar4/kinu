@@ -33,7 +33,7 @@
 import * as v from 'valibot';
 import { JsonValueSchema } from '../utils/json';
 import {
-  SWARM_ADVANCES, SWARM_DECORRELATES, SWARM_EXPANDS, SWARM_OBSERVES,
+  SWARM_ADVANCES, SWARM_CONTEXTS, SWARM_DECORRELATES, SWARM_EXPANDS, SWARM_OBSERVES,
 } from '../strategy/swarm';
 import type { Objective } from '../strategy/objective';
 import type { SwarmConfig } from '../strategy/swarm';
@@ -111,20 +111,22 @@ const ObjectiveSchema = v.variant('kind', [
  * did not state (that refusal lives in `resolveSwarm`, over the merged tuple, because
  * completeness is a property of the resolution rather than of the field).
  *
- * The three tagged axes keep their parameters ON the value that owns them: `inherit`
- * exists only under `unit:'trajectory'`, `samples` only under `score:'judge'`, and a
- * threshold only under the two `carry` values that admit into a store. That is what
- * makes §6.5's marginalisation refusal always have its input instead of reasoning over
- * an absent field — and what makes `inherit` unstateable on a node that has no
- * conversation to state it about.
+ * The tagged axes keep their parameters ON the value that owns them: `samples` only
+ * under `score:'judge'`, and a threshold only under the two `carry` values that admit
+ * into a store. That is what makes §6.5's marginalisation refusal always have its
+ * input instead of reasoning over an absent field.
+ *
+ * `unit` is no longer among them. It carried `inherit` on a `trajectory` value; every
+ * node except `thought` is now an agent, so the parameter belonged to a surface rather
+ * than to a value, and it is the `context` axis below (§8.4).
  */
 const SwarmConfigWireSchema = v.strictObject({
   unit: v.optional(v.variant('kind', [
-    v.strictObject({ kind: v.literal('step') }),
     v.strictObject({ kind: v.literal('answer') }),
     v.strictObject({ kind: v.literal('generator') }),
-    v.strictObject({ kind: v.literal('trajectory'), inherit: v.boolean() }),
+    v.strictObject({ kind: v.literal('thought') }),
   ])),
+  context: v.optional(v.picklist(SWARM_CONTEXTS)),
   observe: v.optional(v.picklist(SWARM_OBSERVES)),
   expand: v.optional(v.picklist(SWARM_EXPANDS)),
   decorrelate: v.optional(v.picklist(SWARM_DECORRELATES)),
@@ -161,6 +163,7 @@ const SwarmConfigWireSchema = v.strictObject({
 function configOf(wire: v.InferOutput<typeof SwarmConfigWireSchema>): Partial<SwarmConfig> {
   const config: Partial<SwarmConfig> = {};
   if (wire.unit !== undefined) Object.assign(config, { unit: wire.unit });
+  if (wire.context !== undefined) Object.assign(config, { context: wire.context });
   if (wire.observe !== undefined) Object.assign(config, { observe: wire.observe });
   if (wire.expand !== undefined) Object.assign(config, { expand: wire.expand });
   if (wire.decorrelate !== undefined) Object.assign(config, { decorrelate: wire.decorrelate });

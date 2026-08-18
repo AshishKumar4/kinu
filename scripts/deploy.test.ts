@@ -28,11 +28,11 @@ const REQUIRED_GATES = [
   "bun test packages/cli/",
   "bun test scripts/eval.test.ts",
   `bun test ${BENCH_GATE_FILES.join(" ")}`,
-  "bun test scripts/secret-scan.test.ts",
+  "bun test scripts/secret-scan.test.ts scripts/sources.test.ts",
   "bun scripts/secret-scan.ts",
   "bun scripts/schema-drift.ts",
   "bun scripts/tracing-gate.ts",
-  "bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts",
+  "bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/infra.test.ts",
   "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts",
   "bun test scripts/gate-set-equality.test.ts",
   "bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts",
@@ -59,6 +59,7 @@ const REQUIRED_GATES = [
   "bun run layergate",
   "bun run layergate --matrix",
   "bun run verify:lean",
+  "bun run gate:infra",
 ] as const;
 
 afterEach(() => {
@@ -150,6 +151,13 @@ describe("production deploy gate", () => {
     expect(run.events).toEqual([...REQUIRED_GATES, "MUTATE bunx vite build"]);
   });
 
+  // The budget is EXPLICIT because the work is quadratic and bun's 5000ms
+  // default is not a decision anybody made about this test. One deploy run per
+  // gate, each running every earlier gate's stub: 44 gates is ~1,900 process
+  // spawns, which crossed the default the moment `gate:infra` was added and
+  // made this suite fail one run in three with nothing wrong. A stated budget
+  // is also the signal for the gate after next — if this starts timing out at
+  // 60s the sweep needs a different shape, not a bigger number.
   test("every gate fails closed even when the former skip variable is set", () => {
     for (const [index, gate] of REQUIRED_GATES.entries()) {
       const run = runDeploy(gate);
@@ -158,7 +166,7 @@ describe("production deploy gate", () => {
       expect(run.events).toEqual(REQUIRED_GATES.slice(0, index + 1));
       expect(run.events.some((event) => event.startsWith("MUTATE "))).toBe(false);
     }
-  });
+  }, 60_000);
 
   test("a dirty checkout is rejected before verification or mutation", () => {
     const run = runDeploy("", true);

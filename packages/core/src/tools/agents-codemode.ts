@@ -26,7 +26,7 @@
  * started in here rides the enclosing `execute_tools` call, and that job kind
  * declines background resume (side effects can't be re-run). Quick orchestration
  * belongs in the sandbox; one long expensive search that must survive an
- * eviction belongs at the top-level tool, which resumes from its MCTS
+ * eviction belongs at the top-level tool, which resumes from its search
  * checkpoint.
  */
 
@@ -56,17 +56,13 @@ import {
  * change shape depending on where the agent happens to be running.
  */
 const AGENTS_CODEMODE_MEMBERS = {
-  fork: `  /** Spawn 2-6 ephemeral forks of yourself on this same workspace and settle
-   *  them into one answer. The settle decides what the call takes and what a
-   *  fork IS, so the two are not interchangeable:
-   *    merge (default) runs the briefs in \`forks\` — required — each as a real
-   *      agent with its own multi-step tool loop (execute_tools/run/file/web,
-   *      narrowed by its own allowedTools) over this workspace, then merges
-   *      what they found.
-   *    settle:"mcts" reads \`task\` alone and writes its own competing
-   *      approaches; a branch is a single proposal with no tool loop of its
-   *      own, scored against its rivals by execution. Passing \`forks\` here is
-   *      REFUSED rather than ignored — nothing would run them.
+  fork: `  /** Spawn 2-6 ephemeral forks of yourself on this same workspace and merge
+   *  them into one answer. The briefs in \`forks\` are REQUIRED: each becomes a
+   *  real agent with its own multi-step tool loop (execute_tools/run/file/web,
+   *  narrowed by its own allowedTools) over this workspace, and what they found
+   *  merges back. Nothing infers the angles for you — if you want the search to
+   *  write its own competing candidates from the task alone and measure them,
+   *  that is \`agents.swarm\`.
    *  NOT resumable from here: a fork started inside execute_tools rides this
    *  sandbox call, and execute_tools declines background resume because its
    *  side effects cannot be safely re-run. Script quick fan-out here; call the
@@ -74,8 +70,7 @@ const AGENTS_CODEMODE_MEMBERS = {
    *  eviction, which resumes from its search checkpoint. */
   fork(input: {
     task: string;
-    forks?: Array<{ task: string; rationale: string; model?: string; allowedTools?: string[] }>;
-    settle?: "merge" | "mcts";
+    forks: Array<{ task: string; rationale: string; model?: string; allowedTools?: string[] }>;
     merge_strategy?: "synthesize" | "best_of" | "consensus";
     budget?: number;
     wall_clock_ms?: number;
@@ -166,7 +161,7 @@ const AGENTS_CODEMODE_MEMBERS = {
 
 /** One-line member descriptions for the provider record. */
 const AGENTS_CODEMODE_DESCRIPTIONS = {
-  fork: 'Spawn 2-6 ephemeral forks of yourself that settle into one answer (merge, or settle:"mcts"). Not resumable from inside the sandbox.',
+  fork: 'Spawn 2-6 ephemeral forks of yourself that settle into one answer. Not resumable from inside the sandbox.',
   swarm: 'Run a configured search whose candidates are measured by your own verifier rather than judged: name the shape with preset and what counts with objective. Refuses an illegal composition by naming the axis, and a shape no engine runs faithfully rather than substituting one.',
   hire: 'Create a persistent named helper that starts with a blank context: a subordinate here, or scope:"workspace" for a specialist workspace of its own.',
   ask: 'Hand an agent work and expect the answer back (a subordinate reports later as an event; a peer reply is awaited).',

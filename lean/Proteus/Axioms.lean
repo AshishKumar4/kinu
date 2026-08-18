@@ -301,7 +301,7 @@ import Proteus
 #print axioms Proteus.Exploration.Arbitration.accepted_children_within_depth
 #print axioms Proteus.Exploration.Arbitration.accepted_within_budget
 #print axioms Proteus.Exploration.Arbitration.accepted_width_in_range
-#print axioms Proteus.Exploration.Arbitration.accepted_respects_decorrelate
+#print axioms Proteus.Exploration.Arbitration.accepted_respects_context
 #print axioms Proteus.Exploration.Arbitration.archive_refuses_at_node
 #print axioms Proteus.Exploration.Arbitration.arbitrate_at_zero_depth_always_refuses
 #print axioms Proteus.Exploration.Arbitration.every_proposal_gets_a_verdict

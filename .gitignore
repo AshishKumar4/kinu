@@ -62,6 +62,11 @@ CC-CORPUS-*.md
 # citations escaped — into a shipped production constant.
 /docs/research/
 
+# Raw owner/session transcripts are private harness memory, never repository source.
+# Requirements may cite local turn numbers, but the transcript itself stays under
+# ~/.claude/projects/.../memory/requirements/.
+/docs/requirements/OWNER-MESSAGES-VERBATIM.md
+
 # UI verification screenshots — proof-of-work, regenerated on demand, never source.
 /.ui-proof/
 
@@ -95,3 +100,27 @@ CC-CORPUS-*.md
 # so a root-level copy is an escaped run, never a fixture.
 /report.txt
 /todos.txt
+
+# The nine internal design records the 2026-08-18 history sweep removed from
+# every commit: specification drafts, spike write-ups, research notes, the
+# requirements transcripts and the captured axis-study runs. They described the
+# project to itself and were never meant to be published, and the sweep rewrote
+# 1,898 commits down to 844 to take them out of the history as well as the tree.
+# Listed here because that is expensive to do and cheap to undo: a stray write, a
+# `git add -A`, or a merge from a branch that predates the sweep would put one
+# back as a tracked file and nothing else would notice. Prose references to their
+# SECTION numbers survive in source on purpose — re-homing those is a separate
+# decision and needs a document, not a re-add.
+#
+# `/docs/requirements/` widens the narrower entry above, which stays because it
+# states a different reason: that transcript is private harness memory whatever
+# the sweep did with the rest of the directory.
+/docs/EXPLORATION-SPEC.md
+/docs/NODE-ISOLATION.md
+/docs/CRAFTED-TOOL-LOADING.md
+/docs/NIMBUS-SPIKE-MEASUREMENTS-2026-08-04.md
+/docs/RESEARCH_NOTES.md
+/docs/requirements/
+/scripts/axis-ergonomics/REPORT.md
+/scripts/axis-ergonomics/PREREGISTRATION.md
+/scripts/axis-ergonomics/runs/

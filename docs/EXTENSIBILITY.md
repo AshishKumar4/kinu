@@ -192,9 +192,15 @@ The strategy returns a `StrategyResult` — `strategy`, `best`, `all`, an option
 `trace`, and `cost`. Strategies should always respect `ctx.signal` and
 `ctx.budget` for cancellation and budget enforcement.
 
-Strategies plug into a `StrategyRegistry`. The `agents` tool's `fork` action
-selects the registered strategy through its `settle` policy; `mcts` is one
-settlement policy inside that rung rather than another top-level tool.
+Strategies plug into a `StrategyRegistry`, and registration is not the same as
+reachability. The `agents` tool's `fork` action resolves one strategy,
+`FORK_STRATEGY_ID` (`heads`), because a fork has one settlement — a merge of the
+briefs it requires — and no field selects another. `core/strategy/mcts.ts` is
+registered all the same, and is reached programmatically by the durable search
+store and the eval harness; tree search on the model-facing surface is
+`action:'swarm'` with a `depth`, scored against the caller's own `objective`
+through `core/strategy/verifier-registry.ts`. So a new strategy earns its callers
+from the code that dispatches it, not from a new value on a tool field.
 
 ## Replacing the inference loop
 
@@ -366,9 +372,10 @@ tests under `packages/core/tests/`.
 - **Heads ExplorationStrategy adapter** — `core/strategy/heads.ts`. Wraps
   `HeadController` behind the strategy interface.
 - **Unified `agents` fork seam** — `core/tools/agents-tool.ts` dispatches the
-  fork rung through the strategy registry. `settle: 'mcts'` selects MCTS;
-  ordinary merging heads are the default. Adding strategies does not add a
-  competing top-level delegation tool.
+  fork rung to the heads strategy through the registry; the MCTS adapter stays
+  registered for the durable search store and the eval harness, with no route
+  from a tool field. Adding strategies does not add a competing top-level
+  delegation tool.
 - **Eval harness** — `core/eval/{types,runner,judge,corpus,report}.ts`. JSONL
   corpus loader, A/B runner against any two `ExplorationStrategy`s, structured
   judge verdicts via Valibot. Seed corpus at the repo root's

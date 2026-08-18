@@ -3,9 +3,9 @@
  *
  * ONE list and ONE tree, not a tab per mechanism. The old surface split MCTS
  * from Branches, which mirrored a storage split (search_nodes vs head_journal)
- * that `agents(action:'fork')` picks between on its `settle` argument — so the
- * same user action landed in a different tab depending on an internal strategy
- * id, and the owner twice found an empty pane where his forks should have been.
+ * that `agents(action:'swarm')` and `agents(action:'fork')` write to separately —
+ * so exploring alternatives landed in a different tab depending on which of the
+ * two ran, and the owner twice found an empty pane where his forks should have been.
  *
  * The unification is honest because a fork IS a tree either way: a merge is
  * that tree at depth 1 (the task, then one branch per head) and a competition

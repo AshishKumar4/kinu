@@ -449,6 +449,39 @@ export interface HeadInferenceDeps {
    * never appeared on the Exploration surface at all.
    */
   reportStep?: (seq: number, step: HeadStep) => Promise<void> | void;
+  /**
+   * The prompt this loop runs, when the caller is not a head.
+   *
+   * A swarm node is a head-SHAPED agent and not a head: it needs the same tool
+   * loop, the same per-step trace and the same report assembly, but a search's
+   * framing rather than a fork's — the objective, the pinned task block, the
+   * sibling angle and the branch protocol, none of which a head has. Absent is
+   * the head's own framing, which is every existing caller.
+   *
+   * One optional dep rather than a second loop: a node with its own copy of
+   * this function would be the parallel-implementation defect this module was
+   * created to remove, and the swarm's own header records that the loop is
+   * reused rather than rebuilt.
+   */
+  framing?: {
+    readonly system: string;
+    readonly messages: readonly ModelMessage[];
+  };
+  /**
+   * The conversation this loop PRODUCED — every step's assistant and tool
+   * messages, in order — handed over once, when the loop finishes normally.
+   *
+   * This is what a forking child inherits: EXPLORATION-SPEC §8.4 makes a child's
+   * context its parent's *"unchanged, with the new material appended"*, and an
+   * unmodified prefix is a prefix a provider can cache, so every sibling of one
+   * parent shares one cacheable prefix. Absent for a head, which merges FINDINGS
+   * (`record_evidence`, `record_decision`) rather than forking a conversation, and
+   * then nothing is accumulated at all.
+   *
+   * Not called on the error path: a loop that threw produced no conversation a
+   * child could be given, and half of one is worse than none.
+   */
+  reportMessages?: (messages: readonly ModelMessage[]) => void;
 }
 
 /**
@@ -478,6 +511,12 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // A step with no prose, reasoning or tool call is padding and is not recorded,
   // exactly as the whole-run walk used to drop it.
   let recorded = 0;
+  // The conversation this loop PRODUCED, accumulated per step rather than read off
+  // the result: `result.response.messages` is the last step's, and what a forking
+  // child inherits is every step's (EXPLORATION-SPEC §8.4's append-only rule).
+  // Collected only when someone asked for it — a head merges findings and has no
+  // use for the transcript as messages.
+  const produced: ModelMessage[] = [];
 
   try {
     // Before the first call as well as between steps: a head spawned into an
@@ -487,8 +526,9 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     }
     const result = await generateText({
       model: deps.model,
-      system: buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout),
-      messages: buildHeadMessages(input),
+      system: deps.framing?.system
+        ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout),
+      messages: deps.framing ? [...deps.framing.messages] : buildHeadMessages(input),
       tools: deps.tools,
       onStepFinish: async (step) => {
         const traced = toHeadStep(step);
@@ -507,6 +547,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
             );
           }
         }
+        if (deps.reportMessages) produced.push(...step.response.messages);
         const usage = normalizeUsage(step.usage);
         // A step the provider said nothing about meters nothing: neither the
         // report nor the ledger may be moved by a guess.
@@ -528,6 +569,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         return outOfBudget();
       },
     });
+    deps.reportMessages?.(produced);
 
     if (refusal) {
       return exhaustedMissionReport(input, capture, refusal, Date.now() - startedAt, recorded);
