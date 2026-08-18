@@ -100,7 +100,7 @@ describe('listForkRuns', () => {
     seedCompetedRun(db, { rootId: 'r-search', task: 'pick a backfill', at: 2000, branches: 5, winner: 0.82, ledger: 'converged' });
     seedMergedRun(db, { rootId: 'r-merge-new', task: 'split the docs', at: 3000, heads: [{ status: 'running' }] });
 
-    const runs = listForkRuns(sql, 20);
+    const runs = listForkRuns(sql, null, 20).items;
     expect(runs.map((r) => r.id)).toEqual(['r-merge-new', 'r-search', 'r-merge-old']);
     expect(runs.map((r) => r.settle)).toEqual(['merged', 'competed', 'merged']);
   });
@@ -108,7 +108,7 @@ describe('listForkRuns', () => {
   test('a competed run carries its branch count and winning score', () => {
     const { db, sql } = freshDb();
     seedCompetedRun(db, { rootId: 'r1', task: 'pick a backfill', at: 2000, branches: 6, winner: 0.82, ledger: 'converged' });
-    const [run] = listForkRuns(sql);
+    const [run] = listForkRuns(sql).items;
     expect(run).toMatchObject({
       task: 'pick a backfill', settle: 'competed', status: 'completed', branches: 6, winnerScore: 0.82,
     });
@@ -117,7 +117,7 @@ describe('listForkRuns', () => {
   test('a merged run counts heads and has no winner — every branch fed the synthesis', () => {
     const { db, sql } = freshDb();
     seedMergedRun(db, { rootId: 'r1', task: 'audit the CLI', at: 1000, heads: [{ status: 'completed' }, { status: 'completed' }, { status: 'completed' }], merged: true });
-    const [run] = listForkRuns(sql);
+    const [run] = listForkRuns(sql).items;
     expect(run).toMatchObject({
       task: 'audit the CLI', settle: 'merged', status: 'completed', branches: 3, winnerScore: null,
     });
@@ -126,13 +126,13 @@ describe('listForkRuns', () => {
   test('a run with a head still going reads as running', () => {
     const { db, sql } = freshDb();
     seedMergedRun(db, { rootId: 'r1', task: 'audit', at: 1000, heads: [{ status: 'completed' }, { status: 'running' }] });
-    expect(listForkRuns(sql)[0]!.status).toBe('running');
+    expect(listForkRuns(sql).items[0]!.status).toBe('running');
   });
 
   test('heads that errored without a merge read as partial, not completed', () => {
     const { db, sql } = freshDb();
     seedMergedRun(db, { rootId: 'r1', task: 'audit', at: 1000, heads: [{ status: 'completed' }, { status: 'errored' }] });
-    expect(listForkRuns(sql)[0]!.status).toBe('partial');
+    expect(listForkRuns(sql).items[0]!.status).toBe('partial');
   });
 
   test("a recursive sub-split is judged by its parent head, as the detail view judges it", () => {
@@ -143,7 +143,7 @@ describe('listForkRuns', () => {
       rootId: 'r1', task: 'nested', at: 1000, parentHead: { status: 'running' },
       heads: [{ status: 'completed' }, { status: 'completed' }],
     });
-    const [run] = listForkRuns(sql);
+    const [run] = listForkRuns(sql).items;
     expect(run).toMatchObject({ status: 'running', branches: 2, task: 'parent of nested' });
   });
 
@@ -154,14 +154,14 @@ describe('listForkRuns', () => {
     const { db, sql } = freshDb();
     seedCompetedRun(db, { rootId: 'r-won', task: 'old but decided', at: 1000, branches: 3, winner: 0.9 });
     seedCompetedRun(db, { rootId: 'r-stopped', task: 'old and abandoned', at: 900, branches: 2 });
-    const runs = listForkRuns(sql);
+    const runs = listForkRuns(sql).items;
     expect(runs.map((r) => [r.id, r.status])).toEqual([['r-won', 'completed'], ['r-stopped', 'partial']]);
   });
 
   test('a failed search says failed', () => {
     const { db, sql } = freshDb();
     seedCompetedRun(db, { rootId: 'r1', task: 'doomed', at: 1000, branches: 1, ledger: 'failed' });
-    expect(listForkRuns(sql)[0]!.status).toBe('failed');
+    expect(listForkRuns(sql).items[0]!.status).toBe('failed');
   });
 
   test('Steer-as-Branch redirects are not fork runs', () => {
@@ -172,7 +172,7 @@ describe('listForkRuns', () => {
     const branchId = newBranchId();
     seedMergedRun(db, { rootId: branchId, task: 'user redirect', at: 2000, heads: [{ status: 'completed' }], merged: true });
     seedMergedRun(db, { rootId: 'r-real', task: 'a real fork', at: 1000, heads: [{ status: 'completed' }], merged: true });
-    expect(listForkRuns(sql).map((r) => r.id)).toEqual(['r-real']);
+    expect(listForkRuns(sql).items.map((r) => r.id)).toEqual(['r-real']);
   });
 
   test('Steer-as-Branch rows cannot consume the fork limit before they are excluded', () => {
@@ -188,7 +188,7 @@ describe('listForkRuns', () => {
       });
     }
 
-    expect(listForkRuns(sql, 30).map((run) => run.id)).toEqual(['r-real']);
+    expect(listForkRuns(sql, null, 30).items.map((run) => run.id)).toEqual(['r-real']);
   });
 
   test('legacy unscoped search rows stay invisible', () => {
@@ -198,7 +198,7 @@ describe('listForkRuns', () => {
        VALUES ('legacy', NULL, NULL, 'pre-root_id', '', '', 0, 'open', 5000)`,
     ).run();
     seedCompetedRun(db, { rootId: 'r1', task: 'scoped', at: 1000, branches: 1, ledger: 'converged' });
-    expect(listForkRuns(sql).map((r) => r.id)).toEqual(['r1']);
+    expect(listForkRuns(sql).items.map((r) => r.id)).toEqual(['r1']);
   });
 
   test('the limit bounds the merged list, not each half', () => {
@@ -207,7 +207,7 @@ describe('listForkRuns', () => {
       seedMergedRun(db, { rootId: `m${i}`, task: `merge ${i}`, at: 1000 + i * 10, heads: [{ status: 'completed' }], merged: true });
       seedCompetedRun(db, { rootId: `s${i}`, task: `search ${i}`, at: 1005 + i * 10, branches: 2, winner: 0.5, ledger: 'converged' });
     }
-    const runs = listForkRuns(sql, 3);
+    const runs = listForkRuns(sql, null, 3).items;
     expect(runs).toHaveLength(3);
     expect(runs.map((r) => r.id)).toEqual(['s3', 'm3', 's2']);
   });
@@ -225,7 +225,7 @@ describe('listForkRuns', () => {
       });
     }
 
-    expect(listForkRuns(sql, 30).some((run) => run.id === 'bookmarked')).toBe(false);
+    expect(listForkRuns(sql, null, 30).items.some((run) => run.id === 'bookmarked')).toBe(false);
     expect(readForkRun(sql, 'bookmarked')).toMatchObject({
       id: 'bookmarked', task: 'historical fork', settle: 'merged',
     });
@@ -234,6 +234,6 @@ describe('listForkRuns', () => {
 
   test('nothing forked yet is an empty list, not a throw', () => {
     const { sql } = freshDb();
-    expect(listForkRuns(sql)).toEqual([]);
+    expect(listForkRuns(sql).items).toEqual([]);
   });
 });

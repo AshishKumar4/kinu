@@ -609,11 +609,15 @@ The stream also carries the agent's durable run-event ledger: one `run_event`
 line per row of its `run_events` table, wrapping the row verbatim. That is where
 the harness-side measurements live — `turn_steering` (which trigger fired,
 and whether the model then reached for `agents`), `context_budget`,
-`budget_exhausted`, and `head_split` / `head_merge`. The last pair closes the
-loop on the first: a nudge that converts is only worth something if the fork it
-produced came back with something, so `head_merge` carries `headsWithFindings`
-against `headCount` and the split's `totalTokens`. The table itself is inside
-the container's database and dies
+`budget_exhausted`, and `head_split` with whichever of `head_merge` /
+`head_abandoned` terminates it. The terminal row closes the loop on the first: a
+nudge that converts is only worth something if the fork it produced came back
+with something, so `head_merge` carries `headsWithFindings` against `headCount`
+and the split's `totalTokens`. `head_abandoned` is the other outcome — a split
+retired at the start of a later activation because nothing was left to run it —
+and it carries `abandoned` against `headCount`. Without it a dead fork was
+byte-for-byte a fork still in flight, so its spend scored against no result.
+The table itself is inside the container's database and dies
 with the container, so the stream is the only copy: `run_events(events, …)`
 reads it, and the adapter keeps it in `trajectory.json` and the trial metadata.
 A row is written when its turn settles, so a trial killed by the agent timeout

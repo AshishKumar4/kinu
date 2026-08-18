@@ -56,10 +56,17 @@ import {
  * change shape depending on where the agent happens to be running.
  */
 const AGENTS_CODEMODE_MEMBERS = {
-  fork: `  /** Spawn 2-6 ephemeral forks of yourself on this same workspace. Each runs its
-   *  own multi-step tool loop, then they settle into one answer: merged by
-   *  default, or scored against each other by execution with settle:"mcts".
-   *  Omit \`forks\` to let the strategy pick the angles.
+  fork: `  /** Spawn 2-6 ephemeral forks of yourself on this same workspace and settle
+   *  them into one answer. The settle decides what the call takes and what a
+   *  fork IS, so the two are not interchangeable:
+   *    merge (default) runs the briefs in \`forks\` — required — each as a real
+   *      agent with its own multi-step tool loop (execute_tools/run/file/web,
+   *      narrowed by its own allowedTools) over this workspace, then merges
+   *      what they found.
+   *    settle:"mcts" reads \`task\` alone and writes its own competing
+   *      approaches; a branch is a single proposal with no tool loop of its
+   *      own, scored against its rivals by execution. Passing \`forks\` here is
+   *      REFUSED rather than ignored — nothing would run them.
    *  NOT resumable from here: a fork started inside execute_tools rides this
    *  sandbox call, and execute_tools declines background resume because its
    *  side effects cannot be safely re-run. Script quick fan-out here; call the
@@ -80,7 +87,7 @@ const AGENTS_CODEMODE_MEMBERS = {
     budget_usd?: number;
     budget_tokens?: number;
     budget_label?: string;
-  }): Promise<{ strategy: string; text: string; score: number; trace: unknown; cost: unknown; mission_budget?: unknown } | { error: string }>;`,
+  }): Promise<{ strategy: string; text: string; score: number; trace: unknown; cost: unknown; mission_budget?: unknown } | { error: string; reason?: "bad_input" }>;`,
 
   staff: `  /** Create a persistent named helper that keeps its own context across turns.
    *  Default scope:"subordinate" staffs THIS workspace (role + mission

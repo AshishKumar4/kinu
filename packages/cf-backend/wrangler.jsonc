@@ -171,6 +171,16 @@
     // disable either executor.
   "vars": {
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
+    // Container control plane. Both getSandbox call sites pass `transport: "rpc"`
+    // explicitly and that is what actually switches an EXISTING sandbox — the SDK
+    // persists transport in the sandbox object's storage and a stored value beats
+    // this var on every cold start. The var covers the other direction: a future
+    // getSandbox that omits the option would otherwise inherit the SDK's `http`
+    // field default, which is the route-based compatibility client. Cloudflare
+    // deprecated `http`/`websocket` on 2026-06-09 ("will not ship in future
+    // Sandbox SDK majors") and 1.0 drops the knob entirely, so `rpc` is both the
+    // measured-better and the only surviving path.
+    "SANDBOX_TRANSPORT": "rpc",
     "PREVIEW_HOST_SUFFIX": "proteus.ashishkumarsingh.com",
     "CLI_PUBLIC_ORIGIN": "https://proteus.ashishkumarsingh.com",
     "CLI_APPROVAL_ORIGIN": "https://proteus.ashishkumarsingh.com",
@@ -230,8 +240,17 @@
   //    to `vars` below. ProteusSandbox picks the mode up from their presence —
   //    no flag — and the mode is recorded per snapshot, so handles taken in one
   //    mode keep restoring in that mode.
+  // NIMBUS_RUNTIME_CACHE is the artifact store a HOSTED workspace installs its
+  // toolchain from: `catalog/v1.json`, `manifests/<name>-<version>.json` and
+  // content-addressed blobs under `blobs/<name>-<version>/<file>`
+  // (external/nimbus/packages/worker/src/runtime/runtime-catalog.ts:111-150).
+  // Measured 2026-08-17: this bucket exists on this account and IS seeded —
+  // clang, python, ruby, bash, cpython. Without the binding the Worker throws
+  // `NIMBUS_RUNTIME_CACHE binding missing`, which is why a hosted `python3` was
+  // 127 while the local CLI (which ships the runtimes as npm packages) worked.
   "r2_buckets": [
-    { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }
+    { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" },
+    { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" }
   ],
   // D1 auth/session store. Browser auth reads use D1 Sessions API so Cloudflare
   // can route read-only verification queries to read replicas when replication
@@ -314,8 +333,12 @@
       // Inbox stays off (no routing rule points here; outbound sends skip).
       "send_email": [{ "name": "EMAIL" }],
       "ai": { "binding": "AI" },
+      // Same seeded bucket as production: a runtime artifact is content-addressed
+      // and immutable, so there is nothing to keep separate per environment, and
+      // parity here is what makes a staging `python3` prove the hosted path.
       "r2_buckets": [
-        { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }
+        { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" },
+        { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" }
       ],
       "d1_databases": [
         {
@@ -334,7 +357,9 @@
         "PREVIEW_HOST_SUFFIX": "",
         "CLI_PUBLIC_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",
         "CLI_APPROVAL_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",
-        "DEV_USER_EMAIL": "staging-tester@proteus.dev"
+        "DEV_USER_EMAIL": "staging-tester@proteus.dev",
+        // Same single choice as production — see the note on the production var.
+        "SANDBOX_TRANSPORT": "rpc"
       }
     }
   }

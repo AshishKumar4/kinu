@@ -13,13 +13,21 @@
  *     requires `interceptHttps = true`, which the SDK does NOT default to
  *     despite what its docs say (see {@link ProteusSandbox}).
  *   Every other TCP port               — NEVER routed through a handler by the
- *     platform. Denied outright, because `enableInternet = false`.
- *   DNS                                — leaves, always, even with
- *     `enableInternet = false`, to Cloudflare's resolvers only. Arbitrary
- *     DESTINATIONS are impossible; arbitrary NAMES are not, so a container can
- *     still signal outward through the labels of a query it asks Cloudflare to
- *     resolve. This is a real residual, it is low-bandwidth, and it cannot
- *     carry a secret the container does not have.
+ *     platform. Denied outright, because `enableInternet = false`. MEASURED, not
+ *     just designed: from a real container on the deployed worker, TCP connects
+ *     to 22, 2222, 3306, 5432, 6379 and 8080 all time out while 80 and 443
+ *     connect — so the probe demonstrably distinguishes the two, and the denials
+ *     are an observation rather than the absence of one.
+ *   DNS                                — MEASURED CLOSED, correcting what this
+ *     comment used to claim. Inside a real container on the deployed worker,
+ *     raw UDP/53 and TCP/53 to 1.1.1.1 / 8.8.8.8 / 2606:4700:4700::1111 get no
+ *     reply, and every name — `<random>.invalidtld-nothing-here` included —
+ *     resolves to the same private ULA `fd00::119:1`. A public resolver cannot
+ *     return an fd00::/8 address nor answer an impossible TLD, so resolution is
+ *     synthesized by the platform to steer 80/443 into interception; the query
+ *     never leaves. So there is no low-bandwidth label channel here. It is a
+ *     PLATFORM property and can regress with no diff in this file —
+ *     `scripts/egress-interception.ts` records the probe.
  *   A container that distrusts the CA  — fails the handshake. Fails CLOSED: no
  *     request, no secret, a visible error.
  *
@@ -160,15 +168,15 @@ export async function handleContainerEgress(
     headers: [...request.headers],
   };
 
-  const vaultView: Partial<EgressVaultClient> = {};
-  Object.assign(vaultView, env.UserDO.get(env.UserDO.idFromName(params.ownerUserId)));
-  // SAFETY: checked by construction and pinned by a test. `resolveEgressInjection`
-  // is declared `public` on UserDO and listed in USER_DO_METHODS, which is
-  // `as const satisfies readonly (keyof UserDO)[]` — so the name cannot be
-  // misspelled without failing the build, and `sealRpcSurface` therefore leaves
-  // it reachable on the stub. `unit-egress-vault.test.ts` asserts the name is on
-  // USER_DO_RPC_SURFACE, so the assertion cannot outlive the method.
-  const vault = vaultView as EgressVaultClient;
+  // The stub is USED, never COPIED. `Object.assign` transfers own enumerable
+  // properties and a JSRPC stub's methods live behind a Proxy, so copying one
+  // yields `{}`. This threw `vaultView.resolveEgressInjection is not a function`
+  // on every intercepted request on production — and because an outbound handler
+  // that throws returns no HTTP response at all, the container saw only
+  // "Empty reply from server". That is why ALL container egress was dead while
+  // every test passed: the tests asserted the method is on the RPC surface,
+  // which it is, and nothing asserted the copy transferred it.
+  const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(params.ownerUserId));
   const resolved = await vault.resolveEgressInjection(
     await ownerCaller(env), facts, params.bindings,
   );
@@ -254,19 +262,11 @@ export async function handleContainerEvent(
     return refusal(400, `Body is not JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  const agentView: Partial<ContainerEventClient> = {};
-  Object.assign(agentView, await getAgentByName<Env, OrchestratorAgent>(
+  // Used, not copied — same defect as `handleContainerEgress`, and it killed the
+  // whole container→DO event channel the same way.
+  const agent: ContainerEventClient = await getAgentByName<Env, OrchestratorAgent>(
     env.OrchestratorAgent, params.workspaceName,
-  ));
-  // SAFETY: checked by construction and pinned by a test. `acceptContainerEvent`
-  // is declared `public` on OrchestratorAgent and listed in ORCHESTRATOR_METHODS,
-  // which is `as const satisfies readonly (keyof OrchestratorAgent)[]`, so the
-  // name cannot drift from the method without failing the build, and
-  // `sealRpcSurface` therefore leaves it reachable. `unit-egress-interception.test.ts`
-  // derives this call from THIS file and asserts the name is on
-  // ORCHESTRATOR_RPC_SURFACE, which is what stops it becoming a sixth
-  // fail-closed RPC rejecting inside a warn-only path.
-  const agent = agentView as ContainerEventClient;
+  );
   const result = await agent.acceptContainerEvent(body);
   if (result.status === 'rejected') return refusal(result.http_status, result.reason);
   return Response.json(

@@ -132,7 +132,7 @@ import {
   // AGENTS.md (agents.md standard) — cloud workspace discovery
   collectWorkspaceAgentsMd,
   mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
-  uiMessageText, tableExists,
+  uiMessageText, tableExists, PROGRAMMATIC_MESSAGE_ID_PREFIX,
   // memory.* / tasks.* — codemode projections of the same-named native tools
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject, type JsonValue,
@@ -620,6 +620,7 @@ export abstract class ActorAgent extends Think<Env> {
         usage: this.acc.usage,
         context: this.acc.context,
         files: this.acc.files,
+        escalations: this.acc.escalations,
         steering: this.orch.steering.snapshot(),
         craft: this.orch.craft.snapshot(),
         recoveries: this.orch.recoverySnapshot(),
@@ -1007,8 +1008,14 @@ export abstract class ActorAgent extends Think<Env> {
           const drainTurnId = v.is(v.string(), metadata?.drainTurnId)
             ? metadata.drainTurnId
             : null;
+          // The id is the row's provenance (core transcriptRole): every turn the
+          // harness enqueues is prefixed, keyed or not, so the transcript and the
+          // walk-back fork can tell it from something the operator typed. Where
+          // the producer named the FACT, the id is that name — and the message
+          // store's primary key is then what makes a re-announcement land on the
+          // row the first one wrote instead of beside it.
           const message: UIMessage = {
-            id: idempotencyKey ? `programmatic:${idempotencyKey}` : crypto.randomUUID(),
+            id: `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${idempotencyKey ?? crypto.randomUUID()}`,
             role: 'user' as const, parts: [{ type: 'text' as const, text }],
           };
           if (metadata) message.metadata = metadata;
@@ -1815,6 +1822,10 @@ export abstract class ActorAgent extends Think<Env> {
         // counters ride the accumulator, so the cached toolset sees the turn's
         // ledger and the reset rides the turn's own accounting.
         fileLedger: this.acc.files,
+        // Same turn-scoped ownership as fileLedger: the `run` dispatch records
+        // each escalation decision here, and the settle spine above writes the
+        // durable row.
+        escalations: this.acc.escalations,
         // The unified `agents` delegation tool — fork substrate (heads / mcts
         // settle) is universal; staff/ask/send actions appear only when this
         // actor's profile wires the team/peers transports. Owner resolution

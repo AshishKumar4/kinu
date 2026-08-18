@@ -21,6 +21,7 @@ import type { LLMProviderConfig } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
 import { makeExecRaw, makeSql } from '../src/runtime.js';
+import { scratchPath } from '@proteus/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -65,7 +66,7 @@ function interruptedWorkspace() {
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, {
-    dbPath: `/tmp/proteus-fork-resume-${Math.floor(performance.now())}.db`,
+    dbPath: scratchPath('local-session-fork-resume', 'agent.db'),
     llm: DUMMY_LLM,
   });
   const execRaw = makeExecRaw(db);
@@ -134,7 +135,7 @@ describe('resuming a workspace whose fork was interrupted', () => {
       role TEXT NOT NULL, content TEXT NOT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
     const rt = createCLIRuntime(db, {
-      dbPath: `/tmp/proteus-fork-clean-${Math.floor(performance.now())}.db`,
+      dbPath: scratchPath('local-session-fork-clean', 'agent.db'),
       llm: DUMMY_LLM,
     });
     const events: SessionEvent[] = [];

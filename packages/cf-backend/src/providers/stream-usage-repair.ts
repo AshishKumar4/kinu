@@ -2,31 +2,40 @@
  * Cached-usage repair for Cloudflare AI SSE streams.
  *
  * The {account}/ai/v1 chat-completions stream carries usage TWICE: the model
- * runtime's own final chunk, then a platform-appended duplicate. For some
- * models the duplicate zeroes `prompt_tokens_details.cached_tokens` (verified
- * live 2026-07-13: @cf/zai-org/glm-5.2's model chunk reported
- * cached_tokens:14528 while the trailing duplicate said 0 — and account
- * billing confirmed the discounted cached rate was applied;
- * @cf/moonshotai/kimi-k2.6's duplicate is faithful). @ai-sdk/openai-compatible
- * keeps the LAST usage chunk it sees, so without repair every streamed step
- * reports cachedInputTokens:0 and prefix-cache efficacy is invisible to
- * per-turn accounting (`cacheRead: 0` on every run, which reads as a total
- * cache miss because a reported zero is evidence) — the cache itself works;
- * only the reporting is lost.
+ * runtime's own final chunk, then a platform-appended duplicate. The duplicate
+ * loses the cache report in one of TWO shapes, and both were observed live:
+ * it zeroes `prompt_tokens_details.cached_tokens` (2026-07-13,
+ * @cf/zai-org/glm-5.2: the model chunk reported cached_tokens:14528 while the
+ * trailing duplicate said 0 — and account billing confirmed the discounted
+ * cached rate was applied), or it DROPS `prompt_tokens_details` altogether
+ * (2026-08-17, @cf/deepseek-ai/deepseek-v4-pro-0813 — see the workspace
+ * evidence in unit-stream-usage-repair.ts). @cf/moonshotai/kimi-k2.6's
+ * duplicate is faithful. @ai-sdk/openai-compatible keeps the LAST usage chunk
+ * it sees, so without repair every streamed step loses its cache read:
+ * the zeroing shape reports `cacheRead: 0`, which reads as a total cache miss
+ * because a reported zero is evidence, and the dropping shape reports nothing
+ * at all, which `normalizeUsage` correctly refuses to guess at. Either way the
+ * cache itself works; only the reporting is lost.
  *
  * Repair rule: within one response, `cached_tokens` cannot legitimately
  * decrease. Track the largest value seen; rewrite any later usage chunk that
- * reports less (or drops the field) to that maximum. Untouched lines pass
- * through byte-exactly and nothing is ever fabricated — a stream that only
- * ever reports 0 stays 0.
+ * reports less, or that dropped the field, to that maximum. Untouched lines
+ * pass through byte-exactly and nothing is ever fabricated — until a chunk has
+ * reported a real cache read there is no maximum to restore, so a stream that
+ * only ever reports 0, or never mentions caching at all, is left exactly as it
+ * came.
  */
 
 import * as v from 'valibot';
 import { tolerate } from '@proteus/core/obs';
 
+/** A usage-bearing chunk. `usage` is required — that is what distinguishes a
+ *  usage chunk from a delta — while the cache detail it carries is optional,
+ *  because a duplicate that dropped or nulled the whole object is precisely the
+ *  shape needing repair. */
 const UsageChunkSchema = v.looseObject({
   usage: v.looseObject({
-    prompt_tokens_details: v.looseObject({ cached_tokens: v.optional(v.number()) }),
+    prompt_tokens_details: v.nullish(v.looseObject({ cached_tokens: v.nullish(v.number()) })),
   }),
 });
 
@@ -43,7 +52,8 @@ export function repairSseCachedUsage(res: Response): Response {
 }
 
 /** Byte→byte transform: split the SSE stream into lines, repair `data:` lines
- *  whose usage under-reports cached tokens, pass everything else through. */
+ *  whose usage under-reports or drops the cached-token count, pass everything
+ *  else through. */
 function cachedUsageRepairTransform(): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -63,11 +73,15 @@ function cachedUsageRepairTransform(): TransformStream<Uint8Array, Uint8Array> {
     if (!parsed.success) return line;
     const chunk = parsed.output;
     const details = chunk.usage.prompt_tokens_details;
-    const cached = details.cached_tokens ?? 0;
-    if (cached >= maxCached) {
+    const cached = details?.cached_tokens ?? undefined;
+    if (cached !== undefined && cached >= maxCached) {
       maxCached = cached;
       return line;
     }
+    // No chunk has reported a real cache read yet, so there is no maximum to
+    // restore — and writing a `cached_tokens: 0` here would fabricate a report
+    // the provider never made, which is the one thing this repair must not do.
+    if (maxCached === 0) return line;
     chunk.usage.prompt_tokens_details = { ...details, cached_tokens: maxCached };
     return `data: ${JSON.stringify(chunk)}${crlf ? '\r' : ''}`;
   };

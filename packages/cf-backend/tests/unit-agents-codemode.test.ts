@@ -135,6 +135,13 @@ function forkOnlyDeps(explore?: (ctx: StrategyContext) => Promise<JsonValue>): A
   return { mode: 'build', fork: { registry, rt, model: new MockLanguageModelV3() } };
 }
 
+/** settle=merge is the settle that RUNS briefs, and it refuses a call with
+ *  none — so every fork below carries the two-brief minimum. */
+const TWO_FORKS = [
+  { task: 'read it', rationale: 'ground it' },
+  { task: 'test it', rationale: 'check it' },
+];
+
 function fullDeps(): AgentsToolDeps {
   return {
     ...forkOnlyDeps(),
@@ -346,7 +353,7 @@ describe('agents.fork called back from an in-flight sandbox call', () => {
 
     let outerSettled = false;
     // The enclosing execute_tools call is still awaiting when the callback runs.
-    const outer = sandboxFork(deps, { task: 'investigate' }).then((result) => {
+    const outer = sandboxFork(deps, { task: 'investigate', forks: TWO_FORKS }).then((result) => {
       outerSettled = true;
       return result;
     });
@@ -371,8 +378,8 @@ describe('agents.fork called back from an in-flight sandbox call', () => {
       return ctx.task;
     });
     await Promise.all([
-      sandboxFork(deps, { task: 'a' }),
-      sandboxFork(deps, { task: 'b' }),
+      sandboxFork(deps, { task: 'a', forks: TWO_FORKS }),
+      sandboxFork(deps, { task: 'b', forks: TWO_FORKS }),
     ]);
     expect(calls.filter((c) => c.startsWith('subAgent:')).sort()).toEqual(['subAgent:a', 'subAgent:b']);
     // One terminal delete per head's run(), plus one evict per explicit abort.
@@ -404,7 +411,7 @@ describe('agents.fork called back from an in-flight sandbox call', () => {
       });
       return null;
     });
-    await sandboxFork(deps, { task: 't' });
+    await sandboxFork(deps, { task: 't', forks: TWO_FORKS });
     expect(spawned).toEqual([ExplorationAgent]);
   });
 });

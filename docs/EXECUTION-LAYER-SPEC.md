@@ -99,6 +99,84 @@ The parent provider is available only to actor facets that need an explicit RPC
 view of another workspace authority. It is not a duplicate registration of the
 facet's own shared workspace.
 
+## When to leave the workspace for the container
+
+The container is not the place the toolchain lives. The workspace has files, a
+POSIX shell, ~95 coreutils and `node`; `npm` and `npx`; and, on demand, `bash`,
+`python3` and `pip`. Runtimes install on first use of the command, from R2 on
+the hosted backend and from npm runtime packages locally, and nothing is written
+until the command is actually run. So "I need Python" is not a reason to
+escalate, and it used to be the most common one.
+
+The container is also hosted-only. The CLI registers `workspace` and `laptop`
+and no container at all, so on the CLI this decision does not exist: work that
+needs a real machine goes to `laptop`, behind consent.
+
+Both inventories below are probed, not read off a declaration. The workspace
+numbers come from `scripts/nimbus-runtime-probe.ts`; the container's come from
+`executeInExecutor` against the deployed one, which reports `git` 2.34.1, `npm`
+10.9.8, `node` v22.23.2, `bun`, `sh`/`bash`, `jq` and `curl` PRESENT, and
+`python3`, `python`, `ruby`, `clang`, `gcc`, `make`, `tsc` and `docker` ABSENT
+at exit 127. A local pull of the same image gave a byte-identical inventory.
+
+Escalate when the work needs something the workspace cannot honour, which is a
+short list and each entry is structural rather than a matter of degree:
+
+- **Running a native Linux binary.** Nimbus executes wasm32-wasi and JavaScript,
+  so a prebuilt ELF executable, a native Node addon (`.node`) or a native Python
+  wheel is `native-unsupported` by ABI rather than by configuration. This is the
+  `native_binary` capability. Note the narrow scope: the container can RUN a
+  native binary and cannot BUILD one — it has no `gcc`, `clang` or `make` — so
+  "compile this C" is not an escalation, it is unavailable on both.
+- **Real parallelism.** Nimbus's threads are cooperative and correct, and not
+  parallel. Work whose point is using more than one core — sharded test runs — 
+  gets nothing from the workspace. The container is 2 vCPU.
+- **More memory or disk than an isolate has.** The container is 6185 MiB and
+  7.3G of disk. The workspace runs in the isolate, whose published ceiling is
+  `worker.isolate.memory` — read that entry rather than quoting a number here,
+  because it conflicts with two probed entries beside it and the catalog says so.
+  Its filesystem is capped at 10 GB shared with everything else the object keeps.
+- **Work that must not share the workspace's fate.** A container is disposable
+  and its `/workspace` is snapshot-restored; the workspace filesystem is the
+  agent's own durable one. Something destructive, or something that wants a
+  throwaway tree, belongs in the container for that reason alone.
+
+Explicitly NOT triggers:
+
+- **`docker`.** Not in the image: `docker` and `dockerd` both exit 127 inside the
+  running container. Nothing is gained by escalating for it.
+- **Python, pip, or any interpreter.** The container has NO `python3` — the
+  workspace is the only place Python runs at all, once its runtime installs.
+- **Inbound ports and previews.** The workspace exposes ports and returns
+  preview URLs whenever the deployment has a preview origin configured.
+- **Long-running processes.** The workspace has `startProcess`, a process table,
+  logs, signals and kill.
+- **`git`, on the hosted backend.** The hosted workspace already has it
+  (isomorphic-git in the session worker). The LOCAL workspace does not, and there
+  the answer is `laptop`, not a container — the CLI registers no container. And
+  container `git clone` does not currently work in production at all, because
+  container egress is broken there; escalating for it would fail at exit 128.
+
+Escalation is neither free nor unbounded, and both halves belong in the decision.
+A cold container costs about 2.8s to provision and exec, a warm call about 0.22s,
+so escalating a one-second command costs more than the command while escalating a
+ten-minute build costs nothing worth counting.
+
+Concurrency is admission-controlled, and the platform REFUSES rather than queues.
+Two distinct refusals, both observed from `@cloudflare/containers`: exceeding
+`max_instances` (10 in production, 5 in the second environment) answers HTTP 503,
+and starting containers too quickly answers HTTP 429 "you are requesting too many
+containers per second". Neither waits for a slot. Both are retried as transient,
+but the retry budget is about 1.5s across three attempts, which is shorter than
+one 2.8s provision — so a forty-way parallel workload does not become forty
+containers and does not become a queue either; it becomes failures. Size the work
+to one instance before splitting it across instances that do not exist.
+
+This rule is written down rather than automated on purpose. A heuristic that
+guesses "this looks compute-heavy" is unauditable and wrong in both directions;
+a declared rule is one the model can follow and a reviewer can check against the
+capability sets, which are rendered into the agent's own execution block.
+
 ## Files, diffs, and Outputs
 
 The Environment surface shows one row per provider with a raw file view when

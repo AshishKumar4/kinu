@@ -1,6 +1,16 @@
 [install]
 linker = "hoisted"
 
+# The security scanner every `bun install` and `bun pm scan` runs through.
+#
+# Bun ships NO built-in scanner: without this line `bun pm scan` exits 1 with
+# `error: no security scanner configured` and an install unpacks 1288 tarballs
+# having checked none of them against any advisory feed. This line is what makes
+# the check exist; `scripts/dependency-advisory-gate.ts` asserts it is still
+# here, because deleting it would turn that gate green over a scan nobody ran.
+[install.security]
+scanner = "./scripts/security-scanner.ts"
+
 [test]
 preload = ["./scripts/test-preload.ts"]
 

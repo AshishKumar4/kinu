@@ -45,7 +45,7 @@
  * judges here are built from the ledger scorers, which cannot score a trajectory
  * that never reached them.
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -57,11 +57,13 @@ import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index.
 import { minimumPairsForSignificance, parseCorpus } from '../../packages/core/src/index.js';
 import {
   assessAdmissibility, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE, gitProvenance,
+  hardTaskCases,
   liveChatModel, liveModelTarget, preRegister, reportLiveModelSpend, TASK_OUTCOME, UNCONFIGURED_LLM,
   writeRunRecord,
   type EvalArmState, type EvalObservation, type EvalRunRecord, type EvalTier,
 } from '@proteus/test-utils';
 import { DegenerateRunError, runBehaviourTask, type BehaviourOutput } from './harness.js';
+import { resolveArtifactRoot } from '../../scripts/bench-retention.js';
 
 /** One observation's input: the task and which repetition of it. That pair IS
  *  the pairing identity two runs are compared on. */
@@ -69,17 +71,35 @@ interface EvalInput { task: EvalCase; repetition: number }
 
 const REPO_ROOT = join(import.meta.dirname, '../..');
 const TARGET = liveModelTarget('Behaviour Evals');
-const LLM: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 /**
- * Which arm this process is. Flash is the volume arm that produces the stats,
- * pro the small arm that establishes the bound — the owner's split, declared as
- * a property of the run rather than left in a comment, because a 18-observation
+ * Which arm this process is. Flash is the volume arm that produces the stats, pro
+ * the small arm that establishes the bound — the owner's split, declared as a
+ * property of the run rather than left in a comment, because an 18-observation
  * flash number and a 9-observation pro number invite different readings.
  */
 const TIER: EvalTier = process.env.PROTEUS_EVAL_TIER === 'pro' ? 'pro' : 'flash';
 const REPEATS = Number(process.env.PROTEUS_EVAL_REPEATS ?? (TIER === 'pro' ? '1' : '2'));
 const SEED = Number(process.env.PROTEUS_EVAL_SEED ?? '1');
+
+/**
+ * The model this run DRIVES, and it is the tier's — not the resolver's default.
+ *
+ * `resolveLiveModel` falls back to `DEFAULT_WORKERS_AI_MODEL_ID`, which is the PRO
+ * id, while the run record wrote `EVAL_MODELS[TIER]`. Measured: with only
+ * PROTEUS_ORIGIN + PROTEUS_TOKEN set, the resolver describes itself as `model
+ * @cf/deepseek-ai/deepseek-v4-pro-0813` and the record would have claimed flash —
+ * a record naming a model 3.0x cheaper than the one that was billed. Two sources
+ * of truth for "which model", and the wrong one was the one a reader saw.
+ *
+ * The tier IS the arm, so the tier owns the model, and `modelId` in the record is
+ * read from here rather than re-derived. A `PROTEUS_MODEL` in the environment is
+ * deliberately not honoured for this suite: an arm chosen by two knobs is an arm
+ * that can be half-changed.
+ */
+const LLM: LLMProviderConfig = TARGET === null
+  ? UNCONFIGURED_LLM
+  : { ...TARGET.llm, model: EVAL_MODELS[TIER] };
 
 /**
  * The arm state, recorded because a measurement whose mechanism was switched off
@@ -94,15 +114,22 @@ const ARM: EvalArmState = {
 };
 
 /**
- * The corpus: `behaviour.jsonl` first, because those are the cases that hand
- * over an environment.
+ * The corpus: `behaviour.jsonl` first, because those are the cases that hand over
+ * an environment; then the HARD TASKS, which are the only cases that declare
+ * ground truth and therefore the only ones the headline can be computed over.
  *
  * seed.jsonl is kept whole rather than replaced, but its no-tool cases are
  * filtered out BY TAG rather than deleted. "What is 17 * 23?" cannot exercise a
- * single mechanism here, and including it would guarantee a degenerate
- * observation the harness would correctly refuse — 500 steps available and one
- * used is a property of the task format, not of the agent. seed.jsonl remains
- * the corpus for the judged A/B in `scripts/eval.ts`, which is what it is for.
+ * single mechanism here, and including it would guarantee a degenerate observation
+ * the harness would correctly refuse — 500 steps available and one used is a
+ * property of the task format, not of the agent. seed.jsonl remains the corpus for
+ * the judged A/B in `scripts/eval.ts`, which is what it is for.
+ *
+ * The behavioural cases stay even though they carry no verifier. They are what the
+ * mechanism covariates are measured over, and the comparator already drops an
+ * unverified pair BY NAME (`baseline-unverified`) rather than charging it as a
+ * loss — so a case with no ground truth costs the headline nothing and still
+ * explains a moved one after the fact.
  */
 function loadCorpus(): EvalCase[] {
   const read = (name: string) =>
@@ -110,7 +137,7 @@ function loadCorpus(): EvalCase[] {
   const behaviour = read('behaviour.jsonl');
   const toolUsing = read('seed.jsonl').filter((c) =>
     c.tags?.some((t) => t === 'tool-use' || t === 'multi-step') === true);
-  return [...behaviour, ...toolUsing];
+  return [...behaviour, ...toolUsing, ...hardTaskCases()];
 }
 
 const CORPUS = loadCorpus();
@@ -119,7 +146,36 @@ const CORPUS = loadCorpus();
 const CASES = CORPUS.flatMap((task) =>
   Array.from({ length: REPEATS }, (_, repetition) => ({ task, repetition })));
 
-const DIR = mkdtempSync(join(tmpdir(), 'proteus-behaviour-eval-'));
+/**
+ * Where the run's agent stores live — and SURVIVE.
+ *
+ * This was `mkdtempSync(join(tmpdir(), …))` and was `rmSync`d in `afterAll`, so
+ * every transcript the tier produced was destroyed by the tier that produced it.
+ * The consequence was concrete: run flash-a published a tool-failure count and
+ * the calls behind it were unrecoverable, so "why do the tool calls fail" could
+ * not be answered even in principle — the same defect as the 89-trial bench
+ * whose per-trial artifacts were swept, which is why `bench-retention.ts`
+ * exists. Its rules are reused rather than restated: `resolveArtifactRoot`
+ * refuses `/tmp` (which mkdtemp used), refuses an empty override, and there is
+ * no way to opt out.
+ *
+ * The stores are the whole trajectory, not a summary: `run_events` holds every
+ * `tool_call_end` with its args and its result, which is what an investigation
+ * reads. The path is recorded in the run record, so a number and its evidence
+ * are one hop apart.
+ */
+const TRANSCRIPTS = join(
+  // `runRoot: tmpdir()` states the truth about this tier rather than filling a
+  // parameter: it writes nothing under a throwaway run root, and the check that
+  // matters — the root is not under a swept directory — is the one mkdtemp
+  // failed.
+  resolveArtifactRoot({
+    flag: undefined, env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS },
+    repoRoot: REPO_ROOT, runRoot: tmpdir(),
+  }),
+  `behaviour-${TIER}-${String(Date.now())}`,
+);
+mkdirSync(TRANSCRIPTS, { recursive: true });
 const opened: Database[] = [];
 const observations: EvalObservation[] = [];
 let model: LanguageModel;
@@ -203,7 +259,7 @@ beforeAll(() => {
   model = liveChatModel(LLM);
   const pre = preRegister(CORPUS.length, REPEATS);
   console.log('\n── behaviour eval tier ────────────────────────────────');
-  console.log(`arm:     ${TIER} (${EVAL_MODELS[TIER]})`);
+  console.log(`arm:     ${TIER} (${LLM.model})`);
   console.log(`         evolution ${ARM.evolution ? 'ON' : 'OFF'}, `
     + `${String(ARM.tools.length)} tools, seed ${String(SEED)}`);
   console.log(`corpus:  ${String(CORPUS.length)} tasks x ${String(REPEATS)} repeats `
@@ -223,7 +279,10 @@ afterAll(() => {
     createdAt: new Date().toISOString(),
     ...gitProvenance(REPO_ROOT),
     tier: TIER,
-    modelId: EVAL_MODELS[TIER],
+    // The model DRIVEN, read from the config the session was built with rather
+    // than re-derived from the tier. A record's model id has to be a fact about
+    // the run, not a second computation that can disagree with it.
+    modelId: LLM.model,
     repeats: REPEATS,
     seed: SEED,
     arm: ARM,
@@ -240,14 +299,25 @@ afterAll(() => {
       tokensIn: spend.usage.input ?? 0,
       tokensOut: spend.usage.output ?? 0,
     },
+    transcripts: TRANSCRIPTS,
   };
-  const out = process.env.PROTEUS_EVAL_RECORD
-    ?? join(REPO_ROOT, 'tests/eval/runs', `${record.runId}.json`);
+  // Beside the stores it cites, not in the repo. The default used to be
+  // `tests/eval/runs/<runId>.json`, a TRACKED directory, so every local run —
+  // including a scripted-model one that costs nothing and proves nothing —
+  // dirtied the working tree; one such record reached the primary checkout and
+  // blocked a deploy, because `deploy.sh` correctly refuses a dirty tree.
+  // `tests/eval/runs/` holds PUBLISHED records (`flash-a`, `flash-b` — the
+  // baseline `eval-run.ts` reads), committed deliberately by whoever publishes
+  // the number. A run that nobody publishes leaves nothing behind but its own
+  // artifact directory, under `bench-artifacts/` retention.
+  const out = process.env.PROTEUS_EVAL_RECORD ?? join(TRANSCRIPTS, 'run-record.json');
   writeRunRecord(out, record);
   console.log(`\n${formatRunRecord(record)}\n\nrecord: ${out}\n`);
 
+  // Closed, not deleted. Closing is what checkpoints each store's WAL, so the
+  // retained file is readable by the next process; deleting is what made every
+  // published tool-failure count unauditable.
   for (const db of opened) db.close();
-  rmSync(DIR, { recursive: true, force: true });
 });
 
 describeEval('Agent behaviour over the run-event ledger', {
@@ -260,7 +330,7 @@ describeEval('Agent behaviour over the run-event ledger', {
       const startedAt = Date.now();
       try {
         const output = await runBehaviourTask(input.task, {
-          dir: join(DIR, `rep${String(input.repetition)}`), model, llm: LLM, arm: ARM, opened,
+          dir: join(TRANSCRIPTS, `rep${String(input.repetition)}`), model, llm: LLM, arm: ARM, opened,
         });
         observations.push({
           taskId: input.task.id, repetition: input.repetition, outcome: 'scored',

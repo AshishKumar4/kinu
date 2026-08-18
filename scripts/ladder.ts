@@ -171,6 +171,25 @@ export const LADDER: readonly Gate[] = [
       + 'never parses.',
   },
   {
+    run: 'bun run gate:install-scripts',
+    tier: 'commit',
+    seconds: 0.2,
+    catches: 'a third-party dependency lifecycle script executing on every `bun install` without '
+      + 'a recorded reason. Nine installed dependencies declare `preinstall`/`install`/'
+      + '`postinstall`; bun blocks five; FOUR EXECUTE — esbuild, workerd, puppeteer, sharp — and '
+      + 'the first two fetch a binary and run it (`fetch(`, `https.get`, `execFileSync` in their '
+      + 'install.js). Nothing in this repository authorised that: `trustedDependencies` is absent, '
+      + "so the allowlist doing the work is bun's own, compiled into bun and able to widen in a "
+      + 'patch release. This gate subtracts `bun pm untrusted` from the declared set to learn what '
+      + 'actually runs, and fails when that set is not exactly the allowlist — so a new dependency '
+      + 'arriving with a hook, or a `trustedDependencies` entry appearing, is a deliberate edit '
+      + 'with a stated reason rather than a default drifting underneath us.',
+    blind: 'whether an allowed script is SAFE. It cannot judge that and does not pretend to; it '
+      + 'only forces the set to be a decision. Also blind to what a script does at runtime, to '
+      + 'transitive `bun.lock` integrity, and to CVEs — `bun run gate:dependency-advisories` '
+      + 'is the gate for the last, and shares the reviewed-set shape with this one.',
+  },
+  {
     run: 'bun run gate:skip-ratchet',
     tier: 'commit',
     seconds: 0.3,
@@ -210,12 +229,16 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts',
     tier: 'push',
-    seconds: 1,
+    seconds: 1.6,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
-      + 'genuinely different body.',
+      + 'genuinely different body — and, for scratch-ownership, the three shapes that '
+      + 'leaked 10,124 temp entries in one evening proven red against the historical '
+      + 'source, plus the three it must NOT fire on: prose quoting the defect, a `/tmp/` '
+      + 'path belonging to the SANDBOX rather than this box, and a program whose scratch '
+      + 'outlives the run on purpose.',
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts.',
   },
   {
@@ -308,6 +331,27 @@ export const LADDER: readonly Gate[] = [
       + 'bun, which is why `bun run test:workerd` exists below.',
   },
 
+  {
+    run: 'bun run gate:dependency-advisories',
+    tier: 'ci',
+    seconds: 0.3,
+    catches: 'a dependency arriving with a known vulnerability nobody reviewed. `bun pm scan` '
+      + 'was named as the tool for this in the note above and was invoked NOWHERE — and could '
+      + 'not have helped if it had been, because bun ships no scanner and answers `error: no '
+      + 'security scanner configured`. `bunfig.toml` now points at `scripts/security-scanner.ts`, '
+      + 'so every `bun install` checks all 1288 lockfile entries against npm\'s advisory feed '
+      + 'before unpacking a tarball, and this gate asserts the exposures are EXACTLY the 54 ids '
+      + 'over 19 packages reviewed in REVIEWED_ADVISORIES — failing both when a new one appears '
+      + 'and when a recorded one stops reproducing, so a fixed advisory cannot keep its '
+      + 'acceptance and pre-approve the next one. It is at `ci` and not at commit or push '
+      + 'because it needs the network: a pre-push hook that did would fail every offline push, '
+      + 'and `--no-verify` is not an option here.',
+    blind: 'whether an accepted advisory is exploitable in this repository — it cannot judge '
+      + 'that and does not pretend to, it only forces the set to be a decision. Also blind to a '
+      + 'malicious package with no advisory filed, to anything the npm feed does not carry, and '
+      + 'to what an install script DOES once bun runs it, which is `gate:install-scripts` above. '
+      + 'An unreachable feed is reported as `unknown` via `blocked()`, never as a clean tree.',
+  },
   {
     run: 'bun test packages/cli-backend/',
     tier: 'ci',
@@ -486,6 +530,24 @@ export const LADDER: readonly Gate[] = [
       + 'only PARTIALLY match a constant — the partial-match version reported 12 and '
       + 'every one was two unrelated decisions picking the same round number, so exact '
       + 'is the rule and 0 is the honest count.',
+  },
+  {
+    run: 'bun run gate:scratch-ownership',
+    tier: 'commit',
+    seconds: 1.3,
+    catches: 'a suite that mints a temp directory and never removes it, at the mint site. '
+      + 'Measured 2026-08-17: 10,124 of our own entries in the temp directory, from 2,434 '
+      + 'earlier the same evening, and 5,489 of them were one eager `mkdirSync` that ran '
+      + 'per `createCLIRuntime` — 107 per cli-backend suite run, whether MCTS branched or '
+      + 'not. Three rules, each a shape that leaked: a temp path built from Date.now() '
+      + '(unowned and unattributable — the name cannot say which suite made it), a mkdtemp '
+      + 'prefix absent from the catalogue preflight counts by (so it is uncollected AND '
+      + 'invisible, which under-reported our garbage by ~30%), and a suite file that mints '
+      + 'without releasing through a throw.',
+    blind: 'a directory minted by a program this repo merely runs (`external/` clones mint '
+      + '`agent-core-*`), and the runtime COUNT, deliberately: preflight already argues '
+      + 'that a ceiling on live scratch gets raised the first time it fires and deleted '
+      + 'the second, so free inodes stay its invariant and ownership is this one.',
   },
 ];
 

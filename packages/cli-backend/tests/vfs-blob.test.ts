@@ -5,11 +5,12 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createCLIRuntime } from '../src/runtime.js';
+import { scratchPath } from '@proteus/test-utils';
 
 function freshVfs() {
   const db = new Database(':memory:');
   const rt = createCLIRuntime(db, {
-    dbPath: `/tmp/proteus-vfs-${Math.floor(performance.now())}.db`,
+    dbPath: scratchPath('vfs-blob', 'agent.db'),
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   });
   return rt.storage.vfs;

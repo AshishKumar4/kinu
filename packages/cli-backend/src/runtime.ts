@@ -28,8 +28,12 @@ import {
 import {
   createWorkspace as createWorkspaceFilesystem,
   nextWorkspaceGeneration,
+  workspaceToolchainCapabilities,
 } from '@proteus/core/workspace';
 import { tolerate, tolerateAsync } from '@proteus/core/obs';
+import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
+import bashRuntime from '@nimbus-sh/runtime-bash';
+import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
 import { createSandboxedExecutor } from './executor.js';
@@ -55,6 +59,19 @@ export interface CLIRuntimeConfig {
   codexAuthStore?: LocalCodexAuthStore;
   codexConfigPath?: string;
   onCodexRefresh?: (credential: OAuthCredential) => void;
+  /**
+   * Where the HOST plane is rooted — the `laptop` executor and the checkpointed
+   * host shell behind it, i.e. the developer's own filesystem. Defaults to
+   * `process.cwd()`, where `proteus` was invoked.
+   *
+   * `null` withholds the plane entirely, and that is the only isolation there
+   * is: `laptop.writeFile` resolves an ABSOLUTE path straight through and
+   * `laptop.exec` runs a real shell that can `cd` anywhere, so re-rooting the
+   * provider somewhere harmless contains nothing. A measurement harness passes
+   * `null` — an eval episode with a host plane writes into the developer's repo
+   * (tests/evals/harness.ts, `requireSandboxedExecutors`).
+   */
+  hostRoot?: string | null;
   /** Shadow-git checkpoints kept per working directory (the one retention knob). */
   checkpointKeep?: number;
 }
@@ -133,6 +150,19 @@ export function localTransactions(db: Database): WorkspaceTransactions {
     },
   };
 }
+
+/**
+ * The runtimes a local workspace can install into itself.
+ *
+ * Named here rather than in `@proteus/core` because these are the bytes: 40 MB
+ * of wasm read through `node:fs`, which the deployed Worker can neither bundle
+ * nor open. A hosted session gets the same runtimes from R2 through
+ * `nimbus install`; this is the same publisher for a host that has a disk.
+ *
+ * Importing them costs the two manifests. The blobs stay on disk until a
+ * `python3` or a `bash` is actually run — see core/vfs/workspace-runtimes.ts.
+ */
+const WORKSPACE_RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRuntime];
 
 /** Positional-binding SQL — what the events hub, the release board and
  *  the experience library speak. A Durable Object's `ctx.storage.sql` is this
@@ -284,7 +314,10 @@ export function createCLIRuntime(
     fiber: createLinuxFiber(sql),
   };
 
-  const basePath = config.dbPath.replace(/\.db$/, '');
+  // `:memory:` is SQLite's in-memory sentinel, not a path — see the spawner's
+  // own doc comment. Null tells it there is no directory rather than letting it
+  // compute one from a value that is not a filename.
+  const basePath = config.dbPath === ':memory:' ? null : config.dbPath.replace(/\.db$/, '');
   const { spawn, abort } = createBranchSpawner(basePath, {
     llm: config.llm,
     providerCredentials: config.providerCredentials,
@@ -299,6 +332,7 @@ export function createCLIRuntime(
     sql: nimbusSql(db),
     transactions: localTransactions(db),
     generation: nextWorkspaceGeneration(nimbusSql(db)),
+    runtimes: WORKSPACE_RUNTIMES,
   });
   const vfs = workspace.vfs;
 
@@ -310,13 +344,12 @@ export function createCLIRuntime(
   craftStoreImpl.ensureSchema();
   const craftStore = adaptCraftStore(craftStoreImpl);
 
-  // v2.0: shell + executionRouter so the canonical `run` tool in core has a
-  // workspace provider and a bound POSIX shell. In CLI/local mode the shell is
-  // the user's real machine, rooted at the process cwd where `proteus` or an
-  // alias was invoked. Durable agent memory still lives in SQLite/VFS.
-  // Shadow-git checkpoints: every host-FS mutation path (the bound shell — the
-  // run tool + laptop.exec — and laptop.writeFile) snapshots its target dir
-  // before the first mutation of each turn. Invisible until /undo.
+  // Shadow-git checkpoints for the HOST plane: both of its mutation paths
+  // (`laptop.exec`, through the checkpointed shell, and `laptop.writeFile`)
+  // snapshot their target directory before the first mutation of each turn.
+  // Invisible until /undo. Built even when there is no host plane, because
+  // `status()` and `list()` are asked either way and answer honestly — nothing
+  // mutated the host, so there is nothing to restore.
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
   // The live shell-approval policy every gated exec boundary below consults:
   // `mode` reads agent_config directly (no staleness — a setShellApprovalMode
@@ -342,12 +375,10 @@ export function createCLIRuntime(
   // Checkpointing still sits inside the gate, so a refused `rm -rf /` does
   // not spend a snapshot on a command that never ran.
   const shell: Shell = withApprovalGatedShell(workspace.shell, approvalPolicy);
-  const hostShell: Shell = withCheckpointedShell(
-    createHostShell(process.cwd()), checkpoints, process.cwd());
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
-  // Both local executors run their commands in THIS process's container, so
-  // both carry its measured cgroup limits — the truth `nproc` cannot tell the
-  // model. Null off a cgroup, and then nothing is claimed.
+  // Every executor registered below runs its commands in THIS process's
+  // container, so each carries its measured cgroup limits — the truth `nproc`
+  // cannot tell the model. Null off a cgroup, and then nothing is claimed.
   const limits = hostResourceLimits();
   // `sql` is not optional in practice: workspace.createTool seeds the crafted
   // tool's score prior and writes the misevolution veto trail through it, and
@@ -355,10 +386,17 @@ export function createCLIRuntime(
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
     vfs, memory, craftStore, shell, sql,
     ledger: () => turnFileLedgerProvider?.(),
+    toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
   };
   if (limits) inlineOptions.resourceLimits = limits;
   executionRouter.register(createInlineExecutor(inlineOptions));
-  executionRouter.register(createLocalLaptopExecutor(process.cwd(), hostShell, checkpoints, limits));
+  // The HOST plane, when this runtime is allowed one. Withholding it is the
+  // whole isolation story for a measurement harness — see CLIRuntimeConfig.
+  const hostRoot = config.hostRoot === undefined ? process.cwd() : config.hostRoot;
+  if (hostRoot !== null) {
+    const hostShell = withCheckpointedShell(createHostShell(hostRoot), checkpoints, hostRoot);
+    executionRouter.register(createLocalLaptopExecutor(hostRoot, hostShell, checkpoints, limits));
+  }
 
   return buildRuntime({
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
@@ -410,6 +448,7 @@ export function buildCLIHeadRuntime(
     sql: nimbusSql(db),
     transactions: localTransactions(db),
     generation: nextWorkspaceGeneration(nimbusSql(db)),
+    runtimes: WORKSPACE_RUNTIMES,
   });
   const vfs = workspace.vfs;
 
@@ -422,7 +461,10 @@ export function buildCLIHeadRuntime(
 
   const shell = withApprovalGatedShell(workspace.shell);
   const executionRouter = new DefaultExecutionRouter();
-  executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell, sql }));
+  executionRouter.register(createInlineExecutor({
+    vfs, memory, craftStore, shell, sql,
+    toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
+  }));
 
   // The parent workspace, over the parent runtime in this same process — the
   // same interface the cloud head satisfies with Durable Object RPC.

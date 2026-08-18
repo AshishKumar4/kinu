@@ -22,19 +22,40 @@
  * second notification path, and nothing here picks a mechanism.
  */
 
+import type { RunEventInput } from '../events/types.js';
 import type { SignalDeliverer } from '../types/signals.js';
 import type { AbandonedHeadRun, HeadJournal } from './journal.js';
+
+/** What this reconciliation needs of the run-event recorder: find the run a
+ *  fork was dispatched from, and append to it. Structural so core's heads layer
+ *  does not depend on the recorder class. */
+export interface RunEventLedger {
+  runForHeadSplit(rootId: string): string | null;
+  emit(runId: string, input: RunEventInput): void;
+}
 
 /** The `proteusEvent` name for an interrupted fork — the queued turn's
  *  provenance, and what makes the chat render it as an event card. */
 export const FORK_INTERRUPTED_SIGNAL = 'fork_interrupted';
 
-/** What `error_message` records on a head this reconciliation settled. Stated
- *  as the observable fact (no executor) rather than a guessed cause: the
- *  journal cannot distinguish a cancel from a crash, and inventing one would
- *  put a cause nobody observed into the run history. */
+/**
+ * What `error_message` records on a head this reconciliation settled.
+ *
+ * Two observations and no cause. `running` meant "spawned, and no report
+ * recorded"; the reconciliation runs before anything can resume a fork, so at
+ * that instant nothing exists that could produce one. The journal cannot
+ * distinguish an operator cancel from a process exit from a DO eviction — this
+ * file's own header names all three — and it must not pick one.
+ *
+ * It previously read "settled at start of life, having outlived the activation
+ * that spawned it", which named a mechanism: a head that ran past its owner.
+ * That is false for the operator cancel, and the phrasing reads as a thrown
+ * runtime error rather than what it is — a bookkeeping entry, written by the
+ * routine that retires stale rows. It was reported as a crash on that basis.
+ */
 export const FORK_INTERRUPTED_REASON =
-  'no executor: settled at start of life, having outlived the activation that spawned it';
+  'no executor: spawned, never reported, and retired when a later activation '
+  + 'found nothing left that could run it';
 
 /** How many runs the wake names before it summarizes. A resumed workspace with
  *  a long-abandoned history should still read as one short paragraph. */
@@ -76,6 +97,11 @@ export function forkInterruptedWake(runs: readonly AbandonedHeadRun[]): string {
 export async function reconcileInterruptedForks(deps: {
   readonly journal: Pick<HeadJournal, 'abandonRunning'>;
   readonly signals: SignalDeliverer;
+  /** The durable run-event ledger, when the caller has one. Each settled run
+   *  gets its terminal `head_abandoned` appended to the run that carried its
+   *  `head_split` — the same retraction the roster gets, on the plane the
+   *  Timeline and every delegation-cost query read. */
+  readonly runEvents?: RunEventLedger;
   readonly logActivity?: (event: string, detail?: string) => void;
 }): Promise<readonly AbandonedHeadRun[]> {
   const runs = deps.journal.abandonRunning(FORK_INTERRUPTED_REASON);
@@ -84,6 +110,7 @@ export async function reconcileInterruptedForks(deps: {
     'fork_runs_abandoned',
     runs.map((run) => `${run.rootId} (${run.abandoned}/${run.total})`).join(', '),
   );
+  recordAbandonedRuns(deps.runEvents, runs);
   await deps.signals.deliver({
     kind: FORK_INTERRUPTED_SIGNAL,
     text: forkInterruptedWake(runs),
@@ -93,4 +120,36 @@ export async function reconcileInterruptedForks(deps: {
     },
   });
   return runs;
+}
+
+/** Close each dead fork's span in the run-event ledger.
+ *
+ *  Best-effort per run and never fatal: the journal is already settled by the
+ *  time this runs, and losing the agent's wake because a ledger write threw
+ *  would trade the record this module exists for against a secondary copy of
+ *  it. A fork with no recorded split has no run to close and is skipped. */
+function recordAbandonedRuns(
+  ledger: RunEventLedger | undefined,
+  runs: readonly AbandonedHeadRun[],
+): void {
+  if (!ledger) return;
+  for (const run of runs) {
+    try {
+      const runId = ledger.runForHeadSplit(run.rootId);
+      if (!runId) continue;
+      ledger.emit(runId, {
+        type: 'head_abandoned',
+        rootId: run.rootId,
+        headCount: run.total,
+        abandoned: run.abandoned,
+        rationale: run.rationale,
+        reason: FORK_INTERRUPTED_REASON,
+      });
+    } catch (err) {
+      console.warn(
+        `[proteus] could not record the abandonment of fork ${run.rootId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
 }

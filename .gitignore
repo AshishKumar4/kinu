@@ -89,3 +89,9 @@ CC-CORPUS-*.md
 # a commit once by a `git add -A` in a worktree; the real artifacts live under
 # bench-artifacts/ and tests/bench/ with their own retention.
 /*_benchmark.jsonl
+
+# Behaviour-eval task output. The corpus tasks (`ws-inventory`, `ws-find-todo`,
+# `ws-recover-cmd`) tell the agent to write these; the harness runs in a temp dir,
+# so a root-level copy is an escaped run, never a fixture.
+/report.txt
+/todos.txt

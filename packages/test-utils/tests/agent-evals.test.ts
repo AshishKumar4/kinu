@@ -179,7 +179,7 @@ describe('scoreSettleVisibility — every settle mode writes where the reader re
     seedHeads(store.sql, { root: 'merge-a', heads: 2 });
 
     const mergedOnly = (sql: SqlExecutor, limit: number) =>
-      listForkRuns(sql, limit).filter((run) => run.settle === 'merged');
+      listForkRuns(sql, null, limit).items.filter((run) => run.settle === 'merged');
     const score = scoreSettleVisibility(store.sql, mergedOnly);
 
     expect(score.rootsWritten).toBe(2);
@@ -200,7 +200,7 @@ describe('scoreSettleVisibility — every settle mode writes where the reader re
     seedHeads(store.sql, { root: 'merge-a', heads: 2 });
 
     const competedOnly = (sql: SqlExecutor, limit: number) =>
-      listForkRuns(sql, limit).filter((run) => run.settle === 'competed');
+      listForkRuns(sql, null, limit).items.filter((run) => run.settle === 'competed');
     const score = scoreSettleVisibility(store.sql, competedOnly);
 
     expect(score.invisibleRoots).toEqual(['merge-a']);
@@ -708,14 +708,76 @@ describe('spillRetrieval — spilled context read back', () => {
 });
 
 describe('toolOutcomes — the coarse instrument that always has a denominator', () => {
-  test('returning calls pass and the tool mix is reported', () => {
+  test('returning calls pass, and a clean run names NO mix', () => {
+    // What this used to assert was `detail` containing `run×1` — a histogram
+    // built over ALL rows, so every published mix summed to the denominator and
+    // described the run's tool USAGE while sitting beside a failure rate. Run
+    // flash-a scored 103/126 and the record could not say which 23 failed. The
+    // mix is now over failures, so a clean run has nothing to name.
     const store = eventStore();
     emit(store.sql, 'run-a', 'tool_call_end', { name: 'run', toolCallId: 't1', durationMs: 10 });
     emit(store.sql, 'run-a', 'tool_call_end', { name: 'file', toolCallId: 't2', durationMs: 4 });
     const score = toolOutcomes.score(store.sql);
     expect(score.eligible).toBe(2);
     expect(score.passed).toBe(2);
-    expect(score.detail).toContain('run×1');
+    expect(score.detail).toBe('2/2 tool calls returned; 0 refused, 0 work failed, 0 runtime absent, 0 broke');
+    expect(score.detail).not.toContain('run×1');
+    store.close();
+  });
+
+  test('the failing mix names the tool, the ACTION and the reason', () => {
+    // `file×13` was the best the old record could do, and it is unactionable:
+    // read, write and edit are one bucket, and nine distinct refusal reasons are
+    // one bucket. The args on the row plus the reason on the result are what make
+    // this line a diagnosis instead of a count.
+    const store = eventStore();
+    emit(store.sql, 'run-a', 'tool_call_end', {
+      name: 'file', toolCallId: 't1', args: { action: 'edit', path: 'a.ts' },
+      result: { reason: 'not_found', error: 'old_text does not appear in a.ts' },
+    });
+    emit(store.sql, 'run-a', 'tool_call_end', {
+      name: 'file', toolCallId: 't2', args: { action: 'edit', path: 'b.ts' },
+      result: JSON.stringify({ reason: 'not_found', error: 'old_text does not appear in b.ts' }),
+    });
+    emit(store.sql, 'run-a', 'tool_call_end', {
+      name: 'run', toolCallId: 't3', args: { command: 'bun test' },
+      result: 'Error (exit 1)\n--- stdout ---\n1 fail\n',
+    });
+    const score = toolOutcomes.score(store.sql);
+    expect(score.eligible).toBe(3);
+    expect(score.passed).toBe(0);
+    // Two refusals the tool was RIGHT to make, one command that ran and found a
+    // failing suite, nothing broken. Reported split, because which part a
+    // failure sits in is the whole finding.
+    expect(score.detail).toBe(
+      '0/3 tool calls returned; 2 refused, 1 work failed, 0 runtime absent, 0 broke; '
+      + 'failed: file·edit·not_found×2, run·exit_1×1',
+    );
+    store.close();
+  });
+
+  test('RED: a structured error body is a failure, on either backend shape', () => {
+    // Measured to score a CLEAN 1/1 before the fix, on both shapes. The cf sink
+    // stores a tool's structured output as an object and the CLI sink renders it
+    // through JSON.stringify, so the identical payload arrives two ways and a
+    // reader that narrows to a string sees a per-backend false zero. The eval
+    // harness ran a runtime with no executionRouter, so every `execute_tools`
+    // block touching `workspace.*` failed exactly like this and was counted as a
+    // pass — an overestimate of tool health, in the flattering direction.
+    const store = eventStore();
+    emit(store.sql, 'run-a', 'tool_call_end', {
+      name: 'execute_tools', toolCallId: 't1',
+      result: { error: 'workspace.createTool is not a function' },
+    });
+    emit(store.sql, 'run-a', 'tool_call_end', {
+      name: 'execute_tools', toolCallId: 't2',
+      result: JSON.stringify({ error: 'workspace.createTool is not a function' }),
+    });
+    const score = toolOutcomes.score(store.sql);
+    expect(score.eligible).toBe(2);
+    expect(score.passed).toBe(0);
+    expect(score.detail).toContain('0 refused, 0 work failed, 0 runtime absent, 2 broke');
+    expect(score.detail).toContain('execute_tools·returned_error×2');
     store.close();
   });
 

@@ -35,7 +35,7 @@
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
  */
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
@@ -57,15 +57,21 @@ import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
-import { MessageView, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
+import { MessageView, DeviceConsentCard, ChatErrorCard, EmptyConversation, HistoryBoundary } from "@/pages/WorkspacePage";
+import { usePagedScroll } from "@/hooks/use-paged-scroll";
+import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { SupervisePage } from "@/pages/SupervisePage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
-import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, type JsonValue } from "@proteus/core";
+import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript, type JsonValue } from "@proteus/core";
 import type { BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ExecutorInfo } from "@/lib/executors";
-import type { DirEntry, ForkRunParams, ForkRunSummary, HeadRunView, MountInfo, PendingAction, RunSummary } from "@proteus/core";
+import type {
+  ChatHistoryEntry, DirEntry, ExplorationCanvasRun, ForkRunParams, ForkRunSummary,
+  HeadRunView, MountInfo, Page, PageRequest, PendingAction, RunSummary, SearchNode,
+} from "@proteus/core";
+import { seekPage } from "@proteus/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
 import * as v from "valibot";
 
@@ -444,12 +450,17 @@ const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
 };
 
 /**
- * The two fork runs the Exploration frames list, and the stores behind them.
+ * Every fork the Exploration frames list, and the stores behind them.
  *
  * Both settle policies are in the same list on purpose: that IS the change.
  * `getMctsNodeDetail` legitimately answers null for a node the server has
  * retired and the view falls back to the row it holds — stubRpc's blanket `[]`
  * for a `get*` is not that shape and crashes the inspector.
+ *
+ * The list is longer than one page on purpose too. A workspace that has forked
+ * thirty-four times is the case where the old bare `LIMIT 30` quietly answered
+ * "that is every fork", and a frame that never crosses a page boundary cannot
+ * photograph either the boundary or the end of the list.
  */
 const FORK_RUNS: ForkRunSummary[] = [
   {
@@ -464,7 +475,37 @@ const FORK_RUNS: ForkRunSummary[] = [
     id: "root-merge-0", task: "Audit the CLI surface", startedAt: NOW - 9 * 36e5,
     status: "partial", settle: "merged", branches: 2, winnerScore: null,
   },
+  ...olderForks(),
 ];
+
+/**
+ * The forks behind the first page — a week of real work, so scrolling past the
+ * boundary lands on rows that read like history rather than like filler.
+ */
+function olderForks(): ForkRunSummary[] {
+  const tasks = [
+    "Reproduce the checkout 500 against the staging snapshot",
+    "Work out which migration dropped the coupon index",
+    "Find every reader of rules[kind] outside checkout",
+    "Decide whether inferKind belongs at the edge or the reader",
+    "Trace the cart serializer's null path",
+    "Check the admin coupon report against the same guard",
+    "Compare the two candidate fixes on the failing fixture",
+    "Establish whether the 500 predates the pricing refactor",
+  ];
+  return Array.from({ length: 31 }, (_, i) => {
+    const competed = i % 3 === 0;
+    return {
+      id: competed ? `n${String(100 + i).padStart(3, "0")}` : `root-merge-${100 + i}`,
+      task: `${tasks[i % tasks.length]!}${i >= tasks.length ? ` (attempt ${Math.floor(i / tasks.length) + 1})` : ""}`,
+      startedAt: NOW - (10 + i) * 36e5,
+      status: i % 7 === 5 ? "partial" as const : "completed" as const,
+      settle: competed ? "competed" as const : "merged" as const,
+      branches: competed ? 9 + (i % 5) : 2 + (i % 3),
+      winnerScore: competed ? 0.62 + ((i % 7) * 0.04) : null,
+    };
+  });
+}
 
 const MERGED_RUN: HeadRunView = {
   rootId: "root-merge-1",
@@ -560,12 +601,14 @@ const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
 };
 
 /**
- * The canvas projection, as the server composes it: the run list, each run's
- * dispatch parameters, and the search rows for every competed tree — one read.
+ * Dispatch parameters for the forks that still have them recorded.
  *
  * Two runs of the SAME task under different policies are in here on purpose:
  * that is the pair the owner could not tell apart, and the frame is where the
- * claim that they now read differently is checked.
+ * claim that they now read differently is checked. The older forks have none —
+ * the ledger prunes settled rows after a day while the trees stay forever, so
+ * "parameters no longer recorded" is the normal state of a week-old fork and the
+ * frame photographs it rather than pretending otherwise.
  */
 const FORK_PARAMS: ForkRunParams[] = [
   {
@@ -576,14 +619,70 @@ const FORK_PARAMS: ForkRunParams[] = [
   { rootId: "root-merge-0", policy: "merge", mergeStrategy: "best_of", branches: 2 },
 ];
 
-/** Search rows for the canvas, carrying the root each belongs to. */
-const CANVAS_SEARCH = MCTS_ROWS.map((row) => ({ ...row, root_id: "n000" }));
+/**
+ * The canvas as the server composes it: ONE ROW PER FORK, each carrying its own
+ * parameters and its own tree rows. Not three parallel collections keyed by root
+ * id — that shape is what let the trees and the fork list beside them disagree.
+ */
+const CANVAS_ROWS: readonly ExplorationCanvasRun[] = FORK_RUNS.map((run) => ({
+  run,
+  params: FORK_PARAMS.find((entry) => entry.rootId === run.id) ?? null,
+  tree: run.id === "n000" ? MCTS_ROWS.map(asSearchNode) : [],
+}));
 
-const EXPLORATION_CANVAS = { runs: FORK_RUNS, params: FORK_PARAMS, search: CANVAS_SEARCH };
+/** The generator writes the CLIENT's loose row shape, which is what the socket
+ *  broadcast and `getSearchTree` really deliver. This stub is standing in for the
+ *  server, so the canvas payload has to be the server's row — every column
+ *  present, including the ones a partial row leaves out. */
+function asSearchNode(row: MctsRow): SearchNode {
+  return {
+    id: row.id,
+    parent_id: row.parent_id,
+    root_id: "n000",
+    task: row.task ?? "",
+    action: row.action,
+    observation: row.observation ?? "",
+    code_used: row.code_used ?? null,
+    code_language: row.code_used ? "typescript" : null,
+    visits: row.visits,
+    value: row.value,
+    depth: row.depth,
+    // `running` is a merged-HEAD status; the search_nodes CHECK constraint
+    // cannot hold it, so a row claiming it is not a row the server could serve.
+    status: row.status === "running" ? "open" : row.status,
+    msg_id: row.msg_id ?? null,
+    branch_agent_key: row.branch_agent_key ?? null,
+    created_at: row.created_at ?? NOW,
+  };
+}
+
+/**
+ * Pages the fixture the way the read model pages storage, through the same
+ * `seekPage`, so the frame exercises the real walk rather than one hand-made
+ * page. The anchor here is the bare fork id where the server's is composite:
+ * that difference is deliberate and safe, because `after` is documented opaque
+ * and a client only ever echoes it back — a stub standing in for the server may
+ * choose any format it can resolve.
+ */
+function canvasPage(rows: readonly ExplorationCanvasRun[], args: unknown[] | undefined): Page<ExplorationCanvasRun> {
+  const request = v.parse(GalleryPageRequestSchema, args?.[0] ?? {});
+  const limit = request.limit ?? 30;
+  const after = request.cursor?.after;
+  const start = after === undefined ? 0 : rows.findIndex((entry) => entry.run.id === after) + 1;
+  return seekPage(rows.slice(start, start + limit + 1), limit, (entry) => entry.run.id);
+}
+
+const GalleryPageRequestSchema: v.GenericSchema<PageRequest> = v.object({
+  cursor: v.optional(v.object({ after: v.string() })),
+  limit: v.optional(v.number()),
+});
 
 const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getExplorationCanvas") return rpcResult(EXPLORATION_CANVAS).json<T>();
-  if (method === "listForkRuns") return rpcResult(FORK_RUNS).json<T>();
+  if (method === "getExplorationCanvas") return rpcResult(canvasPage(CANVAS_ROWS, args)).json<T>();
+  if (method === "listForkRuns") {
+    const page = canvasPage(CANVAS_ROWS, args);
+    return rpcResult({ ...page, items: page.items.map((entry) => entry.run) }).json<T>();
+  }
   if (method === "getForkRun") return rpcResult(FORK_RUNS.find((run) => run.id === args?.[0]) ?? null).json<T>();
   if (method === "getSearchTree") return rpcResult(MCTS_ROWS).json<T>();
   if (method === "getHeadRun") return rpcResult(args?.[0] === MERGED_RUN.rootId ? MERGED_RUN : null).json<T>();
@@ -595,11 +694,10 @@ const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 /** The same surface with the MERGED run selected — a fork is a tree at depth 1,
  *  and every score encoding has to be absent rather than drawn from a zero no
  *  branch earned. This frame is where that claim is checked. */
+const MERGE_FIRST_ROWS = CANVAS_ROWS.slice(1).map((entry) => ({ ...entry, tree: [] }));
+
 const mergeFirstRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getExplorationCanvas") {
-    return rpcResult({ ...EXPLORATION_CANVAS, runs: FORK_RUNS.slice(1), search: [] }).json<T>();
-  }
-  if (method === "listForkRuns") return rpcResult(FORK_RUNS.slice(1)).json<T>();
+  if (method === "getExplorationCanvas") return rpcResult(canvasPage(MERGE_FIRST_ROWS, args)).json<T>();
   return forkRpc<T>(method, args);
 };
 
@@ -801,6 +899,101 @@ function ChatEmptyFrame() {
         <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
           <EmptyConversation mission={BRAIN_STATUS.purpose} />
         </div>
+        <GalleryComposer />
+      </div>
+    </div>
+  );
+}
+/* ── Chat infinite scroll ───────────────────────────────────────────
+
+   The REAL hooks (usePagedScroll + useGrowingScroll), the REAL merge rule and
+   the REAL HistoryBoundary, over a stub page source whose latency, failure and
+   live-arrival timing this frame can drive. The hooks are the whole of the
+   behaviour under test and none of them touch the socket, so a harness that
+   can make a page arrive slowly proves more here than the live app can — in
+   the live app the awkward cases are exactly the ones you cannot arrange.
+
+   Query params: ?latency=ms  ?fail=1 (first fetch fails)  ?depth=N (pages
+   before exhaustion). */
+const HISTORY_PAGE = 12;
+const historyParams = new URLSearchParams(location.search);
+const HISTORY_LATENCY = Number(historyParams.get("latency") ?? 400);
+const HISTORY_DEPTH = Number(historyParams.get("depth") ?? 4);
+
+/** The stored transcript this frame pages back through, oldest first. */
+const STORED_HISTORY: ChatHistoryEntry[] = Array.from(
+  { length: HISTORY_PAGE * HISTORY_DEPTH },
+  (_, i) => ({
+    id: `h${i + 1}`,
+    role: i % 2 === 0 ? "user" as const : "assistant" as const,
+    content: `Archived message ${i + 1} of ${HISTORY_PAGE * HISTORY_DEPTH}. `
+      + "Long enough to occupy real vertical space, so the scroll anchoring is "
+      + "measured against a container that actually overflows.",
+    createdAt: "2026-01-01 00:00:00",
+  }),
+);
+
+function ChatHistoryFrame() {
+  const [live, setLive] = useState<UIMessage[]>(() => MESSAGES.slice(-3));
+  const failed = useRef(historyParams.get("fail") === "1");
+  const [calls, setCalls] = useState<string[]>([]);
+
+  const history = usePagedScroll<ChatHistoryEntry>({
+    grows: "up",
+    fetchPage: useCallback(async (cursor) => {
+      setCalls((prev) => [...prev, cursor.after]);
+      const settled = Promise.withResolvers<void>();
+      setTimeout(settled.resolve, HISTORY_LATENCY);
+      await settled.promise;
+      if (failed.current) { failed.current = false; throw new Error("stub failure"); }
+      const end = STORED_HISTORY.findIndex((row) => row.id === cursor.after);
+      const from = end < 0 ? STORED_HISTORY.length : end;
+      const start = Math.max(0, from - HISTORY_PAGE);
+      const items = STORED_HISTORY.slice(start, from);
+      return start === 0 ? { status: "end", items } : { status: "more", items, next: { after: items[0]!.id } };
+    }, []),
+    startFrom: useCallback(() => live[0] ? { after: live[0].id } : null, [live]),
+  });
+
+  const transcript = useMemo(() => mergeTranscript(history.fetched, live), [history.fetched, live]);
+  const messagesRef = useGrowingScroll<HTMLDivElement>({
+    grows: "up", content: transcript, fetched: history.fetched, onReachEdge: history.loadMore,
+  });
+
+  // Driven from the test, so a live turn can be made to land while an older
+  // page is still in flight — the case that decides whether the two sources
+  // can double-render the same message.
+  useEffect(() => {
+    const onArrive = (event: Event) => {
+      const detail = v.safeParse(v.pipe(v.string(), v.nonEmpty()), event instanceof CustomEvent ? event.detail : null);
+      const id = detail.success ? detail.output : `live-${Date.now()}`;
+      setLive((prev) => [...prev, {
+        id, role: "assistant", parts: [{ type: "text", text: `Live arrival ${id}` }],
+      }]);
+    };
+    window.addEventListener("gallery:arrive", onArrive);
+    return () => window.removeEventListener("gallery:arrive", onArrive);
+  }, []);
+
+  return (
+    <div className="flex h-screen justify-center p-bg p-text">
+      <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
+        <GalleryChatTabs />
+        <div ref={messagesRef} data-testid="chat-scroll"
+          className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
+          <HistoryBoundary
+            loading={history.loading} error={history.error}
+            exhausted={history.exhausted} onRetry={history.loadMore} />
+          {transcript.map((m, i) => (
+            <div key={m.id} data-msg={m.id}>
+              <MessageView message={m} isLast={i === transcript.length - 1} isStreaming={false} />
+            </div>
+          ))}
+        </div>
+        <div data-testid="probe" className="hidden">{JSON.stringify({
+          ids: transcript.map((m) => m.id), calls,
+          loading: history.loading, exhausted: history.exhausted, error: history.error,
+        })}</div>
         <GalleryComposer />
       </div>
     </div>
@@ -1494,11 +1687,11 @@ const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
   },
   {
     name: "sandbox", kind: "sandbox", available: true, configured: true, active: true, status: "active",
-    capabilities: ["shell", "npm", "git", "docker", "fs_owned", "net_inbound", "process_long"],
+    capabilities: ["shell", "npm", "git", "fs_owned", "net_inbound", "process_long"],
   },
   {
     name: "workspace", kind: "workspace", available: true, configured: true, active: true, status: "active",
-    capabilities: ["javascript", "typescript", "shell", "fs_shared"],
+    capabilities: ["javascript", "typescript", "python", "shell", "npm", "fs_shared"],
   },
 ];
 
@@ -1597,7 +1790,12 @@ const SUPERVISE_TASKS = [
 /** Typed, so the fixtures move with `RunSummary` instead of only failing at the
  *  browser-side valibot parse. The second run is deliberately a SILENT one — the
  *  provider reported nothing for any of its turns — because that is the case the
- *  history block has to render as unreported rather than as free. */
+ *  history block has to render as unreported rather than as free.
+ *
+ *  Longer than one page on purpose: this block sums the usage of the rows it
+ *  received and prints the total as the workspace's spend, so a frame that never
+ *  crosses a page boundary cannot show whether that total is honest about what
+ *  it covers. */
 const SUPERVISE_RUNS: RunSummary[] = [
   {
     runId: "run_9c1", startedAt: NOW - 45 * 60e3, causedBy: "chat",
@@ -1610,7 +1808,39 @@ const SUPERVISE_RUNS: RunSummary[] = [
     userMessage: null, status: "completed", eventCount: 18,
     usage: {}, turnsWithoutUsage: 3,
   },
+  ...olderRuns(),
 ];
+
+/** The runs behind the first page — a week of turns, so the boundary and the
+ *  end of the history are both reachable in the frame. */
+function olderRuns(): RunSummary[] {
+  const asked = [
+    "Which migration dropped the coupon index?",
+    "Show me every reader of rules[kind]",
+    "Does the cart serializer already guard this?",
+    "Run the checkout suite against the fix",
+    "Why is the admin report still 500ing?",
+    null,
+  ];
+  return Array.from({ length: 40 }, (_, i) => {
+    const silent = i % 9 === 8;
+    const asking = asked[i % asked.length] ?? null;
+    return {
+      runId: `run_8${String(99 - i).padStart(2, "0")}`,
+      startedAt: NOW - (7 + i) * 36e5,
+      causedBy: asking === null ? "timer" : "chat",
+      userMessage: asking,
+      status: i % 11 === 7 ? "aborted" : "completed",
+      eventCount: 12 + ((i * 7) % 50),
+      usage: silent ? {} : {
+        input: 12_000 + i * 1_400,
+        output: 800 + i * 60,
+        cacheRead: i % 3 === 0 ? 0 : 6_000 + i * 900,
+      },
+      turnsWithoutUsage: silent ? 2 : 0,
+    };
+  });
+}
 
 const SUPERVISE_TRIGGERS = [
   {
@@ -1639,7 +1869,15 @@ const SUPERVISE_JOBS: BackgroundJob[] = [
 
 const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listCurriculumTasks") return rpcResult({ tasks: SUPERVISE_TASKS }).json<T>();
-  if (method === "getRunSummaries") return rpcResult(SUPERVISE_RUNS).json<T>();
+  if (method === "getRunSummaries") {
+    const request = v.parse(GalleryPageRequestSchema, args?.[0] ?? {});
+    const limit = request.limit ?? 30;
+    const after = request.cursor?.after;
+    const start = after === undefined ? 0 : SUPERVISE_RUNS.findIndex((run) => run.runId === after) + 1;
+    return rpcResult(seekPage(
+      SUPERVISE_RUNS.slice(start, start + limit + 1), limit, (run) => run.runId,
+    )).json<T>();
+  }
   if (method === "listTriggers") return rpcResult({ triggers: SUPERVISE_TRIGGERS }).json<T>();
   if (method === "listBackgroundJobs") return rpcResult(SUPERVISE_JOBS).json<T>();
   return stubRpc<T>(method, args);
@@ -1838,6 +2076,7 @@ async function mount() {
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "chatempty") node = <ChatEmptyFrame />;
+  else if (frame === "chathistory") node = <ChatHistoryFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;

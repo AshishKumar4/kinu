@@ -129,7 +129,7 @@ describe('a re-driven fork job stays one run', () => {
     for (let i = 0; i < 3; i++) void drive(journal, spawned, false);
     await drive(journal, spawned, true);
 
-    const runs = listForkRuns(sql, 30);
+    const runs = listForkRuns(sql, null, 30).items;
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ task: TASK, settle: 'merged', status: 'completed' });
 
@@ -155,7 +155,7 @@ describe('a re-driven fork job stays one run', () => {
     expect(RECLAIMED_RUN_REASON).not.toMatch(/nanoid|root_id|epoch|null/);
 
     // Both attempts are branches of the same single run.
-    expect(listForkRuns(sql, 30)).toHaveLength(1);
+    expect(listForkRuns(sql, null, 30).items).toHaveLength(1);
   });
 
   test('a settled run is never reclaimed: the next fork on the same task is its own run', async () => {
@@ -165,7 +165,7 @@ describe('a re-driven fork job stays one run', () => {
     await drive(journal, spawned, true);
     await drive(journal, spawned, true);
 
-    const runs = listForkRuns(sql, 30);
+    const runs = listForkRuns(sql, null, 30).items;
     expect(runs).toHaveLength(2);
     expect(runs.every((run) => run.status === 'completed')).toBe(true);
     expect(new Set(spawned.map((head) => head.rootId)).size).toBe(2);
@@ -183,7 +183,7 @@ describe('a re-driven fork job stays one run', () => {
       request: splitRequest(2, 'a completely different question'),
     });
 
-    expect(listForkRuns(sql, 30).map((run) => run.task).slice().sort())
+    expect(listForkRuns(sql, null, 30).items.map((run) => run.task).slice().sort())
       .toEqual([TASK, 'a completely different question']);
   });
 
@@ -204,7 +204,7 @@ describe('a re-driven fork job stays one run', () => {
     // which is the state a workspace reopens in.
     journal.abandonRunning('no executor: outlived the activation that spawned it');
 
-    const [run] = listForkRuns(sql, 30);
+    const [run] = listForkRuns(sql, null, 30).items;
     expect(run).toMatchObject({ task: TASK, settle: 'merged', status: 'partial' });
     expect(run!.winnerScore).toBeNull();
   });

@@ -76,13 +76,17 @@ import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executo
 import { filterByEffectiveScore } from '../craft/ema.js';
 import { craftInvocationError } from '../craft/in-episode.js';
 import { DEFAULT_CONFIG } from '../config.js';
-import { formatExecResult } from '../execution/exec-result.js';
+import { formatExecResult, isFailingResultText } from '../execution/exec-result.js';
+import { TurnEscalationLedger } from '../execution/escalation.js';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool.js';
 import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool.js';
 import { createTasksDispatcher, type TasksToolInput } from './tasks-tool.js';
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index.js';
 import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review.js';
 import type { JsonValue } from '../utils/json.js';
+import {
+  createConsoleLogger, ProteusError, refusalOf, toProteusError, type Logger,
+} from '../obs/index.js';
 
 type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
 type ExecutableToolEntry = NonNullable<ToolSet[string]>;
@@ -193,6 +197,21 @@ export interface BuiltinToolDeps {
    *  caller that omits it (a fork's own toolset, tests) gets a fresh one, so
    *  the policy is per-root by construction. */
   contextBudget?: TurnContextBudget;
+  /** The turn's escalation decisions — which provisioned environments `run` was
+   *  sent to instead of the workspace shell, the model's stated reason, and the
+   *  outcome. Same ownership rule as fileLedger/contextBudget: backends pass
+   *  their TurnAccumulator's, and a caller that omits it gets a fresh one. */
+  escalations?: TurnEscalationLedger;
+  /**
+   * Where a tool's refusals and handled failures are logged. Omitted everywhere
+   * but a test: the default writes one JSON line per event to `console`, which is
+   * what Workers Logs and the CLI journal both already collect.
+   *
+   * A test passes `createRecordingLogger()` and asserts the event name and the
+   * classification — an instrument nobody asserts on is one nobody notices has
+   * stopped.
+   */
+  logger?: Logger;
 }
 
 // The Team/Peers deps contracts (and the reserved peer-reply topic) live with
@@ -326,6 +345,18 @@ interface WebToolInput {
   url?: string;
 }
 
+/**
+ * The `run` tool's log event names. Declared as constants beside the code that
+ * emits them, the way `SPAN_ATTR_*` is declared beside the tracer: what makes an
+ * event findable across Workers Logs and the CLI journal is that the emitter and
+ * the query spell it identically, and a constant is the only way to guarantee
+ * that. All three are refusals or handled failures — a THROWN error is not logged
+ * here, because whoever catches it classifies it there.
+ */
+const RUN_SHELL_ABSENT = 'run.shell_absent';
+const RUN_ESCALATION_REFUSED = 'run.escalation_refused';
+const RUN_ESCALATION_FAILED = 'run.escalation_failed';
+
 export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const { rt } = deps;
   const memory = rt.memory;
@@ -338,9 +369,16 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // A toolset built without a budget still budgets — a fresh one, scoped to
   // whatever root owns this toolset. Never absent, so there is one policy.
   const budget = deps.contextBudget ?? new TurnContextBudget();
+  // Same per-turn ownership as the budget: the turn's escalation decisions, so
+  // `run` can record WHY it left the workspace shell at the moment it decides.
+  const escalations = deps.escalations ?? new TurnEscalationLedger();
   // Same per-turn ownership as the budget: each hand-rolled-write shape gets
   // its note once, on the call that earned it (run-file-steer.ts).
   const fileToolSteer = createFileToolSteer();
+  // The observability seam. A toolset built without one still logs: the console
+  // logger writes one JSON line per event to the sink both backends already
+  // collect. Never absent, so a refusal is never silent.
+  const logger = deps.logger ?? createConsoleLogger();
 
   const tools: ToolSet = {};
 
@@ -428,7 +466,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // somewhere else.
   tools.run = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.run,
-    inputSchema: jsonSchema<{ command: string; runtime?: string }>({
+    inputSchema: jsonSchema<{ command: string; runtime?: string; why?: string }>({
       type: 'object',
       properties: {
         command: { type: 'string', description: 'Shell command to run' },
@@ -440,10 +478,15 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
             'workspace is this agent\'s own shell over its own file plane, and the default only when runtime is omitted; the execution-status block says what that shell is on this backend and what it can run. ' +
             'Every other value names a registered environment; the live prompt states which files it addresses and any provisioning or consent semantics. Choose that runtime explicitly when the work lives there.',
         },
+        why: {
+          type: 'string',
+          description:
+            'Required when runtime is anything other than workspace: one short clause saying what that environment gives you that the workspace shell does not (a long-running process, an inbound port, real parallelism, resources). Recorded durably against the outcome, so it is how escalations get evaluated later — not a formality.',
+        },
       },
       required: ['command'],
     }),
-    execute: async (args: { command: string; runtime?: string }, options?: ToolExecutionOptions) => {
+    execute: async (args: { command: string; runtime?: string; why?: string }, options?: ToolExecutionOptions) => {
       const signal = options?.abortSignal;
       // No gate here — the approval ladder (reviewCommand / shellApprovalMode
       // / the interactive channel) lives at the execution seam this tool
@@ -468,17 +511,40 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       const defaultRuntime = 'workspace';
       const runtimeKey = args.runtime ?? defaultRuntime;
       if (runtimeKey === 'workspace') {
-        if (!shell) return 'Error: no workspace shell available in this runtime.';
+        if (!shell) {
+          const refusal = new ProteusError(
+            'unsupported',
+            'no workspace shell available in this runtime',
+          );
+          logger.failure(RUN_SHELL_ABSENT, refusal, { runtime: runtimeKey });
+          return JSON.stringify(refusalOf(refusal));
+        }
         return clamp(formatExecResult(await shell.exec(args.command, signal ? { signal } : undefined)));
       }
+      // Everything below this line is an ESCALATION: the work is leaving this
+      // agent's own shell for an environment that must be provisioned, costs a
+      // cold start, and shares a hard `max_instances` ceiling with every other
+      // concurrent turn. Each exit path records the decision with the model's
+      // stated reason — a REFUSED escalation is as informative as a successful
+      // one, since "the runtime was never there" and "the command failed" are
+      // different findings that a single failure count would merge.
       const provider = router?.getProvider(runtimeKey);
       if (!provider) {
-        // Caller asked for a runtime that hasn't been provisioned. Return a
-        // structured-but-readable error — the UI watches for this and surfaces
-        // the install card. Do NOT silently fall back to workspace; that
-        // confuses the LLM into thinking it has more access than it does.
+        escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
+        // Caller asked for a runtime that hasn't been provisioned. Do NOT
+        // silently fall back to workspace; that confuses the LLM into thinking
+        // it has more access than it does.
+        //
+        // `unavailable`, never `unsupported`: a sandbox provisions on first use
+        // and a laptop comes back when its daemon does, so this is a retry, and
+        // a reader that filed it as a capability gap would report a cold start
+        // as a missing feature. `error` keeps its literal token because the
+        // install card matches on it (cf-backend WorkspacePage.tsx:76-80).
+        const refusal = new ProteusError('unavailable', 'runtime_not_provisioned');
+        logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
         return JSON.stringify({
-          error: 'runtime_not_provisioned',
+          reason: refusal.code,
+          error: refusal.message,
           runtime: runtimeKey,
           message:
             runtimeKey === 'laptop'
@@ -490,13 +556,47 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       }
       const execTool = provider.tools.exec;
       if (!execTool) {
+        escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
+        // `unsupported`, not `unavailable`: this environment is here and does
+        // not have a shell. Retrying cannot change that, and the two codes exist
+        // to keep those apart.
+        const refusal = new ProteusError('unsupported', 'runtime_does_not_support_exec');
+        logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
         return JSON.stringify({
-          error: 'runtime_does_not_support_exec',
+          reason: refusal.code,
+          error: refusal.message,
           runtime: runtimeKey,
           message: `Runtime "${runtimeKey}" is provisioned but does not expose shell exec.`,
         });
       }
-      return clamp(String(await execTool.execute(args.command, signal ? { signal } : undefined)));
+      let result: string;
+      try {
+        result = String(await execTool.execute(args.command, signal ? { signal } : undefined));
+      } catch (caught) {
+        // A remote executor that cannot kill an in-flight command stops WAITING
+        // and throws (execution/signal.ts), and the platform's own memory wall
+        // throws prose. Both used to leave this tool by raising, so the durable
+        // row recorded `threw` and the class was gone — the caller could not
+        // tell a cancelled wait from an OOM from a dead transport. Classified
+        // here and returned as a refusal the reader can branch on.
+        const failure = toProteusError({
+          doing: `run \`${args.command}\` on ${runtimeKey}`,
+          cause: caught,
+          otherwise: 'io',
+        });
+        escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'failed' });
+        logger.failure(RUN_ESCALATION_FAILED, failure, { runtime: runtimeKey });
+        return JSON.stringify(refusalOf(failure));
+      }
+      // The ONE failure predicate (exec-result.ts). A non-zero exit comes back
+      // as an ordinary successful result prefixed `Error (exit N)`, so reading
+      // the transport discriminator here would score every failed command a win.
+      escalations.observe({
+        runtime: runtimeKey,
+        reason: args.why,
+        outcome: isFailingResultText(result) ? 'failed' : 'ok',
+      });
+      return clamp(result);
     },
   });
 

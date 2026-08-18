@@ -1,0 +1,10 @@
+{
+  "//": "The project `unit-obs-log-ban.test.ts` compiles to prove the reserved-log-field ban rejects what it claims to. `violations.ts` is deliberately broken, so this directory is excluded from packages/core/tsconfig.json and typechecked only from that test.",
+  "extends": "../../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": []
+  },
+  "include": ["allowed.ts", "violations.ts"]
+}

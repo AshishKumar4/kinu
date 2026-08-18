@@ -213,6 +213,18 @@ export interface EvalRunRecord {
   readonly observations: readonly EvalObservation[];
   readonly admissibility: EvalAdmissibility;
   readonly spend: { readonly calls: number; readonly tokensIn: number; readonly tokensOut: number };
+  /**
+   * Directory holding the run's agent stores — the trajectories the scores were
+   * computed from.
+   *
+   * Required, like every other provenance field here: an optional evidence
+   * pointer is the field that will be missing exactly when someone needs it.
+   * The tier used to write these under `/tmp` and delete them in teardown, so a
+   * published tool-failure count named no call and could not be investigated at
+   * all. `resolveArtifactRoot` (scripts/bench-retention.ts) is what refuses a
+   * swept location, and there is no opt-out.
+   */
+  readonly transcripts: string;
 }
 
 /**

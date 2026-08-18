@@ -5,9 +5,11 @@
 // tests; here we verify the loop: turns stream + persist, programmatic turns run
 // serialized (reactor / job wake), broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
-import { createTestSql, toolExecute } from '@proteus/test-utils';
+import { createTestSql, scratchDir, scratchPath, toolExecute } from '@proteus/test-utils';
 import { MissionGovernor } from '@proteus/core';
 import { Database } from 'bun:sqlite';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model.js';
@@ -27,6 +29,7 @@ import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session.js';
 import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver.js';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory.js';
+import { discoverAgentsMd } from '../src/agents-md.js';
 import * as v from 'valibot';
 
 /** The resolver members these tests do not exercise — spelled out once so a
@@ -159,7 +162,7 @@ function workspaceRuntime() {
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-  const rt = createCLIRuntime(db, { dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { dbPath: scratchPath('local-session', 'agent.db'), llm: DUMMY_LLM });
   return { db, rt };
 }
 
@@ -1598,7 +1601,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
       role TEXT NOT NULL, content TEXT NOT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-    const rt = createCLIRuntime(db, { dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { dbPath: scratchPath('local-session-review', 'agent.db'), llm: DUMMY_LLM });
     // The classifier + reflection ride rt.llm.complete — stub it so the review
     // runs without a network LLM.
     Object.defineProperty(rt, 'llm', { value: {
@@ -1692,51 +1695,36 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
 describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
   test('injects the cwd AGENTS.md chain into the turn system prompt', async () => {
-    const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const { tmpdir } = await import('node:os');
-    const root = mkdtempSync(join(tmpdir(), 'proteus-ls-agentsmd-'));
-    try {
-      const nested = join(root, 'app');
-      mkdirSync(nested);
-      writeFileSync(join(root, 'AGENTS.md'), 'Root: prefer bun.');
-      writeFileSync(join(nested, 'AGENTS.md'), 'App: run lint before commit.');
+    const root = scratchDir('local-session-agentsmd');
+    const nested = join(root, 'app');
+    mkdirSync(nested);
+    writeFileSync(join(root, 'AGENTS.md'), 'Root: prefer bun.');
+    writeFileSync(join(nested, 'AGENTS.md'), 'App: run lint before commit.');
 
-      let system = '';
-      const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }), { cwd: nested });
-      await session.send('hello');
+    let system = '';
+    const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }), { cwd: nested });
+    await session.send('hello');
 
-      expect(system).toContain('## Project instructions (AGENTS.md)');
-      expect(system).toContain('Root: prefer bun.');
-      expect(system).toContain('App: run lint before commit.');
-      // Nearest renders last (it wins on conflict).
-      expect(system.indexOf('Root: prefer bun.')).toBeLessThan(system.indexOf('App: run lint before commit.'));
-      expect(system).toContain(`Working directory: ${nested}`);
-      await session.end();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(system).toContain('## Project instructions (AGENTS.md)');
+    expect(system).toContain('Root: prefer bun.');
+    expect(system).toContain('App: run lint before commit.');
+    // Nearest renders last (it wins on conflict).
+    expect(system.indexOf('Root: prefer bun.')).toBeLessThan(system.indexOf('App: run lint before commit.'));
+    expect(system).toContain(`Working directory: ${nested}`);
+    await session.end();
   });
 
   test('omits the AGENTS.md block when no file exists up the tree', async () => {
-    const { mkdtempSync, rmSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const { tmpdir } = await import('node:os');
-    const { discoverAgentsMd } = await import('../src/agents-md.js');
-    const root = mkdtempSync(join(tmpdir(), 'proteus-ls-noagents-'));
-    try {
-      // Ancestors of the tmpdir could theoretically carry an AGENTS.md on a
-      // developer machine — only assert omission when the chain is truly empty.
-      if (discoverAgentsMd(root).length > 0) return;
-      let system = '';
-      const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }), { cwd: root });
-      await session.send('hello');
-      expect(system.length).toBeGreaterThan(0);
-      expect(system).not.toContain('Project instructions (AGENTS.md)');
-      await session.end();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const root = scratchDir('local-session-noagents');
+    // Ancestors of the tmpdir could theoretically carry an AGENTS.md on a
+    // developer machine — only assert omission when the chain is truly empty.
+    if (discoverAgentsMd(root).length > 0) return;
+    let system = '';
+    const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }), { cwd: root });
+    await session.send('hello');
+    expect(system.length).toBeGreaterThan(0);
+    expect(system).not.toContain('Project instructions (AGENTS.md)');
+    await session.end();
   });
 
   test('persisted turns are searchable through the session-search seam', async () => {
@@ -2566,7 +2554,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { session, events } = setup('hello there');
     await session.send('hi');
 
-    const runId = session.listRuns()[0]!.runId;
+    const runId = session.listRuns().items[0]!.runId;
     const streamed = events
       .filter((e): e is Extract<SessionEvent, { type: 'run-event' }> => e.type === 'run-event')
       .map((e) => e.event);
@@ -2593,7 +2581,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     await session.send('go');
     await session.settleBackgroundWork();
 
-    const forkRun = session.listRuns()
+    const forkRun = session.listRuns().items
       .map((r) => session.getRunEvents(r.runId))
       .find((evs) => evs.some((e) => e.type === 'head_split'));
     expect(forkRun).toBeDefined();
@@ -2647,7 +2635,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     // The durable ledger has to agree — an open run is a run nothing can read
     // back as finished.
-    const runs = session.listRuns();
+    const runs = session.listRuns().items;
     expect(runs).toHaveLength(1);
     const runEvents = session.getRunEvents(runs[0]!.runId);
     expect(runEvents.at(-1)?.type).toBe('run_end');
@@ -2666,7 +2654,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { session } = setup('hello there');
     await session.send('hi');
 
-    const runs = session.listRuns();
+    const runs = session.listRuns().items;
     expect(runs).toHaveLength(1);
     expect(runs[0]!.eventCount).toBeGreaterThan(0);
 
@@ -2703,9 +2691,9 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { session } = setup('done');
     await session.send('first');
     await session.enqueueTurn({ text: 'job finished', metadata: { proteusEvent: 'background_job' } });
-    await waitFor(() => session.listRuns().length === 2);
+    await waitFor(() => session.listRuns().items.length === 2);
 
-    const runs = session.listRuns();
+    const runs = session.listRuns().items;
     expect(new Set(runs.map((r) => r.runId)).size).toBe(2);
     const causes = runs.map((r) => {
       const start = session.getRunEvents(r.runId)[0];
@@ -2724,7 +2712,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const { session } = setup('unused', exploding);
     await session.send('hi');
 
-    const run = session.listRuns()[0]!;
+    const run = session.listRuns().items[0]!;
     const end = session.getRunEvents(run.runId).at(-1);
     expect(end?.type).toBe('run_end');
     expect(end).toMatchObject({ reason: 'error', error: expect.stringContaining('upstream is on fire') });
@@ -2828,7 +2816,10 @@ describe('agents.* codemode namespace — node sandbox', () => {
     const db = new Database(':memory:');
     const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
     const result = await sandboxWith({ mode: 'build', fork: { registry, rt, model: fakeModel('unused') } })(`
-      const settled = await agents.fork({ task: 't' });
+      const settled = await agents.fork({ task: 't', forks: [
+        { task: 'read it', rationale: 'ground it' },
+        { task: 'test it', rationale: 'check it' },
+      ] });
       return settled.error ? 'recovered: ' + settled.error.includes('heads unavailable') : 'no error';
     `);
     expect(result).toEqual({ result: 'recovered: true' });
@@ -2837,7 +2828,8 @@ describe('agents.* codemode namespace — node sandbox', () => {
   test('the turn abort signal reaches a fork started inside the sandbox', async () => {
     const { deps, seen } = scriptedFork();
     const controller = new AbortController();
-    await sandboxWith(deps)('return await agents.fork({ task: "t" });', {
+    const brief = '{ task: "read it", rationale: "ground it" }';
+    await sandboxWith(deps)(`return await agents.fork({ task: "t", forks: [${brief}, ${brief}] });`, {
       abortSignal: controller.signal,
       toolCallId: 'fork-abort-test',
       messages: [],
@@ -3007,7 +2999,7 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
     await session.send('write the report');
     await session.settleBackgroundWork();
 
-    const gateRun = session.listRuns()
+    const gateRun = session.listRuns().items
       .map((r) => session.getRunEvents(r.runId))
       .find((evs) => evs.some((e) => e.type === 'completion_gate'));
     expect(gateRun).toBeDefined();
@@ -3020,7 +3012,7 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
     await session.send('write the report');
     await session.settleBackgroundWork();
 
-    const rows = session.listRuns()
+    const rows = session.listRuns().items
       .flatMap((r) => session.getRunEvents(r.runId))
       .filter((e) => e.type === 'completion_gate');
     expect(rows).toHaveLength(1);

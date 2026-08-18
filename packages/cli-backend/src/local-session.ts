@@ -66,6 +66,7 @@ import {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
+  PROGRAMMATIC_MESSAGE_ID_PREFIX,
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
   createAgentsCodemodeProvider, createReleaseCodemodeProvider, type CodemodeProvider,
@@ -109,7 +110,7 @@ import {
   setAlwaysActiveSkills, setModel, setReasoningEffort, setShellApprovalMode,
   getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   type EvolutionChangelogView,
-  getRunEvents, listRuns, type RunListEntry,
+  getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
 } from '@proteus/core';
 import { makeSqlExec } from './runtime.js';
 import { discoverAgentsMd } from './agents-md.js';
@@ -269,6 +270,10 @@ interface QueueItem {
   /** Attachments for a user turn — forwarded to the model as file parts. */
   files?: ReadonlyArray<PromptFile>;
   metadata?: ProgrammaticTurn['metadata'];
+  /** The producer's name for the fact this programmatic turn announces. The
+   *  durable row's id is derived from it, so a re-announcement collides with
+   *  the row the first one wrote (see `persist`). */
+  idempotencyKey?: string;
   kind: 'user' | 'programmatic';
   resolve: () => void;
 }
@@ -607,11 +612,16 @@ export class LocalAgentSession implements BackendHost {
    * Shadow-git file checkpoints (newest first) with the store's reachability, so
    * a caller cannot read an empty list as "this turn changed nothing" — the
    * store may simply not be configured, or git may be missing.
+   *
+   * `turnId` narrows IN THE STORE. A caller after one turn must pass it rather
+   * than filter a window itself: retention is per working directory and the
+   * limit is global, so a self-filtered window silently drops turns whose
+   * checkpoints still exist. See FileCheckpoints.list.
    */
-  async listFileCheckpoints(limit?: number): Promise<FileCheckpointListing> {
+  async listFileCheckpoints(limit?: number, turnId?: string): Promise<FileCheckpointListing> {
     const availability = await this.checkpointStatus();
     if (!availability.available || !this.rt.checkpoints) return { availability, entries: [] };
-    return { availability, entries: await this.rt.checkpoints.list(limit) };
+    return { availability, entries: await this.rt.checkpoints.list({ limit, turnId }) };
   }
 
   async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
@@ -947,7 +957,15 @@ export class LocalAgentSession implements BackendHost {
 
   /** Inject a programmatic turn into the same serialized loop the user drives —
    *  backs the reactor + background-job wake. Self-starts the pump when idle so
-   *  a job that settles mid-idle wakes the agent immediately. */
+   *  a job that settles mid-idle wakes the agent immediately.
+   *
+   *  A producer that named the fact it is announcing (`idempotencyKey`) gets
+   *  that name carried onto the durable row, and a re-announcement of a fact
+   *  this session already recorded starts no turn at all: the row is already
+   *  there and already answered, so 'queued' is the truth the producer needs
+   *  (nothing was lost, do not compensate) without a second turn spent saying
+   *  it again. The check reads the same durable table the write lands in — the
+   *  ledger IS the store here — so a later process reaches the same answer. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     if (workModeForTurnMetadata(input.metadata) === 'plan') {
       return Promise.reject(new Error(
@@ -958,15 +976,32 @@ export class LocalAgentSession implements BackendHost {
     // will never drain: 'skipped' sends the caller down its durable-breadcrumb
     // path instead, and the next run drains it from the event log.
     if (this.ended) return Promise.resolve({ status: 'skipped' });
-    return new Promise((resolve) => {
-      this.queue.push({
-        text: input.text,
-        metadata: input.metadata,
-        kind: 'programmatic',
-        resolve: () => resolve({ status: 'queued' }),
-      });
-      void this.pump();
-    });
+    if (input.idempotencyKey !== undefined && this.hasAnnounced(input.idempotencyKey)) {
+      return Promise.resolve({ status: 'queued' });
+    }
+    const { promise, resolve } = Promise.withResolvers<EnqueueTurnResult>();
+    const item: QueueItem = {
+      text: input.text,
+      metadata: input.metadata,
+      kind: 'programmatic',
+      resolve: () => resolve({ status: 'queued' }),
+    };
+    if (input.idempotencyKey !== undefined) item.idempotencyKey = input.idempotencyKey;
+    this.queue.push(item);
+    void this.pump();
+    return promise;
+  }
+
+  /** Is this fact already recorded in the durable transcript, or already queued
+   *  to be? Both halves matter: a cold activation asks the table, and a second
+   *  delivery inside one activation (recover + recoverOrphans naming the same
+   *  job) asks the queue, because the first has not persisted yet. */
+  private hasAnnounced(identity: string): boolean {
+    const id = `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`;
+    if (this.queue.some((item) => item.idempotencyKey === identity)) return true;
+    return this.rt.storage.sql<{ id: string }>`
+      SELECT id FROM messages WHERE id = ${id} AND session_id = ${this.sessionId}
+    `.length > 0;
   }
 
   /** BackendHost seam — will there be a next step for a signal to land on?
@@ -1249,6 +1284,7 @@ export class LocalAgentSession implements BackendHost {
     await reconcileInterruptedForks({
       journal: this.headJournal,
       signals: this.orch.signals,
+      runEvents: this.eventRecorder,
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
     });
     const orphans = detectOrphanedFibers(this.rt.storage.sql);
@@ -1419,6 +1455,7 @@ export class LocalAgentSession implements BackendHost {
       usage: this.orch.acc.reportedUsage(),
       context: this.orch.acc.context,
       files: this.orch.acc.files,
+      escalations: this.orch.acc.escalations,
       steering: this.orch.steering.snapshot(),
       completionGate: this.completionGate.take(),
       craft: this.orch.craft.snapshot(),
@@ -1436,9 +1473,9 @@ export class LocalAgentSession implements BackendHost {
     return getRunEvents(this.eventRecorder, runId, opts);
   }
 
-  /** Recent runs, newest first — the local peer of the DO's listRuns. */
-  listRuns(limit = 50): RunListEntry[] {
-    return listRuns(this.eventRecorder, limit);
+  /** A page of recent runs, newest first — the local peer of the DO's listRuns. */
+  listRuns(request?: PageRequest): Page<RunListEntry> {
+    return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
   /**
@@ -1800,8 +1837,18 @@ export class LocalAgentSession implements BackendHost {
 
       // One durable row PER steer (not per drain): the walk-back fork pivot
       // matches individual user messages verbatim, exactly as surfaces and the
-      // JSONL transcript recorded them.
-      assistantMsgId = this.persist(item.text, injections.recorded.flatMap((injection) => injection.texts), fullText);
+      // JSONL transcript recorded them. A turn the harness enqueued opens on a
+      // `programmatic:`-prefixed row instead, which is both its provenance in
+      // the transcript and — when the producer named the fact — the key that
+      // stops a re-announcement writing a second one.
+      assistantMsgId = this.persist(
+        item.kind === 'programmatic'
+          ? `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${item.idempotencyKey ?? crypto.randomUUID()}`
+          : crypto.randomUUID(),
+        item.text,
+        injections.recorded.flatMap((injection) => injection.texts),
+        fullText,
+      );
 
       // Alternate Takes captured during this turn's think-mcts runs get the
       // turn id they competed for, so a pick can credit the right turn. A turn
@@ -2264,14 +2311,25 @@ export class LocalAgentSession implements BackendHost {
 
   /** Persist the exchange (user, any mid-turn steers, assistant); returns the
    *  assistant message id (the turn id the outcome ledger keys on), or null
-   *  when persistence is disabled. */
-  private persist(userText: string, steeredTexts: ReadonlyArray<string>, assistantText: string): string | null {
+   *  when persistence is disabled.
+   *
+   *  `turnId` is the identity of the row that OPENS the exchange: derived from
+   *  the producer's name for the fact when the harness enqueued this turn, a
+   *  fresh uuid when the operator typed it. `INSERT OR IGNORE` is what makes the
+   *  first form idempotent — the primary key refuses a second announcement of
+   *  the same fact — and is a no-op for the second, whose id is unique by
+   *  construction. */
+  private persist(
+    turnId: string,
+    userText: string,
+    steeredTexts: ReadonlyArray<string>,
+    assistantText: string,
+  ): string | null {
     if (!this.persistMessagesEnabled) return null;
-    const msgId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
-    void this.rt.storage.sql`INSERT INTO messages (id, session_id, role, content)
-      VALUES (${msgId}, ${this.sessionId}, ${'user'}, ${userText})`;
-    let parentId = msgId;
+    void this.rt.storage.sql`INSERT OR IGNORE INTO messages (id, session_id, role, content)
+      VALUES (${turnId}, ${this.sessionId}, ${'user'}, ${userText})`;
+    let parentId = turnId;
     for (const steered of steeredTexts) {
       const steerId = crypto.randomUUID();
       void this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
@@ -2404,6 +2462,7 @@ export class LocalAgentSession implements BackendHost {
       // Same ownership for the read-before-edit state and the per-edit outcome
       // counters the `file` tool writes.
       fileLedger: this.orch.acc.files,
+      escalations: this.orch.acc.escalations,
       craftedToolExecute: createNodeCraftedExecute(),
         createExecuteTool: createNodeExecuteToolFactory({
           extraProviders: [

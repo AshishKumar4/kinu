@@ -53,6 +53,36 @@ export interface FileToolInput {
   edits?: Array<{ old_text?: string; new_text?: string }>;
 }
 
+/** What the read-before-write gate decided: the refusal the model is shown and
+ *  the reason that classifies it, or both null when the operation may proceed. */
+interface GateVerdict {
+  readonly refusal: string | null;
+  readonly reason: FileEditOutcomeReason | null;
+}
+
+/**
+ * Why a `file` call did not do what it was asked, on the result the MODEL
+ * receives — the ledger's own reason vocabulary plus the one case the ledger
+ * cannot hold: a call whose arguments were malformed never became an edit
+ * attempt, so counting it among them would inflate `attempts`.
+ *
+ * It is on the result because the dispatcher already computes it at every
+ * failure site and, until now, threw it away there: the reason reached the
+ * per-TURN counters in the `file_edit` event and nothing else, so a durable
+ * `tool_call_end` row could say a `file` call failed and never which of nine
+ * distinct things happened. Nine reasons collapsed to one bit is why "why do
+ * the tool calls fail" was unanswerable from the ledger.
+ */
+export type FileToolFailureReason = FileEditOutcomeReason | 'bad_input';
+
+/** A failure result, reason FIRST. Every seam that shows a tool result to a
+ *  human or a steering hash bounds it to a head slice (1000 chars), and the
+ *  refusal prose is the long part — so the discriminator leads, where no clamp
+ *  can reach it. */
+function failure(reason: FileToolFailureReason, error: string): JsonValue {
+  return { reason, error };
+}
+
 /** A VFS failure, rendered for the model and classified for the ledger. */
 async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, path: string): Promise<{
   reason: FileEditOutcomeReason;
@@ -107,25 +137,30 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   };
 
   /** The read-before-write gate, shared by edit and overwriting write. Returns
-   *  the ledger's verdict with the refusal it earns, so the caller reports the
-   *  reason it already computed rather than asking twice. */
-  const gate = (path: string, current: string, action: 'edit' | 'overwrite') => {
+   *  the refusal a verdict earns AND the reason that classifies it, computed
+   *  once here: the two call sites used to derive the reason themselves with a
+   *  ternary each, which is two places for one rule.
+   *
+   *  `partial` classifies as `unread` — read to less depth than the operation
+   *  needs is the same defect as not read at all, and the prose is what
+   *  distinguishes them for the model. It is only reachable on `whole`. */
+  const gate = (path: string, current: string, action: 'edit' | 'overwrite'): GateVerdict => {
     const need: FileSeenNeed = action === 'edit' ? 'part' : 'whole';
     const verdict = ledger.seenState(path, current, need);
     switch (verdict.state) {
       case 'seen':
-        return { verdict, refusal: null };
+        return { refusal: null, reason: null };
       case 'partial':
-        return { verdict, refusal:
+        return { reason: 'unread', refusal:
           `You have read only lines 1-${verdict.coveredTo} of ${verdict.total} in ${path}, so replacing it ` +
           `would discard ${verdict.total - verdict.coveredTo} lines you have not seen. ` +
           `Change part of it with action=edit, or read the rest first (action=read path=${path} offset=${verdict.coveredTo + 1}).` };
       case 'stale':
-        return { verdict, refusal:
+        return { reason: 'stale', refusal:
           `${path} changed since you read it. Read it again (action=read path=${path}) before you ` +
           (action === 'edit' ? 'edit it — the text you are matching may have moved.' : 'replace it, so you know what you are discarding.') };
       case 'never':
-        return { verdict, refusal:
+        return { reason: 'unread', refusal:
           `${path} has not been read here yet, so ${action === 'edit' ? 'editing' : 'overwriting'} it would be blind. ` +
           `Call action=read path=${path} first` +
           (action === 'edit' ? ', then copy old_text out of what it returns.' : '.') };
@@ -143,10 +178,10 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
     // was answered without naming the three that work.
     const parsed = v.safeParse(ActionSchema, args.action);
     if (!parsed.success) {
-      return { error: unknownActionError('file', 'action', args.action, FILE_TOOL_ACTIONS) };
+      return failure('bad_input', unknownActionError('file', 'action', args.action, FILE_TOOL_ACTIONS));
     }
     const parsedPath = v.safeParse(PathSchema, args.path);
-    if (!parsedPath.success) return { error: 'file requires `path`.' };
+    if (!parsedPath.success) return failure('bad_input', 'file requires `path`.');
     const path = parsedPath.output;
 
     switch (parsed.output) {
@@ -155,7 +190,8 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         try {
           content = await readText(path);
         } catch (err) {
-          return { error: (await vfsFailure(vfs, { error: err }, 'read', path)).error };
+          const vfsFail = await vfsFailure(vfs, { error: err }, 'read', path);
+          return failure(vfsFail.reason, vfsFail.error);
         }
         const configured = DEFAULT_TOOL_RESULT_MAX_CHARS;
         const cap = budget.capFor(configured);
@@ -175,24 +211,26 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
       }
 
       case 'write': {
-        if (args.content === undefined) return { error: 'file action=write requires `content`.' };
+        if (args.content === undefined) return failure('bad_input', 'file action=write requires `content`.');
         let existing: string | null = null;
         try {
           existing = await readText(path);
         } catch (err) {
           if (!isVfsError(err) || err.code !== 'ENOENT') {
-            return { error: (await vfsFailure(vfs, { error: err }, 'write', path)).error };
+            const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
+            return failure(vfsFail.reason, vfsFail.error);
           }
         }
         if (existing !== null) {
-          const { refusal } = gate(path, existing, 'overwrite');
-          if (refusal) return { error: refusal };
+          const { refusal, reason } = gate(path, existing, 'overwrite');
+          if (refusal && reason) return failure(reason, refusal);
         }
         const content = args.content;
         try {
           await persist(path, content, () => ledger.observeWhole(path, content));
         } catch (err) {
-          return { error: (await vfsFailure(vfs, { error: err }, 'write', path)).error };
+          const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
+          return failure(vfsFail.reason, vfsFail.error);
         }
         return { ok: true, path, bytes: args.content.length, action: existing === null ? 'created' : 'replaced' };
       }
@@ -200,16 +238,16 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
       case 'edit': {
         const raw = Array.isArray(args.edits) ? args.edits : [];
         if (raw.length === 0) {
-          return { error: 'file action=edit requires `edits`: [{ old_text, new_text }].' };
+          return failure('bad_input', 'file action=edit requires `edits`: [{ old_text, new_text }].');
         }
         // A malformed edit must not be read as the destructive option: a
         // missing new_text would otherwise default to deleting the match.
         const EditInputSchema = v.object({ old_text: v.string(), new_text: v.string() });
         const malformed = raw.findIndex((edit) => !v.safeParse(EditInputSchema, edit).success);
         if (malformed !== -1) {
-          return { error:
+          return failure('bad_input',
             `edits[${malformed}] needs both old_text and new_text. ` +
-            'old_text is the text to find; new_text replaces it, and "" deletes it.' };
+            'old_text is the text to find; new_text replaces it, and "" deletes it.');
         }
         const edits: FileEdit[] = v.parse(v.array(EditInputSchema), raw)
           .map((edit) => ({ oldText: edit.old_text, newText: edit.new_text }));
@@ -218,30 +256,30 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         try {
           current = await readText(path);
         } catch (err) {
-          const failure = await vfsFailure(vfs, { error: err }, 'edit', path);
-          ledger.recordEdit(path, failure.reason);
-          return { error: failure.error };
+          const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
+          ledger.recordEdit(path, vfsFail.reason);
+          return failure(vfsFail.reason, vfsFail.error);
         }
 
-        const { verdict, refusal } = gate(path, current, 'edit');
-        if (refusal) {
-          ledger.recordEdit(path, verdict.state === 'stale' ? 'stale' : 'unread');
-          return { error: refusal };
+        const { refusal, reason } = gate(path, current, 'edit');
+        if (refusal && reason) {
+          ledger.recordEdit(path, reason);
+          return failure(reason, refusal);
         }
 
         const outcome = applyFileEdits(current, edits, path);
         if (!outcome.ok) {
           ledger.recordEdit(path, outcome.reason);
-          return { error: outcome.message };
+          return failure(outcome.reason, outcome.message);
         }
         try {
           // Coverage carries across the edit: only the span the model named
           // itself changed, so what it knew about the file it still knows.
           await persist(path, outcome.content, () => ledger.observeEdited(path, current, outcome.content));
         } catch (err) {
-          const failure = await vfsFailure(vfs, { error: err }, 'edit', path);
-          ledger.recordEdit(path, failure.reason);
-          return { error: failure.error };
+          const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
+          ledger.recordEdit(path, vfsFail.reason);
+          return failure(vfsFail.reason, vfsFail.error);
         }
         ledger.recordEdit(path, null);
         return {

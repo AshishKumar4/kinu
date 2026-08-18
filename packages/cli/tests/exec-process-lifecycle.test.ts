@@ -24,23 +24,32 @@
  * and destroy the thing they asked for.
  */
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { JsonObjectSchema, decodeJsonValue, parseJsonObject, type JsonObject, type JsonValue } from '@proteus/core';
 import { tolerate } from '@proteus/core/obs';
+import { scratchDir } from '@proteus/test-utils';
 import * as v from 'valibot';
 
 const repoRoot = resolve(import.meta.dir, "../../..");
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
 const homes: string[] = [];
 
+/** Where {@link heartbeatCommand} records the pid of the writer it backgrounds,
+ *  so cleanup can stop it instead of racing it. */
+const HEARTBEAT_PID = 'heartbeat.pid';
+
 afterEach(() => {
   for (const home of homes.splice(0)) {
-    const pidfile = tolerate(() => readFileSync(join(home, "daemon.pid"), "utf-8"), 'enoent');
-    if (pidfile !== undefined) {
-      const pid = parseInt(pidfile.trim(), 10);
+    // Every process this suite left running, stopped before the directory it
+    // writes into is removed. The daemon was already handled; the backgrounded
+    // heartbeat was not, and it is what made `rmSync` a no-op that reported
+    // success (see heartbeatCommand).
+    for (const pidfile of ['daemon.pid', HEARTBEAT_PID]) {
+      const recorded = tolerate(() => readFileSync(join(home, pidfile), "utf-8"), 'enoent');
+      if (recorded === undefined) continue;
+      const pid = parseInt(recorded.trim(), 10);
       if (Number.isInteger(pid) && pid > 1) tolerate(() => process.kill(pid, "SIGTERM"), 'esrch');
     }
     rmSync(home, { recursive: true, force: true });
@@ -105,7 +114,7 @@ function modelThatRuns(command: string) {
 }
 
 function newHome(): string {
-  const home = mkdtempSync(join(tmpdir(), "proteus-exec-life-"));
+  const home = scratchDir("exec-lifecycle");
   homes.push(home);
   return home;
 }
@@ -132,8 +141,16 @@ async function runCli(
 /**
  * A stand-in for the server the agent was asked to start: it backgrounds, it
  * outlives the command, and it keeps touching a file so its liveness is a fact
- * on disk rather than a pid to chase across process groups. It stops on its own
- * once the temp home goes away, so cleanup never leaves it behind.
+ * on disk rather than a pid to chase across process groups.
+ *
+ * It records its own pid because "it stops on its own once the temp home goes
+ * away" — what this comment used to claim — is a RACE, and the race was
+ * measured: the loop reopens the log with `>>` every second, so a removal that
+ * unlinks the log and then rmdirs the home loses to the next append, and
+ * `rmSync(force: true)` swallows the resulting ENOTEMPTY and returns as if it
+ * had succeeded. Two homes survived every run of this file that way, with the
+ * same inode as before the removal — the directory was never gone, and nothing
+ * said so. `afterEach` now stops the writer first.
  *
  * `seconds` is deliberately much longer than the exit deadline asserted below:
  * that gap IS the test. A shell that waits for this process to finish cannot
@@ -141,7 +158,7 @@ async function runCli(
  */
 function heartbeatCommand(home: string, path: string, seconds: number): string {
   return `(for i in $(seq 1 ${seconds}); do [ -d ${home} ] || exit 0; echo alive >> ${path}; sleep 1; done) &`
-    + ` echo server-started`;
+    + ` echo $! > ${join(home, HEARTBEAT_PID)}; echo server-started`;
 }
 
 describe("proteus exec — a one-shot run terminates", () => {

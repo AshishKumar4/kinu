@@ -179,16 +179,16 @@ async function listOwnerEgressVault(
   env: Env, actor: ActorRuntimeIdentity,
 ): Promise<EgressSecretBinding[]> {
   try {
-    const vaultView: Partial<EgressVaultClient> = {};
     const userId = actor.ownerUserId();
     if (!userId) return [];
-    Object.assign(vaultView, env.UserDO.get(env.UserDO.idFromName(userId)));
-    // SAFETY: the compiler guarantees this name is a real UserDO method — it is
-    // declared public there and listed in USER_DO_METHODS, whose
-    // `as const satisfies readonly (keyof UserDO)[]` contract fails the build on
-    // a typo, so `sealRpcSurface` leaves it reachable on the stub.
-    // unit-egress-vault.test.ts asserts it is on USER_DO_RPC_SURFACE.
-    const vault = vaultView as EgressVaultClient;
+    // The stub is USED, never COPIED. `Object.assign` transfers own enumerable
+    // properties, and a JSRPC stub's methods live behind a Proxy rather than on
+    // the object, so copying one yields `{}` and every call on it is undefined.
+    // Measured on production as `vaultView.listEgressSecrets is not a function`,
+    // which this `catch` then swallowed into an empty vault — so the container
+    // silently lost every injectable secret. The narrow interface still limits
+    // what this call site may reach; it is the copy that was wrong, not the type.
+    const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(userId));
     return [...await vault.listEgressSecrets(await ownerCaller(env))];
   } catch (err) {
     console.warn("[proteus] egress vault unreadable, no secret is injectable:", errorMessage(err));
@@ -216,14 +216,14 @@ async function userCallerFor(actor: ActorRuntimeIdentity): Promise<UserCaller> {
 async function fetchRootApprovalPolicy(
   env: Env, workspaceName: string,
 ): Promise<{ mode: ShellApprovalMode; grants: readonly ApprovalGrant[] }> {
-  const rootView: Partial<RootApprovalClient> = {};
-  Object.assign(rootView, env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName)));
-  // SAFETY: checked by construction and pinned by a test. Both names are keys of
-  // AGENT_RPC_ACCESS (cli/rpc-gate.ts), and ORCHESTRATOR_RPC_SURFACE is built by
+  // Used, not copied — see `listOwnerEgressVault`. Both names are keys of
+  // AGENT_RPC_ACCESS (cli/rpc-gate.ts) and ORCHESTRATOR_RPC_SURFACE is built by
   // spreading `Object.keys(AGENT_RPC_ACCESS)`, so their reachability is a
   // consequence of that spread rather than a second list that could drift.
   // unit-facet-grant-inheritance.test.ts asserts both are on the surface.
-  const root = rootView as RootApprovalClient;
+  const root: RootApprovalClient = env.OrchestratorAgent.get(
+    env.OrchestratorAgent.idFromName(workspaceName),
+  );
   const [mode, grants] = await Promise.all([
     root.getShellApprovalMode(), root.getShellApprovalGrants(),
   ]);
@@ -426,13 +426,34 @@ export function createCFRuntime(
   let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox) {
     try {
-      // `transport: 'websocket'` multiplexes the whole container control plane
-      // over one WebSocket instead of a request per call. It must be passed
-      // identically on EVERY getSandbox() for an id — changing it mid-life
-      // disconnects the active client and drops in-flight requests — so this
-      // option list is the single place it is chosen (see orchestrator.ts's
-      // release-preview lookup, which passes the same).
-      const sdk = getSandbox(env.Sandbox, sandboxId, { normalizeId: true, transport: "websocket" });
+      // `transport: 'rpc'` is the SDK's primary container-control path: one
+      // capnweb RPC session over a WebSocket, against the container's own
+      // control plane. `http` and `websocket` select the ROUTE-BASED
+      // COMPATIBILITY CLIENT, which Cloudflare deprecated on 2026-06-09 —
+      // "HTTP and WebSocket transports are deprecated and will not ship in
+      // future Sandbox SDK majors" — and which cannot restore a workspace.
+      // MEASURED against a real 0.12.7 container: `restoreBackup` of
+      // /workspace is the SDK's only transport-branching path we take
+      // (localBucket, so doRestoreBackupLocal), and on `websocket` it buffers
+      // the whole archive as an ArrayBuffer plus a base64 copy in this
+      // isolate. Restores of an 8/9/10/11 MiB payload land; 12, 16, 20, 24 and
+      // 32 MiB every one fails with `WebSocket closed: 1011 Container
+      // WebSocket error` and leaves /workspace empty. The ceiling is base64
+      // expansion against a 16 MiB frame: 12 MiB x 4/3 is exactly 16 MiB. On
+      // `rpc` the same restores stream (writeFileStream) and all five sizes
+      // land, 32 MiB in 1045 ms.
+      //
+      // It must be passed identically on EVERY getSandbox() for an id —
+      // changing it mid-life disconnects the active client and drops in-flight
+      // requests. Both call sites therefore move together (see
+      // orchestrator.ts's teardown lookup). The option cannot be dropped in
+      // favour of the SANDBOX_TRANSPORT var alone: the SDK PERSISTS transport
+      // in the sandbox object's own storage and a stored value beats the
+      // env-derived default on every cold start, so an existing sandbox stays
+      // on whatever it was last told. The var is set as well, so a future
+      // getSandbox that forgets this option inherits `rpc` rather than the
+      // SDK's `http` field default.
+      const sdk = getSandbox(env.Sandbox, sandboxId, { normalizeId: true, transport: "rpc" });
       // Egress interception is configured before the container can run anything,
       // and awaited inside the operation that needed it. Not in `onStart`: the
       // Container base re-applies its persisted outbound configuration

@@ -810,6 +810,8 @@ export {
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
   formatExecResult, isFailingResultText, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
+  TurnEscalationLedger, ESCALATION_OUTCOMES,
+  type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
   createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
@@ -843,6 +845,7 @@ export {
 export {
   CHECKPOINT_REF_PREFIX, CHECKPOINT_WORKDIR_MARKER, CHECKPOINT_EXCLUDES,
   checkpointSubject, parseCheckpointSubject, checkpointRefTimestampMs,
+  checkpointReason, diagnoseStaging, type StagingDiagnosis,
 } from './checkpoints/format.js';
 
 // Vectorize-backed semantic memory (Workers AI embeddings + hybrid retrieval)
@@ -914,6 +917,7 @@ export type {
   CacheHitStats, StepTelemetry,
 } from './events/index.js';
 export {
+  FAILURE_WITHOUT_ERROR,
   initRunEventTables,
   parseStoredRunEvent,
   RunEventRecorder,
@@ -1137,6 +1141,7 @@ export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, withSpawnDetach,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
+  backgroundJobWakeTrigger,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type BackgroundRefusal, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type SessionSurface,
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim,
@@ -1301,6 +1306,10 @@ export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/
 export { getRunEvents, getRunSummaries, listRuns } from './read-models/runs.js';
 export type { RunListEntry, RunSummary } from './read-models/runs.js';
 export {
+  censusToolFailures, classifyToolFailure, toolFailureKey,
+} from './read-models/tool-failures.js';
+export type { ToolFailure, ToolFailureCensus } from './read-models/tool-failures.js';
+export {
   getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
   walkWorkspaceTextFiles,
 } from './read-models/workspace-diff.js';
@@ -1317,18 +1326,22 @@ export type {
   DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorWriteResult,
   EnvironmentInfo, MountInfo,
 } from './read-models/files.js';
-export { readLatestSearchTree, readSearchTree, readSearchForest } from './read-models/search-tree.js';
+export { readLatestSearchTree, readSearchTree } from './read-models/search-tree.js';
 export { readForkRunParams } from './read-models/fork-params.js';
 export { readExplorationCanvas } from './read-models/exploration-canvas.js';
-export type { ExplorationCanvasView } from './read-models/exploration-canvas.js';
+export type { ExplorationCanvasRun } from './read-models/exploration-canvas.js';
 export type {
   ForkRunParams, ForkSettlePolicy, CompetedForkParams, MergedForkParams,
 } from './read-models/fork-params.js';
 export { listForkRuns, readForkRun } from './read-models/fork-runs.js';
 export type { ForkRunSummary, ForkRunStatus, ForkSettle } from './read-models/fork-runs.js';
 export { buildPendingActions } from './read-models/pending-actions.js';
-export { getAgentStatus, getChatHistory, getToolList } from './read-models/status.js';
-export { uiMessageText } from './utils/ui-message.js';
+export { getAgentStatus, getChatHistoryPage, getToolList } from './read-models/status.js';
+export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './read-models/page.js';
+export type { Page, PageRequest, SeekCursor } from './read-models/page.js';
+export {
+  mergeTranscript, uiMessageText, transcriptRole, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+} from './utils/ui-message.js';
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions.js';
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,

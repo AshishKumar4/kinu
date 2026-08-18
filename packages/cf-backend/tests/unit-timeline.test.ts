@@ -77,7 +77,7 @@ describe('runEventToSpan', () => {
   });
 
   test('tool calls map by tool name and carry latency on end', () => {
-    expect(runEventToSpan(ev({ type: 'tool_call_start', name: 'run', args: {}, toolCallId: 'tc1' })).kind).toBe('runtime-exec');
+    expect(runEventToSpan(ev({ type: 'tool_call_end', name: 'run', args: { command: 'ls' }, toolCallId: 'tc0' })).kind).toBe('runtime-exec');
     const end = runEventToSpan(ev({ type: 'tool_call_end', name: 'execute_tools', toolCallId: 'tc1', durationMs: 42 }));
     expect(end.kind).toBe('tool-call');
     expect(end.elapsedMs).toBe(42);

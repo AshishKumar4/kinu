@@ -1,6 +1,7 @@
 // @proteus/test-utils — shared fixtures for the project's test suite.
 // Mock at real seams (LLM, HTTP, SQL), never at internal functions.
 export * from './sql.js';
+export * from './scratch.js';
 export * from './vfs.js';
 export * from './llm.js';
 export * from './network.js';
@@ -15,3 +16,4 @@ export * from './git.js';
 export * from './eval-compare.js';
 export * from './eval-run.js';
 export * from './eval-outcome.js';
+export * from './hard-tasks/index.js';

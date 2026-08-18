@@ -461,7 +461,7 @@ describe('CLI TUI layout', () => {
           status: 200,
           headers: { 'content-type': 'application/json' },
         });
-        const { renderer, mockInput, renderOnce } = await createTestRenderer({
+        const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
           width: 100,
           height: 40,
           useThread: false,
@@ -474,6 +474,20 @@ describe('CLI TUI layout', () => {
             await Bun.sleep(10);
           }
         };
+        // Counted render rounds are the wrong instrument for "has the UI caught
+        // up": on a loaded machine the overlay had not opened yet, every
+        // subsequent keystroke went nowhere, and the test then asserted against a
+        // config file it had seeded itself — so a no-op interaction read as a
+        // persistence bug. Wait for the observable state instead, and name what
+        // failed to arrive.
+        const waitFor = async (what, predicate, rounds = 600) => {
+          for (let i = 0; i < rounds; i++) {
+            await renderOnce();
+            if (predicate()) return;
+            await Bun.sleep(10);
+          }
+          throw new Error('timed out waiting for ' + what);
+        };
         root.render(createElement(HomeApp, { opts: {} }));
         await settle();
         mockInput.pressTab();
@@ -481,16 +495,37 @@ describe('CLI TUI layout', () => {
         mockInput.pressTab();
         await settle();
         mockInput.pressEnter();
-        await settle(100);
-        await mockInput.typeText('openai');
-        await settle();
-        mockInput.pressArrow('down');
+        await waitFor('the model picker to open', () => captureCharFrame().includes('Select model'));
+        // Filter to ONE match and take it, rather than counting arrow presses
+        // from an assumed cursor position. The picker opens with the cursor on
+        // the model already in use — sensible behaviour, and it made the old
+        // 'openai' + one 'down' land back on gpt-5.5 (the seeded current model,
+        // and the LAST of the three openai matches), so the selection was a
+        // no-op that looked like a persistence failure.
+        await mockInput.typeText('gpt-5.4');
+        // And wait for the CURSOR to be on that row before taking it: Enter
+        // pressed a render too early takes whatever the cursor still sat on,
+        // which is the current model, which is a no-op. Anchored on the cursor
+        // marker rather than on the absence of gpt-5.5 anywhere in the frame —
+        // the home screen renders the model in use BEHIND the overlay, so that
+        // string is on screen no matter what the list is showing.
+        await waitFor('the cursor to reach the gpt-5.4 row', () => {
+          const cursorRow = captureCharFrame().split('\\n').find((row) => row.includes('▶'));
+          return cursorRow !== undefined && cursorRow.includes('gpt-5.4');
+        });
         mockInput.pressEnter();
-        await settle();
+        await waitFor('the chosen model to persist', () => JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).model !== 'openai/gpt-5.5');
+        // The write lands while the overlay is still on screen, so persistence is
+        // NOT the signal that the picker is done with the keyboard. Tab pressed
+        // here goes to the overlay and focus never reaches Effort.
+        await waitFor('the model picker to close', () => !captureCharFrame().includes('Select model'));
         mockInput.pressTab();
-        await settle();
+        // The row renders its key hint only while focused, so this is the
+        // observable "the effort control has the keyboard" — an arrow sent before
+        // it does goes to the previous field.
+        await waitFor('the effort control to take focus', () => captureCharFrame().includes('↑/↓ select'));
         mockInput.pressArrow('down');
-        await settle();
+        await waitFor('the chosen effort to persist', () => JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).reasoningEffort !== 'medium');
         root.render(createElement('box'));
         renderer.destroy();
         console.log(readFileSync(CONFIG_PATH, 'utf8'));

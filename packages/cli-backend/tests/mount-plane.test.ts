@@ -4,30 +4,19 @@
 // absolute paths. The property this suite has always protected — that the
 // agent can actually reach the host's files, and that they are not silently
 // confused with its own — survives the change and is what is asserted here.
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCLIRuntime } from '../src/runtime.js';
-
-const tempDirs: string[] = [];
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
+import { scratchDir, scratchPath } from '@proteus/test-utils';
 
 function freshRuntime() {
   const db = new Database(':memory:');
   return createCLIRuntime(db, {
-    dbPath: `/tmp/proteus-mount-${Math.floor(performance.now())}.db`,
+    dbPath: scratchPath('mount-plane', 'agent.db'),
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   });
-}
-
-function scratch(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'proteus-mount-'));
-  tempDirs.push(dir);
-  return dir;
 }
 
 describe('the local backend’s environments', () => {
@@ -48,7 +37,7 @@ describe('the local backend’s environments', () => {
 
   test('the laptop executor reads and writes the real host filesystem', async () => {
     const laptop = freshRuntime().executionRouter!.getProvider('laptop')!.files!;
-    const dir = scratch();
+    const dir = scratchDir('mount-plane-host');
     writeFileSync(join(dir, 'existing.txt'), 'from the host');
 
     // The machine's OWN absolute paths — no prefix to add or strip.
@@ -71,7 +60,7 @@ describe('the local backend’s environments', () => {
 
   test("the workspace filesystem is the agent's own, not the host's", async () => {
     const rt = freshRuntime();
-    const dir = scratch();
+    const dir = scratchDir('mount-plane-host');
     writeFileSync(join(dir, 'host-only.txt'), 'on the machine');
 
     // A host path names nothing in the workspace: they are separate

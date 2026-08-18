@@ -14,16 +14,17 @@ import {
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
-  CLOUD_MAX_INLINE_ATTACHMENT_BYTES, JsonObjectSchema, JsonValueSchema,
+  CLOUD_MAX_INLINE_ATTACHMENT_BYTES, JsonObjectSchema, JsonValueSchema, mergeTranscript, pageSchema,
   isPlaceholderMission, planReviewAwaitingDecision, summarizeRestorePlan,
 } from "@proteus/core";
 import type {
-  AlternateTakeSet, FileCheckpointEntry, FileCheckpointListing, FileRestoreChange, FileRestorePlan,
-  JsonObject, JsonValue, TakePickOutcome,
+  AlternateTakeSet, ChatHistoryEntry, FileCheckpointEntry, FileCheckpointListing,
+  FileRestoreChange, FileRestorePlan, JsonObject, JsonValue, Page, TakePickOutcome,
 } from "@proteus/core";
 import * as v from "valibot";
 import { useProteus } from "@/hooks/use-proteus";
-import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
+import { useGrowingScroll } from "@/hooks/use-growing-scroll";
+import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { touchWorkspace } from "@/lib/user-api";
 import { describeError } from "@/hooks/use-async-resource";
 import { tolerate } from "@proteus/core/obs";
@@ -62,6 +63,16 @@ function getMessageText(msg: UIMessage): string {
 const MessageCreatedAtSchema = v.looseObject({
   createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),
 });
+/** Messages per older-history request. Small enough that a page renders in one
+ *  frame and the scroll stays smooth, large enough that a flick up does not
+ *  need a dozen round trips. */
+const CHAT_PAGE_SIZE = 40;
+const ChatHistoryPageSchema: v.GenericSchema<Page<ChatHistoryEntry>> = pageSchema(v.object({
+  id: v.pipe(v.string(), v.nonEmpty()),
+  role: v.picklist(["user", "assistant", "system"]),
+  content: v.string(),
+  createdAt: v.union([v.string(), v.number()]),
+}));
 const ProvisionErrorSchema = v.object({
   error: v.literal("runtime_not_provisioned"),
   runtime: v.string(),
@@ -95,6 +106,46 @@ export function EmptyConversation({ mission }: { mission: string }) {
         </>
       )}
       <p className="mt-3 text-sm p-text-3">Send the first message to start.</p>
+    </div>
+  );
+}
+
+/**
+ * The top of the transcript: what is above the oldest message on screen.
+ *
+ * Four distinct answers, never collapsed into silence. "Failed" in particular
+ * has to be its own state — rendering nothing there would tell the reader they
+ * had reached the beginning of a conversation the pane simply could not fetch.
+ *
+ * All four are the same height, including the idle one. This row sits directly
+ * above the prepend, so a row that changes size as it changes state moves the
+ * transcript under the reader by the difference — measured at 15px per page
+ * before it was pinned, which is small, constant, and accumulates once per
+ * page for as long as someone keeps scrolling.
+ */
+export function HistoryBoundary({ loading, error, exhausted, onRetry }: {
+  loading: boolean;
+  error: string | null;
+  exhausted: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="flex h-7 items-center justify-center gap-2 text-xs">
+      {error ? (
+        <>
+          <WarningCircleIcon size={13} className="p-danger shrink-0" />
+          <span className="p-text-3">Could not load earlier messages.</span>
+          <button onClick={onRetry} className="p-accent hover:underline">Retry</button>
+        </>
+      ) : loading ? (
+        <span className="flex items-center gap-2 p-text-3"><Loader size="sm" />Loading earlier messages…</span>
+      ) : exhausted ? (
+        <>
+          <span className="h-px flex-1 p-border border-t" />
+          <span className="p-text-3 text-[11px]">Beginning of the conversation</span>
+          <span className="h-px flex-1 p-border border-t" />
+        </>
+      ) : null}
     </div>
   );
 }
@@ -907,7 +958,10 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
   const setModel = state.setModel;
   const onPickModel = useCallback((spec: string) => { void setModel(spec); }, [setModel]);
   const [input, setInput] = useState("");
-  const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
+  // No older-history walk: a subordinate facet's transcript is one delegation,
+  // and the SDK's seed already carries all of it. `prepended` is therefore
+  // constant — nothing is ever inserted above the live list here.
+  const messagesRef = useGrowingScroll<HTMLDivElement>({ grows: "up", content: state.messages, fetched: null });
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useLayoutEffect(() => {
@@ -1050,7 +1104,34 @@ export default function WorkspacePage() {
   const [chatInput, setChatInput] = useState("");
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
+  // ── Older history ────────────────────────────────────────────────────────
+  // `state.messages` is the LIVE list: the SDK's `get-messages` seed (which is
+  // `Think.messages`, a bounded newest window governed by hydrationByteBudget)
+  // plus everything the socket has streamed since. Anything older than that
+  // window exists only in storage and is reached one cursored page at a time.
+  const oldest = state.messages[0]?.id;
+  const history = usePagedScroll<ChatHistoryEntry>({
+    grows: "up",
+    fetchPage: useCallback(
+      (cursor) => state.rpc<unknown>("getChatHistoryPage", [{ cursor, limit: CHAT_PAGE_SIZE }])
+        .then((page) => v.parse(ChatHistoryPageSchema, page)),
+      [state.rpc],
+    ),
+    // The first anchor is the oldest message the live list is showing: the SDK
+    // seeds without a cursor, so this is the only place the walk can start.
+    startFrom: useCallback(() => oldest ? { after: oldest } : null, [oldest]),
+  });
+
+  const transcript = useMemo(
+    () => mergeTranscript(history.fetched, state.messages),
+    [history.fetched, state.messages]);
+
+  const messagesRef = useGrowingScroll<HTMLDivElement>({
+    grows: "up",
+    content: transcript,
+    fetched: history.fetched,
+    onReachEdge: history.loadMore,
+  });
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   // Pending chat attachments — fed by the attach button, paste, and drag-drop
   // onto the chat column; rendered as removable chips above the input.
@@ -1253,8 +1334,14 @@ export default function WorkspacePage() {
     setRestoreNotice(null);
     setPlanning(true);
     try {
+      // Keyed on the turn IN THE STORE, not filtered here. Reading a window and
+      // filtering client-side is what produced "It changed no device files." on a
+      // turn that had written plenty: retention is per working directory while
+      // this limit is global across them, so once the operator had a few active
+      // directories a still-restorable checkpoint fell outside the newest 200 and
+      // the empty filter result was rendered as a fact about the turn.
       const { availability, entries } =
-        await state.rpc<FileCheckpointListing>('listFileCheckpoints', [200]);
+        await state.rpc<FileCheckpointListing>('listFileCheckpoints', [200, mid]);
       if (!availability.available) {
         // The store is not reachable. Saying anything about what the turn
         // changed would be a guess: this is where "It changed no device files."
@@ -1264,14 +1351,16 @@ export default function WorkspacePage() {
         );
         return;
       }
-      const matches = entries.filter((e) => e.turnId === mid);
-      if (matches.length === 0) {
+      // Now an empty answer means what it says: the store searched every
+      // directory for this turn and holds no checkpoint for it.
+      if (entries.length === 0) {
         setRestoreNotice(
           'This turn changed no files on your machine. File history covers your own device only — '
           + 'changes the agent made in its workspace or in a sandbox are not restorable here.',
         );
         return;
       }
+      const matches = entries;
       const plans: FileRestorePlan[] = [];
       for (const entry of matches) {
         plans.push(await state.rpc<FileRestorePlan>('planFileRestore', [entry.dir, entry.id]));
@@ -1395,14 +1484,19 @@ export default function WorkspacePage() {
                 whitescreen the chat. (STABILITY-AUDIT §D2.) */}
             <ErrorBoundary label="Chat">
             <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
-              {state.messages.length === 0 && !state.isStreaming && (
+              {transcript.length === 0 && !state.isStreaming && (
                 <EmptyConversation mission={as?.purpose ?? ""} />
               )}
-              {state.messages.map((msg, i) => (
+              {transcript.length > 0 && (
+                <HistoryBoundary
+                  loading={history.loading} error={history.error}
+                  exhausted={history.exhausted} onRetry={history.loadMore} />
+              )}
+              {transcript.map((msg, i) => (
                 <MessageView
                   key={msg.id}
                   message={msg}
-                  isLast={i === state.messages.length - 1}
+                  isLast={i === transcript.length - 1}
                   isStreaming={state.isStreaming}
                   onFork={onForkMessage}
                   onFeedback={onMessageFeedback}

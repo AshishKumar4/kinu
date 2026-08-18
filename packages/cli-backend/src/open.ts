@@ -39,6 +39,10 @@ export interface CLIOpenConfig {
   codexAuthStore?: LocalCodexAuthStore;
   codexConfigPath?: string;
   onCodexRefresh?: (credential: OAuthCredential) => void;
+  /** Where the `laptop` executor is rooted, or `null` for a runtime with no
+   *  host plane at all. See CLIRuntimeConfig.hostRoot — a measurement harness
+   *  passes `null` so an episode cannot write into the developer's repo. */
+  hostRoot?: string | null;
   /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
 }
@@ -84,6 +88,7 @@ export async function openWorkspaceCLI(
     codexConfigPath: config.codexConfigPath,
     onCodexRefresh: config.onCodexRefresh,
     checkpointKeep: config.checkpointKeep,
+    hostRoot: config.hostRoot,
     agentName: identity.name,
   });
 

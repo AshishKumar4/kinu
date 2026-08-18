@@ -15,8 +15,9 @@ import * as v from 'valibot';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import type { RunEvent, RunEventInput, RunEventType } from './types.js';
-import { JsonObjectSchema, JsonValueSchema } from '../utils/json.js';
+import { JsonValueSchema } from '../utils/json.js';
 import { UsageSchema } from '../usage.js';
+import { ESCALATION_OUTCOMES } from '../execution/escalation.js';
 
 /** A stored model message, validated by the AI SDK's OWN schema rather than a
  *  hand-written copy of its part unions — the same predicate the compaction
@@ -53,10 +54,9 @@ const RunEventSchema = v.variant('type', [
     userMessage: v.optional(v.string()), caused_by: v.optional(v.string()),
     ingress_kind: v.optional(v.string()), trigger_id: v.optional(v.string()) }),
   v.object({ ...BaseFields, type: v.literal('turn_start'), turnIndex: v.number() }),
-  v.object({ ...BaseFields, type: v.literal('tool_call_start'), name: v.string(),
-    args: JsonObjectSchema, toolCallId: v.string() }),
   v.object({ ...BaseFields, type: v.literal('tool_call_end'), name: v.string(),
-    toolCallId: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.string()),
+    toolCallId: v.string(), args: v.optional(JsonValueSchema),
+    result: v.optional(JsonValueSchema), error: v.optional(v.string()),
     durationMs: v.optional(v.number()) }),
   v.object({ ...BaseFields, type: v.literal('step_finish'), stepIndex: v.number(),
     reason: v.optional(v.string()), messages: v.optional(v.array(StoredModelMessageSchema)),
@@ -68,6 +68,8 @@ const RunEventSchema = v.variant('type', [
     headCount: v.number(), headsWithFindings: v.number(), totalTokens: v.optional(v.number()),
     mergedNarrative: v.string(), fileChanges: v.array(HeadFileChangeSetSchema),
     blindSpots: v.array(v.string()) }),
+  v.object({ ...BaseFields, type: v.literal('head_abandoned'), rootId: v.string(),
+    headCount: v.number(), abandoned: v.number(), rationale: v.string(), reason: v.string() }),
   v.object({ ...BaseFields, type: v.literal('scaffold_promotion'), fromVersion: v.number(), toVersion: v.number() }),
   v.object({ ...BaseFields, type: v.literal('scaffold_rollback'), fromVersion: v.number(), toVersion: v.number() }),
   v.object({ ...BaseFields, type: v.literal('memory_write'), path: v.string(), bytes: v.number() }),
@@ -94,6 +96,12 @@ const RunEventSchema = v.variant('type', [
     raised: v.number(), dropped: v.array(v.string()) }),
   v.object({ ...BaseFields, type: v.literal('execution_recovery'), recoveries: v.array(v.object({
     tool: v.string(), failures: v.number(), failedSignature: v.string(),
+  })) }),
+  v.object({ ...BaseFields, type: v.literal('execution_escalation'), escalations: v.array(v.object({
+    runtime: v.string(), reason: v.nullable(v.string()),
+    // The picklist IS the exported constant, so an outcome a producer can write
+    // is never one this parser would reject.
+    outcome: v.picklist(ESCALATION_OUTCOMES), count: v.number(),
   })) }),
   v.object({ ...BaseFields, type: v.literal('budget_exhausted'),
     seam: v.picklist(['model_call', 'spawn']), label: v.string(), scope: v.string(),
@@ -127,6 +135,14 @@ export interface RunEventQuery {
   types?: readonly RunEventType[];
   /** Maximum rows to return. Default 200. */
   limit?: number;
+}
+
+/** One run as the log lists it: which run, when it was last written to, and how
+ *  many events it holds. */
+export interface RunListEntry {
+  runId: string;
+  lastTs: string;
+  eventCount: number;
 }
 
 export type RunEventListener = (event: RunEvent) => void;
@@ -201,6 +217,36 @@ export class RunEventRecorder {
     return events.filter((e) => types.has(e.type)).slice(0, limit);
   }
 
+  /**
+   * The run that recorded this fork root's `head_split`, or null.
+   *
+   * A fork outlives the run that dispatched it — that is the normal case, not
+   * the exceptional one — so anything settling a fork later has to find its way
+   * back to that run. `allocateIndex` reads MAX(event_index) from the table, so
+   * appending to a run whose `run_end` was written by a dead activation is
+   * ordinary: the index continues where the row left off.
+   *
+   * Null rather than a guess when no split was recorded (a fork dispatched with
+   * no open run, which every benchmark trial does). Attributing a fork's death
+   * to an unrelated turn's timeline would be worse than leaving it out.
+   *
+   * Matched client-side over the `type` index for the same reason {@link read}
+   * filters client-side: `payload` is opaque TEXT to every SqlExecutor this
+   * runs on, and no production query has ever depended on SQLite's JSON
+   * functions being available on both of them.
+   */
+  runForHeadSplit(rootId: string, window = 500): string | null {
+    const rows = this.sql<{ run_id: string; payload: string }>`
+      SELECT run_id, payload FROM run_events
+      WHERE type = 'head_split'
+      ORDER BY ts DESC LIMIT ${window}`;
+    for (const row of rows) {
+      const ev = parseStoredRunEvent(row.payload);
+      if (ev.type === 'head_split' && ev.rootId === rootId) return row.run_id;
+    }
+    return null;
+  }
+
   /** Replay all events strictly after `afterIndex` — for SSE Last-Event-ID resume. */
   readSince(runId: string, afterIndex: number, limit = 500): RunEvent[] {
     const rows = this.sql<{ payload: string }>`
@@ -273,13 +319,38 @@ export class RunEventRecorder {
     return rows[0]?.n ?? 0;
   }
 
-  /** List recent runs (distinct run_ids, ordered by latest event ts). */
-  listRuns(limit = 50): Array<{ runId: string; lastTs: string; eventCount: number }> {
-    return this.sql<{ runId: string; lastTs: string; eventCount: number }>`
+  /**
+   * One batch of runs, newest first — the run most recently written to leading.
+   *
+   * Ordered by MAX(rowid), NOT MAX(ts). `ts` is TEXT (see the DDL above) and a
+   * turn writes several rows inside one clock tick, so `ORDER BY MAX(ts) DESC`
+   * with no tiebreak had no defined MEMBERSHIP when two runs' latest events
+   * share a tick — not merely an undefined order between them, but no answer to
+   * which one the window contains. rowid is total and is the write order, so
+   * for an append-only log this is the "latest event first" that ordering was
+   * reaching for, now decidable. `lastTs` is still returned: it is what a
+   * surface shows.
+   *
+   * `before` bounds the scan strictly below a position from {@link runSeq};
+   * null starts at the newest. This is the storage half only — the page fold
+   * belongs to `read-models/runs.ts`, which owns the contract.
+   */
+  listRunsBefore(before: number | null, count: number): RunListEntry[] {
+    return this.sql<RunListEntry>`
       SELECT run_id AS runId, MAX(ts) AS lastTs, COUNT(*) AS eventCount
       FROM run_events
       GROUP BY run_id
-      ORDER BY lastTs DESC
-      LIMIT ${limit}`;
+      HAVING ${before} IS NULL OR MAX(rowid) < ${before}
+      ORDER BY MAX(rowid) DESC
+      LIMIT ${count}`;
+  }
+
+  /** Where a run sits in the log's write order, or null when the log no longer
+   *  holds it — the resolvable question a page anchor asks, so that a vanished
+   *  run raises instead of reading as an exhausted history. */
+  runSeq(runId: string): number | null {
+    const rows = this.sql<{ seq: number | null }>`
+      SELECT MAX(rowid) AS seq FROM run_events WHERE run_id = ${runId}`;
+    return rows[0]?.seq ?? null;
   }
 }

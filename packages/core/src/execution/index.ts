@@ -18,6 +18,10 @@ export {
   formatExecResult, isFailingResultText, type ExecOutcome,
   STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
 } from './exec-result.js';
+export {
+  TurnEscalationLedger, ESCALATION_OUTCOMES,
+  type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
+} from './escalation.js';
 export { DefaultExecutionRouter } from './router.js';
 export { createInlineExecutor, type InlineExecutorDeps } from './inline.js';
 export { withApprovalGatedShell, gateProviderExec } from './approval.js';

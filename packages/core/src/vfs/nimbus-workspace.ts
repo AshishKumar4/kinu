@@ -27,9 +27,14 @@
 
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
+import { provisionWorkspaceRuntimes } from './workspace-runtimes.js';
 import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives.js';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path.js';
+
+export { workspaceToolchainCapabilities } from './workspace-runtimes.js';
+export type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 
 export { WORKSPACE_ROOT, workspacePath } from './workspace-path.js';
 
@@ -166,6 +171,17 @@ export interface WorkspaceOptions {
    * process live write authority. Use {@link nextWorkspaceGeneration}.
    */
   generation: number;
+  /**
+   * Language runtimes this host can install into the workspace, as the npm
+   * packages that hold them (`@nimbus-sh/runtime-bash`,
+   * `@nimbus-sh/runtime-cpython`).
+   *
+   * Supplied by the host rather than imported here because the packages read
+   * `node:fs` and weigh 40 MB: the deployed Worker has neither, and gets its
+   * runtimes from R2 through the hosted session instead. Nothing is written
+   * until one of their commands is invoked — see vfs/workspace-runtimes.ts.
+   */
+  runtimes?: readonly RuntimePackage[];
 }
 
 /**
@@ -185,6 +201,11 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     transactions: opts.transactions,
     generation: opts.generation,
     cwd: WORKSPACE_ROOT,
+  }).then((workspace) => {
+    // Before the first command, and after the substrate's own registrations so
+    // a coreutil is never shadowed by a runtime bin of the same name.
+    provisionWorkspaceRuntimes({ workspace, runtimes: opts.runtimes ?? [] });
+    return workspace;
   });
   // A boot nobody has awaited yet must not surface as an unhandled rejection.
   // The failure still reaches every caller that awaits `booting`; this states it

@@ -34,8 +34,8 @@ explore problems. This skill runs that audit.
 1. Restate what you implemented in two or three sentences: the change,
    the user-facing effect, the files touched.
 
-2. Call \`agents({ action: "fork", task: <audit task>, budget: 3-4 })\` with
-   three or four forks, each scoped to a distinct angle:
+2. Call \`agents({ action: "fork", task: <audit task>, forks: [...], budget: 3-4 })\`
+   with three or four forks in that array, each scoped to a distinct angle:
 
    - **correctness** — does the implementation match the stated
      intent? Bugs, missing edge cases, unhandled errors, broken

@@ -24,8 +24,8 @@ const SSE_POLL_MS = 500;
 const SSE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const SSE_HEARTBEAT_MS = 15_000;
 const ALLOWED_TYPES = [
-  'run_start', 'turn_start', 'tool_call_start', 'tool_call_end',
-  'step_finish', 'head_split', 'head_merge', 'scaffold_promotion',
+  'run_start', 'turn_start', 'tool_call_end',
+  'step_finish', 'head_split', 'head_merge', 'head_abandoned', 'scaffold_promotion',
   'scaffold_rollback', 'memory_write', 'fiber_recovered', 'error',
   'turn_end', 'run_end',
 ] as const satisfies readonly RunEventType[];
@@ -60,10 +60,13 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
   if (listMatch) {
     const [, agentName] = listMatch;
     const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit') ?? '50')));
+    // The page's own `next`, echoed back verbatim. A caller that ignores it gets
+    // exactly what it got before; a caller that reads it can tell a full page
+    // from the end of the history, which `limit` alone never said.
+    const after = url.searchParams.get('after');
     try {
       const stub = await resolveAgent(env, agentName);
-      const runs = await stub.listRuns(limit);
-      return Response.json(runs);
+      return Response.json(await stub.listRuns({ limit, cursor: after ? { after } : undefined }));
     } catch (err) {
       return Response.json({ error: errorMessage(err) }, { status: 500 });
     }

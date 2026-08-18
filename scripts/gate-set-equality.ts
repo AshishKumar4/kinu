@@ -132,6 +132,13 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + '`result.json` is a trial. No repository enumerator can produce that set. It fails loudly '
     + 'on a directory holding none, rather than pairing fewer arms in silence.',
   ],
+  [
+    'scripts/install-scripts-gate.ts',
+    'enumerates installed dependency manifests under `node_modules` and asks `bun pm untrusted` '
+    + 'which of their lifecycle scripts bun refused to run. `git ls-files` lists neither, and '
+    + "bun's built-in trusted list is compiled into bun rather than declared here — so the set "
+    + 'that EXECUTES is exactly the set no repository enumerator can produce.',
+  ],
 ]);
 
 export type Kind = 'private-enumeration' | 'private-pattern' | 'unmeasured-publication'

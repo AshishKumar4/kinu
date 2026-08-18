@@ -116,3 +116,43 @@ describe('F1 defense 2 — @callable surface reduction (worker-side stubs preser
     }
   });
 });
+
+describe("the SDK's own endpoints route, and nothing more", () => {
+  /**
+   * Pinning BOTH directions of one regex, because closing the F1 hole
+   * accidentally closed the chat with it.
+   *
+   * `ORCHESTRATOR_AGENT_PATH_RE` allowed the agent name followed by end-of-string
+   * or `/sub/<subordinate>/…` and nothing else, so the agents SDK's own
+   * `/get-messages` matched nothing, `isForeignAgentNamespacePath` called it
+   * foreign, and the worker answered 404. The WebSocket still connected, so the
+   * live turn streamed while every prior message was missing — which reads as
+   * total data loss and was not: `getChatHistory` returned 100 messages
+   * throughout, the last of them the one on screen.
+   *
+   * A wildcard segment would have fixed the symptom and re-opened the hole. The
+   * endpoint set is enumerated, and this test is the thing that stops either
+   * half regressing.
+   */
+  test('the history endpoint routes, and the account-takeover path still does not', () => {
+    const ws = 'stone-ash-71f2';
+    // Must route: the socket, the SDK's history fetch, and a subordinate facet.
+    expect(isForeignAgentNamespacePath(`/agents/orchestrator-agent/${ws}`)).toBe(false);
+    expect(isForeignAgentNamespacePath(`/agents/orchestrator-agent/${ws}/get-messages`)).toBe(false);
+    expect(extractOrchestratorAgentName(`/agents/orchestrator-agent/${ws}/get-messages`)).toBe(ws);
+    expect(isForeignAgentNamespacePath(`/agents/orchestrator-agent/${ws}/sub/subordinate-agent/x`)).toBe(false);
+
+    // Must NOT route: F1 itself, recursive facet resolution, and any segment
+    // outside the enumerated set — the control that proves the widening above
+    // did not become a wildcard.
+    expect(isForeignAgentNamespacePath('/agents/user-d-o/victim-user-id')).toBe(true);
+    expect(isForeignAgentNamespacePath(`/agents/orchestrator-agent/${ws}/sub/subordinate-agent/a/sub/b`)).toBe(true);
+    expect(isForeignAgentNamespacePath(`/agents/orchestrator-agent/${ws}/arbitrary-thing`)).toBe(true);
+  });
+
+  test('a connect ticket still authorises only the root socket, never the history fetch', () => {
+    const ws = 'stone-ash-71f2';
+    expect(extractTicketOrchestratorAgentName(`/agents/orchestrator-agent/${ws}`)).toBe(ws);
+    expect(extractTicketOrchestratorAgentName(`/agents/orchestrator-agent/${ws}/get-messages`)).toBeNull();
+  });
+});

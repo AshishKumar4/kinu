@@ -101,6 +101,15 @@ describe('isFailingToolResult — a failure the seam had to truncate', () => {
     expect(isFailingToolResult({ toolName: 'execute_tools', args: {}, result: truncated, success: true })).toBe(true);
   });
 
+  test('a bounded prefix of a REASON-FIRST refusal still reads as a failure', () => {
+    // A refusal leads with its classification, where no clamp can reach it
+    // (obs/error.ts `Refusal`). Reading only `error` at the head meant a clamped
+    // refusal was indistinguishable from a clamped success — the same defect one
+    // discriminator over.
+    const truncated = `{"reason":"unavailable","error":"${'x'.repeat(60)}`;
+    expect(isFailingToolResult({ toolName: 'run', args: {}, result: truncated, success: true })).toBe(true);
+  });
+
   test('a truncated SUCCESS payload is not turned into a failure', () => {
     const truncated = `{"result":"${'x'.repeat(60)}`;
     expect(isFailingToolResult({ toolName: 'execute_tools', args: {}, result: truncated, success: true })).toBe(false);

@@ -247,7 +247,7 @@ export class LocalAgentClient implements AgentClient {
     };
     // Closures read this.session so the surface survives fork/resume swaps.
     this.checkpoints = {
-      list: (limit) => this.session.listFileCheckpoints(limit),
+      list: (limit, turnId) => this.session.listFileCheckpoints(limit, turnId),
       plan: (dir, id) => this.session.planFileRestore(dir, id),
       restore: (dir, id) => this.session.restoreFileCheckpoint(dir, id),
     };

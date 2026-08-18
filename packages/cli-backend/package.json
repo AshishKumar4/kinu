@@ -9,6 +9,8 @@
   "dependencies": {
     "@ai-sdk/provider": "^3.0.10",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@nimbus-sh/runtime-bash": "5.2.37",
+    "@nimbus-sh/runtime-cpython": "3.13.14",
     "@proteus/core": "workspace:*",
     "@proteus/agent-utils": "workspace:*",
     "ai": "^6.0.196",

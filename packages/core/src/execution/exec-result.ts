@@ -88,21 +88,25 @@ export function formatExecResult(result: ExecOutcome): string {
  * successful result, because that text is what steers the model's next step.
  *
  * Two shapes, both produced by this codebase and nothing else guessed at: the
- * `Error` prefix every built-in failure uses, and the `{"error": "…"}` payload
- * the unprovisioned-runtime paths return. A result that merely mentions the
- * word "error" somewhere in its output is not a failure.
+ * `Error` prefix every built-in failure uses, and the refusal payload a tool puts
+ * on its own result. A result that merely mentions the word "error" somewhere in
+ * its output is not a failure.
  *
- * The JSON half is read from the head rather than parsed whole: every seam
- * hands over a BOUNDED prefix of the result (chat.ts and the cf afterToolCall
- * both cut at 1000 chars), so a long failure payload arrives as JSON that
- * cannot parse while its discriminator is still legible at the front.
+ * The JSON half is read from the head rather than parsed whole: every seam hands
+ * over a BOUNDED prefix of the result (chat.ts and the cf afterToolCall both cut
+ * at 1000 chars), so a long failure payload arrives as JSON that cannot parse
+ * while its discriminator is still legible at the front. `reason` is read there
+ * as well as `error`, because a refusal leads with its CLASSIFICATION — that is
+ * the whole point of putting the discriminator where no clamp can reach it
+ * (obs/error.ts `Refusal`, tools/file-tool.ts:78-84). Reading only `error` meant
+ * a clamped refusal was indistinguishable from a clamped success.
  */
 export function isFailingResultText(result: string): boolean {
   const text = result.trimStart();
   if (/^Error\b/.test(text)) return true;
   if (!text.startsWith('{')) return false;
   const json = tolerate(() => parseJsonValue(text), 'malformed-input');
-  if (json === undefined) return /^\{\s*"error"\s*:\s*"/.test(text);
+  if (json === undefined) return /^\{\s*"(?:reason|error)"\s*:\s*"/.test(text);
   return v.safeParse(ErrorResultSchema, json).success;
 }
 

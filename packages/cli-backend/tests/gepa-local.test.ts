@@ -21,6 +21,7 @@ import {
 } from '@proteus/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from '../src/runtime.js';
 import { LocalAgentSession } from '../src/local-session.js';
+import { scratchPath } from '@proteus/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -84,7 +85,7 @@ async function setup(judge: () => Promise<string>) {
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, {
-    dbPath: `/tmp/proteus-gepa-${Math.floor(performance.now())}.db`,
+    dbPath: scratchPath('gepa-local', 'agent.db'),
     llm: DUMMY_LLM,
   });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));

@@ -19,7 +19,7 @@
  * sandbox container, and when that is unavailable this surface says so up
  * front instead of presenting a pipeline that cannot run.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
   ArrowClockwiseIcon, CheckIcon, GitBranchIcon, GitDiffIcon,
@@ -38,7 +38,20 @@ import type {
 import { deployTargetAsCommand } from "@proteus/core";
 import { isPreviewUrl } from "@/lib/preview-origin";
 import { releaseSubstrate, type ExecutorInfo } from "@/lib/executors";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState } from "./shared";
+
+/**
+ * How many changes the board carries.
+ *
+ * A DELIBERATE cap, not a paging window. The release lane is a decision queue:
+ * what matters is every change still waiting on the owner, and a change that
+ * has deployed or been rejected is closed. Thirty is far past the depth at
+ * which the lane needs draining, and an unbounded lane would put settled
+ * history in front of the one decision this surface exists to take.
+ */
+const RELEASE_BOARD_LIMIT = 30;
 
 const STATUS_META = {
   draft: { label: "Draft", tone: "p-card p-text-2" },
@@ -365,47 +378,47 @@ function ChangeDetail({
 }
 
 export function ReleasesSurface({ rpc, executors }: { rpc: Rpc; executors: ExecutorInfo[] }) {
-  const [board, setBoard] = useState<ReleaseBoard | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setErr(null);
-    try {
-      const next = await rpc<ReleaseBoard>("getReleaseBoard", [30]);
-      setBoard(next);
-      setSelectedId((current) => current && next.changes.some((c) => c.id === current) ? current : next.changes[0]?.id ?? null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [rpc]);
-
-  useEffect(() => { void load(); }, [load]);
+  const load = useCallback(() => rpc<ReleaseBoard>("getReleaseBoard", [RELEASE_BOARD_LIMIT]), [rpc]);
+  const { resource, reload } = useAsyncResource(load);
+  const board = lastValue(resource);
 
   const bindings = board?.bindings ?? [];
   const changes = board?.changes ?? [];
   const bindingMap = useMemo(() => new Map((board?.bindings ?? []).map((b) => [b.id, b])), [board?.bindings]);
-  const selected = changes.find((c) => c.id === selectedId) ?? null;
-  const checks = (board?.checks ?? []).filter((c) => c.changeId === selectedId);
-  const approvals = (board?.approvals ?? []).filter((a) => a.changeId === selectedId);
-  const deployments = (board?.deployments ?? []).filter((d) => d.changeId === selectedId);
+  // Derived, never written by the loader: a refresh that no longer carries the
+  // selected change falls back to the newest one, without a second state write
+  // racing the fetch that caused it.
+  const selected = changes.find((c) => c.id === selectedId) ?? changes[0] ?? null;
+  const checks = (board?.checks ?? []).filter((c) => c.changeId === selected?.id);
+  const approvals = (board?.approvals ?? []).filter((a) => a.changeId === selected?.id);
+  const deployments = (board?.deployments ?? []).filter((d) => d.changeId === selected?.id);
 
-  if (loading) return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
+  // Nothing has loaded yet, and "the read broke" is not "the lane is empty".
+  // Rendering the empty state for a failed read is how intact data gets
+  // reported as absent, so the two answers never share a branch.
+  if (board === null) {
+    return resource.status === "error"
+      ? <LoadFailure what="the release lane" message={resource.message} onRetry={reload} className="p-card p-3" />
+      : <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
+  }
 
   return (
     <div className="space-y-5 animate-fade-in">
       <div className="flex items-center gap-2">
         <GitDiffIcon size={15} className="p-text-2" />
         <span className="text-sm font-medium p-text">Releases</span>
-        {board && <Badge variant="secondary">{board.changes.length}</Badge>}
+        <Badge variant="secondary">{changes.length}</Badge>
         <div className="flex-1" />
-        <Button size="sm" variant="ghost" onClick={load} icon={<ArrowClockwiseIcon size={12} />}>Refresh</Button>
+        <Button size="sm" variant="ghost" onClick={reload} icon={<ArrowClockwiseIcon size={12} />}>Refresh</Button>
       </div>
 
-      {err && <div className="text-xs p-danger p-card p-3">{err}</div>}
+      {/* A refresh that failed over a board already on screen. Without this the
+          view goes stale in silence and reads as current. */}
+      {resource.status === "error" && (
+        <LoadFailure what="a fresher release lane" message={resource.message} onRetry={reload} className="p-card p-3" />
+      )}
 
       <SubstrateNotice executors={executors} />
 
@@ -422,7 +435,7 @@ export function ReleasesSurface({ rpc, executors }: { rpc: Rpc; executors: Execu
         <div className="grid gap-5 xl:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.5fr)] xl:grid-rows-[auto_1fr]">
           <section className="xl:col-start-1 xl:row-start-1">
             <SectionTitle icon={<GitDiffIcon size={14} />} title="Changes" count={changes.length} />
-            <ChangeList changes={changes} selectedId={selectedId} onSelect={setSelectedId} bindings={bindingMap} />
+            <ChangeList changes={changes} selectedId={selected?.id ?? null} onSelect={setSelectedId} bindings={bindingMap} />
           </section>
           <section className="min-w-0 xl:col-start-2 xl:row-start-1 xl:row-span-2">
             <ChangeDetail
@@ -432,7 +445,7 @@ export function ReleasesSurface({ rpc, executors }: { rpc: Rpc; executors: Execu
               approvals={approvals}
               deployments={deployments}
               rpc={rpc}
-              onRefresh={load}
+              onRefresh={reload}
             />
           </section>
           {bindings.length > 0 && (

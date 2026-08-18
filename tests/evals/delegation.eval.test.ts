@@ -37,9 +37,7 @@
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import type { LanguageModel } from 'ai';
 
 import { initWorkspaceSchema, type LLMProviderConfig } from '../../packages/core/src/index.js';
@@ -47,15 +45,16 @@ import { createWorkspace } from '../../packages/core/src/identity/index.js';
 import { LocalAgentSession } from '../../packages/cli-backend/src/local-session.js';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
 import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
+import { requireSandboxedExecutors } from './harness.js';
 import {
-  liveChatModel, liveModelTarget, reportLiveModelSpend, scoreDelegation, UNCONFIGURED_LLM,
+  liveChatModel, liveModelTarget, reportLiveModelSpend, scoreDelegation, scratchDir, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
 
 const TARGET = liveModelTarget('Delegation Evals');
 const liveTest = test.skipIf(!TARGET);
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
-const TEST_DIR = join(tmpdir(), 'proteus-eval-delegation-' + String(Date.now()));
+const TEST_DIR = scratchDir('eval-delegation');
 
 /**
  * One eligible turn each: an imperative (never a question), multi-part, with
@@ -81,14 +80,12 @@ describe('Delegation evals — conversion over eligible turns', () => {
   let outcomes: TurnOutcome[] = [];
 
   beforeAll(() => {
-    mkdirSync(TEST_DIR, { recursive: true });
     model = liveChatModel(LLM_CONFIG);
   });
 
   afterAll(() => {
     reportLiveModelSpend('Delegation Evals');
     for (const outcome of outcomes) outcome.db.close();
-    rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
   liveTest('the delegation rate is measured over a non-zero count of eligible turns', async () => {
@@ -109,7 +106,12 @@ describe('Delegation evals — conversion over eligible turns', () => {
         llm: LLM_CONFIG,
       });
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-      const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM_CONFIG });
+      // `hostRoot: null` for the reason harness.ts states at length: an episode
+      // reaches every registered executor, and the default `laptop` plane is
+      // rooted at the repo this suite was launched from. Asserted rather than
+      // trusted, because this suite spends real money to find out.
+      const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM_CONFIG, hostRoot: null });
+      requireSandboxedExecutors(`delegation-${String(index)}`, rt);
       const session = new LocalAgentSession({
         rt, db, model, onEvent: () => {}, noAutoEvolve: true,
       });

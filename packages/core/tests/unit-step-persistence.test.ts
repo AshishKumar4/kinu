@@ -27,6 +27,7 @@
 // fail naming the missing step.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { scratchPath } from '@proteus/test-utils';
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { runChat, INTERRUPTED_TURN, type ChatEvent } from '../src/chat.ts';
@@ -94,7 +95,9 @@ function scriptedProvider(script: ReadonlyArray<() => Response>) {
 /** A file-backed workspace database — a durability claim checked against an
  *  in-memory database proves nothing about surviving the process. */
 function workspaceOnDisk() {
-  const path = `/tmp/proteus-step-persistence-${crypto.randomUUID()}.sqlite`;
+  // A sqlite file also strands its -wal and -shm siblings, so it gets a
+  // directory of its own rather than a bare path under the temp root.
+  const path = scratchPath('step-persistence', 'store.sqlite');
   const db = new Database(path);
   initRunEventTables(makeExecRaw(db));
   return { path, db, sql: makeSql(db) };

@@ -32,6 +32,7 @@ import {
 } from './session.js';
 import { SessionRecorder } from './session-recorder.js';
 import { normalizeModelMenu, type AgentModelMenu } from './model-catalog.js';
+import { pageSchema, type Page, type SeekCursor } from '@proteus/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, ReasoningEffort, TakePickOutcome } from '@proteus/core';
 import {
   asRecord,
@@ -103,6 +104,7 @@ const CloudChatMessageSchema: v.GenericSchema<CloudChatMessage> = v.object({
   content: v.string(),
   createdAt: v.union([v.string(), v.number()]),
 });
+const CloudChatPageSchema: v.GenericSchema<Page<CloudChatMessage>> = pageSchema(CloudChatMessageSchema);
 const BranchTurnResultSchema = v.nullable(v.object({
   accepted: v.optional(v.boolean()),
   reason: v.optional(v.string()),
@@ -269,8 +271,9 @@ export class CloudAgentClient implements AgentClient {
     };
     // Checkpoints live on the user's device daemon; the DO forwards.
     this.checkpoints = {
-      list: async (limit) => v.parse(
-        FileCheckpointListingSchema, await this.callRpc('listFileCheckpoints', [limit ?? 50]),
+      list: async (limit, turnId) => v.parse(
+        FileCheckpointListingSchema,
+        await this.callRpc('listFileCheckpoints', [limit ?? 50, turnId ?? null]),
       ),
       plan: async (dir, id) => v.parse(FileRestorePlanSchema, await this.callRpc('planFileRestore', [dir, id])),
       restore: async (dir, id) => v.parse(
@@ -391,7 +394,7 @@ export class CloudAgentClient implements AgentClient {
    *  sibling client pointed at the fork. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.activeTurns.size > 0) throw new Error('Cannot fork while a turn is running.');
-    const rows = await this.callHttp('getChatHistory', v.array(CloudChatMessageSchema));
+    const rows = await this.transcript();
     const pivot = findForkPivot(rows, point);
     if (pivot < 0) throw new Error('Could not locate that message in the agent’s chat history.');
     if (pivot === 0) throw new Error('Cannot walk back before the first message of a cloud workspace.');
@@ -460,8 +463,30 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
-    const rows = await this.callHttp('getChatHistory', v.array(CloudChatMessageSchema));
-    return rows.map((row) => ({ id: row.id, role: row.role, content: row.content }));
+    return (await this.transcript()).map((row) => ({ id: row.id, role: row.role, content: row.content }));
+  }
+
+  /**
+   * The WHOLE durable transcript, oldest first.
+   *
+   * Walked page by page rather than asked for in one call. Both callers need
+   * completeness and neither can detect its absence: `history()` seeds the
+   * TUI's message list, and `fork()` searches the result for a pivot message
+   * and reports "could not locate that message" when it is not there — which
+   * is what a silent cap reads as for any conversation past the page size.
+   */
+  private async transcript(): Promise<CloudChatMessage[]> {
+    const rows: CloudChatMessage[] = [];
+    let cursor: SeekCursor | null = null;
+    for (;;) {
+      const page: Page<CloudChatMessage> = await this.callHttp(
+        'getChatHistoryPage', CloudChatPageSchema,
+        [cursor === null ? {} : { cursor: { after: cursor.after } }],
+      );
+      rows.unshift(...page.items);
+      if (page.status === 'end') return rows;
+      cursor = page.next;
+    }
   }
 
   listSessions(): CliSessionInfo[] {

@@ -24,6 +24,7 @@ export {
   BackgroundJobRunner,
   JobNotResumable,
   EVICTION_INTERRUPT_ERROR,
+  backgroundJobWakeTrigger,
   MAX_CONCURRENT_DETACHED_JOBS,
   type BackgroundJobRunnerDeps,
   type JobResumer,

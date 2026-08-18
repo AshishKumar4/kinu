@@ -8,7 +8,7 @@ import {
   initRunEventTables, RunEventRecorder,
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery,
-  TurnAccumulator, TurnSteering, CraftCycle,
+  TurnAccumulator, TurnSteering, CraftCycle, TurnEscalationLedger,
   OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   SPILL_DIRS,
   type AgentSignal, type CompactionTriggerState,
@@ -276,5 +276,79 @@ describe('applyOverflowRecovery', () => {
     expect(rateLimit.forceCompaction).toBe(false);
     expect(signals.delivered).toEqual([]);
     expect(state.armed).toEqual(['k']); // only the genuine overflow armed
+  });
+});
+
+// Escalation — a turn reaching past its own shell into a provisioned
+// environment. The row exists so "did escalating help" is answerable from the
+// durable log, so what matters is that the REASON and the OUTCOME survive
+// storage, not merely that something was emitted.
+//
+// `recorder()` is a real RunEventRecorder over SQLite and `read()` parses back
+// through `parseStoredRunEvent`, so every assertion here is a producer →
+// storage → parser round trip. A payload the valibot variant rejected would
+// fail these rather than being silently unreadable later.
+describe('the escalation row', () => {
+  test('a turn that escalated writes one row that survives storage; one that did not writes none', () => {
+    const rec = recorder();
+    const escalations = new TurnEscalationLedger();
+    escalations.observe({ runtime: 'sandbox', reason: 'needs a long-running process', outcome: 'ok' });
+
+    closeTurnRun(rec, 'run-e', { turnIndex: 0, reason: 'completed', escalations });
+    closeTurnRun(rec, 'run-plain', {
+      turnIndex: 0, reason: 'completed', escalations: new TurnEscalationLedger(),
+    });
+
+    expect(rec.read('run-plain').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
+    const rows = rec.read('run-e').filter((e) => e.type === 'execution_escalation');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      type: 'execution_escalation',
+      escalations: [{
+        runtime: 'sandbox', reason: 'needs a long-running process', outcome: 'ok', count: 1,
+      }],
+    });
+  });
+
+  test('a repeated decision is counted, not listed again', () => {
+    // Thirty commands in one container is one decision thirty times over.
+    const escalations = new TurnEscalationLedger();
+    for (let i = 0; i < 30; i += 1) {
+      escalations.observe({ runtime: 'sandbox', reason: 'inbound port', outcome: 'ok' });
+    }
+    expect(escalations.snapshot().escalations).toEqual([
+      { runtime: 'sandbox', reason: 'inbound port', outcome: 'ok', count: 30 },
+    ]);
+  });
+
+  test('an unstated reason is null, never invented from the runtime name', () => {
+    // How often escalation happens unreasoned is the measurement a prompt change
+    // would try to move; fabricating a reason would destroy it.
+    const escalations = new TurnEscalationLedger();
+    escalations.observe({ runtime: 'sandbox', reason: undefined, outcome: 'ok' });
+    escalations.observe({ runtime: 'laptop', reason: '   ', outcome: 'ok' });
+    expect(escalations.snapshot().escalations.map((e) => e.reason)).toEqual([null, null]);
+  });
+
+  test('refused and failed are distinct outcomes, and the same reason splits by them', () => {
+    // "The runtime was never there" and "the command failed" are different
+    // findings; a single failure count would merge them into "unreliable".
+    const escalations = new TurnEscalationLedger();
+    escalations.observe({ runtime: 'sandbox', reason: 'parallelism', outcome: 'refused' });
+    escalations.observe({ runtime: 'sandbox', reason: 'parallelism', outcome: 'failed' });
+    escalations.observe({ runtime: 'sandbox', reason: 'parallelism', outcome: 'failed' });
+    expect(escalations.snapshot().escalations).toEqual([
+      { runtime: 'sandbox', reason: 'parallelism', outcome: 'refused', count: 1 },
+      { runtime: 'sandbox', reason: 'parallelism', outcome: 'failed', count: 2 },
+    ]);
+  });
+
+  test('reset clears the turn, so a ledger is never carried into the next one', () => {
+    const escalations = new TurnEscalationLedger();
+    escalations.observe({ runtime: 'sandbox', reason: 'x', outcome: 'ok' });
+    expect(escalations.active).toBe(true);
+    escalations.reset();
+    expect(escalations.active).toBe(false);
+    expect(escalations.snapshot().escalations).toEqual([]);
   });
 });

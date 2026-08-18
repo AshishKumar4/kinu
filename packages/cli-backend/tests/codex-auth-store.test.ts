@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '@proteus/test-utils';
 import { CODEX_CRED_KEY, createFileCodexAuthStore } from '../src/codex-auth-store.js';
 import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@proteus/core';
 import * as v from 'valibot';
@@ -19,7 +19,7 @@ const savedConfigSchema = v.object({
 
 describe('createFileCodexAuthStore', () => {
   test('refreshes Codex OAuth credentials atomically and preserves config', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'proteus-codex-auth-'));
+    const dir = scratchDir('codex-auth-store');
     const configPath = join(dir, 'config.json');
     writeFileSync(configPath, `${JSON.stringify({
       origin: 'https://proteus.example',
@@ -69,7 +69,7 @@ describe('createFileCodexAuthStore', () => {
   // holding ONLY the codex credential — silently deleting every other
   // provider's key it was supposed to preserve.
   test('an unparseable config is a failure, not an empty one', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'proteus-codex-auth-'));
+    const dir = scratchDir('codex-auth-store');
     const configPath = join(dir, 'config.json');
     const intact = JSON.stringify({
       origin: 'https://proteus.example',
@@ -84,7 +84,7 @@ describe('createFileCodexAuthStore', () => {
   });
 
   test('a config that has never been written reads as empty', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'proteus-codex-auth-'));
+    const dir = scratchDir('codex-auth-store');
     const store = createFileCodexAuthStore(join(dir, 'nested', 'config.json'));
     expect(store.hasCredential()).toBe(false);
     store.save({ kind: 'oauth', accessToken: 'a', refreshToken: 'r' });

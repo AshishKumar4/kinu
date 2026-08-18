@@ -17,13 +17,14 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promises as fs, existsSync, statSync } from 'node:fs';
-import { homedir, devNull } from 'node:os';
+import { homedir, devNull, tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { proteusHome } from './home.js';
 import {
   DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT,
   CHECKPOINT_REF_PREFIX as REF_PREFIX, CHECKPOINT_WORKDIR_MARKER as WORKDIR_MARKER,
   CHECKPOINT_EXCLUDES, checkpointSubject, parseCheckpointSubject, checkpointRefTimestampMs,
+  checkpointReason, diagnoseStaging,
   type CheckpointAvailability, type CheckpointTurnMeta, type FileCheckpoints,
   type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan, type FileRestoreResult,
 } from '@proteus/core';
@@ -32,6 +33,16 @@ import { classify, tolerateAsync } from '@proteus/core/obs';
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
 const GIT_TIMEOUT_MS = 30_000;
+/**
+ * Directories that are not a work tree, so a whole-tree snapshot of one is
+ * never what the caller meant. The filesystem root and the user's home were
+ * always here; the SHARED TEMP ROOTS are here because `workdirForPath` resolves
+ * a bare `/tmp/x.js` to `/tmp` — no project marker above it — and `/tmp` on this
+ * box holds 12,017 entries belonging to every process and user on the machine.
+ * Copying those into the agent's checkpoint store is neither the user's project
+ * state nor the agent's to read.
+ */
+const UNSNAPSHOTTABLE = new Set([tmpdir(), '/tmp', '/var/tmp'].map((dir) => resolve(dir)));
 
 export interface HostCheckpointsOpts {
   agent: string;
@@ -46,6 +57,10 @@ export interface HostCheckpointsOpts {
 
 interface GitResult { code: number; stdout: string; stderr: string }
 interface GitEnvironment { [name: string]: string }
+
+/** One staged tree, plus the paths that are NOT in it because this process may
+ *  not read them. */
+interface StagedTree { tree: string; unreadable: string[] }
 
 export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoints {
   const agent = opts.agent.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -71,6 +86,10 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     env.GIT_AUTHOR_EMAIL = 'checkpoints@proteus.local';
     env.GIT_COMMITTER_NAME = 'Proteus Checkpoint';
     env.GIT_COMMITTER_EMAIL = 'checkpoints@proteus.local';
+    // Pinned so git's own diagnostics are the strings `diagnoseStaging` parses:
+    // a localized `warning: could not open directory` would read as an
+    // unexplained failure and fail the mutation it precedes.
+    env.LC_ALL = 'C';
     return env;
   }
 
@@ -134,7 +153,8 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
 
   function snapshotSkipped(dir: string): boolean {
     const abs = resolve(dir);
-    return abs === '/' || abs === resolve(homedir()) || !existsSync(abs) || !statSync(abs).isDirectory();
+    return abs === '/' || abs === resolve(homedir()) || UNSNAPSHOTTABLE.has(abs)
+      || !existsSync(abs) || !statSync(abs).isDirectory();
   }
 
   /** Refs newest-first for one store: [refName, sha, subject]. */
@@ -156,14 +176,30 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     return existsSync(workdir) ? workdir : base;
   }
 
-  /** Stage the working tree and write it as a tree object. */
-  async function stageCurrent(gitDir: string, workdir: string): Promise<string> {
+  /**
+   * Stage the working tree and write it as a tree object.
+   *
+   * `--ignore-errors` so a path this process may not read costs only that path:
+   * without it git aborts at the first refusal and everything after it is
+   * silently missing from the snapshot, which is a checkpoint that restores a
+   * tree the user never had. What it could not read is returned rather than
+   * discarded — see `diagnoseStaging`.
+   */
+  async function stageCurrent(gitDir: string, workdir: string): Promise<StagedTree> {
     const env = storeEnv(gitDir, workdir);
-    const add = await runGit(['add', '-A'], workdir, env);
-    if (add.code !== 0) throw new Error(`checkpoint staging failed: ${add.stderr.trim()}`);
+    const add = await runGit(['add', '-A', '--ignore-errors'], workdir, env);
+    const diagnosis = diagnoseStaging(add.stderr);
+    // A non-zero exit explained ENTIRELY by paths it may not read is not a
+    // failure: everything readable is staged and `write-tree` is clean. An
+    // unexplained diagnostic, or a non-zero exit with nothing to explain it,
+    // still fails — an incomplete snapshot nobody knows about is the defect
+    // this replaces, not the fix for it.
+    if (diagnosis.unexplained.length > 0 || (add.code !== 0 && diagnosis.unreadable.length === 0)) {
+      throw new Error(`checkpoint staging failed: ${add.stderr.trim()}`);
+    }
     const tree = await runGit(['write-tree'], workdir, env);
     if (tree.code !== 0) throw new Error(`checkpoint write-tree failed: ${tree.stderr.trim()}`);
-    return tree.stdout.trim();
+    return { tree: tree.stdout.trim(), unreadable: diagnosis.unreadable };
   }
 
   /** Take a snapshot of dir tagged with the given turn meta (null for
@@ -176,7 +212,8 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     const gitDir = storeDirFor(abs);
     await initStore(gitDir, abs);
     const env = storeEnv(gitDir, abs);
-    const tree = await stageCurrent(gitDir, abs);
+    const staged = await stageCurrent(gitDir, abs);
+    const tree = staged.tree;
 
     const refs = await storeRefs(gitDir, abs);
     const latest = refs[0];
@@ -185,7 +222,8 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       if (latestTree.code === 0 && latestTree.stdout.trim() === tree) return latest.id;
     }
 
-    const commit = await runGit(['commit-tree', tree, '-m', checkpointSubject(meta, reason)], abs, env);
+    const subject = checkpointSubject(meta, checkpointReason(reason, staged.unreadable));
+    const commit = await runGit(['commit-tree', tree, '-m', subject], abs, env);
     if (commit.code !== 0) throw new Error(`checkpoint commit failed: ${commit.stderr.trim()}`);
     const sha = commit.stdout.trim();
     const refName = `${REF_PREFIX}/${String(Date.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
@@ -222,8 +260,10 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
   /** diff current staged state → checkpoint tree, as restore-direction changes. */
   async function diffToCheckpoint(gitDir: string, abs: string, id: string): Promise<FileRestoreChange[]> {
     const env = storeEnv(gitDir, abs);
-    const currentTree = await stageCurrent(gitDir, abs);
-    const diff = await runGit(['diff-tree', '-r', '--name-status', currentTree, `${id}^{tree}`], abs, env);
+    // An unreadable path is in neither tree, so it appears in no change and the
+    // restore has no business with it.
+    const current = await stageCurrent(gitDir, abs);
+    const diff = await runGit(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, env);
     if (diff.code !== 0) throw new Error(`checkpoint diff failed: ${diff.stderr.trim()}`);
     const files: FileRestoreChange[] = [];
     for (const line of diff.stdout.split('\n')) {
@@ -253,7 +293,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       return await snapshot(abs, turn, reason);
     },
 
-    async list(limit = 50): Promise<FileCheckpointEntry[]> {
+    async list(opts: { limit?: number; turnId?: string } = {}): Promise<FileCheckpointEntry[]> {
       if (!(await probeGit())) return [];
       const stores = await tolerateAsync(() => fs.readdir(agentBase), 'enoent') ?? [];
       const entries: FileCheckpointEntry[] = [];
@@ -264,11 +304,14 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
         const workdir = (await fs.readFile(markerPath, 'utf8')).trim();
         for (const ref of await storeRefs(gitDir, workdir)) {
           const meta = parseCheckpointSubject(ref.subject);
+          if (opts.turnId !== undefined && meta.turnId !== opts.turnId) continue;
           entries.push({ id: ref.id, dir: workdir, at: checkpointRefTimestampMs(ref.ref), ...meta });
         }
       }
       entries.sort((a, b) => b.at - a.at);
-      return entries.slice(0, Math.max(1, limit));
+      // Truncation is LAST, after any turn filter, so a limit can never hide a
+      // checkpoint that exists — see FileCheckpoints.list.
+      return entries.slice(0, Math.max(1, opts.limit ?? 50));
     },
 
     async plan(dir: string, id: string): Promise<FileRestorePlan> {

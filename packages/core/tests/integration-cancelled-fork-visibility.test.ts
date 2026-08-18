@@ -15,7 +15,11 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { HeadJournal, initHeadsTables } from '../src/heads/index.js';
-import { reconcileInterruptedForks, FORK_INTERRUPTED_SIGNAL } from '../src/heads/reconcile.js';
+import {
+  reconcileInterruptedForks, FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
+} from '../src/heads/reconcile.js';
+import { RunEventRecorder, initRunEventTables } from '../src/events/recorder.js';
+import { headPhaseRunEvent } from '../src/orchestrator/heads-support.js';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store.js';
 import { SignalDelivery } from '../src/orchestrator/signals.js';
 import {
@@ -28,6 +32,8 @@ import { makeSql, makeExecRaw } from './helpers.js';
 const HEADS = 4;
 const ROOT = 'root-research';
 const RATIONALE = 'four angles on the research question';
+/** The run the fork was dispatched from — the one carrying its `head_split`. */
+const RUN = 'run-dispatched-the-fork';
 
 /** The workspace as it stood when the operator cancelled: a detached 4-head
  *  fork, journalled by the real controller's writes. */
@@ -142,6 +148,64 @@ describe('an operator-cancelled fork is not reported as running', () => {
     expect(turn.text).toContain(`${HEADS} of ${HEADS} heads`);
     expect(turn.text).toContain('nothing is executing them');
     expect(turn.text).toContain('no longer true');
+  });
+
+  /**
+   * The agent is told, and so is the ledger.
+   *
+   * `head_split` goes into `run_events` at fork dispatch and `head_merge` when
+   * the split settles. That pair is what the Timeline renders (read-models/
+   * timeline.ts) and, per heads/controller.ts, "the only durable trace a fork
+   * ran at all". An interrupted fork reached the first and never the second, so
+   * its run kept a "Heads split" span nothing ever closed — in that ledger it is
+   * indistinguishable from a fork still in flight, forever.
+   *
+   * Which is this module's own argument, applied to the second ledger: a state
+   * ledger that goes quiet does not retract anything. The roster got its
+   * retraction; `run_events` did not.
+   */
+  test('the fork run that died is closed in the run-event ledger, not left mid-split', async () => {
+    const w = workspace();
+    initRunEventTables(makeExecRaw(w.db));
+    const recorder = new RunEventRecorder(makeSql(w.db));
+
+    // The dispatching turn, recorded exactly as both backends record it
+    // (actor-agent.ts emitHeadPhase / local-session.ts emitHeadPhase).
+    recorder.emit(RUN, headPhaseRunEvent({
+      kind: 'split', rootId: ROOT, headIds: ['h1', 'h2', 'h3', 'h4'], rationale: RATIONALE,
+    }));
+    // …and that run ended with the process. The fork outlived it, which is the
+    // whole situation: nothing was ever going to append to this run again.
+    recorder.emit(RUN, { type: 'run_end', reason: 'done' });
+
+    await reconcileInterruptedForks({
+      journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+    });
+
+    const events = recorder.read(RUN);
+    expect(events.map((e) => e.type)).toEqual(['head_split', 'run_end', 'head_abandoned']);
+    expect(events.at(-1)).toMatchObject({
+      type: 'head_abandoned', rootId: ROOT, headCount: HEADS, abandoned: HEADS,
+      rationale: RATIONALE, reason: FORK_INTERRUPTED_REASON,
+    });
+  });
+
+  test('a fork whose split was never recorded reconciles without inventing a run', async () => {
+    const w = workspace();
+    initRunEventTables(makeExecRaw(w.db));
+    const recorder = new RunEventRecorder(makeSql(w.db));
+
+    // No `head_split` row: a benchmark trial, or a fork dispatched before the
+    // ledger existed. There is no run to close, and guessing one would put a
+    // fork's death on an unrelated turn's timeline.
+    await reconcileInterruptedForks({
+      journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+    });
+
+    expect(recorder.read(RUN)).toEqual([]);
+    // The journal is still settled — the ledger is an additional record, never
+    // a precondition for retiring a stale head.
+    expect(w.journal.listLive()).toEqual([]);
   });
 
   test('a clean start reconciles nothing and wakes nobody', async () => {

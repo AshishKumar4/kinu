@@ -87,3 +87,37 @@ export function projectJsonValue(input: { value: unknown }): JsonValue {
     throw validationError;
   }
 }
+
+/**
+ * How much of a digested value survives. One number, because two truncation
+ * limits on the same kind of payload would make two durable records of the
+ * same call disagree about what the call was.
+ */
+export const DIGEST_LIMIT = 800;
+
+/**
+ * A bounded projection of an SDK value, for durable records that must describe
+ * a call without storing it. A tool's arguments and a step's tool trace are the
+ * two payloads that carry unbounded content — a `write` body, a crafted tool's
+ * source — and a ledger that stored them whole would grow with the content the
+ * turn moved rather than with what it did.
+ *
+ * Structure is preserved when it fits, which is the common case and the one
+ * that matters: a dispatcher call is a handful of short scalars, so it stays a
+ * queryable object. Only an oversized value degrades to a truncated JSON
+ * string, and it degrades visibly — the trailing ellipsis is the record saying
+ * it is a digest, so a reader never mistakes it for the whole argument.
+ */
+export function digestJsonValue(input: { value: unknown }): JsonValue | undefined {
+  const absent = v.safeParse(v.union([v.null(), UndefinedSchema]), input.value);
+  if (absent.success) return absent.output;
+  const text = v.safeParse(v.string(), input.value);
+  if (text.success) {
+    return text.output.length > DIGEST_LIMIT ? text.output.slice(0, DIGEST_LIMIT) + '…' : text.output;
+  }
+  try {
+    const projected = projectJsonValue(input);
+    const serialized = JSON.stringify(projected);
+    return serialized.length <= DIGEST_LIMIT ? projected : serialized.slice(0, DIGEST_LIMIT) + '…';
+  } catch { return String(input.value).slice(0, DIGEST_LIMIT); }
+}

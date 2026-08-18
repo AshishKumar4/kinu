@@ -1,0 +1,28 @@
+# Canonical authorship.
+#
+# This repository has one living contributor. Commits had landed under agent-run
+# identities (`Proteus Test`, `Proteus`, `Claude`), under a malformed noreply
+# address git never validated, under GitHub's web-UI committer, and under two
+# further personal addresses. None of them was a separate person.
+#
+# The history was REWRITTEN on 2026-08-17 (`git filter-repo --mailmap`, this
+# file) so every commit's author and committer is the identity below, and every
+# agent co-author trailer is gone. Commit hashes therefore changed and `origin`
+# was force-pushed; the pre-rewrite object graph is preserved at
+# `~/.cache/proteus-handoff/pre-rewrite-all-refs.bundle`.
+#
+# The file is kept, not deleted: it is the declaration a future commit made from
+# a different machine or a web edit is measured against, and it keeps every git
+# tool's view canonical without a second rewrite.
+
+Ashish Kumar Singh <ashishkmr472@gmail.com>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <Ashish Kumar Singh@users.noreply.seal.dev>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <mrmoraculus@gmail.com>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <ashishsingh@cloudflare.com>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <proteus@example.invalid>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <agent@proteus>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <proteus@local>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <proteus@localhost>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <claude@anthropic.com>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <u@x>
+Ashish Kumar Singh <ashishkmr472@gmail.com> <noreply@github.com>

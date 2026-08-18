@@ -90,7 +90,7 @@ interface DebugRunEvent {
   caused_by?: string;
   userMessage?: string;
   name?: string;
-  args?: JsonObject;
+  args?: JsonValue;
   result?: JsonValue;
   error?: string;
   message?: string;
@@ -140,7 +140,7 @@ const DebugRunSchema: v.GenericSchema<DebugRun> = v.objectWithRest({ runId: v.st
 const DebugRunEventSchema: v.GenericSchema<DebugRunEvent> = v.objectWithRest({
   eventIndex: v.number(), runId: v.string(), type: v.string(), timestamp: v.string(),
   caused_by: v.optional(v.string()), userMessage: v.optional(v.string()), name: v.optional(v.string()),
-  args: v.optional(JsonObjectSchema), result: v.optional(JsonValueSchema), error: v.optional(v.string()),
+  args: v.optional(JsonValueSchema), result: v.optional(JsonValueSchema), error: v.optional(v.string()),
   message: v.optional(v.string()),
   usage: v.optional(UsageSchema),
   reason: v.optional(v.string()),
@@ -199,7 +199,8 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
     callAgentRpc(auth.origin, auth.token, cloudName, method, schema, args);
   return {
     identity: () => rpc('getWorkspaceSnapshot', WorkspaceSnapshotSchema).then((snapshot) => snapshot.status),
-    messages: (limit) => rpc('getChatHistory', JsonRowsSchema, [limit]),
+    messages: (limit) => rpc('getChatHistoryPage', v.object({ items: JsonRowsSchema }), [{ limit }])
+      .then((page) => page.items),
     runs: (limit) => rpc('listRuns', v.array(DebugRunSchema), [limit]),
     runEvents: (runId, since, limit) => rpc('getRunEvents', v.array(DebugRunEventSchema), [runId, { since, limit }]),
     headRuns: (limit) => rpc('getHeadRuns', v.array(DebugHeadRunSchema), [limit]),
@@ -374,7 +375,14 @@ interface DebugSummary {
  *  who/what caused it, what it cost, and — the direct answer to "did the
  *  agent poll a background job instead of ending its turn" — every
  *  `agent.jobResult` tool call that happened AFTER this run's own events
- *  already contain a `background: true` handle for that job. */
+ *  already contain a `background: true` handle for that job.
+ *
+ *  Both counters read `tool_call_end`, which is the row production writes. They
+ *  were written against `tool_call_start` and no producer has ever emitted it,
+ *  so `toolCalls` and `jobPollsAfterHandle` reported 0 on every run ever
+ *  debugged — a silent zero in the surface whose job is to explain a run. The
+ *  args are read before the result on each row so "after the handle" still
+ *  means after: a row cannot be a poll of the handle it is itself announcing. */
 function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
   const stats: RunStats = {
     runId, eventCount: events.length, toolCalls: 0, errors: [], causedBy: null, userMessage: null,
@@ -388,13 +396,12 @@ function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
       stats.causedBy = e.caused_by ?? 'chat';
       stats.userMessage = e.userMessage ?? null;
       stats.startedAt = ts;
-    } else if (e.type === 'tool_call_start') {
-      stats.toolCalls++;
-      if (e.name === 'agent' && e.args?.jobResult !== undefined) {
-        const jobId = String(e.args.jobResult ?? '');
-        if (handledJobIds.has(jobId)) stats.jobPollsAfterHandle++;
-      }
     } else if (e.type === 'tool_call_end') {
+      stats.toolCalls++;
+      const args = v.safeParse(JsonObjectSchema, e.args);
+      if (e.name === 'agent' && args.success && args.output.jobResult !== undefined) {
+        if (handledJobIds.has(String(args.output.jobResult))) stats.jobPollsAfterHandle++;
+      }
       const result = v.safeParse(JsonObjectSchema, e.result);
       const jobId = result.success ? v.safeParse(v.string(), result.output.jobId) : null;
       if (result.success && result.output.background === true && jobId?.success) {

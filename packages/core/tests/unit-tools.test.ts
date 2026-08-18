@@ -48,6 +48,8 @@ import {
   type ReleaseSource,
   type ReleaseToolDeps,
   type TeamToolDeps,
+  type AgentRuntime,
+  TurnEscalationLedger,
 } from '../src/index.js';
 
 interface RecordedReleaseCheck {
@@ -103,9 +105,13 @@ const nodeExecFactory: CreateExecuteToolFactory = (opts) => {
   });
 };
 
-function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
+function tools(
+  rt: AgentRuntime,
+  escalations: TurnEscalationLedger = new TurnEscalationLedger(),
+) {
   return buildBuiltinTools({
     rt,
+    escalations,
     craftedToolExecute: nodeCraftedExecute,
     createExecuteTool: nodeExecFactory,
     codemodeLoader: { __test: true },
@@ -450,36 +456,69 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(captured).toEqual({ status: 'completed', content: 'Fix landed; tests added.' });
   });
 
-  test('run in workspace mode falls back gracefully when no shell provided', async () => {
-    // Test runtime has no rt.shell — `run` must return an error string rather
-    // than throwing. This lets test harnesses exercise the tool shape without
-    // providing a real shell dependency.
-    // A runtime with no shell at all: every real one has the workspace's, so
-    // this is the degraded case the fallback exists for.
+  test('run with no workspace shell REFUSES with a classification, not a bare string', async () => {
+    // It used to answer `'Error: no workspace shell available in this runtime.'`
+    // — accurate prose carrying no class, so a reader could not tell this apart
+    // from a timeout or an OOM. `unsupported`: this runtime has no shell, and
+    // retrying cannot change that.
     const { rt } = createTestRuntime();
     const t = tools({ ...rt, shell: undefined });
     const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
     const result = await tool.execute({ command: 'echo hi' });
-    expect(result).toContain('Error');
+    const parsed = v.parse(v.object({ reason: v.string(), error: v.string() }), JSON.parse(result));
+    expect(parsed.reason).toBe('unsupported');
+    expect(parsed.error).toContain('no workspace shell');
+    // The discriminator LEADS, where no clamp can reach it.
+    expect(result.indexOf('"reason"')).toBeLessThan(result.indexOf('"error"'));
   });
 
   test('run with an unprovisioned runtime returns structured runtime_not_provisioned', async () => {
     // The UI parses this exact JSON shape (parseProvisionError in
     // WorkspacePage.tsx) to render the amber install-card. Silent fallback to
     // workspace would defeat the install-card flow, so the contract is:
-    // `{error:'runtime_not_provisioned', runtime, message}`.
+    // `{error:'runtime_not_provisioned', runtime, message}` — with the
+    // classification added AHEAD of it, which the UI's `v.object` ignores.
     const { rt } = createTestRuntime();
     const t = tools(rt);
     const tool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.run) };
     for (const runtime of ['sandbox', 'nimbus', 'laptop'] as const) {
       const result = await tool.execute({ command: 'echo hi', runtime });
       const parsed = v.parse(v.object({
-        error: v.string(), runtime: v.string(), message: v.string(),
+        reason: v.string(), error: v.string(), runtime: v.string(), message: v.string(),
       }), JSON.parse(result));
       expect(parsed.error).toBe('runtime_not_provisioned');
       expect(parsed.runtime).toBe(runtime);
       expect(parsed.message.length).toBeGreaterThan(0);
+      // `unavailable`, not `unsupported`: a sandbox provisions on first use and a
+      // laptop comes back when its daemon does, so this is a retry.
+      expect(parsed.reason).toBe('unavailable');
     }
+  });
+
+  test('escalating records the decision and the stated reason; staying in the workspace records nothing', async () => {
+    // The wiring, not the ledger: `run` must call the ledger AT the dispatch, or
+    // the durable `execution_escalation` row is a feature that is declared and
+    // emitted by nothing — the exact defect this codebase keeps finding.
+    const { rt } = createTestRuntime();
+    const escalations = new TurnEscalationLedger();
+    const t = tools(rt, escalations);
+    const tool = {
+      execute: toolExecute<{ command: string; runtime?: string; why?: string }, string>(t.run),
+    };
+
+    // Unprovisioned here, so this is the `refused` branch — which is itself the
+    // finding "the runtime was never there", not a failed command.
+    await tool.execute({ command: 'echo hi', runtime: 'sandbox', why: 'needs an inbound port' });
+    expect(escalations.snapshot().escalations).toEqual([
+      { runtime: 'sandbox', reason: 'needs an inbound port', outcome: 'refused', count: 1 },
+    ]);
+
+    // The workspace shell is the DEFAULT, not an escalation: running there — and
+    // naming it explicitly — must leave the ledger exactly as it was.
+    const before = escalations.snapshot().escalations;
+    await tool.execute({ command: 'echo hi' });
+    await tool.execute({ command: 'echo hi', runtime: 'workspace' });
+    expect(escalations.snapshot().escalations).toEqual(before);
   });
 
   test('gated run commands return an error the MODEL can act on', async () => {

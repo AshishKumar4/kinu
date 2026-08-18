@@ -153,7 +153,7 @@ describe('an unreported field stays absent through the whole pipeline', () => {
     expect('reasoning' in (turn.usage ?? {})).toBe(false);
 
     // Stage 3 — the cross-run read model.
-    const [summary] = getRunSummaries(recorder);
+    const [summary] = getRunSummaries(recorder).items;
     expect(summary?.usage.input).toBe(88);
     expect(summary?.usage.cacheRead).toBe(0);
     expect('reasoning' in (summary?.usage ?? {})).toBe(false);
@@ -165,7 +165,7 @@ describe('an unreported field stays absent through the whole pipeline', () => {
     const { recorder } = setup();
     runOneTurn(recorder, 'run-ant', [usage]);
 
-    const [summary] = getRunSummaries(recorder);
+    const [summary] = getRunSummaries(recorder).items;
     expect(summary?.usage.input).toBe(3084);
     expect(summary?.usage.cacheRead).toBe(2048);
     expect(summary?.usage.cacheWrite).toBe(1024);
@@ -190,7 +190,7 @@ describe('an unreported field stays absent through the whole pipeline', () => {
       if (e.type === 'turn_end') expect(e.usage).toBeUndefined();
     }
     // ...and the read model says the totals are unknown, not zero.
-    const [summary] = getRunSummaries(recorder);
+    const [summary] = getRunSummaries(recorder).items;
     expect(summary?.usage).toEqual({});
     expect(summary?.turnsWithoutUsage).toBe(1);
   });
@@ -199,7 +199,7 @@ describe('an unreported field stays absent through the whole pipeline', () => {
     const { recorder } = setup();
     runOneTurn(recorder, 'run-zero', [{ input: 0, output: 0 }]);
 
-    const [summary] = getRunSummaries(recorder);
+    const [summary] = getRunSummaries(recorder).items;
     // A report of zero IS a report: the fields are present and the turn is not
     // counted as unreported. This is the half of the contract that a naive
     // "treat 0 as missing" fix would break.
@@ -212,7 +212,7 @@ describe('an unreported field stays absent through the whole pipeline', () => {
     const { recorder } = setup();
     runOneTurn(recorder, 'run-mixed', [wai, ant]);
 
-    const [summary] = getRunSummaries(recorder);
+    const [summary] = getRunSummaries(recorder).items;
     expect(summary?.usage.input).toBe(88 + 3084);
     expect(summary?.usage.cacheRead).toBe(0 + 2048);
     // Reported by exactly one of the two, and not halved or zero-filled.

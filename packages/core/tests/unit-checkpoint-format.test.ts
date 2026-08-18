@@ -14,7 +14,9 @@ import {
   CHECKPOINT_REF_PREFIX,
   CHECKPOINT_WORKDIR_MARKER,
   checkpointRefTimestampMs,
+  checkpointReason,
   checkpointSubject,
+  diagnoseStaging,
   parseCheckpointSubject,
 } from '../src/checkpoints/format.js';
 
@@ -116,5 +118,81 @@ describe('store-format constants pinned by the pc-agent daemon mirror', () => {
       expect(CHECKPOINT_EXCLUDES).toContain(entry);
     }
     expect(new Set(CHECKPOINT_EXCLUDES).size).toBe(CHECKPOINT_EXCLUDES.length);
+  });
+});
+
+/**
+ * The staging diagnosis, over git's own stderr.
+ *
+ * The engine test in cli-backend provokes the real git for the tolerated case;
+ * what it cannot provoke deterministically is a staging failure that is NOT a
+ * permission denial, and that is the half the distinction is made of. A parse
+ * that called everything tolerable would swallow the failures this exists to
+ * keep reporting.
+ */
+describe('diagnoseStaging', () => {
+  // Verbatim from `git add -A --ignore-errors` (git 2.53) over a work tree with
+  // a mode-000 directory and a mode-000 file.
+  const DENIALS = [
+    "warning: could not open directory 'systemd-private-abc/': Permission denied",
+    'error: open("locked.txt"): Permission denied',
+    "error: unable to index file 'locked.txt'",
+  ].join('\n');
+
+  test('names the unreadable paths once each, sorted, and explains every line', () => {
+    expect(diagnoseStaging(DENIALS)).toEqual({
+      unreadable: ['locked.txt', 'systemd-private-abc'],
+      unexplained: [],
+    });
+  });
+
+  test('clean stderr is neither unreadable nor unexplained', () => {
+    expect(diagnoseStaging('')).toEqual({ unreadable: [], unexplained: [] });
+  });
+
+  test("git's abort summary is explained only by a denial it can follow", () => {
+    // The line `add` prints WITHOUT --ignore-errors. It restates the denials
+    // above it and adds nothing…
+    expect(diagnoseStaging(`${DENIALS}\nfatal: adding files failed`).unexplained).toEqual([]);
+    // …but on its own it is a staging failure with no explanation, and a caller
+    // that treated it as tolerable would commit a truncated tree.
+    expect(diagnoseStaging('fatal: adding files failed').unexplained)
+      .toEqual(['fatal: adding files failed']);
+  });
+
+  test('an unindexable file that was never denied is reported, not tolerated', () => {
+    // `unable to index file` covers more than permissions — a vanished or
+    // unreadable-for-another-reason path lands here too.
+    expect(diagnoseStaging("error: unable to index file 'other.txt'")).toEqual({
+      unreadable: [],
+      unexplained: ["error: unable to index file 'other.txt'"],
+    });
+  });
+
+  test('a real staging failure alongside a denial is still reported', () => {
+    const mixed = `${DENIALS}\nerror: unable to write new index file`;
+    expect(diagnoseStaging(mixed).unreadable).toEqual(['locked.txt', 'systemd-private-abc']);
+    expect(diagnoseStaging(mixed).unexplained).toEqual(['error: unable to write new index file']);
+  });
+});
+
+describe('checkpointReason', () => {
+  test('an uneventful snapshot records the reason unchanged', () => {
+    expect(checkpointReason('pre-mutation', [])).toBe('pre-mutation');
+  });
+
+  test('skipped paths are named in the record, so an incomplete snapshot says so', () => {
+    expect(checkpointReason('file write', ['locked.txt', 'systemd-private-abc']))
+      .toBe('file write [skipped 2 unreadable: locked.txt systemd-private-abc]');
+  });
+
+  test('a directory full of them stays one readable line', () => {
+    expect(checkpointReason('shell exec', ['a', 'b', 'c', 'd', 'e']))
+      .toBe('shell exec [skipped 5 unreadable: a b c +2 more]');
+  });
+
+  test('the note survives the subject round trip as part of the reason', () => {
+    const reason = checkpointReason('file write', ['locked.txt']);
+    expect(parseCheckpointSubject(checkpointSubject(meta, reason)).reason).toBe(reason);
   });
 });

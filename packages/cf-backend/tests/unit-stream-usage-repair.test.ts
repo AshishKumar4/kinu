@@ -5,10 +5,21 @@
 // models (glm-5.2), zeroes prompt_tokens_details.cached_tokens. The AI SDK
 // keeps the LAST usage chunk, so every streamed run reported `cacheRead: 0`
 // while billing showed ~73% of input tokens served from the prefix cache.
+//
+// Second shape, production-proven (2026-08-17, deepseek-v4-pro): the duplicate
+// DROPS prompt_tokens_details entirely rather than zeroing it. The repair's
+// stated rule covered that case in prose and not in code — the schema required
+// the detail object, so a chunk without it failed the parse and passed through
+// unrepaired. Measured cost on one workspace: of 350 retained steps, 38 carried
+// no cache read at all, which the step telemetry rendered as 38 total cache
+// misses and dragged a real ~93.5% mean hit rate down to the 83.5% the owner
+// was reading off the panel.
+//
 // Fixtures below are verbatim captures from the live endpoint.
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials.js';
 import { streamText } from 'ai';
+import { DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage } from '@proteus/core';
 import { repairSseCachedUsage } from '../src/providers/stream-usage-repair.ts';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
 
@@ -21,6 +32,12 @@ const DELTA_CHUNK = `data: {${head},"choices":[{"delta":{"content":"ok","reasoni
 const MODEL_USAGE_CHUNK = `data: {${tailHead},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"completion_tokens":3,"prompt_tokens":14571,"prompt_tokens_details":{"cached_tokens":14528},"total_tokens":14574}}`;
 // The platform-appended duplicate — cached_tokens zeroed (the bug).
 const ZEROED_USAGE_CHUNK = `data: {${tailHead},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574,"prompt_tokens_details":{"cached_tokens":0}}}`;
+// The same duplicate as it arrives from deepseek-v4-pro: prompt_tokens_details
+// gone rather than zeroed. The SDK's `cached_tokens ?? 0` then reports 0 AND
+// leaves `raw` without the key, so neither the value nor its absence survives.
+const DROPPED_USAGE_CHUNK = `data: {${tailHead},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574}}`;
+// The null variant of the same loss.
+const NULLED_USAGE_CHUNK = `data: {${tailHead},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574,"prompt_tokens_details":null}}`;
 
 function sse(...lines: string[]): string {
   return lines.map((l) => `${l}\n\n`).join('');
@@ -58,6 +75,33 @@ describe('repairSseCachedUsage', () => {
     expect(out).toContain('data: [DONE]\n');
     // The repaired duplicate keeps its other usage fields.
     expect(out).toContain('"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574');
+  });
+
+  test('a duplicate that DROPS prompt_tokens_details is repaired to the real count', async () => {
+    const input = sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, DROPPED_USAGE_CHUNK, 'data: [DONE]');
+    const out = await repairSseCachedUsage(sseResponse(input)).text();
+    // The trailing chunk — the only one the SDK keeps — now carries the count.
+    expect(out).not.toContain(DROPPED_USAGE_CHUNK);
+    expect(out.slice(out.indexOf(MODEL_USAGE_CHUNK) + MODEL_USAGE_CHUNK.length))
+      .toContain('"prompt_tokens_details":{"cached_tokens":14528}');
+    expect(out).toContain(`${MODEL_USAGE_CHUNK}\n`);
+    expect(out).toContain('data: [DONE]\n');
+  });
+
+  test('a duplicate whose prompt_tokens_details is null is repaired too', async () => {
+    const input = sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, NULLED_USAGE_CHUNK, 'data: [DONE]');
+    const out = await repairSseCachedUsage(sseResponse(input)).text();
+    expect(out).not.toContain('"prompt_tokens_details":null');
+    expect(lastCachedTokens(out)).toBe(14528);
+  });
+
+  test('a dropped field with no prior cache read is left alone, never given a zero', async () => {
+    // Nothing reported a cache read, so there is no maximum to restore.
+    // Writing `cached_tokens: 0` here would fabricate a total-miss measurement.
+    const input = sse(DELTA_CHUNK, DROPPED_USAGE_CHUNK, 'data: [DONE]');
+    const out = await repairSseCachedUsage(sseResponse(input)).text();
+    expect(out).toBe(input);
+    expect(out).not.toContain('cached_tokens');
   });
 
   test('consistent duplicates (kimi shape) pass through byte-exactly', async () => {
@@ -144,5 +188,28 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
     expect(usage.cachedInputTokens).toBe(14528);
     expect(usage.inputTokens).toBe(14571);
     expect(usage.outputTokens).toBe(3);
+  });
+
+  test('streamed deepseek-v4-pro usage survives a duplicate that dropped the detail', async () => {
+    const reg = createAgentProviderRegistry({
+      env: {},
+      userDO: fakeUserDOStub(),
+      fetch: Object.assign(
+        async () => sseResponse(sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, DROPPED_USAGE_CHUNK, 'data: [DONE]')),
+        { preconnect: globalThis.fetch.preconnect },
+      ),
+      workersAI: { sessionAffinity: 'proteus-stone-ash-71f2' },
+    });
+    const result = streamText({
+      model: reg.resolveModel(`workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`),
+      prompt: 'ping',
+    });
+    await result.consumeStream();
+    const usage = await result.usage;
+    expect(usage.cachedInputTokens).toBe(14528);
+    // `raw` is what normalizeUsage witnesses presence off, so the repair has to
+    // restore the KEY as well as the number — otherwise the step reports no
+    // cache read at all and the hit-rate sample is silently dropped.
+    expect(normalizeUsage(usage).cacheRead).toBe(14528);
   });
 });

@@ -13,6 +13,7 @@ import { jsonSchema, tool, type ToolSet } from 'ai';
 
 import {
   collectWorkspaceTextFiles, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
+  SDK_SESSION_DDL,
 } from './helpers.js';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store.js';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder.js';
@@ -20,13 +21,14 @@ import { createAgentConfigStore } from '../src/config/store.js';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema.js';
 import { getRunTimeline } from '../src/read-models/timeline.js';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs.js';
-import { getAgentStatus, getChatHistory, getToolList } from '../src/read-models/status.js';
+import { getAgentStatus, getChatHistoryPage, getToolList } from '../src/read-models/status.js';
+import { StaleCursorError, type SeekCursor } from '../src/read-models/page.js';
 import { uiMessageText } from '../src/utils/ui-message.js';
 import {
   getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
 } from '../src/read-models/workspace-diff.js';
 import { getExecutorFiles, readExecutorFile, writeExecutorFileOp } from '../src/read-models/files.js';
-import type { VFS } from '../src/types/primitives.js';
+import type { SqlExecutor, VFS } from '../src/types/primitives.js';
 import {
   cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob, jobResult,
   listBackgroundJobs, retryBackgroundJob, type BackgroundJobControl,
@@ -46,6 +48,36 @@ function workspace() {
   const exec = makeSqlExec(db);
   initWorkspaceSchema({ execRaw, sql, exec });
   return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs, config: createAgentConfigStore(sql) };
+}
+
+interface SeedRow { id: string; role: string; content: string }
+
+/** `n` transcript rows, m1 oldest. Inserted through the SDK's own column list
+ *  so `created_at` is the whole-second DATETIME default a real turn writes. */
+function transcriptOf(n: number): SeedRow[] {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `m${i + 1}`, role: i % 2 === 0 ? 'user' : 'assistant', content: `message ${i + 1}`,
+  }));
+}
+
+function seedTranscript(sql: SqlExecutor, rows: readonly SeedRow[]): void {
+  for (const row of rows) {
+    void sql`INSERT INTO assistant_messages (id, session_id, role, content, created_at)
+      VALUES (${row.id}, ${''}, ${row.role}, ${row.content}, ${'2026-01-01 00:00:00'})`;
+  }
+}
+
+/** Every page, oldest first — the walk a caller performs, and the only way to
+ *  observe that the pages join up without overlapping. */
+function walkTranscript(sql: SqlExecutor, limit: number): string[] {
+  const ids: string[] = [];
+  let cursor: SeekCursor | undefined;
+  for (;;) {
+    const page = getChatHistoryPage(sql, { limit, cursor });
+    ids.unshift(...page.items.map((m) => m.id));
+    if (page.status === 'end') return ids;
+    cursor = page.next;
+  }
 }
 
 /** A real job store plus a recording stand-in for the runner: this plane's
@@ -88,7 +120,7 @@ describe('run reads', () => {
     events.emit('r1', { type: 'turn_end', turnIndex: 1, usage: { input: 5, output: 1 } });
     events.emit('r1', { type: 'run_end', reason: 'completed' });
 
-    const [summary] = getRunSummaries(events);
+    const [summary] = getRunSummaries(events).items;
     expect(summary).toMatchObject({
       runId: 'r1', causedBy: 'timer', userMessage: 'do the thing', status: 'completed',
       eventCount: 4, turnsWithoutUsage: 0,
@@ -106,9 +138,9 @@ describe('run reads', () => {
     events.emit('zeroed', { type: 'run_start', agentId: 'a1', caused_by: 'chat' });
     events.emit('zeroed', { type: 'turn_end', turnIndex: 0, usage: { input: 0, output: 0 } });
 
-    const summaries = getRunSummaries(events);
-    const silent = summaries.find((s) => s.runId === 'silent');
-    const zeroed = summaries.find((s) => s.runId === 'zeroed');
+    const { items } = getRunSummaries(events);
+    const silent = items.find((s) => s.runId === 'silent');
+    const zeroed = items.find((s) => s.runId === 'zeroed');
 
     // The provider said nothing: no field is present, and the count of silent
     // turns is the denominator that says so.
@@ -125,10 +157,10 @@ describe('run reads', () => {
     const events = eventLog();
     events.emit('r2', { type: 'error', message: 'boom' });
 
-    expect(getRunSummaries(events)[0]).toMatchObject({
+    expect(getRunSummaries(events).items[0]).toMatchObject({
       runId: 'r2', causedBy: null, usage: {}, turnsWithoutUsage: 0,
     });
-    expect(listRuns(events).map((r) => r.runId)).toEqual(['r2']);
+    expect(listRuns(events).items.map((r) => r.runId)).toEqual(['r2']);
     expect(getRunEvents(events, 'r2')).toHaveLength(1);
   });
 
@@ -227,24 +259,121 @@ describe('agent status', () => {
     })).rejects.toThrow(/no such table/);
   });
 
-  test('chat history flattens UI-message parts and bounds the page', () => {
-    const { db, sql } = workspace();
-    void sql`CREATE TABLE assistant_messages (id TEXT, role TEXT, content TEXT, created_at TEXT)`;
-    void sql`INSERT INTO assistant_messages VALUES ('a', 'user', ${JSON.stringify({ parts: [{ type: 'text', text: 'hello' }] })}, '2026-01-01')`;
-    void sql`INSERT INTO assistant_messages VALUES ('b', 'tool', 'not a chat role', '2026-01-02')`;
-
-    expect(getChatHistory(sql)).toEqual([
-      { id: 'a', role: 'user', content: 'hello', createdAt: '2026-01-01' },
+  test('chat history flattens UI-message parts and drops non-chat roles', () => {
+    const { db, sql, execRaw } = workspace();
+    execRaw(SDK_SESSION_DDL);
+    seedTranscript(sql, [
+      { id: 'a', role: 'user', content: JSON.stringify({ parts: [{ type: 'text', text: 'hello' }] }) },
+      { id: 'b', role: 'tool', content: 'not a chat role' },
     ]);
+
+    expect(getChatHistoryPage(sql)).toEqual({
+      status: 'end',
+      items: [{ id: 'a', role: 'user', content: 'hello', createdAt: '2026-01-01 00:00:00' }],
+    });
     db.close();
   });
 
   test('chat history falls back to the plain mirror when there is no rich table', () => {
     const { db, sql } = workspace();
     void sql`INSERT INTO messages (id, session_id, role, content, created_at) VALUES ('m1', 'default', 'assistant', 'plain', 5)`;
-    expect(getChatHistory(sql, 1)).toEqual([
-      { id: 'm1', role: 'assistant', content: 'plain', createdAt: 5 },
-    ]);
+    expect(getChatHistoryPage(sql, { limit: 1 })).toEqual({
+      status: 'end',
+      items: [{ id: 'm1', role: 'assistant', content: 'plain', createdAt: 5 }],
+    });
+    db.close();
+  });
+
+  /**
+   * The defect a bare `LIMIT` has: it answers a truncated window and a complete
+   * one with the identical shape, so a caller cannot tell "that is all there
+   * is" from "that is all you asked for".
+   *
+   * The third case is the one the limit+1 probe exists for. A page that exactly
+   * consumes the data is indistinguishable from a truncated one by row count
+   * alone — `rows.length === limit` is true for both — so an implementation
+   * that compares lengths reports `more` here and then serves an empty page.
+   */
+  test('a short page is exhaustion, a full page is not, and an exactly-full page is', () => {
+    const { db, sql, execRaw } = workspace();
+    execRaw(SDK_SESSION_DDL);
+    seedTranscript(sql, transcriptOf(4));
+
+    expect(getChatHistoryPage(sql, { limit: 9 }).status).toBe('end');
+    expect(getChatHistoryPage(sql, { limit: 2 })).toMatchObject({ status: 'more', next: { after: 'm3' } });
+    expect(getChatHistoryPage(sql, { limit: 4 }).status).toBe('end');
+    db.close();
+  });
+
+  /**
+   * THE property. A message arriving between two page fetches is the normal
+   * case for a chat — the user scrolls up while the agent is still answering —
+   * and it is what separates a keyset cursor from an offset.
+   *
+   * An offset implementation fails this precisely: page 1 of `ORDER BY rowid
+   * DESC LIMIT 4` is m10..m7, the insert makes m11 the newest row, and `LIMIT 4
+   * OFFSET 4` then answers m7..m4 — m7 delivered twice. Shift the offset to
+   * compensate and it skips instead. There is no offset that is right, because
+   * an offset names a position in a sequence that changed.
+   */
+  test('a message arriving mid-pagination causes neither a duplicate nor a gap', () => {
+    const { db, sql, execRaw } = workspace();
+    execRaw(SDK_SESSION_DDL);
+    seedTranscript(sql, transcriptOf(10));
+
+    const first = getChatHistoryPage(sql, { limit: 4 });
+    expect(first).toMatchObject({ status: 'more' });
+    if (first.status !== 'more') throw new Error('unreachable');
+    expect(first.items.map((m) => m.id)).toEqual(['m7', 'm8', 'm9', 'm10']);
+
+    // The live turn lands while the reader is scrolling up.
+    seedTranscript(sql, [{ id: 'm11', role: 'assistant', content: 'live arrival' }]);
+
+    const second = getChatHistoryPage(sql, { limit: 4, cursor: first.next });
+    expect(second.items.map((m) => m.id)).toEqual(['m3', 'm4', 'm5', 'm6']);
+
+    // No duplicate: nothing from page 1 reappears. No gap: m6 is the row
+    // immediately before m7, not m5. And the newer arrival never leaks into a
+    // page walking away from it.
+    expect(second.items.map((m) => m.id)).not.toContain('m11');
+
+    const walked = walkTranscript(sql, 4);
+    expect(walked).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11']);
+    expect(new Set(walked).size).toBe(walked.length);
+    db.close();
+  });
+
+  /**
+   * `assistant_messages.created_at` is a whole-second DATETIME and a turn emits
+   * several rows inside one second (see identity/session-tree.ts). Every row
+   * here shares a timestamp, so a `created_at` cursor has no boundary to seek
+   * on at all and a `created_at` ORDER BY has no defined membership.
+   */
+  test('messages sharing one whole second still page without loss', () => {
+    const { db, sql, execRaw } = workspace();
+    execRaw(SDK_SESSION_DDL);
+    for (const row of transcriptOf(6)) {
+      void sql`INSERT INTO assistant_messages (id, session_id, role, content, created_at)
+        VALUES (${row.id}, ${''}, ${row.role}, ${row.content}, ${'2026-03-04 05:06:07'})`;
+    }
+    expect(walkTranscript(sql, 2)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']);
+    db.close();
+  });
+
+  /**
+   * The third state. A cursor whose anchor is gone must not answer "no rows",
+   * because that is the exhaustion answer and the caller would stop walking a
+   * conversation it never finished reading.
+   */
+  test('a cursor whose anchor has vanished is refused, not reported as exhausted', () => {
+    const { db, sql, execRaw } = workspace();
+    execRaw(SDK_SESSION_DDL);
+    seedTranscript(sql, transcriptOf(3));
+
+    expect(() => getChatHistoryPage(sql, { cursor: { after: 'never-existed' } }))
+      .toThrow(StaleCursorError);
+    expect(() => getChatHistoryPage(sql, { cursor: { after: 'never-existed' } }))
+      .toThrow(/no longer in it/);
     db.close();
   });
 

@@ -9,12 +9,12 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { buildBuiltinTools, DEFAULT_TOOL_RESULT_MAX_CHARS } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
-import { toolExecute } from '@proteus/test-utils';
+import { scratchPath, toolExecute } from '@proteus/test-utils';
 
 function localRuntime() {
   const db = new Database(':memory:');
   return createCLIRuntime(db, {
-    dbPath: `/tmp/proteus-clamp-${Math.floor(performance.now())}.db`,
+    dbPath: scratchPath('clamp-marker', 'agent.db'),
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   });
 }

@@ -18,13 +18,16 @@ import {
 import { EmptyState } from "@/components/surfaces/shared";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { usePagedScroll } from "@/hooks/use-paged-scroll";
+import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { Modal } from "@/components/ui/Modal";
 import { btnSmCls, inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import type { Rpc } from "@/lib/protocol";
 import { fmtTokens, fmtPct } from "@/lib/format";
-import { addUsage, cacheHitRate, UsageSchema, usageTotal, type Usage } from "@proteus/core";
+import { addUsage, cacheHitRate, pageSchema, UsageSchema, usageTotal, type SeekCursor, type Usage } from "@proteus/core";
 import * as v from "valibot";
 
 const ProposedTaskSchema = v.object({
@@ -174,10 +177,52 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
 
 /* ── Run history ───────────────────────────────────────────────── */
 
+/** One page of the history. Each row costs a full read of that run's events to
+ *  fold its provenance and usage, so the page is smaller than a list's. */
+const RUN_HISTORY_PAGE = 30;
+
+const RunPageSchema = pageSchema(RunSummarySchema);
+
+/**
+ * The cross-run history, and the budget folded over it.
+ *
+ * The totals here are the reason this read had to become cursored rather than
+ * merely scroll further. They are summed over the runs ON SCREEN, and under a
+ * bare `LIMIT 30` that made a thirty-run window read as the workspace's whole
+ * spend. So the figures now say which runs they cover: bare when the walk has
+ * reached the end, "so far" while there is more behind them. A number the owner
+ * decides on must state its own denominator.
+ */
 function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
-  const load = useCallback(async () => v.parse(v.array(RunSummarySchema), await rpc("getRunSummaries", [30])), [rpc]);
+  const load = useCallback(
+    async () => v.parse(RunPageSchema, await rpc("getRunSummaries", [{ limit: RUN_HISTORY_PAGE }])),
+    [rpc],
+  );
   const { resource, reload } = useAsyncResource(load);
-  const runs = lastValue(resource);
+  const first = lastValue(resource);
+
+  const fetchPage = useCallback(
+    async (cursor: SeekCursor) => v.parse(
+      RunPageSchema, await rpc("getRunSummaries", [{ cursor, limit: RUN_HISTORY_PAGE }]),
+    ),
+    [rpc],
+  );
+  // The first page's own `next`, never an anchor built here: this read's cursor
+  // is opaque and only the server knows how to spell it.
+  const startFrom = useCallback(
+    () => (first !== null && first.status === "more" ? first.next : null),
+    [first],
+  );
+  const tail = usePagedScroll<v.InferOutput<typeof RunSummarySchema>>({ grows: "down", fetchPage, startFrom });
+
+  const runs = first === null ? null : [...first.items, ...tail.fetched];
+  // A first page that already said 'end' is exhausted before the pager ever
+  // runs, and the pager cannot know that.
+  const exhausted = first !== null && (first.status === "end" || tail.exhausted);
+  const containerRef = useGrowingScroll<HTMLDivElement>({
+    grows: "down", content: runs, fetched: tail.fetched, onReachEdge: tail.loadMore,
+  });
+
   const totalUsage = (runs ?? []).reduce<Usage>((acc, r) => addUsage(acc, r.usage), {});
   const totalTokens = usageTotal(totalUsage);
   // One definition of a cache hit, shared with the Activity surface. Null
@@ -185,15 +230,16 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   const hitRate = cacheHitRate(totalUsage);
   // The denominator for the totals above: runs the provider went quiet on.
   const silentRuns = (runs ?? []).filter((r) => r.turnsWithoutUsage > 0).length;
+  const covers = exhausted ? "" : " so far";
   return (
     <section className="min-w-0">
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <ClockIcon size={16} className="p-accent" />
         <h2 className="text-sm font-semibold p-text">Run history &amp; budget</h2>
-        {runs && <Badge variant="secondary">{runs.length}</Badge>}
+        {runs && <Badge variant="secondary">{exhausted ? `${runs.length}` : `${runs.length}+`}</Badge>}
         <span className="ml-auto flex flex-wrap items-center gap-2">
-          {hitRate !== null && <span className="p-meta p-success" title="prompt-cache hit rate (cache-read input / total input)">{fmtPct(hitRate)} cached</span>}
-          {totalTokens !== undefined && <span className="p-meta p-text-3">{fmtTokens(totalTokens)} tokens</span>}
+          {hitRate !== null && <span className="p-meta p-success" title={`prompt-cache hit rate (cache-read input / total input) over the ${runs?.length ?? 0} runs loaded`}>{fmtPct(hitRate)} cached{covers}</span>}
+          {totalTokens !== undefined && <span className="p-meta p-text-3" title={exhausted ? "tokens in+out across every recorded run" : "tokens in+out across the runs loaded — scroll for more"}>{fmtTokens(totalTokens)} tokens{covers}</span>}
           {silentRuns > 0 && (
             <span className="p-meta p-text-3" title="These runs are not in the totals: their provider reported no usage, which is not the same as costing nothing.">
               {silentRuns} unreported
@@ -208,11 +254,11 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
         )
         : runs.length === 0 ? <p className="text-xs p-text-3">No recorded runs yet.</p>
         : (
-          <div className="rounded-md border p-border overflow-hidden text-xs">
+          <div ref={containerRef} className="max-h-[28rem] overflow-y-auto rounded-md border p-border text-xs">
             {runs.map((r) => {
               const tokens = usageTotal(r.usage);
               return (
-                <div key={r.runId} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
+                <div key={r.runId} className="flex items-center gap-2 px-3 py-1.5 border-b p-border">
                   <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "aborted" ? "p-dot-danger" : "p-dot-neutral"}`} />
                   <span className="p-meta px-1 rounded-sm p-fill p-text-3 shrink-0">{r.causedBy ?? "chat"}</span>
                   <span className="p-text-2 truncate flex-1" title={r.userMessage ?? r.runId}>{r.userMessage ?? r.runId}</span>
@@ -224,6 +270,8 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
                 </div>
               );
             })}
+            <ScrollBoundary what="runs" count={runs.length}
+              loading={tail.loading} exhausted={exhausted} error={tail.error} onRetry={tail.loadMore} />
           </div>
         )}
     </section>

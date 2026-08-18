@@ -8,7 +8,7 @@ import { mcpToolKey, type LLMProviderConfig } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
 import { connectMcpServers } from '../src/mcp.js';
-import { toolExecute } from '@proteus/test-utils';
+import { scratchPath, toolExecute } from '@proteus/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -59,7 +59,7 @@ function sessionWithModel(model: LanguageModel) {
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, {
-    dbPath: `/tmp/proteus-mcp-test-${Math.floor(performance.now())}.db`,
+    dbPath: scratchPath('mcp', 'agent.db'),
     llm: DUMMY_LLM,
   });
   const events: SessionEvent[] = [];

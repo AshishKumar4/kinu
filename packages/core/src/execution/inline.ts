@@ -104,6 +104,17 @@ export interface InlineExecutorDeps {
    *  never spends it (only file-tool.ts's own `read` does); required because
    *  the shared dispatcher's deps shape asks for one. */
   budget?: () => TurnContextBudget | undefined;
+  /**
+   * Toolchain this workspace's shell can actually reach beyond the coreutils,
+   * as the capability names for it.
+   *
+   * Declared by the host because the host is what supplies the bytes: the local
+   * CLI ships runtime packages and gets `python`, a Worker does not and must not
+   * claim one. Derived rather than written out — see
+   * `workspaceToolchainCapabilities` in vfs/workspace-runtimes.ts, which reads
+   * the same list that decides which commands get registered.
+   */
+  toolchain?: readonly ExecutorCapability[];
 }
 
 /**
@@ -384,7 +395,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
   const types = `declare namespace workspace {
   function readFile(path: string): Promise<string>;
-  function writeFile(path: string, content: string): Promise<string | { error: string }>;
+  function writeFile(path: string, content: string): Promise<string | { error: string; reason?: 'unread' | 'stale' | 'io' }>;
   /**
    * Replace exact text inside a file — old_text must occur exactly once,
    * copied verbatim (indentation and all) from what readFile/writeFile/
@@ -396,7 +407,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
    */
   function editFile(
     path: string, edits: Array<{ old_text: string; new_text: string }>
-  ): Promise<{ ok: boolean; path?: string; applied?: Array<{ line: number; removed_lines: number; added_lines: number }>; error?: string }>;
+  ): Promise<{ ok: boolean; path?: string; applied?: Array<{ line: number; removed_lines: number; added_lines: number }>; error?: string; reason?: 'unread' | 'stale' | 'io' }>;
   function readdir(path: string): Promise<string[]>;
   function exists(path: string): Promise<boolean>;
   /**
@@ -440,7 +451,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     kind: 'workspace',
     files: vfs,
     homeDir: async () => WORKSPACE_ROOT,
-    capabilities: new Set<ExecutorCapability>(['javascript', 'typescript', 'shell', 'fs_shared']),
+    capabilities: new Set<ExecutorCapability>([
+      'javascript', 'typescript', 'shell', 'fs_shared', ...(deps.toolchain ?? []),
+    ]),
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},

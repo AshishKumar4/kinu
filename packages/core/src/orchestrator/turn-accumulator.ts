@@ -16,12 +16,13 @@ import type { ModelMessage } from 'ai';
 import type { ToolCallRecord } from '../evolution/types.js';
 import { TurnContextBudget, citesSpillAddress } from '../context-budget.js';
 import { TurnContextMeter } from '../context-meter.js';
-import type { RunEventInput } from '../events/types.js';
+import { FAILURE_WITHOUT_ERROR, type RunEventInput } from '../events/types.js';
 import { TurnFileLedger } from '../tools/file-ledger.js';
+import { TurnEscalationLedger } from '../execution/escalation.js';
 import { priceCall, type MissionGovernor } from '../mission-budget.js';
 import { USAGE_FIELDS, addUsage, usageReported, usageTotal, type Usage } from '../usage.js';
 import * as v from 'valibot';
-import { projectJsonValue, type JsonObject, type JsonValue } from '../utils/json.js';
+import { digestJsonValue, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json.js';
 
 const UndefinedSchema = v.undefined();
 const StringSchema = v.string();
@@ -72,6 +73,17 @@ export interface TurnSinks {
   onStepEvent?(e: Omit<Extract<RunEventInput, { type: 'step_finish' }>, 'type'>): void;
 }
 
+/** A failed call's error, as text that is never empty. A tool that reports
+ *  `success: false` with a nullish error has still failed, and the ledger's one
+ *  discriminator is a non-empty string — so the absence of a message is stated
+ *  rather than rendered as the absence of a failure. */
+function describeToolFailure(input: { error: unknown }): string {
+  const { error } = input;
+  if (error instanceof Error) return error.message || FAILURE_WITHOUT_ERROR;
+  if (error === null || error === undefined) return FAILURE_WITHOUT_ERROR;
+  return String(error) || FAILURE_WITHOUT_ERROR;
+}
+
 export class TurnAccumulator {
   toolCalls: ToolCallRecord[] = [];
   stepCount = 0;
@@ -94,6 +106,12 @@ export class TurnAccumulator {
    *  toolset so an edit can refuse to run blind, and read at turn end for the
    *  durable `file_edit` row. Reset with the rest of the turn. */
   readonly files = new TurnFileLedger();
+  /** Which provisioned environments the turn reached for instead of its own
+   *  shell, why, and how each turned out. Handed to the toolset so the `run`
+   *  dispatch can record the decision at the moment it is made, and read at turn
+   *  end for the durable `execution_escalation` row. Reset with the rest of the
+   *  turn. */
+  readonly escalations = new TurnEscalationLedger();
   /** What each of the turn's requests was made of. Handed to the step pipeline
    *  (the one holder of the final composed array) and drained here, so a
    *  measurement is always reported against the usage of the very request it
@@ -135,6 +153,7 @@ export class TurnAccumulator {
     this.startedAt = now;
     this.context.reset();
     this.files.reset();
+    this.escalations.reset();
     this.composition.reset();
     this.craftUsed.clear();
     this.durableMessages = 0;
@@ -168,9 +187,17 @@ export class TurnAccumulator {
 
   /** A tool call completed. Records the core ToolCallRecord + fires sinks. */
   recordToolCall(c: ToolResultLike): void {
-    const recorded = c.success === false
-      ? { error: c.error instanceof Error ? c.error.message : String(c.error) }
-      : c.output;
+    // ONE description of the failure for both the core record and the durable
+    // event. They used to disagree — `String(c.error)` here against
+    // `String(c.error ?? '')` at the sink — so the same nullish error read as
+    // `"undefined"` in the evolution signal and as `""` in the ledger. Empty is
+    // the expensive one: every reader's predicate is `error !== ''`, so a tool
+    // that reported failure without saying why was recorded as a CLEAN call,
+    // while `hadError` below knew it had failed.
+    const failure = c.success === false
+      ? describeToolFailure({ error: c.error })
+      : null;
+    const recorded = failure !== null ? { error: failure } : c.output;
     if (c.success === false) this.hadError = true;
     // A call that names a spill address is the drop-content-keep-the-path
     // recipe being followed — the counter that says the references are read,
@@ -183,10 +210,18 @@ export class TurnAccumulator {
       name: c.toolName,
       toolCallId: `tc-${this.toolCalls.length}`,
     };
+    // What the call was ASKED to do, bounded. Without it the durable row names
+    // the tool and nothing else, so a ledger of 34 failures could say `file×13`
+    // and never which action — and a dispatcher tool's action is the whole
+    // difference between a refusal it was right to make and a defect.
+    if (c.input !== undefined) {
+      const args = digestJsonValue({ value: c.input });
+      if (args !== undefined) event.args = args;
+    }
     if (!v.safeParse(UndefinedSchema, recorded).success) {
       event.result = projectJsonValue({ value: recorded });
     }
-    if (c.success === false) event.error = String(c.error ?? '');
+    if (failure !== null) event.error = failure;
     if (c.durationMs !== undefined) event.durationMs = c.durationMs;
     this.sinks.onToolCallEvent?.(event);
   }

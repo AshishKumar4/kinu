@@ -24,8 +24,15 @@ declare global {
     AI?: Ai;
     /** Optional semantic-memory index. Without it, memory remains FTS-only. */
     MEMORY_VECTORS?: ProteusVectorizeIndex;
-    /** Optional Nimbus runtime-catalog binding/config marker. */
-    NIMBUS_RUNTIME_CACHE?: string;
+    /** The Nimbus runtime artifact store a HOSTED workspace installs its
+     *  toolchain from — `catalog/v1.json`, per-version manifests and
+     *  content-addressed blobs. An R2 BUCKET, not a marker string: the Nimbus
+     *  session DO calls `.get()` on it
+     *  (external/nimbus/packages/worker/src/runtime/runtime-catalog.ts:117).
+     *  Absent ⇒ a hosted `python3`/`ruby`/`clang` exits 127 and the shell says
+     *  the binding is missing; the local CLI is unaffected because it ships its
+     *  runtimes as npm packages. */
+    NIMBUS_RUNTIME_CACHE?: R2Bucket;
     LOADER: WorkerLoader;
     OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
     /** Per-user DO: profile + agent registry + credentials + defaults. */

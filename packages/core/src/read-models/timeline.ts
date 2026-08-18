@@ -94,8 +94,6 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
       return { ...base, kind: 'trigger', label: e.caused_by ? `Run started · ${e.caused_by}` : 'Run started', detail: e.userMessage };
     case 'turn_start':
       return { ...base, kind: 'llm-turn', label: `Turn ${e.turnIndex}` };
-    case 'tool_call_start':
-      return { ...base, kind: toolKindFor(e.name), label: e.name, refId: e.toolCallId };
     case 'tool_call_end':
       return {
         ...base, kind: toolKindFor(e.name), label: e.error ? `${e.name} failed` : e.name,
@@ -107,6 +105,11 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
       return { ...base, kind: 'head-split', label: 'Heads split', detail: e.rationale, data: { rootId: e.rootId, headIds: e.headIds }, refId: e.rootId };
     case 'head_merge':
       return { ...base, kind: 'head-merge', label: `Heads merged (${e.headCount})`, detail: e.mergedNarrative?.slice(0, 200), refId: e.rootId };
+    case 'head_abandoned':
+      return {
+        ...base, kind: 'abort', label: `Heads abandoned (${e.abandoned} of ${e.headCount})`,
+        detail: e.rationale || e.reason, refId: e.rootId,
+      };
     case 'scaffold_promotion':
       return { ...base, kind: 'scaffold', label: `Scaffold promoted v${e.fromVersion} → v${e.toVersion}` };
     case 'scaffold_rollback':

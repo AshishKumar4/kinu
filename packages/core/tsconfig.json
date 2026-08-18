@@ -5,5 +5,7 @@
     "allowImportingTsExtensions": true,
     "types": ["bun", "node"]
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests"],
+  "//": "tests/fixtures/log-ban is deliberately uncompilable — it is the red half of the reserved-log-field proof, and unit-obs-log-ban.test.ts runs tsc over its own project to read the diagnostics.",
+  "exclude": ["tests/fixtures/log-ban"]
 }

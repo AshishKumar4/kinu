@@ -19,11 +19,12 @@ import {
   calibrationReport,
   createCompletionLLM,
   ensembleReport,
-  getChatHistory,
+  getChatHistoryPage,
   getEvolutionChangelog,
   ingestOutcomeLabels,
   initTurnOutcomeTables,
   listGepaRuns,
+  listRuns,
   listScaffoldVersions,
   loadGepaCandidates,
   nextCronFire,
@@ -41,6 +42,7 @@ import {
   type EnsembleJudge,
   type EvolutionChangelogView,
   type GepaCandidate,
+  type RunListEntry,
   type GepaRunSummary,
   type HeadRunView,
   type WeakLabel,
@@ -262,10 +264,12 @@ export function listLocalEvents(name: string, opts: { variant?: string; since?: 
 }
 
 /** Recent runs from the durable run-event log — the local peer of the cloud
- *  `listRuns` RPC. */
-export function listLocalRuns(name: string, limit = 50): Array<{ runId: string; lastTs: string; eventCount: number }> {
+ *  `listRuns` RPC. One page; `proteus inspect` prints a window, not a walk. */
+export function listLocalRuns(name: string, limit = 50): RunListEntry[] {
   return withLocalDb(name, (db) => (
-    tableExists(db, 'run_events') ? new RunEventRecorder(makeSql(db)).listRuns(limit) : []
+    tableExists(db, 'run_events')
+      ? [...listRuns(new RunEventRecorder(makeSql(db)), null, limit).items]
+      : []
   ));
 }
 
@@ -286,7 +290,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
     // turn boundaries. The cloud timeline spine leads with the same source.
     if (tableExists(db, 'run_events')) {
       const recorder = new RunEventRecorder(makeSql(db));
-      const latest = recorder.listRuns(1)[0];
+      const latest = listRuns(recorder, null, 1).items[0];
       if (latest) {
         rows.push(...recorder.read(latest.runId, { limit }).map((e) => ({
           id: `${e.runId}:${e.eventIndex}`,
@@ -435,11 +439,11 @@ export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
   });
 }
 
-/** Local peer of the cloud `getChatHistory` RPC — no local wrapper existed
- *  before `proteus debug` needed the full transcript, though the read model
- *  itself (core status.ts) has always worked over any SqlExecutor. */
+/** Local peer of the cloud `getChatHistoryPage` RPC — the newest page, which
+ *  is what `proteus debug messages --limit` is asking for. The read model
+ *  itself (core status.ts) works over any SqlExecutor. */
 export function getLocalChatHistory(name: string, limit = 100): ChatHistoryEntry[] {
-  return withLocalDb(name, (db) => getChatHistory(makeSql(db), limit));
+  return withLocalDb(name, (db) => [...getChatHistoryPage(makeSql(db), { limit }).items]);
 }
 
 /** Local peer of the cloud `getEvolutionChangelog` RPC. */

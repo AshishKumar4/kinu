@@ -2,17 +2,23 @@
  * The canvas projection: every tree in a workspace, and what each run was
  * dispatched with.
  *
- * Two defects these pin, both from the owner's own screenshots:
+ * Three defects these pin, the first two from the owner's own screenshots:
  *
  *   1. "Currently I can choose a run and I only see that tree." The surface read
  *      ONE root, because the scoped read model exists precisely to stop a client
- *      folding an unscoped pile into whichever root it picked. So the fix is an
- *      explicitly multi-root projection whose every row still names its tree —
- *      not the removal of scoping.
+ *      folding an unscoped pile into whichever root it picked. So the fix is a
+ *      canvas composed of scoped per-root reads — not the removal of scoping.
  *
  *   2. "the Exploration UI doesnt really differentiate properly between the run
  *      params i.e, if the settle is of mcts or what." A search and a merge are
  *      different objects; the surface could only say which OUTCOME each reached.
+ *
+ *   3. The trees and the run list beside them were bounded SEPARATELY, by
+ *      different ordering keys — the run list by when a fork started, the trees
+ *      by when a search was last written to. Two windows over overlapping sets,
+ *      so the canvas could draw a listed fork with no tree and hold a tree for a
+ *      fork it had not listed. The runs now choose the roots, which is why there
+ *      is no multi-root read left to disagree with them.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -21,9 +27,10 @@ import { makeSql, makeExecRaw } from './helpers.js';
 import { initSearchTables } from '../src/mcts/schemas.js';
 import { initMctsSearchTable } from '../src/mcts/search-store.js';
 import { initHeadsTables } from '../src/heads/schema.js';
-import { readSearchForest } from '../src/read-models/search-tree.js';
+import { readSearchTree } from '../src/read-models/search-tree.js';
 import { readForkRunParams } from '../src/read-models/fork-params.js';
-import { readExplorationCanvas } from '../src/read-models/exploration-canvas.js';
+import { readExplorationCanvas, type ExplorationCanvasRun } from '../src/read-models/exploration-canvas.js';
+import type { Page, SeekCursor } from '../src/read-models/page.js';
 
 function freshDb() {
   const db = new Database(':memory:');
@@ -75,51 +82,6 @@ function seedSplit(db: Database, run: {
       .run(run.rootId, run.heads, run.at, run.strategy ?? 'synthesize');
   }
 }
-
-describe('readSearchForest', () => {
-  test('serves every search, each row naming its own tree', () => {
-    const { db, sql } = freshDb();
-    seedSearch(db, { rootId: 's-old', task: 'first', at: 1_000, nodes: 2 });
-    seedSearch(db, { rootId: 's-new', task: 'second', at: 5_000, nodes: 3 });
-
-    const rows = readSearchForest(sql, 30);
-    const roots = new Set(rows.map((row) => row.root_id));
-    expect(roots).toEqual(new Set(['s-old', 's-new']));
-    // Newest search first, and its rows contiguous — a caller folding row by row
-    // never straddles two trees.
-    expect(rows[0]!.root_id).toBe('s-new');
-    expect(rows.filter((row) => row.root_id === 's-new')).toHaveLength(4);
-    expect(rows.filter((row) => row.root_id === 's-old')).toHaveLength(3);
-  });
-
-  test('every row carries the root that says which tree it is', () => {
-    const { db, sql } = freshDb();
-    seedSearch(db, { rootId: 's1', task: 'one', at: 1_000, nodes: 2 });
-    expect(readSearchForest(sql, 30).every((row) => row.root_id === 's1')).toBe(true);
-  });
-
-  test('the limit bounds SEARCHES, not rows — a big tree cannot crowd out a run', () => {
-    const { db, sql } = freshDb();
-    seedSearch(db, { rootId: 'huge', task: 'huge', at: 1_000, nodes: 40 });
-    seedSearch(db, { rootId: 'small', task: 'small', at: 5_000, nodes: 1 });
-
-    const rows = readSearchForest(sql, 2);
-    expect(new Set(rows.map((row) => row.root_id))).toEqual(new Set(['huge', 'small']));
-    expect(readSearchForest(sql, 1).every((row) => row.root_id === 'small')).toBe(true);
-  });
-
-  test('legacy unscoped rows stay invisible, as they are to every scoped read', () => {
-    const { db, sql } = freshDb();
-    db.exec(`INSERT INTO search_nodes (id, task, action, depth, visits, value, status, created_at)
-      VALUES ('legacy', 'old', '', 0, 1, 0.5, 'open', 500)`);
-    expect(readSearchForest(sql, 30)).toEqual([]);
-  });
-
-  test('an empty workspace is an empty forest, not an error', () => {
-    const { sql } = freshDb();
-    expect(readSearchForest(sql, 30)).toEqual([]);
-  });
-});
 
 describe('readForkRunParams', () => {
   test('a search reports the policy and knobs it actually ran with', () => {
@@ -180,35 +142,102 @@ describe('readForkRunParams', () => {
 });
 
 describe('readExplorationCanvas', () => {
-  test('the runs, their parameters and every tree arrive from one snapshot', () => {
+  test('each fork arrives with its own parameters and its own tree', () => {
     const { db, sql } = freshDb();
     seedSearch(db, { rootId: 's1', task: 'compete', at: 1_000, nodes: 3 });
     seedSplit(db, { rootId: 'm1', task: 'merge', at: 4_000, heads: 2, merged: true });
     seedSearch(db, { rootId: 's2', task: 'compete again', at: 6_000, nodes: 1 });
 
-    const canvas = readExplorationCanvas(sql, 30);
-    expect(canvas.runs.map((run) => run.id)).toEqual(['s2', 'm1', 's1']);
-    // Every run in the list has its parameters, and every competed run its rows.
-    expect(new Set(canvas.params.map((entry) => entry.rootId))).toEqual(new Set(['s1', 'm1', 's2']));
-    expect(new Set(canvas.search.map((row) => row.root_id))).toEqual(new Set(['s1', 's2']));
-    // A merge keeps its branches in the journal, so it contributes no rows here.
-    expect(canvas.search.some((row) => row.root_id === 'm1')).toBe(false);
+    const page = readExplorationCanvas(sql);
+    expect(page.status).toBe('end');
+    expect(page.items.map((entry) => entry.run.id)).toEqual(['s2', 'm1', 's1']);
+    // Parameters travel WITH the fork, so there is no id to re-associate on and
+    // no way for a row to be labelled with another fork's knobs.
+    expect(page.items.map((entry) => entry.params?.policy)).toEqual(['mcts', 'merge', 'mcts']);
+    expect(page.items.map((entry) => entry.tree.every((row) => row.root_id === entry.run.id)))
+      .toEqual([true, true, true]);
+    // A merge keeps its branches in the journal, so it carries no tree rows.
+    expect(page.items.find((entry) => entry.run.id === 'm1')!.tree).toEqual([]);
+    expect(page.items.find((entry) => entry.run.id === 's1')!.tree).toHaveLength(4);
   });
 
-  test('no tree is served for a run the list does not have', () => {
+  test('a big tree costs one slot, not forty', () => {
     const { db, sql } = freshDb();
-    for (let i = 0; i < 4; i++) {
+    seedSearch(db, { rootId: 'huge', task: 'huge', at: 1_000, nodes: 40 });
+    seedSearch(db, { rootId: 'small', task: 'small', at: 5_000, nodes: 1 });
+
+    const page = readExplorationCanvas(sql, null, 1);
+    expect(page.items.map((entry) => entry.run.id)).toEqual(['small']);
+    expect(page.status).toBe('more');
+    // The page bounds FORKS. Asking for one still delivers that fork whole.
+    expect(readExplorationCanvas(sql, page.status === 'more' ? page.next : null, 1)
+      .items[0]!.tree).toHaveLength(41);
+  });
+
+  test('a search still being written cannot displace the fork the page shows', () => {
+    const { db, sql } = freshDb();
+    // `growing` STARTED first but is still receiving nodes, so it is the newest
+    // by last write and the oldest by first write. The canvas used to pick its
+    // trees by last write while the fork list picked by first write, so at a
+    // page of one the list showed `settled` and the trees beside it belonged to
+    // `growing` — a listed fork drawn with no tree, next to a tree for a fork
+    // that was not listed.
+    seedSearch(db, { rootId: 'growing', task: 'still going', at: 1_000, nodes: 1 });
+    seedSearch(db, { rootId: 'settled', task: 'done', at: 5_000, nodes: 1 });
+    db.query(`INSERT INTO search_nodes
+      (id, parent_id, root_id, task, action, observation, depth, visits, value, status, created_at)
+      VALUES ('growing-late', 'growing', 'growing', 'still going', 'late', '', 1, 1, 0.5, 'open', 9_000)`).run();
+
+    const page = readExplorationCanvas(sql, null, 1);
+    expect(page.items.map((entry) => entry.run.id)).toEqual(['settled']);
+    expect(page.items[0]!.tree.every((row) => row.root_id === 'settled')).toBe(true);
+  });
+
+  test('a fork whose parameters are gone says so instead of inventing them', () => {
+    const { db, sql } = freshDb();
+    seedSearch(db, { rootId: 's1', task: 'compete', at: 1_000, nodes: 1 });
+    // The ledger prunes settled rows after a day; the tree stays forever.
+    db.exec(`DELETE FROM mcts_search_runs WHERE root_id = 's1'`);
+
+    const page = readExplorationCanvas(sql);
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]!.params).toBeNull();
+    expect(page.items[0]!.tree).toHaveLength(2);
+  });
+
+  test('legacy unscoped rows stay invisible, as they are to every scoped read', () => {
+    const { db, sql } = freshDb();
+    db.exec(`INSERT INTO search_nodes (id, task, action, depth, visits, value, status, created_at)
+      VALUES ('legacy', 'old', '', 0, 1, 0.5, 'open', 500)`);
+    expect(readExplorationCanvas(sql)).toEqual({ status: 'end', items: [] });
+    expect(readSearchTree(sql, 'legacy')).toEqual([]);
+  });
+
+  test('an empty workspace is an exhausted page, not an error and not "more"', () => {
+    const { sql } = freshDb();
+    expect(readExplorationCanvas(sql)).toEqual({ status: 'end', items: [] });
+  });
+
+  test('a full walk reaches every fork exactly once', () => {
+    const { db, sql } = freshDb();
+    for (let i = 0; i < 7; i++) {
       seedSearch(db, { rootId: `s${i}`, task: `t${i}`, at: 1_000 * (i + 1), nodes: 1 });
     }
-    const canvas = readExplorationCanvas(sql, 2);
-    const listed = new Set(canvas.runs.map((run) => run.id));
-    expect(listed.size).toBe(2);
-    expect(canvas.search.every((row) => listed.has(row.root_id ?? ''))).toBe(true);
-    expect(canvas.params.every((entry) => listed.has(entry.rootId))).toBe(true);
-  });
+    seedSplit(db, { rootId: 'm1', task: 'merge', at: 3_500, heads: 2, merged: true });
 
-  test('an empty workspace is an empty canvas', () => {
-    const { sql } = freshDb();
-    expect(readExplorationCanvas(sql, 30)).toEqual({ runs: [], params: [], search: [] });
+    const seen: string[] = [];
+    let cursor: SeekCursor | null = null;
+    let pages = 0;
+    for (;;) {
+      const page: Page<ExplorationCanvasRun> = readExplorationCanvas(sql, cursor, 3);
+      seen.push(...page.items.map((entry) => entry.run.id));
+      pages++;
+      if (page.status === 'end') break;
+      cursor = page.next;
+      expect(pages).toBeLessThan(10);
+    }
+    expect(pages).toBe(3);
+    expect(seen).toEqual(['s6', 's5', 's4', 's3', 'm1', 's2', 's1', 's0']);
+    expect(new Set(seen).size).toBe(seen.length);
   });
 });
