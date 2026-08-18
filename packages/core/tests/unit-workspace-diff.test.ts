@@ -1,9 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { git, gitEnv, initRepo } from '@proteus/test-utils';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { git, gitEnv, initRepo, scratchDir } from '@proteus/test-utils';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createWorkspace } from '../src/identity/create.js';
 import {
@@ -261,7 +260,7 @@ describe('workspace diff lifecycle', () => {
   });
 
   test('repeated git diff reads include untracked work without changing the real index', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'proteus-output-diff-'));
+    const repo = scratchDir('workspace-diff');
     initRepo(repo);
     writeFileSync(join(repo, 'tracked.txt'), 'before\n');
     git(repo, 'add', 'tracked.txt');

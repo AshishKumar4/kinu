@@ -1,6 +1,7 @@
 import { describe, test, expect, mock } from 'bun:test';
 import { generateText } from 'ai';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { scratchPath } from '@proteus/test-utils';
 import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@proteus/core';
 import * as v from 'valibot';
 import {
@@ -37,9 +38,7 @@ function makeSpawn(output: string, exitCode = 0): OpenCodeSpawn {
 }
 
 function makeAuthFile(origin: string, token: string): string {
-  const dir = `/tmp/proteus-test-${Date.now()}`;
-  const path = `${dir}/auth.json`;
-  mkdirSync(dir, { recursive: true });
+  const path = scratchPath('opencode-provider-auth', 'auth.json');
   writeFileSync(path, JSON.stringify({ [origin]: { type: 'wellknown', key: 'TOKEN', token } }));
   return path;
 }

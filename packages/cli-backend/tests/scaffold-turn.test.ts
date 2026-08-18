@@ -25,6 +25,7 @@ import {
 } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
+import { scratchPath } from '@proteus/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -61,7 +62,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, {
-    dbPath: `/tmp/proteus-scaffold-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM,
+    dbPath: scratchPath('scaffold-turn', 'agent.db'), llm: DUMMY_LLM,
   });
   // What `proteus create` provisions (identity/create.ts): the scaffold
   // tables, agent_config, and the v0 scaffold file + archive row — so the

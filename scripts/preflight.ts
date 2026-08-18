@@ -31,6 +31,7 @@ import { existsSync, readFileSync, readdirSync, statSync, statfsSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { assertMeasured, finding } from './gate-ratchet.ts';
+import { SCRATCH_PREFIXES } from '@proteus/test-utils';
 
 /** This checkout, so the merge-state probe reads THIS tree's git directory
  *  rather than whatever directory the gate happened to be invoked from. */
@@ -109,16 +110,16 @@ export const PROJECT_MARKERS = [
   '.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg',
 ] as const;
 
-/** Scratch prefixes our own harness mints under the temp directory. Every
- *  prefix any harness mints MUST be here: `judge` counts orphans and `reclaim`
- *  removes them from this one list, so a prefix missing here is simultaneously
- *  uncollected and invisible. That is how /tmp reached 100% inode exhaustion
- *  with 8 GB of bytes still free while this file reported healthy. */
-const SCRATCH_PREFIXES = [
-  'proteus-test-', 'proteus-home-', 'proteus-mount-', 'proteus-output-diff-',
-  'proteus-head-', 'mutation-gate-', 'dist-integrity-', 'deploy-isolation-',
-  'outcome-baseline-',
-] as const;
+/* Scratch prefixes come from `@proteus/test-utils` (src/scratch.ts), which is
+ * also what MINTS them — `judge` counts orphans and `reclaim` removes them from
+ * that one list, so a prefix the harness knows and this file does not is
+ * simultaneously uncollected and invisible. It was a hand-written copy here,
+ * and it drifted exactly that way: measured 2026-08-17, 6,102 of 8,643 of our
+ * own entries were counted, so every rising number quoted from this gate all
+ * evening was a FLOOR and not a total. `proteus-scaffold-test-`,
+ * `proteus-runtimes-`, `proteus-webhook-`, `proteus-vfs-`, `proteus-gepa-`,
+ * `proteus-codex-auth-`, `proteus-shared-`, `proteus-mcp-test-` and every
+ * `agent-core-*` were the invisible part. */
 
 /* There is deliberately no threshold on the orphan COUNT. It was one, at 600,
  * and it was wrong in the way that gets gates weakened: on a box running many

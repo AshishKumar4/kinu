@@ -42,6 +42,7 @@ import {
   type Logger,
 } from '@proteus/compaction';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime.js';
+import { scratchPath } from '@proteus/test-utils';
 
 const SESSION = 'proteus-itest:default';
 const silentLogger: Logger = { info() {}, debug() {}, warn() {}, error() {} };
@@ -124,7 +125,7 @@ describe('default compaction over the real storage plane', () => {
   test('rewrite → VFS transcript read-back → durable replay → ledger reset on non-replay', async () => {
     const db = new Database(':memory:');
     const rt = createCLIRuntime(db, {
-      dbPath: `/tmp/proteus-compaction-itest-${Math.floor(performance.now())}.db`,
+      dbPath: scratchPath('compaction-integration', 'agent.db'),
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
     });
 
@@ -295,7 +296,7 @@ describe('default compaction over the real storage plane', () => {
   test('the first rung: superseded ephemeral blocks survive every unpressured turn and go first under pressure', async () => {
     const db = new Database(':memory:');
     const rt = createCLIRuntime(db, {
-      dbPath: `/tmp/proteus-rung-itest-${Math.floor(performance.now())}.db`,
+      dbPath: scratchPath('compaction-integration-rung', 'agent.db'),
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
     });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));

@@ -5,9 +5,11 @@
 // tests; here we verify the loop: turns stream + persist, programmatic turns run
 // serialized (reactor / job wake), broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
-import { createTestSql, toolExecute } from '@proteus/test-utils';
+import { createTestSql, scratchDir, scratchPath, toolExecute } from '@proteus/test-utils';
 import { MissionGovernor } from '@proteus/core';
 import { Database } from 'bun:sqlite';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model.js';
@@ -27,6 +29,7 @@ import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session.js';
 import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver.js';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory.js';
+import { discoverAgentsMd } from '../src/agents-md.js';
 import * as v from 'valibot';
 
 /** The resolver members these tests do not exercise — spelled out once so a
@@ -159,7 +162,7 @@ function workspaceRuntime() {
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-  const rt = createCLIRuntime(db, { dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { dbPath: scratchPath('local-session', 'agent.db'), llm: DUMMY_LLM });
   return { db, rt };
 }
 
@@ -1598,7 +1601,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
       role TEXT NOT NULL, content TEXT NOT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-    const rt = createCLIRuntime(db, { dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { dbPath: scratchPath('local-session-review', 'agent.db'), llm: DUMMY_LLM });
     // The classifier + reflection ride rt.llm.complete — stub it so the review
     // runs without a network LLM.
     Object.defineProperty(rt, 'llm', { value: {
@@ -1692,51 +1695,36 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
 describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
   test('injects the cwd AGENTS.md chain into the turn system prompt', async () => {
-    const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const { tmpdir } = await import('node:os');
-    const root = mkdtempSync(join(tmpdir(), 'proteus-ls-agentsmd-'));
-    try {
-      const nested = join(root, 'app');
-      mkdirSync(nested);
-      writeFileSync(join(root, 'AGENTS.md'), 'Root: prefer bun.');
-      writeFileSync(join(nested, 'AGENTS.md'), 'App: run lint before commit.');
+    const root = scratchDir('local-session-agentsmd');
+    const nested = join(root, 'app');
+    mkdirSync(nested);
+    writeFileSync(join(root, 'AGENTS.md'), 'Root: prefer bun.');
+    writeFileSync(join(nested, 'AGENTS.md'), 'App: run lint before commit.');
 
-      let system = '';
-      const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }), { cwd: nested });
-      await session.send('hello');
+    let system = '';
+    const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }), { cwd: nested });
+    await session.send('hello');
 
-      expect(system).toContain('## Project instructions (AGENTS.md)');
-      expect(system).toContain('Root: prefer bun.');
-      expect(system).toContain('App: run lint before commit.');
-      // Nearest renders last (it wins on conflict).
-      expect(system.indexOf('Root: prefer bun.')).toBeLessThan(system.indexOf('App: run lint before commit.'));
-      expect(system).toContain(`Working directory: ${nested}`);
-      await session.end();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(system).toContain('## Project instructions (AGENTS.md)');
+    expect(system).toContain('Root: prefer bun.');
+    expect(system).toContain('App: run lint before commit.');
+    // Nearest renders last (it wins on conflict).
+    expect(system.indexOf('Root: prefer bun.')).toBeLessThan(system.indexOf('App: run lint before commit.'));
+    expect(system).toContain(`Working directory: ${nested}`);
+    await session.end();
   });
 
   test('omits the AGENTS.md block when no file exists up the tree', async () => {
-    const { mkdtempSync, rmSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const { tmpdir } = await import('node:os');
-    const { discoverAgentsMd } = await import('../src/agents-md.js');
-    const root = mkdtempSync(join(tmpdir(), 'proteus-ls-noagents-'));
-    try {
-      // Ancestors of the tmpdir could theoretically carry an AGENTS.md on a
-      // developer machine — only assert omission when the chain is truly empty.
-      if (discoverAgentsMd(root).length > 0) return;
-      let system = '';
-      const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }), { cwd: root });
-      await session.send('hello');
-      expect(system.length).toBeGreaterThan(0);
-      expect(system).not.toContain('Project instructions (AGENTS.md)');
-      await session.end();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const root = scratchDir('local-session-noagents');
+    // Ancestors of the tmpdir could theoretically carry an AGENTS.md on a
+    // developer machine — only assert omission when the chain is truly empty.
+    if (discoverAgentsMd(root).length > 0) return;
+    let system = '';
+    const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }), { cwd: root });
+    await session.send('hello');
+    expect(system.length).toBeGreaterThan(0);
+    expect(system).not.toContain('Project instructions (AGENTS.md)');
+    await session.end();
   });
 
   test('persisted turns are searchable through the session-search seam', async () => {

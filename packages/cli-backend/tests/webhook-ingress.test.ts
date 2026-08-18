@@ -14,6 +14,7 @@ import { TestLanguageModelV2 } from './test-language-model.js';
 import { hmacSha256Hex, type LLMProviderConfig, type WebhookDelivery } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession } from '../src/local-session.js';
+import { scratchPath } from '@proteus/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -31,7 +32,7 @@ afterEach(async () => {
 function localSession(): LocalAgentSession {
   const db = new Database(':memory:');
   const rt = createCLIRuntime(db, {
-    dbPath: `/tmp/proteus-webhook-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM,
+    dbPath: scratchPath('webhook-ingress', 'agent.db'), llm: DUMMY_LLM,
   });
   const session = new LocalAgentSession({
     rt, db, model: idleModel, noAutoEvolve: true, onEvent: () => {},

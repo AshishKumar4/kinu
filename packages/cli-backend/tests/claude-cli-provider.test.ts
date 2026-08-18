@@ -14,6 +14,7 @@ import { createLocalModelResolver } from '../src/model-resolver.js';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2Usage } from '@ai-sdk/provider';
+import { scratchPath } from '@proteus/test-utils';
 
 // ─── stream-json fixtures (captured from the real `claude` binary) ───────────
 
@@ -435,7 +436,7 @@ describe('claude-cli provider — tool loop composition', () => {
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
       role TEXT NOT NULL, content TEXT NOT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-    const rt = createCLIRuntime(db, { dbPath: `/tmp/proteus-claude-${Math.floor(performance.now())}.db`, llm: openaiLlm });
+    const rt = createCLIRuntime(db, { dbPath: scratchPath('claude-cli-provider', 'agent.db'), llm: openaiLlm });
     const events: SessionEvent[] = [];
     const session = new LocalAgentSession({
       rt, db,

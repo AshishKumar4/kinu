@@ -43,11 +43,37 @@ interface ReflectBranchArgs {
 
 type BranchRpcArgs = ExploreBranchArgs | ReflectBranchArgs;
 
-export function createBranchSpawner(basePath: string, config: BranchSpawnerConfig): BranchSpawner {
-  mkdirSync(`${basePath}/branches`, { recursive: true });
+/**
+ * `basePath` is the agent database's path with `.db` removed — the directory a
+ * branch's own store goes next to. NULL when this runtime has no such
+ * directory: an in-memory agent database is a SQLite sentinel, not a path, and
+ * a branch child process needs a real file to open (`PROTEUS_PARENT_DB` below).
+ * Joining onto the sentinel is what created a literal `:memory:/branches`
+ * directory in the primary checkout and 15 worktrees — and an empty directory
+ * is invisible to `git status`, which is why sixteen "clean" trees held one.
+ */
+export function createBranchSpawner(
+  basePath: string | null,
+  config: BranchSpawnerConfig,
+): BranchSpawner {
+  const branchRoot = basePath === null ? null : `${basePath}/branches`;
 
   const spawn: SpawnBranch = async (branchId: string): Promise<BranchHandle> => {
-    const dbPath = `${basePath}/branches/${branchId}.db`;
+    if (branchRoot === null || basePath === null) {
+      throw new Error(
+        'Branch isolation needs a file-backed agent database: each branch opens its own '
+        + 'SQLite store beside it and reads the parent\'s. This runtime\'s database is '
+        + 'in-memory, so there is nowhere to put one.',
+      );
+    }
+    // Created HERE, by the first branch that needs somewhere to put its
+    // database — not when the spawner is built. Building one is what every
+    // `createCLIRuntime` does, MCTS or not, so the eager mkdir wrote a
+    // directory per runtime: measured 107 new `/tmp/proteus-test-<n>/branches`
+    // from one `bun test packages/cli-backend/` run, none of them ever used and
+    // none of them removed.
+    mkdirSync(branchRoot, { recursive: true });
+    const dbPath = `${branchRoot}/${branchId}.db`;
 
     // Locate the worker script relative to this file
     const workerPath = join(dirname(fileURLToPath(import.meta.url)), 'branch-worker.ts');

@@ -9,9 +9,7 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { scratchPath } from '@proteus/test-utils';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
@@ -41,7 +39,7 @@ function open(path: string, runtimes: readonly RuntimePackage[] = RUNTIMES): Wor
   });
 }
 
-const dbPath = () => join(mkdtempSync(join(tmpdir(), 'proteus-runtimes-')), 'workspace.db');
+const dbPath = () => scratchPath('workspace-runtimes', 'workspace.db');
 
 /**
  * Bun's default per-test timeout is 5s, and provisioning is real work: the first

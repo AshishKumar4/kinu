@@ -229,12 +229,16 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts',
     tier: 'push',
-    seconds: 1,
+    seconds: 1.6,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
-      + 'genuinely different body.',
+      + 'genuinely different body — and, for scratch-ownership, the three shapes that '
+      + 'leaked 10,124 temp entries in one evening proven red against the historical '
+      + 'source, plus the three it must NOT fire on: prose quoting the defect, a `/tmp/` '
+      + 'path belonging to the SANDBOX rather than this box, and a program whose scratch '
+      + 'outlives the run on purpose.',
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts.',
   },
   {
@@ -526,6 +530,24 @@ export const LADDER: readonly Gate[] = [
       + 'only PARTIALLY match a constant — the partial-match version reported 12 and '
       + 'every one was two unrelated decisions picking the same round number, so exact '
       + 'is the rule and 0 is the honest count.',
+  },
+  {
+    run: 'bun run gate:scratch-ownership',
+    tier: 'commit',
+    seconds: 1.3,
+    catches: 'a suite that mints a temp directory and never removes it, at the mint site. '
+      + 'Measured 2026-08-17: 10,124 of our own entries in the temp directory, from 2,434 '
+      + 'earlier the same evening, and 5,489 of them were one eager `mkdirSync` that ran '
+      + 'per `createCLIRuntime` — 107 per cli-backend suite run, whether MCTS branched or '
+      + 'not. Three rules, each a shape that leaked: a temp path built from Date.now() '
+      + '(unowned and unattributable — the name cannot say which suite made it), a mkdtemp '
+      + 'prefix absent from the catalogue preflight counts by (so it is uncollected AND '
+      + 'invisible, which under-reported our garbage by ~30%), and a suite file that mints '
+      + 'without releasing through a throw.',
+    blind: 'a directory minted by a program this repo merely runs (`external/` clones mint '
+      + '`agent-core-*`), and the runtime COUNT, deliberately: preflight already argues '
+      + 'that a ceiling on live scratch gets raised the first time it fires and deleted '
+      + 'the second, so free inodes stay its invariant and ownership is this one.',
   },
 ];
 

@@ -14,6 +14,7 @@ import type { LLMProviderConfig, RunEvent } from '@proteus/core';
 import { CRAFT_NEUTRAL_PRIOR } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
+import { scratchPath } from '@proteus/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -63,7 +64,7 @@ function episode(blocks: readonly string[]) {
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db, {
-    dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM,
+    dbPath: scratchPath('in-episode-craft', 'agent.db'), llm: DUMMY_LLM,
   });
   const events: SessionEvent[] = [];
   const session = new LocalAgentSession({
@@ -170,7 +171,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
         role TEXT NOT NULL, content TEXT NOT NULL,
         created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
       const rt = createCLIRuntime(dbOff, {
-        dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM,
+        dbPath: scratchPath('in-episode-craft-off', 'agent.db'), llm: DUMMY_LLM,
       });
       const evs: SessionEvent[] = [];
       return {

@@ -314,7 +314,10 @@ export function createCLIRuntime(
     fiber: createLinuxFiber(sql),
   };
 
-  const basePath = config.dbPath.replace(/\.db$/, '');
+  // `:memory:` is SQLite's in-memory sentinel, not a path — see the spawner's
+  // own doc comment. Null tells it there is no directory rather than letting it
+  // compute one from a value that is not a filename.
+  const basePath = config.dbPath === ':memory:' ? null : config.dbPath.replace(/\.db$/, '');
   const { spawn, abort } = createBranchSpawner(basePath, {
     llm: config.llm,
     providerCredentials: config.providerCredentials,

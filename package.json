@@ -44,7 +44,8 @@
     "verify:lean": "bash scripts/verify-lean.sh",
     "bench": "bun scripts/bench.ts",
     "gate:install-scripts": "bun scripts/install-scripts-gate.ts",
-    "gate:dependency-advisories": "bun scripts/dependency-advisory-gate.ts"
+    "gate:dependency-advisories": "bun scripts/dependency-advisory-gate.ts",
+    "gate:scratch-ownership": "bun scripts/scratch-ownership.ts"
   },
   "knip": {
     "ignoreExportsUsedInFile": true,

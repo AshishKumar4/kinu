@@ -6,8 +6,7 @@
 // that the caffe fork lacked — all without a network LLM.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model.js';
@@ -17,14 +16,14 @@ import {
   MissionGovernor,
   type HeadInput, type WebSearchProvider, type AgentRuntime, type JsonObject,
 } from '@proteus/core';
-import { toolExecute } from '@proteus/test-utils';
+import { scratchDir, scratchPath, toolExecute } from '@proteus/test-utils';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime.js';
 import { makeSql, makeExecRaw, createCLIRuntime, buildCLIHeadRuntime } from '../src/runtime.js';
 
 // A local head's scratch is a real store under PROTEUS_HOME (home.ts is the
 // isolation boundary), so point that boundary at a temp dir before anything
 // reads it: a test run must never write into the real home.
-process.env.PROTEUS_HOME = mkdtempSync(join(tmpdir(), 'proteus-home-'));
+process.env.PROTEUS_HOME = scratchDir('head-runtime-home');
 const HEAD_SCRATCH_DIR = join(process.env.PROTEUS_HOME, 'heads');
 
 /** Scratch stores present right now — [] before any head has ever run. */
@@ -41,7 +40,8 @@ const stubWeb: WebSearchProvider = {
 /** A parent CLI runtime — the real execution surface every head forks. */
 function makeParent(): AgentRuntime {
   return createCLIRuntime(new Database(':memory:'), {
-    dbPath: '/tmp/parent.db', llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' },
+    dbPath: scratchPath('head-runtime-parent', 'parent.db'),
+    llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' },
   });
 }
 
@@ -275,7 +275,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 
 describe('a local head forks the parent runtime (the caffe-fork capability)', () => {
   test("sees the parent's workspace, runs real commands, keeps its own scratch private", async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'proteus-head-'));
+    const dir = scratchDir('head-runtime-cwd');
     writeFileSync(join(dir, 'hello.txt'), 'from the real machine');
     const parent = makeParent();
     await parent.storage.vfs.writeFile('hello.txt', 'from the parent workspace');
@@ -305,7 +305,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
   });
 
   test('the head run tool reaches the real host with runtime=laptop', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'proteus-head-'));
+    const dir = scratchDir('head-runtime-cwd');
     writeFileSync(join(dir, 'note.txt'), 'real file content');
     const rt = buildCLIHeadRuntime(new Database(':memory:'), {
       parentRuntime: makeParent(), cwd: dir, agentId: 'h2', agentName: 'head-h2',
@@ -477,7 +477,7 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
 
 describe('a head reports the files IT changed, with concurrent siblings on the same plane', () => {
   test('two heads writing at the same time do not smear into each other', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'proteus-shared-'));
+    const dir = scratchDir('head-runtime-shared-plane');
     const runtime = createCLIHeadRuntime(headDeps(
       sharedWorkspaceProbeModel(barrier(2, () => {})),
       { cwd: dir },
