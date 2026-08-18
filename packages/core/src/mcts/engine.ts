@@ -124,7 +124,13 @@ export async function runMCTS(
     initialPhase = { iteration: 0, budget: effective.budget, rootId, rootMsgId, task };
     search?.begin({
       rootId, task, rootMsgId,
-      config: persistableMCTSConfig(effective), budget: effective.budget, now: Date.now(),
+      // The RESOLVED judge knobs, not just the caller-supplied ones. A read of
+      // this row has to be able to say what ensemble the run requested and what
+      // it realised, and both are unrecoverable from a blob that omits a knob
+      // the caller left at its default — which is also why the read model
+      // refuses to invent one (read-models/fork-params.ts).
+      config: persistableMCTSConfig({ ...effective, judgeSamples, maxEvalLLMCalls }),
+      budget: effective.budget, now: Date.now(),
     });
   }
 
@@ -133,6 +139,11 @@ export async function runMCTS(
   const report = (event: MCTSProgressBody): void => config.onProgress?.({ ...event, rootId });
   const { outOfBudget, charge } = missionMeter(config.mission);
   const reportedUngroundedLanguages = new Set<string>();
+  // Realised judge-ensemble sizes already disclosed. A build search has two:
+  // a code-bearing branch pays one of its evaluation calls for the generated
+  // check suite, a prose-only branch does not, so each is stated once rather
+  // than per branch per iteration.
+  const reportedClampedEnsembles = new Set<number>();
 
   return rt.schedule.fiber<ConvergenceResult>('mcts', async (ctx) => {
     // The durable search store is the resume source of truth when injected; the
@@ -299,6 +310,26 @@ export async function runMCTS(
                 canRun: [...rt.executor.languages],
                 iteration,
                 remainingBudget: phase.budget,
+              });
+            }
+            // The ensemble this branch ACTUALLY ran. `judgeSamples` is only the
+            // request: it shares one per-evaluation call pool with check
+            // generation, so a request the pool cannot fund is realised lower —
+            // and used to be realised lower with no field anywhere carrying the
+            // realised number. Reported from the evaluator's own answer rather
+            // than predicted from the knobs, and only when the ensemble was
+            // reached at all: a cascade that short-circuited before judging
+            // attempted zero samples, which is not a clamp.
+            const realised = r.value.judgeSamplesAttempted;
+            if (realised > 0 && realised < judgeSamples && !reportedClampedEnsembles.has(realised)) {
+              reportedClampedEnsembles.add(realised);
+              diagnostics.event('mcts.judge_ensemble_clamped', {
+                rootId,
+                mode,
+                iteration,
+                judgeSamplesRequested: judgeSamples,
+                judgeSamplesRealised: realised,
+                maxEvalLLMCalls,
               });
             }
             scores.push(r.value.score);

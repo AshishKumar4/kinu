@@ -35,6 +35,7 @@ import {
 import { headProducedFindings } from './head-summary';
 import { MergeOutputSchema, type MergeOutput } from './merge-schema';
 import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation';
+import { DEFAULT_CONFIG } from '../config';
 import type { LLM, Executor } from '../types/primitives';
 import type { WorkMode } from '../prompting/surface';
 import { addUsage, usageTotal, type Usage } from '../usage';
@@ -333,7 +334,7 @@ export class HeadController {
     // Ground each head's report into a real [0,1] outcome (execution-banded
     // when the head left runnable code, else median judge) — the SAME evaluator
     // the MCTS engine uses. Empty when the runtime has no grounding seam.
-    const headScores = await this.scoreHeads(reports, opts.request.rationale, opts.mode);
+    const headScores = await this.scoreHeads(rootId, reports, opts.request.rationale, opts.mode);
 
     // Synthesize via LLM (k-sample median when grounded; n=1 otherwise).
     const mergeResult = await this.merge(
@@ -383,11 +384,19 @@ export class HeadController {
    * indistinguishable from a workspace that never wired a judge.
    */
   private async scoreHeads(
+    rootId: HeadId,
     reports: readonly HeadReport[],
     rationale: string,
     mode: WorkMode,
   ): Promise<readonly HeadScore[]> {
     const g = mode === 'plan' ? undefined : this.runtime.grounding;
+    // Heads reuse the MCTS judge knobs, so they inherit its clamp: the ensemble
+    // shares one per-head-score call pool with check generation, and a request
+    // the pool cannot fund is realised lower. Disclosed by name from the
+    // evaluator's own answer, once per realised size — the engine discloses it
+    // the same way, for the same reason.
+    const judgeSamplesRequested = g?.judgeSamples ?? DEFAULT_CONFIG.mcts.judgeSamples;
+    const reportedClampedEnsembles = new Set<number>();
     const siblings = reports.map(headTrajectory);
     const settled = await Promise.allSettled(
       reports.map(async (r, i): Promise<HeadScore> => {
@@ -408,6 +417,16 @@ export class HeadController {
           judgeSamples: g.judgeSamples,
           maxLLMCalls: g.maxEvalLLMCalls,
         });
+        const realised = evaluation.judgeSamplesAttempted;
+        if (realised > 0 && realised < judgeSamplesRequested && !reportedClampedEnsembles.has(realised)) {
+          reportedClampedEnsembles.add(realised);
+          diagnostics.event('head.judge_ensemble_clamped', {
+            rootId,
+            judgeSamplesRequested,
+            judgeSamplesRealised: realised,
+            maxEvalLLMCalls: g.maxEvalLLMCalls ?? DEFAULT_CONFIG.mcts.maxEvalLLMCalls,
+          });
+        }
         return { ...base, score: evaluation.score, grounding: evaluation.grounding };
       }),
     );

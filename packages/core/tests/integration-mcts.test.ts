@@ -9,7 +9,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
-import { createTestRuntime, createMockSession } from './helpers';
+import { createTestRuntime, createMockSession, captureConsole } from './helpers';
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
@@ -336,6 +336,65 @@ describe('MCTS integration', () => {
     });
     // 2 branches × 1 judge sample (prose: no assertion-generation call).
     expect(llm.judgeCalls()).toBe(2);
+  });
+
+  // The invisible spend ceiling (2026-08-18): a search told `judgeSamples: 20`
+  // ran three-sample ensembles on shipped defaults, and nothing said so. Keyed
+  // on the stable dotted NAME, which is what a spend query would filter on.
+  const isClampLine = (line: string): boolean =>
+    line.includes('"event":"mcts.judge_ensemble_clamped"');
+
+  test('a judge request the call budget cannot fund is realised at the ceiling AND disclosed', async () => {
+    const llm = countingLLM('{"score": 0.5}');
+    const { rt } = createTestRuntime();
+    rt.llm = llm;
+    rt.judgeModel = llm;
+    // A code-bearing branch: one of its four evaluation calls buys the check
+    // suite, so the twenty-sample request is funded at three.
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'approach\n```js\nconst x = 42;\n```' }),
+      generateReflection: async () => ({ text: 'n/a' }),
+    });
+
+    initTables(rt);
+    const { stderr } = await captureConsole(() =>
+      runMCTS(rt, createMockSession(), 'twenty judges please', {
+        budget: 1, branches: 1, judgeSamples: 20,
+      }),
+    );
+
+    // One branch, so the judge-prompt count IS the realised ensemble size.
+    expect(llm.judgeCalls()).toBe(3);
+
+    // Fields, not prose: the pair a spend question needs, both scalars.
+    const lines = stderr.filter(isClampLine);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!).fields).toMatchObject({
+      mode: 'build',
+      judgeSamplesRequested: 20,
+      judgeSamplesRealised: 3,
+      maxEvalLLMCalls: 4,
+    });
+  });
+
+  test('a judge request the budget funds is not reported as clamped', async () => {
+    const llm = countingLLM('{"score": 0.5}');
+    const { rt } = createTestRuntime();
+    rt.llm = llm;
+    rt.judgeModel = llm;
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'approach\n```js\nconst x = 42;\n```' }),
+      generateReflection: async () => ({ text: 'n/a' }),
+    });
+
+    initTables(rt);
+    const { stdout, stderr } = await captureConsole(() =>
+      runMCTS(rt, createMockSession(), 'two judges is fine', {
+        budget: 1, branches: 1, judgeSamples: 2,
+      }),
+    );
+    expect(llm.judgeCalls()).toBe(2);
+    expect([...stdout, ...stderr].filter(isClampLine)).toHaveLength(0);
   });
 
   test('sequential tasks on one DB do not contaminate each other (fresh root per task)', async () => {

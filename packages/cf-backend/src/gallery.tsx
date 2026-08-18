@@ -777,7 +777,12 @@ const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
 const FORK_PARAMS: ForkRunParams[] = [
   {
     rootId: "n000", policy: "mcts", budget: 24, branches: 4,
-    maxDepth: 6, explorationWeight: 1.41, judgeSamples: 3, mode: "build",
+    maxDepth: 6, explorationWeight: 1.41,
+    // A CLAMPED ensemble, deliberately: `judgeSamples` shares its call pool with
+    // check generation, so this run asked for twenty and ran three. It is the
+    // longest value the parameter list renders, which is the one worth
+    // photographing.
+    judgeSamplesRequested: 20, judgeSamplesRealised: 3, mode: "build",
   },
   { rootId: "root-merge-1", policy: "merge", mergeStrategy: "synthesize", branches: 3 },
   { rootId: "root-merge-0", policy: "merge", mergeStrategy: "best_of", branches: 2 },

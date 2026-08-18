@@ -92,8 +92,43 @@ describe('readForkRunParams', () => {
     });
     expect(readForkRunParams(sql, ['s1'])).toEqual([{
       rootId: 's1', policy: 'mcts', budget: 12, branches: 4,
-      maxDepth: 6, explorationWeight: 0.9, judgeSamples: 3, mode: 'plan',
+      maxDepth: 6, explorationWeight: 0.9,
+      judgeSamplesRequested: 3,
+      // The call budget is not on this row, so the realised ensemble is unknown.
+      // Unknown is reported as unknown: echoing the request here is exactly the
+      // claim that made a clamped run read as an honoured one.
+      judgeSamplesRealised: null,
+      mode: 'plan',
     }]);
+  });
+
+  // The invisible spend ceiling (2026-08-18). `judgeSamples` is a REQUEST; it
+  // shares one per-evaluation call pool with check generation, so a request the
+  // pool cannot fund runs smaller. The surface used to show only the request.
+  test('a search that asked for 20 judges and ran 3 says both numbers', () => {
+    const { db, sql } = freshDb();
+    seedSearch(db, {
+      rootId: 'clamped', task: 'twenty judges please', at: 1_000, nodes: 1,
+      config: { budget: 4, branches: 2, judgeSamples: 20, maxEvalLLMCalls: 4, mode: 'build' },
+    });
+    expect(readForkRunParams(sql, ['clamped'])[0]).toMatchObject({
+      judgeSamplesRequested: 20,
+      judgeSamplesRealised: 3,
+    });
+  });
+
+  // A plan search never runs the executor, so no call buys a check suite and the
+  // whole pool is the ensemble's — one more than the same knobs give a build run.
+  test('a plan search realises the whole call budget as its ensemble', () => {
+    const { db, sql } = freshDb();
+    seedSearch(db, {
+      rootId: 'planned', task: 'weigh two designs', at: 1_000, nodes: 1,
+      config: { budget: 4, branches: 2, judgeSamples: 20, maxEvalLLMCalls: 4, mode: 'plan' },
+    });
+    expect(readForkRunParams(sql, ['planned'])[0]).toMatchObject({
+      judgeSamplesRequested: 20,
+      judgeSamplesRealised: 4,
+    });
   });
 
   test('a merge reports its merge strategy and head count, and no budget at all', () => {

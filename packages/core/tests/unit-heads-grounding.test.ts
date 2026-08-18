@@ -25,7 +25,7 @@ import {
   listAlternateTakeSets, recordTakePick,
 } from '../src/index';
 import { createJSONLLM } from '@proteus/test-utils';
-import { makeSql, makeExecRaw, createTestWorkspace } from './helpers';
+import { makeSql, makeExecRaw, createTestWorkspace, captureConsole } from './helpers';
 
 // ── fakes ────────────────────────────────────────────────────────────
 
@@ -197,6 +197,36 @@ describe('grounded head outcome scores', () => {
     });
     expect(result.grounded).toBe(false);
     expect(result.headScores.every((s) => s.score === 0.5)).toBe(true);
+  });
+
+  // The invisible spend ceiling (2026-08-18): heads reuse the MCTS judge knobs,
+  // so a split told `judgeSamples: 20` scored its heads with three-sample
+  // ensembles — the request shares one per-head-score call pool with check
+  // generation — and nothing said so.
+  test('a head judge request the call budget cannot fund is realised at the ceiling AND disclosed', async () => {
+    const { journal } = newJournal();
+    const runtime = buildRuntime({
+      reports: {
+        a: report('h-a', {
+          summary: 'works',
+          evidence: [{ id: 'e1', kind: 'artifact', body: '```js\nconst x = 42;\n```' }],
+        }),
+      },
+      grounding: grounding({ judgeSamples: 20 }),
+    });
+    const { stderr } = await captureConsole(() => new HeadController(runtime, journal).run({
+      mode: 'build',
+      parentHeadId: null, inheritedContext: ctx,
+      request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }] },
+    }));
+
+    const lines = stderr.filter((line) => line.includes('"event":"head.judge_ensemble_clamped"'));
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!).fields).toMatchObject({
+      judgeSamplesRequested: 20,
+      judgeSamplesRealised: 3,
+      maxEvalLLMCalls: 4,
+    });
   });
 });
 

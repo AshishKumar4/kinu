@@ -5,7 +5,8 @@
 //            prose-only branches are judge-only at reduced confidence.
 import { describe, test, expect } from 'bun:test';
 import { evaluateWithMultiModelJudging } from '../src/index';
-import { executionObservation, isParseFailure } from '../src/mcts/evaluation';
+import { executionObservation, isParseFailure, judgeCallBudget } from '../src/mcts/evaluation';
+import { DEFAULT_CONFIG } from '../src/config';
 import { createScriptedLLM, createJSONLLM } from '@proteus/test-utils';
 import type { Executor, LLM } from '../src/index';
 
@@ -537,6 +538,87 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
       judge, explorer: judge, judgeSamples: 2, maxLLMCalls: 3,
     });
     expect(result.judgeSamplesUsed).toBe(2);
+  });
+});
+
+// The invisible spend ceiling (2026-08-18): `judgeSamples` and `maxEvalLLMCalls`
+// are not independent knobs — they share ONE per-evaluation call pool — so a
+// caller who asked for twenty judges was answered by three, and no field
+// anywhere carried the three. These pin the arithmetic AND its disclosure.
+describe('judge ensemble clamp — requested vs realised', () => {
+  test('shipped defaults sit flush against the ceiling', () => {
+    const { judgeSamples, maxEvalLLMCalls } = DEFAULT_CONFIG.mcts;
+    // The live numbers, spelled out: the default request is already equal to
+    // what the default budget funds a code branch, so the clamp binds the
+    // instant the request rises by one.
+    expect({ judgeSamples, maxEvalLLMCalls }).toEqual({ judgeSamples: 3, maxEvalLLMCalls: 4 });
+    expect(judgeCallBudget({ judgeSamples, maxLLMCalls: maxEvalLLMCalls, offersRunnableCode: true }))
+      .toEqual({ ensemble: 3, generatesChecks: true });
+    expect(judgeCallBudget({ judgeSamples, maxLLMCalls: maxEvalLLMCalls, offersRunnableCode: false }))
+      .toEqual({ ensemble: 3, generatesChecks: false });
+    // Twenty, on those same defaults, is three.
+    expect(judgeCallBudget({ judgeSamples: 20, maxLLMCalls: maxEvalLLMCalls, offersRunnableCode: true }))
+      .toEqual({ ensemble: 3, generatesChecks: true });
+  });
+
+  test('a code branch asking for 20 spends 3 judge calls and REPORTS the 3', async () => {
+    const judge = countingJudge('{"score": 0.6}');
+    const result = await evaluateWithMultiModelJudging({
+      task: 'compute 42',
+      trajectory: withCode('here you go', 'const x = 42;'),
+      executor: exec(),
+      judge,
+      explorer: judge,
+      judgeSamples: 20,
+      // maxLLMCalls left at the shipped default (4) — the ceiling under test.
+    });
+    // 1 check-generation call + 3 samples: the request was funded at three.
+    expect(judge.prompts).toHaveLength(4);
+    // And the realised size is on the result. Without this field a caller
+    // reading `judgeSamples: 20` back off its own config had no way to learn it.
+    expect(result.judgeSamplesAttempted).toBe(3);
+    expect(result.judgeSamplesUsed).toBe(3);
+  });
+
+  test('a prose branch realises one more, having bought no check suite', async () => {
+    const judge = countingJudge('{"score": 0.6}');
+    const result = await evaluateWithMultiModelJudging({
+      task: 'analyze', trajectory: 'prose only', executor: exec(),
+      judge, explorer: judge, judgeSamples: 20,
+    });
+    expect(judge.prompts).toHaveLength(4);
+    expect(result.judgeSamplesAttempted).toBe(4);
+  });
+
+  test('an ensemble that answered nothing is not an ensemble that was never asked', async () => {
+    // Asked three, none parsed: `judgeSamplesUsed` 0 with `attempted` 3.
+    const refusing = createScriptedLLM(['no', 'no', 'no', 'no']);
+    const answeredNothing = await evaluateWithMultiModelJudging({
+      task: 'compute 42', trajectory: withCode('ok', 'const x = 42;'),
+      executor: exec(), judge: refusing, explorer: refusing, judgeSamples: 20,
+    });
+    expect(answeredNothing.judgeSamplesAttempted).toBe(3);
+    expect(answeredNothing.judgeSamplesUsed).toBe(0);
+
+    // Never asked: the parse cascade short-circuited before the ensemble.
+    const judge = countingJudge('{"score": 0.9}');
+    const neverAsked = await evaluateWithMultiModelJudging({
+      task: 'compute 42', trajectory: withCode('oops', 'const x = ('),
+      executor: exec({ error: 'SyntaxError: Unexpected end of input' }),
+      judge, explorer: judge, judgeSamples: 20, maxLLMCalls: 1,
+    });
+    expect(neverAsked.judgeSamplesAttempted).toBe(0);
+    expect(neverAsked.judgeSamplesUsed).toBe(0);
+  });
+
+  test('a request the budget CAN fund is realised whole', async () => {
+    const judge = countingJudge('{"score": 0.6}');
+    const result = await evaluateWithMultiModelJudging({
+      task: 'compute 42', trajectory: withCode('ok', 'const x = 42;'),
+      executor: exec(), judge, explorer: judge, judgeSamples: 5, maxLLMCalls: 6,
+    });
+    expect(result.judgeSamplesAttempted).toBe(5);
+    expect(judge.prompts).toHaveLength(6);
   });
 });
 

@@ -13,11 +13,11 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ForkRunSummary, HeadRunView } from '@proteus/core';
+import type { CompetedForkParams, ForkRunParams, ForkRunSummary, HeadRunView } from '@proteus/core';
 import type { BackgroundJob } from '../src/lib/protocol';
 import {
   FORK_IDLE_REVALIDATE_MS, FORK_REVALIDATE_MS, forkRunsRevalidateMs, hasLiveForkRun,
-  hasActiveForkWork, headRunToTree, selectForkRun,
+  hasActiveForkWork, headRunToTree, selectForkRun, forkParamRows,
 } from '../src/components/surfaces/fork-runs';
 import { isCompeted, principalVariation, maxVisits } from '../src/components/fork-tree-model';
 
@@ -237,5 +237,42 @@ describe('a merge is a tree of depth 1', () => {
 
   test('the merge narrative rides on the root, where the root is what is selected', () => {
     expect(headRunToTree(headRun()).observation).toBe('X, with Y’s guard rail');
+  });
+});
+
+// The invisible spend ceiling (2026-08-18): `judgeSamples` is a REQUEST, capped
+// by the per-evaluation call budget it shares with check generation. This strip
+// used to render the request alone, so a search that asked for 20 judges and ran
+// 3 read as a search that ran 20.
+describe('the judges row names what the search actually ran', () => {
+  function competed(over: Partial<CompetedForkParams> = {}): ForkRunParams {
+    return {
+      rootId: 'r1', policy: 'mcts', budget: 8, branches: 3,
+      maxDepth: null, explorationWeight: null,
+      judgeSamplesRequested: 3, judgeSamplesRealised: 3, mode: null, ...over,
+    };
+  }
+
+  test('a clamped ensemble names both numbers, realised first', () => {
+    const rows = forkParamRows(competed({ judgeSamplesRequested: 20, judgeSamplesRealised: 3 }));
+    expect(rows.find((row) => row.label === 'judges')?.value).toBe('3 of 20 requested');
+  });
+
+  test('an unrecoverable realised size is not reported as an honoured request', () => {
+    // The record carried the request but not the call budget, so the realised
+    // size is unknown. Unknown says "requested" and makes no per-branch claim:
+    // "20 per branch" would assert the very thing that cannot be known here.
+    const rows = forkParamRows(competed({ judgeSamplesRequested: 20, judgeSamplesRealised: null }));
+    expect(rows.find((row) => row.label === 'judges')?.value).toBe('20 requested');
+  });
+
+  test('a request the budget funded reads as the plain per-branch figure', () => {
+    const rows = forkParamRows(competed());
+    expect(rows.find((row) => row.label === 'judges')?.value).toBe('3 per branch');
+  });
+
+  test('a run whose request was never recorded shows no judges row at all', () => {
+    const rows = forkParamRows(competed({ judgeSamplesRequested: null, judgeSamplesRealised: null }));
+    expect(rows.some((row) => row.label === 'judges')).toBe(false);
   });
 });
