@@ -410,7 +410,7 @@ export function isPresetPoint(row: SwarmPresetRow): row is SwarmPresetPoint {
  * ONLY definition of it. A named preset resolves to exactly its row; `custom`
  * resolves to `config`, optionally seeded from `from`'s row. There is deliberately
  * no `custom` row: `config` IS the override and `from` names the base, and a sixth
- * row would be the second spelling §6.4's reason 1 exists to prevent.
+ * row would be the second spelling §6.4's first reason exists to prevent.
  *
  * TWO ROWS ARE UNDECLARED, and both are the same gap. §6.3 gives `research` and
  * `audit` `carry:'artifacts'`, but `carry` is a TAGGED value and its `artifacts`
@@ -425,7 +425,7 @@ export const SWARM_PRESET_POINTS = {
       unit: 'answer', observe: 'none', expand: 'sample', decorrelate: 'angles',
       score: { kind: 'none' }, advance: 'none', carry: { kind: 'none' },
     },
-    // 1 BY CONSTRUCTION rather than by choice: `advance:'none'` means there is no
+    // Depth is one BY CONSTRUCTION rather than by choice: `advance:'none'` means there is no
     // selection step, so there is no second level to reach (§8.3).
     depth: 1,
     branches: 5,
