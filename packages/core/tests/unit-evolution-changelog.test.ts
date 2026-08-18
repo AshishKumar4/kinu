@@ -223,6 +223,35 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(outcomes!.revert).toBeUndefined();
   });
 
+  test('the digest attributes each verdict to the source that produced it', () => {
+    const { rt } = setup();
+    const sql = rt.storage.sql;
+    // `execution` is the runtime's own verdict on a headless turn: no user saw
+    // it, let alone followed up. The digest used to report the whole batch as
+    // "from real user follow-ups", which invented a person for these two.
+    recordTurnOutcome(sql, {
+      outcome: 'accepted', confidence: 1, source: 'execution',
+      userMessage: 'ship it', assistantResponse: 'shipped',
+    });
+    recordTurnOutcome(sql, {
+      outcome: 'corrected', confidence: 1, source: 'execution',
+      userMessage: 'again', assistantResponse: 'threw',
+    });
+    recordTurnOutcome(sql, {
+      outcome: 'accepted', confidence: 0.9, source: 'classifier',
+      userMessage: 'fix it', assistantResponse: 'fixed', followup: 'thanks',
+    });
+
+    const outcomes = buildChangelog(sql).find((e) => e.kind === 'outcomes')!;
+    expect(outcomes.summary).toContain('Graded 3 turns');
+    expect(outcomes.summary).toContain('2 by whether their tool calls ran');
+    expect(outcomes.summary).toContain('1 from how the user replied');
+    expect(outcomes.summary).not.toContain('real user follow-ups');
+    // The outcome tally is unchanged — provenance is a separate question from
+    // what the verdicts were.
+    expect(outcomes.evidence).toBe('2 accepted · 1 corrected');
+  });
+
   test('every ledger present and empty produces an empty digest', () => {
     const { rt } = setup();
     expect(buildChangelog(rt.storage.sql)).toEqual([]);

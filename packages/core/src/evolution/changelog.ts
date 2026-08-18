@@ -21,7 +21,9 @@ import { rollbackScaffold } from '../scaffold/rollback.js';
 import { revertView } from '../views/store.js';
 import { listGepaRuns } from './gepa/persistence.js';
 import { listReplayEvals } from './replay.js';
-import { listTurnOutcomes, TURN_OUTCOMES } from './outcomes.js';
+import {
+  listTurnOutcomes, TURN_OUTCOMES, TURN_OUTCOME_SOURCES, type TurnOutcomeSource,
+} from './outcomes.js';
 import { describePathology } from './pathology.js';
 import { formatScoreInterval, lossInterval } from '../utils/stats.js';
 import { parseJsonValue } from '../utils/json.js';
@@ -302,6 +304,18 @@ function replayEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
   });
 }
 
+/** How a batch of verdicts was reached, honestly per source. A digest that reads
+ *  "from real user follow-ups" over `execution` rows reports a person where the
+ *  only witness was the runtime, and over `session_end` rows reports a reply
+ *  that is precisely what never came. */
+const OUTCOME_BATCH_PHRASE = {
+  explicit: "from the user's thumbs",
+  classifier: 'from how the user replied',
+  session_end: 'from sessions ending unanswered',
+  take_pick: "from the user's picks between takes",
+  execution: 'by whether their tool calls ran',
+} satisfies Record<TurnOutcomeSource, string>;
+
 function outcomeEntry(sql: SqlExecutor, since: number | undefined): ChangelogEntry | null {
   const rows = listTurnOutcomes(sql, { limit: 200 })
     .filter((r) => since === undefined || r.createdAt > since);
@@ -312,11 +326,15 @@ function outcomeEntry(sql: SqlExecutor, since: number | undefined): ChangelogEnt
     .map((k) => [k, count(k)] as const)
     .filter(([, n]) => n > 0)
     .map(([k, n]) => `${n} ${k}`);
+  const provenance = TURN_OUTCOME_SOURCES
+    .map((s) => [s, rows.filter((r) => r.source === s).length] as const)
+    .filter(([, n]) => n > 0)
+    .map(([s, n]) => `${n} ${OUTCOME_BATCH_PHRASE[s]}`);
   return {
     id: `outcomes:${newest}:${rows.length}`,
     kind: 'outcomes',
     at: newest,
-    summary: `Graded ${rows.length} turn${rows.length === 1 ? '' : 's'} from real user follow-ups`,
+    summary: `Graded ${rows.length} turn${rows.length === 1 ? '' : 's'} · ${provenance.join(' · ')}`,
     evidence: parts.join(' · '),
   };
 }
