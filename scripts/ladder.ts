@@ -181,6 +181,36 @@ export const LADDER: readonly Gate[] = [
       + 'never parses.',
   },
   {
+    run: 'bun run gate:literature-citations',
+    tier: 'commit',
+    seconds: 1,
+    catches: 'a QUALIFIER lost crossing the one boundary nothing else checks — prose to a paper '
+      + 'nobody in this process can open. `lean-citations` closed TypeScript -> Lean and caught '
+      + 'three stale citations immediately; docs -> literature was the boundary still open, and a '
+      + 'seven-number audit of `docs/EXPLORATION-SPEC.md` found six of seven DIGITS correct and '
+      + 'four QUALIFIERS wrong, so a digit-comparing gate would have passed all seven. This one '
+      + 'refuses the qualifier instead: an external number with no register entry and therefore '
+      + 'no locator; a compute-dependent claim under a bare parity ADJECTIVE (`+12.5 at matched '
+      + 'compute`, over a subtraction spanning a no-search row the same paper prices at 20x the '
+      + 'LM calls); a hedge the source states and prose deletes (GEPA\'s `up to 11.33%`, which '
+      + 'overstated its own justification by ~55%); a confusable unit left unnamed (`+25.4` is '
+      + 'DISCRIMINATION accuracy, and read as task accuracy it argues the opposite); a locator '
+      + 'naming a table that does not hold the number; and a WITHDRAWN number re-asserted as '
+      + 'live. `scripts/literature.ts` is the one place an external number is written down, so '
+      + 'the set is enumerable (`--list-claims`) with provenance DEPTH — first-hand, second-hand '
+      + 'through an internal artifact, or read by nobody — which is what gives a '
+      + 're-verification pass a worklist instead of a re-read.',
+    blind: 'the digit itself, and whether a locator SUPPORTS its claim. It never opens a paper: '
+      + 'prose and register can agree and both be wrong, and an author-declared `withdrawn` is '
+      + 'trusted rather than verified. It governs a number only where a source is cited by '
+      + 'author-or-arXiv form or by one of its own registered figures, so a number beside a bare '
+      + 'product name is ungoverned — deliberately, since `GEPA` and `LATS` are modules here as '
+      + 'often as papers. It cannot see a compressed QUOTATION, which is the one defect in this '
+      + 'family that needed a human and the recorded source. It prints all of this on the GREEN '
+      + 'path, because a blind spot visible only in red output is invisible exactly when the '
+      + 'tree is clean.',
+  },
+  {
     run: 'bun run gate:install-scripts',
     tier: 'commit',
     seconds: 0.2,
@@ -239,16 +269,21 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts',
     tier: 'push',
-    seconds: 1.6,
+    seconds: 1.7,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
       + 'genuinely different body — and, for scratch-ownership, the three shapes that '
       + 'leaked 10,124 temp entries in one evening proven red against the historical '
       + 'source, plus the three it must NOT fire on: prose quoting the defect, a `/tmp/` '
       + 'path belonging to the SANDBOX rather than this box, and a program whose scratch '
-      + 'outlives the run on purpose.',
+      + 'outlives the run on purpose. For literature-citations, every red direction it '
+      + 'claims proven against the drifted text that was actually in this tree — a bare '
+      + 'parity adjective, a deleted `up to`, an unnamed confusable unit, a locator '
+      + 'naming the wrong table, a withdrawn number re-asserted — plus the six false '
+      + 'positives that shaped its corpus decision, each of which demanded a paper '
+      + 'locator for one of our own numbers.',
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts.',
   },
   {
