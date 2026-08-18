@@ -439,11 +439,20 @@ describe('the implementation, asserted where absences used to be pinned', () => 
       'PUBLICATION_SURFACES', 'PUBLISHING_CARRIES', 'admitsPublication',
       'carrySuppression', 'floorMargin', 'isBetter', 'normalisedScore',
     ]);
+    // GROWN BY THREE, deliberately: §8.2's arbiter landed. `arbitrateBranch` is the
+    // executable port of `Exploration/Arbitration.lean`'s `arbitrate`, and the two
+    // constants are the bounds its theorems quantify over — `BRANCH_PROPOSAL_WIDTH` is
+    // the 2-4 band `accepted_width_in_range` proves, `BRANCH_REFUSAL_POLICIES` the five
+    // reasons `every_refusal_is_reachable` proves none of is unreachable. Named here
+    // because that is what this pin is for: the decision is recorded rather than
+    // absorbed.
     expect(Object.keys(swarmModule).sort()).toEqual([
+      'BRANCH_PROPOSAL_WIDTH', 'BRANCH_REFUSAL_POLICIES',
       'JUDGE_MARGINALISATION_MIN', 'NAMED_SWARM_PRESETS', 'SWARM_ADVANCES', 'SWARM_CARRIES',
       'SWARM_DECORRELATES', 'SWARM_EXPANDS', 'SWARM_OBSERVES', 'SWARM_PRESETS',
       'SWARM_PRESET_POINTS', 'SWARM_SCORES', 'SWARM_TREE_ADVANCES', 'SWARM_UNITS',
-      'isPresetPoint', 'isTreeAdvance', 'resolveSwarm', 'settleOf', 'swarmValidity',
+      'arbitrateBranch', 'isPresetPoint', 'isTreeAdvance', 'resolveSwarm', 'settleOf',
+      'swarmValidity',
     ]);
   });
 

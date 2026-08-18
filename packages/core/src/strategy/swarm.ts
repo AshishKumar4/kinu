@@ -886,13 +886,153 @@ export interface BranchProposal {
    * whether its context is worth inheriting while the engine does not. Validated
    * against the search's `decorrelate` rather than overriding it (§8.4): a run
    * configured `blind` refuses `inherit: true` and says so, instead of quietly
-   * honouring one of two conflicting policies. The node may narrow, never widen.
+   * honouring one of two conflicting policies. The node may NARROW, never widen — the
+   * same asymmetry as an inner mission cap only ever being tighter than its outer one.
    *
    * `blind`, not `fresh`. This rule was written against `fresh` — a value renamed six
    * declarations up for being measured unusable ({@link SWARM_DECORRELATES}) — so it
    * cited the axis it belongs to by a name that axis no longer had.
    */
   readonly inherit: boolean;
+}
+
+/**
+ * §8.2's width band: a proposal names 2-4 narrower sub-questions.
+ *
+ * Enforced by the arbiter rather than by the type, so an out-of-range request
+ * produces a reason-coded refusal instead of being unrepresentable and therefore
+ * unexplainable — `Arbitration.lean:65-69` states exactly this choice, and it is
+ * the difference between a node that learns its width was wrong and one that
+ * silently gets something else.
+ *
+ * A band on the PROPOSAL and never on the search's own `branches`: width is a cap
+ * the caller sets (`ideate` runs 5), so applying this to an engine-driven
+ * expansion would refuse a legal preset.
+ */
+export const BRANCH_PROPOSAL_WIDTH = { min: 2, max: 4 } as const;
+
+/**
+ * The five reasons arbitration can refuse, as stable tokens.
+ *
+ * Exactly `Arbitration.lean`'s `Refusal` constructors, in that file's order, so
+ * the executable arbiter and the proven one can be read against each other. They
+ * are TOKENS as well as prose because the prose is for the node and the token is
+ * for the log: `every_refusal_is_reachable` proves none of the five is a reason
+ * the arbiter can never give, and a query over the event stream is how that stays
+ * true of the shipped engine.
+ */
+export const BRANCH_REFUSAL_POLICIES = [
+  'does-not-expand-at-node', 'width-out-of-range', 'depth-exhausted',
+  'budget-exhausted', 'decorrelate-conflict',
+] as const;
+export type BranchRefusalPolicy = (typeof BRANCH_REFUSAL_POLICIES)[number];
+
+/**
+ * What the arbiter decided, before the engine has created anything.
+ *
+ * Distinct from {@link BranchVerdict}, which is what the NODE is handed: a verdict
+ * carries the ids of children that now exist, and only the engine that recorded
+ * them can say what those are. Keeping the decision separate is what keeps this
+ * function total, pure and free of identity — it decides, it does not mint.
+ */
+export type BranchArbitration =
+  | { readonly kind: 'accepted'; readonly width: number }
+  | {
+    readonly kind: 'refused';
+    readonly policy: BranchRefusalPolicy;
+    readonly error: string;
+  };
+
+/** What a proposal is arbitrated against: the caps in force, the search's own
+ *  policies, and the state of the budget at the moment the request is answered. */
+export interface BranchArbitrationInput {
+  readonly config: SwarmConfig;
+  readonly caps: ResolvedSwarmCaps;
+  /**
+   * The depth of the proposing node, READ FROM THE ENGINE'S OWN ROW.
+   *
+   * Deliberately not a field of {@link BranchProposal}: a node never states its
+   * own depth, so the number it would have to lie about is one it never supplies
+   * (`subordinates/depth.ts`, and the same move as {@link SwarmScoreSetting}
+   * having no untagged parameters).
+   */
+  readonly atDepth: number;
+  /** Budget still available to the search, in units of one child. */
+  readonly remainingChildren: number;
+  readonly proposal: BranchProposal;
+}
+
+/**
+ * **The arbiter.** A total function of the caps, the search's own policies and the
+ * proposal — §8.2's single scheduler, which a proposal is an input to.
+ *
+ * A faithful port of `lean/Proteus/Exploration/Arbitration.lean`'s `arbitrate`,
+ * including its ORDER: the theorems there are projections of one acceptance
+ * region (`accepted_iff`), so a reordering here would leave the proven arbiter and
+ * the shipped one agreeing on which proposals pass while disagreeing on what the
+ * node is TOLD, which is the half §7.2 measured as load-bearing. The five arms
+ * discharge, in order, `archive_refuses_at_node`, `accepted_width_in_range`,
+ * `accepted_children_within_depth` (S3), `accepted_within_budget` (S8) and
+ * `accepted_respects_decorrelate` (§8.4).
+ *
+ * Every refusal names the POLICY and the STATE that made it refuse, because a node
+ * that cannot tell refusal from being ignored will simply propose again. Absent
+ * caps are refused rather than defaulted: a search whose depth nothing states
+ * cannot grant depth, and saying so is not the same as saying the budget ran out.
+ *
+ * NOTE ON THE LEAN SPELLING: `Arbitration.lean:105` names the fifth arm's trigger
+ * `Decorrelate.fresh`, which is this axis's former spelling; the value has been
+ * `'blind'` since `SWARM_DECORRELATES` was written, and §8.4 uses `'blind'` too.
+ * The token is stale in Lean only, not the contract.
+ */
+export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitration {
+  const { config, caps, atDepth, remainingChildren, proposal } = input;
+  const width = proposal.branches.length;
+  const refused = (policy: BranchRefusalPolicy, error: string): BranchArbitration =>
+    ({ kind: 'refused', policy, error });
+
+  if (!isTreeAdvance(config.advance)) {
+    return refused('does-not-expand-at-node',
+      `advance:"${config.advance}" does not expand at a node, so this branch cannot be granted here: `
+      + `${config.advance === 'none'
+        ? 'a flat run has no selection step, so there is no second level for a branch to land on'
+        : `an ${config.advance} run reports a store rather than descending a tree`}`
+      + `. The request is refused rather than dropped. A branch inside THIS search needs one of `
+      + `${SWARM_TREE_ADVANCES.join('/')}; a new search with its own budget and its own objective is `
+      + 'a nested `agents.swarm` call, which is a different thing and capped on a different counter.');
+  }
+  if (width < BRANCH_PROPOSAL_WIDTH.min || width > BRANCH_PROPOSAL_WIDTH.max) {
+    return refused('width-out-of-range',
+      `a branch proposal names ${String(BRANCH_PROPOSAL_WIDTH.min)}-${String(BRANCH_PROPOSAL_WIDTH.max)} `
+      + `narrower sub-questions and this one names ${String(width)}. Propose between `
+      + `${String(BRANCH_PROPOSAL_WIDTH.min)} and ${String(BRANCH_PROPOSAL_WIDTH.max)}.`);
+  }
+  if (!caps.depth) {
+    return refused('depth-exhausted',
+      'nothing states how deep this search may go — neither the call nor a preset row behind it — so '
+      + 'there is no cap a branch could be granted inside. This is an absent depth rather than an '
+      + 'exhausted one.');
+  }
+  if (caps.depth.value <= atDepth) {
+    return refused('depth-exhausted',
+      `depth exhausted at depth ${String(atDepth)}: this node sits at the cap of `
+      + `${String(caps.depth.value)}, so its children would be depth ${String(atDepth + 1)}. The cap is `
+      + 'the search\'s own `depth` and is not raisable from inside the search.');
+  }
+  if (remainingChildren < width) {
+    return refused('budget-exhausted',
+      `budget exhausted at depth ${String(atDepth)}: ${String(width)} children were asked for and `
+      + `${String(remainingChildren)} remain in this search's expansion budget. The budget is the `
+      + 'search\'s, shared by every node, and a proposal cannot mint children it cannot pay for.');
+  }
+  if (config.decorrelate === 'blind' && proposal.inherit) {
+    return refused('decorrelate-conflict',
+      'this search is configured decorrelate:"blind", which expands a child without sight of what its '
+      + 'siblings proposed, and `inherit: true` asks for the opposite. A node may narrow the search\'s '
+      + 'decorrelation and never widen it, so this is refused rather than one of two conflicting '
+      + 'policies being honoured quietly. Propose the same branches with `inherit: false`.');
+  }
+  return { kind: 'accepted', width };
 }
 
 /**
