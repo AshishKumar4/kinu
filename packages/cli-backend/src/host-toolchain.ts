@@ -16,17 +16,23 @@
  * memoised: the answer can change under a long session (`npm i -g`), and a stale
  * cached row is the failure this module exists to prevent.
  *
+ * The QUESTION lives in core (`execution/toolchain.ts`) and is shared with the
+ * user's tunnelled machine, which answers it about itself over the device
+ * tunnel. Only the lookup differs — `Bun.which` here, a PATH walk in the
+ * dependency-free daemon there — because only a host can look at its own PATH.
+ * A second table of which binaries prove `python` is the drift this repo keeps
+ * deleting.
+ *
  * Locked cli-only in scripts/capability-parity.lock.json rather than moved to a
  * shared package. It imports nothing core could not, so the parity gate reads it
  * as movable — but `Bun.which` is a platform global, absent on workerd, and the
  * gate says outright that a global reached with no import is its blind spot.
- * Nor is there anything for cf to under-wire: a Worker isolate has no host and
- * no PATH, and the cf `laptop` is the device tunnel, which cannot be probed from
- * that side at all until `DeviceStatus` can carry an answer back — the gap
- * recorded in docs/EXECUTION-LAYER-SPEC.md.
  */
 
-import type { ExecutorCapability } from '@proteus/core';
+import {
+  TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_UNPROBEABLE, toolchainCapabilities,
+  type ExecutorCapability,
+} from '@proteus/core';
 
 /** True by construction rather than by probe — properties of this executor's own
  *  wiring, which no PATH lookup could confirm or deny:
@@ -39,26 +45,6 @@ const STRUCTURAL: readonly ExecutorCapability[] = [
   'native_binary', 'shell', 'fs_shared', 'net_outbound', 'process_spawn',
 ] as const;
 
-/**
- * A capability and the PATH entries that would make it true. Any one suffices —
- * each named binary runs that language or tool by itself.
- *
- * `docker` is deliberately absent: a `docker` client on PATH evidences a client,
- * not a reachable daemon, and the capability reads "Docker". `gpu` likewise —
- * nothing on PATH establishes usable hardware.
- */
-const PROBED: readonly (readonly [ExecutorCapability, readonly string[]])[] = [
-  ['javascript', ['node', 'bun', 'deno']],
-  // `tsc` is not in this list on purpose: it type-checks, it does not run. These
-  // three execute a `.ts` file directly.
-  ['typescript', ['bun', 'deno', 'tsx']],
-  ['python', ['python3', 'python']],
-  // Reads "Installs npm packages", and all four install from the npm registry —
-  // the same set core's approval gate treats as the package managers.
-  ['npm', ['npm', 'bun', 'pnpm', 'yarn']],
-  ['git', ['git']],
-];
-
 /** Every capability the host running this CLI can be shown to have.
  *
  *  `PATH` is passed rather than left ambient: bare `Bun.which` resolves against
@@ -67,10 +53,13 @@ const PROBED: readonly (readonly [ExecutorCapability, readonly string[]])[] = [
  *  value is the honest one to ask against. */
 export function hostToolchainCapabilities(): readonly ExecutorCapability[] {
   const PATH = process.env.PATH ?? '';
-  return [
-    ...STRUCTURAL,
-    ...PROBED
-      .filter(([, binaries]) => binaries.some((binary) => Bun.which(binary, { PATH }) !== null))
-      .map(([capability]) => capability),
-  ];
+  const found = TOOLCHAIN_PROBE_BINARIES.filter((binary) => Bun.which(binary, { PATH }) !== null);
+  return [...STRUCTURAL, ...toolchainCapabilities(found)];
 }
+
+/** What this host cannot answer for either way — `docker` and `gpu`, for the
+ *  reasons core records against them. Declared rather than dropped: an omission
+ *  reads to the agent's execution block exactly like a measured absence, and
+ *  "no GPU here" is a claim nothing on PATH entitles this row to make. */
+export const HOST_UNMEASURED_CAPABILITIES: readonly ExecutorCapability[] =
+  TOOLCHAIN_UNPROBEABLE.map(([capability]) => capability);

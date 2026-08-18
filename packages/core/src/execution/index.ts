@@ -44,12 +44,19 @@ export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunne
 export { explainNativeToolReferenceError } from './sandbox-errors';
 export {
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
-  DEVICE_PRESENCE_CONFIG_KEY,
+  deviceToolchainAnswer, freshDeviceToolchain,
+  DEVICE_PRESENCE_CONFIG_KEY, DEVICE_TOOLCHAIN_TTL_MS,
   type DeviceStatus, type DevicePresence, type DevicePresenceStore,
+  type DeviceToolchain,
 } from './device-status';
+export {
+  TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_PROBED_CAPABILITIES,
+  TOOLCHAIN_UNPROBEABLE, toolchainCapabilities,
+} from './toolchain';
 export {
   DeviceTunnel, type TunnelSocket,
   TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
+  DEVICE_UNKNOWN_METHOD, isDeviceUnknownMethodError,
 } from './device-tunnel';
 
 // Reusable Nimbus adapter. Cloudflare composes the session as its authoritative

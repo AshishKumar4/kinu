@@ -1,5 +1,6 @@
 /**
- * DeviceSocketHub — hibernation-aware ownership of device-daemon WebSockets.
+ * DeviceSocketHub — hibernation-aware ownership of device-daemon WebSockets,
+ * and the toolchain answer that belongs to each one.
  *
  * The UserDO accepts each daemon socket as a HIBERNATABLE WebSocket tagged
  * `device:<deviceId>` so an idle hub can sleep between calls. That makes
@@ -8,13 +9,35 @@
  * surviving sockets whenever the DO instance wakes. This module owns that
  * policy (tagging, attachment marking, replace-on-reconnect, rebuild) in a
  * unit-testable home — the UserDO just wires tickets, SQL, and consent.
+ *
+ * It owns the toolchain probe for the same reason it owns liveness: the answer
+ * describes ONE machine over ONE connection, and the socket attachment is the
+ * only store with exactly that lifetime. Kept out of SQL deliberately — a
+ * `user_devices` column would outlive the machine it described, so a different
+ * laptop reconnecting under the same device row would inherit its predecessor's
+ * capabilities, and a stale answer would read as a fresh one.
  */
-import { DeviceTunnel, type JsonValue, type TunnelSocket } from '@proteus/core';
+import {
+  DeviceTunnel, EXECUTOR_CAPABILITIES, TOOLCHAIN_PROBE_BINARIES, isDeviceUnknownMethodError,
+  deviceToolchainAnswer, freshDeviceToolchain,
+  type DeviceToolchain, type JsonValue, type TunnelSocket,
+} from '@proteus/core';
+import { diagnostics, ProteusError, toProteusError } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 /** WebSocket.OPEN is 1 across every implementation. */
 const WS_OPEN = 1;
 const DEVICE_WS_TAG_PREFIX = 'device:';
+
+/**
+ * Deadline for the probe round-trip. Short on purpose: it runs on the path that
+ * assembles a turn's device status, so a machine that is connected but too busy
+ * to answer must cost that turn a moment, not its patience. Missing the deadline
+ * leaves the row unmeasured and the next turn asks again.
+ */
+const PROBE_TIMEOUT_MS = 3_000;
+
+const WhichResultSchema = v.object({ present: v.array(v.string()) });
 
 /** The socket surface the hub needs — satisfied by the platform WebSocket. */
 export interface DeviceSocket extends TunnelSocket {
@@ -23,7 +46,34 @@ export interface DeviceSocket extends TunnelSocket {
   deserializeAttachment(): JsonValue | undefined;
 }
 
-const DeviceAttachmentSchema = v.object({ device: v.string() });
+/**
+ * The toolchain answer as it rides the socket attachment. Narrowed to declared
+ * capability ids on the way back in: an attachment is JSON we wrote, but it
+ * survives a code deploy, so what a previous version wrote is untrusted input.
+ */
+const DeviceToolchainSchema = v.object({
+  present: v.array(v.picklist(EXECUTOR_CAPABILITIES)),
+  asked: v.array(v.picklist(EXECUTOR_CAPABILITIES)),
+  probedAt: v.number(),
+});
+
+/** The daemon was asked and has no `which` method — an install too old to
+ *  answer. Recorded so the hub stops asking a socket that cannot reply, and
+ *  kept distinct from an answer of "nothing found": this machine may well have
+ *  python, and nobody knows. */
+export const PROBE_UNANSWERABLE = 'unanswerable';
+
+const DeviceProbeSchema = v.union([DeviceToolchainSchema, v.literal(PROBE_UNANSWERABLE)]);
+
+/** What one connection has told us. `probe` absent means never asked. */
+const DeviceAttachmentSchema = v.object({
+  device: v.string(),
+  probe: v.optional(DeviceProbeSchema),
+});
+
+/** What one connection has told us, in the domain's own type — the schema above
+ *  only narrows what comes back OUT of an attachment. */
+type DeviceProbe = DeviceToolchain | typeof PROBE_UNANSWERABLE;
 
 /** The DurableObjectState subset the hub needs. */
 export interface DeviceSocketCtx {
@@ -68,6 +118,86 @@ export class DeviceSocketHub {
       if (ws.readyState === WS_OPEN) return ws;
     }
     return null;
+  }
+
+  /**
+   * The attached machine's toolchain answer, when there is a fresh one.
+   *
+   * Null covers three different situations and says so to nobody: never asked,
+   * asked and unable to answer, and answered too long ago to still be evidence.
+   * They are the same to a reader — "this machine has not told us" — and none of
+   * them is "this machine has no python", which is exactly the claim a two-state
+   * capability row would have made.
+   */
+  toolchain(deviceId: string, now: number): DeviceToolchain | null {
+    const probe = this.probeRecord(deviceId);
+    if (probe === null || probe === PROBE_UNANSWERABLE) return null;
+    return freshDeviceToolchain(probe, now);
+  }
+
+  /**
+   * Ask the machine which of the probe's binaries it has, and record the answer
+   * against its current socket. Answers whatever is now known, so a caller can
+   * use the result directly.
+   *
+   * Consent is deliberately not consulted, and this is the one call on the
+   * device plane where that is the right answer. `deviceRpc` gates every call
+   * that carries an agent name because the agent is acting on the owner's
+   * machine; this is the hub's own bookkeeping, like `checkpointStatus`, and the
+   * question is closed by construction — the daemon is handed a fixed list of
+   * bare binary names from core's table and answers which of THOSE exist. There
+   * is no path from it to enumerating the machine, reading a file, or running a
+   * command, so it grants no reach that the capability row does not need.
+   */
+  async probeToolchain(deviceId: string, now: number): Promise<DeviceToolchain | null> {
+    const existing = this.probeRecord(deviceId);
+    // An install with no `which` will not grow one while this socket is open.
+    if (existing === PROBE_UNANSWERABLE) return null;
+    const fresh = existing === null ? null : freshDeviceToolchain(existing, now);
+    if (fresh) return fresh;
+
+    const tunnel = this.tunnel(deviceId);
+    if (!tunnel) return null;
+    let present: readonly string[];
+    try {
+      const answered = await tunnel.rpc('which', [[...TOOLCHAIN_PROBE_BINARIES]], {
+        timeoutMs: PROBE_TIMEOUT_MS,
+      });
+      const parsed = v.safeParse(WhichResultSchema, answered);
+      if (!parsed.success) throw new ProteusError('io', 'device answered `which` with an unreadable payload');
+      present = parsed.output.present;
+    } catch (err) {
+      // A daemon too old to know the method says so in its error frame, and that
+      // is a durable property of this connection — record it and stop asking.
+      // Every other failure (a timeout, a dropped socket, a payload we could not
+      // read) is transient: leave the record untouched so the next turn re-asks.
+      const failure = toProteusError({ doing: 'probe the device toolchain', cause: err, otherwise: 'io' });
+      if (isDeviceUnknownMethodError(err)) this.recordProbe(deviceId, PROBE_UNANSWERABLE);
+      diagnostics.failure('device.toolchain_probe_failed', failure, { device: deviceId });
+      return null;
+    }
+    const answer = deviceToolchainAnswer(present, now);
+    this.recordProbe(deviceId, answer);
+    return answer;
+  }
+
+  private probeRecord(deviceId: string): DeviceProbe | null {
+    const ws = this.liveSocket(deviceId);
+    if (!ws) return null;
+    const attachment = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
+    return attachment.success ? attachment.output.probe ?? null : null;
+  }
+
+  private recordProbe(deviceId: string, probe: DeviceProbe): void {
+    const ws = this.liveSocket(deviceId);
+    if (!ws) return;
+    // Written out field by field rather than spread: this is a wire shape that
+    // outlives the code that wrote it, and `DeviceAttachmentSchema` above is the
+    // only thing that will ever read it back.
+    const stored: JsonValue = probe === PROBE_UNANSWERABLE
+      ? probe
+      : { present: [...probe.present], asked: [...probe.asked], probedAt: probe.probedAt };
+    ws.serializeAttachment({ device: deviceId, probe: stored });
   }
 
   isConnected(deviceId: string): boolean {

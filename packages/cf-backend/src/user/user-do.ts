@@ -107,7 +107,7 @@ import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
-  type DeviceConsentScope, type DeviceConsentDecision,
+  type DeviceConsentScope, type DeviceConsentDecision, type DeviceStatus,
 } from '@proteus/core';
 import {
   validateMcpServerInput, parseAllowedTools, mapConnectionStatus,
@@ -1168,6 +1168,35 @@ export class UserDO extends Agent<Env> {
         connected: this._devices.isConnected(r.id),
         createdAt: r.created_at, lastSeenAt: r.last_seen_at, expiresAt: r.expires_at,
       }));
+  }
+
+  /**
+   * The device plane as an agent runtime needs it: whether a machine is there,
+   * and what that machine can run. One call, because a laptop row that says
+   * "connected" and nothing about its toolchain is honest and useless — the
+   * declared set is what the model reads to decide where to send work.
+   *
+   * The toolchain half is asked of the machine on the first status read after it
+   * connects, and again once an answer ages out of evidence. Deliberately not
+   * asked from the WebSocket message handler where HELLO arrives: the reply is
+   * itself a frame on that socket, so awaiting it there would wait on the
+   * handler that has to deliver it. Here the caller is another Durable Object,
+   * exactly as it is for `deviceRpc`, and the round-trip is bounded.
+   *
+   * Separate from `listDevices`, which serves Account settings: that is the
+   * device REGISTRY (labels, timestamps, revocation) and must not pay for a
+   * device round-trip to render a settings page.
+   */
+  async deviceRuntimeStatus(caller: UserCaller): Promise<DeviceStatus> {
+    await this.requireTier(caller, 'device.rpc');
+    const deviceId = this._devices.connectedDeviceId();
+    if (deviceId) {
+      return { connected: true, registered: true, toolchain: await this._devices.probeToolchain(deviceId, Date.now()) };
+    }
+    const registered = this.sqlx<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM user_devices WHERE revoked_at IS NULL`,
+    )[0]?.n ?? 0;
+    return { connected: false, registered: registered > 0, toolchain: null };
   }
 
   /** Revoke a device: drop its live socket + mark the row revoked. */

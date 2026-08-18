@@ -120,8 +120,8 @@ describe('the surfaces the model reads', () => {
   test('the device tunnel reports failures the same way', async () => {
     const laptop = createDeviceTunnelExecutor({
       rpc: async () => PYTEST,
-      status: () => ({ connected: true, registered: true }),
-      refreshStatus: async () => ({ connected: true, registered: true }),
+      status: () => ({ connected: true, registered: true, toolchain: null }),
+      refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
     });
     const out = String(await laptop.tools.exec!.execute('pytest'));
     expect(out).toStartWith('Error (exit 1)');

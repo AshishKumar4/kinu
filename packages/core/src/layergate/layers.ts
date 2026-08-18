@@ -1388,10 +1388,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'execution-signal/presence-three-state',
         asserts: 'connected beats registered; unregistered is "none", never "offline"',
         observe: (s) => [
-          { connected: true, registered: true },
-          { connected: true, registered: false },
-          { connected: false, registered: true },
-          { connected: false, registered: false },
+          { connected: true, registered: true, toolchain: null },
+          { connected: true, registered: false, toolchain: null },
+          { connected: false, registered: true, toolchain: null },
+          { connected: false, registered: false, toolchain: null },
         ].map((status) => [status.connected, status.registered, s.devicePresence(status)]),
       },
       {

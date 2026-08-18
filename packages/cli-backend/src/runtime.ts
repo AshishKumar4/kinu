@@ -40,7 +40,7 @@ import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
 import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
-import { hostToolchainCapabilities } from './host-toolchain';
+import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createHostMountVFS } from './host-mount';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber';
 import { createBranchSpawner } from './branch-process';
@@ -688,6 +688,9 @@ function createLocalLaptopExecutor(
     // `git` and `npm` used to be claimed unconditionally, and the model reads
     // this set as a routing instruction (host-toolchain.ts says why).
     capabilities: new Set(hostToolchainCapabilities()),
+    // Declared, not dropped: nothing on PATH settles `docker` or `gpu`, and an
+    // omission reads to the model exactly like a measured absence.
+    unmeasuredCapabilities: new Set(HOST_UNMEASURED_CAPABILITIES),
     positionalArgs: true,
     isAvailable: () => true,
     connect: async () => {},

@@ -23,10 +23,17 @@ import type { UserCaller } from './user/workspace-capability';
  *  kicks a background re-check against the user hub. */
 const DEVICE_STATUS_TTL_MS = 5_000;
 
+/** No machine, and nothing known about one. The `toolchain: null` is not a
+ *  detail: it is what keeps "we have not asked" from reading as "it has no
+ *  python" once a device does attach. */
+const DISCONNECTED: DeviceStatus = { connected: false, registered: false, toolchain: null };
+
 /** The UserDO surface the device transport needs (a DO-to-DO RPC stub view).
  *  Both methods are attenuated at the hub, so both carry the caller identity. */
 export interface DeviceHubClient {
-  listDevices(caller: UserCaller): Promise<Array<{ connected: boolean }>>;
+  /** Presence AND what the attached machine can run — the hub asks the machine
+   *  itself, because a Worker isolate has no PATH to look at. */
+  deviceRuntimeStatus(caller: UserCaller): Promise<DeviceStatus>;
   deviceRpc(
     caller: UserCaller,
     method: string,
@@ -60,7 +67,7 @@ export interface HubDeviceTransportOpts {
 
 export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTransport {
   const now = opts.now ?? Date.now;
-  let snapshot: DeviceStatus = { connected: false, registered: false };
+  let snapshot: DeviceStatus = DISCONNECTED;
   let checkedAt = 0;
   let inFlight: Promise<DeviceStatus> | null = null;
 
@@ -68,14 +75,14 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
     if (inFlight) return inFlight;
     const hub = opts.hub();
     if (!hub) {
-      snapshot = { connected: false, registered: false };
+      snapshot = DISCONNECTED;
       checkedAt = now();
       return Promise.resolve(snapshot);
     }
     inFlight = opts.caller()
-      .then((caller) => hub.listDevices(caller))
-      .then((devices) => {
-        snapshot = { connected: devices.some((d) => d.connected), registered: devices.length > 0 };
+      .then((caller) => hub.deviceRuntimeStatus(caller))
+      .then((status) => {
+        snapshot = status;
         return snapshot;
       })
       .catch(() => snapshot) // transient hub error — keep the last snapshot
@@ -92,7 +99,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
     rpc: async (method, params, rpcOpts) => {
       const hub = opts.hub();
       if (!hub) {
-        snapshot = { connected: false, registered: false };
+        snapshot = DISCONNECTED;
         checkedAt = now();
         throw new Error(NO_DEVICE_CONNECTED);
       }
@@ -115,7 +122,11 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         const rawResult = await hub.deviceRpc(
           await opts.caller(), method, effectiveParams, deviceOptions,
         );
-        snapshot = { connected: true, registered: true };
+        // A call getting through re-proves presence and nothing else: the
+        // toolchain answer is the machine's, not this call's, so it is carried
+        // forward rather than dropped. Overwriting it here would blank the row
+        // the moment the agent used the device.
+        snapshot = { ...snapshot, connected: true, registered: true };
         checkedAt = now();
         return rawResult === undefined
           ? undefined

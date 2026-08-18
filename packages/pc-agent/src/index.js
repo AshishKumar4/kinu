@@ -477,6 +477,78 @@ function listListeningPorts() {
   return rows;
 }
 
+// ── PATH lookup (the toolchain probe's device half) ────────────────────
+//
+// `which` answers ONE closed question: which of the binary NAMES the caller
+// asked about resolve on this machine's PATH. The names come from core's single
+// toolchain table (packages/core/src/execution/toolchain.ts) and the hub sends
+// them with the question, so this daemon holds no capability policy of its own —
+// there is no second answer to "which binaries prove python" here to drift from
+// the one the CLI host uses. The hub turns the names back into the `laptop`
+// capability row, which is where the model decides to send work.
+//
+// Bare names only, and a bounded number of them. A name carrying a path
+// separator would make this a way to test arbitrary paths on the user's machine
+// for existence, and the capability row needs nothing of the sort.
+//
+// PATH is read per call, never cached: the agent can install a toolchain onto
+// this machine through `exec`, and a cached row that outlived its measurement is
+// the failure the probe exists to prevent.
+const BARE_BINARY_NAME = /^[A-Za-z0-9._+-]{1,64}$/;
+const WHICH_MAX_NAMES = 64;
+
+/**
+ * Whether any PATH entry provides an executable `name`.
+ *
+ * Must agree with `Bun.which` on the CLI host, which resolves the same names on
+ * the machine the CLI runs on — one row, two resolvers, and a disagreement is a
+ * capability the model routes work by. `cli-backend/tests/path-resolver-parity.test.ts`
+ * holds them to it.
+ *
+ * `isFile` is the load-bearing half: a DIRECTORY can carry a binary's name and
+ * carry the execute bit (they nearly all do), and `accessSync(X_OK)` alone said
+ * yes to it. A directory named `bun` on PATH claimed `javascript` and
+ * `typescript` for a machine that could run neither.
+ */
+function onPath(dirs, name) {
+  for (const dir of dirs) {
+    const candidate = path.join(dir, name);
+    try {
+      // stat, not lstat: a symlink to a real executable IS the normal shape of
+      // a binary on PATH, and resolving it is what `which` does.
+      if (!fs.statSync(candidate).isFile()) continue;
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return true;
+    } catch (err) {
+      // Absent, not executable by this user, an entry that is not a directory
+      // at all, or a symlink that goes nowhere: each means this entry does not
+      // provide the binary. Anything else is a real fault and must not pass as
+      // a clean "absent".
+      if (!['ENOENT', 'EACCES', 'ENOTDIR', 'ELOOP', 'ENAMETOOLONG'].includes(err.code)) throw err;
+    }
+  }
+  return false;
+}
+
+/** The names this daemon will answer about, parsed out of the frame: bare
+ *  binary names, and nothing else. */
+function probeNames(raw) {
+  if (!Array.isArray(raw)) throw new Error('which expects an array of binary names');
+  const names = [];
+  for (const value of raw.slice(0, WHICH_MAX_NAMES)) {
+    const name = String(value);
+    // `name === value` rejects anything that merely stringifies into a name — a
+    // number, a boxed object — because only a name is a name.
+    if (name === value && BARE_BINARY_NAME.test(name)) names.push(name);
+  }
+  return names;
+}
+
+function whichAll(names) {
+  const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  return probeNames(names).filter((name) => onPath(dirs, name));
+}
+
 // ── RPC dispatch ───────────────────────────────────────────────────────
 
 function handle(msg, ws, ctx) {
@@ -539,6 +611,8 @@ function handle(msg, ws, ctx) {
       rpc(ws, id, fs.existsSync(params[0]));
     } else if (method === 'listPorts') {
       rpc(ws, id, listListeningPorts());
+    } else if (method === 'which') {
+      rpc(ws, id, { present: whichAll(params[0]) });
     } else if (method === 'checkpointStatus') {
       rpc(ws, id, checkpoints ? checkpoints.status() : { available: false, reason: 'checkpoints are not configured' });
     } else if (method === 'checkpointList') {

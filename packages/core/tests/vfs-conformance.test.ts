@@ -189,8 +189,8 @@ function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
       }
       return null;
     },
-    status: () => ({ connected: true, registered: true }),
-    refreshStatus: async () => ({ connected: true, registered: true }),
+    status: () => ({ connected: true, registered: true, toolchain: null }),
+    refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
   };
   return transport;
 }

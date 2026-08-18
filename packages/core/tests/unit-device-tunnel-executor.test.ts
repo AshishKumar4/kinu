@@ -13,7 +13,7 @@ function transport(resultFor: (method: string, params: JsonValue[]) => JsonValue
   const calls: Array<{ method: string; params: JsonValue[] }> = [];
   return {
     calls,
-    ...staticTransport({ connected: true, registered: true }, async (method, params) => {
+    ...staticTransport({ connected: true, registered: true, toolchain: null }, async (method, params) => {
       calls.push({ method, params });
       return resultFor(method, params);
     }),
@@ -69,7 +69,7 @@ describe('createDeviceTunnelExecutor', () => {
     // Regression: agents whose runtime predated the device connection gated
     // every call on the cached flag, so false could never flip back to true.
     const t = transport(() => ({ stdout: 'hi', stderr: '', exitCode: 0 }));
-    t.status = () => ({ connected: false, registered: true });
+    t.status = () => ({ connected: false, registered: true, toolchain: null });
     const provider = createDeviceTunnelExecutor(t);
 
     expect(await provider.tools.exec.execute('echo hi')).toBe('hi');
@@ -80,9 +80,9 @@ describe('createDeviceTunnelExecutor', () => {
 
   test('getStatus maps the hub snapshot to the three lifecycle states', () => {
     const rpc: DeviceTransport['rpc'] = async () => 'unused';
-    const connected = createDeviceTunnelExecutor(staticTransport({ connected: true, registered: true }, rpc));
-    const offline = createDeviceTunnelExecutor(staticTransport({ connected: false, registered: true }, rpc));
-    const none = createDeviceTunnelExecutor(staticTransport({ connected: false, registered: false }, rpc));
+    const connected = createDeviceTunnelExecutor(staticTransport({ connected: true, registered: true, toolchain: null }, rpc));
+    const offline = createDeviceTunnelExecutor(staticTransport({ connected: false, registered: true, toolchain: null }, rpc));
+    const none = createDeviceTunnelExecutor(staticTransport({ connected: false, registered: false, toolchain: null }, rpc));
 
     expect(connected.getStatus?.()).toMatchObject({ available: true, configured: true, status: 'active' });
     expect(offline.getStatus?.()).toMatchObject({ available: false, configured: true, status: 'disconnected' });
@@ -91,10 +91,10 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   test('hub/tunnel disconnect errors surface the connect guidance', async () => {
-    const hubRejects = staticTransport({ connected: false, registered: true }, async () => {
+    const hubRejects = staticTransport({ connected: false, registered: true, toolchain: null }, async () => {
       throw new Error('no device connected');
     });
-    const tunnelDropped = staticTransport({ connected: true, registered: true }, async () => {
+    const tunnelDropped = staticTransport({ connected: true, registered: true, toolchain: null }, async () => {
       throw new Error('device tunnel not connected');
     });
 
@@ -113,7 +113,7 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   test('a non-connection failure is classified, and keeps its own message', async () => {
-    const t = staticTransport({ connected: true, registered: true }, async () => {
+    const t = staticTransport({ connected: true, registered: true, toolchain: null }, async () => {
       throw new Error('permission denied');
     });
     // `io`, not `unavailable`: the device answered and its filesystem said no.
@@ -125,7 +125,7 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   test('a read that could not reach the device never answers `false`', async () => {
-    const t = staticTransport({ connected: true, registered: true }, async () => {
+    const t = staticTransport({ connected: true, registered: true, toolchain: null }, async () => {
       throw new Error('permission denied');
     });
     const answer = await createDeviceTunnelExecutor(t).tools.exists.execute('/tmp/a');

@@ -14,23 +14,32 @@ import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sand
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import type { ExecutorProvider } from '../src/execution/types';
-import { renderDynamicContextBlock, buildSystemPromptSync } from '../src/index';
+import {
+  renderDynamicContextBlock, buildSystemPromptSync,
+  deviceToolchainAnswer, DEVICE_TOOLCHAIN_TTL_MS,
+} from '../src/index';
 import { createTestRuntime } from '@proteus/test-utils';
 
-/** The `— runs: …` line for one real provider, through the real projection
- *  (`DefaultExecutionRouter.listExecutors`) and the real renderer. */
-function runsLine(provider: ExecutorProvider): string {
+/** The rows the real projection (`DefaultExecutionRouter.listExecutors`) hands
+ *  the prompt for one real provider. */
+function routerRows(provider: ExecutorProvider) {
   const router = new DefaultExecutionRouter();
   router.register(provider);
-  const block = renderDynamicContextBlock({ executors: router.listExecutors() });
+  return router.listExecutors();
+}
+
+/** The `— runs: …` line for one real provider, through that projection and the
+ *  real renderer. */
+function runsLine(provider: ExecutorProvider): string {
+  const block = renderDynamicContextBlock({ executors: routerRows(provider) });
   const line = block?.split('\n').find((row) => row.startsWith(`- ${provider.name}:`));
   if (line === undefined) throw new Error(`no rendered row for ${provider.name}`);
   return line;
 }
 
 const connectedDevice: DeviceTransport = {
-  status: () => ({ connected: true, registered: true }),
-  refreshStatus: async () => ({ connected: true, registered: true }),
+  status: () => ({ connected: true, registered: true, toolchain: null }),
+  refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
   rpc: async () => undefined,
 };
 
@@ -75,18 +84,66 @@ describe('sandbox capability row', () => {
   });
 });
 
+/** A machine that answered the toolchain question `secondsAgo` ago, having
+ *  resolved exactly `binaries` on its own PATH. */
+function probedDevice(binaries: readonly string[], secondsAgo = 0): DeviceTransport {
+  const status = {
+    connected: true,
+    registered: true,
+    toolchain: deviceToolchainAnswer(binaries, Date.now() - secondsAgo * 1_000),
+  };
+  return { status: () => status, refreshStatus: async () => status, rpc: async () => undefined };
+}
+
 describe('tunneled laptop capability row', () => {
-  test('claims nothing about a machine this repo never asked', () => {
+  test('an unprobed machine claims nothing, and denies nothing either', () => {
     const line = runsLine(createDeviceTunnelExecutor(connectedDevice));
 
     // The device is the user's own hardware behind a consent grant they made.
-    // Nothing on this path probes its toolchain, so none of these may be
-    // declared — an over-claim sends work there and it fails on their machine.
+    // Nothing has asked it what it holds, so none of these may be CLAIMED — an
+    // over-claim sends work there and it fails on their machine.
+    const [runs, notMeasured] = line.split(' — not measured here: ');
     for (const unprobed of ['javascript', 'typescript', 'python', 'npm', 'git', 'docker', 'gpu']) {
-      expect(line).not.toContain(unprobed);
+      expect(runs).not.toContain(unprobed);
     }
-    // What the tunnel's own existence and this provider's tools do establish.
-    expect(line).toBe('- laptop: connected — runs: native_binary, shell, fs_owned, net_outbound, process_spawn');
+    // And none may be reported ABSENT either. The row that replaced this one
+    // simply omitted them, which reads to the model exactly like a denial: it
+    // would never try python on a machine that may well have python.
+    expect(runs).toBe('- laptop: connected — runs: native_binary, shell, fs_owned, net_outbound, process_spawn');
+    expect(notMeasured).toBe('javascript, typescript, python, npm, git, docker, gpu');
+  });
+
+  test('a probed machine offers the languages it actually has, and only those', () => {
+    // `node` runs .js but not .ts, and is not a package manager. So one answer
+    // produces all three states at once: javascript is evidenced, typescript /
+    // npm / git were looked for and not found, and docker / gpu were not looked
+    // for because nothing on a PATH could settle them.
+    const line = runsLine(createDeviceTunnelExecutor(probedDevice(['node', 'python3'])));
+
+    expect(line).toBe(
+      '- laptop: connected — runs: javascript, python, native_binary, shell, fs_owned, net_outbound, process_spawn'
+      + ' — not measured here: docker, gpu',
+    );
+  });
+
+  test('a stale answer cannot masquerade as a fresh one', () => {
+    // The agent can install a toolchain onto that machine through `laptop.exec`,
+    // so an answer is evidence for a bounded time. Past it the row goes back to
+    // knowing nothing — it does not keep claiming, and it does not start denying.
+    const stale = runsLine(createDeviceTunnelExecutor(
+      probedDevice(['node', 'python3'], DEVICE_TOOLCHAIN_TTL_MS / 1_000 + 1),
+    ));
+
+    expect(stale).not.toContain('runs: javascript');
+    expect(stale).toContain('not measured here: javascript, typescript, python, npm, git, docker, gpu');
+  });
+
+  test('the block tells the model that "not measured" is ignorance, not a denial', () => {
+    const block = renderDynamicContextBlock({
+      executors: routerRows(createDeviceTunnelExecutor(connectedDevice)),
+    });
+
+    expect(block).toContain('it may well work, so try it rather than ruling it out');
   });
 
   test('declares no capability its own tool surface cannot exercise', () => {

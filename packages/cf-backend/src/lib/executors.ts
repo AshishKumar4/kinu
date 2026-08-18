@@ -5,13 +5,16 @@
  * here so the vocabulary never drifts across tabs.
  */
 
-import type { ExecutorCapability } from "@proteus/core";
+import { EXECUTOR_CAPABILITIES, type ExecutorCapability } from "@proteus/core";
 
 /** Live executor row as reported by the orchestrator's getExecutors RPC. */
 export interface ExecutorInfo {
   name: string;
   kind: string;
   capabilities: string[];
+  /** Capabilities the environment could not answer for either way. Rendered
+   *  apart from real absences: "Not here" is a measurement, and this is not. */
+  unmeasuredCapabilities?: string[];
   available: boolean;
   configured?: boolean;
   active?: boolean;
@@ -153,4 +156,69 @@ export function pickDefaultExecutor(executors: ExecutorAvailability[], lastActiv
     if (isActive(name)) return name;
   }
   return "workspace";
+}
+
+/** The two capabilities that say WHICH filesystem an environment has rather
+ *  than whether it can do something. Never rendered as an absence: every
+ *  environment has a filesystem, so "its own private files — Your PC" against
+ *  the workspace reads as a deficiency when sharing the agent's files is the
+ *  whole point of the workspace. */
+const FILESYSTEM_TOPOLOGY = {
+  fs_owned: true,
+  fs_shared: true,
+} satisfies Partial<Record<ExecutorCapability, true>>;
+
+function isFilesystemTopology(capability: ExecutorCapability): boolean {
+  return Object.hasOwn(FILESYSTEM_TOPOLOGY, capability);
+}
+
+/** One absence, and the reachable environments that cover it. */
+export interface CapabilityAbsence {
+  capability: ExecutorCapability;
+  where: string[];
+}
+
+/** One environment's capability row, in the three readings a user gets. */
+export interface CapabilityRow {
+  /** Declared present. */
+  has: ExecutorCapability[];
+  /** Measured absent here, and available somewhere reachable. */
+  missing: CapabilityAbsence[];
+  /** Not answerable either way by this environment. */
+  unknown: ExecutorCapability[];
+}
+
+/**
+ * How one environment's capability row reads: what it has, what it lacks and
+ * can point elsewhere for, and what it could not answer for at all.
+ *
+ * Three buckets rather than two, and the third is the whole point. A capability
+ * missing from `capabilities` is either measured absent or never measured, and
+ * only the first is an absence — rendering the second under "Not here" told the
+ * user their own laptop does not run Python when nothing had ever asked it.
+ * Disjoint by construction, so no capability can be claimed and denied at once.
+ */
+export function partitionCapabilities(
+  selected: ExecutorInfo,
+  all: readonly ExecutorInfo[],
+): CapabilityRow {
+  const here = new Set(selected.capabilities);
+  const unmeasured = new Set(selected.unmeasuredCapabilities ?? []);
+  const reachable = all.filter((exec) => exec.available && exec.name !== selected.name);
+  return {
+    has: EXECUTOR_CAPABILITIES.filter((capability) => here.has(capability)),
+    unknown: EXECUTOR_CAPABILITIES.filter((capability) => unmeasured.has(capability)),
+    // Only absences somewhere reachable can cover: an absence you cannot act on
+    // is not information, and listing all sixteen would bury the ones you can.
+    missing: EXECUTOR_CAPABILITIES
+      .filter((capability) => !(
+        here.has(capability) || unmeasured.has(capability) || isFilesystemTopology(capability)))
+      .map((capability) => ({
+        capability,
+        where: reachable
+          .filter((exec) => exec.capabilities.includes(capability))
+          .map((exec) => executorLabel(exec.name)),
+      }))
+      .filter((row) => row.where.length > 0),
+  };
 }

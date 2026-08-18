@@ -95,20 +95,40 @@ through the owner's UserDO device hub, scoped to the consented root unless the
 owner granted full-filesystem access. A disconnected or unapproved device does
 not become available through fallback routing.
 
-Its capability row is therefore the narrowest of the four, and deliberately: the
-device is the user's own machine and nothing on this path asks it what it holds,
-so only `shell`, `native_binary`, `fs_owned`, `net_outbound` and `process_spawn`
-— what the tunnel's existence and the `laptop` tools themselves establish — are
-declared. **This is a gap, not a finished state.** The row is true but says
-almost nothing, and the language capabilities are the ones the model reads when
-it decides where to send work, so an unprobed device is a device the agent will
-not use for code. The fix is a toolchain probe at connect time: the daemon
-holding the tunnel open IS the CLI, so it can answer the same question
-`cli-backend/src/host-toolchain.ts` already answers for the local host, and
-`DeviceStatus` (`execution/device-status.ts`) needs a field to carry the answer.
-`gpu` is the entry that costs the most to leave out — a user may have attached
-the tunnel specifically for it — and it is the clearest reason to build the
-probe rather than to widen the row on a guess.
+Its capability row has two halves, and the split is the point. What the tunnel's
+existence and the `laptop` tools themselves establish — `shell`,
+`native_binary`, `fs_owned`, `net_outbound`, `process_spawn` — is declared
+structurally. Everything else is ASKED of the machine: the hub sends the daemon
+the binary names in `execution/toolchain.ts` (the single table, shared with
+`cli-backend/src/host-toolchain.ts`, which answers the same question about the
+CLI's own host with `Bun.which`) and the daemon answers which of those it has on
+its PATH. `DeviceStatus.toolchain` carries the answer, recorded on the device
+socket's own attachment so it lives exactly as long as the connection that
+produced it.
+
+One table, two resolvers — `Bun.which` on a CLI host, the daemon's own PATH walk
+on a tunnelled one, because only a host can look at its own PATH and the daemon
+is dependency-free Node. The table stops the policy drifting; the two resolvers
+must also return the same answer for the same PATH, and
+`cli-backend/tests/path-resolver-parity.test.ts` holds them to it. They had
+already diverged: an executable DIRECTORY named `bun` satisfied the daemon's
+access check, so a machine with no interpreter at all declared `javascript` and
+`typescript`.
+
+Three states, because two cannot say the thing that matters. A capability the
+answer names is evidenced; one the answer's declared scope covers and does not
+name was looked for and not found; one outside that scope was never measured —
+and an install too old to answer the probe at all is not a machine without
+python. Only the first is claimed, and only the third is reported as unknown, so
+the model reads `— not measured here: …` and knows to try rather than to rule
+out. `gpu` and `docker` are permanently in that third state: nothing on a PATH
+establishes usable hardware, and a `docker` client is not a reachable daemon.
+Leaving them off the row entirely was the costliest omission — a user may have
+attached the tunnel specifically for its GPU.
+
+An answer stops being evidence after `DEVICE_TOOLCHAIN_TTL_MS`, because the
+agent can install a toolchain onto that machine through `laptop.exec`. Expiry
+returns the row to never-measured; it never turns into an absence.
 
 The parent provider is available only to actor facets that need an explicit RPC
 view of another workspace authority. It is not a duplicate registration of the

@@ -7,7 +7,10 @@ import { describe, expect, test } from 'bun:test';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { JsonValue } from '@proteus/core';
+import {
+  DEVICE_TOOLCHAIN_TTL_MS, DEVICE_UNKNOWN_METHOD, TOOLCHAIN_PROBE_BINARIES,
+  type JsonValue,
+} from '@proteus/core';
 import * as v from 'valibot';
 import {
   DeviceSocketHub,
@@ -154,6 +157,129 @@ describe('DeviceSocketHub', () => {
   });
 });
 
+/**
+ * The toolchain probe. The hub owns it because the answer describes ONE machine
+ * over ONE connection, and that is exactly the socket attachment's lifetime.
+ */
+describe('DeviceSocketHub toolchain probe', () => {
+  const NOW = 1_700_000_000_000;
+
+  /** Answer the frame the hub just sent, as a daemon would. */
+  function answerLast(hub: DeviceSocketHub, ws: FakeSocket, reply: Record<string, JsonValue>) {
+    const raw = ws.sent[ws.sent.length - 1];
+    const frame = v.parse(
+      v.object({ id: v.string(), method: v.string(), params: v.array(v.unknown()) }),
+      JSON.parse(raw ?? 'null'),
+    );
+    hub.handleMessage('dev-a', JSON.stringify({ id: frame.id, ...reply }));
+    return frame;
+  }
+
+  function connected() {
+    const ctx = fakeCtx();
+    const hub = new DeviceSocketHub(ctx);
+    const ws = fakeSocket();
+    hub.accept('dev-a', ws);
+    return { ctx, hub, ws };
+  }
+
+  test('asks the machine the shared question and turns its answer into evidence', async () => {
+    const { hub, ws } = connected();
+
+    const probing = hub.probeToolchain('dev-a', NOW);
+    // The names come from core's single table rather than a list the hub keeps:
+    // one answer to "which binaries prove python", shared with the CLI host row.
+    const frame = answerLast(hub, ws, { result: { present: ['node', 'python3'] } });
+    expect(frame.method).toBe('which');
+    expect(frame.params[0]).toEqual([...TOOLCHAIN_PROBE_BINARIES]);
+
+    expect(await probing).toEqual({
+      present: ['javascript', 'python'],
+      asked: ['javascript', 'typescript', 'python', 'npm', 'git'],
+      probedAt: NOW,
+    });
+    // `typescript`, `npm` and `git` were looked for and not found — measured
+    // absent, which the row may act on. Nothing was measured about docker or gpu.
+    expect(hub.toolchain('dev-a', NOW)?.present).toEqual(['javascript', 'python']);
+
+    // Asked once: a second read serves the recorded answer, no second frame.
+    expect(await hub.probeToolchain('dev-a', NOW)).not.toBeNull();
+    expect(ws.sent).toHaveLength(1);
+  });
+
+  test('a daemon too old to answer is recorded as unable, never as a machine with nothing', async () => {
+    const { hub, ws } = connected();
+
+    const probing = hub.probeToolchain('dev-a', NOW);
+    answerLast(hub, ws, { error: 'unknown method: which' });
+
+    // The failure mode this exists to prevent: an empty answer would strip
+    // python from a machine that may well have it.
+    expect(await probing).toBeNull();
+    expect(hub.toolchain('dev-a', NOW)).toBeNull();
+
+    // And it stops asking — the install will not grow the method mid-connection.
+    expect(await hub.probeToolchain('dev-a', NOW + 1)).toBeNull();
+    expect(ws.sent).toHaveLength(1);
+  });
+
+  test("the daemon's unknown-method reply is still the words core matches on", () => {
+    // The daemon ships as one dependency-free file and cannot import the
+    // constant, so the coupling is pinned here rather than left to drift.
+    const daemon = readFileSync(join(import.meta.dir, '..', '..', 'pc-agent', 'src', 'index.js'), 'utf8');
+    expect(daemon).toContain(`'${DEVICE_UNKNOWN_METHOD}: ' + method`);
+  });
+
+  test('a transient failure leaves the question open for the next turn', async () => {
+    const { hub, ws } = connected();
+
+    const probing = hub.probeToolchain('dev-a', NOW);
+    answerLast(hub, ws, { error: 'EIO reading /usr/bin' });
+    expect(await probing).toBeNull();
+
+    // Nothing durable was learned, so the next read asks again.
+    void hub.probeToolchain('dev-a', NOW + 1);
+    expect(ws.sent).toHaveLength(2);
+  });
+
+  test('an answer past its window is re-asked, not reused', async () => {
+    const { hub, ws } = connected();
+
+    const probing = hub.probeToolchain('dev-a', NOW);
+    answerLast(hub, ws, { result: { present: ['node'] } });
+    await probing;
+
+    // The agent can install a toolchain onto that machine through `exec`, so an
+    // answer is evidence for a bounded time and then stops being one.
+    const later = NOW + DEVICE_TOOLCHAIN_TTL_MS;
+    expect(hub.toolchain('dev-a', later)).toBeNull();
+    void hub.probeToolchain('dev-a', later);
+    expect(ws.sent).toHaveLength(2);
+  });
+
+  test('an answer never outlives the machine that gave it', async () => {
+    const { hub, ws } = connected();
+
+    const probing = hub.probeToolchain('dev-a', NOW);
+    answerLast(hub, ws, { result: { present: ['node'] } });
+    await probing;
+    expect(hub.toolchain('dev-a', NOW)).not.toBeNull();
+
+    // A DIFFERENT laptop can reconnect under the same device row. Recording the
+    // answer on the socket rather than in SQL is what keeps it from inheriting
+    // its predecessor's capabilities.
+    hub.accept('dev-a', fakeSocket());
+    expect(hub.toolchain('dev-a', NOW)).toBeNull();
+  });
+
+  test('an offline device is not asked at all', async () => {
+    const ctx = fakeCtx();
+    const hub = new DeviceSocketHub(ctx);
+    expect(await hub.probeToolchain('dev-a', NOW)).toBeNull();
+    expect(hub.toolchain('dev-a', NOW)).toBeNull();
+  });
+});
+
 describe('/pc/connect upgrade wiring', () => {
   const read = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
 
@@ -230,6 +356,21 @@ describe('device tokens expire on idleness', () => {
     ageDevice(harness, deviceId, 12345);
     expect(await harness.userDO.listDevices(await testOwner()))
       .toMatchObject([{ id: deviceId, expiresAt: 12345 }]);
+    harness.close();
+  });
+
+  test('the runtime status separates "no device" from "registered but away", with nothing claimed', async () => {
+    const harness = createTestUserDO();
+    // Nothing registered: the agent's laptop row is not configured at all.
+    expect(await harness.userDO.deviceRuntimeStatus(await testOwner()))
+      .toEqual({ connected: false, registered: false, toolchain: null });
+
+    await harness.userDO.registerDevice(await testOwner(), 'laptop');
+    // Registered and offline. `toolchain: null` is the honest answer for a
+    // machine that is not there to be asked — never an empty capability set,
+    // which would tell the model the user's laptop runs nothing.
+    expect(await harness.userDO.deviceRuntimeStatus(await testOwner()))
+      .toEqual({ connected: false, registered: true, toolchain: null });
     harness.close();
   });
 });

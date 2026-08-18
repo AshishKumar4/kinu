@@ -287,6 +287,26 @@ function executorCapabilitySuffix(exec: PromptExecutorInfo): string {
   return ordered.length > 0 ? ` — runs: ${ordered.join(', ')}` : '';
 }
 
+/** The row's marker and the legend's subject are the same words by
+ *  construction — a legend that stops naming what it explains explains
+ *  nothing. */
+const NOT_MEASURED_LABEL = 'not measured here';
+
+/**
+ * What the environment could not answer for, as a second status suffix.
+ *
+ * An unknown dropped from the declared set reads to the model exactly like one
+ * measured absent, and the two must not look alike: the user's tunnelled machine
+ * may have been attached FOR its GPU, which nothing on its PATH can establish,
+ * and an unprobed machine has said nothing about python rather than denying it.
+ * Rendered in the canonical union order for the same reason the declared set is.
+ */
+function executorUnmeasuredSuffix(exec: PromptExecutorInfo): string {
+  const unmeasured = new Set(exec.unmeasuredCapabilities ?? []);
+  const ordered = EXECUTOR_CAPABILITIES.filter((capability) => unmeasured.has(capability));
+  return ordered.length > 0 ? ` — ${NOT_MEASURED_LABEL}: ${ordered.join(', ')}` : '';
+}
+
 /** Bytes as the unit a memory cap is usually written in. One decimal at most,
  *  and never a rounded-UP figure: a cap must not read as more than it is. */
 function formatBytes(bytes: number): string {
@@ -376,11 +396,21 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
 
   const executors = (ctx.executors ?? []).filter(executorIsSelectable);
   if (executors.length > 0) {
+    const rows = executors.map((exec) =>
+      `- ${exec.name}: ${executorAvailabilityLabel(exec)}${executorLimitsSuffix(exec)}`
+      + `${executorCapabilitySuffix(exec)}${executorUnmeasuredSuffix(exec)}`);
+    // The legend rides along only when a row actually carries an unknown, so
+    // the common case pays nothing for it — and where it does appear, the model
+    // needs telling that this is ignorance rather than a denial.
+    const legend = rows.some((row) => row.includes(NOT_MEASURED_LABEL))
+      ? [`("${NOT_MEASURED_LABEL}" is what nobody asked that environment — it may well work, `
+        + 'so try it rather than ruling it out.)']
+      : [];
     sections.push([
       '## Execution status',
       'Live availability for the runtimes described in the system prompt, and what each one declares it can run:',
-      ...executors.map((exec) =>
-        `- ${exec.name}: ${executorAvailabilityLabel(exec)}${executorLimitsSuffix(exec)}${executorCapabilitySuffix(exec)}`),
+      ...rows,
+      ...legend,
     ].join('\n'));
   }
 

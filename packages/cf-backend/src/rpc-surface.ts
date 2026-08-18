@@ -208,6 +208,7 @@ const USER_DO_METHODS = [
   'decideReleaseApproval',
   'deleteCredential',
   'deviceRpc',
+  'deviceRuntimeStatus',
   'disconnectCodex',
   'ensureProfile',
   'ensureWorkspaceCapability',

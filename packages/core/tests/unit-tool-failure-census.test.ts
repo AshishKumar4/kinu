@@ -660,8 +660,8 @@ describe('each executor tool files its own failure in the right part', () => {
   test('laptop: no device attached is a platform gap, and it used to be invisible', async () => {
     const payload = await escalate(createDeviceTunnelExecutor({
       rpc: async () => { throw new Error('no device connected'); },
-      status: () => ({ connected: false, registered: true }),
-      refreshStatus: async () => ({ connected: false, registered: true }),
+      status: () => ({ connected: false, registered: true, toolchain: null }),
+      refreshStatus: async () => ({ connected: false, registered: true, toolchain: null }),
     }));
     // The regression this locks: the old prose was read as a SUCCESSFUL call, so
     // the census counted nothing at all here.
