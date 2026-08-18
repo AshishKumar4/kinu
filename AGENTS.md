@@ -30,6 +30,24 @@ bash scripts/setup-worktree.sh           # prepare a git worktree (see below)
 `bun run check` runs the strict lint gate before TypeScript. All anti-slop rules are
 errors, warnings fail the gate, and unused disable directives are errors.
 
+**A gate is only worth the set it actually measures, and four here have been green while
+blind.** `gate-set-equality`'s import resolver returned nothing for an extensionless specifier,
+silently shrinking the governed set; `layergate` carried the same bug; `capability-parity` carried
+a dead `.jsx?` strip; and `sources.ts` applied `.gitignore` on top of `git ls-files`, so a file
+that was tracked AND ignored was invisible to every gate built on it — including the secret
+scanner, which passed over two live credentials. None of those failed. They passed, over less than
+they claimed. So when adding or trusting a gate: state the set it MEASURES and the set it claims
+to GOVERN and check they are equal; read the corpus through `scripts/sources.ts`, never a
+hand-maintained list beside it; prove it RED in every direction it claims before trusting it
+green; and print its own blind spots on the SUCCESS path, because a limitation visible only in
+red output is invisible exactly when the tree is green.
+
+**A verification claim must match what was exercised.** Beyond the `node_modules` trap below: a
+suite run in a shared checkout proves nothing about your branch (green may be someone else's
+in-flight work, red usually is), a number recalled is not a number measured — a platform limit was
+once asserted here against a value that had not existed for ten months — and a subagent's summary
+is a claim to check, not evidence. Say which tree, which command, and which revision.
+
 The anti-slop plugin is **vendored**, not a dependency: upstream
 [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) is `private: true` and publishes no
 npm package. `tools/oxlint/anti-slop/upstream.json` pins the upstream commit and a digest per
