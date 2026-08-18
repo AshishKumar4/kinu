@@ -91,35 +91,36 @@ export interface SwarmConfig {
   /**
    * Judge ensemble size, read by the validity predicate rather than by taste.
    *
-   * A judged scalar driving a tree selector must be MARGINALISED or the tree
-   * loses to plain re-ranking. Koh et al. 2407.01476 Table 4 holds the budget
-   * fixed at c=20,d=5,b=5 and varies only the value function: no search 24.5% →
-   * single-sample judge 28.5% → judge + SC(20) 37.0% → oracle 43.5%. So the knee
-   * is SC(20), the refusal is about SAMPLE COUNT and not about judging, and our
-   * live default of 3 (config.ts:100) is below it.
+   * A judged scalar driving a tree selector must be MARGINALISED. Koh et al.
+   * 2407.01476 Table 4 (§5.1) holds NODE EXPANSIONS fixed at c=20,d=5,b=5 across all
+   * five search rows and varies only the value function: strong judge with no
+   * self-consistency 28.5%, a WEAKER LLaVA-34B judge marginalised to SC(20) 30.0%,
+   * strong judge at SC(5) 32.5%, at SC(20) 37.0%, ground-truth reward 43.5%.
+   *
+   * The like-for-like comparison is inside those rows: an unmarginalised strong judge
+   * is beaten by a marginalised weak one (28.5 vs 30.0), so marginalisation buys more
+   * than judge strength. SC(1)->SC(20) is +8.5 AT FIXED EXPANSIONS, not at fixed LM
+   * calls — SC(20) is twenty value-function calls per state. Do NOT cite 37.0-24.5 as
+   * a matched-compute gain: it spans the no-search row, which performs zero
+   * expansions, and §5.4 prices that span at "up to 20x more LM calls".
+   *
+   * Our live default of 3 (config.ts:100) is below the smallest SC arm the paper
+   * measured.
    */
   readonly judgeSamples: number;
   /**
-   * Per-node model variation, for CAPABILITY AND COST ROUTING — a cheap model for
-   * recon, a strong one for synthesis.
+   * NOTE what is deliberately NOT here: `branches`, `depth` and `models`. All three
+   * are per-run choices rather than technique identity — ToT at branches=3 and ToT
+   * at branches=8 are the same TECHNIQUE, and so is ToT routed across a cheap and a
+   * strong model — so none of them spans the coverage matrix. They live on
+   * {@link SwarmInput} where EVERY preset can set them.
    *
-   * NOT for diversity, and the docstring the model sees must say so. Self-MoA
-   * (2502.00674) re-ran Mixture-of-Agents' own ablation over the same six models
-   * and found the HOMOGENEOUS ensemble beat the mixed one 65.7 vs 59.1 at
-   * identical compute, with quality dominating diversity by up to 3.2x in their
-   * regression. A model zoo is measured WORSE than repeated sampling from the
-   * best model when the purpose is decorrelation. Decorrelation is
-   * {@link SwarmConfig.decorrelate}.
-   *
-   * NOTE `branches` and `depth` are deliberately NOT here. They are resource
-   * caps, not axes — ToT at branches=3 and ToT at branches=8 are the same
-   * TECHNIQUE, so width and depth do not span the coverage matrix. They live on
-   * {@link SwarmInput} where every preset can set them, which is also the fix for
-   * a measured hole: with them in `config`, a named preset (which takes no
-   * `config`) had no way to say "eight candidates", and models reported exactly
-   * that absence unprompted — "no direct field to set the initial population".
+   * Each was moved after being measured missing. Width: with `branches` in `config`,
+   * a named preset (which takes no `config`) could not say "eight candidates", and
+   * models reported that absence unprompted. Model routing: with `models` in
+   * `config`, no named preset could do capability-and-cost routing at all — the one
+   * use of model variety that measured correct 3/3.
    */
-  readonly models?: readonly string[];
 }
 
 /**
@@ -203,6 +204,31 @@ export interface SwarmInput {
    * above every system in the literature (ToT <=3, LATS 7, Koh 5).
    */
   readonly depth?: number;
+  /**
+   * Per-node model variation, for CAPABILITY AND COST ROUTING — a cheap model for
+   * recon, a strong one for synthesis. Available on EVERY preset.
+   *
+   * NOT for diversity. Self-MoA (2502.00674) re-ran Mixture-of-Agents' own ablation
+   * over the same six models and found the HOMOGENEOUS ensemble beat the mixed one
+   * 65.7 vs 59.1 with the proposer count and topology held fixed (six proposals, one
+   * aggregator; the paper claims no cost parity), quality dominating diversity by up
+   * to 3.2x.
+   * A model zoo is measured WORSE than repeated sampling from the best model when
+   * the purpose is decorrelation. Decorrelation is {@link SwarmConfig.decorrelate}.
+   *
+   * Cost routing is understood 3/3 across vendors, so the field earns its place. The
+   * warning holds 2/3 against a caller who demands a zoo for diversity, which is why
+   * the composition `models.length > 1` with a resolved `decorrelate` of `'none'` is
+   * REFUSED rather than merely discouraged — a docstring is advice, and advice loses
+   * to an instruction from the caller.
+   *
+   * Because the refusal reads the RESOLVED `decorrelate`, a named preset whose own
+   * `decorrelate` is not `'none'` accepts `models` freely. A preset that resolves to
+   * `decorrelate:'none'` must instead PROHIBIT `models.length > 1` at its own
+   * boundary — declared per preset, never discovered as a refusal, because §6.4
+   * requires a named preset to be unrefusable.
+   */
+  readonly models?: readonly string[];
 }
 
 /**

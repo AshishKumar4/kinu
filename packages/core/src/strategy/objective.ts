@@ -146,22 +146,49 @@ export type Verifier = (ctx: MeasurementContext) => Promise<Measurement>;
  * closure. The whole hard-task corpus is already expressible this way.
  */
 export interface VerifierSpec {
-  /** A registered verifier kind. Resolving it to a callable is the registry's job;
-   *  the digest never depends on the resolution. */
+  /**
+   * A verifier kind, drawn from a CLOSED set the registry declares.
+   *
+   * Closed, not a free string, and the reason is this spec's own §3.8 argument one
+   * level up: **a `kind` nobody registered is a fabricated script wearing a type.**
+   * An open string would let a caller invent `'exec-ratio'` exactly as a model
+   * invented `scripts/simulate_conversion.py`, and §3.4's one real guard — a
+   * fabricated name cannot resolve — would become advisory again. So an unregistered
+   * kind is a CALL-TIME `bad_input` naming the registered kinds.
+   *
+   * Consequence for §5.1 that follows from closing it: **the registry is part of the
+   * objective's identity.** Two runs whose `kind` resolves to different
+   * implementations are not comparable, and `argumentDigest({kind, spec})` does not
+   * capture that on its own. Found by `FixtureZero` while forcing the JSON boundary.
+   */
   readonly kind: string;
   /** Everything that kind needs, as JSON. Digested with `stableStringify`, so key
-   *  order cannot change the identity. */
+   *  order cannot change the identity. Model it on `RatioProblem` and keep every
+   *  field: a spec that drops `lowerBoundOps` leaves §4's floor nowhere to live and
+   *  §4.5's C1/C2 checks with no input. */
   readonly spec: JsonValue;
 }
 
 /**
- * How an objective supplies its verifier.
+ * How an objective supplies its verifier — and the two arms belong to DIFFERENT
+ * SURFACES, which an earlier revision left as one union serving two channels.
  *
- * A bare closure stays legal, because one-off local work should not require
- * registering a kind — but a closure-backed objective has NO DIGEST and is
- * therefore NOT PUBLISHABLE, and the run says so at CALL time rather than
- * discovering it at settle. That keeps the escape hatch open without making the
- * records store's guarantee a fiction.
+ * `VerifierSpec` is the ONLY arm reachable from the tool surface. `agents.swarm` is a
+ * valibot-validated JSON action, so **the closure arm is unauthorable there, not
+ * merely undigestible** — a model cannot send a function at all. Since §2.5 makes
+ * `objective` REQUIRED on `optimise`, `VerifierSpec` is the only inhabitable arm on
+ * the flagship preset.
+ *
+ * The closure arm exists for IN-PROCESS callers only: tests, the hard-task corpus,
+ * core code. It stays legal because one-off local work should not require registering
+ * a kind, and a closure-backed objective is NOT PUBLISHABLE — said at CALL time, not
+ * discovered at settle.
+ *
+ * AND THE CLOSURE ARM IS UNGUARDED, WHICH IS THE STRONGER REASON. §3.4's one real
+ * guard is that a fabricated instrument cannot resolve — but **a closure cannot fail
+ * to resolve**, so on that arm the guard does not exist. That is why the arm is
+ * confined to callers who wrote the closure themselves rather than merely marked
+ * unpublishable. Found by `FixtureZero`.
  */
 export type VerifierSource = VerifierSpec | Verifier;
 
@@ -541,6 +568,23 @@ export interface ExplorationRecord {
    *  rows after 24h (mcts/search-store.ts:98,109-110) and would make week-old
    *  records dangle. read-models/fork-runs.ts:243-245 already keys this way. */
   readonly rootId: string;
+  /**
+   * Digest over the FULLY RESOLVED configuration — the seven axes, every
+   * axis-parameter, and every cap actually in force.
+   *
+   * One column rather than one per field, so it cannot go stale as fields are added.
+   * It exists because an un-parameterised run otherwise leaves no record of the shape
+   * it got, and **an ABSENT default is worse than a wrong one**: a wrong default is
+   * visible in the record and arguable, whereas an absent one means the shape is
+   * decided by whatever the implementation happens to do and the record cannot report
+   * a number the spec never named.
+   */
+  readonly configDigest: string;
+  /** Denormalised beside {@link configDigest} for reading, the same way
+   *  {@link floorValue} sits beside {@link floorDigest}: a leaderboard row should not
+   *  have to resolve a digest to say how deep and how wide the search was. */
+  readonly depth: number;
+  readonly branches: number;
   /**
    * WHICH FLOOR this record was published under, as a digest over that `Floor`.
    *
