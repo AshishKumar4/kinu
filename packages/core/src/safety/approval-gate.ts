@@ -155,6 +155,31 @@ interface Rule {
 }
 
 /**
+ * Every ecosystem's "ship this to the world" command, not only JavaScript's.
+ *
+ * Pushing a package to a public registry is irreversible and outward-facing
+ * whichever language types it, so the rule that says so has to recognise all
+ * of them. Matching `npm publish` alone meant an identical Rust, Python, Ruby,
+ * Java or .NET task published with no approval prompt: the `why` was already
+ * language-agnostic while the pattern was not.
+ *
+ * The binary list beside it is load-bearing, not decoration — `binaries` gates
+ * whether the rule fires at all, so a pattern extended without it is a rule
+ * that reads as fixed and never matches.
+ */
+const PACKAGE_PUBLISH = new RegExp(
+  [
+    /\b(?:npm|pnpm|yarn|bun|cargo|poetry|uv|flit|hatch)\s+publish\b/, // JS, Rust, Python
+    /\btwine\s+upload\b/, // Python, including `python -m twine`
+    /\bgem\s+push\b/, // Ruby
+    /\bmvn\s+deploy\b|\bgradlew?\s+[^&|;]*\bpublish[A-Za-z]*/, // Java
+    /\bdotnet\s+nuget\s+push\b/, // .NET
+  ]
+    .map((r) => r.source)
+    .join('|'),
+);
+
+/**
  * Default rule set — the ONE table, resolved per executor by
  * {@link reviewCommand}. There is no per-executor copy of it.
  *
@@ -276,12 +301,30 @@ const RULES: Rule[] = [
     binaries: ['git'],
   },
   {
-    pattern: /\b(npm|pnpm|yarn|bun)\s+publish\b/,
+    pattern: PACKAGE_PUBLISH,
     decision: 'gate',
     name: 'package-publish',
     why: 'Publishes to a public package registry.',
     harm: 'reaches_out',
-    binaries: ['npm', 'pnpm', 'yarn', 'bun'],
+    binaries: [
+      'npm',
+      'pnpm',
+      'yarn',
+      'bun',
+      'cargo',
+      'poetry',
+      'uv',
+      'flit',
+      'hatch',
+      'twine',
+      'gem',
+      'mvn',
+      'gradle',
+      'gradlew',
+      'dotnet',
+      'python',
+      'python3',
+    ],
   },
 
   // ── DENY: prompt-injection / cloud-metadata SSRF ─────────────────
