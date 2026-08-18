@@ -265,12 +265,55 @@ describe('turn_outcomes CHECK-widening rebuild', () => {
     legacyRow(db, 'legacy:1');
     initTurnOutcomeTables(execRaw, sql); // creates the new table + copies
     // Re-create the crash state: legacy still present alongside copied rows.
-    db.exec(`CREATE TABLE turn_outcomes_legacy ${LEGACY_DDL}`);
-    db.exec(`INSERT INTO turn_outcomes_legacy SELECT * FROM turn_outcomes`);
+    // Cloned from the live table rather than re-declared, because legacy IS the
+    // RENAMED original — it always carries the shape the table had at rename
+    // time, including columns reconciled onto it before the rename.
+    db.exec(`CREATE TABLE turn_outcomes_legacy AS SELECT * FROM turn_outcomes`);
 
     initTurnOutcomeTables(execRaw, sql);
     expect(listTurnOutcomes(sql)).toHaveLength(1);
     expect(db.prepare(`SELECT name FROM sqlite_master WHERE name = 'turn_outcomes_legacy'`).all()).toHaveLength(0);
+  });
+});
+
+describe('the verdict reason is durable', () => {
+  test('evidence round-trips, and a verdict that is its own evidence stores none', () => {
+    const { sql } = setup();
+    recordTurnOutcome(sql, {
+      turnId: 'm1', outcome: 'corrected', confidence: 0.9, source: 'classifier',
+      userMessage: 'u', assistantResponse: 'a', followup: 'no, the other one',
+      evidence: 'the user restated the request with a correction', now: 100,
+    });
+    // A thumb carries no reason to store — `source` already says everything
+    // there is to know about how that verdict was reached.
+    recordTurnOutcome(sql, {
+      turnId: 'm2', outcome: 'accepted', confidence: 1, source: 'explicit',
+      userMessage: 'u', assistantResponse: 'a', now: 200,
+    });
+
+    const [newest, oldest] = listTurnOutcomes(sql);
+    expect(newest.evidence).toBeNull();
+    expect(oldest.evidence).toBe('the user restated the request with a correction');
+  });
+
+  test('a ledger written before the column reads null rather than failing', () => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    db.exec(`CREATE TABLE turn_outcomes ${LEGACY_DDL}`);
+    legacyRow(db, 'old-1');
+
+    initTurnOutcomeTables(makeExecRaw(db), sql);
+
+    // The row predates the column, so it has no reason on record — which is a
+    // different thing from a reason that was recorded as empty.
+    expect(listTurnOutcomes(sql).map((r) => [r.id, r.evidence])).toEqual([['old-1', null]]);
+    // And the reconciled table takes one immediately afterwards.
+    recordTurnOutcome(sql, {
+      turnId: 'x', outcome: 'accepted', confidence: 1, source: 'execution',
+      userMessage: 'u', assistantResponse: 'a',
+      evidence: 'every tool call this turn ran completed', now: 300,
+    });
+    expect(listTurnOutcomes(sql)[0].evidence).toBe('every tool call this turn ran completed');
   });
 });
 

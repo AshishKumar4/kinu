@@ -22,6 +22,7 @@ import type { CompletedTurn, ToolCallRecord } from './types.js';
 import type { EvalInstance } from './gepa/types.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
+import { reconcileColumns } from '../identity/columns.js';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive.js';
 import { RunEventRecorder } from '../events/recorder.js';
 import { nanoid } from '../utils/nanoid.js';
@@ -282,6 +283,10 @@ export async function classifyTurnOutcome(
 
 // ── The durable outcome ledger ───────────────────────────────────
 
+/** `evidence` is LAST deliberately. On an existing table it arrives by
+ *  ALTER TABLE ADD COLUMN, which appends — so keeping the declared order
+ *  identical to the altered order is what lets the rebuilds below copy with
+ *  `SELECT *`. */
 const TURN_OUTCOMES_DDL = `(
     id TEXT PRIMARY KEY,
     turn_id TEXT,
@@ -293,8 +298,13 @@ const TURN_OUTCOMES_DDL = `(
     assistant_response TEXT NOT NULL,
     followup TEXT,
     scaffold_version INTEGER,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    evidence TEXT
   )`;
+
+/** Columns added after the ledger shipped. Both sides of a `SELECT *` rebuild
+ *  must carry them, or the copy is a column-count mismatch. */
+const TURN_OUTCOMES_POST_RELEASE_COLUMNS = { evidence: 'TEXT' } as const;
 
 export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   // The probe decides whether either migration below runs at all, so it must
@@ -314,11 +324,16 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): vo
   // IGNORE (PK ids) makes the resume idempotent at every crash point.
   if (tableDdl('turn_outcomes_legacy') !== null) {
     execRaw(`CREATE TABLE IF NOT EXISTS turn_outcomes ${TURN_OUTCOMES_DDL}`);
+    // Both sides before the copy: a rebuild interrupted before `evidence`
+    // existed leaves a legacy table one column short of the one it feeds.
+    reconcileColumns(sql, execRaw, 'turn_outcomes', TURN_OUTCOMES_POST_RELEASE_COLUMNS);
+    reconcileColumns(sql, execRaw, 'turn_outcomes_legacy', TURN_OUTCOMES_POST_RELEASE_COLUMNS);
     execRaw(`INSERT OR IGNORE INTO turn_outcomes SELECT * FROM turn_outcomes_legacy`);
     execRaw(`DROP TABLE turn_outcomes_legacy`);
   }
 
   execRaw(`CREATE TABLE IF NOT EXISTS turn_outcomes ${TURN_OUTCOMES_DDL}`);
+  reconcileColumns(sql, execRaw, 'turn_outcomes', TURN_OUTCOMES_POST_RELEASE_COLUMNS);
   // A table created before a source was added carries a narrower CHECK that
   // SQLite cannot ALTER — rebuild it in place (same columns, data kept). The
   // probe is the source LIST, so adding a member is the only edit a future
@@ -482,6 +497,10 @@ export interface TurnOutcomeRow {
   followup: string | null;
   scaffoldVersion: number | null;
   createdAt: number;
+  /** WHY this verdict: the classifier's one-sentence reason, or the execution
+   *  verdict's observation. Null where the source is its own evidence (a thumb)
+   *  or the row predates the column. */
+  evidence: string | null;
 }
 
 export interface RecordTurnOutcomeInput {
@@ -494,6 +513,7 @@ export interface RecordTurnOutcomeInput {
   assistantResponse: string;
   followup?: string | null;
   scaffoldVersion?: number | null;
+  evidence?: string | null;
   now?: number;
 }
 
@@ -509,13 +529,14 @@ export function recordTurnOutcome(sql: SqlExecutor, input: RecordTurnOutcomeInpu
   }
   void sql`INSERT INTO turn_outcomes
         (id, turn_id, session_id, outcome, confidence, source,
-         user_message, assistant_response, followup, scaffold_version, created_at)
+         user_message, assistant_response, followup, scaffold_version, created_at, evidence)
       VALUES
         (${id}, ${input.turnId ?? null}, ${input.sessionId ?? 'default'}, ${input.outcome},
          ${input.confidence}, ${input.source}, ${evidenceWindow(input.userMessage, EVIDENCE_BUDGETS.storedUserMessage)},
          ${evidenceWindow(input.assistantResponse, EVIDENCE_BUDGETS.storedAssistantResponse)},
          ${input.followup === null || input.followup === undefined ? null : evidenceWindow(input.followup, EVIDENCE_BUDGETS.storedFollowup)},
-         ${input.scaffoldVersion ?? null}, ${input.now ?? nowMs()})`;
+         ${input.scaffoldVersion ?? null}, ${input.now ?? nowMs()},
+         ${input.evidence === null || input.evidence === undefined ? null : evidenceWindow(input.evidence, EVIDENCE_BUDGETS.storedEvidence)})`;
   return id;
 }
 
@@ -523,7 +544,7 @@ interface RawOutcomeRow {
   id: string; turn_id: string | null; session_id: string; outcome: TurnOutcome;
   confidence: number; source: TurnOutcomeSource; user_message: string;
   assistant_response: string; followup: string | null;
-  scaffold_version: number | null; created_at: number;
+  scaffold_version: number | null; created_at: number; evidence: string | null;
 }
 
 function toOutcomeRow(r: RawOutcomeRow): TurnOutcomeRow {
@@ -532,6 +553,7 @@ function toOutcomeRow(r: RawOutcomeRow): TurnOutcomeRow {
     confidence: r.confidence, source: r.source, userMessage: r.user_message,
     assistantResponse: r.assistant_response, followup: r.followup,
     scaffoldVersion: r.scaffold_version, createdAt: r.created_at,
+    evidence: r.evidence ?? null,
   };
 }
 

@@ -385,6 +385,9 @@ export function recordTakePick(
     // A sibling pick IS the correction: the candidate the user actually wanted.
     followup: changedAnswer ? chosen.text : null,
     scaffoldVersion: input.scaffoldVersion ?? null,
+    evidence: changedAnswer
+      ? 'the user picked an alternate take over the delivered answer'
+      : 'the user re-picked the delivered answer over its alternates',
     now,
   });
 

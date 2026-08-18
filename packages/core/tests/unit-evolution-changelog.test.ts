@@ -252,6 +252,34 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(outcomes.evidence).toBe('2 accepted · 1 corrected');
   });
 
+  test('each graded turn expands to the reason behind its verdict', () => {
+    const { rt } = setup();
+    const sql = rt.storage.sql;
+    recordTurnOutcome(sql, {
+      outcome: 'corrected', confidence: 0.75, source: 'classifier',
+      userMessage: 'add pagination to the chat list', assistantResponse: 'done',
+      followup: 'no, the other list',
+      evidence: 'the user named a different list than the one that changed', now: 100,
+    });
+    // No reason on record: the source IS the reason, and the item has to read
+    // as one rather than as a verdict with its evidence missing.
+    recordTurnOutcome(sql, {
+      outcome: 'accepted', confidence: 1, source: 'explicit',
+      userMessage: 'ship it', assistantResponse: 'shipped', now: 200,
+    });
+
+    const items = buildChangelog(sql).find((e) => e.kind === 'outcomes')!.items!;
+    expect(items.map((i) => i.summary)).toEqual([
+      'accepted — "ship it"',
+      'corrected — "add pagination to the chat list"',
+    ]);
+    expect(items[1].evidence).toBe(
+      "the user's reply read as corrected"
+      + ' — the user named a different list than the one that changed · confidence 75%',
+    );
+    expect(items[0].evidence).toBe('thumbs up from the user');
+  });
+
   test('every ledger present and empty produces an empty digest', () => {
     const { rt } = setup();
     expect(buildChangelog(rt.storage.sql)).toEqual([]);

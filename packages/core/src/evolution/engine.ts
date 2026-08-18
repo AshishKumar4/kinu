@@ -393,6 +393,9 @@ export class EvolutionEngine {
           assistantResponse: turn.assistantResponse,
           followup,
           scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql),
+          // The classifier's one-sentence reason, or the execution verdict's
+          // observation — stored so the ledger can say WHY, not just count.
+          evidence,
         });
       }
       turn.feedback = outcomeToFeedback(outcome);

@@ -71,6 +71,10 @@ export const EVIDENCE_BUDGETS = {
   storedUserMessage: 8_000,
   storedAssistantResponse: 16_000,
   storedFollowup: 8_000,
+  /** The one-sentence reason behind a verdict — the classifier's own words or
+   *  the execution observation. A reason longer than this is not the short
+   *  answer the classifier was asked for. */
+  storedEvidence: 1_000,
 
   /** Shadow eval: what the sampled judge is shown, and what the trial row
    *  records. One window for both, so the stored evidence IS the evidence the
