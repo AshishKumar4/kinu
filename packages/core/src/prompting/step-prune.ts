@@ -41,6 +41,18 @@ const PRUNED_OUTPUT_HEAD_CHARS = 2_000;
 export interface StepPruneBudget {
   /** The resolved model's context window, in tokens. */
   contextWindow: number;
+  /**
+   * Tokens the caller will add to `messages` AFTER this pass, and which the
+   * request therefore carries even though they are not in the array being
+   * measured.
+   *
+   * Today that is the dynamic-context ledger: the pipeline prunes before it
+   * weaves (frozen block positions are coordinates in the pruned array —
+   * prepare-step.ts step 3), so without this the pass prices a request smaller
+   * than the one that gets sent and under-prunes by the ledger's whole size,
+   * which on a long mission turn is the largest single thing it cannot see.
+   */
+  reservedTokens?: number;
 }
 
 type AssistantPart = Exclude<AssistantModelMessage['content'], string>[number];
@@ -58,7 +70,7 @@ export function pruneStepToolOutputs(
   const limit = Math.floor(budget.contextWindow * STEP_CONTEXT_BUDGET_RATIO);
   if (limit <= 0) return undefined;
 
-  let total = 0;
+  let total = budget.reservedTokens ?? 0;
   for (const message of messages) total += estimateMessageTokens(message);
   if (total <= limit) return undefined;
 

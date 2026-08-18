@@ -9,6 +9,7 @@ import type { ModelMessage, ToolResultPart } from 'ai';
 import {
   pruneStepToolOutputs,
   composePrepareStep,
+  DynamicContextLedger,
   STEP_CONTEXT_BUDGET_RATIO,
   STEP_RECENT_TOOL_BUDGET_TOKENS,
 } from '../src/index';
@@ -151,6 +152,37 @@ describe('composePrepareStep with pruning', () => {
     expect(composePrepareStep({ prune: { contextWindow: 400_000 } }, { stepNumber: 3, messages }))
       .toBeUndefined();
     expect(composePrepareStep({}, { stepNumber: 3, messages })).toBeUndefined();
+  });
+
+  // The pipeline prunes BEFORE it weaves — frozen block positions have to be
+  // coordinates in the array the model actually receives — so the blocks the
+  // weave is about to put back are absent from the array the pruner measures.
+  // Left unreserved, a turn whose ledger has grown sends a request OVER the
+  // budget the pruner just declared it was under. This test fails on that
+  // ordering: the bare history sits under the budget, the woven request does
+  // not, and only a pruner told about the ledger shrinks anything.
+  test('the pruner is charged for the ledger blocks the weave adds back', () => {
+    const messages = bigTurn();
+    // ~60k tokens of history against an 84k budget: under it on its own.
+    const contextWindow = 120_000;
+    expect(composePrepareStep({ prune: { contextWindow } }, { stepNumber: 3, messages }))
+      .toBeUndefined();
+
+    // A busy turn's worth of frozen blocks — a block is appended whenever live
+    // state changes, and nothing bounds them mid-turn.
+    const ledger = new DynamicContextLedger();
+    for (let i = 0; i < 20; i++) {
+      ledger.weave(messages, { memoryTail: `lesson ${i}: ${'m'.repeat(6_000)}` });
+    }
+    expect(ledger.size).toBe(20);
+
+    const result = composePrepareStep({
+      prune: { contextWindow },
+      dynamic: { ledger, snapshot: () => ({}) },
+    }, { stepNumber: 3, messages });
+
+    expect(result).toBeDefined();
+    expect(outputText(resultPart(result!.messages[2]))).toContain('…[truncated:');
   });
 
   test('cache markers land LAST, on the pruned array', () => {

@@ -43,6 +43,7 @@ import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, norm
 import { listAvailableModels, listProviderCatalog } from './available-models';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access';
 import { err, json, safeJson } from '../lib/http';
+import { retryTransientDO } from '../lib/do-rpc';
 import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from './workspace-capability';
 import * as v from 'valibot';
 
@@ -79,7 +80,11 @@ export async function handleUserRequest(
 
   const stub = getUserDOStub(env, identity.userId);
   // Bootstrap profile on every request — cheap UPDATE if exists, INSERT once.
-  await stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined);
+  // It is also the gate every /api/user route passes through, so a dropped
+  // connection here fails a request that had nothing wrong with it; the upsert
+  // converges to the same row however many times it runs.
+  await retryTransientDO('ensureProfile',
+    () => stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined));
 
   // First hit for this user in this isolate: warm MCP, and repair workspaces that
   // predate the capability boundary. Both are one-shot per user inside the UserDO

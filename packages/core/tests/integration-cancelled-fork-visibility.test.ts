@@ -5,7 +5,7 @@
 // cleared 'running' (HeadJournal.recordReport, the happy path). An operator
 // cancel settled the fork's background job and a process exit killed its
 // executor, but nothing ever wrote the head rows — so `listLive()`'s
-// `HAVING running > 0` stayed true forever, and every model step carried
+// running-head predicate stayed true forever, and every model step carried
 //
 //   ## Delegates working for you
 //   - <root> (fork) — 4 of 4 heads running: <rationale>

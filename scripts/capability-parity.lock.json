@@ -50,6 +50,7 @@
   "movable packages/cf-backend/src/lib/cron.ts",
   "movable packages/cf-backend/src/lib/crypto.ts",
   "movable packages/cf-backend/src/lib/deployed-assets.ts",
+  "movable packages/cf-backend/src/lib/do-rpc.ts",
   "movable packages/cf-backend/src/lib/executors.ts",
   "movable packages/cf-backend/src/lib/fork-tree-rows.ts",
   "movable packages/cf-backend/src/lib/format.ts",

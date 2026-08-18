@@ -482,6 +482,12 @@ interface LedgerBlock {
   /** The rendered block text, which is also the append gate: a step whose
    *  render is byte-identical to this adds nothing. */
   text: string;
+  /** What this block costs the request, on the compaction ladder's chars/4
+   *  scale. Priced ONCE, here at birth: the step pruner reads the ledger's
+   *  total on every model step and `dropSuperseded` reads a slice of it, so
+   *  neither has to re-derive the scale, and there is one place that applies
+   *  it. */
+  tokens: number;
   message: ModelMessage;
 }
 
@@ -540,6 +546,23 @@ export class DynamicContextLedger {
   }
 
   /**
+   * What the frozen blocks add to the next request, on the same chars/4 scale
+   * the compaction ladder prices with.
+   *
+   * The step pruner reserves it: the pipeline prunes before it weaves, so this
+   * is the part of the request the pruner would otherwise measure as absent —
+   * and it is the part that GROWS, a block per state change for the life of
+   * the activation. A step that appends a new block is still one block short
+   * until the next step freezes it, which is the residual an ordering that
+   * renders once per step can leave; the unbounded term is what this closes.
+   */
+  get overheadTokens(): number {
+    let tokens = 0;
+    for (const block of this.blocks) tokens += block.tokens;
+    return tokens;
+  }
+
+  /**
    * Drop every superseded block, keeping the newest — the compaction ladder's
    * first rung, and the ONLY thing that ever removes a frozen block.
    *
@@ -566,7 +589,9 @@ export class DynamicContextLedger {
     if (this.blocks.length <= 1) return 0;
     const superseded = this.blocks.slice(0, -1);
     this.blocks = this.blocks.slice(-1);
-    return superseded.reduce((tokens, block) => tokens + Math.round(block.text.length / 4), 0);
+    let freed = 0;
+    for (const block of superseded) freed += block.tokens;
+    return freed;
   }
 
   weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext): ModelMessage[] {
@@ -583,7 +608,12 @@ export class DynamicContextLedger {
     // A null render appends nothing; frozen blocks stay regardless (removing
     // a mid-array message would break the provider prefix cache).
     if (text !== null && this.blocks[this.blocks.length - 1]?.text !== text) {
-      this.blocks.push({ index: history.length, text, message: { role: 'user', content: text } });
+      this.blocks.push({
+        index: history.length,
+        text,
+        tokens: Math.round(text.length / 4),
+        message: { role: 'user', content: text },
+      });
     }
     const woven: ModelMessage[] = [];
     let cursor = 0;

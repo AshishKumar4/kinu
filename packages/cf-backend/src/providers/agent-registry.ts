@@ -27,6 +27,7 @@ import { createMyGatewayProvider } from './my-gateway';
 import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from './ai-gateway';
 import type { CredentialSummary } from '../user/user-do';
 import type { UserCaller } from '../user/workspace-capability';
+import { retryTransientDO } from '../lib/do-rpc';
 
 /** Stub for the per-user DO that owns this user's credentials, paired with the
  *  identity this context presents to it — a Worker route acting for the
@@ -88,9 +89,18 @@ export function createUserDOAuthResolver(source: UserCredentialSource | null): A
   return async (key, opts) => {
     if (!source) return null;
     const caller = await resolveCaller(source);
-    const headers = await source.stub.getAuthHeaders(caller, key, opts);
+    // Auth is re-resolved before EVERY request to a provider (providers/util.ts
+    // createAuthedFetch), which puts these two cross-DO reads on the critical
+    // path of every model step of every turn: one dropped connection ended the
+    // turn with an error card the user had to retry by hand. Both are reads —
+    // the conditional OAuth refresh inside getAuthHeaders persists before it
+    // returns, so a retry either sees the refreshed credential and does nothing,
+    // or re-runs a refresh that never happened.
+    const headers = await retryTransientDO('credential auth',
+      () => source.stub.getAuthHeaders(caller, key, opts));
     if (!headers) return null;
-    const baseURL = await source.stub.getCredentialBaseURL(caller, key);
+    const baseURL = await retryTransientDO('credential baseURL',
+      () => source.stub.getCredentialBaseURL(caller, key));
     return baseURL ? { headers, baseURL } : { headers };
   };
 }
@@ -119,7 +129,10 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
 
   const credentialKeys = async (): Promise<string[]> => {
     if (!source) return [];
-    return (await source.stub.listCredentials(await resolveCaller(source))).map((c) => c.key);
+    const caller = await resolveCaller(source);
+    const credentials = await retryTransientDO('credential listing',
+      () => source.stub.listCredentials(caller));
+    return credentials.map((c) => c.key);
   };
 
   const deps: ProviderDeps = {

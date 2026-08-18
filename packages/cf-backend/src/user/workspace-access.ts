@@ -7,6 +7,7 @@ import type { UserDO } from './user-do';
 import { createCloudWorkspaceForUser } from './workspace-create';
 import { err, json, safeJson } from '../lib/http';
 import { ownerCaller } from './workspace-capability';
+import { classifyTransientDO, retryTransientDO } from '../lib/do-rpc';
 import { diagnostics, toProteusError } from '@proteus/core/obs';
 import * as v from 'valibot';
 
@@ -71,6 +72,7 @@ export type OwnedWorkspaceResult =
  *  the orchestrator's own identity). 404 when the workspace isn't in the
  *  caller's registry — creation must go through the explicit create APIs so
  *  probes cannot register workspaces; 403 only for a genuine cross-user collision;
+ *  503 when the platform dropped the call, so a client knows to try again; and
  *  anything else is a surfaced 500 so boot/schema issues stay diagnosable. */
 export async function claimOwnedWorkspace(
   env: Env,
@@ -78,7 +80,15 @@ export async function claimOwnedWorkspace(
   workspaceName: string,
 ): Promise<OwnedWorkspaceResult> {
   const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-  if (!(await userDO.hasWorkspace(await ownerCaller(env), workspaceName))) {
+  // Every one of the three calls below runs on EVERY authenticated request for
+  // this workspace, and every one is idempotent — a membership read, a claim
+  // that converges on the same owner, and a reconcile that returns immediately
+  // once the two sides agree. A connection the platform dropped between the
+  // Worker and either object is not a statement about the request.
+  const owner = await ownerCaller(env);
+  const member = await retryTransientDO('hasWorkspace',
+    () => userDO.hasWorkspace(owner, workspaceName));
+  if (!member) {
     return {
       ok: false,
       status: 404,
@@ -88,16 +98,17 @@ export async function claimOwnedWorkspace(
   const agent = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName));
   let claim: { owner: string; capabilityHash: string | null };
   try {
-    claim = await agent.claimOwner(userId);
+    claim = await retryTransientDO('claimOwner', () => agent.claimOwner(userId));
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    const status = /owned by a different user/i.test(message) ? 403 : 500;
-    if (status === 500) {
+    const transient = classifyTransientDO({ cause: e });
+    const status = /owned by a different user/i.test(message) ? 403 : transient !== null ? 503 : 500;
+    if (status !== 403) {
       diagnostics.failure('workspace.claim_owner_failed', toProteusError({
         doing: 'claiming workspace ownership',
         cause: e,
         otherwise: 'unavailable',
-      }), { workspace: workspaceName });
+      }), { workspace: workspaceName, transient: transient ?? 'none' });
     }
     return { ok: false, status, error: message };
   }
@@ -106,15 +117,21 @@ export async function claimOwnedWorkspace(
   // is the only place that can see both sides; it returns immediately when they
   // already agree, which is every request after the first.
   try {
-    await userDO.ensureWorkspaceCapability(workspaceName, claim.capabilityHash);
+    await retryTransientDO('ensureWorkspaceCapability',
+      () => userDO.ensureWorkspaceCapability(workspaceName, claim.capabilityHash));
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
+    const transient = classifyTransientDO({ cause: e });
     diagnostics.failure('workspace.capability_provisioning_failed', toProteusError({
       doing: "provisioning the workspace's capability token",
       cause: e,
       otherwise: 'unavailable',
-    }), { workspace: workspaceName });
-    return { ok: false, status: 500, error: `Could not issue this workspace's capability token: ${message}` };
+    }), { workspace: workspaceName, transient: transient ?? 'none' });
+    return {
+      ok: false,
+      status: transient !== null ? 503 : 500,
+      error: `Could not issue this workspace's capability token: ${message}`,
+    };
   }
   return { ok: true, agent };
 }
