@@ -42,6 +42,7 @@ const REQUIRED_GATES = [
   "bun run gate:capability-parity",
   "bun run gate:policy-drift",
   "bun run gate:scratch-ownership",
+  "bun run gate:agents-fields",
   "bun run gate:do-init",
   "bun run gate:reachability",
   "bun run gate:platform",

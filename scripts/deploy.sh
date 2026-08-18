@@ -162,6 +162,7 @@ run_required_gate "Duplicate implementations" bun run gate:duplication
 run_required_gate "Cross-backend capability parity" bun run gate:capability-parity
 run_required_gate "Duplicated policy constants" bun run gate:policy-drift
 run_required_gate "Test scratch ownership" bun run gate:scratch-ownership
+run_required_gate "Agents action/field relation" bun run gate:agents-fields
 run_required_gate "Durable Object cold start" bun run gate:do-init
 run_required_gate "Unreachable RPC surface" bun run gate:reachability
 run_required_gate "Platform fact catalog" bun run gate:platform

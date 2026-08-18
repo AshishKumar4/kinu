@@ -44,6 +44,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { MergeStrategy } from '../heads/types';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
+import { diagnostics } from '../obs/index';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -362,6 +363,44 @@ export interface AgentsToolInput {
   keep_history?: boolean;
 }
 
+/** Every input field except the discriminant. */
+export type AgentsToolInputField = Exclude<keyof AgentsToolInput, 'action'>;
+
+/**
+ * Which fields each action's handler reads — the relation nothing enforced.
+ *
+ * An action could join `AGENTS_TOOL_ACTIONS` while its fields never joined the
+ * schema, and the only symptom was that every one of them arrived ABSENT: a
+ * caller who asked for something got the same input a caller who asked for
+ * nothing did. This map is what makes that a build failure instead: it is
+ * `Record<AgentsToolAction, ...>`, so an action added to the picklist with no
+ * fields does not compile, and `gate:agents-fields` holds each list to the
+ * `input.<field>` reads its case arm in `dispatchAgentsAction` actually performs
+ * — the handler, not this declaration, is the authority for what an action reads.
+ *
+ * Load-bearing at runtime, not just under the gate: a refusal names the fields
+ * the called action takes, and a field outside the list is refused rather than
+ * accepted and ignored.
+ */
+export const AGENTS_ACTION_FIELDS = {
+  fork: [
+    'task', 'forks', 'settle', 'merge_strategy', 'budget', 'wall_clock_ms', 'options',
+    'budget_usd', 'budget_tokens', 'budget_label',
+  ],
+  hire: ['agent', 'role', 'mission', 'model', 'scope', 'message', 'timeout_seconds'],
+  ask: ['agent', 'message', 'topic', 'timeout_seconds', 'deliverable', 'deadline_hint'],
+  send: ['agent', 'message', 'topic'],
+  reply: ['event_id', 'message'],
+  list: ['agent'],
+  dismiss: ['agent', 'keep_history'],
+} as const satisfies Record<AgentsToolAction, readonly AgentsToolInputField[]>;
+
+/** One action's fields, as plain names. The `as const` above keeps each list's
+ *  literal type — which is what lets the advertised JSON-Schema properties be
+ *  DERIVED from it below — and this is where that precision is spent for the
+ *  ordinary string work: membership, and the list a refusal prints. */
+const fieldsOf = (action: AgentsToolAction): readonly string[] => AGENTS_ACTION_FIELDS[action];
+
 interface MergeableOption {
   [key: string]: BuiltinStrategyOptions[keyof BuiltinStrategyOptions];
 }
@@ -382,13 +421,22 @@ interface HeadsOptionOverlay {
   mergeStrategy?: MergeStrategy;
 }
 
-const ForkSpecSchema = v.object({
+/** A fork brief's fields, `strictObject` for the same reason the input is: these
+ *  are the surface's only camelCase names, so `allowed_tools` beside the tool's
+ *  own snake_case is a mistake the shape itself invites. */
+const ForkSpecEntries = {
   task: v.string(),
   rationale: v.string(),
   model: v.optional(v.string()),
   allowedTools: v.optional(v.array(v.string())),
-});
-const AgentsToolInputSchema = v.object({
+};
+const ForkSpecSchema = v.strictObject(ForkSpecEntries);
+
+/** Every input field and its type, declared ONCE. The two policies below read
+ *  these same entries — the model-facing parse REFUSES an unrecognised field,
+ *  the replay filter DROPS it — so neither can come to declare a field the
+ *  other does not. */
+const AgentsInputEntries = {
   action: v.picklist(AGENTS_TOOL_ACTIONS),
   task: v.optional(v.string()),
   forks: v.optional(v.array(ForkSpecSchema)),
@@ -412,9 +460,191 @@ const AgentsToolInputSchema = v.object({
   timeout_seconds: v.optional(v.number()),
   event_id: v.optional(v.string()),
   keep_history: v.optional(v.boolean()),
-});
+};
 
+/**
+ * The model-facing parse. `strictObject`, not `object`: valibot's `object`
+ * EXCLUDES an unrecognised entry rather than rejecting it, which on this surface
+ * is not a cosmetic difference. Measured against the flat `object` this replaces:
+ *
+ *   parseAgentsToolInput({ action:'fork', task:'x', budgetUsd:5, wallClockMs:1000 })
+ *     -> { action:'fork', task:'x' }
+ *
+ * Both caps gone. A model that spelled a cap camelCase asked for a $5 ceiling,
+ * got no ceiling, and nothing in the error, the result or the run record said its
+ * request had vanished. camelCase for a snake_case field is the EXPECTED mistake
+ * here — the tool's own fork briefs are camelCase one level down — so this is a
+ * shape the surface provokes rather than an exotic one.
+ */
+const AgentsToolInputSchema = v.strictObject(AgentsInputEntries);
+
+/**
+ * The REPLAY parse, over a durable job row instead of a model's call. A row is
+ * history: no model is listening for a correction, and refusing the row would
+ * turn an interrupted fork into a hard failure (JobNotResumable) over a field
+ * that was ALREADY dropped when the row was first dispatched. So unknown entries
+ * are dropped here — which is what makes the re-drive faithful to the run it
+ * resumes — and `resumableForkInput` logs the drop rather than repeating it
+ * silently.
+ */
+const StoredAgentsInputSchema = v.object(AgentsInputEntries);
+
+/** Every field name in declaration order — what a refusal suggests from when the
+ *  action itself is unreadable, and the set the picklist gate holds the
+ *  per-action map against. */
+const AGENTS_INPUT_FIELDS: readonly string[] = Object.keys(AgentsInputEntries)
+  .filter((field) => field !== 'action');
+
+/** True when `action`'s handler reads `field`. The gate holds AGENTS_ACTION_FIELDS
+ *  to what `dispatchAgentsAction` actually reads, so a field outside this relation
+ *  provably cannot reach the call it was written on. */
+function actionReads(action: AgentsToolAction, field: string): boolean {
+  return fieldsOf(action).some((declared) => declared === field);
+}
+
+/** One typo, or the same word under another convention. */
+const MAX_FIELD_EDIT_DISTANCE = 2;
+
+/** Everything a naming convention can differ by. Collapsing it is what makes
+ *  `budgetUsd`, `budget-usd` and `Budget USD` all reach `budget_usd` — the
+ *  measured mistake, not a hypothetical one. */
+const FIELD_NAME_SEPARATORS = /[^a-z0-9]/gi;
+
+/** Levenshtein distance, abandoned once every cell in a row exceeds `limit`: a
+ *  candidate that cannot be the intended field costs a length check rather than
+ *  |a|x|b| cells. Returns `limit + 1` for "further away than limit". */
+function editDistance(a: string, b: string, limit: number): number {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = row[0];
+    row[0] = i;
+    let best = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const substitute = diagonal + (a[i - 1] === b[j - 1] ? 0 : 1);
+      diagonal = row[j];
+      const next = Math.min(substitute, row[j] + 1, row[j - 1] + 1);
+      row[j] = next;
+      if (next < best) best = next;
+    }
+    if (best > limit) return limit + 1;
+  }
+  return row[b.length];
+}
+
+/** The field `name` was probably meant to be, or undefined when nothing is close
+ *  enough to name. Convention first, then one or two character edits (`mision`
+ *  for `mission`) — both collapse to the same comparison. */
+function nearestField(name: string, candidates: readonly string[]): string | undefined {
+  const target = name.replace(FIELD_NAME_SEPARATORS, '').toLowerCase();
+  let nearest: string | undefined;
+  let shortest = MAX_FIELD_EDIT_DISTANCE + 1;
+  for (const candidate of candidates) {
+    const collapsed = candidate.replace(FIELD_NAME_SEPARATORS, '').toLowerCase();
+    const distance = editDistance(target, collapsed, MAX_FIELD_EDIT_DISTANCE);
+    if (distance >= shortest) continue;
+    nearest = candidate;
+    shortest = distance;
+    if (distance === 0) break;
+  }
+  return nearest;
+}
+
+/** An input's own field names, with nothing asserted about its values: a
+ *  primitive the model sent where an object belongs yields none, and the schema
+ *  behind this is what reports what it actually is. */
+const FieldNamesSchema = v.record(v.string(), v.unknown());
+
+function fieldNames<T>(value: T): readonly string[] {
+  const parsed = v.safeParse(FieldNamesSchema, value);
+  return parsed.success ? Object.keys(parsed.output) : [];
+}
+
+/** Said once, after the specifics: WHY a name mistake is an error now. */
+const FIELD_RULE = 'A field the called action cannot act on is refused rather than dropped — a cap'
+  + ' that never reached the run is a cap that was never applied.';
+
+function takesSentence(action: AgentsToolAction): string {
+  return `action "${action}" takes: ${fieldsOf(action).join(', ')}.`;
+}
+
+/**
+ * What is wrong with the field NAMES of `input`, or undefined when nothing is.
+ *
+ * Runs ahead of the schema so a name mistake gets a message naming the field that
+ * was MEANT — `explainNativeToolReferenceError`'s job at the other end of the
+ * same call: the caller is a model, and an error it cannot act on is a silent
+ * drop with extra steps. The strict schemas behind it still refuse anything this
+ * misses, so the refusal never depends on this being exhaustive.
+ *
+ * Two kinds, one message. An UNKNOWN field is a name this surface does not have.
+ * A MISPLACED one is a real field the called action's handler never reads:
+ * `budget_usd` on `hire` parsed cleanly and was then ignored, which is the same
+ * silence the strict object closes, one layer in.
+ */
+function agentsFieldRefusal<T>(input: T): string | undefined {
+  const parsed = v.safeParse(FieldNamesSchema, input);
+  if (!parsed.success) return undefined;
+  const declared = v.safeParse(v.picklist(AGENTS_TOOL_ACTIONS), parsed.output['action']);
+  const action = declared.success ? declared.output : undefined;
+  const problems: string[] = [];
+  // Printed ONCE at the end rather than after every clause: four unknown fields
+  // used to repeat the same ten-name list four times, which buries the one line
+  // that says which field was wrong.
+  let listFields = false;
+  for (const field of Object.keys(parsed.output)) {
+    if (field === 'action') continue;
+    if (Object.hasOwn(AgentsInputEntries, field)) {
+      if (action && !actionReads(action, field)) {
+        const readers = AGENTS_TOOL_ACTIONS.filter((other) => actionReads(other, field));
+        problems.push(`field "${field}" does not apply to action "${action}" — it is read by`
+          + ` ${readers.join('/')}, and ${action} would ignore it.`);
+        listFields = true;
+      }
+      continue;
+    }
+    const meant = nearestField(field, action ? fieldsOf(action) : AGENTS_INPUT_FIELDS);
+    if (meant) {
+      problems.push(`unknown field "${field}" — did you mean "${meant}"?`);
+      continue;
+    }
+    const elsewhere = action ? nearestField(field, AGENTS_INPUT_FIELDS) : undefined;
+    problems.push(elsewhere
+      ? `unknown field "${field}" — "${elsewhere}" is read by`
+        + ` ${AGENTS_TOOL_ACTIONS.filter((other) => actionReads(other, elsewhere)).join('/')},`
+        + ` not ${action ?? 'this action'}.`
+      : `unknown field "${field}".`);
+    listFields = true;
+  }
+  // The briefs, whose own fields are the camelCase half of the same collision.
+  const briefs = v.safeParse(v.array(FieldNamesSchema), parsed.output['forks']);
+  if (briefs.success) {
+    for (const [index, brief] of briefs.output.entries()) {
+      for (const field of Object.keys(brief)) {
+        if (Object.hasOwn(ForkSpecEntries, field)) continue;
+        const meant = nearestField(field, Object.keys(ForkSpecEntries));
+        problems.push(`unknown field "forks[${String(index)}].${field}"`
+          + (meant
+            ? ` — did you mean "${meant}"? A brief's fields are camelCase.`
+            : `. A brief takes: ${Object.keys(ForkSpecEntries).join(', ')}.`));
+      }
+    }
+  }
+  if (problems.length === 0) return undefined;
+  const fields = listFields
+    ? action ? ` ${takesSentence(action)}` : ` Fields are: ${AGENTS_INPUT_FIELDS.join(', ')}.`
+    : '';
+  return `${problems.join(' ')}${fields} ${FIELD_RULE}`;
+}
+
+/**
+ * The one parse, for both surfaces that can dispatch a delegation: the `agents`
+ * tool's own execute and the `agents.*` codemode namespace. Throws a message the
+ * caller can correct itself from.
+ */
 export function parseAgentsToolInput<T>(input: T): AgentsToolInput {
+  const refusal = agentsFieldRefusal(input);
+  if (refusal) throw new Error(refusal);
   return v.parse(AgentsToolInputSchema, input);
 }
 
@@ -424,6 +654,15 @@ export function parseAgentsToolInput<T>(input: T): AgentsToolInput {
  * MCTS search checkpoint / heads re-run path). Returns the fork input to
  * re-execute, translating rows stored by the pre-unification `think` tool
  * (strategy → settle, heads → forks), or null when the job is not resumable.
+ *
+ * Rows are TRANSLATED rather than validated as a model call would be. A row was
+ * recorded verbatim from whatever the model sent (jobs/runner.ts stores the raw
+ * input), so rows written before the strict parse can carry fields it now
+ * refuses — and a row is re-driven, not answered, so a refusal there is a fork
+ * lost to a spelling nobody can correct any more. Both branches therefore build
+ * the resumed call out of the fork fields alone, and anything left over is
+ * logged: dropped, as it was dropped on the original dispatch, but no longer
+ * silently.
  */
 const LegacyForkInputSchema = v.object({
   strategy: v.optional(v.string()),
@@ -437,8 +676,24 @@ const LegacyForkInputSchema = v.object({
 
 export function resumableForkInput<T>(kind: string, input: T): AgentsToolInput | null {
   if (kind === 'agents') {
-    const parsed = v.safeParse(AgentsToolInputSchema, input);
-    return parsed.success && parsed.output.action === 'fork' ? parsed.output : null;
+    const parsed = v.safeParse(StoredAgentsInputSchema, input);
+    if (!parsed.success || parsed.output.action !== 'fork') return null;
+    const resumed: AgentsToolInput = { action: 'fork' };
+    for (const field of AGENTS_ACTION_FIELDS.fork) {
+      const value = parsed.output[field];
+      if (value !== undefined) Object.assign(resumed, { [field]: value });
+    }
+    const carried = new Set(Object.keys(resumed));
+    const dropped = fieldNames(input).filter((field) => !carried.has(field));
+    if (dropped.length > 0) {
+      // Absent from the re-drive, and present in the record of why. Named
+      // rather than counted: a resumed fork that lost a cap is only diagnosable
+      // if the line says which cap.
+      diagnostics.event('agents.resume.fields_dropped', {
+        kind, fields: dropped.join(','), count: dropped.length,
+      });
+    }
+    return resumed;
   }
   if (kind !== 'think') return null;
   const parsed = v.safeParse(LegacyForkInputSchema, input);
@@ -717,18 +972,15 @@ async function runFork(
 
 // ── Schema assembly ─────────────────────────────────────────────────────────
 
-interface ForkSchemaProperties {
-  task?: JsonObject;
-  forks?: JsonObject;
-  settle?: JsonObject;
-  merge_strategy?: JsonObject;
-  budget?: JsonObject;
-  wall_clock_ms?: JsonObject;
-  options?: JsonObject;
-  budget_usd?: JsonObject;
-  budget_tokens?: JsonObject;
-  budget_label?: JsonObject;
-}
+/** The JSON-Schema properties an action's fields may be advertised under,
+ *  DERIVED from AGENTS_ACTION_FIELDS rather than restated beside it: a property
+ *  shown to the model that no action's handler reads does not compile. That is
+ *  the advertised-vs-parsed half of the same relation `gate:agents-fields`
+ *  checks from the declaration side. */
+type SchemaPropertiesFor<Action extends AgentsToolAction> =
+  { [Field in (typeof AGENTS_ACTION_FIELDS)[Action][number]]?: JsonObject };
+
+type ForkSchemaProperties = SchemaPropertiesFor<'fork'>;
 
 function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
   if (!deps.fork) return {};
@@ -832,20 +1084,7 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
   return properties;
 }
 
-interface ConverseSchemaProperties {
-  agent?: JsonObject;
-  role?: JsonObject;
-  mission?: JsonObject;
-  model?: JsonObject;
-  scope?: JsonObject;
-  message?: JsonObject;
-  topic?: JsonObject;
-  timeout_seconds?: JsonObject;
-  event_id?: JsonObject;
-  deliverable?: JsonObject;
-  deadline_hint?: JsonObject;
-  keep_history?: JsonObject;
-}
+type ConverseSchemaProperties = SchemaPropertiesFor<Exclude<AgentsToolAction, 'fork'>>;
 
 function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   if (!deps.team && !deps.peers) return {};
@@ -890,6 +1129,22 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
     });
   }
   return properties;
+}
+
+/**
+ * The peer topic an ask/send rides, or the refusal when the caller claimed the
+ * transport's reserved one.
+ *
+ * Read inside the two arms that use it rather than once for all seven actions:
+ * `topic` is a field of ask and send, and reading it for every action made it
+ * read like a field of every action — the exact shape that lets a field be
+ * accepted where nothing acts on it.
+ */
+function requestedTopic(input: AgentsToolInput): { topic: string } | { error: string } {
+  const topic = input.topic?.trim() || 'message';
+  return topic === PEER_REPLY_TOPIC
+    ? { error: `topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes` }
+    : { topic };
 }
 
 /**
@@ -956,10 +1211,6 @@ export async function dispatchAgentsAction(
     return delegationDepthRefusal(team.delegation);
   }
   try {
-    const topic = input.topic?.trim() || 'message';
-    if (topic === PEER_REPLY_TOPIC) {
-      return { error: `topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes` };
-    }
     switch (input.action) {
       case 'fork':
         return await runFork(deps.fork!, input, mode, toolOptions, deps.budget);
@@ -1001,6 +1252,8 @@ export async function dispatchAgentsAction(
 
       case 'ask': {
         if (!input.agent || !input.message) return { error: 'ask requires agent and message' };
+        const asked = requestedTopic(input);
+        if ('error' in asked) return asked;
         if (team && await isSubordinate(input.agent)) {
           const assignment: Parameters<TeamToolDeps['assign']>[0] = {
             name: input.agent,
@@ -1019,7 +1272,7 @@ export async function dispatchAgentsAction(
         }
         if (peers) {
           return await peers.ask({
-            agent: input.agent, topic, message: input.message,
+            agent: input.agent, topic: asked.topic, message: input.message,
             timeoutMs: askTimeoutMs(input.timeout_seconds),
             mode,
           });
@@ -1029,6 +1282,8 @@ export async function dispatchAgentsAction(
 
       case 'send': {
         if (!input.agent || !input.message) return { error: 'send requires agent and message' };
+        const sent = requestedTopic(input);
+        if ('error' in sent) return sent;
         if (team && await isSubordinate(input.agent)) {
           const handoff = await team.message({ name: input.agent, content: input.message, mode });
           // Same delivered/queued vocabulary the peer transport already uses:
@@ -1041,7 +1296,7 @@ export async function dispatchAgentsAction(
           };
         }
         if (peers) {
-          return await peers.send({ agent: input.agent, topic, message: input.message, mode });
+          return await peers.send({ agent: input.agent, topic: sent.topic, message: input.message, mode });
         }
         return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
       }
@@ -1116,8 +1371,27 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
         ...forkProperties(deps),
         ...converseProperties(deps),
       },
+      // No `additionalProperties: false` here, deliberately. The AI SDK
+      // validates a tool call against this schema BEFORE `execute`, so the
+      // declaration refusing unknown properties would replace the message below
+      // with the SDK's generic "must NOT have additional properties" — a
+      // refusal the model cannot correct itself from, which is most of what
+      // this change is for. The parse in `execute` is the enforcement; this
+      // schema is what the model is TOLD.
     }),
-    execute: async (input: AgentsToolInput, toolOptions?: AgentsToolCallOptions) =>
-      dispatchAgentsAction(deps, input, toolOptions),
+    execute: async (input: AgentsToolInput, toolOptions?: AgentsToolCallOptions) => {
+      // The native surface parses too. Its inputs arrive schema-checked for
+      // TYPES and never for names, which is how `budgetUsd` reached the
+      // dispatcher and was read by nothing at all.
+      let parsed: AgentsToolInput;
+      try {
+        parsed = parseAgentsToolInput(input);
+      } catch (error) {
+        // Reason FIRST, the vocabulary a fork refusal already uses: a call the
+        // parse refused is bad input, not a tool that broke.
+        return { reason: 'bad_input', error: error instanceof Error ? error.message : String(error) };
+      }
+      return dispatchAgentsAction(deps, parsed, toolOptions);
+    },
   });
 }

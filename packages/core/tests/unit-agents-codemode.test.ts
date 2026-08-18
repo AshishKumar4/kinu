@@ -334,6 +334,33 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     expect(team.calls).toEqual([]);
   });
 
+  test('a misspelled field in a hand-built object is an error naming the field meant', async () => {
+    const team = makeTeam();
+    const peers = makePeers();
+    const ns = namespaceOf(() => ({ team: team.deps, peers: peers.deps }));
+    // The sandbox builds this object by hand with no schema behind it, so this
+    // is the surface where a name mistake was most invisible: the field was
+    // dropped and the call ran as if it had never been written.
+    const result = v.parse(ErrorResultSchema, await member(ns, 'ask').execute({
+      agent: 'researcher', message: 'go', timeoutSeconds: 30,
+    }));
+    expect(result.error).toContain('agents.ask: unknown field "timeoutSeconds" — did you mean "timeout_seconds"?');
+    expect(team.calls).toEqual([]);
+  });
+
+  test('the exec context is not read as a field, even beside the script\'s own options', async () => {
+    const team = makeTeam();
+    const ns = namespaceOf(() => ({ team: team.deps }));
+    // Both shapes the node sandbox produces: the context alone (above), and the
+    // context appended AFTER the script's object. Neither may reach the parse —
+    // `signal` is the host's, and refusing it as unknown would refuse the call
+    // the script actually made.
+    expect(await member(ns, 'list').execute(
+      { agent: 'researcher' },
+      { signal: new AbortController().signal },
+    )).toEqual({ roster: [rosterEntry] });
+  });
+
   test('a malformed field is an inspectable error, never a throw into the script', async () => {
     const peers = makePeers();
     const ns = namespaceOf(() => ({ peers: peers.deps }));

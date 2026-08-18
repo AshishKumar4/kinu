@@ -272,15 +272,18 @@ describe('what the live tool surface does with entry zero', () => {
     expect(() => parseAgentsToolInput(CALL)).toThrow();
   });
 
-  test('adding the action without its fields drops every one of them silently', () => {
-    // `AgentsToolInputSchema` is one flat `v.object`, and valibot's `object`
-    // EXCLUDES unknown entries rather than rejecting them. So `swarm` on the
-    // picklist and nothing else means `preset`, `objective`, `branches` and
-    // `depth` reach the dispatcher as ABSENT — indistinguishable from a caller
-    // who never sent them, which is the one distinction this spec exists to
-    // keep. Demonstrated through an action that is on the picklist today, so it
-    // is a property of the schema rather than of the missing action.
-    const smuggled = parseAgentsToolInput({
+  test('adding the action without its fields is refused, and the refusal names the action', () => {
+    // FLIPPED, not replaced (was: "drops every one of them silently"). The
+    // finding this pins is `FixtureZero`'s: `AgentsToolInputSchema` was one flat
+    // `v.object`, and valibot's `object` EXCLUDES unknown entries rather than
+    // rejecting them, so `swarm` on the picklist and nothing else meant
+    // `preset`, `objective`, `branches` and `depth` reached the dispatcher as
+    // ABSENT — indistinguishable from a caller who never sent them, which is the
+    // one distinction this spec exists to keep. It is `v.strictObject` now, and
+    // the assertion is the same call with the opposite verdict: still through an
+    // action that IS on the picklist, so it remains a property of the schema
+    // rather than of the missing action.
+    const smuggle = () => parseAgentsToolInput({
       action: 'fork',
       task: CALL.task,
       preset: CALL.preset,
@@ -288,36 +291,41 @@ describe('what the live tool surface does with entry zero', () => {
       branches: 8,
       depth: 4,
     });
-    expect(smuggled).toEqual({ action: 'fork', task: CALL.task });
+    expect(smuggle).toThrow(/unknown field "preset"/);
+    // Every one of them, not just the first: a refusal that named one field at a
+    // time would cost a round trip per field of the call entry zero writes.
+    for (const field of ['objective', 'branches', 'depth']) {
+      expect(smuggle).toThrow(new RegExp(`unknown field "${field}"`));
+    }
+    // And the correction: what `fork` does take, so a caller can fix the call
+    // from the message alone rather than guessing again.
+    expect(smuggle).toThrow(/action "fork" takes: task, forks, settle/);
   });
 
-  test('and the same silence already costs money on a shipping action', () => {
-    // Not latent. The caps DO exist on this schema — as `budget_usd` and
-    // `wall_clock_ms` — so a model spelling either in camelCase asks for a $5
-    // ceiling and gets none, with no error and no field recording that its
-    // request vanished. Independently reproduced by `Main` against the shipped
-    // parser. It composes with the naming collision entry zero also carries
-    // (`floor.bestKnownHonest` beside `merge_strategy`): camelCase-for-snake_case
-    // is the EXPECTED model error on this surface, not an exotic one.
-    const dropped = parseAgentsToolInput({
+  test('and the money case is refused by the spelling it got wrong', () => {
+    // FLIPPED (was: "the same silence already costs money on a shipping
+    // action"). The caps DO exist on this schema — as `budget_usd` and
+    // `wall_clock_ms` — and a model spelling either in camelCase used to ask for
+    // a $5 ceiling and get none, with no error and no field recording that its
+    // request vanished. Reproduced by `Main` against the shipped parser, and by
+    // `StrictAgentsInput` before the change. It composes with the naming
+    // collision entry zero also carries (`floor.bestKnownHonest` beside
+    // `merge_strategy`): camelCase-for-snake_case is the EXPECTED model error on
+    // this surface, not an exotic one — which is why the refusal has to name the
+    // snake_case spelling and not merely reject the key.
+    const camelCase = () => parseAgentsToolInput({
       action: 'fork', task: CALL.task, budgetUsd: 5, wallClockMs: 1_000,
     });
-    expect(dropped).toEqual({ action: 'fork', task: CALL.task });
+    expect(camelCase).toThrow(/unknown field "budgetUsd" — did you mean "budget_usd"\?/);
+    expect(camelCase).toThrow(/unknown field "wallClockMs" — did you mean "wall_clock_ms"\?/);
 
-    // Both spellings of the same request, and only one of them is heard.
+    // Both spellings of the same request: one is heard, and the other is now
+    // TOLD, where before it was dropped and the two were indistinguishable.
     expect(parseAgentsToolInput({
       action: 'fork', task: CALL.task, budget_usd: 5,
     })).toEqual({ action: 'fork', task: CALL.task, budget_usd: 5 });
   });
 });
-
-// SUCCESSOR ASSERTION, stated so the cutover is legible rather than a surprise.
-// `Main` is landing a strict input parser that refuses unknown keys with a message
-// naming the right spelling, plus a gate asserting the action picklist and the
-// declared field set agree. Both tests above then go red BY DESIGN, and their
-// replacement is the refusal: `parseAgentsToolInput` must throw on `budgetUsd`
-// and name `budget_usd`, and throw on a swarm field until the action declares it.
-// A test that passed both before and after would be asserting nothing.
 
 describe('pending the implementation, pinned so the fixture cannot be bypassed', () => {
   test('nothing resolves a named preset, so §6.5 validity has no input', () => {

@@ -178,7 +178,18 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
     tools[action] = {
       description: AGENTS_CODEMODE_DESCRIPTIONS[action],
       execute: async (...args: unknown[]) => {
-        const raw = args[0];
+        // The node sandbox appends its exec context as a trailing argument, so a
+        // member called with no options of its own arrives as `list({ signal })`.
+        // That object is the HOST's, never a field the script wrote: it is found
+        // by the signal it carries and taken out of the input, because an
+        // injected field refused as unknown would refuse the call the script
+        // actually made. Reading it positionally (`args[1]`) also lost
+        // cancellation for every zero-argument call.
+        let context: unknown;
+        for (const arg of args) {
+          if (readExecSignal({ context: arg }) !== undefined) context = arg;
+        }
+        const raw = args[0] === context ? undefined : args[0];
         const parsedRaw = raw === undefined ? undefined : v.safeParse(JsonValueSchema, raw);
         if (parsedRaw && (!parsedRaw.success || !isJsonObject(parsedRaw.output))) {
           return { error: `agents.${action}: expects a single options object` };
@@ -194,9 +205,7 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
         } catch (error) {
           return { error: `agents.${action}: ${error instanceof Error ? error.message : String(error)}` };
         }
-        // Cancellation rides the trailing exec-context arg the node sandbox
-        // appends; the cf loader passes only the model's own arguments.
-        const signal = readExecSignal({ context: args[1] });
+        const signal = readExecSignal({ context });
         return dispatchAgentsAction({ ...deps(), mode }, input, signal ? { abortSignal: signal } : undefined);
       },
     };

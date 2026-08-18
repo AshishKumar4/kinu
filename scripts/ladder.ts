@@ -594,6 +594,30 @@ export const LADDER: readonly Gate[] = [
       + 'that a ceiling on live scratch gets raised the first time it fires and deleted '
       + 'the second, so free inodes stay its invariant and ownership is this one.',
   },
+  {
+    run: 'bun run gate:agents-fields',
+    tier: 'commit',
+    seconds: 0.34,
+    catches: 'a field of the `agents` tool that the handler reads and nothing declares, or '
+      + 'declares and nothing reads. The input was one flat `v.object`, and valibot\'s '
+      + '`object` EXCLUDES an unknown entry rather than rejecting it, so '
+      + '`{ action:"fork", task:"x", budgetUsd:5, wallClockMs:1000 }` parsed to '
+      + '`{ action:"fork", task:"x" }` — measured against the shipped parser 2026-08-18. Both '
+      + 'spend caps gone with no error and nothing recording the loss. The structural half is '
+      + 'what this holds: an action can join AGENTS_TOOL_ACTIONS while its fields never join '
+      + 'the schema, and every symptom is a field arriving ABSENT. Not a tautology — the two '
+      + 'sides are the DECLARATION (the picklist in registry.ts, AGENTS_ACTION_FIELDS and the '
+      + 'schema entries) and the CODE (the `input.<field>` reads each `case` arm of '
+      + 'dispatchAgentsAction performs, followed through every whole-input hand-off, including '
+      + 'across the module boundary into readMissionLimits where budget_usd is actually read). '
+      + '31 reads over 7 arms and 6 hops today. An input handed somewhere it cannot follow '
+      + 'fails the gate instead of being skipped, so a green cannot come from a walk that '
+      + 'stopped early.',
+    blind: 'what a read is USED for — a read whose value is discarded still counts — and field '
+      + 'TYPES entirely. The advertised JSON Schema is bound to the same map at compile time '
+      + '(the property types are derived from it) and asserted under full deps in '
+      + 'unit-agents-tool.test.ts, so this gate deliberately does not build a tool.',
+  },
 ];
 
 /**
