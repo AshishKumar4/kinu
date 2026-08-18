@@ -18,7 +18,7 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import type { ToolSet } from 'ai';
-import type { SqlExecRow, SqlValue } from '@proteus/core';
+import type { IngressDescriptor, SqlExecRow, SqlValue } from '@proteus/core';
 import * as v from 'valibot';
 import { mockAgentsSdk } from './agents-sdk';
 import { platformGatewayEnv } from './platform-gateway';
@@ -38,6 +38,12 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
+  /** Admit one event, through the only writer allowed to: `publish` is the
+   *  single admitted author of `kind='event'` rows, so a test that wants an
+   *  event in the log goes through it rather than around it with an INSERT. */
+  publishHarnessEvent(descriptor: IngressDescriptor, now: number): void {
+    this.eventLog.publish({ descriptor, now });
+  }
 }
 
 class HarnessSubordinateAgent extends SubordinateAgent {

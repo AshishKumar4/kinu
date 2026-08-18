@@ -84,10 +84,15 @@ const KNOWN_TWINS: readonly string[] = [
   // + the local auth store. Only the memoisation is common, and memoisation is
   // not a module.
   'getWebSearchProvider',
-  // Both already read the one core EventLog.query; what differs after it is a
-  // projection into the web wire shape, which only cf has. A core symbol here
-  // would be a passthrough, and `.query` is too generic a name for the
-  // delegation check to prove anything with. Not expected to shrink.
+  // Both already read the one core EventLog.query; what differs after it is
+  // cf's ten-field allowlist over the row, which drops the log's own plumbing
+  // (schema_version, dedupe_key, reply_channel) before it leaves the
+  // workspace. Both answer a bare list — the shape is NOT part of the
+  // divergence, and was only ever divergent by accident: cf wrapped its rows in
+  // `{ events: [...] }` and `proteus inspect events` silently stopped
+  // formatting them. A core symbol here would be a passthrough, and `.query` is
+  // too generic a name for the delegation check to prove anything with. Not
+  // expected to shrink.
   'listRecentEvents',
   // One shaper, two sources — the divergence is real: cf digests its durable
   // assistant_messages rows (inheritedContextFromRows), the CLI reads live
