@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/prompting/volatile-context.ts b/packages/core/src/prompting/volatile-context.ts
-index 9a382d0..8f967ce 100644
+index 8cb12385..57275ab8 100644
 --- a/packages/core/src/prompting/volatile-context.ts
 +++ b/packages/core/src/prompting/volatile-context.ts
-@@ -368,7 +368,7 @@ export class DynamicContextLedger {
+@@ -607,7 +607,7 @@ export class DynamicContextLedger {
      const text = renderDynamicContextBlock(state);
      // A null render appends nothing; frozen blocks stay regardless (removing
      // a mid-array message would break the provider prefix cache).
 -    if (text !== null && this.blocks[this.blocks.length - 1]?.text !== text) {
 +    if (text !== null && this.blocks[this.blocks.length - 1]?.text === text) {
-       this.blocks.push({ index: history.length, text, message: { role: 'user', content: text } });
-     }
-     const woven: ModelMessage[] = [];
+       this.blocks.push({
+         index: history.length,
+         text,

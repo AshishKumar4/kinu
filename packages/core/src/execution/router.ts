@@ -69,6 +69,9 @@ export class DefaultExecutionRouter implements ExecutionRouter {
         active: status.active,
         status: status.status,
       };
+      if (p.unmeasuredCapabilities !== undefined && p.unmeasuredCapabilities.size > 0) {
+        info.unmeasuredCapabilities = [...p.unmeasuredCapabilities];
+      }
       if (status.reason !== undefined) Object.assign(info, { reason: status.reason });
       if (p.resourceLimits !== undefined) Object.assign(info, { resourceLimits: p.resourceLimits });
       return info;

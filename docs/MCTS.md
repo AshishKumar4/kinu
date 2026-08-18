@@ -141,10 +141,39 @@ band the branch lands.
 
 `f` is the **measured** share of generated checks the code satisfied —
 `passedChecks / totalChecks` — and it is LATS's backpropagated reward
-(`passed_test_count / len(tests)`). `j` is the **median** of up to
-`judgeSamples` judge calls; samples that fail to parse are dropped rather than
-scored zero, and if every sample fails the branch falls to its band floor. An
-empty trajectory scores a hard 0 without spending a judge call.
+(`passed_test_count / len(tests)`). `j` is the **median** of `judgeSamples` judge
+calls; samples that fail to parse are dropped rather than scored zero, and if
+every sample fails the branch falls to its band floor. An empty trajectory scores
+a hard 0 without spending a judge call.
+
+### `judgeSamples` is a request, and `maxEvalLLMCalls` is its ceiling
+
+The two knobs share **one** per-evaluation call pool. `maxEvalLLMCalls` is the
+whole pool; on a code-bearing branch one of those calls buys the generated check
+suite, so the ensemble gets what is left. `judgeCallBudget`
+(`mcts/evaluation.ts`) is the single place that arithmetic lives:
+
+| Branch | Realised ensemble | On shipped defaults (3, 4) |
+|---|---|---|
+| code the executor can run | `min(judgeSamples, maxEvalLLMCalls − 1)` | 3 |
+| prose only, or `plan` mode | `min(judgeSamples, maxEvalLLMCalls)` | 3 |
+| `maxEvalLLMCalls: 1` | 1 — no check suite is bought | 1 |
+
+A request above the ceiling is realised AT the ceiling, so `judgeSamples: 20` on
+shipped defaults runs a **3**-sample ensemble on every code branch. That is not
+silent: the realised size comes back on each evaluation as
+`BranchEvaluation.judgeSamplesAttempted`, the engine logs
+`mcts.judge_ensemble_clamped` (`judgeSamplesRequested` / `judgeSamplesRealised` /
+`maxEvalLLMCalls`) once per realised size per search, the heads path logs
+`head.judge_ensemble_clamped` the same way, and `mcts_search_runs.config_json`
+records both RESOLVED knobs so the run read model
+(`read-models/fork-params.ts`) can report requested-versus-realised afterwards.
+Raising the request alone buys nothing — `maxEvalLLMCalls` has to move with it.
+
+`judgeSamplesAttempted` is also what separates two facts a single count used to
+conflate: `judgeSamplesUsed: 0` with `judgeSamplesAttempted: 3` is an ensemble
+that answered nothing usable, while `judgeSamplesAttempted: 0` is a cascade that
+short-circuited before the ensemble was asked at all.
 
 **Why the fail band is positioned by `f` and not by `j`.** The judge is asked
 nothing there. A whole suite appended into one run stops at the first throw, so

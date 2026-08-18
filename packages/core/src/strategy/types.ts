@@ -10,6 +10,7 @@
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { MissionScope } from '../mission-budget';
 import type { ModelCallSink } from '../events/model-call';
+import type { CostModel } from '../mcts/cost';
 import type { LanguageModel } from 'ai';
 import type { WorkMode } from '../prompting/surface';
 import type { JsonValue } from '../utils/json';
@@ -77,6 +78,16 @@ export interface StrategyContext {
    * Absent = unreported, which the coverage fraction states rather than hides.
    */
   reportModelCall?: ModelCallSink;
+  /**
+   * The model this exploration runs on and what the catalog charges for it,
+   * for any strategy that gates on projected spend before starting (MCTS's
+   * `maxCostUSD`). Read lazily — the catalog lookup lands asynchronously.
+   *
+   * Absent = that gate prices at the blended fallback and states it. A gate
+   * that treated absence as free would wave through the most expensive models
+   * in the catalog, which is the worse of the two failures.
+   */
+  costModel?: () => CostModel;
   signal?: AbortSignal;
 }
 

@@ -102,7 +102,7 @@ def arbitrate (c : Caps) (dec : Decorrelate) (adv : Advance) (p : Proposal) : Ve
   else if p.branches < 2 ∨ 4 < p.branches then .refused .widthOutOfRange
   else if c.maxDepth ≤ p.atDepth then .refused .depthExhausted
   else if c.remainingBudget < p.branches then .refused .budgetExhausted
-  else if dec = .fresh ∧ p.inherit = true then .refused .decorrelateConflict
+  else if dec = .blind ∧ p.inherit = true then .refused .decorrelateConflict
   else .accepted p.branches
 
 /-! ## S8 — a proposal cannot exceed the arbiter
@@ -121,7 +121,7 @@ theorem accepted_iff (c : Caps) (dec : Decorrelate) (adv : Advance) (p : Proposa
         ∧ ¬(p.branches < 2 ∨ 4 < p.branches)
         ∧ ¬(c.maxDepth ≤ p.atDepth)
         ∧ ¬(c.remainingBudget < p.branches)
-        ∧ ¬(dec = .fresh ∧ p.inherit = true)
+        ∧ ¬(dec = .blind ∧ p.inherit = true)
         ∧ n = p.branches) := by
   unfold arbitrate
   by_cases h1 : adv = .archive ∨ adv = .none
@@ -132,7 +132,7 @@ theorem accepted_iff (c : Caps) (dec : Decorrelate) (adv : Advance) (p : Proposa
       · simp [h1, h2, h3]
       · by_cases h4 : c.remainingBudget < p.branches
         · simp [h1, h2, h3, h4]
-        · by_cases h5 : dec = .fresh ∧ p.inherit = true
+        · by_cases h5 : dec = .blind ∧ p.inherit = true
           · simp [h1, h2, h3, h4, h5]
           · simp only [h1, h2, h3, h4, h5, if_false, Verdict.accepted.injEq,
               not_false_eq_true, true_and, and_true]
@@ -164,13 +164,13 @@ theorem accepted_width_in_range (c : Caps) (dec : Decorrelate) (adv : Advance)
   omega
 
 /-- **A node may narrow, never widen** (section 8.4). `inherit` is validated
-    AGAINST the search's `decorrelate`, so a run configured `decorrelate:'fresh'`
+    AGAINST the search's `decorrelate`, so a run configured `decorrelate:'blind'`
     refuses `inherit: true` rather than quietly honouring one of two conflicting
     policies. Same shape as the mission-budget rule that an inner cap can only
     ever be tighter than the outer one. -/
 theorem accepted_respects_decorrelate (c : Caps) (adv : Advance) (p : Proposal)
-    (n : Nat) (h : arbitrate c .fresh adv p = .accepted n) : p.inherit = false := by
-  obtain ⟨-, -, -, -, hdec, -⟩ := (accepted_iff c .fresh adv p n).mp h
+    (n : Nat) (h : arbitrate c .blind adv p = .accepted n) : p.inherit = false := by
+  obtain ⟨-, -, -, -, hdec, -⟩ := (accepted_iff c .blind adv p n).mp h
   simpa using hdec
 
 /-- **A selector that does not expand at a node refuses**, naming the policy
@@ -227,7 +227,7 @@ theorem every_refusal_is_reachable :
         { branches := 3, atDepth := 1, inherit := false } = .refused .depthExhausted
     ∧ arbitrate { maxDepth := 5, remainingBudget := 1 } .angles .uct
         { branches := 3, atDepth := 1, inherit := false } = .refused .budgetExhausted
-    ∧ arbitrate { maxDepth := 5, remainingBudget := 10 } .fresh .uct
+    ∧ arbitrate { maxDepth := 5, remainingBudget := 10 } .blind .uct
         { branches := 3, atDepth := 1, inherit := true } = .refused .decorrelateConflict := by
   refine ⟨by decide, by decide, by decide, by decide, by decide⟩
 

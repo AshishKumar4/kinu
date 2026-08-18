@@ -164,9 +164,12 @@ function actionEnumOf(deps: TestAgentsToolDeps): string[] {
 // ── Structural gating: one gate, two surfaces ───────────────────────────────
 
 describe('agents.* codemode namespace — dep gating', () => {
-  test('fork-only deps (CLI / subordinate) expose exactly agents.fork', () => {
+  test('fork-substrate deps (CLI / subordinate) expose the two search members', () => {
     const deps = withBuildMode({ fork: forkDeps() });
-    expect(Object.keys(namespaceOf(() => deps))).toEqual(['fork']);
+    // `swarm` rides the same substrate as `fork` — a model to expand with and a
+    // workspace to measure in — so a sandbox that can fan out can also run a
+    // configured search, and the namespace says so structurally.
+    expect(Object.keys(namespaceOf(() => deps))).toEqual(['fork', 'swarm']);
   });
 
   test('full deps (the workspace orchestrator) expose every action', () => {
@@ -332,6 +335,33 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     // of a subordinate named after the context.
     expect(await member(ns, 'list').execute({ signal: new AbortController().signal })).toEqual({ subordinates: [rosterEntry] });
     expect(team.calls).toEqual([]);
+  });
+
+  test('a misspelled field in a hand-built object is an error naming the field meant', async () => {
+    const team = makeTeam();
+    const peers = makePeers();
+    const ns = namespaceOf(() => ({ team: team.deps, peers: peers.deps }));
+    // The sandbox builds this object by hand with no schema behind it, so this
+    // is the surface where a name mistake was most invisible: the field was
+    // dropped and the call ran as if it had never been written.
+    const result = v.parse(ErrorResultSchema, await member(ns, 'ask').execute({
+      agent: 'researcher', message: 'go', timeoutSeconds: 30,
+    }));
+    expect(result.error).toContain('agents.ask: unknown field "timeoutSeconds" — did you mean "timeout_seconds"?');
+    expect(team.calls).toEqual([]);
+  });
+
+  test('the exec context is not read as a field, even beside the script\'s own options', async () => {
+    const team = makeTeam();
+    const ns = namespaceOf(() => ({ team: team.deps }));
+    // Both shapes the node sandbox produces: the context alone (above), and the
+    // context appended AFTER the script's object. Neither may reach the parse —
+    // `signal` is the host's, and refusing it as unknown would refuse the call
+    // the script actually made.
+    expect(await member(ns, 'list').execute(
+      { agent: 'researcher' },
+      { signal: new AbortController().signal },
+    )).toEqual({ roster: [rosterEntry] });
   });
 
   test('a malformed field is an inspectable error, never a throw into the script', async () => {

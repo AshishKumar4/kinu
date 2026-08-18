@@ -98,6 +98,23 @@ export function isDeviceNotConnectedError<T>(err: T): boolean {
   return message.includes(NO_DEVICE_CONNECTED) || message.includes(TUNNEL_DISCONNECTED);
 }
 
+/**
+ * The prefix the daemon answers for a method it does not implement
+ * (`packages/pc-agent/src/index.js`: `'unknown method: ' + method`).
+ *
+ * Load-bearing for any OPTIONAL method: an install too old to know it is not a
+ * failed call, and for the toolchain probe the difference is the difference
+ * between "this machine has no python" and "nobody could ask". Pinned against
+ * the daemon's own source in cf-backend's device-hub test, since the daemon
+ * ships as one dependency-free file and cannot import this.
+ */
+export const DEVICE_UNKNOWN_METHOD = 'unknown method';
+
+/** Whether a rejection is the daemon saying it has never heard of the method. */
+export function isDeviceUnknownMethodError<T>(err: T): boolean {
+  return (err instanceof Error ? err.message : String(err)).includes(DEVICE_UNKNOWN_METHOD);
+}
+
 export class DeviceTunnel {
   private pending = new Map<string, Pending>();
   private seq = 0;

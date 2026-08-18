@@ -16,9 +16,9 @@ function memoryStore(): DevicePresenceStore {
 
 describe('devicePresence', () => {
   test('reduces the hub snapshot to the three prompt states', () => {
-    expect(devicePresence({ connected: true, registered: true })).toBe('connected');
-    expect(devicePresence({ connected: false, registered: true })).toBe('offline');
-    expect(devicePresence({ connected: false, registered: false })).toBe('none');
+    expect(devicePresence({ connected: true, registered: true, toolchain: null })).toBe('connected');
+    expect(devicePresence({ connected: false, registered: true, toolchain: null })).toBe('offline');
+    expect(devicePresence({ connected: false, registered: false, toolchain: null })).toBe('none');
   });
 });
 
@@ -76,23 +76,23 @@ describe('observeDevicePresence', () => {
   test('a mid-session connect is announced on exactly the next turn', () => {
     const store = memoryStore();
     // Turn 1: no device yet — first observation seeds the watermark silently.
-    expect(observeDevicePresence(store, { connected: false, registered: false }))
+    expect(observeDevicePresence(store, { connected: false, registered: false, toolchain: null }))
       .toEqual({ presence: 'none', notice: null });
     // The user runs `proteus connect` between turns.
-    const turn2 = observeDevicePresence(store, { connected: true, registered: true });
+    const turn2 = observeDevicePresence(store, { connected: true, registered: true, toolchain: null });
     expect(turn2.presence).toBe('connected');
     expect(turn2.notice).toContain('just connected');
     // Turn 3: same state — no repeat notice.
-    expect(observeDevicePresence(store, { connected: true, registered: true }).notice).toBeNull();
+    expect(observeDevicePresence(store, { connected: true, registered: true, toolchain: null }).notice).toBeNull();
   });
 
   test('disconnect then reconnect produces one notice per transition', () => {
     const store = memoryStore();
-    observeDevicePresence(store, { connected: true, registered: true });
-    expect(observeDevicePresence(store, { connected: false, registered: true }).notice)
+    observeDevicePresence(store, { connected: true, registered: true, toolchain: null });
+    expect(observeDevicePresence(store, { connected: false, registered: true, toolchain: null }).notice)
       .toContain('disconnected');
-    expect(observeDevicePresence(store, { connected: false, registered: true }).notice).toBeNull();
-    expect(observeDevicePresence(store, { connected: true, registered: true }).notice)
+    expect(observeDevicePresence(store, { connected: false, registered: true, toolchain: null }).notice).toBeNull();
+    expect(observeDevicePresence(store, { connected: true, registered: true, toolchain: null }).notice)
       .toContain('just connected');
   });
 });

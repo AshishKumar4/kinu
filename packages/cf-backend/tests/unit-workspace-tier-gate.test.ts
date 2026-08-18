@@ -107,6 +107,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'mcp.manage', name: 'userMcp_handleOAuthCallback', run: (u, c) => u.userMcp_handleOAuthCallback(c, 'https://app/api/user/mcp/callback') },
 
   { capability: 'device.rpc', name: 'deviceRpc', run: (u, c) => u.deviceRpc(c, 'exec', ['ls'], { agentName: WORKSPACE }) },
+  { capability: 'device.rpc', name: 'deviceRuntimeStatus', run: (u, c) => u.deviceRuntimeStatus(c) },
 
   { capability: 'device.consent', name: 'getDeviceFsConsent', run: (u, c) => u.getDeviceFsConsent(c, WORKSPACE) },
   { capability: 'device.consent', name: 'setDeviceConsentScope', run: (u, c) => u.setDeviceConsentScope(c, WORKSPACE, 'dev-1', 'all_local_actions') },

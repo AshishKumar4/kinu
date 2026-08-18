@@ -648,6 +648,10 @@ export { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window';
 // Runtime builder (shared across backends)
 export { buildRuntime } from './runtime-builder';
 export type { RuntimeComponents } from './runtime-builder';
+export { createAgentStores } from './state/agent-stores';
+export type { AgentStores } from './state/agent-stores';
+export { collectDynamicContext } from './state/dynamic-context';
+export type { DynamicContextInput } from './state/dynamic-context';
 
 // MCTS engine
 export { runMCTS } from './mcts/engine';
@@ -828,9 +832,14 @@ export {
   createDeviceTunnelExecutor, type DeviceTransport,
   explainNativeToolReferenceError,
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
-  DEVICE_PRESENCE_CONFIG_KEY,
+  deviceToolchainAnswer, freshDeviceToolchain,
+  DEVICE_PRESENCE_CONFIG_KEY, DEVICE_TOOLCHAIN_TTL_MS,
   type DeviceStatus, type DevicePresence, type DevicePresenceStore,
+  type DeviceToolchain,
+  TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_PROBED_CAPABILITIES,
+  TOOLCHAIN_UNPROBEABLE, toolchainCapabilities,
   DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
+  DEVICE_UNKNOWN_METHOD, isDeviceUnknownMethodError,
   createNimbusExecutor, createNimbusWorkspaceExecutor, nimbusSessionShell,
   type NimbusExecutorOpts, type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
   type NimbusStartResult,

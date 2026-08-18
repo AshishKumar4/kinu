@@ -10,6 +10,7 @@ import {
 } from '@proteus/core';
 import type { UserDO } from './user-do';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
+import { retryTransientDO } from '../lib/do-rpc';
 import type { UserCaller } from './workspace-capability';
 
 export interface ModelMenuEntry {
@@ -53,7 +54,9 @@ export async function listAvailableModels(env: Env, userId: string, caller: User
 
   // openai-compat: user-named — we surface each as a single generic entry.
   // The agent_config.model can be set to `openai-compat:<name>/<modelId>`.
-  const creds = await stub.listCredentials(caller);
+  // Retried: a dropped read here renders a user's connected accounts as none at
+  // all, which sends them to re-authorise a provider they never lost.
+  const creds = await retryTransientDO('listCredentials', () => stub.listCredentials(caller));
   for (const c of creds) {
     if (c.key.startsWith('openai-compat.')) {
       const name = c.key.slice('openai-compat.'.length);
@@ -112,7 +115,7 @@ export async function listProviderCatalog(env: Env, userId: string, caller: User
   const { registry } = createAgentProviderRegistry({ env, userDO: { stub, caller }, fetch });
   const [providers, creds] = await Promise.all([
     listModelsDevProviders({ fetch }),
-    stub.listCredentials(caller),
+    retryTransientDO('listCredentials', () => stub.listCredentials(caller)),
   ]);
   return buildProviderCatalog(
     providers,

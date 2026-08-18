@@ -181,11 +181,11 @@ export class HeadJournal {
    * settles the fork's background job without the controller ever reaching
    * {@link recordReport} — so at the start of an activation that predicate is
    * false for every row still carrying it, whatever became of the executor.
-   * Left alone the row is PERMANENT, and {@link listLive}'s `HAVING running >
-   * 0` then asserts the fork is in flight into every model step for the life
-   * of the workspace. That is what it did: `background_jobs` read `cancelled
-   * by operator` while the dynamic-context block kept rendering "4 of 4 heads
-   * running".
+   * Left alone the row is PERMANENT, and its root then satisfies
+   * {@link listLive}'s running-head predicate forever, asserting the fork is in
+   * flight into every model step for the life of the workspace. That is what it
+   * did: `background_jobs` read `cancelled by operator` while the
+   * dynamic-context block kept rendering "4 of 4 heads running".
    *
    * `scope` narrows it to one run, for the re-drive that reclaims that run's
    * identity: same transition, same `error_message` column, so a reclaim does
@@ -356,6 +356,17 @@ export class HeadJournal {
    * Deliberately narrower than {@link listRuns}: no per-head steps, no merge
    * synthesis, one query. It is read on every request of every turn, and a
    * roster line only has to say which run is open and how far along it is.
+   *
+   * The `root_id IN (running)` subquery is what keeps it that way. Aggregating
+   * the whole table first and filtering the groups with `HAVING running > 0`
+   * reads every head ever spawned — the journal has no GC, so that scan grows
+   * for the life of the workspace and is paid on every model step, against a
+   * roster that is empty almost all the time. Measured on bun:sqlite with this
+   * DDL, one live root among settled ones: 1.6 ms at 4k head rows and 41.5 ms
+   * at 80k, versus 0.004 ms and 0.007 ms here — the scan grows with the table
+   * and this does not. Selecting the open roots off
+   * `idx_head_journal_status` first bounds the aggregate to those roots, and
+   * the result is identical: every root with a running head, and no other.
    */
   listLive(limit = 8): LiveHeadRun[] {
     return this.sql<{ root_id: string; rationale: string | null; running: number; total: number; spawned_at: number }>`
@@ -365,7 +376,8 @@ export class HeadJournal {
              COUNT(*) AS total,
              MIN(j.spawned_at) AS spawned_at
       FROM head_journal j LEFT JOIN head_runs r ON r.root_id = j.root_id
-      GROUP BY j.root_id HAVING running > 0
+      WHERE j.root_id IN (SELECT root_id FROM head_journal WHERE status = 'running')
+      GROUP BY j.root_id
       ORDER BY spawned_at DESC LIMIT ${limit}`
       .map((row) => ({
         rootId: row.root_id,

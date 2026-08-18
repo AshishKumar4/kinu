@@ -93,6 +93,10 @@ export interface PromptExecutorInfo {
   name: string;
   kind?: string;
   capabilities?: readonly string[];
+  /** Capabilities the environment can neither claim nor rule out. Rendered
+   *  separately from the declared set: a model that reads an omission as an
+   *  absence never tries the one thing the machine may have been attached for. */
+  unmeasuredCapabilities?: readonly string[];
   available?: boolean;
   configured?: boolean;
   active?: boolean;

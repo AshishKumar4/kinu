@@ -121,7 +121,12 @@ const SHARED_TRANSPORTS = {
   createDurableWebhook: 'registerDurableWebhook',
   createMCTSSession: 'createDurableMctsSession',
   createTimerTrigger: 'createTimerTrigger',
-  dynamicContextSnapshot: 'agentDynamicContext',
+  // Both bodies were the SAME eight-field literal binding each live plane to the
+  // store that answers it — `agentDynamicContext` owned which planes exist, but
+  // which store fed each one was stated once per backend. state/dynamic-context.ts
+  // now holds that binding, so each side passes only what it alone knows: its
+  // turn's memory tail and its own unreachable-MCP roster.
+  dynamicContextSnapshot: 'collectDynamicContext',
   emitHeadPhase: 'headPhaseRunEvent',
   getAlwaysActiveSkills: 'getAlwaysActiveSkills',
   getEvolutionChangelog: 'getEvolutionChangelog',
@@ -154,7 +159,6 @@ const SHARED_TRANSPORTS = {
   proposeScaffold: 'proposeScaffold',
   recordHeadsTake: 'recordGroundedHeadsTake',
   recordSystemPromptHash: 'observeSystemPromptHash',
-  renderFactsForTurn: 'renderFactsForTurn',
   resumeBackgroundJob: 'resumeForkBackgroundJob',
   revertChangelogEntry: 'revertChangelogEntryById',
   revokeShellApprovalGrants: 'revokeShellApprovalGrants',

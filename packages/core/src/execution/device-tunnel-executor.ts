@@ -25,7 +25,13 @@ import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { formatExecResult, parseStatLine, refusalText } from './exec-result';
 import { ProteusError, toProteusError } from '../obs/index';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
-import type { DeviceStatus } from './device-status';
+import {
+  freshDeviceToolchain,
+  type DeviceStatus, type DeviceToolchain,
+} from './device-status';
+import {
+  TOOLCHAIN_PROBED_CAPABILITIES, TOOLCHAIN_UNPROBEABLE,
+} from './toolchain';
 import { isDeviceNotConnectedError } from './device-tunnel';
 import { readExecSignal } from './signal';
 import {
@@ -37,6 +43,22 @@ import {
 const NOT_CONNECTED =
   'No device connected. Connect your machine once at the user level ' +
   '(Devices / Executors tab → "Connect a device", or run the Proteus CLI: `proteus connect`).';
+
+/** True by construction rather than by probe — properties of this executor's
+ *  own wiring, which no answer from the machine could confirm or deny. Read the
+ *  provider below for what each one rests on. */
+const STRUCTURAL: readonly ExecutorCapability[] = [
+  'native_binary', 'shell', 'fs_owned', 'net_outbound', 'process_spawn',
+] as const;
+
+/** What this row can only learn from the machine: everything a PATH lookup
+ *  settles, plus the two it cannot settle at all. Both belong here — a
+ *  capability nobody can answer for is unmeasured on every row, forever, and
+ *  dropping it silently would read as measured absent. */
+const ASKED_OF_THE_MACHINE: readonly ExecutorCapability[] = [
+  ...TOOLCHAIN_PROBED_CAPABILITIES,
+  ...TOOLCHAIN_UNPROBEABLE.map(([capability]) => capability),
+];
 
 /**
  * `unavailable` — the user has no machine attached right now, and connecting one
@@ -126,6 +148,32 @@ export function createDeviceTunnelExecutor(
       };
     }
     return { configured: false, available: false, active: false, status: 'not_configured' };
+  };
+
+  // Derived per read, not frozen at construction: a device that connects — or
+  // installs a toolchain onto itself mid-session, which the agent can do through
+  // `exec` — must change this row without rebuilding the provider. Memoised on
+  // the very answer it was derived from, so repeated reads cost one subtraction.
+  let memo: {
+    from: DeviceToolchain | null;
+    capabilities: ReadonlySet<ExecutorCapability>;
+    unmeasured: ReadonlySet<ExecutorCapability>;
+  } | null = null;
+
+  const derived = () => {
+    const answer = freshDeviceToolchain(transport.status().toolchain, Date.now());
+    if (memo?.from === answer) return memo;
+    // Anything the answer's own scope covers is measured — named in `present`,
+    // or absent because it was looked for and not found. Anything outside that
+    // scope was never measured, which includes every entry when there is no
+    // answer at all and `docker`/`gpu` even when there is one.
+    const measured = answer?.asked ?? [];
+    memo = {
+      from: answer,
+      capabilities: new Set([...STRUCTURAL, ...answer?.present ?? []]),
+      unmeasured: new Set(ASKED_OF_THE_MACHINE.filter((c) => !measured.includes(c))),
+    };
+    return memo;
   };
 
   const tools: ExecutorProvider['tools'] = {
@@ -258,12 +306,40 @@ export function createDeviceTunnelExecutor(
     files,
     homeDir: files.homeDir,
     kind: 'laptop',
-    capabilities: new Set<ExecutorCapability>([
-      'javascript', 'typescript', 'python', 'native_binary',
-      'shell', 'npm', 'git', 'docker',
-      'fs_owned', 'net_outbound', 'net_inbound',
-      'process_spawn', 'process_long', 'process_signal', 'gpu',
-    ]),
+    // The set is rendered into the model's execution block ("— runs: …",
+    // prompting/volatile-context.ts), which is where work is routed: a
+    // declared-but-absent capability sends work to the user's hardware, behind
+    // a consent prompt they granted, and fails there, while a present-but-
+    // undeclared one means the work never goes there at all.
+    //
+    // STRUCTURAL is what the tunnel's existence and this provider's own tools
+    // establish, with no probe needed:
+    //
+    //   shell          `exec` runs commands through the device's own shell.
+    //   native_binary  the daemon holding this tunnel open is one, on that
+    //                  machine.
+    //   fs_owned       the device's real files, behind the consent boundary.
+    //   net_outbound   the device dialled this hub to get here.
+    //   process_spawn  `exec` can start a child.
+    //
+    // `net_inbound`, `process_long` and `process_signal` are refuted by this
+    // file: `exposePort` below answers `supported: false` because the device is
+    // behind the user's NAT, and no tool in the `laptop` namespace can keep or
+    // signal a process — the surface is exec, readFile, writeFile, readdir,
+    // exists. Refuted, so they are absent rather than unmeasured.
+    //
+    // Everything else comes from the machine's own answer, carried on the hub
+    // snapshot (./device-status). Three states, and the third is load-bearing:
+    // an answer that names a capability is evidence FOR it, an answer whose
+    // scope covers it and does not name it is evidence AGAINST it, and no
+    // answer at all is neither — an old daemon that cannot be asked is not a
+    // machine without python.
+    get capabilities() {
+      return derived().capabilities;
+    },
+    get unmeasuredCapabilities() {
+      return derived().unmeasured;
+    },
     isAvailable: () => transport.status().connected,
     getStatus,
     connect: async () => {

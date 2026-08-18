@@ -9,7 +9,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
-import { createTestRuntime, createMockSession } from './helpers';
+import { createTestRuntime, createMockSession, captureConsole } from './helpers';
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
@@ -338,6 +338,65 @@ describe('MCTS integration', () => {
     expect(llm.judgeCalls()).toBe(2);
   });
 
+  // The invisible spend ceiling (2026-08-18): a search told `judgeSamples: 20`
+  // ran three-sample ensembles on shipped defaults, and nothing said so. Keyed
+  // on the stable dotted NAME, which is what a spend query would filter on.
+  const isClampLine = (line: string): boolean =>
+    line.includes('"event":"mcts.judge_ensemble_clamped"');
+
+  test('a judge request the call budget cannot fund is realised at the ceiling AND disclosed', async () => {
+    const llm = countingLLM('{"score": 0.5}');
+    const { rt } = createTestRuntime();
+    rt.llm = llm;
+    rt.judgeModel = llm;
+    // A code-bearing branch: one of its four evaluation calls buys the check
+    // suite, so the twenty-sample request is funded at three.
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'approach\n```js\nconst x = 42;\n```' }),
+      generateReflection: async () => ({ text: 'n/a' }),
+    });
+
+    initTables(rt);
+    const { stderr } = await captureConsole(() =>
+      runMCTS(rt, createMockSession(), 'twenty judges please', {
+        budget: 1, branches: 1, judgeSamples: 20,
+      }),
+    );
+
+    // One branch, so the judge-prompt count IS the realised ensemble size.
+    expect(llm.judgeCalls()).toBe(3);
+
+    // Fields, not prose: the pair a spend question needs, both scalars.
+    const lines = stderr.filter(isClampLine);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!).fields).toMatchObject({
+      mode: 'build',
+      judgeSamplesRequested: 20,
+      judgeSamplesRealised: 3,
+      maxEvalLLMCalls: 4,
+    });
+  });
+
+  test('a judge request the budget funds is not reported as clamped', async () => {
+    const llm = countingLLM('{"score": 0.5}');
+    const { rt } = createTestRuntime();
+    rt.llm = llm;
+    rt.judgeModel = llm;
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'approach\n```js\nconst x = 42;\n```' }),
+      generateReflection: async () => ({ text: 'n/a' }),
+    });
+
+    initTables(rt);
+    const { stdout, stderr } = await captureConsole(() =>
+      runMCTS(rt, createMockSession(), 'two judges is fine', {
+        budget: 1, branches: 1, judgeSamples: 2,
+      }),
+    );
+    expect(llm.judgeCalls()).toBe(2);
+    expect([...stdout, ...stderr].filter(isClampLine)).toHaveLength(0);
+  });
+
   test('sequential tasks on one DB do not contaminate each other (fresh root per task)', async () => {
     // Regression: converge used to leave the winner status='open', so the
     // SECOND runMCTS's global-argmax UCT selected the FIRST task's high-value
@@ -403,6 +462,52 @@ describe('MCTS integration', () => {
     await expect(
       runMCTS(rt, session, 'huge task', { budget: 1000, branches: 10, maxCostUSD: 0.01 }),
     ).rejects.toThrow('exceeds limit');
+  });
+
+  test('cost guard names the model and the basis of its estimate', async () => {
+    const { rt } = createTestRuntime();
+    initTables(rt);
+
+    // A model the catalog DOES price: the refusal must be attributable, so an
+    // operator can tell a real cap from a mispriced one.
+    await expect(
+      runMCTS(rt, createMockSession(), 'huge task', {
+        budget: 1000, branches: 10, maxCostUSD: 0.01,
+        costModel: () => ({
+          spec: 'anthropic/claude-fable-5',
+          pricing: { input: 10, output: 50 },
+        }),
+      }),
+    ).rejects.toThrow(/anthropic\/claude-fable-5.*\$10\/1M in/);
+
+    // A model NOBODY priced still gets a ceiling, but the refusal says the
+    // number is a blended guess rather than the model's rate.
+    await expect(
+      runMCTS(rt, createMockSession(), 'huge task', {
+        budget: 1000, branches: 10, maxCostUSD: 0.01,
+        costModel: () => ({ spec: 'ollama-cloud/kimi-k3', pricing: null }),
+      }),
+    ).rejects.toThrow(/ollama-cloud\/kimi-k3 is unpriced in the catalog/);
+  });
+
+  test('cost guard does NOT refuse a search the catalog prices at nothing', async () => {
+    const { rt } = createTestRuntime();
+    initTables(rt);
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'a candidate' }),
+      generateReflection: async () => ({ text: 'no lesson' }),
+    });
+
+    // The defect: a blended rate refused this at any realistic cap. The catalog
+    // prices the model at zero, so a $0 ceiling is the honest comparison — and
+    // it must pass. `estimatedUSD > maxCostUSD` is 0 > 0, which is false.
+    await expect(
+      runMCTS(rt, createMockSession(), 'free work', {
+        budget: 2, branches: 2, maxCostUSD: 0,
+        judgeSamples: 1, maxEvalLLMCalls: 1,
+        costModel: () => ({ spec: 'free/model', pricing: { input: 0, output: 0 } }),
+      }),
+    ).resolves.toBeDefined();
   });
 
   test('BUG-4: all-low-score convergence returns converged=false', async () => {

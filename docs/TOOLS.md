@@ -223,7 +223,7 @@ and `list` address agents by name, and the name decides the transport:
   lifetime, which is why it sits outside the ladder. `ask` waits for the reply
   (default 120 s, max 600 — a late reply still arrives as an event), `send`
   does not wait, `reply` answers an agent message event by its `event_id`, and
-  `staff` with `scope: workspace` creates or reuses a whole specialist
+  `hire` with `scope: workspace` creates or reuses a whole specialist
   workspace.
 - **`report`** is a separate tool, registered only on subordinates (also
   reachable as `report.*` in `execute_tools` — same `ReportToolDeps.report`
@@ -231,6 +231,42 @@ and `list` address agents by name, and the name decides the transport:
   subordinate's findings reach the orchestrator between turns; the answer of an
   assigned turn is relayed automatically at turn end, so `report` is for
   milestones, not per-step noise.
+
+### The field contract
+
+Every field belongs to an ACTION, and that relation is enforced rather than
+documented. `AGENTS_ACTION_FIELDS` (`core/src/tools/agents-tool.ts`) names the
+fields each action's handler reads; the input schemas are `v.strictObject` over
+one shared set of entries; and `parseAgentsToolInput` runs on BOTH surfaces (the
+native tool's `execute` and the `agents.*` codemode member), so an unrecognised
+field — or a real field on an action whose handler cannot act on it — is an error
+that names the field meant:
+
+```
+unknown field "budgetUsd" — did you mean "budget_usd"?
+field "budget_usd" does not apply to action "hire" — it is read by fork, and hire
+would ignore it. action "hire" takes: agent, role, mission, model, scope, message,
+timeout_seconds.
+```
+
+This exists because the schema was one flat `v.object`, and valibot's `object`
+**excludes** an unknown entry instead of rejecting it. Measured against the
+shipped parser on 2026-08-18, `{ action:'fork', task:'x', budgetUsd:5,
+wallClockMs:1000 }` parsed to `{ action:'fork', task:'x' }`: two spend caps
+asked for, neither applied, no error and nothing in the run record saying the
+request had vanished. `gate:agents-fields` holds the declaration to the code —
+per action, the `input.<field>` reads its `case` arm performs (followed through
+every whole-input hand-off, including into `readMissionLimits`, where
+`budget_usd` is actually read) must be exactly the fields declared for it, and
+every declared field must be in the parse. The JSON Schema the model sees is
+derived from the same map at compile time.
+
+One deliberate asymmetry: the resume filter (`resumableForkInput`) DROPS an
+unknown field instead of refusing it. A durable job row was recorded verbatim
+from the model's original call, no model is listening for a correction, and the
+field was already dropped when the row was first dispatched — so refusing it
+would turn a replayable fork into a hard failure. It is logged
+(`agents.resume.fields_dropped`) rather than dropped silently.
 
 ### The delivery contract
 

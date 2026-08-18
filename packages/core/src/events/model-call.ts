@@ -50,6 +50,7 @@ export const SPEND_SOURCES = [
   'reflection',
   'head',
   'mcts',
+  'swarm',
   'sandbox',
   'platform',
 ] as const;
@@ -67,6 +68,7 @@ export const SPEND_SOURCE_LABEL = {
   reflection: 'Evolution',
   head: 'Exploration heads',
   mcts: 'MCTS rollouts',
+  swarm: 'Swarm expansions',
   sandbox: 'Sandbox llm.query',
   platform: 'Platform AI',
 } as const satisfies Readonly<Record<SpendSource, string>>;
@@ -82,6 +84,9 @@ export const SPEND_SOURCE_DETAIL = {
   reflection: 'the evolution engine’s own reasoning, and GEPA',
   head: 'exploration heads, one loop per fork',
   mcts: 'rollout branches and their reflections',
+  swarm: 'the expansion candidates of a configured search, and the measurements that '
+    + 'score them — distinct from `mcts` because a swarm names its own axes and is '
+    + 'scored by the objective\'s verifier rather than by a judge',
   sandbox: 'llm.query issued by a codemode or scaffold program',
   platform: 'Workers AI utility bindings: memory embeddings and HTML→markdown '
     + 'repair. Neither returns a usage field of any kind, so these are counted '

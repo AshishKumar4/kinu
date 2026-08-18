@@ -34,10 +34,11 @@ import {
   HardDrivesIcon, CircleIcon,
   LockSimpleIcon, TerminalIcon, FolderOpenIcon, PlugIcon, GearSixIcon,
 } from "@phosphor-icons/react";
-import { EXECUTOR_CAPABILITIES, type ExecutorCapability, type MountInfo } from "@proteus/core";
+import type { MountInfo } from "@proteus/core";
 import type { ExecutorCommandResult, Rpc } from "@/lib/protocol";
 import {
-  capabilityLabel, executorForMount, executorLabel, isExecutorActive, pickDefaultExecutor,
+  capabilityLabel, executorForMount, executorLabel, isExecutorActive,
+  partitionCapabilities, pickDefaultExecutor,
   type ExecutorInfo,
 } from "@/lib/executors";
 import type { ExecutorOutput } from "@/hooks/use-proteus";
@@ -53,11 +54,6 @@ const CONSISTENCY_HINT = {
   ephemeral: "ephemeral, dies with the container",
   "live-shared": "live, your own machine",
 } satisfies Record<MountInfo["policy"]["consistency"], string>;
-
-/** The two capabilities that say WHICH filesystem an environment has rather
- *  than whether it can do something. Never rendered as an absence — see
- *  EnvironmentCapabilities. */
-const FILESYSTEM_TOPOLOGY: ReadonlySet<ExecutorCapability> = new Set(['fs_owned', 'fs_shared']);
 
 export interface EnvironmentSurfaceProps {
   rpc: Rpc;
@@ -217,33 +213,20 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
  * that has them, which is the only action available at this point — switch.
  * Capabilities nothing reachable offers are omitted: an absence you cannot do
  * anything about is not information.
+ *
+ * "Not here" is a MEASUREMENT and only measurements go under it. An environment
+ * that could not answer for a capability declares it (`unmeasuredCapabilities`),
+ * and those render on their own line — the tunnelled laptop said nothing about
+ * python until it was probed, and "Not here: Runs Python" said something false
+ * about the user's own machine.
  */
 function EnvironmentCapabilities(
   { selected, all }: { selected: ExecutorInfo | undefined; all: readonly ExecutorInfo[] },
 ) {
   if (selected === undefined) return null;
-  const here = new Set(selected.capabilities);
-  const reachable = all.filter((exec) => exec.available && exec.name !== selected.name);
+  const { has, missing, unknown } = partitionCapabilities(selected, all);
 
-  const has = EXECUTOR_CAPABILITIES.filter((capability) => here.has(capability));
-  // Only absences somewhere reachable can cover: an absence you cannot act on
-  // is not information, and listing all sixteen would bury the ones you can.
-  //
-  // `fs_owned`/`fs_shared` are excluded because they are not gaps. They say
-  // WHICH filesystem this environment has, and every environment has one — so
-  // rendering "its own private files — Your PC" against the workspace reads as
-  // a deficiency when sharing the agent's files is the whole point of it.
-  const missing = EXECUTOR_CAPABILITIES
-    .filter((capability) => !here.has(capability) && !FILESYSTEM_TOPOLOGY.has(capability))
-    .map((capability) => ({
-      capability,
-      where: reachable
-        .filter((exec) => exec.capabilities.includes(capability))
-        .map((exec) => executorLabel(exec.name)),
-    }))
-    .filter((row) => row.where.length > 0);
-
-  if (has.length === 0 && missing.length === 0) return null;
+  if (has.length === 0 && missing.length === 0 && unknown.length === 0) return null;
   return (
     <div className="px-3 py-1.5 border-b p-border shrink-0 space-y-1">
       <div className="flex items-center gap-1 flex-wrap">
@@ -267,6 +250,18 @@ function EnvironmentCapabilities(
               <span className="p-text-2">{row.where.join(" or ")}</span>
             </span>
           ))}
+        </div>
+      )}
+      {unknown.length > 0 && (
+        <div data-capability-unmeasured className="text-[10px] p-text-3 leading-relaxed">
+          Not measured:{" "}
+          {unknown.map((capability, i) => (
+            <span key={capability}>
+              {i > 0 && " · "}
+              <span title={capability}>{capabilityLabel(capability)}</span>
+            </span>
+          ))}
+          {" — may work anyway; nothing here can tell."}
         </div>
       )}
     </div>

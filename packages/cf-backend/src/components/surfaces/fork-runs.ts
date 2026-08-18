@@ -321,8 +321,21 @@ export function forkParamRows(params: ForkRunParams | undefined): ForkParamRow[]
   if (params.explorationWeight !== null) {
     rows.push({ label: "exploration c", value: params.explorationWeight.toFixed(2) });
   }
-  if (params.judgeSamples !== null) {
-    rows.push({ label: "judges", value: `${params.judgeSamples} per branch` });
+  if (params.judgeSamplesRequested !== null) {
+    // Realised first, and the word "requested" wherever the realised size is not
+    // known to equal it. Rendering the request as a per-branch figure is the
+    // original defect: a run that asked for 20 and ran 3 read as one that ran 20,
+    // and a run whose call budget was never recorded reads the same way.
+    const realised = params.judgeSamplesRealised;
+    const requested = params.judgeSamplesRequested;
+    rows.push({
+      label: "judges",
+      value: realised === null
+        ? `${requested} requested`
+        : realised < requested
+          ? `${realised} of ${requested} requested`
+          : `${realised} per branch`,
+    });
   }
   if (params.mode !== null) rows.push({ label: "mode", value: params.mode });
   return rows;

@@ -44,8 +44,11 @@ inductive Expand where
   | sample | mutate | aggregate
   deriving Repr, BEq, DecidableEq, Inhabited
 
+/-- `blind`, not `fresh`: the TS axis renamed the value for being measured unusable
+    (`SWARM_DECORRELATES`, `strategy/swarm.ts`), and a formal model that spells an axis
+    value differently from the code models a different axis. -/
 inductive Decorrelate where
-  | none | angles | fresh
+  | none | angles | blind
   deriving Repr, BEq, DecidableEq, Inhabited
 
 inductive Score where

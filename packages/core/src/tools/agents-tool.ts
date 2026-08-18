@@ -35,15 +35,22 @@ import {
   type AgentsToolAction,
 } from './registry';
 import { FORK_STRATEGY_ID } from '../strategy/heads';
+import { SwarmConfigSchema, SwarmObjectiveSchema } from './swarm-input';
+import { resolveSwarm, swarmValidity, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../strategy/swarm';
+import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
+import type { NamedSwarmPreset, SwarmConfig, SwarmPreset } from '../strategy/swarm';
+import type { Objective } from '../strategy/objective';
 import { readSpawnStarted } from '../jobs/threshold';
 import { localMissionPort, readMissionLimits, type MissionGovernor } from '../mission-budget';
 import type {
   BuiltinStrategyOptions, StrategyContext, StrategyRegistry,
 } from '../strategy/types';
 import type { AgentRuntime } from '../types/agent-runtime';
+import type { CostModel } from '../mcts/cost';
 import type { MergeStrategy } from '../heads/types';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
+import { diagnostics } from '../obs/index';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -231,6 +238,10 @@ export interface AgentsForkDeps {
   registry: StrategyRegistry;
   rt: AgentRuntime;
   model: LanguageModel;
+  /** What the resolved model charges, for strategies that gate on projected
+   *  spend before starting. Backends wire the ModelCatalogSession they already
+   *  hold; absence makes the gate blend and say so. */
+  costModel?: () => CostModel;
   /** Build per-strategy infrastructure options the LLM must not set —
    *  e.g. `{ mcts: { session }, heads: { controller, inheritedContext, onPhase } }`.
    *  Called once per fork invocation and deep-merged (one level) under the
@@ -282,6 +293,12 @@ export function agentsActionsFor(deps: { fork?: object; team?: object; peers?: o
   const converse = !!deps.team || !!deps.peers;
   const present = {
     fork: !!deps.fork,
+    // The same deps as `fork`, and structurally rather than by choice: a swarm needs a
+    // model to expand with and a workspace to measure in, which is exactly what
+    // AgentsForkDeps carries. It is not a separate capability a backend could wire
+    // half of, so it gets no deps group of its own — an actor that can fork can run a
+    // configured search, and one that cannot has neither in its enum.
+    swarm: !!deps.fork,
     hire: converse,
     ask: converse,
     send: converse,
@@ -299,7 +316,7 @@ export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
   const spec = BUILTIN_TOOL_SPECS.agents;
   const use = [
     DELEGATION_FRAME,
-    ...(deps.fork ? [DELEGATION_RUNGS.fork] : []),
+    ...(deps.fork ? [DELEGATION_RUNGS.fork, DELEGATION_RUNGS.swarm] : []),
     ...(deps.team || deps.peers ? [DELEGATION_RUNGS.hire] : []),
     ...(deps.peers
       ? [DELEGATION_CONVERSE]
@@ -347,6 +364,21 @@ export interface AgentsToolInput {
   /** Name the sub-ledger. Defaults to a generated label under the caller's
    *  mission; naming it lets a run keep one budget across several calls. */
   budget_label?: string;
+  // swarm — the configured-search rung. `preset` and `objective` are the two halves
+  // of §6.4's rule: a preset fixes the search, the caller supplies the objective.
+  preset?: SwarmPreset;
+  /** What is measured, in what unit, which direction is better. Required for
+   *  `optimise`; refused on `ideate`, which has no value signal by design. */
+  objective?: Objective;
+  /** The coverage key an archive bins elites into. */
+  key?: string;
+  /** The axes, with `preset:'custom'` only — the OVERRIDE half of a composition. */
+  config?: Partial<SwarmConfig>;
+  from?: NamedSwarmPreset;
+  label?: string;
+  branches?: number;
+  depth?: number;
+  models?: string[];
   // hire / converse
   agent?: string;
   role?: string;
@@ -361,6 +393,62 @@ export interface AgentsToolInput {
   event_id?: string;
   keep_history?: boolean;
 }
+
+/** Every input field except the discriminant. */
+export type AgentsToolInputField = Exclude<keyof AgentsToolInput, 'action'>;
+
+/**
+ * Which fields each action's handler reads — the relation nothing enforced.
+ *
+ * An action could join `AGENTS_TOOL_ACTIONS` while its fields never joined the
+ * schema, and the only symptom was that every one of them arrived ABSENT: a
+ * caller who asked for something got the same input a caller who asked for
+ * nothing did. This map is what makes that a build failure instead: it is
+ * `Record<AgentsToolAction, ...>`, so an action added to the picklist with no
+ * fields does not compile, and `gate:agents-fields` holds each list to the
+ * `input.<field>` reads its case arm in `dispatchAgentsAction` actually performs
+ * — the handler, not this declaration, is the authority for what an action reads.
+ *
+ * Load-bearing at runtime, not just under the gate: a refusal names the fields
+ * the called action takes, and a field outside the list is refused rather than
+ * accepted and ignored.
+ */
+export const AGENTS_ACTION_FIELDS = {
+  fork: [
+    'task', 'forks', 'settle', 'merge_strategy', 'budget', 'wall_clock_ms', 'options',
+    'budget_usd', 'budget_tokens', 'budget_label',
+  ],
+  // The mission caps sit beside the swarm's own fields because §6.4 puts them there
+  // deliberately: `budget_usd`, `budget_tokens` and `budget_label` are PRE-EXISTING
+  // caps on this input and stay there rather than being duplicated onto `SwarmInput`,
+  // which would be the second spelling §6.4's reason 1 exists to prevent. A swarm
+  // reads them through the same seam a fork does, and the governor enforces them.
+  //
+  // `budget` and `wall_clock_ms` are DELIBERATELY ABSENT, and that is a disagreement
+  // with §2.5 recorded rather than papered over. The table calls both caps optional on
+  // every preset — but an iteration cap is meaningless at the one depth that runs
+  // today, and nothing here cuts a search off on a wall clock. Declaring them would
+  // make this surface accept a cap nothing applies, which is the precise defect the
+  // specification is written against, so a caller who sends either is TOLD (the field
+  // refusal names the actions that do read them) instead of quietly ignored. They join
+  // this list when something enforces them.
+  swarm: [
+    'task', 'preset', 'objective', 'key', 'config', 'from', 'label', 'branches', 'depth',
+    'models', 'budget_usd', 'budget_tokens', 'budget_label',
+  ],
+  hire: ['agent', 'role', 'mission', 'model', 'scope', 'message', 'timeout_seconds'],
+  ask: ['agent', 'message', 'topic', 'timeout_seconds', 'deliverable', 'deadline_hint'],
+  send: ['agent', 'message', 'topic'],
+  reply: ['event_id', 'message'],
+  list: ['agent'],
+  dismiss: ['agent', 'keep_history'],
+} as const satisfies Record<AgentsToolAction, readonly AgentsToolInputField[]>;
+
+/** One action's fields, as plain names. The `as const` above keeps each list's
+ *  literal type — which is what lets the advertised JSON-Schema properties be
+ *  DERIVED from it below — and this is where that precision is spent for the
+ *  ordinary string work: membership, and the list a refusal prints. */
+const fieldsOf = (action: AgentsToolAction): readonly string[] => AGENTS_ACTION_FIELDS[action];
 
 interface MergeableOption {
   [key: string]: BuiltinStrategyOptions[keyof BuiltinStrategyOptions];
@@ -382,13 +470,22 @@ interface HeadsOptionOverlay {
   mergeStrategy?: MergeStrategy;
 }
 
-const ForkSpecSchema = v.object({
+/** A fork brief's fields, `strictObject` for the same reason the input is: these
+ *  are the surface's only camelCase names, so `allowed_tools` beside the tool's
+ *  own snake_case is a mistake the shape itself invites. */
+const ForkSpecEntries = {
   task: v.string(),
   rationale: v.string(),
   model: v.optional(v.string()),
   allowedTools: v.optional(v.array(v.string())),
-});
-const AgentsToolInputSchema = v.object({
+};
+const ForkSpecSchema = v.strictObject(ForkSpecEntries);
+
+/** Every input field and its type, declared ONCE. The two policies below read
+ *  these same entries — the model-facing parse REFUSES an unrecognised field,
+ *  the replay filter DROPS it — so neither can come to declare a field the
+ *  other does not. */
+const AgentsInputEntries = {
   action: v.picklist(AGENTS_TOOL_ACTIONS),
   task: v.optional(v.string()),
   forks: v.optional(v.array(ForkSpecSchema)),
@@ -400,6 +497,19 @@ const AgentsToolInputSchema = v.object({
   budget_usd: v.optional(v.number()),
   budget_tokens: v.optional(v.number()),
   budget_label: v.optional(v.string()),
+  // swarm. Spelled out here rather than spread in from tools/swarm-input.ts, because
+  // `gate:agents-fields` reads THESE KEYS as the declaration side of the relation: a
+  // spread would hide every one of them from the gate, which is the same
+  // pass-by-omission the gate exists to catch.
+  preset: v.optional(v.picklist(SWARM_PRESETS)),
+  objective: v.optional(SwarmObjectiveSchema),
+  key: v.optional(v.string()),
+  config: v.optional(SwarmConfigSchema),
+  from: v.optional(v.picklist(NAMED_SWARM_PRESETS)),
+  label: v.optional(v.string()),
+  branches: v.optional(v.number()),
+  depth: v.optional(v.number()),
+  models: v.optional(v.array(v.string())),
   agent: v.optional(v.string()),
   role: v.optional(v.string()),
   mission: v.optional(v.string()),
@@ -412,9 +522,191 @@ const AgentsToolInputSchema = v.object({
   timeout_seconds: v.optional(v.number()),
   event_id: v.optional(v.string()),
   keep_history: v.optional(v.boolean()),
-});
+};
 
+/**
+ * The model-facing parse. `strictObject`, not `object`: valibot's `object`
+ * EXCLUDES an unrecognised entry rather than rejecting it, which on this surface
+ * is not a cosmetic difference. Measured against the flat `object` this replaces:
+ *
+ *   parseAgentsToolInput({ action:'fork', task:'x', budgetUsd:5, wallClockMs:1000 })
+ *     -> { action:'fork', task:'x' }
+ *
+ * Both caps gone. A model that spelled a cap camelCase asked for a $5 ceiling,
+ * got no ceiling, and nothing in the error, the result or the run record said its
+ * request had vanished. camelCase for a snake_case field is the EXPECTED mistake
+ * here — the tool's own fork briefs are camelCase one level down — so this is a
+ * shape the surface provokes rather than an exotic one.
+ */
+const AgentsToolInputSchema = v.strictObject(AgentsInputEntries);
+
+/**
+ * The REPLAY parse, over a durable job row instead of a model's call. A row is
+ * history: no model is listening for a correction, and refusing the row would
+ * turn an interrupted fork into a hard failure (JobNotResumable) over a field
+ * that was ALREADY dropped when the row was first dispatched. So unknown entries
+ * are dropped here — which is what makes the re-drive faithful to the run it
+ * resumes — and `resumableForkInput` logs the drop rather than repeating it
+ * silently.
+ */
+const StoredAgentsInputSchema = v.object(AgentsInputEntries);
+
+/** Every field name in declaration order — what a refusal suggests from when the
+ *  action itself is unreadable, and the set the picklist gate holds the
+ *  per-action map against. */
+const AGENTS_INPUT_FIELDS: readonly string[] = Object.keys(AgentsInputEntries)
+  .filter((field) => field !== 'action');
+
+/** True when `action`'s handler reads `field`. The gate holds AGENTS_ACTION_FIELDS
+ *  to what `dispatchAgentsAction` actually reads, so a field outside this relation
+ *  provably cannot reach the call it was written on. */
+function actionReads(action: AgentsToolAction, field: string): boolean {
+  return fieldsOf(action).some((declared) => declared === field);
+}
+
+/** One typo, or the same word under another convention. */
+const MAX_FIELD_EDIT_DISTANCE = 2;
+
+/** Everything a naming convention can differ by. Collapsing it is what makes
+ *  `budgetUsd`, `budget-usd` and `Budget USD` all reach `budget_usd` — the
+ *  measured mistake, not a hypothetical one. */
+const FIELD_NAME_SEPARATORS = /[^a-z0-9]/gi;
+
+/** Levenshtein distance, abandoned once every cell in a row exceeds `limit`: a
+ *  candidate that cannot be the intended field costs a length check rather than
+ *  |a|x|b| cells. Returns `limit + 1` for "further away than limit". */
+function editDistance(a: string, b: string, limit: number): number {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = row[0];
+    row[0] = i;
+    let best = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const substitute = diagonal + (a[i - 1] === b[j - 1] ? 0 : 1);
+      diagonal = row[j];
+      const next = Math.min(substitute, row[j] + 1, row[j - 1] + 1);
+      row[j] = next;
+      if (next < best) best = next;
+    }
+    if (best > limit) return limit + 1;
+  }
+  return row[b.length];
+}
+
+/** The field `name` was probably meant to be, or undefined when nothing is close
+ *  enough to name. Convention first, then one or two character edits (`mision`
+ *  for `mission`) — both collapse to the same comparison. */
+function nearestField(name: string, candidates: readonly string[]): string | undefined {
+  const target = name.replace(FIELD_NAME_SEPARATORS, '').toLowerCase();
+  let nearest: string | undefined;
+  let shortest = MAX_FIELD_EDIT_DISTANCE + 1;
+  for (const candidate of candidates) {
+    const collapsed = candidate.replace(FIELD_NAME_SEPARATORS, '').toLowerCase();
+    const distance = editDistance(target, collapsed, MAX_FIELD_EDIT_DISTANCE);
+    if (distance >= shortest) continue;
+    nearest = candidate;
+    shortest = distance;
+    if (distance === 0) break;
+  }
+  return nearest;
+}
+
+/** An input's own field names, with nothing asserted about its values: a
+ *  primitive the model sent where an object belongs yields none, and the schema
+ *  behind this is what reports what it actually is. */
+const FieldNamesSchema = v.record(v.string(), v.unknown());
+
+function fieldNames<T>(value: T): readonly string[] {
+  const parsed = v.safeParse(FieldNamesSchema, value);
+  return parsed.success ? Object.keys(parsed.output) : [];
+}
+
+/** Said once, after the specifics: WHY a name mistake is an error now. */
+const FIELD_RULE = 'A field the called action cannot act on is refused rather than dropped — a cap'
+  + ' that never reached the run is a cap that was never applied.';
+
+function takesSentence(action: AgentsToolAction): string {
+  return `action "${action}" takes: ${fieldsOf(action).join(', ')}.`;
+}
+
+/**
+ * What is wrong with the field NAMES of `input`, or undefined when nothing is.
+ *
+ * Runs ahead of the schema so a name mistake gets a message naming the field that
+ * was MEANT — `explainNativeToolReferenceError`'s job at the other end of the
+ * same call: the caller is a model, and an error it cannot act on is a silent
+ * drop with extra steps. The strict schemas behind it still refuse anything this
+ * misses, so the refusal never depends on this being exhaustive.
+ *
+ * Two kinds, one message. An UNKNOWN field is a name this surface does not have.
+ * A MISPLACED one is a real field the called action's handler never reads:
+ * `budget_usd` on `hire` parsed cleanly and was then ignored, which is the same
+ * silence the strict object closes, one layer in.
+ */
+function agentsFieldRefusal<T>(input: T): string | undefined {
+  const parsed = v.safeParse(FieldNamesSchema, input);
+  if (!parsed.success) return undefined;
+  const declared = v.safeParse(v.picklist(AGENTS_TOOL_ACTIONS), parsed.output['action']);
+  const action = declared.success ? declared.output : undefined;
+  const problems: string[] = [];
+  // Printed ONCE at the end rather than after every clause: four unknown fields
+  // used to repeat the same ten-name list four times, which buries the one line
+  // that says which field was wrong.
+  let listFields = false;
+  for (const field of Object.keys(parsed.output)) {
+    if (field === 'action') continue;
+    if (Object.hasOwn(AgentsInputEntries, field)) {
+      if (action && !actionReads(action, field)) {
+        const readers = AGENTS_TOOL_ACTIONS.filter((other) => actionReads(other, field));
+        problems.push(`field "${field}" does not apply to action "${action}" — it is read by`
+          + ` ${readers.join('/')}, and ${action} would ignore it.`);
+        listFields = true;
+      }
+      continue;
+    }
+    const meant = nearestField(field, action ? fieldsOf(action) : AGENTS_INPUT_FIELDS);
+    if (meant) {
+      problems.push(`unknown field "${field}" — did you mean "${meant}"?`);
+      continue;
+    }
+    const elsewhere = action ? nearestField(field, AGENTS_INPUT_FIELDS) : undefined;
+    problems.push(elsewhere
+      ? `unknown field "${field}" — "${elsewhere}" is read by`
+        + ` ${AGENTS_TOOL_ACTIONS.filter((other) => actionReads(other, elsewhere)).join('/')},`
+        + ` not ${action ?? 'this action'}.`
+      : `unknown field "${field}".`);
+    listFields = true;
+  }
+  // The briefs, whose own fields are the camelCase half of the same collision.
+  const briefs = v.safeParse(v.array(FieldNamesSchema), parsed.output['forks']);
+  if (briefs.success) {
+    for (const [index, brief] of briefs.output.entries()) {
+      for (const field of Object.keys(brief)) {
+        if (Object.hasOwn(ForkSpecEntries, field)) continue;
+        const meant = nearestField(field, Object.keys(ForkSpecEntries));
+        problems.push(`unknown field "forks[${String(index)}].${field}"`
+          + (meant
+            ? ` — did you mean "${meant}"? A brief's fields are camelCase.`
+            : `. A brief takes: ${Object.keys(ForkSpecEntries).join(', ')}.`));
+      }
+    }
+  }
+  if (problems.length === 0) return undefined;
+  const fields = listFields
+    ? action ? ` ${takesSentence(action)}` : ` Fields are: ${AGENTS_INPUT_FIELDS.join(', ')}.`
+    : '';
+  return `${problems.join(' ')}${fields} ${FIELD_RULE}`;
+}
+
+/**
+ * The one parse, for both surfaces that can dispatch a delegation: the `agents`
+ * tool's own execute and the `agents.*` codemode namespace. Throws a message the
+ * caller can correct itself from.
+ */
 export function parseAgentsToolInput<T>(input: T): AgentsToolInput {
+  const refusal = agentsFieldRefusal(input);
+  if (refusal) throw new Error(refusal);
   return v.parse(AgentsToolInputSchema, input);
 }
 
@@ -424,6 +716,15 @@ export function parseAgentsToolInput<T>(input: T): AgentsToolInput {
  * MCTS search checkpoint / heads re-run path). Returns the fork input to
  * re-execute, translating rows stored by the pre-unification `think` tool
  * (strategy → settle, heads → forks), or null when the job is not resumable.
+ *
+ * Rows are TRANSLATED rather than validated as a model call would be. A row was
+ * recorded verbatim from whatever the model sent (jobs/runner.ts stores the raw
+ * input), so rows written before the strict parse can carry fields it now
+ * refuses — and a row is re-driven, not answered, so a refusal there is a fork
+ * lost to a spelling nobody can correct any more. Both branches therefore build
+ * the resumed call out of the fork fields alone, and anything left over is
+ * logged: dropped, as it was dropped on the original dispatch, but no longer
+ * silently.
  */
 const LegacyForkInputSchema = v.object({
   strategy: v.optional(v.string()),
@@ -437,8 +738,24 @@ const LegacyForkInputSchema = v.object({
 
 export function resumableForkInput<T>(kind: string, input: T): AgentsToolInput | null {
   if (kind === 'agents') {
-    const parsed = v.safeParse(AgentsToolInputSchema, input);
-    return parsed.success && parsed.output.action === 'fork' ? parsed.output : null;
+    const parsed = v.safeParse(StoredAgentsInputSchema, input);
+    if (!parsed.success || parsed.output.action !== 'fork') return null;
+    const resumed: AgentsToolInput = { action: 'fork' };
+    for (const field of AGENTS_ACTION_FIELDS.fork) {
+      const value = parsed.output[field];
+      if (value !== undefined) Object.assign(resumed, { [field]: value });
+    }
+    const carried = new Set(Object.keys(resumed));
+    const dropped = fieldNames(input).filter((field) => !carried.has(field));
+    if (dropped.length > 0) {
+      // Absent from the re-drive, and present in the record of why. Named
+      // rather than counted: a resumed fork that lost a cap is only diagnosable
+      // if the line says which cap.
+      diagnostics.event('agents.resume.fields_dropped', {
+        kind, fields: dropped.join(','), count: dropped.length,
+      });
+    }
+    return resumed;
   }
   if (kind !== 'think') return null;
   const parsed = v.safeParse(LegacyForkInputSchema, input);
@@ -655,6 +972,10 @@ async function runFork(
       wallClockMs: input.wall_clock_ms,
     },
     options,
+    // The spend gate's pricing route. Passed through as the thunk the backend
+    // supplied so the catalog rate is read when the gate runs, not when this
+    // context was built — the lookup is usually still in flight at this point.
+    costModel: deps.costModel,
   };
   const signal = readAbortSignal(toolOptions);
   if (signal) Object.assign(ctx, { signal });
@@ -715,20 +1036,101 @@ async function runFork(
   }
 }
 
+// ── Swarm dispatch (the configured-search rung) ──────────────────────────────
+
+/**
+ * One `agents.swarm` call: resolve it, check it, run it — in that order, because each
+ * step is the input to the next and the last one is the only one that spends anything.
+ *
+ * The three refusals are three DIFFERENT things and the vocabulary keeps them apart:
+ * `bad_input` is a call that does not describe a legal search, `unsupported` is a legal
+ * search this tree has no engine for, and `unavailable` is a legal search whose
+ * instrument is missing from this actor. Collapsing them would put "you asked wrongly"
+ * and "we cannot do that yet" in one bucket, which is the distinction a caller needs
+ * most: only one of the three is worth correcting.
+ *
+ * WHY THIS READS THE CAPS. §6.4 keeps `budget`, `wall_clock_ms` and the mission caps on
+ * this input rather than duplicating them onto `SwarmInput`, so a swarm nests under the
+ * caller's mission scope through the very same seam a fork does — `forkMissionScope`
+ * reads `budget_usd` / `budget_tokens` / `budget_label`, and the governed model is what
+ * the expansion runs on.
+ */
+async function runSwarmAction(
+  deps: AgentsForkDeps,
+  input: AgentsToolInput,
+  mode: WorkMode,
+  toolOptions: AgentsToolCallOptions | undefined,
+  budget?: MissionGovernor,
+): Promise<object> {
+  if (!input.preset) {
+    return forkRefusal('swarm needs `preset` — the shape of the search. optimise measures a number '
+      + 'you declare in `objective`; ideate samples in parallel with no value signal; '
+      + 'research/audit/redteam bin findings under a coverage `key`; custom states the axes in '
+      + '`config` under a `label`.');
+  }
+  if (!input.task) {
+    return forkRefusal('swarm needs `task` — what the search is for, in prose. The measured '
+      + 'quantity goes in `objective`, never here.');
+  }
+  const call = { preset: input.preset, task: input.task };
+  if (input.objective) Object.assign(call, { objective: input.objective });
+  if (input.key) Object.assign(call, { key: input.key });
+  if (input.config) Object.assign(call, { config: input.config });
+  if (input.from) Object.assign(call, { from: input.from });
+  if (input.label) Object.assign(call, { label: input.label });
+  if (input.branches !== undefined) Object.assign(call, { branches: input.branches });
+  if (input.depth !== undefined) Object.assign(call, { depth: input.depth });
+  if (input.models) Object.assign(call, { models: input.models });
+
+  // §6.3 — resolution first, because §6.5 is stated over the resolved configuration
+  // and has no input without it.
+  const resolved = resolveSwarm(call);
+  if ('reason' in resolved) return resolved;
+  // §6.5 — legality, over the resolved tuple and never over the preset name.
+  const illegal = swarmValidity(resolved);
+  if (illegal) return illegal;
+
+  // The mission scope, and with it the model-call seam: the same one a fork nests
+  // under, so an exhausted label stops a search mid-flight rather than after it.
+  const mission = forkMissionScope(budget, input);
+  let rt: AgentRuntime = deps.rt;
+  if (mission) {
+    rt = { ...deps.rt, llm: mission.governor.govern(deps.rt.llm, mission.labels) };
+  }
+  const runDeps: SwarmRunDeps = { rt, model: deps.model, mode };
+  const signal = readAbortSignal(toolOptions);
+  if (signal) Object.assign(runDeps, { signal });
+  readSpawnStarted(toolOptions)?.();
+  const result = await runSwarm(runDeps, resolved);
+  if ('reason' in result) return result;
+  // The spawn always records. TOKENS are charged as a lump here because a swarm's
+  // expansions and measurements are made from THIS process through the governed
+  // `rt.llm`, so nothing has debited them yet — the opposite of a heads fork, which
+  // debits every step itself and is charged nothing again. A run that reported no
+  // total is charged nothing rather than billed a fabricated zero.
+  mission?.governor.debit(result.report.tokens ?? 0, { labels: mission.labels, spawns: 1 });
+  const output: JsonObject = parseJsonObject(JSON.stringify(result));
+  if (mission) {
+    const label = mission.labels[0];
+    const snapshot = label ? mission.governor.snapshot(label)[0] : undefined;
+    if (snapshot) {
+      Object.assign(output, { mission_budget: parseJsonObject(JSON.stringify(snapshot)) });
+    }
+  }
+  return output;
+}
+
 // ── Schema assembly ─────────────────────────────────────────────────────────
 
-interface ForkSchemaProperties {
-  task?: JsonObject;
-  forks?: JsonObject;
-  settle?: JsonObject;
-  merge_strategy?: JsonObject;
-  budget?: JsonObject;
-  wall_clock_ms?: JsonObject;
-  options?: JsonObject;
-  budget_usd?: JsonObject;
-  budget_tokens?: JsonObject;
-  budget_label?: JsonObject;
-}
+/** The JSON-Schema properties an action's fields may be advertised under,
+ *  DERIVED from AGENTS_ACTION_FIELDS rather than restated beside it: a property
+ *  shown to the model that no action's handler reads does not compile. That is
+ *  the advertised-vs-parsed half of the same relation `gate:agents-fields`
+ *  checks from the declaration side. */
+type SchemaPropertiesFor<Action extends AgentsToolAction> =
+  { [Field in (typeof AGENTS_ACTION_FIELDS)[Action][number]]?: JsonObject };
+
+type ForkSchemaProperties = SchemaPropertiesFor<'fork'>;
 
 function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
   if (!deps.fork) return {};
@@ -741,7 +1143,11 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
     // runs on ctx.task and never looks at `forks`) — so the wording has to
     // carry both, and "the concrete task the forks explore together" carried
     // neither past the word `task` itself.
-    task: { type: 'string', description: 'For action=fork: the task the forks explore together and the context they share — the goal, the constraints that hold for every fork, and any interface they must agree on. State it here once rather than repeating it in each fork.' },
+    // Two actions read this ONE property, so it names both. The fork half is
+    // unchanged; the swarm half is here rather than in `swarmProperties` because a
+    // second declaration of the same key would replace this sentence instead of
+    // adding to it, and this is the one that was measured.
+    task: { type: 'string', description: 'For action=fork: the task the forks explore together and the context they share — the goal, the constraints that hold for every fork, and any interface they must agree on. State it here once rather than repeating it in each fork. For action=swarm: what the search is for, in prose — never the measured quantity, which belongs in `objective`.' },
     forks: {
       type: 'array',
       minItems: 2,
@@ -832,20 +1238,55 @@ function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
   return properties;
 }
 
-interface ConverseSchemaProperties {
-  agent?: JsonObject;
-  role?: JsonObject;
-  mission?: JsonObject;
-  model?: JsonObject;
-  scope?: JsonObject;
-  message?: JsonObject;
-  topic?: JsonObject;
-  timeout_seconds?: JsonObject;
-  event_id?: JsonObject;
-  deliverable?: JsonObject;
-  deadline_hint?: JsonObject;
-  keep_history?: JsonObject;
+/**
+ * What a swarm call is advertised as taking.
+ *
+ * Gated on the same deps as {@link forkProperties} and for the same reason: the action
+ * is in the enum exactly when the substrate is wired, so a property described here
+ * cannot be shown for an action that is not offered.
+ *
+ * The descriptions carry the SHAPE and not only the meaning — `objective` is nested
+ * three deep and `verify` is the field a model reaches for with a script path, twice
+ * measured, unprompted — because a field description is read at the moment the field
+ * is filled, which is where a schema beats an example.
+ */
+type SwarmSchemaProperties = SchemaPropertiesFor<'swarm'>;
+
+function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
+  if (!deps.fork) return {};
+  // `task` is deliberately NOT here. It is ONE JSON-Schema property read by two
+  // actions, and this function is spread after `forkProperties`, so declaring it again
+  // would silently replace the fork wording — the description measured to matter — with
+  // the swarm one. The shared property carries both readers instead, in forkProperties
+  // where the sentence that must survive already lives.
+  return {
+    preset: {
+      type: 'string',
+      enum: [...SWARM_PRESETS],
+      description: 'For action=swarm: the shape of the search. optimise = beat a measured number (requires `objective`). ideate = flat parallel sampling with no value signal, which is why it takes no `objective` and returns a set. research/audit/redteam = bin findings into an archive under a coverage `key`. custom = state the axes yourself in `config`, with a `label`.',
+    },
+    objective: {
+      type: 'object',
+      description: 'For action=swarm: what is measured. {kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}} and an optional floor:{value, kind:"certificate", proof, best_known_honest}. verify names a REGISTERED instrument and hands it its whole spec — a metric nothing can execute is not an objective, and a script path invented here is refused rather than run. kind:"witness" is a checkable certificate and needs a scalar `proxy` to be searchable; kind:"instanced" (one metric, 2+ instances) and kind:"vector" (2+ metrics) are the two front shapes. Field names are snake_case, like every field on this tool.',
+    },
+    key: { type: 'string', description: 'For action=swarm with research/audit/redteam: the coverage descriptor elites are binned into. It must name something a tool call can witness — a key that can only say "distinct idea" means the task wants preset:"ideate".' },
+    config: { type: 'object', description: 'For action=swarm with preset:"custom" only: the axes — unit, observe, expand, decorrelate, score, advance, carry — as the OVERRIDE on `from`\'s shape, or all seven when there is no `from`. Prohibited on a named preset, which is a tested path and cannot be refused.' },
+    from: {
+      type: 'string',
+      enum: [...NAMED_SWARM_PRESETS],
+      description: 'For action=swarm with preset:"custom": a named preset to start from, so you state only what differs. It does NOT make this a preset run — the record still says custom, which is the point of having both fields.',
+    },
+    label: { type: 'string', maxLength: 120, description: 'For action=swarm with preset:"custom": required provenance. A composed shape recorded repeatedly under one label is the evidence for a new preset.' },
+    branches: { type: 'integer', minimum: 1, description: 'For action=swarm: candidates per expansion. Omit to take the preset\'s own width.' },
+    depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion and is the depth that runs today; deeper needs a tree engine that scores by your objective, and the refusal says so rather than substituting a judge.' },
+    models: { type: 'array', items: { type: 'string' }, description: 'For action=swarm: per-node model routing — a cheap model for recon, a strong one for synthesis. NOT for diversity: a mixed panel tracks its AVERAGE member, so a weaker model added for variety measurably subtracts. Diversity is the `decorrelate` axis.' },
+    budget_usd: { type: 'number', minimum: 0, description: 'For action=swarm: cumulative USD cap for the whole search, including its measurements. Omit for no cap.' },
+    budget_tokens: { type: 'integer', minimum: 1, description: 'For action=swarm: cumulative token cap, same scope as budget_usd.' },
+    budget_label: { type: 'string', maxLength: 120, description: 'For action=swarm: name the sub-ledger so several calls share one cumulative budget.' },
+  };
 }
+
+type ConverseSchemaProperties = SchemaPropertiesFor<Exclude<AgentsToolAction, 'fork' | 'swarm'>>;
 
 function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   if (!deps.team && !deps.peers) return {};
@@ -890,6 +1331,22 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
     });
   }
   return properties;
+}
+
+/**
+ * The peer topic an ask/send rides, or the refusal when the caller claimed the
+ * transport's reserved one.
+ *
+ * Read inside the two arms that use it rather than once for all seven actions:
+ * `topic` is a field of ask and send, and reading it for every action made it
+ * read like a field of every action — the exact shape that lets a field be
+ * accepted where nothing acts on it.
+ */
+function requestedTopic(input: AgentsToolInput): { topic: string } | { error: string } {
+  const topic = input.topic?.trim() || 'message';
+  return topic === PEER_REPLY_TOPIC
+    ? { error: `topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes` }
+    : { topic };
 }
 
 /**
@@ -941,7 +1398,8 @@ export async function dispatchAgentsAction(
   // many, so the cap is checked before the launch — for every action that
   // creates or wakes an agent, not just fork. `list`, `dismiss` and `reply`
   // spend nothing and stay available so a stopped run can still wind itself up.
-  if (input.action === 'fork' || input.action === 'hire' || input.action === 'ask' || input.action === 'send') {
+  if (input.action === 'fork' || input.action === 'swarm' || input.action === 'hire'
+    || input.action === 'ask' || input.action === 'send') {
     const refusal = deps.budget?.guard('spawn');
     if (refusal) return refusal;
   }
@@ -956,13 +1414,12 @@ export async function dispatchAgentsAction(
     return delegationDepthRefusal(team.delegation);
   }
   try {
-    const topic = input.topic?.trim() || 'message';
-    if (topic === PEER_REPLY_TOPIC) {
-      return { error: `topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes` };
-    }
     switch (input.action) {
       case 'fork':
         return await runFork(deps.fork!, input, mode, toolOptions, deps.budget);
+
+      case 'swarm':
+        return await runSwarmAction(deps.fork!, input, mode, toolOptions, deps.budget);
 
       case 'hire': {
         if ((input.scope ?? 'subordinate') === 'workspace') {
@@ -1001,6 +1458,8 @@ export async function dispatchAgentsAction(
 
       case 'ask': {
         if (!input.agent || !input.message) return { error: 'ask requires agent and message' };
+        const asked = requestedTopic(input);
+        if ('error' in asked) return asked;
         if (team && await isSubordinate(input.agent)) {
           const assignment: Parameters<TeamToolDeps['assign']>[0] = {
             name: input.agent,
@@ -1019,7 +1478,7 @@ export async function dispatchAgentsAction(
         }
         if (peers) {
           return await peers.ask({
-            agent: input.agent, topic, message: input.message,
+            agent: input.agent, topic: asked.topic, message: input.message,
             timeoutMs: askTimeoutMs(input.timeout_seconds),
             mode,
           });
@@ -1029,6 +1488,8 @@ export async function dispatchAgentsAction(
 
       case 'send': {
         if (!input.agent || !input.message) return { error: 'send requires agent and message' };
+        const sent = requestedTopic(input);
+        if ('error' in sent) return sent;
         if (team && await isSubordinate(input.agent)) {
           const handoff = await team.message({ name: input.agent, content: input.message, mode });
           // Same delivered/queued vocabulary the peer transport already uses:
@@ -1041,7 +1502,7 @@ export async function dispatchAgentsAction(
           };
         }
         if (peers) {
-          return await peers.send({ agent: input.agent, topic, message: input.message, mode });
+          return await peers.send({ agent: input.agent, topic: sent.topic, message: input.message, mode });
         }
         return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
       }
@@ -1095,7 +1556,13 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
           type: 'string',
           enum: actions,
           description: [
-            ...(deps.fork ? ['fork = spawn 2–6 ephemeral forks of yourself that settle back into this turn.'] : []),
+            ...(deps.fork ? [
+              'fork = spawn 2–6 ephemeral forks of yourself that settle back into this turn. '
+              // The one line that separates the two search rungs, on the field a
+              // model reads FIRST. Without it "spawn several and pick the best"
+              // describes both, and the difference that matters is who decides.
+              + 'swarm = run a configured search whose candidates are measured by your own verifier instead of judged — it takes a preset and an objective, not briefs.',
+            ] : []),
             ...(team || peers ? [
               'hire = create a persistent named helper. ask = hand an agent work and get its answer back. send = fire-and-forget message. list = the unified roster.'
               // How much tree is left, stated the way head-tools states nesting
@@ -1114,10 +1581,30 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
           ].join(' '),
         },
         ...forkProperties(deps),
+        ...swarmProperties(deps),
         ...converseProperties(deps),
       },
+      // No `additionalProperties: false` here, deliberately. The AI SDK
+      // validates a tool call against this schema BEFORE `execute`, so the
+      // declaration refusing unknown properties would replace the message below
+      // with the SDK's generic "must NOT have additional properties" — a
+      // refusal the model cannot correct itself from, which is most of what
+      // this change is for. The parse in `execute` is the enforcement; this
+      // schema is what the model is TOLD.
     }),
-    execute: async (input: AgentsToolInput, toolOptions?: AgentsToolCallOptions) =>
-      dispatchAgentsAction(deps, input, toolOptions),
+    execute: async (input: AgentsToolInput, toolOptions?: AgentsToolCallOptions) => {
+      // The native surface parses too. Its inputs arrive schema-checked for
+      // TYPES and never for names, which is how `budgetUsd` reached the
+      // dispatcher and was read by nothing at all.
+      let parsed: AgentsToolInput;
+      try {
+        parsed = parseAgentsToolInput(input);
+      } catch (error) {
+        // Reason FIRST, the vocabulary a fork refusal already uses: a call the
+        // parse refused is bad input, not a tool that broke.
+        return { reason: 'bad_input', error: error instanceof Error ? error.message : String(error) };
+      }
+      return dispatchAgentsAction(deps, parsed, toolOptions);
+    },
   });
 }

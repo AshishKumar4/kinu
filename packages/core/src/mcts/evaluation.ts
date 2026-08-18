@@ -145,10 +145,13 @@ export interface EvaluateBranchOptions {
   /** Cross-model judge. Omitted → explorer judges (documented fallback). */
   judge?: LLM;
   explorer: LLM;
-  /** Judge ensemble size (median-aggregated). Default 3. */
+  /** REQUESTED judge ensemble size (median-aggregated). Default 3. Not what the
+   *  branch necessarily gets: `maxLLMCalls` clamps it, and the realised size
+   *  comes back as `judgeSamplesAttempted`. See {@link judgeCallBudget}. */
   judgeSamples?: number;
-  /** Per-evaluation LLM-call budget: assertion generation + judge samples.
-   *  The operator's spend dial — see DEFAULT_CONFIG.mcts.maxEvalLLMCalls. */
+  /** Per-evaluation LLM-call budget: check generation + judge samples, sharing
+   *  ONE pool. The operator's spend dial — see
+   *  DEFAULT_CONFIG.mcts.maxEvalLLMCalls — and the ceiling on `judgeSamples`. */
   maxLLMCalls?: number;
   /** Wall clock on each individual judge call, so a non-responding judge is
    *  dropped rather than hanging the whole search. Defaults to
@@ -175,8 +178,15 @@ export interface BranchEvaluation {
   };
   /** Present when the branch offered code this executor cannot run. */
   unrunnableLanguage?: string;
-  /** Judge samples that parsed successfully (out of those attempted). Zero
-   *  when the cascade short-circuited before the ensemble was sampled. */
+  /** The ensemble size actually SAMPLED — the caller's request after the
+   *  per-evaluation call budget clamped it (see {@link judgeEnsembleSize}).
+   *  Zero only when the cascade short-circuited before the ensemble was
+   *  reached, which is why it sits beside the next field: `judgeSamplesUsed: 0`
+   *  with a non-zero `judgeSamplesAttempted` is an ensemble that answered
+   *  nothing usable, and "never asked" is not the same fact as "asked and got
+   *  nothing back". */
+  judgeSamplesAttempted: number;
+  /** Judge samples that parsed successfully, out of those attempted. */
   judgeSamplesUsed: number;
 }
 
@@ -264,6 +274,51 @@ async function codeFailedToParse(
   return !bare.passed && !!bare.error && isParseFailure(bare.error);
 }
 
+/** How an evaluation's LLM-call budget divides between check generation and the
+ *  judge ensemble. */
+export interface JudgeCallBudget {
+  /** Samples the ensemble is actually asked for — the caller's REQUEST after the
+   *  budget clamped it. */
+  readonly ensemble: number;
+  /** True when one call goes to generating the check suite before the ensemble. */
+  readonly generatesChecks: boolean;
+}
+
+/**
+ * Split one evaluation's LLM-call budget — and with it, decide the judge
+ * ensemble a branch actually gets.
+ *
+ * `judgeSamples` and `maxEvalLLMCalls` are not independent knobs. The second is
+ * the WHOLE per-evaluation budget, and on a code-bearing branch one of those
+ * calls buys the generated check suite, so the ensemble is bounded by what is
+ * left. A budget of 1 buys no suite: an unjudged branch is worse than an
+ * unchecked one.
+ *
+ * On shipped defaults (judgeSamples 3, maxEvalLLMCalls 4) a code branch realises
+ * `min(3, 4 - 1) = 3` and a prose branch `min(3, 4) = 3` — the clamp already
+ * sits flush against the default request, so it binds the instant the request
+ * rises. A caller asking for 20 is answered by 3, and until this function
+ * existed that happened with no field anywhere carrying the 3.
+ *
+ * Exported because three seams must agree on the split: the evaluator, which
+ * spends the calls; the engine, which discloses the realised ensemble on the
+ * run; and the run read model, which states it without re-running the search.
+ */
+export function judgeCallBudget(opts: {
+  judgeSamples: number;
+  maxLLMCalls: number;
+  /** True when the branch offers code this executor can run, so its evaluation
+   *  spends a call on check generation before the ensemble. */
+  offersRunnableCode: boolean;
+}): JudgeCallBudget {
+  const budget = Math.max(1, opts.maxLLMCalls);
+  const generatesChecks = opts.offersRunnableCode && budget >= 2;
+  return {
+    ensemble: Math.min(Math.max(1, opts.judgeSamples), budget - (generatesChecks ? 1 : 0)),
+    generatesChecks,
+  };
+}
+
 export async function evaluateWithMultiModelJudging(
   opts: EvaluateBranchOptions,
 ): Promise<BranchEvaluation> {
@@ -271,11 +326,10 @@ export async function evaluateWithMultiModelJudging(
   // A branch that produced nothing (failed exploration) is dead — spend no
   // judge calls on it.
   if (trajectory.length === 0) {
-    return { score: 0, grounding: 'judge', judgeSamplesUsed: 0 };
+    return { score: 0, grounding: 'judge', judgeSamplesAttempted: 0, judgeSamplesUsed: 0 };
   }
 
   const defaults = DEFAULT_CONFIG.mcts;
-  const judgeSamples = Math.max(1, opts.judgeSamples ?? defaults.judgeSamples);
   const maxLLMCalls = Math.max(1, opts.maxLLMCalls ?? defaults.maxEvalLLMCalls);
   const judge = opts.judge ?? opts.explorer;
   const judgeTimeoutMs = opts.judgeCallTimeoutMs ?? DEFAULT_JUDGE_CALL_TIMEOUT_MS;
@@ -283,28 +337,34 @@ export async function evaluateWithMultiModelJudging(
   const proposal = opts.executionPolicy === 'judge-only'
     ? null
     : readProposalCode(trajectory, opts.executor.languages);
+  // Decided before a call is spent, and reported on every return below, so the
+  // clamp cannot bind in silence.
+  const { ensemble: k, generatesChecks } = judgeCallBudget({
+    judgeSamples: opts.judgeSamples ?? defaults.judgeSamples,
+    maxLLMCalls,
+    offersRunnableCode: proposal?.kind === 'runnable',
+  });
 
-  // Layer 1: execution grounding. Assertion generation costs 1 LLM call and
-  // only runs when the budget leaves room for at least 1 judge sample.
+  // Layer 1: execution grounding.
   let execution: BranchEvaluation['execution'];
-  let llmCallsLeft = maxLLMCalls;
   if (proposal?.kind === 'runnable') {
     const { code, language } = proposal;
     let checks: readonly string[] = [];
-    if (llmCallsLeft >= 2) {
-      llmCallsLeft--;
+    if (generatesChecks) {
       checks = await generateAssertionSuite(judge, opts.task, code, language, judgeTimeoutMs);
     }
     execution = await runForVerdict(opts.executor, code, checks, language);
     // Cascade stage 0: source that never parsed has decided its own verdict.
     // Spend no judge calls placing it inside a band it cannot leave.
     if (await codeFailedToParse(opts.executor, execution, code, language)) {
-      return { score: FAIL_FLOOR, grounding: 'execution', execution, judgeSamplesUsed: 0 };
+      return {
+        score: FAIL_FLOOR, grounding: 'execution', execution,
+        judgeSamplesAttempted: 0, judgeSamplesUsed: 0,
+      };
     }
   }
 
   // Layer 2: judge ensemble (median, parse-failure-robust).
-  const k = Math.min(judgeSamples, llmCallsLeft);
   const prompt = buildJudgePrompt(opts.task, trajectory, opts.siblings ?? [], execution);
   const samples = await Promise.all(
     Array.from({ length: k }, () => sampleJudgeScore(judge, prompt, judgeTimeoutMs)),
@@ -327,13 +387,17 @@ export async function evaluateWithMultiModelJudging(
     const score = execution.passed
       ? PASS_FLOOR + PASS_SPAN * (judgeScore ?? 0)
       : FAIL_FLOOR + FAIL_SPAN * (fraction ?? judgeScore ?? 0);
-    return { score, grounding: 'execution', execution, judgeSamplesUsed: parsed.length };
+    return {
+      score, grounding: 'execution', execution,
+      judgeSamplesAttempted: k, judgeSamplesUsed: parsed.length,
+    };
   }
   if (proposal?.kind === 'unrunnable') {
     return {
       score: FAIL_CEIL * (judgeScore ?? 0),
       grounding: 'unrunnable',
       unrunnableLanguage: proposal.language,
+      judgeSamplesAttempted: k,
       judgeSamplesUsed: parsed.length,
     };
   }
@@ -344,6 +408,7 @@ export async function evaluateWithMultiModelJudging(
   return {
     score: proseCap * (judgeScore ?? 0),
     grounding: 'judge',
+    judgeSamplesAttempted: k,
     judgeSamplesUsed: parsed.length,
   };
 }

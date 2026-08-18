@@ -27,6 +27,7 @@ import {
   type MergeStrategy,
   initHeadsTables,
 } from '../src/heads/index';
+import type { SqlValue } from '../src/types/primitives';
 import { makeSql, makeExecRaw } from './helpers';
 
 // ── Test runtime wiring ──────────────────────────────────────────────
@@ -586,6 +587,43 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     const live = journal.listLive(2);
     expect(live).toHaveLength(2);
     expect(live.every((run) => run.rationale === '')).toBe(true);
+  });
+
+  // The roster is read on every model step and the journal has no GC, so its
+  // cost must be a function of the OPEN runs, not of everything ever spawned.
+  // Pinned on the PLAN rather than on a stopwatch: the statement is captured
+  // from the journal itself (no second copy of the SQL to drift), and a full
+  // scan of head_journal is the regression this guards. It fails on the
+  // previous `GROUP BY … HAVING running > 0` with "SCAN j USING INDEX …".
+  test('the roster does not read the settled journal', () => {
+    const db = new Database(':memory:');
+    initHeadsTables(makeExecRaw(db), makeSql(db));
+    const inner = makeSql(db);
+    const statements: string[] = [];
+    const capturing: typeof inner = <T,>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+      statements.push(strings.join('?'));
+      return inner<T>(strings, ...values);
+    };
+    const journal = new HeadJournal(capturing);
+
+    journal.recordSplit('root-live', 'still going', Date.now());
+    spawn(journal, 'root-live', 'live-1');
+    for (let i = 0; i < 200; i++) {
+      journal.recordSplit(`root-old-${i}`, 'done', i);
+      spawn(journal, `root-old-${i}`, `old-${i}`);
+      journal.recordReport(fakeReport(`old-${i}`));
+    }
+
+    statements.length = 0;
+    expect(journal.listLive()).toEqual([
+      { rootId: 'root-live', rationale: 'still going', running: 1, total: 1 },
+    ]);
+
+    expect(statements).toHaveLength(1);
+    const plan = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN ${statements[0]}`).all(8);
+    const details = plan.map((row) => row.detail).join('\n');
+    expect(details).not.toMatch(/\bSCAN\b/);
+    expect(details).toContain('idx_head_journal_status');
   });
 });
 

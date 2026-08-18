@@ -131,8 +131,21 @@ export interface ExecutorProvider {
    */
   homeDir(): Promise<string>;
 
-  /** Declared capabilities — immutable after construction */
+  /** Declared capabilities — everything this environment can be shown to have. */
   readonly capabilities: ReadonlySet<ExecutorCapability>;
+
+  /**
+   * Capabilities this environment can neither claim nor rule out.
+   *
+   * Omitting an unknown says "absent" to every reader, including the model
+   * deciding where to send work — so an environment that genuinely cannot
+   * answer for a capability declares it here instead of quietly dropping it.
+   * The user's tunnelled machine is the case that forced this: nothing on its
+   * PATH establishes a GPU, and a user may have attached that machine FOR its
+   * GPU. Disjoint from `capabilities` by construction: a row that can claim a
+   * capability is not unsure about it.
+   */
+  readonly unmeasuredCapabilities?: ReadonlySet<ExecutorCapability>;
 
   /** The measured limits of the environment this executor's processes run in.
    *  Set by whoever supplies that environment (the CLI backend reads its own
@@ -226,6 +239,9 @@ export interface ExecutorInfo {
   name: string;
   kind: ExecutorKind;
   capabilities: string[];
+  /** Capabilities this environment cannot answer for either way. Absent on
+   *  every environment that can answer for all of them. */
+  unmeasuredCapabilities?: string[];
   available: boolean;
   configured: boolean;
   active: boolean;

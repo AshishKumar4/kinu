@@ -67,7 +67,10 @@ import {
   parseJsonValue,
   type SqlExec,
 } from '@proteus/core';
-import { makeSql, makeSqlExec, createHostShell, type LocalModelResolver } from '@proteus/cli-backend';
+import {
+  makeSql, makeSqlExec, createHostShell, hostToolchainCapabilities,
+  type LocalModelResolver,
+} from '@proteus/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath } from './config';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
@@ -619,7 +622,11 @@ export function listLocalExecutors(): LocalExecutorInfo[] {
       name: 'laptop',
       kind: 'laptop',
       status: 'connected',
-      capabilities: ['shell', 'git', 'npm', 'fs_shared', 'net_outbound', 'process_spawn'],
+      // The same probe the live provider declares from, not a copy of its row:
+      // this listing is what `proteus inspect` shows for the machine it is
+      // running on, so a hardcoded `git`/`npm` here would contradict the row the
+      // agent is actually given.
+      capabilities: [...hostToolchainCapabilities()],
     },
   ];
 }

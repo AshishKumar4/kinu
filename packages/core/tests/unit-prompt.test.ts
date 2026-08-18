@@ -139,8 +139,15 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('the agents schema description leads with positive delegation triggers', () => {
+    // The frame gained a clause when the measured-search rung landed: the ladder's
+    // two SPAWN rungs still differ on lifetime and context, and the third rung is
+    // named as what it is — nodes that are candidate answers rather than helpers —
+    // so the sentence stays true of a surface that now has three.
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
-      /Use when: One delegation ladder\. Its two rungs differ on two axes at once: how long the helper lives, and what context it starts from/,
+      /Use when: One delegation ladder\. Its two spawn rungs differ on two axes at once: how long the helper lives, and what context it starts from/,
+    );
+    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
+      /candidate answers measured against a number you declare/,
     );
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents.indexOf('one subordinate per independent workstream'))
       .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.agents.indexOf('full turn'));

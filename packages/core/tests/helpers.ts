@@ -481,3 +481,37 @@ export async function collectWorkspaceTextFiles(rt: AgentRuntime): Promise<Recor
   await walkWorkspaceTextFiles(rt, (path, content) => { out[path] = content; });
   return out;
 }
+
+// ── Diagnostic-line capture ──────────────────────────────────────
+
+/** Both console channels for one awaited call. WHICH channel a diagnostic lands
+ *  on is itself a contract — stdout is the CLI's machine stream — so both are
+ *  collected and asserted on separately. */
+export interface ConsoleCapture {
+  stdout: string[];
+  stderr: string[];
+}
+
+/**
+ * Run `fn` with both console channels collected.
+ *
+ * Manual reassignment rather than `spyOn(console, …)`: bun:test's spy does not
+ * intercept calls made from inside the async work awaited here (its own reporter
+ * appears to hold a pre-mock reference), verified against a direct count. Plain
+ * reassignment is what actually observes the calls.
+ */
+export async function captureConsole<Result>(fn: () => Promise<Result>): Promise<ConsoleCapture> {
+  const originalLog = console.log;
+  const originalError = console.error;
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  console.log = (...args: unknown[]) => { stdout.push(String(args[0])); };
+  console.error = (...args: unknown[]) => { stderr.push(String(args[0])); };
+  try {
+    await fn();
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  return { stdout, stderr };
+}

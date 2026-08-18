@@ -353,7 +353,7 @@ requirements:
       - No runtime precondition yet implements C2 against the measured baseline
       - The majority-vote witnesses hardcode tasks.ts numbers rather than reading the corpus
   PR-PUBLISH-001:
-    statement: From a sealed publication state no finite sequence of the run's own actions writes a records-store row, which is section 10.1 S7 as reachability rather than as a guard.
+    statement: From an uncleared sealed state no finite sequence of the run's own actions publishes to any member of the enumerated six-surface publication set, which is section 10.1 S7 as reachability over publication rather than over one table.
     status: proved-in-abstract-model
     theorems:
       - Proteus.Exploration.Publication.runOf_nil
@@ -364,9 +364,14 @@ requirements:
       - Proteus.Exploration.Publication.sealed_is_absorbing
       - Proteus.Exploration.Publication.sealed_publishes_nothing
       - Proteus.Exploration.Publication.breach_freezes_the_store
-      - Proteus.Exploration.Publication.open_publish_writes
       - Proteus.Exploration.Publication.retry_does_not_clear
       - Proteus.Exploration.Publication.good_measurement_does_not_clear
+      - Proteus.Exploration.Publication.surface_enumeration_is_total
+      - Proteus.Exploration.Publication.surface_enumeration_has_six
+      - Proteus.Exploration.Publication.admits_ignores_surface
+      - Proteus.Exploration.Publication.admits_iff_not_uncleared
+      - Proteus.Exploration.Publication.every_surface_is_writable
+      - Proteus.Exploration.Publication.every_surface_is_retro_writable
     tsRefs:
       - packages/core/src/strategy/objective.ts:288
       - packages/core/src/strategy/objective.ts:256
@@ -375,18 +380,19 @@ requirements:
       - The step function is a single sequential fold, so two runs racing on one objective's seal are not modelled and this is the model's largest gap
       - No records-store DDL or write path exists yet for the postconditions to refine
       - A store-level conditional write on the seal is what would close the concurrent case and it is unspecified
+      - Five of the six enumerated surfaces have live writers that take no PublicationState at all, so where each gate sits is unwired even though the enumeration is now checked
+      - The previous revision of this requirement was a true theorem about a false property: it quantified over records-store actions while experience_library was not one of them
   PR-PUBLISH-002:
-    statement: Only a recorded re-derivation carrying an admissible replacement floor and a stated adjudication clears a seal, retroactive publication additionally requires verifier-digest equality, and an identity-keyed seal provably cannot discriminate a corrected floor from the breached one.
+    statement: Only a recorded re-derivation carrying an admissible replacement floor and a stated adjudication admits publication again, retroactive publication additionally requires verifier-digest equality, and an identity-keyed seal provably cannot discriminate a corrected floor from the breached one.
     status: proved-in-abstract-model
     theorems:
       - Proteus.Exploration.Publication.identityKey_is_floor_blind
       - Proteus.Exploration.Publication.sealKey_discriminates
-      - Proteus.Exploration.Publication.admissible_rederivation_reopens
       - Proteus.Exploration.Publication.refuted_replacement_does_not_clear
       - Proteus.Exploration.Publication.unaudited_rederivation_does_not_clear
       - Proteus.Exploration.Publication.rederivation_restores_publication
       - Proteus.Exploration.Publication.retroPublish_requires_same_verifier
-      - Proteus.Exploration.Publication.retroPublish_after_clearance_writes
+      - Proteus.Exploration.Publication.admissible_rederivation_admits
     tsRefs:
       - packages/core/src/strategy/objective.ts:311
       - packages/core/src/strategy/objective.ts:318
@@ -397,18 +403,30 @@ requirements:
       - No implementation of FloorRederivation or of the retroactive re-evaluation path exists yet
       - The requirement that a replacement floor pass C1 is this model's reading of 'the same burden', not a literal clause of the spec
   PR-PUBLISH-003:
-    statement: A floor breach suspends the floor and stops publication without halting the run or stopping scoring, which is section 4.4's continuation rule.
+    statement: A floor breach suspends the floor and stops publication without halting the run, stopping scoring or suppressing the settle report, every refused publication is counted so the disclosure cannot under-report, and the suppressed-cell count is a provably independent quantity counted once per cell.
     status: proved-in-abstract-model
     theorems:
       - Proteus.Exploration.Publication.breach_does_not_halt
       - Proteus.Exploration.Publication.sealed_still_scores
       - Proteus.Exploration.Publication.breach_records_suspension
+      - Proteus.Exploration.Publication.sealed_still_reports
+      - Proteus.Exploration.Publication.suppression_none_is_not_zero
+      - Proteus.Exploration.Publication.cleared_seal_discloses_nothing
+      - Proteus.Exploration.Publication.sealed_publish_counts_the_refusal
+      - Proteus.Exploration.Publication.inert_refusal_is_not_a_suppression
+      - Proteus.Exploration.Publication.suppression_counts_every_refusal
+      - Proteus.Exploration.Publication.suppressedCells_counts_each_cell_once
+      - Proteus.Exploration.Publication.suppressedCells_le_improvements
+      - Proteus.Exploration.Publication.suppressedCells_monotone
+      - Proteus.Exploration.Publication.suppression_quantities_are_independent
     tsRefs:
       - packages/core/src/strategy/objective.ts:288
       - packages/core/src/strategy/objective.ts:256
     remainingEvidence:
-      - The continuation rule is under active review by SpecAudit and these three theorems are the exact clauses that would fail if it moves
-      - No engine code yet continues a run past a breach
+      - The continuation rule survived the audit's surface finding verbatim, which is what the clause-level isolation was for
+      - No engine code yet continues a run past a breach, and nothing yet computes the count of cells whose best was reached and not recorded
+      - The model proves the two disclosed quantities are independent and neither derivable from the other; connecting suppressedCells to an actual write attempt needs the records-store write path
+      - suppressedCells is modelled over the cells the run REACHED rather than over a records-store action, so nothing here proves the engine computes it
   PR-FAULT-001:
     statement: After a verifier fault no finite trace scores, records or publishes anything, which is section 3.4's crash-is-not-zero asymmetry as reachability.
     status: proved-in-abstract-model

@@ -188,11 +188,13 @@ export const CHARS_PER_TOKEN = 4;
  *  blend (≈ $3 / 1M tokens) so anything sized with it errs toward
  *  over-estimating spend.
  *
- *  The FALLBACK, not the rate: `ModelInfo.cost` now carries models.dev's real
- *  per-model prices, and the mission-budget ledger prices every call it can
- *  attribute to the actor's model from them (recording the tokens it could
- *  not). This stays for the seams that see characters rather than usage — the
- *  `LLM` primitive here, and MCTS's pre-run size estimate. */
+ *  The FALLBACK, not the rate: `ModelInfo.cost` carries models.dev's real
+ *  per-model prices, and both spend seams price from them first — the
+ *  mission-budget ledger per debit, and MCTS's pre-run estimate per search
+ *  (mcts/cost.ts), each recording that it fell back when it had to. This stays
+ *  for the seam that sees CHARACTERS rather than usage (the `LLM` primitive
+ *  here) and for the model nobody priced, where a blended ceiling is still
+ *  better than treating an unknown price as no price at all. */
 export const BLENDED_USD_PER_1K_TOKENS = 0.003;
 
 export function estimateTokens(chars: number): number {

@@ -210,3 +210,84 @@ describe('daemon checkpoint protocol', () => {
     } finally { cleanup(); }
   });
 });
+
+/**
+ * The device half of the toolchain probe. The hub sends the binary names from
+ * core's single table and this answers which of THOSE the machine has; the
+ * answer becomes the `laptop` capability row the model routes work by.
+ */
+describe('daemon toolchain probe', () => {
+  function withPath(dir, fn) {
+    const previous = process.env.PATH;
+    process.env.PATH = dir;
+    try {
+      return fn();
+    } finally {
+      process.env.PATH = previous;
+    }
+  }
+
+  /** A PATH directory holding executables named `names`. */
+  function pathWith(names) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proteus-which-'));
+    for (const name of names) {
+      fs.writeFileSync(path.join(dir, name), '#!/bin/sh\n', { mode: 0o755 });
+    }
+    return dir;
+  }
+
+  test('answers only about the names it was asked, and only those that resolve', async () => {
+    const dir = pathWith(['node', 'git']);
+    try {
+      const ws = fakeWs();
+      withPath(dir, () => handle({ id: 1, method: 'which', params: [['node', 'bun', 'git', 'python3']] }, ws, {}));
+
+      // `bun` and `python3` are not there. Reported as absent, which is a
+      // measurement — distinct from the hub never getting an answer at all.
+      expect((await ws.response(1)).result).toEqual({ present: ['node', 'git'] });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a non-executable file of the right name is not a binary on PATH', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proteus-which-'));
+    fs.writeFileSync(path.join(dir, 'python3'), 'not a program', { mode: 0o644 });
+    try {
+      const ws = fakeWs();
+      withPath(dir, () => handle({ id: 1, method: 'which', params: [['python3']] }, ws, {}));
+
+      // The capability reads "Runs Python". A file nobody can execute does not.
+      expect((await ws.response(1)).result).toEqual({ present: [] });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('refuses to answer for anything but a bare binary name', async () => {
+    const dir = pathWith(['node']);
+    try {
+      const ws = fakeWs();
+      // The probe must not become a way to ask whether paths on the user's
+      // machine exist. Names carrying a separator are dropped, not resolved —
+      // even one that would obviously succeed.
+      withPath(dir, () => handle({
+        id: 1,
+        method: 'which',
+        params: [['../etc/passwd', '/bin/sh', 'node/../node', 'node']],
+      }, ws, {}));
+
+      expect((await ws.response(1)).result).toEqual({ present: ['node'] });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a malformed question is an error frame, never a confident empty answer', async () => {
+    const ws = fakeWs();
+    handle({ id: 1, method: 'which', params: ['node'] }, ws, {});
+
+    // `{present: []}` here would tell the hub this machine has no toolchain.
+    expect((await ws.response(1)).error).toMatch(/array of binary names/);
+  });
+});

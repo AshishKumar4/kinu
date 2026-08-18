@@ -11,7 +11,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, createMockSession, makeSql } from './helpers';
+import { createTestRuntime, createMockSession, makeSql, captureConsole } from './helpers';
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
@@ -97,32 +97,6 @@ describe('MCTS evict-resume (B6)', () => {
 // the checkpoint (mcts_search_runs.updated_at) is the one real heartbeat this
 // backend has, but nothing reached console output. Gated on `search` being
 // present, same as the checkpoint call itself.
-/** Manual console capture — bun:test's spyOn(console, …) does not intercept
- *  calls made from inside the async work `await`ed here (its own reporter
- *  appears to hold a pre-mock reference), verified against a direct count. A
- *  plain reassignment is what actually observes the calls. Both channels are
- *  captured because WHICH one carries the heartbeat is the contract under
- *  test. */
-interface ConsoleCapture {
-  stdout: string[];
-  stderr: string[];
-}
-
-async function captureConsole<Result>(fn: () => Promise<Result>): Promise<ConsoleCapture> {
-  const originalLog = console.log;
-  const originalError = console.error;
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  console.log = (...args: unknown[]) => { stdout.push(String(args[0])); };
-  console.error = (...args: unknown[]) => { stderr.push(String(args[0])); };
-  try {
-    await fn();
-  } finally {
-    console.log = originalLog;
-    console.error = originalError;
-  }
-  return { stdout, stderr };
-}
 
 /** The heartbeat, as the typed logger emits it: one JSON line whose `event` is the
  *  stable dotted name. Keyed on the NAME rather than on prose, which is the whole

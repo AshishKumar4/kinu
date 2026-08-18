@@ -11,6 +11,11 @@ import { configuredScanner, judgeAdvisories } from './dependency-advisory-gate';
 import {
   advisoriesFor, queryAdvisories, type Exposure, type ReviewedPackage,
 } from './security-scanner';
+import {
+  audit as auditAgentsFields, parseSources as parseAgentsSources,
+  readDeclarations as readAgentsDeclarations, readHandler as readAgentsHandler,
+  type FindingKind,
+} from './agents-fields';
 
 /** A body large enough to clear a real threshold, written twice with every
  *  identifier renamed. A text- or token-similarity tool matches on the names;
@@ -499,5 +504,135 @@ describe('dependency advisory gate', () => {
     } finally {
       await server.stop(true);
     }
+  });
+});
+
+/**
+ * The agents action/field gate, over MINIATURE sources at the paths it governs.
+ * Synthetic rather than the real file on purpose: the point of these cases is
+ * that each shape it must catch is proven to make it red, and the real file is
+ * (by design) green.
+ */
+describe('agents action/field gate', () => {
+  const REGISTRY = 'packages/core/src/tools/registry.ts';
+  const TOOL = 'packages/core/src/tools/agents-tool.ts';
+  const LIMITS = 'packages/core/src/mission-limits.ts';
+
+  interface Miniature {
+    readonly actions: readonly string[];
+    /** Field names `AgentsInputEntries` declares. */
+    readonly entries: readonly string[];
+    readonly map: Readonly<Record<string, readonly string[]>>;
+    /** Per action, the body of its `case` arm. */
+    readonly arms: Readonly<Record<string, string>>;
+  }
+
+  const quoted = (names: readonly string[]): string => names.map((name) => `'${name}'`).join(', ');
+
+  function kinds(miniature: Miniature, extra = ''): FindingKind[] {
+    const tool = [
+      "import { readLimits } from '../mission-limits';",
+      `const AgentsInputEntries = {\n  action: v.picklist(AGENTS_TOOL_ACTIONS),`,
+      ...miniature.entries.map((field) => `  ${field}: v.optional(v.string()),`),
+      '};',
+      'export const AGENTS_ACTION_FIELDS = {',
+      ...Object.entries(miniature.map).map(([action, fields]) => `  ${action}: [${quoted(fields)}],`),
+      '} as const satisfies Record<AgentsToolAction, readonly AgentsToolInputField[]>;',
+      'export function dispatchAgentsAction(deps: Deps, input: AgentsToolInput): object {',
+      '  switch (input.action) {',
+      ...Object.entries(miniature.arms).map(([action, body]) => `    case '${action}': {\n${body}\n    }`),
+      '  }',
+      '  return {};',
+      '}',
+      extra,
+    ].join('\n');
+    const parsed = parseAgentsSources(new Map([
+      [REGISTRY, `export const AGENTS_TOOL_ACTIONS = [${quoted(miniature.actions)}] as const;`],
+      [TOOL, tool],
+      [LIMITS, 'export function readLimits(input: { cap?: number }): number { return input.cap ?? 0; }'],
+    ]));
+    return auditAgentsFields(readAgentsDeclarations(parsed), readAgentsHandler(parsed)).map((f) => f.kind);
+  }
+
+  const consistent: Miniature = {
+    actions: ['fork', 'list'],
+    entries: ['task', 'agent'],
+    map: { fork: ['task'], list: ['agent'] },
+    arms: {
+      fork: '      return { task: input.task };',
+      list: '      return { agent: input.agent };',
+    },
+  };
+
+  test('a handler whose arms read exactly what is declared has no findings', () => {
+    // The control. Without it every red below could come from a walk that
+    // reports findings over anything at all.
+    expect(kinds(consistent)).toEqual([]);
+  });
+
+  test('an action on the picklist with no fields and no arm is caught twice', () => {
+    // The shape this gate exists for: `swarm` joins the picklist, its fields
+    // join nothing, and the only symptom in production is that every one of
+    // them arrives absent.
+    expect(kinds({ ...consistent, actions: ['fork', 'list', 'swarm'] }))
+      .toEqual(['unhandled-action', 'undeclared-action']);
+  });
+
+  test('a field an action declares and the parse does not is the silent drop', () => {
+    expect(kinds({
+      ...consistent,
+      map: { ...consistent.map, fork: ['task', 'budget_usd'] },
+      arms: { ...consistent.arms, fork: '      return { u: input.budget_usd, task: input.task };' },
+    })).toEqual(['unparsed-field']);
+  });
+
+  test('a field the handler reads and the map does not claim is caught', () => {
+    expect(kinds({
+      ...consistent,
+      entries: ['task', 'agent', 'preset'],
+      arms: { ...consistent.arms, list: '      return { p: input.preset, agent: input.agent };' },
+    })).toEqual(['undeclared-field', 'orphan-field']);
+  });
+
+  test('a field claimed for an action whose arm never reads it is caught', () => {
+    expect(kinds({ ...consistent, map: { ...consistent.map, list: ['agent', 'task'] } }))
+      .toEqual(['unread-field']);
+  });
+
+  test('an input handed somewhere the walk cannot follow fails rather than passing', () => {
+    // Non-vacuity, in the direction that matters: a gate that silently stopped
+    // following would be green over exactly the code it could not read.
+    const opaque = kinds({
+      ...consistent,
+      arms: { ...consistent.arms, list: '      return { ...input };' },
+    });
+    expect(opaque).toContain('opaque');
+  });
+
+  test('a whole-input hand-off across a module boundary is followed, not guessed', () => {
+    // `budget_usd` is read inside `readMissionLimits` in another module, so a
+    // walk that stopped at the file boundary would report the real fork arm's
+    // caps as undeclared. Proven here on a miniature of the same shape.
+    const parsed = parseAgentsSources(new Map([
+      [REGISTRY, "export const AGENTS_TOOL_ACTIONS = ['fork'] as const;"],
+      [TOOL, [
+        "import { readLimits } from '../mission-limits';",
+        'const AgentsInputEntries = {\n  action: v.picklist(AGENTS_TOOL_ACTIONS),\n  cap: v.optional(v.number()),\n};',
+        "export const AGENTS_ACTION_FIELDS = {\n  fork: ['cap'],\n} as const satisfies Record<A, readonly F[]>;",
+        'export function dispatchAgentsAction(deps: Deps, input: AgentsToolInput): object {',
+        '  switch (input.action) {',
+        "    case 'fork': {",
+        '      return { limit: readLimits(input) };',
+        '    }',
+        '  }',
+        '  return {};',
+        '}',
+      ].join('\n')],
+      [LIMITS, 'export function readLimits(input: { cap?: number }): number { return input.cap ?? 0; }'],
+    ]));
+    const reads = readAgentsHandler(parsed);
+    expect([...reads.byAction.get('fork') ?? []]).toEqual(['cap']);
+    expect(reads.hops).toContain('readLimits(…)');
+    expect(auditAgentsFields(readAgentsDeclarations(parsed), reads)).toEqual([]);
   });
 });

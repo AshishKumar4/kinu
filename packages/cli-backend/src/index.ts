@@ -14,6 +14,7 @@ export {
 } from './secret-file';
 export { openWorkspaceCLI, type WorkspaceInfo, type CLIOpenConfig } from './open';
 export { createSandboxedExecutor, createNodeExecutor } from './executor';
+export { hostToolchainCapabilities } from './host-toolchain';
 export { createLinuxFiber, detectOrphanedFibers } from './fiber';
 export { createBranchSpawner } from './branch-process';
 export { createNodeCraftedExecute } from './craft-executor';

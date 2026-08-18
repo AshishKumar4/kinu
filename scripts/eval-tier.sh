@@ -29,10 +29,19 @@
 #   AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH an AI Gateway, for models the account
 #                                         proxy does not front.
 #
-# With NEITHER, this script still runs and still passes: every live test skips,
-# the ratchet proves the skips are the declared ones, and the tier reports zero
-# spend. That is deliberate — a tier that cannot run without a secret is a tier
-# nobody can reproduce, and the ratchet is the part that must never be optional.
+# Neither set? This script borrows the SIGNED-IN CLI session — the same
+# `~/.proteus/config.json` credential `proteus chat` uses — via
+# scripts/eval-credentials.ts. That is the fix for a measured defect, not a
+# convenience: the tier asked for two env vars that nothing on the owner's own
+# machine ever exported, so this deploy gate ran to completion reporting
+# `TOTAL: 0 model call(s)` and every live suite skipped. An explicit
+# PROTEUS_TOKEN or AI_GATEWAY_AUTH is never overridden.
+#
+# With no credential ANYWHERE, this script still runs and still passes: every
+# live test skips, the ratchet proves the skips are the declared ones, and the
+# tier reports zero spend. That is deliberate — a tier that cannot run without a
+# secret is a tier nobody can reproduce, and the ratchet is the part that must
+# never be optional.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -56,6 +65,18 @@ export PROTEUS_EVAL_SPEND_FILE="$SPEND"
 # credential exported in a developer's shell can no longer make the commit hook
 # bill the owner's account — being driven by this script is the consent.
 export PROTEUS_EVAL_LIVE=1
+
+# Fill in the credential the tier asks for, from the signed-in CLI session, when
+# the environment names no target. MUST be here rather than inside a suite:
+# `scripts/test-scratch-home.ts` replaces PROTEUS_HOME with a throwaway directory
+# at preload in every test process, so a resolver running under `bun test` reads
+# an empty config and finds nothing. Two lines on stdout or none; the token never
+# reaches argv or the log.
+mapfile -t RESOLVED < <(bun scripts/eval-credentials.ts)
+if [[ ${#RESOLVED[@]} -eq 2 ]]; then
+  export PROTEUS_ORIGIN="${RESOLVED[0]}"
+  export PROTEUS_TOKEN="${RESOLVED[1]}"
+fi
 
 echo "── eval tier ─────────────────────────────────────────────"
 if [[ -n "${PROTEUS_TOKEN:-}" && -n "${PROTEUS_ORIGIN:-}" ]]; then

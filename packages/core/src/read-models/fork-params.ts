@@ -19,6 +19,7 @@
 
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
+import { judgeCallBudget } from '../mcts/evaluation';
 import type { SqlExecutor } from '../types/primitives';
 
 /** The settle policy as the caller names it — `agents(action:'fork', settle)`. */
@@ -37,8 +38,19 @@ export interface CompetedForkParams {
   readonly maxDepth: number | null;
   /** The UCT exploration constant this search selected with. */
   readonly explorationWeight: number | null;
-  /** Judge samples per branch evaluation, median-aggregated. */
-  readonly judgeSamples: number | null;
+  /** Judge samples per branch the run ASKED for, median-aggregated. */
+  readonly judgeSamplesRequested: number | null;
+  /** Judge samples a CODE-BEARING branch actually got. The two spend knobs share
+   *  one per-evaluation call pool, so a request the pool cannot fund is realised
+   *  lower (mcts/evaluation.ts judgeCallBudget) — a run that asked for 20 and ran
+   *  3 says so here rather than reading as a run that ran 20.
+   *
+   *  A prose-only branch of the same BUILD search realises one more, because it
+   *  spends no call generating a check suite; a plan search has no code branches
+   *  at all and this is its every branch. Null when the record does not carry
+   *  both knobs — the realised size is then genuinely unknown, which is not the
+   *  same claim as equal to the request. */
+  readonly judgeSamplesRealised: number | null;
   /** The trusted work mode the search ran under. */
   readonly mode: string | null;
 }
@@ -63,6 +75,7 @@ const ConfigSchema = v.object({
   maxDepth: v.optional(v.number()),
   explorationWeight: v.optional(v.number()),
   judgeSamples: v.optional(v.number()),
+  maxEvalLLMCalls: v.optional(v.number()),
 });
 
 /**
@@ -91,7 +104,16 @@ function competedParams(rootId: string, configJson: string): ForkRunParams | nul
     branches: config.branches,
     maxDepth: config.maxDepth ?? null,
     explorationWeight: config.explorationWeight ?? null,
-    judgeSamples: config.judgeSamples ?? null,
+    judgeSamplesRequested: config.judgeSamples ?? null,
+    judgeSamplesRealised: config.judgeSamples !== undefined && config.maxEvalLLMCalls !== undefined
+      ? judgeCallBudget({
+        judgeSamples: config.judgeSamples,
+        maxLLMCalls: config.maxEvalLLMCalls,
+        // A plan-mode search never runs the executor, so no call is spent on a
+        // check suite and the whole pool is the ensemble's.
+        offersRunnableCode: (config.mode ?? 'build') === 'build',
+      }).ensemble
+      : null,
     mode: config.mode ?? null,
   };
 }

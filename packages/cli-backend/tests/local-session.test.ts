@@ -2917,8 +2917,10 @@ describe('agents.* codemode namespace — node sandbox', () => {
     const result = await sandboxWith(deps)(
       'return { members: Object.keys(agents), hire: typeof agents.hire, fork: typeof agents.fork };',
     );
-    // Local sessions wire fork only — no daemon routes hiring or peer mail.
-    expect(result).toEqual({ result: { members: ['fork'], hire: 'undefined', fork: 'function' } });
+    // Local sessions wire the fork SUBSTRATE only — no daemon routes hiring or peer
+    // mail — and that substrate carries both search rungs: `swarm` needs a model to
+    // expand with and a workspace to measure in, which is what fork deps already are.
+    expect(result).toEqual({ result: { members: ['fork', 'swarm'], hire: 'undefined', fork: 'function' } });
   });
 
   test('a live session turn gets the namespace, gated to what it actually wired', async () => {
@@ -2933,10 +2935,10 @@ describe('agents.* codemode namespace — node sandbox', () => {
     `));
     await session.send('what can you delegate to?');
     expect(events.some((e) => e.type === 'tool-result' && e.toolName === 'execute_tools' && e.success)).toBe(true);
-    // Local sessions wire fork only — no daemon routes hiring or peer mail.
+    // Local sessions wire the fork substrate only, and both search rungs ride it.
     const probe = await rt.storage.vfs.readFile('/workspace/probe/agents.json', { encoding: 'utf8' });
     expect(JSON.parse(String(probe))).toEqual({
-      members: ['fork'], fork: 'function', hire: 'undefined',
+      members: ['fork', 'swarm'], fork: 'function', hire: 'undefined',
     });
     await session.end();
   });

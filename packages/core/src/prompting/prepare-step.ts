@@ -95,7 +95,15 @@ export function composePrepareStep(
   if (refusal) throw new MissionBudgetExhausted(refusal);
   const steered = pipeline.extensions?.runPrepareStep(ctx);
   const base = steered ?? ctx.messages;
-  const pruned = pipeline.prune ? pruneStepToolOutputs(base, pipeline.prune) : undefined;
+  // The weave runs AFTER the prune (step 3 — frozen block positions have to be
+  // coordinates in the array the model actually receives), so the pruner has
+  // to be TOLD what the ledger is about to hand back. Unreserved it prices a
+  // request smaller than the one that gets sent, by the ledger's whole size.
+  const pruned = pipeline.prune
+    ? pruneStepToolOutputs(base, pipeline.dynamic
+      ? { ...pipeline.prune, reservedTokens: pipeline.dynamic.ledger.overheadTokens }
+      : pipeline.prune)
+    : undefined;
   const shrunk = pruned ?? base;
   // The weave always rewrites (frozen blocks must be re-applied every step —
   // a prepareStep override never feeds the next step's input).

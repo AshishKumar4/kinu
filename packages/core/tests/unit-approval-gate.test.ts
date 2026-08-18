@@ -71,6 +71,33 @@ describe('reviewCommand — the rule table', () => {
     }
   });
 
+  test('gates a publish in every ecosystem, not only the one this repo is written in', () => {
+    // The rule's `why` has always been language-agnostic — "Publishes to a
+    // public package registry" — while its pattern matched npm alone, so an
+    // identical Rust, Python, Ruby, Java or .NET task shipped to a public
+    // registry with no prompt. Each line here is a registry reached from a
+    // different toolchain; `python -m twine` is separate because the binary in
+    // command position is the interpreter, and `binaries` decides whether the
+    // rule fires at all.
+    for (const cmd of [
+      'cargo publish',
+      'poetry publish --build',
+      'uv publish',
+      'flit publish',
+      'hatch publish',
+      'twine upload dist/*',
+      'python -m twine upload dist/*',
+      'gem push mygem-1.0.0.gem',
+      'mvn deploy',
+      './gradlew publishToSonatype',
+      'dotnet nuget push pkg.nupkg',
+    ]) {
+      const r = reviewCommand(cmd, THEIRS);
+      expect(r.decision).toBe('gate');
+      expect(r.hits.some((h) => h.rule === 'package-publish')).toBe(true);
+    }
+  });
+
   test('warns on env dumps + secret file reads', () => {
     expect(reviewCommand('printenv', THEIRS).decision).toBe('warn');
     expect(reviewCommand('cat ~/.aws/credentials', THEIRS).decision).toBe('warn');
