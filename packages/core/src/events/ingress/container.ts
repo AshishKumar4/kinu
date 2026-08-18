@@ -64,12 +64,12 @@
  */
 
 import * as v from 'valibot';
-import type { EventLog } from '../hub/log.js';
-import type { IngressDescriptor, TrustLevel } from '../hub/types.js';
-import { spillEventContent } from '../hub/content-spill.js';
-import { EVENT_BRIEF_MAX_CHARS } from '../hub/visibility.js';
-import type { VFS } from '../../types/primitives.js';
-import type { JsonValue } from '../../utils/json.js';
+import type { EventLog } from '../hub/log';
+import type { IngressDescriptor, TrustLevel } from '../hub/types';
+import { spillEventContent } from '../hub/content-spill';
+import { EVENT_BRIEF_MAX_CHARS } from '../hub/visibility';
+import type { VFS } from '../../types/primitives';
+import type { JsonValue } from '../../utils/json';
 
 /** Longest command line a report may carry. Past this it is not a command, it
  *  is a payload wearing one. */

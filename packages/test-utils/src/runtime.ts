@@ -7,9 +7,9 @@ import type {
   AgentRuntime, LLM, Memory, Executor, Schedule, Identity, ExecutionRouter,
   CraftStore, BranchHandle, FiberCtx,
 } from '@proteus/core';
-import { createTestSql, type TestSql } from './sql.js';
-import { createEchoLLM } from './llm.js';
-import { createMemoryVfs } from './vfs.js';
+import { createTestSql, type TestSql } from './sql';
+import { createEchoLLM } from './llm';
+import { createMemoryVfs } from './vfs';
 
 export interface TestRuntimeOptions {
   /** Override the LLM. Default: echo LLM. */

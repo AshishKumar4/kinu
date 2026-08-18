@@ -10,9 +10,9 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { readLatestSearchTree } from '../src/read-models/search-tree.js';
+import { makeSql, makeExecRaw } from './helpers';
+import { initSearchTables } from '../src/mcts/schemas';
+import { readLatestSearchTree } from '../src/read-models/search-tree';
 
 function freshDb() {
   const db = new Database(':memory:');

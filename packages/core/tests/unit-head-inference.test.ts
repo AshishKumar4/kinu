@@ -9,13 +9,13 @@ import { MockLanguageModelV3 } from 'ai/test';
 import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, type HeadInferenceDeps,
-} from '../src/heads/head-inference.js';
-import { DEFAULT_MAX_STEPS } from '../src/config.js';
-import type { Decision, Evidence, HeadInput, SerializedMessage } from '../src/heads/types.js';
+} from '../src/heads/head-inference';
+import { DEFAULT_MAX_STEPS } from '../src/config';
+import type { Decision, Evidence, HeadInput, SerializedMessage } from '../src/heads/types';
 import {
   inheritedContextFromHistory, inheritedContextFromRows, inheritedContextOmissionNote,
-} from '../src/orchestrator/heads-support.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/prompts/evidence-window.js';
+} from '../src/orchestrator/heads-support';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/prompts/evidence-window';
 
 /** A generateText-driving stub. Returns `answer` as one text step + usage;
  *  finishReason 'stop' so the head ends in a single step (no tool calls). */

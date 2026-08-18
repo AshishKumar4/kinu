@@ -10,11 +10,11 @@
  * no way to store a spec that has not been through `parseViewSpec`.
  */
 
-import type { RawSqlExec, SqlExecutor, VFS } from '../types/primitives.js';
+import type { RawSqlExec, SqlExecutor, VFS } from '../types/primitives';
 import * as v from 'valibot';
-import { ensureDir } from '../utils/vfs-helpers.js';
-import { VIEW_LIMITS, parseViewSpec, type ViewSpec } from './spec.js';
-import { parseJsonValue, type JsonValue } from '../utils/json.js';
+import { ensureDir } from '../utils/vfs-helpers';
+import { VIEW_LIMITS, parseViewSpec, type ViewSpec } from './spec';
+import { parseJsonValue, type JsonValue } from '../utils/json';
 
 export interface ViewStoreDeps {
   vfs: VFS;

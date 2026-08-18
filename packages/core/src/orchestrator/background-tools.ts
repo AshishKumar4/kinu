@@ -19,13 +19,13 @@
 
 import type { ToolExecutionOptions, ToolSet } from 'ai';
 import { combineAbortSignals } from '@proteus/agent-utils';
-import { SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from '../jobs/threshold.js';
-import { JobNotResumable } from '../jobs/runner.js';
-import type { BackgroundJobRunner } from '../jobs/runner.js';
-import type { WorkMode } from '../prompting/surface.js';
-import { resumableForkInput } from '../tools/agents-tool.js';
-import { nanoid } from '../utils/nanoid.js';
-import { decodeJsonValue, type JsonValue } from '../utils/json.js';
+import { SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from '../jobs/threshold';
+import { JobNotResumable } from '../jobs/runner';
+import type { BackgroundJobRunner } from '../jobs/runner';
+import type { WorkMode } from '../prompting/surface';
+import { resumableForkInput } from '../tools/agents-tool';
+import { nanoid } from '../utils/nanoid';
+import { decodeJsonValue, type JsonValue } from '../utils/json';
 
 /** How a backgroundable tool's work detaches: racing the threshold for a
  *  result the turn waits on, or on spawn-confirm for a launched process. */

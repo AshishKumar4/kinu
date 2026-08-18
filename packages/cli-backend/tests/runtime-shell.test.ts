@@ -18,7 +18,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { createHostShell } from '../src/runtime.js';
+import { createHostShell } from '../src/runtime';
 
 describe('createHostShell', () => {
   test('aborts long-running commands through AbortSignal', async () => {

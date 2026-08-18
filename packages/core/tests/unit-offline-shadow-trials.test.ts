@@ -22,12 +22,12 @@ import {
   runQueuedShadowTrials,
   type CompletedTurn, type JudgeOutput, type ScaffoldControl,
   type ScaffoldReplayContext,
-} from '../src/index.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { Executor, ResolvedProvider } from '../src/types/primitives.js';
-import { decodeJsonValue } from '../src/utils/json.js';
+} from '../src/index';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { Executor, ResolvedProvider } from '../src/types/primitives';
+import { decodeJsonValue } from '../src/utils/json';
 import type { ModelMessage } from 'ai';
-import { createTestRuntime } from './helpers.js';
+import { createTestRuntime } from './helpers';
 
 const TASK = 'what did we decide about the codename?';
 const LIVE_ANSWER = '<<live-answer>>';

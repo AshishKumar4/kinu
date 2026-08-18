@@ -51,14 +51,14 @@ import type { JsonValue } from '@vitest-evals/core';
 
 import type {
   AgentRuntime, EvalCase, LLMProviderConfig, RunEvent, SeekCursor, Shell,
-} from '../../packages/core/src/index.js';
+} from '../../packages/core/src/index';
 import {
   RunEventRecorder, initWorkspaceSchema, listRuns, resolveMaxSteps,
-} from '../../packages/core/src/index.js';
-import { createWorkspace } from '../../packages/core/src/identity/index.js';
-import { LocalAgentSession } from '../../packages/cli-backend/src/local-session.js';
-import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
-import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
+} from '../../packages/core/src/index';
+import { createWorkspace } from '../../packages/core/src/identity/index';
+import { LocalAgentSession } from '../../packages/cli-backend/src/local-session';
+import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
+import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
 import {
   hardTaskFor, recordLiveModelEpisode, scoreTrajectory, seedHardTask, verifyHardTask,
   type EvalArmState, type EvalScoreRow, type HardTask,

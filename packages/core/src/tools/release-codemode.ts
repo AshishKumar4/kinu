@@ -28,10 +28,10 @@
  */
 
 import * as v from 'valibot';
-import type { CodemodeProvider } from '../rlm.js';
-import { RELEASE_STATUSES } from '../release/index.js';
-import { releaseToolActions, TOOL_REACH, type ReleaseToolAction } from './registry.js';
-import { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from './release-tool.js';
+import type { CodemodeProvider } from '../rlm';
+import { RELEASE_STATUSES } from '../release/index';
+import { releaseToolActions, TOOL_REACH, type ReleaseToolAction } from './registry';
+import { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from './release-tool';
 
 /** Per-action sandbox declaration + description. Split into two records
  *  because a script sends member-specific arguments, not the flat native
@@ -271,4 +271,4 @@ export function createReleaseCodemodeProvider(deps: () => ReleaseToolDeps): Code
 
 // Re-exported so callers that only need the dispatcher (tests, a future
 // owner-facing surface) do not have to import tools/release-tool.ts directly.
-export { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from './release-tool.js';
+export { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from './release-tool';

@@ -12,7 +12,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
-import { TestLanguageModelV2 } from './test-language-model.js';
+import { TestLanguageModelV2 } from './test-language-model';
 import type {
   LanguageModelV2CallOptions,
   LanguageModelV2Usage,
@@ -26,11 +26,11 @@ import {
   type ModelCallSink,
   createAgentSelfProvider,
 } from '@proteus/core';
-import { createCLIRuntime } from '../src/runtime.js';
-import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session.js';
-import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver.js';
-import { createNodeExecuteToolFactory } from '../src/execute-tools-factory.js';
-import { discoverAgentsMd } from '../src/agents-md.js';
+import { createCLIRuntime } from '../src/runtime';
+import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
+import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
+import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
+import { discoverAgentsMd } from '../src/agents-md';
 import * as v from 'valibot';
 
 /** The resolver members these tests do not exercise — spelled out once so a

@@ -13,21 +13,21 @@
  * processTurn/closeRun — with the payload shapes drifting one field at a time.
  */
 
-import type { TurnContextBudget } from '../context-budget.js';
-import type { TurnFileLedger } from '../tools/file-ledger.js';
+import type { TurnContextBudget } from '../context-budget';
+import type { TurnFileLedger } from '../tools/file-ledger';
 import type {
   CompletionGateRecord, CraftCycleRecord, ExecutionRecoveryRecord, RunEventInput, TurnSteeringRecord,
-} from '../events/types.js';
-import type { TurnEscalationLedger } from '../execution/escalation.js';
-import type { CompletedTurn } from '../evolution/types.js';
-import { usageReported, type Usage } from '../usage.js';
-import type { TurnAccumulator } from './turn-accumulator.js';
+} from '../events/types';
+import type { TurnEscalationLedger } from '../execution/escalation';
+import type { CompletedTurn } from '../evolution/types';
+import { usageReported, type Usage } from '../usage';
+import type { TurnAccumulator } from './turn-accumulator';
 import {
   planOverflowRecovery, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   type OverflowRecoveryDecision,
-} from '../turn-failure.js';
-import type { SignalDeliverer } from '../types/signals.js';
-import { diagnostics, toProteusError } from '../obs/index.js';
+} from '../turn-failure';
+import type { SignalDeliverer } from '../types/signals';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** The recorder slice this spine writes through — structural (both backends
  *  pass their RunEventRecorder). */

@@ -36,11 +36,11 @@
  */
 
 import * as v from 'valibot';
-import { isFailingResultText } from '../execution/exec-result.js';
-import { citesApprovalDenial } from '../safety/approval-gate.js';
-import { FAILURE_WITHOUT_ERROR, type RunEvent } from '../events/types.js';
-import { JsonObjectSchema, parseJsonValue, type JsonValue } from '../utils/json.js';
-import { CODE_IS_REFUSAL, ERROR_CODES, tolerate } from '../obs/index.js';
+import { isFailingResultText } from '../execution/exec-result';
+import { citesApprovalDenial } from '../safety/approval-gate';
+import { FAILURE_WITHOUT_ERROR, type RunEvent } from '../events/types';
+import { JsonObjectSchema, parseJsonValue, type JsonValue } from '../utils/json';
+import { CODE_IS_REFUSAL, ERROR_CODES, tolerate } from '../obs/index';
 
 /**
  * The file plane's own refusal reasons — the ones that are not error CLASSES but

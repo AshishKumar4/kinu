@@ -42,7 +42,7 @@ import {
 } from '@proteus/core';
 import { ROOT_DELEGATION_BUDGET } from '@proteus/core';
 import * as v from 'valibot';
-import type { AgentProviderRegistry } from '../src/providers/agent-registry.js';
+import type { AgentProviderRegistry } from '../src/providers/agent-registry';
 
 /** The admission facts every handoff carries back to the sender. */
 const codemodeHandoff: SubordinateHandoff = {
@@ -50,15 +50,15 @@ const codemodeHandoff: SubordinateHandoff = {
   phase: { busy: false, lastActivityAt: null, workingOn: null },
 };
 import { createTestRuntime } from '@proteus/test-utils';
-import { mockAgentsSdk } from './helpers/agents-sdk.js';
+import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
 // Every one of these reaches `cloudflare:workers` at module load, so they are
 // imported after the mock is registered.
 const { resolveProvider } = await import('@cloudflare/codemode/ai');
-const { createExecuteToolsTool } = await import('../src/execute-tools.ts');
-const { ExplorationAgent } = await import('../src/exploration.ts');
-const { spawnHeadFacet } = await import('../src/facet-spawn.ts');
+const { createExecuteToolsTool } = await import('../src/execute-tools');
+const { ExplorationAgent } = await import('../src/exploration');
+const { spawnHeadFacet } = await import('../src/facet-spawn');
 type FacetHost = Parameters<typeof spawnHeadFacet>[0];
 
 const ForkResultSchema = v.object({ text: v.string() });

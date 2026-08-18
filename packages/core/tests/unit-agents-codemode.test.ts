@@ -36,8 +36,8 @@ import {
   type SubordinateRosterEntry,
   type TeamToolDeps,
   type SubordinateDelivery, type SubordinateHandoff,
-} from '../src/index.ts';
-import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth.js';
+} from '../src/index';
+import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 
 interface Call { action: string; input: JsonValue }
 

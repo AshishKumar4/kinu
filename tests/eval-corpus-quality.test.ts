@@ -14,7 +14,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { join } from 'node:path';
-import { minimumPairsForSignificance } from '../packages/core/src/index.js';
+import { minimumPairsForSignificance } from '../packages/core/src/index';
 import {
   TASK_OUTCOME, compareRuns, readRunRecord,
   type EvalObservation, type EvalRunRecord,

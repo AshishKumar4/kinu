@@ -12,8 +12,8 @@ import {
   buildBuiltinTools,
   type JsonValue,
   type PlanEdit,
-} from '../src/index.ts';
-import { createTestRuntime, makeExecRaw, makeSql } from './helpers.ts';
+} from '../src/index';
+import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 
 describe('plan edit contract', () => {
   test('writes the initial full plan and applies later edits against pre-edit line numbers', () => {

@@ -1,8 +1,8 @@
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
-import { createSession, verifySession, type OAuthProfile } from '../src/auth/d1-store.js';
-import { createAuthDatabase, makeD1 } from './helpers/d1.js';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import { createSession, verifySession, type OAuthProfile } from '../src/auth/d1-store';
+import { createAuthDatabase, makeD1 } from './helpers/d1';
+import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 const AuthUserSchema = v.object({ id: v.string(), email: v.string() });

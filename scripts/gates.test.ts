@@ -3,14 +3,14 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { findDuplicateGroups } from './ast-duplication.ts';
-import { findMovable, withoutComments } from './capability-parity.ts';
-import { classify, exportedDeclarations, inScope, keyOf } from './dead-code.ts';
-import { assertMeasured, reconcile, writeLock } from './gate-ratchet.ts';
-import { configuredScanner, judgeAdvisories } from './dependency-advisory-gate.ts';
+import { findDuplicateGroups } from './ast-duplication';
+import { findMovable, withoutComments } from './capability-parity';
+import { classify, exportedDeclarations, inScope, keyOf } from './dead-code';
+import { assertMeasured, reconcile, writeLock } from './gate-ratchet';
+import { configuredScanner, judgeAdvisories } from './dependency-advisory-gate';
 import {
   advisoriesFor, queryAdvisories, type Exposure, type ReviewedPackage,
-} from './security-scanner.ts';
+} from './security-scanner';
 
 /** A body large enough to clear a real threshold, written twice with every
  *  identifier renamed. A text- or token-similarity tool matches on the names;
@@ -146,10 +146,10 @@ describe('dead code gate', () => {
 
   test('a re-export is not a declaration', () => {
     const names = exportedDeclarations('packages/core/src/index.ts', `
-      import { local } from './other.js';
-      export { computeParetoFront, sampleParentByWeight } from './pareto.js';
-      export type { MergePair } from './merge.js';
-      export * from './engine.js';
+      import { local } from './other';
+      export { computeParetoFront, sampleParentByWeight } from './pareto';
+      export type { MergePair } from './merge';
+      export * from './engine';
       export { local };
     `);
     expect([...names]).toEqual([]);

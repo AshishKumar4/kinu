@@ -19,18 +19,18 @@
  * gracefully on judge LLM failure (logged, not recorded).
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { LLM } from '../types/primitives.js';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { LLM } from '../types/primitives';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import * as v from 'valibot';
 import {
   type PendingScaffold, type ShadowConfig, type JudgeFn, type ShadowTrialVerdict,
   DEFAULT_SHADOW_CONFIG, getPendingScaffold, getCurrentScaffoldVersion,
   recordShadowEvaluation, decidePromotion, applyPromotionDecision, readScaffoldVersion,
-} from './shadow.js';
-import { runScaffold, scaffoldEventText, SCAFFOLD_TURN_TIMEOUT_MS, type ScaffoldRunResult } from './executor.js';
-import { diagnostics, ProteusError, toProteusError } from '../obs/index.js';
+} from './shadow';
+import { runScaffold, scaffoldEventText, SCAFFOLD_TURN_TIMEOUT_MS, type ScaffoldRunResult } from './executor';
+import { diagnostics, ProteusError, toProteusError } from '../obs/index';
 
 /**
  * Structured output of ONE judge call. Deliberately neutral: the judge sees

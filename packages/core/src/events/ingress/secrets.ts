@@ -8,8 +8,8 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExec } from '../../types/primitives.js';
-import type { SecretStore } from './webhook.js';
+import type { SqlExec } from '../../types/primitives';
+import type { SecretStore } from './webhook';
 
 export interface WebhookSecretStore extends SecretStore {
   /** Store the secret a freshly registered webhook was created with. */

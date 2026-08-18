@@ -11,16 +11,16 @@
 // The @callable control-plane RPCs (jobResult/list/
 // dismiss/clear/retry) stay on each backend and call BackgroundJobStore + here.
 
-import type { Schedule } from '../types/primitives.js';
-import type { SignalDeliverer } from '../types/signals.js';
-import type { EventLog } from '../events/hub/log.js';
-import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold.js';
-import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store.js';
-import { nanoid } from '../utils/nanoid.js';
-import type { WorkMode } from '../prompting/surface.js';
+import type { Schedule } from '../types/primitives';
+import type { SignalDeliverer } from '../types/signals';
+import type { EventLog } from '../events/hub/log';
+import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
+import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
+import { nanoid } from '../utils/nanoid';
+import type { WorkMode } from '../prompting/surface';
 import * as v from 'valibot';
-import { parseJsonValue, type JsonValue } from '../utils/json.js';
-import { diagnostics, toProteusError } from '../obs/index.js';
+import { parseJsonValue, type JsonValue } from '../utils/json';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** The terminal error a non-recoverable job records when it is interrupted by a
  *  DO eviction (no durable checkpoint / not safe to re-run).

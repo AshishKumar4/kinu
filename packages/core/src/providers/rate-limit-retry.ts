@@ -1,6 +1,6 @@
-import { asFetchFunction } from './fetch-shim.js';
+import { asFetchFunction } from './fetch-shim';
 import * as v from 'valibot';
-import { diagnostics, ProteusError } from '../obs/index.js';
+import { diagnostics, ProteusError } from '../obs/index';
 
 const DEFAULT_MAX_ATTEMPTS = 6;
 const DEFAULT_MAX_ELAPSED_MS = 180_000;

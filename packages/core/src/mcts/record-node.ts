@@ -7,8 +7,8 @@
  * The architecture doc's v1 used `content: "..."` which is a TYPE ERROR.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import { nanoid } from '../utils/nanoid.js';
+import type { SqlExecutor } from '../types/primitives';
+import { nanoid } from '../utils/nanoid';
 
 /** SessionMessage with correct `parts` field (not `content`) */
 export interface SessionMessagePart {

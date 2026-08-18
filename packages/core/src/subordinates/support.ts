@@ -12,23 +12,23 @@
  */
 
 import * as v from 'valibot';
-import type { EventLog, PublishResult } from '../events/hub/log.js';
-import type { SubordinateReportStatus } from '../events/hub/types.js';
-import type { SerializedMessage } from '../heads/types.js';
-import type { SqlExec, SqlExecutor } from '../types/primitives.js';
-import { reconcileColumns } from '../identity/columns.js';
+import type { EventLog, PublishResult } from '../events/hub/log';
+import type { SubordinateReportStatus } from '../events/hub/types';
+import type { SerializedMessage } from '../heads/types';
+import type { SqlExec, SqlExecutor } from '../types/primitives';
+import { reconcileColumns } from '../identity/columns';
 import {
   DELEGATION_MAX_DEPTH,
   delegationBudgetAtDepth,
   type DelegationBudget,
-} from './depth.js';
-import type { WorkMode } from '../prompting/surface.js';
+} from './depth';
+import type { WorkMode } from '../prompting/surface';
 import type {
   SubordinateHandoff,
   SubordinateRosterEntry,
   SubordinateStatus,
   TeamToolDeps,
-} from '../tools/agents-tool.js';
+} from '../tools/agents-tool';
 
 export interface SubordinateLiveStatus {
   lastActivity: number | null;

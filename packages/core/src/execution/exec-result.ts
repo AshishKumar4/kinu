@@ -40,8 +40,8 @@
  */
 
 import * as v from 'valibot';
-import { refusalOf, tolerate, type ProteusError } from '../obs/index.js';
-import { parseJsonValue } from '../utils/json.js';
+import { refusalOf, tolerate, type ProteusError } from '../obs/index';
+import { parseJsonValue } from '../utils/json';
 
 const ErrorResultSchema = v.object({ error: v.string() });
 

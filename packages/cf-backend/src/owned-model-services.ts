@@ -3,14 +3,14 @@ import {
   agentAffinityKey, parseModelSpec, reasoningEffortOptions,
   type ReasoningEffort, type WebSearchProvider,
 } from '@proteus/core';
-import { buildCfWebSearchProvider } from './lib/web-provider.js';
+import { buildCfWebSearchProvider } from './lib/web-provider';
 import {
   createAgentProviderRegistry,
   type AgentProviderRegistry,
-} from './providers/agent-registry.js';
-import { resolveJudgeModelSelection } from './providers/judge-model.js';
-import type { UserDO } from './user/user-do.js';
-import type { UserCaller } from './user/workspace-capability.js';
+} from './providers/agent-registry';
+import { resolveJudgeModelSelection } from './providers/judge-model';
+import type { UserDO } from './user/user-do';
+import type { UserCaller } from './user/workspace-capability';
 
 export interface OwnedModelServicesOptions {
   readonly env: Env;

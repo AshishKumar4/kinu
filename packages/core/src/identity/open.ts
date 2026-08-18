@@ -11,18 +11,18 @@
  * 6. Detect orphaned fibers → recover or clean up
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { LLMProviderConfig } from '../llm.js';
-import { initAllTables, migrateWorkspaceStorage } from './schema.js';
-import { readSoul, summarizeSoul } from './soul.js';
-import { memoryBytes } from '../memory/note.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { LLMProviderConfig } from '../llm';
+import { initAllTables, migrateWorkspaceStorage } from './schema';
+import { readSoul, summarizeSoul } from './soul';
+import { memoryBytes } from '../memory/note';
 import {
   createInlineCraftStore, createInlineExecutor, createInlineMemory,
   createInlineSchedule, createInlineWorkspace, wrapDatabase, type AgentDatabase,
-} from './inline-primitives.js';
-import { createVercelAILLM } from '../llm.js';
-import { buildRuntime } from '../runtime-builder.js';
-import { diagnostics, ProteusError } from '../obs/index.js';
+} from './inline-primitives';
+import { createVercelAILLM } from '../llm';
+import { buildRuntime } from '../runtime-builder';
+import { diagnostics, ProteusError } from '../obs/index';
 
 export interface WorkspaceResumeConfig {
   llm: LLMProviderConfig;

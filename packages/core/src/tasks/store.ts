@@ -11,7 +11,7 @@
 // that the model refers to them in prose ("t4 is blocked on t2") and stable for
 // the life of the workspace, which is what makes them referable at all.
 
-import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
+import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import * as v from 'valibot';
 
 export const TASK_STATUSES = ['open', 'active', 'done', 'dropped'] as const;

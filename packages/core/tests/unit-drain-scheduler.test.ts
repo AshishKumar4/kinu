@@ -2,7 +2,7 @@
 // debounce for the event→turn drain. Hand-cranked fake timer: the test holds
 // the armed callbacks and fires them explicitly.
 import { describe, test, expect } from 'bun:test';
-import { DrainScheduler, DRAIN_DEBOUNCE_MS } from '../src/orchestrator/drain-scheduler.js';
+import { DrainScheduler, DRAIN_DEBOUNCE_MS } from '../src/orchestrator/drain-scheduler';
 
 function setup(drain?: () => Promise<void>) {
   let drains = 0;

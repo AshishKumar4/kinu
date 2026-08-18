@@ -44,7 +44,7 @@
  *   bun scripts/computed-style.ts chat forks # named frames only
  */
 
-import { withGallery } from './gallery-harness.ts';
+import { withGallery } from './gallery-harness';
 
 /** Every frame `gallery.tsx` renders. Between them they mount each surface at
  *  least once, which is what makes "every rule that matched an element" a

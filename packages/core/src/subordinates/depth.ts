@@ -24,7 +24,7 @@
  * constructed, so a build that ran before the seed cannot have known the depth.
  */
 
-import type { ErrorCode } from '../obs/error.js';
+import type { ErrorCode } from '../obs/error';
 
 /**
  * The global cap on subordinate-tree depth: the workspace orchestrator is depth

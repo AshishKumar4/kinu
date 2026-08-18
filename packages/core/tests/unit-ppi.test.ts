@@ -11,12 +11,12 @@
  * No LLM calls, no storage, no clock — pure arithmetic on seeded draws.
  */
 import { describe, test, expect } from 'bun:test';
-import { seededRandom, wilsonInterval } from '../src/utils/stats.js';
+import { seededRandom, wilsonInterval } from '../src/utils/stats';
 import {
   correctedRate, classifierAccuracy, designWeightedKappa, describeCalibrationGap,
   type ClassifierAccuracy, type PredictionStratum, type GoldStratum,
-} from '../src/evolution/ppi.js';
-import { allocateLabelBudget } from '../src/evolution/calibration.js';
+} from '../src/evolution/ppi';
+import { allocateLabelBudget } from '../src/evolution/calibration';
 
 // ── Synthetic world ──────────────────────────────────────────────
 

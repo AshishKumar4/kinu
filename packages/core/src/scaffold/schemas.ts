@@ -7,8 +7,8 @@
  * through it were missing `status` and `parent_version`.
  */
 
-import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
-import { reconcileColumns } from '../identity/columns.js';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import { reconcileColumns } from '../identity/columns';
 
 export function initScaffoldTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   // status: 'current' | 'pending' | 'rolled_back' | 'historical'

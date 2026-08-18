@@ -8,11 +8,11 @@
 //     rides the derived cloudflare.ai-gateway view (cf-aig-gateway-id header)
 //   - streaming SSE passthrough, refresh-on-401 retry, my-gateway error mapping
 //   - GET /models lists the proxy-served wire ids in OpenAI list shape
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { handleCliRequest } from '../src/cli/routes.js';
+import { handleCliRequest } from '../src/cli/routes';
 import { asFetchFunction, parseJsonObject, type JsonObject, type JsonValue } from '@proteus/core';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';

@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { hostname, platform } from 'node:os';
-import { defaultOrigin, logout, pollCliAuth, startCliAuth, whoami } from '../cloud-api.js';
-import { loadConfigFile, saveConfigFile } from '../config.js';
-import { ACCENT, DIM, OK, WARN } from '../display.js';
+import { defaultOrigin, logout, pollCliAuth, startCliAuth, whoami } from '../cloud-api';
+import { loadConfigFile, saveConfigFile } from '../config';
+import { ACCENT, DIM, OK, WARN } from '../display';
 
 export async function authCommand(opts: { origin?: string }): Promise<void> {
   const origin = defaultOrigin(opts);

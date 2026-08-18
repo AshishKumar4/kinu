@@ -14,8 +14,8 @@ import {
   transformTurns,
   type Item,
   type Turn,
-} from '../src/index.js';
-import { assistant, toolCall, toolMessage, toolResult, user } from './helpers.js';
+} from '../src/index';
+import { assistant, toolCall, toolMessage, toolResult, user } from './helpers';
 
 function roundTrip(messages: ModelMessage[]): ModelMessage[] {
   return proteusCodec.decode(proteusCodec.encode(messages), messages);

@@ -15,13 +15,13 @@
  * network and no clock, so it can run on every change.
  */
 
-export { LAYERS, type Layer, type Probe } from './layers.js';
+export { LAYERS, type Layer, type Probe } from './layers';
 export {
   createPipelineSubjects,
   SUBJECT_SOURCE,
   type PipelineSubjects,
   type SubjectName,
-} from './subjects.js';
+} from './subjects';
 export {
   lockBaseline,
   observePipeline,
@@ -31,7 +31,7 @@ export {
   type Baseline,
   type LayerGateReport,
   type LayerScore,
-} from './gate.js';
+} from './gate';
 export {
   FAULTS,
   LOCALIZATION_OTHER_MAX_PP,
@@ -40,5 +40,5 @@ export {
   runFaultMatrix,
   type Fault,
   type FaultImpact,
-} from './faults.js';
-export { LOCKED_BASELINE } from './baseline.js';
+} from './faults';
+export { LOCKED_BASELINE } from './baseline';

@@ -7,14 +7,14 @@
  */
 
 import type { ToolSet } from 'ai';
-import { resolveActiveSkills, extractExplicitInvocations } from '../skills/loader.js';
-import { discoverSkills, type SkillsVfs } from '../skills/discover.js';
-import { BUILTIN_SKILLS } from '../skills/builtins.js';
-import { unionAllowedTools, toolAllowedBySkills } from '../skills/render.js';
-import type { ActiveSkillSet, ParsedSkill } from '../skills/types.js';
-import { renderFactsBlock, type FactsStore } from '../memory/facts.js';
-import type { VFS } from '../types/primitives.js';
-import { diagnostics, toProteusError } from '../obs/index.js';
+import { resolveActiveSkills, extractExplicitInvocations } from '../skills/loader';
+import { discoverSkills, type SkillsVfs } from '../skills/discover';
+import { BUILTIN_SKILLS } from '../skills/builtins';
+import { unionAllowedTools, toolAllowedBySkills } from '../skills/render';
+import type { ActiveSkillSet, ParsedSkill } from '../skills/types';
+import { renderFactsBlock, type FactsStore } from '../memory/facts';
+import type { VFS } from '../types/primitives';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** Passthrough SkillsVfs shim over the runtime's Storage.vfs. */
 export function skillsVfsOver(vfs: VFS): SkillsVfs {

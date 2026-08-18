@@ -24,15 +24,15 @@ import {
   upsertAgentConfig,
   writeAliasShim,
   type AgentMode,
-} from './config.js';
+} from './config';
 import {
   createCloudAgent,
   type CloudAgent,
   type CreateCloudAgentInput,
-} from './cloud-api.js';
-import { authCommand } from './commands/auth.js';
-import { ensureLocalDaemonRunning } from './commands/daemon.js';
-import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
+} from './cloud-api';
+import { authCommand } from './commands/auth';
+import { ensureLocalDaemonRunning } from './commands/daemon';
+import { createConfiguredLocalModelResolver } from './local-model-resolver';
 
 export interface CreateCliAgentInput {
   /** Required for local agents. Cloud agents are named from their mission

@@ -7,14 +7,14 @@ import { createRoot } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 
-import { SLASH_COMMANDS } from '../src/slash-commands.js';
-import { CommandHintOverlay, DeviceConnectOverlay, ModelPickerOverlay, WalkbackOverlay } from '../src/tui/overlays.js';
-import type { AgentModelEntry } from '../src/model-catalog.js';
-import { MessageList } from '../src/tui/messages.js';
-import { tuiColors } from '../src/tui/theme.js';
-import { StatusBar } from '../src/tui/status-bar.js';
-import { handleHistoryScrollKey } from '../src/tui/chat-app.js';
-import { VERSION } from '../src/display.js';
+import { SLASH_COMMANDS } from '../src/slash-commands';
+import { CommandHintOverlay, DeviceConnectOverlay, ModelPickerOverlay, WalkbackOverlay } from '../src/tui/overlays';
+import type { AgentModelEntry } from '../src/model-catalog';
+import { MessageList } from '../src/tui/messages';
+import { tuiColors } from '../src/tui/theme';
+import { StatusBar } from '../src/tui/status-bar';
+import { handleHistoryScrollKey } from '../src/tui/chat-app';
+import { VERSION } from '../src/display';
 
 const repoRoot = resolve(__dirname, '../../..');
 

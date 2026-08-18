@@ -7,8 +7,8 @@
  */
 
 import { getAgentByName } from 'agents';
-import type { OrchestratorAgent } from '../orchestrator.js';
-import { routeInboundEmail } from './route.js';
+import type { OrchestratorAgent } from '../orchestrator';
+import { routeInboundEmail } from './route';
 import { diagnostics } from '@proteus/core/obs';
 
 export async function handleInboundEmail(

@@ -19,7 +19,7 @@ import {
   validateMcpServerInput,
   parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, buildMcpHeaderTransportOpts,
-} from '../src/user/mcp.ts';
+} from '../src/user/mcp';
 import { isMcpToolKey, mcpToolKey, type JsonObject, type JsonValue } from '@proteus/core';
 import { tool, jsonSchema } from 'ai';
 

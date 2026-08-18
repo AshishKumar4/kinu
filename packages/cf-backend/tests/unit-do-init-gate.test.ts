@@ -28,16 +28,16 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { orchestratorHarness } from './helpers/actor-harness.ts';
-import { mockAgentsSdk } from './helpers/agents-sdk.js';
+import { orchestratorHarness } from './helpers/actor-harness';
+import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
 // Dynamic on purpose, exactly as tests/helpers/actor-harness.ts:24-27 does: the
 // real `agents` dist reaches `cloudflare:*`, so the SDK mock must be registered
 // before these modules evaluate, and a static import would hoist above it.
-const { OrchestratorAgent } = await import('../src/orchestrator.js');
-const { SubordinateAgent } = await import('../src/subordinate-agent.js');
-const { ExplorationAgent } = await import('../src/exploration.js');
+const { OrchestratorAgent } = await import('../src/orchestrator');
+const { SubordinateAgent } = await import('../src/subordinate-agent');
+const { ExplorationAgent } = await import('../src/exploration');
 
 /** Every Proteus class whose `onStart` runs inside `blockConcurrencyWhile`.
  *  UserDO declares no override, MonitorDO is a plain DurableObject with no

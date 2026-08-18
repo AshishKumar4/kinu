@@ -20,10 +20,10 @@
  * in the lookup function (provider registry vs LocalModelResolver).
  */
 
-import { contextWindowForModel } from '../context-window.js';
-import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer.js';
-import type { ModelInfo, ModelPricing } from '../providers/types.js';
-import { diagnostics, toProteusError } from '../obs/index.js';
+import { contextWindowForModel } from '../context-window';
+import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
+import type { ModelInfo, ModelPricing } from '../providers/types';
+import { diagnostics, toProteusError } from '../obs/index';
 
 export class ModelCatalogSession {
   private cached: { spec: string; info: ModelInfo | null } | null = null;

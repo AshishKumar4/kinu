@@ -7,10 +7,10 @@
  * stop the rest from loading.
  */
 
-import { parseSkillFile } from './parse.js';
-import { BUILTIN_SKILLS } from './builtins.js';
-import { SKILLS_DIR, type ParsedSkill } from './types.js';
-import { diagnostics, toProteusError } from '../obs/index.js';
+import { parseSkillFile } from './parse';
+import { BUILTIN_SKILLS } from './builtins';
+import { SKILLS_DIR, type ParsedSkill } from './types';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** Minimal VFS shape — duck-typed against any file view. */
 export interface SkillsVfs {

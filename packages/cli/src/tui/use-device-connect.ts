@@ -6,14 +6,14 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
-import { requireAuthConfig } from '../config.js';
+import { requireAuthConfig } from '../config';
 import {
   connectDevice,
   describeConnectOutcome,
   deviceStatusLine,
   dismissDeviceConnectPrompt,
   shouldOfferDeviceConnect,
-} from '../device-connect.js';
+} from '../device-connect';
 
 export type DeviceConnectPromptState =
   | { phase: 'ask'; statusLine: string }

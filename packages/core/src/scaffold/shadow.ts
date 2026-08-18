@@ -36,12 +36,12 @@
 
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
-import { nowMs } from '../utils/date.js';
-import { parseJsonValue } from '../utils/json.js';
-import { nanoid } from '../utils/nanoid.js';
-import { checkMisevolution, recordMisevolutionVeto } from './misevolution.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import { nowMs } from '../utils/date';
+import { parseJsonValue } from '../utils/json';
+import { nanoid } from '../utils/nanoid';
+import { checkMisevolution, recordMisevolutionVeto } from './misevolution';
 
 export type ScaffoldStatus = 'current' | 'pending' | 'rolled_back' | 'historical';
 

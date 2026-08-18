@@ -13,16 +13,16 @@
  */
 
 import { callable, type AgentContext, type SubAgentClass } from "agents";
-import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
-import { writeNimbusWorkspaceSoul } from "./nimbus-route.js";
+import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
+import { writeNimbusWorkspaceSoul } from "./nimbus-route";
 import { getSandbox } from "@cloudflare/sandbox";
 import { generateText, convertToModelMessages } from "ai";
 import type {
   ActivitySnapshot,
   WorkspaceAgent,
-} from "./lib/protocol.js";
-import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster.js";
-import { nextAlarmTime } from "./lib/cron.js";
+} from "./lib/protocol";
+import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster";
+import { nextAlarmTime } from "./lib/cron";
 import type { ChatResponseResult } from "@cloudflare/think";
 import {
   EvolutionEngine,
@@ -165,9 +165,9 @@ import {
   type PlanReviewResult, type WorkMode,
 } from "@proteus/core";
 import * as v from 'valibot';
-import { ActorAgent, type ActorToolDeps } from "./actor-agent.js";
-import { resolveEnsembleJudgeSelection } from "./providers/judge-model.js";
-import { SubordinateAgent } from "./subordinate-agent.js";
+import { ActorAgent, type ActorToolDeps } from "./actor-agent";
+import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
+import { SubordinateAgent } from "./subordinate-agent";
 import {
   createAgentSelfProvider,
   createReleaseCodemodeProvider,
@@ -180,14 +180,14 @@ import {
 } from "@proteus/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@proteus/core";
 import { diagnostics, toProteusError } from "@proteus/core/obs";
-import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
-import { deliverCloudFork } from "./user/workspace-fork.js";
-import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route.js';
-import { agentEmailAddress } from "./email/inbound.js";
+import { createCloudWorkspaceForUser } from "./user/workspace-create";
+import { deliverCloudFork } from "./user/workspace-fork";
+import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route';
+import { agentEmailAddress } from "./email/inbound";
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
-} from "./email/outbound.js";
-import { EmailOutbox } from "./email/outbox.js";
+} from "./email/outbound";
+import { EmailOutbox } from "./email/outbox";
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 

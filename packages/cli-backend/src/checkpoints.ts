@@ -19,7 +19,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs, existsSync, statSync } from 'node:fs';
 import { homedir, devNull, tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
-import { proteusHome } from './home.js';
+import { proteusHome } from './home';
 import {
   DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT,
   CHECKPOINT_REF_PREFIX as REF_PREFIX, CHECKPOINT_WORKDIR_MARKER as WORKDIR_MARKER,

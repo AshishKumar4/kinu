@@ -12,9 +12,9 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { EmailOutbox, type OutboundEmailMessage } from '../src/email/outbox.js';
+import { EmailOutbox, type OutboundEmailMessage } from '../src/email/outbox';
 import type { SqlExec } from '@proteus/core';
-import { sqlExec } from './helpers/user-do.js';
+import { sqlExec } from './helpers/user-do';
 
 function makeSql() {
   const db = new Database(':memory:');

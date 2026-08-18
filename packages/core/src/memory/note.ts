@@ -13,7 +13,7 @@
  * Centralized here so the format stays consistent.
  */
 
-import type { VFS, Memory } from '../types/primitives.js';
+import type { VFS, Memory } from '../types/primitives';
 
 const MEMORY_PATH = 'memory/MEMORY.md';
 

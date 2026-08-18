@@ -5,7 +5,7 @@
 // each other. `cloudflare:test` and `cloudflare:workers` both read
 // `Cloudflare.Env`, which is why the augmentation targets that namespace and
 // not the bare global `Env`.
-import type { GatedDO, NeighbourDO, RetentionDO } from './worker.ts';
+import type { GatedDO, NeighbourDO, RetentionDO } from './worker';
 
 declare global {
   namespace Cloudflare {

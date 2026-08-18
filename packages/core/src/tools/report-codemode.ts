@@ -4,10 +4,10 @@
  * action shape; calls the SAME ReportToolDeps.report the native tool does.
  */
 import * as v from 'valibot';
-import type { CodemodeProvider } from '../rlm.js';
-import type { ReportToolDeps } from './builtins.js';
-import { dispatchReport } from './report-tool.js';
-import { TOOL_REACH } from './registry.js';
+import type { CodemodeProvider } from '../rlm';
+import type { ReportToolDeps } from './builtins';
+import { dispatchReport } from './report-tool';
+import { TOOL_REACH } from './registry';
 
 /** Positional args arrive untyped from the sandbox; narrowing them to two
  *  strings is this surface's only job. Which statuses exist, and what an empty

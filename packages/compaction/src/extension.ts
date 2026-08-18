@@ -56,13 +56,13 @@ import {
   type Summarizer,
   type Turn,
 } from '@better-compact/core';
-import { proteusCodec, proteusSpec } from './codec.js';
+import { proteusCodec, proteusSpec } from './codec';
 import {
   deriveArchiveRange,
   renderArchiveManifest,
   withArchiveManifest,
   type ArchiveIndexStore,
-} from './manifest.js';
+} from './manifest';
 
 export interface CompactionOutcomeEvent {
   sessionKey: string;

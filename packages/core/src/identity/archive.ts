@@ -35,10 +35,10 @@
  */
 
 import * as v from 'valibot';
-import { base64ToBytes, bytesToBase64 } from '../utils/base64.js';
-import type { AgentDatabase } from './inline-primitives.js';
-import type { SqlExec } from '../types/primitives.js';
-import type { JsonPrimitive } from '../utils/json.js';
+import { base64ToBytes, bytesToBase64 } from '../utils/base64';
+import type { AgentDatabase } from './inline-primitives';
+import type { SqlExec } from '../types/primitives';
+import type { JsonPrimitive } from '../utils/json';
 
 type ArchiveDatabaseValue = JsonPrimitive | ArrayBuffer;
 type NativeArchiveDatabaseValue = ArchiveDatabaseValue | Uint8Array;

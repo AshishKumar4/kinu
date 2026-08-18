@@ -14,9 +14,9 @@
  */
 
 import { DurableObject } from 'cloudflare:workers';
-import { EmailOutbox } from '../email/outbox.js';
-import { ensureMonitorSchema, recordProbeRun, type MonitorRunResult } from './incidents.js';
-import { runSyntheticProbes } from './probes.js';
+import { EmailOutbox } from '../email/outbox';
+import { ensureMonitorSchema, recordProbeRun, type MonitorRunResult } from './incidents';
+import { runSyntheticProbes } from './probes';
 
 /** One instance, by name — site health is not per-user or per-workspace. */
 export const MONITOR_SINGLETON = 'site';

@@ -18,7 +18,7 @@ import {
   checkpointSubject,
   diagnoseStaging,
   parseCheckpointSubject,
-} from '../src/checkpoints/format.js';
+} from '../src/checkpoints/format';
 
 const meta = { turnId: 't1', sessionId: 's1' };
 

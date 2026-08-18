@@ -28,16 +28,16 @@
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
-import { provisionWorkspaceRuntimes } from './workspace-runtimes.js';
+import { provisionWorkspaceRuntimes } from './workspace-runtimes';
 import * as v from 'valibot';
-import type { VFS, Shell, ShellExecOptions } from '../types/primitives.js';
-import { WORKSPACE_ROOT, workspacePath } from './workspace-path.js';
-import { diagnostics, toProteusError } from '../obs/index.js';
+import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
+import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
+import { diagnostics, toProteusError } from '../obs/index';
 
-export { workspaceToolchainCapabilities } from './workspace-runtimes.js';
+export { workspaceToolchainCapabilities } from './workspace-runtimes';
 export type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 
-export { WORKSPACE_ROOT, workspacePath } from './workspace-path.js';
+export { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 
 const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
   stdin: v.optional(v.string()),

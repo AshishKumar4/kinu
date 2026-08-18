@@ -13,9 +13,9 @@
 // store is the source of truth when injected, keyed by the search's root id.
 
 import * as v from 'valibot';
-import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
-import type { MCTSConfig } from '../types/mcts.js';
-import type { WorkMode } from '../prompting/surface.js';
+import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import type { MCTSConfig } from '../types/mcts';
+import type { WorkMode } from '../prompting/surface';
 
 /** The serializable knobs of an MCTSConfig — everything a resumed loop needs,
  *  minus the live handles (AbortSignal, callbacks, the store itself, and the

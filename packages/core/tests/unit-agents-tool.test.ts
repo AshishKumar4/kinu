@@ -26,8 +26,8 @@ import {
   type AgentsForkDeps, type AgentsToolDeps, type PeersToolDeps,
   type StrategyContext, type SubordinateRosterEntry, type TeamToolDeps,
   type SubordinateDelivery, type SubordinateHandoff,
-} from '../src/index.ts';
-import { CODE_IS_REFUSAL, ERROR_CODES } from '../src/obs/index.js';
+} from '../src/index';
+import { CODE_IS_REFUSAL, ERROR_CODES } from '../src/obs/index';
 
 interface Call { action: string; input: object }
 type AgentsTestResult = object | string | number | boolean | null | undefined;

@@ -30,7 +30,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, statfsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { assertMeasured, finding } from './gate-ratchet.ts';
+import { assertMeasured, finding } from './gate-ratchet';
 import { SCRATCH_PREFIXES } from '@proteus/test-utils';
 
 /** This checkout, so the merge-state probe reads THIS tree's git directory

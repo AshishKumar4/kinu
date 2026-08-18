@@ -4,15 +4,15 @@
 // value, so the two properties that matter are: it renders the same bytes the
 // hand-written string did, and it refuses to render silently-wrong bytes.
 import { describe, expect, test } from 'bun:test';
-import { definePromptSection, type TemplateSlots } from '../src/prompting/template.ts';
+import { definePromptSection, type TemplateSlots } from '../src/prompting/template';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildSystemPromptSync } from '../src/prompt.ts';
-import { BUILTIN_TOOL_LINE } from '../src/prompting/section-templates.ts';
-import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS, type BuiltinToolName } from '../src/tools/registry.ts';
+import { buildSystemPromptSync } from '../src/prompt';
+import { BUILTIN_TOOL_LINE } from '../src/prompting/section-templates';
+import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS, type BuiltinToolName } from '../src/tools/registry';
 // Narrow import: a prompt-template test has no business pulling the core barrel
 // (orchestrator, heads, chat) in behind a test runtime.
-import { createTestRuntime } from '../../test-utils/src/runtime.ts';
+import { createTestRuntime } from '../../test-utils/src/runtime';
 
 /** Longest common prefix of two strings, in code units — the cache measurement. */
 function commonPrefixLength(a: string, b: string): number {
@@ -213,6 +213,6 @@ describe('BUILTIN_TOOL_LINE — live in the system prompt', () => {
     expect(body).toContain('BUILTIN_TOOL_LINE.render(');
     // The literal it replaced must be gone, or both paths exist and drift.
     expect(body).not.toContain('- **${name}**');
-    expect(source).toContain("import { BUILTIN_TOOL_LINE } from './prompting/section-templates.js';");
+    expect(source).toContain("import { BUILTIN_TOOL_LINE } from './prompting/section-templates';");
   });
 });

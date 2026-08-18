@@ -10,7 +10,7 @@
  * every instrumented Proteus path will use, and it is the shape whose recording
  * a local run CAN prove even though its nesting it cannot.
  */
-import { createWorkersTracer } from '../../src/obs/cf-tracer.js';
+import { createWorkersTracer } from '../../src/obs/cf-tracer';
 
 interface Observation {
   readonly name: string;

@@ -17,8 +17,8 @@
 // collapsed to a per-task pass RATE first, and the test and the interval both
 // operate on the n task-level differences.
 
-import { fnv1a64 } from '../prompting/volatile-context.js';
-import { seededRandom } from '../utils/stats.js';
+import { fnv1a64 } from '../prompting/volatile-context';
+import { seededRandom } from '../utils/stats';
 
 /** Two-sided significance level used everywhere unless overridden. */
 export const DEFAULT_ALPHA = 0.05;

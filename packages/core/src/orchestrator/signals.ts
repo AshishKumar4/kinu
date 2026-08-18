@@ -47,18 +47,18 @@
 
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import type { PrepareStepContext } from '../extension.js';
-import type { BackendHost } from '../types/backend-host.js';
+import type { PrepareStepContext } from '../extension';
+import type { BackendHost } from '../types/backend-host';
 import type {
   AgentSignal, SettledSignals, SignalCardState, SignalDeliverer, SignalOutcome,
   SignalUndeliveredReason,
-} from '../types/signals.js';
-import { SIGNAL_ID_METADATA_KEY } from '../types/signals.js';
-import { StepInjections } from '../prompting/step-injections.js';
-import { nanoid } from '../utils/nanoid.js';
-import { isWorkMode, type WorkMode } from '../prompting/surface.js';
-import type { JsonObject } from '../utils/json.js';
-import { diagnostics, ProteusError, toProteusError } from '../obs/index.js';
+} from '../types/signals';
+import { SIGNAL_ID_METADATA_KEY } from '../types/signals';
+import { StepInjections } from '../prompting/step-injections';
+import { nanoid } from '../utils/nanoid';
+import { isWorkMode, type WorkMode } from '../prompting/surface';
+import type { JsonObject } from '../utils/json';
+import { diagnostics, ProteusError, toProteusError } from '../obs/index';
 
 const SignalIdMetadataSchema = v.object({
   [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()),

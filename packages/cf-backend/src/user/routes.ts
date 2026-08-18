@@ -35,15 +35,15 @@
  *   PATCH  /api/user/mcp/servers/:id               — edit name / headers / allowed_tools
  *   GET    /api/user/mcp/callback                  — OAuth 2.1 redirect handler
  */
-import type { AuthIdentity } from '../auth/session.js';
-import type { UserDO } from './user-do.js';
+import type { AuthIdentity } from '../auth/session';
+import type { UserDO } from './user-do';
 import { DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS, JsonValueSchema } from '@proteus/core';
 import { diagnostics, toProteusError } from '@proteus/core/obs';
-import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
-import { listAvailableModels, listProviderCatalog } from './available-models.js';
-import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access.js';
-import { err, json, safeJson } from '../lib/http.js';
-import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from './workspace-capability.js';
+import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command';
+import { listAvailableModels, listProviderCatalog } from './available-models';
+import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access';
+import { err, json, safeJson } from '../lib/http';
+import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from './workspace-capability';
 import * as v from 'valibot';
 
 const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });

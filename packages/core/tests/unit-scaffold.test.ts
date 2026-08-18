@@ -3,10 +3,10 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime } from './helpers.js';
-import { modifyScaffold } from '../src/scaffold/modify.js';
-import { rollbackScaffold } from '../src/scaffold/rollback.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
+import { createTestRuntime } from './helpers';
+import { modifyScaffold } from '../src/scaffold/modify';
+import { rollbackScaffold } from '../src/scaffold/rollback';
+import { initScaffoldTables } from '../src/scaffold/schemas';
 
 describe('Scaffold modification (4-gate)', () => {
   test('rejects rationale shorter than 50 chars', async () => {

@@ -9,11 +9,11 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { CraftCycle } from '../src/orchestrator/craft-cycle.js';
-import { TurnAccumulator } from '../src/orchestrator/turn-accumulator.js';
-import type { CraftLedger } from '../src/craft/in-episode.js';
-import { CRAFT_INVOCATION_QUALITY, craftInvocationError } from '../src/craft/in-episode.js';
-import type { JsonValue } from '../src/utils/json.js';
+import { CraftCycle } from '../src/orchestrator/craft-cycle';
+import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
+import type { CraftLedger } from '../src/craft/in-episode';
+import { CRAFT_INVOCATION_QUALITY, craftInvocationError } from '../src/craft/in-episode';
+import type { JsonValue } from '../src/utils/json';
 
 interface Observation { names: string[]; quality: number }
 

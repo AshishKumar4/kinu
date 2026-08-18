@@ -1,4 +1,4 @@
-import { isPreviewUrl } from './preview-origin.js';
+import { isPreviewUrl } from './preview-origin';
 
 export interface PinnedPreviewPort {
   executor: string;

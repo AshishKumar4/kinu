@@ -12,14 +12,14 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExecutor } from '../types/primitives.js';
+import type { SqlExecutor } from '../types/primitives';
 import type {
   HeadId, HeadInput, HeadReport, HeadStep, HeadStepToolCall, Evidence, Decision, ArtifactRef,
   HeadFileChange, HeadFileChangeSet, MergeResult, MergeStrategy, HeadRunView, HeadRunHeadView,
-} from './types.js';
-import { headProducedFindings } from './head-summary.js';
-import { USAGE_FIELDS, type Usage } from '../usage.js';
-import { HEAD_USAGE_COLUMNS, type StoredHeadUsage } from './schema.js';
+} from './types';
+import { headProducedFindings } from './head-summary';
+import { USAGE_FIELDS, type Usage } from '../usage';
+import { HEAD_USAGE_COLUMNS, type StoredHeadUsage } from './schema';
 
 const EvidenceKindSchema = v.picklist(['tool_output', 'fact', 'citation', 'artifact']);
 

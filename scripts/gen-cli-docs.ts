@@ -3,8 +3,8 @@
 // checked-in copy is current instead of writing it (what the test runs).
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildProgram } from '../packages/cli/src/program.js';
-import { renderCliReference } from '../packages/cli/src/cli-reference.js';
+import { buildProgram } from '../packages/cli/src/program';
+import { renderCliReference } from '../packages/cli/src/cli-reference';
 
 const target = join(import.meta.dir, '..', 'docs', 'CLI.md');
 const rendered = renderCliReference(buildProgram());

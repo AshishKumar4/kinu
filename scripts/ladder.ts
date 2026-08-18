@@ -36,8 +36,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import * as v from 'valibot';
-import { assertMeasured, finding } from './gate-ratchet.ts';
-import { isRunnableSuite, trackedFiles } from './sources.ts';
+import { assertMeasured, finding } from './gate-ratchet';
+import { isRunnableSuite, trackedFiles } from './sources';
 
 /** DERIVED, because it was hardcoded as 21 while the config carried 22 — a stale count in the
  *  document that tells a reader what a rung catches. Read from the enabled rules rather than from the

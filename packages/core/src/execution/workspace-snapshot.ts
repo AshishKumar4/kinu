@@ -1,4 +1,4 @@
-import { PLATFORM_CATALOG } from '../platform-catalog.js';
+import { PLATFORM_CATALOG } from '../platform-catalog';
 
 /**
  * Durability for a sandbox container's `/workspace`, as decisions rather than

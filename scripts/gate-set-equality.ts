@@ -80,13 +80,13 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { LADDER, deployGates, packageScripts } from './ladder.ts';
-import { assertMeasured, finding } from './gate-ratchet.ts';
-import { isParseable, trackedFiles } from './sources.ts';
+import { LADDER, deployGates, packageScripts } from './ladder';
+import { assertMeasured, finding } from './gate-ratchet';
+import { isParseable, trackedFiles } from './sources';
 import {
   identifierCalleeName, identifierText, importedNames, memberCalleeName, moduleSpecifiers, parse,
   regexPattern, type SyntaxNode, walk,
-} from './syntax.ts';
+} from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -235,12 +235,12 @@ export function gatePrograms(commands: readonly string[], tracked: readonly stri
   // The closure is over non-test `scripts/` and `tools/` modules only.
   const frontier = [...governed, ...suites];
   const seen = new Set(frontier);
+  const known = new Set(tracked);
   while (frontier.length > 0) {
     const from = frontier.pop();
     if (from === undefined || !isParseable(from)) continue;
-    for (const specifier of localImports(from)) {
+    for (const specifier of localImports(from, known)) {
       if (!GATE_DIRECTORIES.some((dir) => specifier.startsWith(dir))) continue;
-      if (!tracked.includes(specifier)) continue;
       governed.add(specifier);
       if (seen.has(specifier)) continue;
       seen.add(specifier);
@@ -263,9 +263,14 @@ function globMatches(token: string, path: string): boolean {
   return pattern.test(path);
 }
 
-/** Repo-relative specifiers a file imports, `.js` rewritten to the `.ts` that
- *  exists — `bun` resolves both and two gates spell it each way. */
-function localImports(file: string): string[] {
+/** Repo-relative paths a file imports. There is one spelling per regime now — no
+ *  extension under a bundler or Bun, an explicit `.ts` in the raw-Node closure
+ *  (`tools/oxlint/anti-slop`, which is where the `.gate.test.ts` files live) — so
+ *  resolution tries the literal path, then `.ts`, then the directory's barrel. It
+ *  used to rewrite a trailing `.js`, and left an extensionless specifier pointing
+ *  at a path with no file, which drops the edge and silently shrinks the governed
+ *  set this gate exists to compare. */
+function localImports(file: string, tracked: ReadonlySet<string>): string[] {
   const text = readFileSync(root + file, 'utf8');
   const dir = file.slice(0, file.lastIndexOf('/') + 1);
   const resolved: string[] = [];
@@ -278,7 +283,9 @@ function localImports(file: string): string[] {
       if (part === '..') stack.pop();
       else stack.push(part);
     }
-    resolved.push(stack.join('/').replace(/\.js$/, '.ts'));
+    const base = stack.join('/');
+    const target = [base, `${base}.ts`, `${base}/index.ts`].find((path) => tracked.has(path));
+    if (target !== undefined) resolved.push(target);
   }
   return resolved;
 }
@@ -477,8 +484,10 @@ function sourceName(callee: SyntaxNode): string | undefined {
   return undefined;
 }
 
-/** The ratchet module, and the publication calls it exports. */
-const RATCHET = /\.\/gate-ratchet\.(?:ts|js)$/;
+/** The ratchet module, and the publication calls it exports. Extensionless is the whole of
+ *  `scripts/`; the `.ts` arm is the raw-Node closure's spelling, kept so a gate program that ever
+ *  lands inside it is still audited rather than silently exempt. */
+const RATCHET = /\.\/gate-ratchet(?:\.ts)?$/;
 const PUBLISHERS: ReadonlySet<string> = new Set(['writeLock', 'report']);
 
 /**

@@ -12,9 +12,9 @@
  * it to the actual Vectorize/AI bindings.
  */
 
-import type { JsonObject } from '../utils/json.js';
-import type { ModelCallSink } from '../events/model-call.js';
-import { diagnostics, toProteusError } from '../obs/index.js';
+import type { JsonObject } from '../utils/json';
+import type { ModelCallSink } from '../events/model-call';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** A Vectorize-shaped binding (subset we need). Duck-typed so core stays dep-free. */
 export interface VectorMutation {

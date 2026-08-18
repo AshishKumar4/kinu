@@ -9,7 +9,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   argumentDigest, sha256Hex, stableStringify,
   deployApprovalDigest,
-} from '../src/index.js';
+} from '../src/index';
 
 describe('argumentDigest', () => {
   test('is deterministic and order-independent over object keys', () => {

@@ -21,28 +21,28 @@ export type {
   HeadScore,
   MergeStrategy,
   SerializedMessage,
-} from './types.js';
+} from './types';
 
 export {
   DEFAULT_HEAD_BUDGET,
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
   budgetExhausted,
-} from './types.js';
+} from './types';
 
 export {
   HeadFileChanges, formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE,
-} from './file-changes.js';
-export { initHeadsTables } from './schema.js';
+} from './file-changes';
+export { initHeadsTables } from './schema';
 export {
   HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
-} from './journal.js';
+} from './journal';
 export {
   reconcileInterruptedForks, forkInterruptedWake,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   type RunEventLedger,
-} from './reconcile.js';
-export { MergeOutputSchema, DecisionSchema, type MergeOutput } from './merge-schema.js';
+} from './reconcile';
+export { MergeOutputSchema, DecisionSchema, type MergeOutput } from './merge-schema';
 export {
   HeadController,
   RECLAIMED_RUN_REASON,
@@ -52,16 +52,16 @@ export {
   type MergeLLMFn,
   type SplitPhaseEvent,
   type HeadJournalPort,
-} from './controller.js';
+} from './controller';
 export {
   extractHeadSteps, extractFinalText, synthesizeHeadSummary, headProducedFindings,
-} from './head-summary.js';
+} from './head-summary';
 export {
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
   type HeadInferenceDeps, type HeadWorkspaceLayout,
-} from './head-inference.js';
+} from './head-inference';
 export {
   buildHeadToolSet, HEAD_BUILTIN_TOOLS,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
-} from './head-tools.js';
+} from './head-tools';

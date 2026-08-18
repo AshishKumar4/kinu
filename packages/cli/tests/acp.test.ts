@@ -20,9 +20,9 @@ import {
   type SessionNotification,
 } from '@agentclientprotocol/sdk';
 import type { ShellApprovalHandler } from '@proteus/cli-backend';
-import { createAcpAgent } from '../src/acp/agent.js';
-import { createCliSession } from '../src/session.js';
-import type { AgentClient, AgentClientEvent, AgentPrompt, AgentTurnResult } from '../src/agent-client.js';
+import { createAcpAgent } from '../src/acp/agent';
+import { createCliSession } from '../src/session';
+import type { AgentClient, AgentClientEvent, AgentPrompt, AgentTurnResult } from '../src/agent-client';
 import * as v from 'valibot';
 
 const TURN: AgentTurnResult = { text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };

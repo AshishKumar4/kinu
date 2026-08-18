@@ -9,17 +9,17 @@
 import { describe, expect, test } from 'bun:test';
 import { toolExecute } from '@proteus/test-utils';
 import * as v from 'valibot';
-import { applyFileEdits, readFileSlice } from '../src/tools/file-edit.js';
-import { TurnFileLedger } from '../src/tools/file-ledger.js';
-import { createFileTool, type FileToolInput } from '../src/tools/file-tool.js';
-import { TurnContextBudget } from '../src/context-budget.js';
-import { JsonObjectSchema } from '../src/utils/json.js';
-import { makeVfsError } from '../src/vfs/errno.js';
-import type { Memory, VFS } from '../src/types/primitives.js';
-import type { JsonValue } from '../src/utils/json.js';
-import { TurnAccumulator } from '../src/orchestrator/turn-accumulator.js';
-import { classifyToolFailure } from '../src/read-models/tool-failures.js';
-import type { RunEvent, RunEventBase } from '../src/events/types.js';
+import { applyFileEdits, readFileSlice } from '../src/tools/file-edit';
+import { TurnFileLedger } from '../src/tools/file-ledger';
+import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
+import { TurnContextBudget } from '../src/context-budget';
+import { JsonObjectSchema } from '../src/utils/json';
+import { makeVfsError } from '../src/vfs/errno';
+import type { Memory, VFS } from '../src/types/primitives';
+import type { JsonValue } from '../src/utils/json';
+import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
+import { classifyToolFailure } from '../src/read-models/tool-failures';
+import type { RunEvent, RunEventBase } from '../src/events/types';
 
 // ── the engine ──────────────────────────────────────────────────────────────
 

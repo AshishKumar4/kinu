@@ -23,12 +23,12 @@
  *   2. `PROXY_DENIED_CRED_KEYS` — some credentials are not the proxy's to
  *      spend at all. See that list for each one's reason.
  */
-import { ANTHROPIC_BASE_URL, ANTHROPIC_CRED_KEY } from './anthropic.js';
-import { getModelsDevProvider, modelsDevCompatBaseURL } from './models-dev.js';
-import { OPENAI_BASE_URL, OPENAI_CRED_KEY } from './openai.js';
-import { OPENROUTER_BASE_URL, OPENROUTER_CRED_KEY } from './openrouter.js';
-import { asFetchFunction } from './fetch-shim.js';
-import type { AuthResolution, ProviderDeps } from './types.js';
+import { ANTHROPIC_BASE_URL, ANTHROPIC_CRED_KEY } from './anthropic';
+import { getModelsDevProvider, modelsDevCompatBaseURL } from './models-dev';
+import { OPENAI_BASE_URL, OPENAI_CRED_KEY } from './openai';
+import { OPENROUTER_BASE_URL, OPENROUTER_CRED_KEY } from './openrouter';
+import { asFetchFunction } from './fetch-shim';
+import type { AuthResolution, ProviderDeps } from './types';
 
 /** Names the credential the server must attach. Present on a request means
  *  "this one is proxied"; absent means the caller resolved real auth and the

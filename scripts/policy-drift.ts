@@ -89,11 +89,11 @@
  * rather than hidden: a policy written as a lowercase local is not seen.
  */
 
-import { assertMeasured, finding, reconcile, report, writeLock } from './gate-ratchet.ts';
-import { readSources } from './sources.ts';
+import { assertMeasured, finding, reconcile, report, writeLock } from './gate-ratchet';
+import { readSources } from './sources';
 import {
   declarationOf, declaredName, identifierText, numericValue, parse, type SyntaxNode, walk,
-} from './syntax.ts';
+} from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
 const LOCK = `${root}scripts/policy-drift.lock.json`;

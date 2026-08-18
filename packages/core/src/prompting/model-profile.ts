@@ -1,4 +1,4 @@
-import type { ModelCapability } from '../providers/types.js';
+import type { ModelCapability } from '../providers/types';
 
 export type PromptModelFamily = 'kimi' | 'gpt' | 'generic';
 

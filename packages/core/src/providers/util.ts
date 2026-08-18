@@ -1,9 +1,9 @@
 // Shared provider internals: the auth-injecting fetch wrapper used by the
 // simple providers (codex keeps its richer 401-refresh/WAF variant) and the
 // small parse helpers the catalog adapters share.
-import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types.js';
-import { asFetchFunction } from './fetch-shim.js';
-import { withRateLimitRetry } from './rate-limit-retry.js';
+import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
+import { asFetchFunction } from './fetch-shim';
+import { withRateLimitRetry } from './rate-limit-retry';
 import * as v from 'valibot';
 
 export interface AuthedFetchOptions {

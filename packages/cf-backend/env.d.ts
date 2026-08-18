@@ -6,10 +6,10 @@
 // no API token. It is declared OPTIONAL because a deployment can omit the
 // binding; the providers that need it report themselves unavailable rather than
 // guessing (providers/ai-gateway.ts `resolvePlatformGateway`).
-import type { OrchestratorAgent } from "./src/orchestrator.js";
-import type { ProteusSandbox } from "./src/proteus-sandbox.js";
-import type { UserDO } from "./src/user/user-do.js";
-import type { MonitorDO } from "./src/monitor/monitor-do.js";
+import type { OrchestratorAgent } from "./src/orchestrator";
+import type { ProteusSandbox } from "./src/proteus-sandbox";
+import type { UserDO } from "./src/user/user-do";
+import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { NimbusSession } from "@nimbus-sh/sdk/worker";
 import type { VectorizeIndex as ProteusVectorizeIndex } from "@proteus/core";
 

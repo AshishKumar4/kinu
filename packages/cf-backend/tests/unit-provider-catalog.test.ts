@@ -1,11 +1,11 @@
 // Connectable-provider catalog + models.dev catalog wiring through the
 // per-agent registry composition.
 import { describe, test, expect } from 'bun:test';
-import { userCredentialSource } from './helpers/user-credentials.js';
+import { userCredentialSource } from './helpers/user-credentials';
 import { createMockFetch } from '@proteus/test-utils';
 import type { ModelsDevProviderInfo } from '@proteus/core';
-import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
-import { buildProviderCatalog } from '../src/user/available-models.ts';
+import { createAgentProviderRegistry } from '../src/providers/agent-registry';
+import { buildProviderCatalog } from '../src/user/available-models';
 
 const CATALOG = {
   groq: {

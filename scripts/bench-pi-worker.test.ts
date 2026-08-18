@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { parseWorkerOutput } from './bench-worker-protocol.js';
+import { parseWorkerOutput } from './bench-worker-protocol';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const scratch: string[] = [];

@@ -3,8 +3,8 @@ import {
   createStrategyRegistry, createSingleShotStrategy,
   workersAIEffortOption, effortFor, reasoningEffortOptions,
   mergeProviderOptions, REASONING_EFFORT_FOR_STAGE,
-} from '../src/index.ts';
-import type { ExplorationStrategy } from '../src/index.ts';
+} from '../src/index';
+import type { ExplorationStrategy } from '../src/index';
 
 describe('StrategyRegistry', () => {
   function fakeStrategy(id: string): ExplorationStrategy {

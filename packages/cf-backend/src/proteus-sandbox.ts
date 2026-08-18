@@ -39,7 +39,7 @@ import {
   CONTAINER_EVENT_HOST, EGRESS_HANDLER, EVENT_HANDLER,
   handleContainerEgress, handleContainerEvent, parseEgressParams,
   type ProteusEgressParams,
-} from "./egress/outbound.js";
+} from "./egress/outbound";
 
 /** Storage key for this container's snapshot record. */
 const SNAPSHOT_STATE_KEY = "proteus:workspace-snapshot";

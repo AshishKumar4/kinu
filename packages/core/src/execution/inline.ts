@@ -15,23 +15,23 @@
  */
 
 import * as v from 'valibot';
-import type { ExecutorProvider, ExecutorCapability, ResourceLimits } from './types.js';
-import type { VFS, Memory, SqlExecutor } from '../types/primitives.js';
-import type { CraftStore } from '../types/agent-runtime.js';
-import { appendMemoryNote } from '../memory/note.js';
-import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno.js';
-import { WORKSPACE_ROOT } from '../vfs/workspace-path.js';
-import { readExecSignal } from './signal.js';
-import { formatExecResult, refusalText } from './exec-result.js';
-import { ProteusError, refusalOf, toProteusError } from '../obs/index.js';
-import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution.js';
-import { seedCraftScore } from '../craft/in-episode.js';
-import { createView, deleteView, viewSlug } from '../views/store.js';
-import { VIEW_DATA_SOURCES } from '../views/sources.js';
-import { createFileDispatcher } from '../tools/file-tool.js';
-import { TurnFileLedger } from '../tools/file-ledger.js';
-import { TurnContextBudget } from '../context-budget.js';
-import type { JsonValue } from '../utils/json.js';
+import type { ExecutorProvider, ExecutorCapability, ResourceLimits } from './types';
+import type { VFS, Memory, SqlExecutor } from '../types/primitives';
+import type { CraftStore } from '../types/agent-runtime';
+import { appendMemoryNote } from '../memory/note';
+import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno';
+import { WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { readExecSignal } from './signal';
+import { formatExecResult, refusalText } from './exec-result';
+import { ProteusError, refusalOf, toProteusError } from '../obs/index';
+import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
+import { seedCraftScore } from '../craft/in-episode';
+import { createView, deleteView, viewSlug } from '../views/store';
+import { VIEW_DATA_SOURCES } from '../views/sources';
+import { createFileDispatcher } from '../tools/file-tool';
+import { TurnFileLedger } from '../tools/file-ledger';
+import { TurnContextBudget } from '../context-budget';
+import type { JsonValue } from '../utils/json';
 
 const StringSchema = v.string();
 const OptionalPathSchema = v.optional(v.string());

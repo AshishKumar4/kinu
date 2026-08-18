@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { nextAlarmTime, nextCronFire } from '../src/events/hub/cron.js';
+import { nextAlarmTime, nextCronFire } from '../src/events/hub/cron';
 
 const BASE = Date.UTC(2026, 5, 2, 10, 17, 30);
 

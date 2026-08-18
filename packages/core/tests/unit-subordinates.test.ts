@@ -39,10 +39,10 @@ import {
   type SubordinateRosterEntry,
   type SubordinateRuntime,
   type ProteusEvent,
-} from '../src/index.js';
-import { CODE_IS_REFUSAL } from '../src/obs/index.js';
+} from '../src/index';
+import { CODE_IS_REFUSAL } from '../src/obs/index';
 import { createMemoryVfs } from '@proteus/test-utils';
-import { makeSql as makeTagged, makeSqlExec } from './helpers.js';
+import { makeSql as makeTagged, makeSqlExec } from './helpers';
 
 function makeSql(): SqlExec {
   return makeSqlExec(new Database(':memory:'));

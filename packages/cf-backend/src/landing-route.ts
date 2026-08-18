@@ -1,7 +1,7 @@
-import { AuthError, authenticateRequest } from './auth/session.js';
-import { buildCliInstallCommand } from './cli/install-command.js';
-import { publicHtmlHeaders } from './lib/security-headers.js';
-import { escapeHtml } from './lib/http.js';
+import { AuthError, authenticateRequest } from './auth/session';
+import { buildCliInstallCommand } from './cli/install-command';
+import { publicHtmlHeaders } from './lib/security-headers';
+import { escapeHtml } from './lib/http';
 
 export async function handleLandingRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);

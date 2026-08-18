@@ -14,7 +14,7 @@ import {
   renderConformanceFindings,
   type ConformanceRoot, type ObservedSurface,
 } from '@proteus/core';
-import { orchestratorHarness, subordinateHarness, type ActorHarness } from './helpers/actor-harness.js';
+import { orchestratorHarness, subordinateHarness, type ActorHarness } from './helpers/actor-harness';
 
 interface RawToolsAgent { observeRawTools(): ToolSet }
 

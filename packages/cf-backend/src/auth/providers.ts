@@ -1,5 +1,5 @@
 import * as oauth from 'oauth4webapi';
-import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../lib/cloudflare-oauth.js';
+import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../lib/cloudflare-oauth';
 
 export type OAuthProviderId = 'google' | 'github' | 'cloudflare';
 

@@ -27,11 +27,11 @@ import {
   parseCorpus, runEvalPair, buildEvalReport, evaluateGate, renderEvalSummary,
   createLLMJudge, extractJsonObject, jsonObjectOnlyInstruction,
   VerdictSchema, DEFAULT_QUALITY_THRESHOLD,
-} from '../packages/core/src/index.js';
+} from '../packages/core/src/index';
 import type {
   EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn, Verdict,
-} from '../packages/core/src/index.js';
-import { createConfiguredLocalModelResolver } from '../packages/cli/src/local-model-resolver.js';
+} from '../packages/core/src/index';
+import { createConfiguredLocalModelResolver } from '../packages/cli/src/local-model-resolver';
 import { createTestRuntime } from '@proteus/test-utils';
 
 const REPO_ROOT = join(import.meta.dir, '..');

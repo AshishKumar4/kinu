@@ -36,7 +36,7 @@
  * tier no matter which tool gate someone forgets.
  */
 import { nanoid, type SqlExec } from '@proteus/core';
-import { hmacSha256Hex, sha256Hex, timingSafeEqual } from '../lib/crypto.js';
+import { hmacSha256Hex, sha256Hex, timingSafeEqual } from '../lib/crypto';
 import * as v from 'valibot';
 
 /** A workspace's reach into the owner's wider world.

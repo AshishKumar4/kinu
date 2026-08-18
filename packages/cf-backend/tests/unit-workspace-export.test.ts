@@ -18,7 +18,7 @@ import {
 } from '@proteus/core';
 import {
   AGENT_RPC_ACCESS, cliScopesConnectionTag, rejectOutOfScopeRpc, requiredRpcAccess,
-} from '../src/cli/rpc-gate.js';
+} from '../src/cli/rpc-gate';
 
 interface WorkspaceFixture {
   sql: SqlExec;

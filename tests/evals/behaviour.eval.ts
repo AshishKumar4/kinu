@@ -53,8 +53,8 @@ import { createHarness, createJudge, describeEval } from 'vitest-evals';
 import type { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 
-import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index.js';
-import { minimumPairsForSignificance, parseCorpus } from '../../packages/core/src/index.js';
+import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index';
+import { minimumPairsForSignificance, parseCorpus } from '../../packages/core/src/index';
 import {
   assessAdmissibility, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE, gitProvenance,
   hardTaskCases, hardTaskFor,
@@ -62,8 +62,8 @@ import {
   writeRunRecord,
   type EvalArmState, type EvalObservation, type EvalRunRecord, type EvalTier,
 } from '@proteus/test-utils';
-import { DegenerateRunError, runBehaviourTask, type BehaviourOutput } from './harness.js';
-import { resolveArtifactRoot } from '../../scripts/bench-retention.js';
+import { DegenerateRunError, runBehaviourTask, type BehaviourOutput } from './harness';
+import { resolveArtifactRoot } from '../../scripts/bench-retention';
 
 /** One observation's input: the task and which repetition of it. That pair IS
  *  the pairing identity two runs are compared on. */

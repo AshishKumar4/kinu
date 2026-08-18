@@ -20,15 +20,15 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { DEFAULT_MAX_STEPS } from '../src/config.js';
-import { DEFAULT_HEAD_BUDGET, type HeadInput } from '../src/heads/types.js';
-import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference.js';
+import { DEFAULT_MAX_STEPS } from '../src/config';
+import { DEFAULT_HEAD_BUDGET, type HeadInput } from '../src/heads/types';
+import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
 import {
   MissionGovernor, localMissionScope, type MissionBudgetPort, type MissionScope,
-} from '../src/mission-budget.js';
-import type { SqlExecutor, SqlValue, RawSqlExec } from '../src/types/primitives.js';
-import { usageTotal } from '../src/usage.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+} from '../src/mission-budget';
+import type { SqlExecutor, SqlValue, RawSqlExec } from '../src/types/primitives';
+import { usageTotal } from '../src/usage';
+import { makeSql, makeExecRaw } from './helpers';
 
 /** A model that keeps calling a tool so the agentic loop keeps stepping,
  *  reporting a fixed spend per step. */

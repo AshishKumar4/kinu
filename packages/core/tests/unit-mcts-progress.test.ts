@@ -18,17 +18,17 @@
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
-import { buildStrategyForkDeps, type ForkDepsWiring } from '../src/orchestrator/fork-deps.js';
-import { createMCTSStrategy } from '../src/strategy/mcts.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
-import type { MCTSProgressEvent } from '../src/types/mcts.js';
-import { HeadController } from '../src/heads/controller.js';
-import { HeadJournal } from '../src/heads/journal.js';
-import { MctsSearchStore } from '../src/mcts/search-store.js';
-import type { AgentsForkDeps } from '../src/tools/agents-tool.js';
-import { createTestRuntime, createMockSession } from './helpers.js';
+import { buildStrategyForkDeps, type ForkDepsWiring } from '../src/orchestrator/fork-deps';
+import { createMCTSStrategy } from '../src/strategy/mcts';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initCraftScoreTables } from '../src/craft/schemas';
+import type { MCTSProgressEvent } from '../src/types/mcts';
+import { HeadController } from '../src/heads/controller';
+import { HeadJournal } from '../src/heads/journal';
+import { MctsSearchStore } from '../src/mcts/search-store';
+import type { AgentsForkDeps } from '../src/tools/agents-tool';
+import { createTestRuntime, createMockSession } from './helpers';
 
 function forkWiring(
   rt: ForkDepsWiring['rt'],

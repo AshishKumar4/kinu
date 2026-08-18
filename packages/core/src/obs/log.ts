@@ -66,7 +66,7 @@
  * diagnostic names the field and states the rule.
  */
 
-import { renderCauseChain, type ErrorCode, type ProteusError } from './error.js';
+import { renderCauseChain, type ErrorCode, type ProteusError } from './error';
 
 /**
  * Field names that may never appear on a log line, from AGENTS.md § Errors.

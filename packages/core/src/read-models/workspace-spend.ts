@@ -37,12 +37,12 @@
  * whole — a workspace has orders of magnitude fewer heads than steps.
  */
 
-import type { RunEventRecorder } from '../events/recorder.js';
-import { SPEND_SOURCES, type SpendSource } from '../events/model-call.js';
-import type { SqlExecutor } from '../types/primitives.js';
-import { addUsage, usageReported, usageTotal, type Usage } from '../usage.js';
-import { storedUsage } from '../heads/journal.js';
-import type { StoredHeadUsage } from '../heads/schema.js';
+import type { RunEventRecorder } from '../events/recorder';
+import { SPEND_SOURCES, type SpendSource } from '../events/model-call';
+import type { SqlExecutor } from '../types/primitives';
+import { addUsage, usageReported, usageTotal, type Usage } from '../usage';
+import { storedUsage } from '../heads/journal';
+import type { StoredHeadUsage } from '../heads/schema';
 
 /** What one producer spent, and what it could not account for. */
 export interface ProducerSpend {

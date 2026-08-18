@@ -80,7 +80,7 @@ describe('branch-worker protocol — no self-rating', () => {
   });
 
   test('the BranchHandle the spawner builds exposes only explore + generateReflection', async () => {
-    const { createBranchSpawner } = await import('../src/branch-process.js');
+    const { createBranchSpawner } = await import('../src/branch-process');
     const { spawn, abort } = createBranchSpawner(dir, {
       llm: { name: 'workers-ai', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' },
     });

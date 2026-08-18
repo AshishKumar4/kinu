@@ -13,12 +13,12 @@ import {
   withClampedToolResults,
   DEFAULT_TOOL_RESULT_MAX_CHARS,
   TOOL_OUTPUT_DIR,
-} from '../src/tools/clamp.js';
-import { TurnContextBudget } from '../src/context-budget.js';
-import { buildBuiltinTools } from '../src/tools/builtins.js';
-import { createTestRuntime } from './helpers.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import { parseJsonValue, type JsonValue } from '../src/utils/json.js';
+} from '../src/tools/clamp';
+import { TurnContextBudget } from '../src/context-budget';
+import { buildBuiltinTools } from '../src/tools/builtins';
+import { createTestRuntime } from './helpers';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import { parseJsonValue, type JsonValue } from '../src/utils/json';
 
 interface RunInput {
   command: string;

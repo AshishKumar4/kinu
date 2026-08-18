@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { tolerate } from '@proteus/core/obs';
 import * as v from 'valibot';
-import { handleCliRequest } from '../src/cli/routes.js';
+import { handleCliRequest } from '../src/cli/routes';
 
 const ORIGIN = 'https://proteus.example.com';
 const tempDirs: string[] = [];

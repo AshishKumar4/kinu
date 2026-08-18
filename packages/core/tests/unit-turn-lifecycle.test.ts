@@ -12,9 +12,9 @@ import {
   OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   SPILL_DIRS,
   type AgentSignal, type CompactionTriggerState,
-} from '../src/index.js';
-import { makeSql, makeExecRaw } from './helpers.js';
-import type { TurnRunRecorder } from '../src/orchestrator/turn-lifecycle.js';
+} from '../src/index';
+import { makeSql, makeExecRaw } from './helpers';
+import type { TurnRunRecorder } from '../src/orchestrator/turn-lifecycle';
 
 function recorder(): RunEventRecorder {
   const db = new Database(':memory:');

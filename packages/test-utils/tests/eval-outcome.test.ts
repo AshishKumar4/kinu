@@ -10,9 +10,9 @@
 import { describe, test, expect } from 'bun:test';
 import {
   OUTCOME_SCALE, TASK_OUTCOME, isCovariateRow, outcomeRow, ratioOutcome, subgoalOutcome,
-} from '../src/eval-outcome.js';
-import { BEHAVIOUR_SCORERS } from '../src/agent-evals.js';
-import { assessAdmissibility, type EvalObservation } from '../src/eval-run.js';
+} from '../src/eval-outcome';
+import { BEHAVIOUR_SCORERS } from '../src/agent-evals';
+import { assessAdmissibility, type EvalObservation } from '../src/eval-run';
 
 describe('subgoalOutcome — partial credit from a count', () => {
   test('three of five checks is a rate of 0.6, with the counts preserved', () => {

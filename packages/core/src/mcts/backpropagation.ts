@@ -14,7 +14,7 @@
  * running mean formula correct across the entire ancestor chain.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
+import type { SqlExecutor } from '../types/primitives';
 
 /**
  * Backpropagate reward from leaf to root via WITH RECURSIVE CTE.

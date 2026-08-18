@@ -22,11 +22,11 @@ import {
   type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver,
 } from '@proteus/core';
 import type { LanguageModel } from 'ai';
-import { createWorkersAIProvider, type WorkersAIOptions } from './workers-ai.js';
-import { createMyGatewayProvider } from './my-gateway.js';
-import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from './ai-gateway.js';
-import type { CredentialSummary } from '../user/user-do.js';
-import type { UserCaller } from '../user/workspace-capability.js';
+import { createWorkersAIProvider, type WorkersAIOptions } from './workers-ai';
+import { createMyGatewayProvider } from './my-gateway';
+import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from './ai-gateway';
+import type { CredentialSummary } from '../user/user-do';
+import type { UserCaller } from '../user/workspace-capability';
 
 /** Stub for the per-user DO that owns this user's credentials, paired with the
  *  identity this context presents to it — a Worker route acting for the

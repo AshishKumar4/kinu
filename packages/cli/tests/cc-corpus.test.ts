@@ -19,7 +19,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { weakLabel, type JsonObject, type JsonValue } from '@proteus/core';
 import { gitEnv } from '@proteus/test-utils';
-import { defaultTranscriptRoot, mineTranscripts, renderMineSkips } from '../src/cc-transcript.js';
+import { defaultTranscriptRoot, mineTranscripts, renderMineSkips } from '../src/cc-transcript';
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];

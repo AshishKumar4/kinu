@@ -18,8 +18,8 @@
  * `buildBuiltinTools` in core is platform-agnostic.
  */
 
-import type { CraftedTool } from '../types/craft.js';
-import type { JsonValue } from '../utils/json.js';
+import type { CraftedTool } from '../types/craft';
+import type { JsonValue } from '../utils/json';
 
 /**
  * Input shape the executor needs from a crafted tool. Not a full CraftedTool

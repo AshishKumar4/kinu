@@ -10,15 +10,15 @@
 
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
-import { createHeadsStrategy } from '../src/strategy/heads.js';
-import { HeadController } from '../src/heads/controller.js';
-import { HeadJournal } from '../src/heads/journal.js';
-import { initHeadsTables } from '../src/heads/schema.js';
-import { HEAD_FILE_CHANGE_PROVENANCE } from '../src/heads/file-changes.js';
-import type { HeadFileChangeSet, HeadReport, MergeResult } from '../src/heads/index.js';
-import type { StrategyContext } from '../src/strategy/types.js';
+import { createHeadsStrategy } from '../src/strategy/heads';
+import { HeadController } from '../src/heads/controller';
+import { HeadJournal } from '../src/heads/journal';
+import { initHeadsTables } from '../src/heads/schema';
+import { HEAD_FILE_CHANGE_PROVENANCE } from '../src/heads/file-changes';
+import type { HeadFileChangeSet, HeadReport, MergeResult } from '../src/heads/index';
+import type { StrategyContext } from '../src/strategy/types';
 import { Database } from 'bun:sqlite';
-import { createTestRuntime, makeSql, makeExecRaw } from './helpers.js';
+import { createTestRuntime, makeSql, makeExecRaw } from './helpers';
 
 function mergeWith(fileChanges: readonly HeadFileChangeSet[]): MergeResult {
   return {

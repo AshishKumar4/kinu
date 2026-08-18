@@ -13,9 +13,9 @@ import {
   acceptWebhookDelivery, createWebhookSecretStore, hmacSha256Hex,
   initEventsHubTables, initWebhookRateLimitTables, registerDurableWebhook,
   type SqlExec, type WebhookDelivery,
-} from '../src/index.js';
+} from '../src/index';
 import { createMemoryVfs } from '@proteus/test-utils';
-import { makeSqlExec } from './helpers.js';
+import { makeSqlExec } from './helpers';
 
 function makeSql(db: Database): SqlExec {
   return makeSqlExec(db);

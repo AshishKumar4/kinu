@@ -1,4 +1,4 @@
-import { requireAuthConfig, resolveCloudOrigin } from '../config.js';
+import { requireAuthConfig, resolveCloudOrigin } from '../config';
 import {
   connectDevice,
   daemonStatus,
@@ -6,9 +6,9 @@ import {
   DEVICE_CONFIG_PATH,
   DEVICE_CONNECT_DEADLINE_MS,
   readDaemonLogTail,
-} from '../device-connect.js';
-import { ACCENT, DIM, ERR, OK } from '../display.js';
-import { authCommand } from './auth.js';
+} from '../device-connect';
+import { ACCENT, DIM, ERR, OK } from '../display';
+import { authCommand } from './auth';
 
 export async function desktopCommand(action: string | undefined, opts: { label?: string }): Promise<void> {
   const sub = action ?? 'status';

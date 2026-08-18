@@ -12,9 +12,9 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExecutor } from '../types/primitives.js';
-import { parseJsonValue } from '../utils/json.js';
-import type { ScaffoldStatus } from './shadow.js';
+import type { SqlExecutor } from '../types/primitives';
+import { parseJsonValue } from '../utils/json';
+import type { ScaffoldStatus } from './shadow';
 
 export interface ScaffoldArchiveEntry {
   version: number;

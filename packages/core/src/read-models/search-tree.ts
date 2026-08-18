@@ -15,8 +15,8 @@
  * design (mcts/schemas.ts).
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import type { SearchNode } from '../types/mcts.js';
+import type { SqlExecutor } from '../types/primitives';
+import type { SearchNode } from '../types/mcts';
 
 export function readLatestSearchTree(sql: SqlExecutor): SearchNode[] {
   return sql<SearchNode>`

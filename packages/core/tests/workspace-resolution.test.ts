@@ -3,7 +3,7 @@
 // the other tree's source. Imported by relative path on purpose — see the
 // guard's own header.
 import { test } from 'bun:test';
-import { assertWorkspaceResolution } from '../../test-utils/src/workspace-resolution.js';
+import { assertWorkspaceResolution } from '../../test-utils/src/workspace-resolution';
 
 test('@proteus/* resolves inside this checkout', () => {
   assertWorkspaceResolution(import.meta.dir);

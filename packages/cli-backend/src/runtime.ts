@@ -37,16 +37,16 @@ import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
-import { createSandboxedExecutor } from './executor.js';
-import { createHostCheckpoints } from './checkpoints.js';
-import { hostResourceLimits } from './cgroup-limits.js';
-import { createHostMountVFS } from './host-mount.js';
-import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber.js';
-import { createBranchSpawner } from './branch-process.js';
+import { createSandboxedExecutor } from './executor';
+import { createHostCheckpoints } from './checkpoints';
+import { hostResourceLimits } from './cgroup-limits';
+import { createHostMountVFS } from './host-mount';
+import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber';
+import { createBranchSpawner } from './branch-process';
 import {
   createLocalModelResolver, createLocalProviderLLM, type LocalProviderCredentials,
-} from './model-resolver.js';
-import type { LocalCodexAuthStore } from './codex-auth-store.js';
+} from './model-resolver';
+import type { LocalCodexAuthStore } from './codex-auth-store';
 import type { OAuthCredential, FileCheckpoints } from '@proteus/core';
 import { diagnostics, ProteusError } from '@proteus/core/obs';
 import type { Database, SQLQueryBindings } from 'bun:sqlite';

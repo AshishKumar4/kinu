@@ -8,8 +8,8 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
-import type { ModelProvider, ModelInfo } from './types.js';
-import { authCacheKey, createAuthedFetch } from './util.js';
+import type { ModelProvider, ModelInfo } from './types';
+import { authCacheKey, createAuthedFetch } from './util';
 
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_CRED_KEY = 'openrouter.bearer';

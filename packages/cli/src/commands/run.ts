@@ -1,18 +1,18 @@
 import * as readline from 'node:readline';
-import { callAgentRpc, createCloudWebhookTrigger, type CloudWebhookTriggerInput } from '../cloud-api.js';
-import { listConfiguredAgentRefs, requireAuthConfig } from '../config.js';
-import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
-import { createAgentClient, type AgentClientFlags } from '../client-factory.js';
-import type { AgentClient, AgentClientEvent } from '../agent-client.js';
+import { callAgentRpc, createCloudWebhookTrigger, type CloudWebhookTriggerInput } from '../cloud-api';
+import { listConfiguredAgentRefs, requireAuthConfig } from '../config';
+import { resolveAgentTarget, type AgentTarget } from '../agent-target';
+import { createAgentClient, type AgentClientFlags } from '../client-factory';
+import type { AgentClient, AgentClientEvent } from '../agent-client';
 import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, type JsonObject, type JsonValue } from '@proteus/core';
 import * as v from 'valibot';
-import type { CliSessionOptions } from '../session.js';
-import { chatCommand } from './chat.js';
-import { ensureLocalDaemonRunning } from './daemon.js';
-import { resolvePromptAttachments } from '../attachments.js';
-import { watchHeadlessConsents, watchTerminalConsents } from '../consent-watch.js';
-import { ERR, formatFailure, printFailure, printToolCall, printToolResult } from '../display.js';
-import { guideFailure } from '../provider-guidance.js';
+import type { CliSessionOptions } from '../session';
+import { chatCommand } from './chat';
+import { ensureLocalDaemonRunning } from './daemon';
+import { resolvePromptAttachments } from '../attachments';
+import { watchHeadlessConsents, watchTerminalConsents } from '../consent-watch';
+import { ERR, formatFailure, printFailure, printToolCall, printToolResult } from '../display';
+import { guideFailure } from '../provider-guidance';
 import {
   executeLocalExecutor,
   getLocalAgentState,
@@ -30,7 +30,7 @@ import {
   markLocalBackgroundJobsCancelled,
   readLocalMemory,
   searchLocalMemory,
-} from '../local-inspection.js';
+} from '../local-inspection';
 
 /** Session flags as Commander actually delivers them: `--no-session` arrives
  *  as `session: false` on the shared option key, not as `noSession: true`. */

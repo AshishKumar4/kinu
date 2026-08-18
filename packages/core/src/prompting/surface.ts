@@ -6,14 +6,14 @@ import {
   type AgentStance,
   type AgentsToolAction,
   type BuiltinToolName,
-} from '../tools/registry.js';
-import { isMcpToolKey } from '../tools/mcp-naming.js';
-import type { ExecutorLifecycleStatus, ResourceLimits } from '../execution/types.js';
+} from '../tools/registry';
+import { isMcpToolKey } from '../tools/mcp-naming';
+import type { ExecutorLifecycleStatus, ResourceLimits } from '../execution/types';
 import {
   resolvePromptModelProfile,
   type PromptModelContext,
   type PromptModelProfile,
-} from './model-profile.js';
+} from './model-profile';
 import * as v from 'valibot';
 
 export type PromptBackend = 'cf' | 'cli-local' | 'cli-cloud';

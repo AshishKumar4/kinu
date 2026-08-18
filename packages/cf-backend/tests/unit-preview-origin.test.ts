@@ -19,15 +19,15 @@ import {
   isPreviewUrl,
   isPreviewHostRequest,
   previewHostSuffix,
-} from '../src/lib/preview-origin.js';
-import { appDocumentCsp, publicHtmlHeaders, withAppSecurityHeaders } from '../src/lib/security-headers.js';
-import { crossSiteRejection } from '../src/auth/session.js';
+} from '../src/lib/preview-origin';
+import { appDocumentCsp, publicHtmlHeaders, withAppSecurityHeaders } from '../src/lib/security-headers';
+import { crossSiteRejection } from '../src/auth/session';
 import {
   handleNimbusPreviewHostRequest,
   nimbusPreviewConfigured,
   nimbusPreviewUrl,
-} from '../src/nimbus-route.js';
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+} from '../src/nimbus-route';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
 // The SDK's entry point pulls in `cloudflare:workers`, which only exists inside
 // workerd. proxyToSandbox is the seam the Worker delegates preview routing to,
@@ -47,7 +47,7 @@ mock.module('@cloudflare/sandbox', () => ({
   Sandbox: class {},
   getSandbox: () => { throw new Error('getSandbox is not exercised by this suite.'); },
 }));
-const { SDK_FORWARD_FAILURE, servePreviewRequest } = await import('../src/preview-proxy.js');
+const { SDK_FORWARD_FAILURE, servePreviewRequest } = await import('../src/preview-proxy');
 
 const root = join(import.meta.dir, '..');
 const source = (path: string): string => readFileSync(join(root, path), 'utf8');

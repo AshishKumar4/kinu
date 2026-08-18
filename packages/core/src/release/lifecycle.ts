@@ -1,4 +1,4 @@
-import type { ReleaseStatus, ReleaseTransitionResult } from './types.js';
+import type { ReleaseStatus, ReleaseTransitionResult } from './types';
 
 const ALLOWED = new Map<ReleaseStatus, ReadonlySet<ReleaseStatus>>([
   ['draft', new Set(['planning', 'rejected', 'failed'])],

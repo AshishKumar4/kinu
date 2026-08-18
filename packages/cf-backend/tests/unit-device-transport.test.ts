@@ -7,8 +7,8 @@ import {
   createHubDeviceTransport,
   type DeviceHubClient,
   type DeviceRpcOptions,
-} from '../src/device-transport.js';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+} from '../src/device-transport';
+import type { UserCaller } from '../src/user/workspace-capability';
 
 const FAKE_CALLER = { workspaceToken: 'pwc_test' } as const;
 const caller = async () => FAKE_CALLER;

@@ -16,10 +16,10 @@
  * verified by hand while writing this file.
  */
 import { describe, test, expect } from 'bun:test';
-import { DefaultExecutionRouter } from '../src/execution/router.js';
-import { gateProviderExec } from '../src/execution/approval.js';
-import type { ExecutorProvider } from '../src/execution/types.js';
-import type { ShellApprovalPolicy, ShellApprovalRequest } from '../src/safety/approval-gate.js';
+import { DefaultExecutionRouter } from '../src/execution/router';
+import { gateProviderExec } from '../src/execution/approval';
+import type { ExecutorProvider } from '../src/execution/types';
+import type { ShellApprovalPolicy, ShellApprovalRequest } from '../src/safety/approval-gate';
 
 const DENY = 'rm -rf /';
 const GATE = 'sudo rm -rf /var/lib/important';

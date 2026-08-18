@@ -6,11 +6,11 @@
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { SignalDelivery } from '../src/orchestrator/signals.js';
-import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host.js';
-import type { AgentSignal, SignalCardEvent } from '../src/types/signals.js';
-import { JsonObjectSchema } from '../src/utils/json.js';
-import { WORKSPACE_CREATED_EVENT, workspaceGenesisSignal } from '../src/identity/soul.js';
+import { SignalDelivery } from '../src/orchestrator/signals';
+import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
+import type { AgentSignal, SignalCardEvent } from '../src/types/signals';
+import { JsonObjectSchema } from '../src/utils/json';
+import { WORKSPACE_CREATED_EVENT, workspaceGenesisSignal } from '../src/identity/soul';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });

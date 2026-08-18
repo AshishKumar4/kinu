@@ -10,8 +10,8 @@ import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { parseJsonObject, type JsonObject } from '@proteus/core';
-import type { CloudDevice } from '../src/cloud-api.js';
-import { CloudAgentClient } from '../src/cloud-agent-client.js';
+import type { CloudDevice } from '../src/cloud-api';
+import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -358,7 +358,7 @@ describe('classic cloud chat connect prompt', () => {
 
 describe('/connect slash command', () => {
   test('is offered to consent-capable clients and returns the device-connect outcome', async () => {
-    const { commandsForClient, executeSlashCommand } = await import('../src/slash-commands.js');
+    const { commandsForClient, executeSlashCommand } = await import('../src/slash-commands');
     const clientOptions = {
       origin: 'https://proteus.invalid', token: 'test', agentName: 'test', cloudName: 'test',
       session: { noSession: true },
@@ -379,7 +379,7 @@ describe('/connect slash command', () => {
 describe('desktop command reuses device-connect', () => {
   test('desktop.ts keeps zero duplicated daemon/registration logic', () => {
     const source = readFileSync(resolve(repoRoot, 'packages/cli/src/commands/desktop.ts'), 'utf8');
-    expect(source).toContain("from '../device-connect.js'");
+    expect(source).toContain("from '../device-connect'");
     expect(source).toContain('connectDevice');
     // The machinery lives in the module only.
     expect(source).not.toContain('registerCloudDevice');

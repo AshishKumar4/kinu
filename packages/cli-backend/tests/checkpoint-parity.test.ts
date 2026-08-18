@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createHostCheckpoints } from '../src/checkpoints.js';
+import { createHostCheckpoints } from '../src/checkpoints';
 import * as v from 'valibot';
 
 const require = createRequire(import.meta.url);

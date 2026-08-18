@@ -66,11 +66,11 @@ import type {
   ToolListEntry,
 } from "@proteus/core";
 import { RELEASE_STATUSES, isEngineOwnedTransitionTarget } from "@proteus/core";
-import type { OrchestratorAgent } from "./orchestrator.js";
-import { AuthError, authenticateRequest } from "./auth/session.js";
-import { authenticateCliToken, readBearer } from "./cli/auth-store.js";
-import { claimOwnedWorkspace } from "./user/workspace-access.js";
-import { decodeRunEventWire, decodeScaffoldRunWire } from './lib/orchestrator-wire.js';
+import type { OrchestratorAgent } from "./orchestrator";
+import { AuthError, authenticateRequest } from "./auth/session";
+import { authenticateCliToken, readBearer } from "./cli/auth-store";
+import { claimOwnedWorkspace } from "./user/workspace-access";
+import { decodeRunEventWire, decodeScaffoldRunWire } from './lib/orchestrator-wire';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

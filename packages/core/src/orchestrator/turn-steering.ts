@@ -103,18 +103,18 @@
 
 import * as v from 'valibot';
 import type { ModelMessage } from 'ai';
-import type { TurnSteeringRecord, TurnSteeringTrigger } from '../events/types.js';
-import type { PrepareStepContext, ToolCallContext, ToolResultContext } from '../extension.js';
-import type { AgentSignal } from '../types/signals.js';
-import type { BuiltinToolName } from '../tools/registry.js';
-import type { RecoveryFinding } from '../evolution/recovery.js';
-import { fnv1a64 } from '../prompting/volatile-context.js';
+import type { TurnSteeringRecord, TurnSteeringTrigger } from '../events/types';
+import type { PrepareStepContext, ToolCallContext, ToolResultContext } from '../extension';
+import type { AgentSignal } from '../types/signals';
+import type { BuiltinToolName } from '../tools/registry';
+import type { RecoveryFinding } from '../evolution/recovery';
+import { fnv1a64 } from '../prompting/volatile-context';
 import {
   isJsonObject,
   type JsonObject,
   type JsonValue,
-} from '../utils/json.js';
-import { isFailingResultText } from '../execution/exec-result.js';
+} from '../utils/json';
+import { isFailingResultText } from '../execution/exec-result';
 
 /** Identical calls answered identically before the turn is told it is looping.
  *  Three is the first count that is a loop rather than a retry: one repeat is a

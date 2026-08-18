@@ -5,8 +5,8 @@ import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
   type PinnedPreviewPort,
-} from '../src/lib/preview-ports.ts';
-import { previewPortId, selectPreviewPort } from '../src/components/surfaces/OutputSurface.tsx';
+} from '../src/lib/preview-ports';
+import { previewPortId, selectPreviewPort } from '../src/components/surfaces/OutputSurface';
 
 const acceptsUrl = (url: string) => url.startsWith('https://preview.example/');
 

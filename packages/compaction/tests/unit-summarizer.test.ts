@@ -6,9 +6,9 @@
 import { describe, expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel } from 'ai';
-import { createCompactionExtension, createModelSummarizer } from '../src/index.js';
-import type { CompactionProfile } from '../src/index.js';
-import { history, memoryArchive, memoryPorts } from './helpers.js';
+import { createCompactionExtension, createModelSummarizer } from '../src/index';
+import type { CompactionProfile } from '../src/index';
+import { history, memoryArchive, memoryPorts } from './helpers';
 
 /** A model whose generate call NEVER resolves on its own — it settles only
  *  when the request's abortSignal fires (exactly how a hung provider fetch

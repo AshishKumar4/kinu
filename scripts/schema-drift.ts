@@ -16,7 +16,7 @@
  * list, because a list is the thing that drifts.
  */
 
-import { isProductSource, readMatching } from './sources.ts';
+import { isProductSource, readMatching } from './sources';
 
 const root = new URL('..', import.meta.url).pathname;
 

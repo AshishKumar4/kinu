@@ -11,12 +11,12 @@
  * Object happened to grow.
  */
 
-import type { RunEventRecorder } from '../events/recorder.js';
-import type { RunEvent } from '../events/types.js';
-import type { BackgroundJobStore } from '../jobs/store.js';
-import type { SqlExecutor } from '../types/primitives.js';
-import type { Usage } from '../usage.js';
-import { parseJsonValue, type JsonValue } from '../utils/json.js';
+import type { RunEventRecorder } from '../events/recorder';
+import type { RunEvent } from '../events/types';
+import type { BackgroundJobStore } from '../jobs/store';
+import type { SqlExecutor } from '../types/primitives';
+import type { Usage } from '../usage';
+import { parseJsonValue, type JsonValue } from '../utils/json';
 
 export type TimelineKind =
   | 'llm-turn' | 'tool-call' | 'runtime-exec' | 'mcts' | 'scaffold' | 'shadow-eval'

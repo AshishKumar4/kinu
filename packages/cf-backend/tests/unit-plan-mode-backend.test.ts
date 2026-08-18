@@ -7,7 +7,7 @@ import {
   type PlanReviewAnnotation,
   type ProgrammaticTurn,
 } from '@proteus/core';
-import { orchestratorHarness } from './helpers/actor-harness.ts';
+import { orchestratorHarness } from './helpers/actor-harness';
 import * as v from 'valibot';
 
 type HarnessAgent = ReturnType<typeof orchestratorHarness>['agent'];

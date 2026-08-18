@@ -7,7 +7,7 @@ import { appendFileSync, closeSync, mkdtempSync, openSync, readFileSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { appendDaemonLog, readDaemonLogTail, rotateDaemonLogIfNeeded } from '../src/daemon-log.js';
+import { appendDaemonLog, readDaemonLogTail, rotateDaemonLogIfNeeded } from '../src/daemon-log';
 
 const dirs: string[] = [];
 

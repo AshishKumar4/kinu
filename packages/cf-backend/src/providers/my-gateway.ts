@@ -17,8 +17,8 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo, ProviderDeps } from '@proteus/core';
 import { authCacheKey, cloneModelInfos, listModelsDevProviderModels } from '@proteus/core';
-import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from '../lib/cloudflare-oauth.js';
-import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch.js';
+import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from '../lib/cloudflare-oauth';
+import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch';
 import * as v from 'valibot';
 
 export const MY_GATEWAY_PROVIDER_ID = 'my-gateway';

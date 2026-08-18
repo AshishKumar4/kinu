@@ -4,7 +4,7 @@
 // rebuilds messages from scratch), replay into the durable response.
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
-import { StepInjections } from '../src/prompting/step-injections.js';
+import { StepInjections } from '../src/prompting/step-injections';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });

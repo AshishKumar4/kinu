@@ -6,7 +6,7 @@ import {
   createOpenAIProvider,
   type AuthResolution,
   type ProviderDeps,
-} from '../src/index.ts';
+} from '../src/index';
 
 function deps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
   const store = new Map(Object.entries(creds));

@@ -8,17 +8,17 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { isE2EConfigured, loadAIGatewayProviders } from './ai-gateway-llm.js';
-import { modifyScaffold } from '../../src/scaffold/modify.js';
-import { rollbackScaffold } from '../../src/scaffold/rollback.js';
-import { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from '../../src/scaffold/bootstrap.js';
-import { initScaffoldTables } from '../../src/scaffold/schemas.js';
-import type { AgentRuntime } from '../../src/types/agent-runtime.js';
-import type { LLM } from '../../src/types/primitives.js';
+import { isE2EConfigured, loadAIGatewayProviders } from './ai-gateway-llm';
+import { modifyScaffold } from '../../src/scaffold/modify';
+import { rollbackScaffold } from '../../src/scaffold/rollback';
+import { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from '../../src/scaffold/bootstrap';
+import { initScaffoldTables } from '../../src/scaffold/schemas';
+import type { AgentRuntime } from '../../src/types/agent-runtime';
+import type { LLM } from '../../src/types/primitives';
 import {
   makeSql, makeExecRaw, createMemoryVFS, createMemoryMemory,
   createMemoryCraftStore, createMockExecutor, createMemorySchedule,
-} from '../helpers.js';
+} from '../helpers';
 
 function createScaffoldTestRuntime(llm: LLM) {
   const db = new Database(':memory:');

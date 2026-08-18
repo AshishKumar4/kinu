@@ -13,10 +13,10 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { runScaffoldGepa } from './scaffold-bridge.js';
-import { initScaffoldTables } from '../../scaffold/schemas.js';
-import { createTestRuntime } from '../../../tests/helpers.js';
-import type { EvalInstance, MetricOutcome } from './types.js';
+import { runScaffoldGepa } from './scaffold-bridge';
+import { initScaffoldTables } from '../../scaffold/schemas';
+import { createTestRuntime } from '../../../tests/helpers';
+import type { EvalInstance, MetricOutcome } from './types';
 
 function seededRng(seed: number): () => number {
   let s = seed;

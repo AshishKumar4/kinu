@@ -2,7 +2,7 @@
 // over the canonical `messages` table (the store both backends persist to).
 import { describe, test, expect } from 'bun:test';
 import { createTestSql, type TestSql } from '@proteus/test-utils';
-import { SessionSearchStore, initAllTables } from '../src/index.ts';
+import { SessionSearchStore, initAllTables } from '../src/index';
 
 interface Fixture { sql: TestSql['sql']; store: SessionSearchStore }
 

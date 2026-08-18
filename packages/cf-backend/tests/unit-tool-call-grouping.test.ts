@@ -7,7 +7,7 @@
 import { describe, test, expect } from 'bun:test';
 import type { ReasoningUIPart, TextUIPart, ToolUIPart, UIMessage } from 'ai';
 import type { JsonValue } from '@proteus/core';
-import { groupMessageParts } from '../src/components/tool-call-grouping.ts';
+import { groupMessageParts } from '../src/components/tool-call-grouping';
 import { describeCommand, describeToolCall, summarizeToolRun } from '@proteus/core';
 
 type Part = UIMessage['parts'][number];

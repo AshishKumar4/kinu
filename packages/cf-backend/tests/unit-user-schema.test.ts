@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { initUserTables } from '../src/user/schema.js';
-import { sqlExec, taggedSql } from './helpers/user-do.js';
+import { initUserTables } from '../src/user/schema';
+import { sqlExec, taggedSql } from './helpers/user-do';
 
 function columns(db: Database, table: string): string[] {
   return db.prepare<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((row) => row.name);

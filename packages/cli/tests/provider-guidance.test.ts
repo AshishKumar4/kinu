@@ -2,7 +2,7 @@
 // real message for any thrown shape, and the exact next command for the
 // failure classes a user can actually do something about.
 import { describe, expect, test } from 'bun:test';
-import { guideFailure } from '../src/provider-guidance.js';
+import { guideFailure } from '../src/provider-guidance';
 
 describe('guideFailure', () => {
   test('digs the message out of a raw provider payload', () => {

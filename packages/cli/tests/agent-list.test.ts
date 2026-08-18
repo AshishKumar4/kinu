@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { reconcileAgentRefs } from '../src/agent-list.js';
+import { reconcileAgentRefs } from '../src/agent-list';
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];

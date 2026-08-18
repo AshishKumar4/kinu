@@ -7,7 +7,7 @@
 //   - Score a scaffold mutation against a held-out task set
 //   - Track which strategy wins on which task class (drives router policy)
 import * as v from 'valibot';
-import type { JsonObject } from '../utils/json.js';
+import type { JsonObject } from '../utils/json';
 
 /** A single eval case — task + optional rubric for the judge. */
 export interface EvalCase {

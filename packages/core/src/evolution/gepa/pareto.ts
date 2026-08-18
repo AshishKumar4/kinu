@@ -15,7 +15,7 @@
  * even when their mean is mediocre.
  */
 
-import type { GepaCandidate } from './types.js';
+import type { GepaCandidate } from './types';
 
 /** Result of a Pareto computation. */
 export interface ParetoComputation {

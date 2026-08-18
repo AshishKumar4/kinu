@@ -25,8 +25,8 @@
  * This is test-plane declaration only. Production code never reads it.
  */
 
-import { AGENTS_TOOL_ACTIONS, BUILTIN_TOOLS, MEMORY_FACT_ACTIONS, MEMORY_NOTE_ACTIONS } from '../tools/registry.js';
-import type { AgentsToolAction, BuiltinToolName, MemoryToolAction } from '../tools/registry.js';
+import { AGENTS_TOOL_ACTIONS, BUILTIN_TOOLS, MEMORY_FACT_ACTIONS, MEMORY_NOTE_ACTIONS } from '../tools/registry';
+import type { AgentsToolAction, BuiltinToolName, MemoryToolAction } from '../tools/registry';
 
 /** The composition roots that assemble a model-facing surface. cf splits by
  *  actor profile because the profiles deliberately differ (`actorToolDeps`);

@@ -23,8 +23,8 @@
  * their public entry point was already gated.
  */
 import { Agent, type AgentContext } from "agents";
-import { USER_DO_RPC_SURFACE, sealRpcSurface } from "../rpc-surface.js";
-import { parseCliTokenUserId } from "../cli/auth-store.js";
+import { USER_DO_RPC_SURFACE, sealRpcSurface } from "../rpc-surface";
+import { parseCliTokenUserId } from "../cli/auth-store";
 import {
   getActiveAccessTokenScopes,
   listAccessTokens as listAccessTokenRows,
@@ -34,7 +34,7 @@ import {
   type AccessTokenMint,
   type AccessTokenRecord,
   type AccessTokenScope,
-} from "../cli/access-token-store.js";
+} from "../cli/access-token-store";
 import { MCPClientManager } from "agents/mcp/client";
 import {
   DurableObjectOAuthClientProvider,
@@ -79,8 +79,8 @@ import {
 } from '@proteus/core';
 import { diagnostics, ProteusError, toProteusError, tolerate } from '@proteus/core/obs';
 import * as v from 'valibot';
-import { initUserTables } from './schema.js';
-import { bindAgentSql } from '../runtime.js';
+import { initUserTables } from './schema';
+import { bindAgentSql } from '../runtime';
 import {
   mintWorkspaceCapability,
   ownerCaller,
@@ -90,19 +90,19 @@ import {
   type UserCaller,
   type WorkspaceCapability,
   type ResolvedCaller,
-} from './workspace-capability.js';
-import { DeviceSocketHub, deviceIdFromSocket } from './device-hub.js';
-import { credentialToHeaders, accessTokenExpiring, isModelInferenceCredentialKey } from './credential-headers.js';
-import { validateCredential, validateCredentialKey, validateWorkspaceName } from './validate.js';
-import { createCredentialCipher, type CredentialCipher } from './credential-envelope.js';
+} from './workspace-capability';
+import { DeviceSocketHub, deviceIdFromSocket } from './device-hub';
+import { credentialToHeaders, accessTokenExpiring, isModelInferenceCredentialKey } from './credential-headers';
+import { validateCredential, validateCredentialKey, validateWorkspaceName } from './validate';
+import { createCredentialCipher, type CredentialCipher } from './credential-envelope';
 import {
   listEgressSecrets, putEgressSecret, resolveEgressInjection,
   revokeEgressSecret, rewrapEgressSecrets,
   type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps,
   type PutEgressSecretInput,
-} from './egress-vault.js';
-import { randomToken, sha256Hex } from '../lib/crypto.js';
-import { resolveWorkspaceTitle } from '../lib/agent-naming.js';
+} from './egress-vault';
+import { randomToken, sha256Hex } from '../lib/crypto';
+import { resolveWorkspaceTitle } from '../lib/agent-naming';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
@@ -114,7 +114,7 @@ import {
   parseMcpHeaders, buildMcpHeaderTransportOpts,
   type McpServerSummary, type McpTransport,
   type SerializableToolDescriptor,
-} from './mcp.js';
+} from './mcp';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   CLOUDFLARE_OAUTH_CRED_KEY,
@@ -131,7 +131,7 @@ import {
   withCloudflareAccount,
   type CloudflareAccount,
   type CloudflareAIGatewaySummary,
-} from '../lib/cloudflare-oauth.js';
+} from '../lib/cloudflare-oauth';
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 /** How long a device token survives without being used. Renewal is automatic

@@ -20,14 +20,14 @@ export {
   tolerate,
   tolerateAsync,
   type ExpectedFailure,
-} from './expected-failure.js';
+} from './expected-failure';
 export {
   createAgentTracing,
   SPAN_ATTR_INVOCATION,
   type AgentTracing,
   type InvocationKind,
   type TracedInvocation,
-} from './agent-tracing.js';
+} from './agent-tracing';
 export {
   createRecordingTracer,
   renderSelfPath,
@@ -41,7 +41,7 @@ export {
   type SpanAttributeValue,
   type SpanOpenAttributes,
   type Tracer,
-} from './tracer.js';
+} from './tracer';
 export {
   classifyErrorCode,
   CODE_IS_REFUSAL,
@@ -52,7 +52,7 @@ export {
   toProteusError,
   type ErrorCode,
   type Refusal,
-} from './error.js';
+} from './error';
 export {
   createConsoleLogger,
   createRecordingLogger,
@@ -68,4 +68,4 @@ export {
   type ReservedFieldIsNotLoggable,
   type ReservedLogField,
   type UninspectedFieldsAreNotLoggable,
-} from './log.js';
+} from './log';

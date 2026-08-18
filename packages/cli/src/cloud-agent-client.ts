@@ -22,16 +22,16 @@ import {
   createCloudAgentConnectTicket,
   listCloudAvailableModels,
   type CloudChatMessage,
-} from './cloud-api.js';
+} from './cloud-api';
 import {
   createCliSession,
   listCliSessions,
   type CliSession,
   type CliSessionInfo,
   type CliSessionOptions,
-} from './session.js';
-import { SessionRecorder } from './session-recorder.js';
-import { normalizeModelMenu, type AgentModelMenu } from './model-catalog.js';
+} from './session';
+import { SessionRecorder } from './session-recorder';
+import { normalizeModelMenu, type AgentModelMenu } from './model-catalog';
 import { pageSchema, type Page, type SeekCursor } from '@proteus/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, ReasoningEffort, TakePickOutcome } from '@proteus/core';
 import {
@@ -56,7 +56,7 @@ import {
   type FileCheckpointSurface,
   type ForkPoint,
   type PendingDeviceConsent,
-} from './agent-client.js';
+} from './agent-client';
 import * as v from 'valibot';
 
 const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);

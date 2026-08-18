@@ -11,31 +11,31 @@
  * Formal spec: MCTS/StorageIsolation.lean — init_isolated, transition_preserves_isolation
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { MCTSConfig, MCTSPhase, MCTSProgressBody } from '../types/mcts.js';
-import type { MissionScope } from '../mission-budget.js';
-import type { ConvergenceResult } from '../types/evaluation.js';
-import type { SessionWriter } from './record-node.js';
-import { DEFAULT_CONFIG } from '../config.js';
-import { initSearchTables } from './schemas.js';
-import { initAlternateTakesTable } from './takes.js';
-import { selectNode } from './uct.js';
-import { siblingAngles } from './diversity.js';
-import { backpropagate } from './backpropagation.js';
-import { recordNode } from './record-node.js';
-import { converge, abandonSearchTree } from './convergence.js';
-import { evaluateWithMultiModelJudging, executionObservation } from './evaluation.js';
-import { readProposalCode } from '../execution/code-fence.js';
-import { pruneLowValueBranches } from './pruning.js';
-import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery.js';
-import { estimateCost } from './cost.js';
-import { persistableMCTSConfig } from './search-store.js';
-import { initMctsSearchTable } from './search-store.js';
-import { diagnostics } from '../obs/index.js';
-import { nanoid } from '../utils/nanoid.js';
-import { isoDate } from '../utils/date.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { MCTSConfig, MCTSPhase, MCTSProgressBody } from '../types/mcts';
+import type { MissionScope } from '../mission-budget';
+import type { ConvergenceResult } from '../types/evaluation';
+import type { SessionWriter } from './record-node';
+import { DEFAULT_CONFIG } from '../config';
+import { initSearchTables } from './schemas';
+import { initAlternateTakesTable } from './takes';
+import { selectNode } from './uct';
+import { siblingAngles } from './diversity';
+import { backpropagate } from './backpropagation';
+import { recordNode } from './record-node';
+import { converge, abandonSearchTree } from './convergence';
+import { evaluateWithMultiModelJudging, executionObservation } from './evaluation';
+import { readProposalCode } from '../execution/code-fence';
+import { pruneLowValueBranches } from './pruning';
+import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery';
+import { estimateCost } from './cost';
+import { persistableMCTSConfig } from './search-store';
+import { initMctsSearchTable } from './search-store';
+import { diagnostics } from '../obs/index';
+import { nanoid } from '../utils/nanoid';
+import { isoDate } from '../utils/date';
 import * as v from 'valibot';
-import { UsageSchema, usageReported, usageTotal, type Usage } from '../usage.js';
+import { UsageSchema, usageReported, usageTotal, type Usage } from '../usage';
 
 const BranchExplorationSchema = v.object({
   text: v.string(),

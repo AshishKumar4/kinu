@@ -12,7 +12,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
-import { UserSteerDrain, steerUserMessage, type UserSteer } from '../src/orchestrator/user-steer.js';
+import { UserSteerDrain, steerUserMessage, type UserSteer } from '../src/orchestrator/user-steer';
 
 /** A prepareStep context: what the step pipeline hands an extension. */
 function step(stepNumber: number, messages: ModelMessage[]) {

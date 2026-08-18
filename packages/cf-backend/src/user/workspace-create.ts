@@ -12,12 +12,12 @@ import {
   type ReasoningEffort,
 } from '@proteus/core';
 import { diagnostics, toProteusError } from '@proteus/core/obs';
-import type { OrchestratorAgent } from '../orchestrator.js';
-import { createAgentProviderRegistry } from '../providers/agent-registry.js';
-import type { UserCredentialClient } from '../providers/agent-registry.js';
-import type { UserCaller } from './workspace-capability.js';
-import { listAvailableModels, type ModelMenuEntry } from './available-models.js';
-import type { WorkspaceEntry } from './user-do.js';
+import type { OrchestratorAgent } from '../orchestrator';
+import { createAgentProviderRegistry } from '../providers/agent-registry';
+import type { UserCredentialClient } from '../providers/agent-registry';
+import type { UserCaller } from './workspace-capability';
+import { listAvailableModels, type ModelMenuEntry } from './available-models';
+import type { WorkspaceEntry } from './user-do';
 
 export interface CloudWorkspaceRegistry extends UserCredentialClient {
   getConfig(caller: UserCaller, key: string): Promise<string | null>;

@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
-import { asFetchFunction } from '../src/providers/fetch-shim.js';
+import { asFetchFunction } from '../src/providers/fetch-shim';
 import {
   parseModelSpec,
   createProviderRegistry,
@@ -10,7 +10,7 @@ import {
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   CODEX_CRED_KEY,
   type ModelProvider, type ProviderDeps, type AuthResolution,
-} from '../src/index.ts';
+} from '../src/index';
 
 /** Tiny in-memory auth fixture for tests. */
 function createTestAuth(store: Map<string, AuthResolution> = new Map()): Pick<ProviderDeps, 'getAuth' | 'hasCredential'> {

@@ -1,8 +1,8 @@
-import { ensureAgentHome, pathHint, type AgentMode } from '../config.js';
-import { createCliAgent } from '../agent-create.js';
-import { ACCENT, DIM, OK, WARN, createSpinner, printCreatedCard, printFailure } from '../display.js';
-import { findUnusableModel } from '../local-model-resolver.js';
-import { ask, canPrompt } from '../prompt.js';
+import { ensureAgentHome, pathHint, type AgentMode } from '../config';
+import { createCliAgent } from '../agent-create';
+import { ACCENT, DIM, OK, WARN, createSpinner, printCreatedCard, printFailure } from '../display';
+import { findUnusableModel } from '../local-model-resolver';
+import { ask, canPrompt } from '../prompt';
 
 interface ModelWarningInput {
   model?: string;

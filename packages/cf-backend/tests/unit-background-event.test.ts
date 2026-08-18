@@ -9,7 +9,7 @@ import type { JsonValue, ProteusEvent } from '@proteus/core';
 import {
   applySignalCard, classifyProgrammaticTurn, eventVariantLabel, messageSignalId,
   parseDrainedEvents, parseSignalCardEvent, type SignalCard,
-} from '../src/components/background-event.ts';
+} from '../src/components/background-event';
 
 describe('programmatic turn provenance', () => {
   test('reactor drains and background-job wakes are not the user talking', () => {

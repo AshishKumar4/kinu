@@ -20,7 +20,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Browser } from 'puppeteer';
 
-import { withGallery } from './gallery-harness.ts';
+import { withGallery } from './gallery-harness';
 
 const REPO = join(import.meta.dir, '..');
 

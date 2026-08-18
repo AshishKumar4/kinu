@@ -12,12 +12,12 @@ import {
   LONGHORIZON_ANSWER_FILE, buildLongHorizonAsks, buildLongHorizonQuestions,
   encodeLongHorizonSpec, generateLongHorizonFiles, longHorizonAsksLeakAnswer,
   partitionCorpus, renderLongHorizonAnswerFile, unitHash,
-} from '../packages/core/src/index.js';
+} from '../packages/core/src/index';
 import type {
   BenchCorpus, BenchTask, LLMProviderConfig, LongHorizonSpec, PartitionOptions,
   Solver, SolverContext, SolverResult,
-} from '../packages/core/src/index.js';
-import { runAgentWorker, runPiWorker, type AgentWorkerOptions } from './bench-solvers.js';
+} from '../packages/core/src/index';
+import { runAgentWorker, runPiWorker, type AgentWorkerOptions } from './bench-solvers';
 
 /** The checker's argv. Run inside the sandbox like every other check; the
  *  answer key is not on disk, it is recomputed from the spec the check carries

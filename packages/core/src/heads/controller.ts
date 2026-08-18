@@ -15,9 +15,9 @@
  */
 
 import * as v from 'valibot';
-import { nanoid } from '../utils/nanoid.js';
-import { jsonObjectOnlyInstruction } from '../prompts/structured.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
+import { nanoid } from '../utils/nanoid';
+import { jsonObjectOnlyInstruction } from '../prompts/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import {
   type HeadId,
   type HeadInput,
@@ -31,14 +31,14 @@ import {
   DEFAULT_HEAD_BUDGET,
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
-} from './types.js';
-import { headProducedFindings } from './head-summary.js';
-import { MergeOutputSchema, type MergeOutput } from './merge-schema.js';
-import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation.js';
-import type { LLM, Executor } from '../types/primitives.js';
-import type { WorkMode } from '../prompting/surface.js';
-import { addUsage, usageTotal, type Usage } from '../usage.js';
-import { diagnostics, toProteusError } from '../obs/index.js';
+} from './types';
+import { headProducedFindings } from './head-summary';
+import { MergeOutputSchema, type MergeOutput } from './merge-schema';
+import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation';
+import type { LLM, Executor } from '../types/primitives';
+import type { WorkMode } from '../prompting/surface';
+import { addUsage, usageTotal, type Usage } from '../usage';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** What the merge LLM should return. Validated by MergeOutputSchema. */
 export type MergeLLMFn = (

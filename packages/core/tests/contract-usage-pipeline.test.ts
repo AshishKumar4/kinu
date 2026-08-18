@@ -29,8 +29,8 @@ import { generateText } from 'ai';
 import {
   initRunEventTables, RunEventRecorder, TurnAccumulator, closeTurnRun,
   getRunSummaries, normalizeUsage, type RunEventInput, type Usage,
-} from '../src/index.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+} from '../src/index';
+import { makeSql, makeExecRaw } from './helpers';
 
 function jsonReply(serialized: string): FetchFunction {
   const stub = async (): Promise<Response> => new Response(serialized, {

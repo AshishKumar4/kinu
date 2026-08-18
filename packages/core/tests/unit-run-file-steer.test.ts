@@ -9,11 +9,11 @@
 // the command runs, its output arrives whole, and a note names `file`.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@proteus/test-utils';
-import { handRolledFileWrite, fileToolSteer, createFileToolSteer } from '../src/tools/run-file-steer.js';
-import { buildBuiltinTools } from '../src/tools/builtins.js';
-import { createTestRuntime } from './helpers.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { Shell } from '../src/types/primitives.js';
+import { handRolledFileWrite, fileToolSteer, createFileToolSteer } from '../src/tools/run-file-steer';
+import { buildBuiltinTools } from '../src/tools/builtins';
+import { createTestRuntime } from './helpers';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { Shell } from '../src/types/primitives';
 
 type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 

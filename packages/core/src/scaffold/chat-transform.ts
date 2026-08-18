@@ -28,15 +28,15 @@
 
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
-import type { ChatEvent } from '../chat.js';
-import { JsonObjectSchema, projectJsonValue, type JsonValue } from '../utils/json.js';
-import { UsageSchema } from '../usage.js';
+import type { ChatEvent } from '../chat';
+import { JsonObjectSchema, projectJsonValue, type JsonValue } from '../utils/json';
+import { UsageSchema } from '../usage';
 import {
   runScaffold,
   type ScaffoldDefaultInferenceChunk,
   type ScaffoldRunOptions,
-} from './executor.js';
-import { pumpScaffoldEvents } from './event-pump.js';
+} from './executor';
+import { pumpScaffoldEvents } from './event-pump';
 
 /** A `host.callTool` result is the tool's own output, or `{ error }` when the
  *  dispatch threw — the shape `buildHostProvider` guarantees. */

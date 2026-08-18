@@ -14,7 +14,7 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
-import type { LocalProviderCredentials } from './model-resolver.js';
+import type { LocalProviderCredentials } from './model-resolver';
 
 const activeBranches = new Map<string, ChildProcess>();
 

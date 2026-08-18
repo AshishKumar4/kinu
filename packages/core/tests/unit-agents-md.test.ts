@@ -4,9 +4,9 @@ import { describe, test, expect } from 'bun:test';
 import { createMemoryVfs, createTestRuntime } from '@proteus/test-utils';
 import {
   buildSystemPromptSync, collectWorkspaceAgentsMd, renderAgentsMdSection,
-} from '../src/index.ts';
-import type { VFS } from '../src/types/primitives.js';
-import type { ExecutorProvider, ExecutorStatus } from '../src/execution/types.js';
+} from '../src/index';
+import type { VFS } from '../src/types/primitives';
+import type { ExecutorProvider, ExecutorStatus } from '../src/execution/types';
 
 describe('renderAgentsMdSection', () => {
   test('renders a delimited block with provenance and precedence guidance', () => {

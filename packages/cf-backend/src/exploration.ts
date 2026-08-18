@@ -36,10 +36,10 @@
  */
 
 import { Agent, callable, type AgentContext } from "agents";
-import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
+import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import { generateText } from "ai";
 import { explorePrompt, formatInheritedContext, generateJson, isWorkMode, normalizeUsage, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
-import type { OrchestratorAgent } from "./orchestrator.js";
+import type { OrchestratorAgent } from "./orchestrator";
 import {
   type CraftedTool,
   type HeadId,
@@ -63,11 +63,11 @@ import {
   type MissionScope,
   type WorkMode,
 } from "@proteus/core";
-import { OwnedModelServices } from "./owned-model-services.js";
-import { FacetIdentity } from "./facet-identity.js";
-import { spawnHeadFacet } from "./facet-spawn.js";
-import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime.js";
-import { createExecuteToolsTool } from "./execute-tools.js";
+import { OwnedModelServices } from "./owned-model-services";
+import { FacetIdentity } from "./facet-identity";
+import { spawnHeadFacet } from "./facet-spawn";
+import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
+import { createExecuteToolsTool } from "./execute-tools";
 import { buildHeadToolSet } from "@proteus/core";
 
 export class ExplorationAgent extends Agent<Env> {

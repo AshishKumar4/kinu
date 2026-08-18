@@ -42,11 +42,11 @@
  */
 
 
-import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet.ts';
-import { readSources, readTests } from './sources.ts';
+import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
+import { readSources, readTests } from './sources';
 import {
   classMembers, declaredName, decoratorNames, memberCalleeName, parse, stringArguments, walk,
-} from './syntax.ts';
+} from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
 const LOCK = `${root}scripts/reachability.lock.json`;

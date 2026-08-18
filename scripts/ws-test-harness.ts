@@ -10,7 +10,7 @@
  */
 
 import * as v from "valibot";
-import { JsonValueSchema, parseJsonValue, type JsonValue } from "../packages/core/src/index.js";
+import { JsonValueSchema, parseJsonValue, type JsonValue } from "../packages/core/src/index";
 
 const BASE_URL = process.argv[2] ?? "http://localhost:5173";
 const AGENT_NAME = process.argv[3] ?? "e2e-test-agent";

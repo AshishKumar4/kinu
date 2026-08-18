@@ -25,9 +25,9 @@ import {
   modifyScaffold, applyPromotionDecision, getPendingScaffold,
   EvolutionEngine,
   type AgentRuntime, type EvolutionEvent,
-} from '../src/index.ts';
-import { describePathology } from '../src/evolution/pathology.ts';
-import { createTestRuntime } from './helpers.ts';
+} from '../src/index';
+import { describePathology } from '../src/evolution/pathology';
+import { createTestRuntime } from './helpers';
 
 const V0_CODE = 'async function* run(rt, task) { yield "v0"; }';
 const V1_CODE = 'async function* run(rt, task) { yield "v1-pending"; }';

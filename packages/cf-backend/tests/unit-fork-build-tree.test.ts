@@ -8,7 +8,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { buildTree, type MctsRow } from '../src/lib/fork-tree-rows.ts';
+import { buildTree, type MctsRow } from '../src/lib/fork-tree-rows';
 
 function row(partial: Partial<MctsRow> & { id: string; created_at: number }): MctsRow {
   return {

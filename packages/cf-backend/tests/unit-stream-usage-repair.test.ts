@@ -17,11 +17,11 @@
 //
 // Fixtures below are verbatim captures from the live endpoint.
 import { describe, test, expect } from 'bun:test';
-import { userCredentialSource } from './helpers/user-credentials.js';
+import { userCredentialSource } from './helpers/user-credentials';
 import { streamText } from 'ai';
 import { DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage } from '@proteus/core';
-import { repairSseCachedUsage } from '../src/providers/stream-usage-repair.ts';
-import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
+import { repairSseCachedUsage } from '../src/providers/stream-usage-repair';
+import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 
 const ID = 'id-1783943808747';
 const head = `"id":"${ID}","created":1783943808,"model":"@cf/zai-org/glm-5.2","object":"chat.completion.chunk"`;

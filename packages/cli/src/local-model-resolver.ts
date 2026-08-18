@@ -5,7 +5,7 @@ import {
   resolveCloudSession,
   resolveLLMConfig,
   resolveProviderCredentials,
-} from './config.js';
+} from './config';
 
 export interface LocalModelResolverOptions {
   model?: string;

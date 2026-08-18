@@ -8,9 +8,9 @@ import {
   catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL,
   type ModelsDevProviderInfo, type ProviderFailure,
 } from '@proteus/core';
-import type { UserDO } from './user-do.js';
-import { createAgentProviderRegistry } from '../providers/agent-registry.js';
-import type { UserCaller } from './workspace-capability.js';
+import type { UserDO } from './user-do';
+import { createAgentProviderRegistry } from '../providers/agent-registry';
+import type { UserCaller } from './workspace-capability';
 
 export interface ModelMenuEntry {
   /** Full spec — `<provider>/<modelId>`, used as the agent_config.model value. */

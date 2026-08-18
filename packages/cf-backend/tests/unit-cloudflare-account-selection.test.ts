@@ -13,11 +13,11 @@
 //     the user's live workspaces to drop their cached provider state
 import { describe, expect, test } from 'bun:test';
 import { asFetchFunction, type OAuthCredential } from '@proteus/core';
-import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, testOwner } from './helpers/user-do.js';
-import { CLOUDFLARE_OAUTH_CRED_KEY } from '../src/lib/cloudflare-oauth.js';
-import { handleUserRequest } from '../src/user/routes.js';
-import type { AuthIdentity } from '../src/auth/session.js';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, testOwner } from './helpers/user-do';
+import { CLOUDFLARE_OAUTH_CRED_KEY } from '../src/lib/cloudflare-oauth';
+import { handleUserRequest } from '../src/user/routes';
+import type { AuthIdentity } from '../src/auth/session';
+import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 const AccountStatusSchema = v.object({

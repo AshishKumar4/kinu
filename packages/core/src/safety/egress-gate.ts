@@ -48,7 +48,7 @@
  * request facts and applies the plan.
  */
 
-import type { ApprovalGrant, ApprovalResult } from './approval-gate.js';
+import type { ApprovalGrant, ApprovalResult } from './approval-gate';
 
 // ── Placeholders ─────────────────────────────────────────────────
 

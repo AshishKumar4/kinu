@@ -14,7 +14,7 @@
 /** First line of every stored summary — lets consumers and tests recognize a
  *  compaction checkpoint, and `stripCheckpointPreamble` recover the body for
  *  iterative updates. */
-import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window';
 
 export const CONTEXT_CHECKPOINT_PREFIX = '[CONTEXT CHECKPOINT — reference only]';
 

@@ -10,7 +10,7 @@ import {
   planOverflowRecovery,
   OVERFLOW_RETRY_EVENT,
   OVERFLOW_RETRY_TEXT,
-} from '../src/index.ts';
+} from '../src/index';
 
 describe('classifyTurnFailure', () => {
   test('context_length: the provider phrasings for an oversized request', () => {

@@ -54,8 +54,8 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
-import { tolerate } from '../packages/core/src/obs/expected-failure.js';
-import { agentDbPath } from '../packages/cli/src/config.js';
+import { tolerate } from '../packages/core/src/obs/expected-failure';
+import { agentDbPath } from '../packages/cli/src/config';
 import { Database } from 'bun:sqlite';
 
 /** The slice of the `--json` event stream this reads. Parsed rather than cast:

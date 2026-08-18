@@ -17,7 +17,7 @@
  * Do not "fix" anything below the declarations.
  */
 
-import { createRecordingLogger, type LogFieldValue } from '../../../src/obs/log.js';
+import { createRecordingLogger, type LogFieldValue } from '../../../src/obs/log';
 
 const log = createRecordingLogger();
 

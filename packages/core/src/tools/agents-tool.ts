@@ -33,29 +33,29 @@ import {
   DELEGATION_INHERITANCE,
   DELEGATION_RUNGS,
   type AgentsToolAction,
-} from './registry.js';
-import { FORK_STRATEGY_ID } from '../strategy/heads.js';
-import { readSpawnStarted } from '../jobs/threshold.js';
-import { localMissionPort, readMissionLimits, type MissionGovernor } from '../mission-budget.js';
+} from './registry';
+import { FORK_STRATEGY_ID } from '../strategy/heads';
+import { readSpawnStarted } from '../jobs/threshold';
+import { localMissionPort, readMissionLimits, type MissionGovernor } from '../mission-budget';
 import type {
   BuiltinStrategyOptions, StrategyContext, StrategyRegistry,
-} from '../strategy/types.js';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { MergeStrategy } from '../heads/types.js';
-import type { WorkMode } from '../prompting/surface.js';
-import { nanoid } from '../utils/nanoid.js';
+} from '../strategy/types';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { MergeStrategy } from '../heads/types';
+import type { WorkMode } from '../prompting/surface';
+import { nanoid } from '../utils/nanoid';
 import {
   delegationDepthRefusal,
   delegationExhausted,
   type DelegationBudget,
   type DelegationDepthRefusal,
-} from '../subordinates/depth.js';
+} from '../subordinates/depth';
 import {
   JsonObjectSchema,
   parseJsonObject,
   type JsonObject,
   type JsonValue,
-} from '../utils/json.js';
+} from '../utils/json';
 
 // ── Team (subordinate agents) deps contract ─────────────────────────────────
 // The deps implementation rides the workspace DO's facet substrate: spawn =

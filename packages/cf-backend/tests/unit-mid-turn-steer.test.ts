@@ -21,7 +21,7 @@ import type { UIMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 import type { PrepareStepContext } from '@cloudflare/think';
-import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness.ts';
+import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 const SteerFrameSchema = v.object({
   type: v.literal('steer_status'),

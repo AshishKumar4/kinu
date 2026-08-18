@@ -25,7 +25,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel, ModelMessage } from 'ai';
-import { TestLanguageModelV2 } from './test-language-model.js';
+import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   DynamicContextLedger,
@@ -41,7 +41,7 @@ import {
   type CompactionOutcomeEvent,
   type Logger,
 } from '@proteus/compaction';
-import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime.js';
+import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { scratchPath } from '@proteus/test-utils';
 
 const SESSION = 'proteus-itest:default';

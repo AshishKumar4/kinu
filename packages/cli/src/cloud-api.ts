@@ -1,4 +1,4 @@
-import { resolveCloudOrigin } from './config.js';
+import { resolveCloudOrigin } from './config';
 import { decodeJsonValue, JsonValueSchema, type JsonValue, type ReasoningEffort } from '@proteus/core';
 import { tolerateAsync } from '@proteus/core/obs';
 import * as v from 'valibot';

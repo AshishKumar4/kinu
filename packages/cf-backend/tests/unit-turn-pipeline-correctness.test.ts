@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { memberBody } from '@proteus/test-utils';
-import { orchestratorHarness } from './helpers/actor-harness.ts';
+import { orchestratorHarness } from './helpers/actor-harness';
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 

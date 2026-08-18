@@ -7,7 +7,7 @@
  * (`prompt.ts`) where the unions are exhaustive — see `template.ts` for why.
  */
 
-import { definePromptSection } from './template.js';
+import { definePromptSection } from './template';
 
 /**
  * One built-in tool's index entry: its name, what it is for, and one real call.

@@ -6,7 +6,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   wilsonInterval, scoreInterval, lossInterval, formatScoreInterval,
-} from '../src/utils/stats.js';
+} from '../src/utils/stats';
 
 describe('wilsonInterval — hand-checked against published values', () => {
   test('3 of 4 → (0.3006, 0.9544)', () => {

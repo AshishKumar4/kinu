@@ -13,10 +13,10 @@ import {
   acceptedMediaForModel,
   sanitizeAttachmentsForModel,
   type MediaModality,
-} from '../src/prompting/attachment-sanitizer.js';
-import type { VFS } from '../src/types/primitives.js';
-import { TurnContextBudget } from '../src/context-budget.js';
-import { createMemoryVFS } from './helpers.js';
+} from '../src/prompting/attachment-sanitizer';
+import type { VFS } from '../src/types/primitives';
+import { TurnContextBudget } from '../src/context-budget';
+import { createMemoryVFS } from './helpers';
 
 interface CountingVfs {
   vfs: VFS;

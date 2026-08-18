@@ -19,8 +19,8 @@
  */
 
 import { getAgentByName } from "agents";
-import type { OrchestratorAgent } from "./orchestrator.js";
-import { err, json } from "./lib/http.js";
+import type { OrchestratorAgent } from "./orchestrator";
+import { err, json } from "./lib/http";
 
 export async function handleFilesRequest(
   request: Request,

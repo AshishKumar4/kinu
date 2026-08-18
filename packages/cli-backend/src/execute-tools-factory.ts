@@ -29,7 +29,7 @@ import type {
 import { diagnostics, toProteusError } from '@proteus/core/obs';
 import { decodeJsonValue, explainNativeToolReferenceError, renderExecuteToolsDescription } from '@proteus/core';
 import { tool, jsonSchema } from 'ai';
-import { addImplicitReturn } from './executor.js';
+import { addImplicitReturn } from './executor';
 import * as v from 'valibot';
 
 export interface NodeExecuteToolFactoryDeps {

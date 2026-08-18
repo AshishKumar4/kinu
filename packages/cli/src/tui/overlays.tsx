@@ -2,13 +2,13 @@ import type { SelectOption, SelectRenderable } from '@opentui/core';
 import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { formatContextWindow, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@proteus/core';
 import { takeEvidence } from '@proteus/core';
-import type { SlashCommandInfo } from '../slash-commands.js';
-import { filterModels, type AgentModelEntry } from '../model-catalog.js';
+import type { SlashCommandInfo } from '../slash-commands';
+import { filterModels, type AgentModelEntry } from '../model-catalog';
 import type { ProviderFailure } from '@proteus/core';
-import type { AgentChangelogView, ForkPoint } from '../agent-client.js';
-import type { DeviceConnectPromptState } from './use-device-connect.js';
-import { clipText } from './format.js';
-import { tuiColors } from './theme.js';
+import type { AgentChangelogView, ForkPoint } from '../agent-client';
+import type { DeviceConnectPromptState } from './use-device-connect';
+import { clipText } from './format';
+import { tuiColors } from './theme';
 
 export interface OverlayGeometry {
   width: number;

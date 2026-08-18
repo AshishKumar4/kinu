@@ -18,17 +18,17 @@
 
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
-import type { ExecutorProvider, ExecutorCapability } from './types.js';
-import { readExecSignal } from './signal.js';
-import { formatExecResult, refusalText } from './exec-result.js';
-import { diagnostics, ProteusError, toProteusError } from '../obs/index.js';
-import type { VFS } from '../types/primitives.js';
-import { makeVfsError } from '../vfs/errno.js';
-import { shellQuote } from '../utils/shell.js';
-import { vfsDirname } from '../utils/vfs-helpers.js';
-import { base64ToBytes, bytesToBase64 } from '../utils/base64.js';
-import type { JsonValue } from '../utils/json.js';
-import { WORKSPACE_BACKUP_DIR } from './workspace-snapshot.js';
+import type { ExecutorProvider, ExecutorCapability } from './types';
+import { readExecSignal } from './signal';
+import { formatExecResult, refusalText } from './exec-result';
+import { diagnostics, ProteusError, toProteusError } from '../obs/index';
+import type { VFS } from '../types/primitives';
+import { makeVfsError } from '../vfs/errno';
+import { shellQuote } from '../utils/shell';
+import { vfsDirname } from '../utils/vfs-helpers';
+import { base64ToBytes, bytesToBase64 } from '../utils/base64';
+import type { JsonValue } from '../utils/json';
+import { WORKSPACE_BACKUP_DIR } from './workspace-snapshot';
 
 interface SandboxExposeOptions {
   hostname: string;

@@ -1,4 +1,4 @@
-import { nanoid } from '../utils/nanoid.js';
+import { nanoid } from '../utils/nanoid';
 import * as v from 'valibot';
 import {
   RELEASE_STATUSES,
@@ -10,11 +10,11 @@ import {
   type ReleaseDeployment,
   type ReleaseSource,
   type ReleaseSourceKind,
-} from './types.js';
-import { assertReleaseTransition } from './lifecycle.js';
-import { deployApprovalDigest, deployTargetAsCommand } from './approval-digest.js';
-import { redactReleaseDiff } from './path-safety.js';
-import type { SqlExec, SqlValue } from '../types/primitives.js';
+} from './types';
+import { assertReleaseTransition } from './lifecycle';
+import { deployApprovalDigest, deployTargetAsCommand } from './approval-digest';
+import { redactReleaseDiff } from './path-safety';
+import type { SqlExec, SqlValue } from '../types/primitives';
 
 export interface ReleaseSqlStore {
   all<Output>(schema: v.GenericSchema<Output>, query: string, ...bindings: SqlValue[]): Output[];

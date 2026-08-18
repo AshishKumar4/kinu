@@ -13,8 +13,8 @@
 import type { LanguageModel } from 'ai';
 import type {
   ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
-} from './types.js';
-import { parseModelSpec } from './types.js';
+} from './types';
+import { parseModelSpec } from './types';
 
 export interface DynamicProviderSource {
   /** Sync — build (or reuse) a provider for `providerId`, or undefined when

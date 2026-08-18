@@ -9,9 +9,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHostCheckpoints } from '@proteus/cli-backend';
 import type { FileCheckpointEntry } from '@proteus/core';
-import { commandsForClient, executeSlashCommand, groupCheckpointsByTurn, performUndo } from '../src/slash-commands.js';
-import type { AgentClient, FileCheckpointSurface } from '../src/agent-client.js';
-import { createCliSession } from '../src/session.js';
+import { commandsForClient, executeSlashCommand, groupCheckpointsByTurn, performUndo } from '../src/slash-commands';
+import type { AgentClient, FileCheckpointSurface } from '../src/agent-client';
+import { createCliSession } from '../src/session';
 
 function inertCheckpointSurface(): FileCheckpointSurface {
   return {

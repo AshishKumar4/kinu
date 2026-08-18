@@ -12,10 +12,10 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readlinkSync, rmSync, statS
 import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { attemptPassed } from '../packages/core/src/index.js';
-import type { AttemptBudget, BenchCheck, BenchTask, CheckOutcome } from '../packages/core/src/index.js';
-import { tolerate } from '../packages/core/src/obs/index.js';
-import { ARTIFACT_DIRNAME } from './bench-retention.js';
+import { attemptPassed } from '../packages/core/src/index';
+import type { AttemptBudget, BenchCheck, BenchTask, CheckOutcome } from '../packages/core/src/index';
+import { tolerate } from '../packages/core/src/obs/index';
+import { ARTIFACT_DIRNAME } from './bench-retention';
 
 /** Paths never copied into a sandbox. `tests/bench` is the seal's outermost
  *  ring: an agent that cannot read the corpus cannot read the held-out tasks,

@@ -4,7 +4,7 @@ import {
   isSameBuild,
   shouldCheckForUpdate,
   updateNotice,
-} from '../src/version-check.ts';
+} from '../src/version-check';
 import type { JsonValue } from '@proteus/core';
 
 const served = (version: string) => ({ version });

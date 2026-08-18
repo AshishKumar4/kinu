@@ -1,7 +1,7 @@
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import * as v from 'valibot';
-import { isPlaceholderMission } from './soul.js';
-import { tolerate } from '../obs/index.js';
+import { isPlaceholderMission } from './soul';
+import { tolerate } from '../obs/index';
 
 const WorkspaceTitleSchema = v.object({ title: v.string() });
 

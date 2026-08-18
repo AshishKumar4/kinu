@@ -1,12 +1,12 @@
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import { asFetchFunction } from '@proteus/core';
-import { testOwner } from './helpers/user-do.js';
+import { testOwner } from './helpers/user-do';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createCloudWorkspaceForUser } from '../src/user/workspace-create.js';
-import { claimOwnedWorkspace } from '../src/user/workspace-access.js';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import { createCloudWorkspaceForUser } from '../src/user/workspace-create';
+import { claimOwnedWorkspace } from '../src/user/workspace-access';
+import type { UserCaller } from '../src/user/workspace-capability';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 const ROOT = join(import.meta.dir, '..');

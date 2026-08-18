@@ -47,11 +47,11 @@ import {
   type BoundsKind,
   type EvidenceLabel,
   type PlatformFactEntry,
-} from '../packages/core/src/platform-catalog.ts';
+} from '../packages/core/src/platform-catalog';
 import { existsSync } from 'node:fs';
 
-import { assertMeasured, finding } from './gate-ratchet.ts';
-import { readSources } from './sources.ts';
+import { assertMeasured, finding } from './gate-ratchet';
+import { readSources } from './sources';
 
 const EVIDENCE_LABELS: readonly EvidenceLabel[] = [
   'proven-by-probe',

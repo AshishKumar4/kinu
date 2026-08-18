@@ -44,10 +44,10 @@
  */
 
 import type { ModelMessage } from 'ai';
-import { DYNAMIC_CONTEXT_OPEN_TAG } from './sections.js';
-import { executorIsSelectable, type PromptExecutorInfo } from './surface.js';
-import { EXECUTOR_CAPABILITIES } from '../execution/types.js';
-import type { ActiveSkillSet, ActivationReason } from '../skills/types.js';
+import { DYNAMIC_CONTEXT_OPEN_TAG } from './sections';
+import { executorIsSelectable, type PromptExecutorInfo } from './surface';
+import { EXECUTOR_CAPABILITIES } from '../execution/types';
+import type { ActiveSkillSet, ActivationReason } from '../skills/types';
 
 /** Detached work the agent started and has not collected yet — one row of the
  *  background-job registry (jobs/store.ts), never a second copy of it. */

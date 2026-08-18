@@ -25,7 +25,7 @@ import {
   TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS, FILE_TOOL_ACTIONS, memoryActionsFor,
   SUBORDINATE_REPORT_STATUSES,
   type AgentRuntime, type WebSearchProvider,
-} from '../src/index.ts';
+} from '../src/index';
 import type { ToolSet } from 'ai';
 
 /** The malformed argument the owner's model actually emitted. A `">` fragment

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { readSources } from './sources.ts';
-import { audit, auditFile } from './do-init-gate.ts';
+import { readSources } from './sources';
+import { audit, auditFile } from './do-init-gate';
 
 /**
  * The fixture is not invented. This is `SubordinateAgent.onStart` exactly as it

@@ -4,17 +4,17 @@
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@proteus/test-utils';
 import * as v from 'valibot';
-import { buildBuiltinTools } from '../src/tools/builtins.js';
-import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox.js';
-import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor.js';
+import { buildBuiltinTools } from '../src/tools/builtins';
+import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
+import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import {
   createNimbusExecutor,
   type NimbusExecResult,
   type NimbusSandboxHandle,
-} from '../src/execution/nimbus.js';
-import { createTestRuntime } from './helpers.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { Shell } from '../src/types/primitives.js';
+} from '../src/execution/nimbus';
+import { createTestRuntime } from './helpers';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { Shell } from '../src/types/primitives';
 
 function hangingPromise<T>(): Promise<T> {
   return new Promise<T>(() => {});

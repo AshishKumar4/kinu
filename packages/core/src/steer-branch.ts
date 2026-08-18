@@ -12,12 +12,12 @@
  * OrchestratorAgent.branchTurn() over ExplorationAgent Facets.
  */
 
-import type { SqlExecutor } from './types/primitives.js';
-import type { HeadInput, HeadReport, SerializedMessage } from './heads/types.js';
-import { raceWithTimeout, type HeadRuntime } from './heads/controller.js';
-import type { HeadJournal } from './heads/journal.js';
-import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes.js';
-import { nanoid } from './utils/nanoid.js';
+import type { SqlExecutor } from './types/primitives';
+import type { HeadInput, HeadReport, SerializedMessage } from './heads/types';
+import { raceWithTimeout, type HeadRuntime } from './heads/controller';
+import type { HeadJournal } from './heads/journal';
+import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
+import { nanoid } from './utils/nanoid';
 
 /** A branch is one head answering one redirect: depth 1, so it answers rather
  *  than splitting further. Like any head it runs until it is done — the settle

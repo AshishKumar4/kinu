@@ -7,8 +7,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { partitionCorpus, promptLeaksFix } from '../packages/core/src/index.js';
-import type { BenchCheck, BenchCorpus, BenchTask, PartitionOptions } from '../packages/core/src/index.js';
+import { partitionCorpus, promptLeaksFix } from '../packages/core/src/index';
+import type { BenchCheck, BenchCorpus, BenchTask, PartitionOptions } from '../packages/core/src/index';
 
 export interface BenchSuite {
   checks: readonly BenchCheck[];

@@ -43,6 +43,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import {
   TEST_FILE, TEST_SUFFIX,
 } from '../tools/oxlint/anti-slop/rules/no-ambient-git-in-tests.ts';
+import {
+  RAW_NODE_MODULE,
+} from '../tools/oxlint/anti-slop/rules/require-runtime-import-extension.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -110,6 +113,17 @@ export const isRunnableSuite = (file: string): boolean => TEST_SUFFIX.test(file)
 
 /** Parseable by `syntax.ts`. */
 export const isParseable = (file: string): boolean => PARSEABLE.test(file);
+
+/** Loaded by raw `node --experimental-strip-types` rather than by Bun or a
+ *  bundler, and therefore the one set whose imports must carry an explicit
+ *  `.ts` — Node's ESM resolver takes a complete path and resolves neither an
+ *  extensionless specifier nor a directory index. Derived from the rule's own
+ *  pattern for the same reason `isTestFile` is: the set a gate measures and the
+ *  set the lint governs have to be one expression.
+ *  `tools/oxlint/anti-slop/import-extension.gate.test.ts` asserts this matches
+ *  the transitive closure of the `node` entrypoints, so it cannot drift wider
+ *  than what raw Node actually loads. */
+export const isRawNodeModule = (file: string): boolean => RAW_NODE_MODULE.test(file);
 
 /** Text a content gate can read — what `secret-scan` scans. Wider than
  *  `isParseable` on purpose: a credential in a `.md` or a `.pem` is no less

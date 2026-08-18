@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { canonicalLanguage, fencedBlocks, readProposalCode } from '../src/execution/code-fence.js';
+import { canonicalLanguage, fencedBlocks, readProposalCode } from '../src/execution/code-fence';
 
 const JAVASCRIPT = ['javascript'] as const;
 

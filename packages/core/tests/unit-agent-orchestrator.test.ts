@@ -5,14 +5,14 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestSql } from '@proteus/test-utils';
 import * as v from 'valibot';
-import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator.js';
-import { initSessionWindowTable, createSessionWindowStore } from '../src/evolution/session-window.js';
-import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index.js';
-import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host.js';
-import type { AgentSignal } from '../src/types/signals.js';
-import type { CompletedTurn } from '../src/evolution/types.js';
-import type { JsonObject, SqlExec } from '../src/index.js';
-import { makeSqlExec } from './helpers.js';
+import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
+import { initSessionWindowTable, createSessionWindowStore } from '../src/evolution/session-window';
+import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index';
+import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
+import type { AgentSignal } from '../src/types/signals';
+import type { CompletedTurn } from '../src/evolution/types';
+import type { JsonObject, SqlExec } from '../src/index';
+import { makeSqlExec } from './helpers';
 
 function makeSql(): SqlExec {
   return makeSqlExec(new Database(':memory:'));

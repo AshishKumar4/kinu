@@ -12,8 +12,8 @@ import {
   PROXY_CRED_HEADER, PROXY_TARGET_HEADER,
   createProviderProxyFetch, providerProxyBaseURL, providerProxyForwardURL,
   proxyAuthResolution, proxyTargetAllowed,
-} from '../src/providers/proxy.js';
-import { asFetchFunction } from '../src/providers/fetch-shim.js';
+} from '../src/providers/proxy';
+import { asFetchFunction } from '../src/providers/fetch-shim';
 
 const CATALOG = {
   groq: { id: 'groq', name: 'Groq', npm: '@ai-sdk/groq', models: {} },

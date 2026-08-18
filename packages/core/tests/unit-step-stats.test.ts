@@ -3,7 +3,7 @@
 // unpriced, a field no step reported stays absent from the totals, and an empty
 // sample reports null rather than zero.
 import { describe, test, expect } from 'bun:test';
-import { cacheHitRate, summarizeSteps, type StepCost, type Usage } from '../src/index.ts';
+import { cacheHitRate, summarizeSteps, type StepCost, type Usage } from '../src/index';
 
 /** A step whose provider reported `u`, priced at `usd` when given. */
 const step = (usage: Usage, usd?: number): StepCost =>

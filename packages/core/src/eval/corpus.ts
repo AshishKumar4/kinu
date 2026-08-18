@@ -4,8 +4,8 @@
 //   {"id": "math-001", "task": "What is 17 * 23?", "reference": "391",
 //    "tags": ["math", "trivial"]}
 import * as v from 'valibot';
-import type { EvalCase } from './types.js';
-import { JsonObjectSchema } from '../utils/json.js';
+import type { EvalCase } from './types';
+import { JsonObjectSchema } from '../utils/json';
 
 // `v.object` STRIPS keys it does not declare rather than rejecting them, so a
 // field missing from this schema is not a loud error — it silently vanishes

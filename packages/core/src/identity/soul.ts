@@ -16,8 +16,8 @@
  */
 
 import * as v from 'valibot';
-import type { AgentSignal } from '../types/signals.js';
-import type { SqlExecutor, VFS } from '../types/primitives.js';
+import type { AgentSignal } from '../types/signals';
+import type { SqlExecutor, VFS } from '../types/primitives';
 
 export const SOUL_PATH = 'SOUL.md';
 

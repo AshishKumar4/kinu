@@ -16,9 +16,9 @@
  * That is the whole of the per-backend difference.
  */
 
-import type { VFS, SqlExecutor } from '../types/primitives.js';
-import { nanoid } from '../utils/nanoid.js';
-import { snapshotWorkspaceForFork, type ForkSnapshot } from './fork.js';
+import type { VFS, SqlExecutor } from '../types/primitives';
+import { nanoid } from '../utils/nanoid';
+import { snapshotWorkspaceForFork, type ForkSnapshot } from './fork';
 
 /**
  * A fork's name. Stricter than the general workspace-name rule (no dots): a

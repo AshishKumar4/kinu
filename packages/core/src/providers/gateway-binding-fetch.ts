@@ -17,8 +17,8 @@
 //    would force a hand-rolled SSE re-serializer. It carries the non-deprecated
 //    `v1/chat/completions` endpoint and streams incrementally (measured: headers
 //    at ~1s, then 390 chunks over the following second).
-import { asFetchFunction } from './fetch-shim.js';
-import type { GatewayRunRequest, WorkersAIBinding } from './types.js';
+import { asFetchFunction } from './fetch-shim';
+import type { GatewayRunRequest, WorkersAIBinding } from './types';
 
 /** An AI Gateway HTTPS base parsed into what the binding addresses it by.
  *  `AI_GATEWAY_URL` is the single source of truth for both. */

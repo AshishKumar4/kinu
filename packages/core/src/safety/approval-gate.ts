@@ -44,7 +44,7 @@
  * the same intuition + add Cloudflare-Workers-specific deny rules.
  */
 
-import { diagnostics, ProteusError } from '../obs/index.js';
+import { diagnostics, ProteusError } from '../obs/index';
 
 export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 

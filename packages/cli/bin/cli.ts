@@ -3,10 +3,10 @@
  * proteus CLI — create, chat with, and evolve persistent AI agents.
  */
 
-import { buildProgram } from '../src/program.js';
-import { chatCommand } from '../src/commands/chat.js';
-import { printHelp, printFailure, DIM } from '../src/display.js';
-import { runStartupUpdateCheck } from '../src/version-check.js';
+import { buildProgram } from '../src/program';
+import { chatCommand } from '../src/commands/chat';
+import { printHelp, printFailure, DIM } from '../src/display';
+import { runStartupUpdateCheck } from '../src/version-check';
 
 const program = buildProgram();
 

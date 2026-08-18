@@ -99,23 +99,23 @@
  */
 
 import * as v from 'valibot';
-import type { LLM, SqlExecutor } from '../types/primitives.js';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
-import { tolerate } from '../obs/index.js';
-import { formatScoreInterval } from '../utils/stats.js';
+import type { LLM, SqlExecutor } from '../types/primitives';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { tolerate } from '../obs/index';
+import { formatScoreInterval } from '../utils/stats';
 import {
   calibrationUniverse, labelingItem, renderLabelingEvidence, OUTCOME_LABEL_HELP,
   type LabelingItem, type UniverseRow,
-} from './calibration.js';
+} from './calibration';
 import {
   ensembleLabels, goldLabels, isNegativeOutcome, recordEnsembleLabels,
   OUTCOME_LABELS, TURN_OUTCOMES,
   type OutcomeLabel, type TurnOutcome,
-} from './outcomes.js';
+} from './outcomes';
 import {
   designWeightedKappa, resampledAccuracy,
   type AccuracyStratum, type ClassifierAccuracy, type GoldStratum, type KappaEstimate,
-} from './ppi.js';
+} from './ppi';
 
 /** The pre-registered bar, in one place. Changing a number here changes what
  *  "the panel qualifies" means, so it is a decision, not a tuning knob — see

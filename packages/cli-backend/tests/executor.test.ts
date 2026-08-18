@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createSandboxedExecutor } from '../src/executor.js';
+import { createSandboxedExecutor } from '../src/executor';
 
 describe('createSandboxedExecutor', () => {
   test('runs without provider arguments', async () => {

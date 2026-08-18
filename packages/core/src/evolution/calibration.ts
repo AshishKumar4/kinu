@@ -35,17 +35,17 @@
  * happens to sort first.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import { formatScoreInterval, seededRandom } from '../utils/stats.js';
+import type { SqlExecutor } from '../types/primitives';
+import { formatScoreInterval, seededRandom } from '../utils/stats';
 import {
   goldLabels, isNegativeOutcome, recordOutcomeLabels, TURN_OUTCOMES,
   type OutcomeLabel, type TurnOutcome,
-} from './outcomes.js';
+} from './outcomes';
 import {
   classifierAccuracy, correctedRate, describeCalibrationGap, designWeightedKappa,
   type CalibrationGap, type ClassifierAccuracy, type CorrectedRate, type KappaEstimate,
   type PredictionStratum,
-} from './ppi.js';
+} from './ppi';
 
 /** One keystroke per verdict — the whole labeling flow's speed budget. The
  *  file's key legend and its parser both read this list, so a key can never

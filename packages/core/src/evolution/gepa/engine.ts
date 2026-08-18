@@ -21,19 +21,19 @@
  * when either iterations OR metric calls are exhausted, whichever first.
  */
 
-import { nanoid } from '../../utils/nanoid.js';
-import { nowMs } from '../../utils/date.js';
+import { nanoid } from '../../utils/nanoid';
+import { nowMs } from '../../utils/date';
 import {
   computeParetoFront, sampleParentByWeight, bestAggregate,
-} from './pareto.js';
-import { proposeMutation } from './mutate.js';
-import { findComplementaryPair, proposeMerge } from './merge.js';
+} from './pareto';
+import { proposeMutation } from './mutate';
+import { findComplementaryPair, proposeMerge } from './merge';
 import {
   DEFAULT_GEPA_BUDGET,
   type EvalInstance, type GepaCandidate, type GepaConfig, type GepaConstraints,
   type GepaResult, type GepaIterationState, type GepaMetric,
-} from './types.js';
-import { diagnostics, toProteusError } from '../../obs/index.js';
+} from './types';
+import { diagnostics, toProteusError } from '../../obs/index';
 
 type ProposalOutcome =
   | { ok: true; source: string; operator: 'mutate' | 'merge'; metricCallsCharged: number; parentSource?: string }

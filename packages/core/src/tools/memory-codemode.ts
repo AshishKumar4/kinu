@@ -7,11 +7,11 @@
  * the identical store. remember/recall/forget appear only when a FactsStore
  * is wired — the same structural gate the native tool's action enum reads.
  */
-import type { CodemodeProvider } from '../rlm.js';
+import type { CodemodeProvider } from '../rlm';
 import * as v from 'valibot';
-import { decodeJsonValue, type JsonValue } from '../utils/json.js';
-import { createMemoryDispatcher, type MemoryToolDeps } from './memory-tool.js';
-import { TOOL_REACH } from './registry.js';
+import { decodeJsonValue, type JsonValue } from '../utils/json';
+import { createMemoryDispatcher, type MemoryToolDeps } from './memory-tool';
+import { TOOL_REACH } from './registry';
 
 const SessionOptionsSchema = v.object({
   query: v.optional(v.string()),

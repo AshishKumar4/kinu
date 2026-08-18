@@ -3,11 +3,11 @@ import { Database } from 'bun:sqlite';
 import { runMCTS, DEFAULT_CONFIG, type MCTSProgressEvent, type SearchNode } from '@proteus/core';
 import type { AgentRuntime, SessionWriter, SessionMessage } from '@proteus/core';
 import { openWorkspaceCLI } from '@proteus/cli-backend';
-import { CONFIG_PATH, agentDbPath, createCodexAuthStore, resolveAgentRef, resolveLLMConfig, resolveProviderCredentials } from '../config.js';
+import { CONFIG_PATH, agentDbPath, createCodexAuthStore, resolveAgentRef, resolveLLMConfig, resolveProviderCredentials } from '../config';
 import {
   printSearchTree, printError, createSpinner,
   BRAND, DIM, OK, WARN, ACCENT, MUTED,
-} from '../display.js';
+} from '../display';
 
 export async function evolveCommand(name: string, opts: {
   budget?: string; branches?: string; maxCost?: string; model?: string; baseUrl?: string; auth?: string;

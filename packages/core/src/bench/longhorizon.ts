@@ -30,9 +30,9 @@
 // seed by the same code, so there is no key on disk to find, and the spec never
 // enters the sandbox.
 
-import { fnv1a64 } from '../prompting/volatile-context.js';
-import { parseJsonValue } from '../utils/json.js';
-import { unitHash } from './stats.js';
+import { fnv1a64 } from '../prompting/volatile-context';
+import { parseJsonValue } from '../utils/json';
+import { unitHash } from './stats';
 
 /** Sandbox-relative root the corpus is materialized under. */
 export const LONGHORIZON_CORPUS_DIR = 'bench-corpus';

@@ -6,4 +6,4 @@
  * just exports the CF-side runtime wrapper for HeadController.
  */
 
-export { createCFHeadRuntime } from "./head-runtime.js";
+export { createCFHeadRuntime } from "./head-runtime";

@@ -11,8 +11,8 @@ import { git } from '@proteus/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { summarizeRestorePlan } from '@proteus/core';
-import { createHostCheckpoints } from '../src/checkpoints.js';
-import { createHostShell, withCheckpointedShell } from '../src/runtime.js';
+import { createHostCheckpoints } from '../src/checkpoints';
+import { createHostShell, withCheckpointedShell } from '../src/runtime';
 
 function setup(opts: { keep?: number; gitBin?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'proteus-ckpt-'));

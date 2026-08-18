@@ -6,10 +6,10 @@
 // the statistics, or the statistics are broken. All three run without a single
 // model call, so the instrument can be validated for free.
 import { join } from 'node:path';
-import { unitHash } from '../packages/core/src/index.js';
-import type { LLMProviderConfig, Solver, SolverContext, SolverResult } from '../packages/core/src/index.js';
-import { applyPatch, sandboxEnv } from './bench-sandbox.js';
-import { parseWorkerOutput } from './bench-worker-protocol.js';
+import { unitHash } from '../packages/core/src/index';
+import type { LLMProviderConfig, Solver, SolverContext, SolverResult } from '../packages/core/src/index';
+import { applyPatch, sandboxEnv } from './bench-sandbox';
+import { parseWorkerOutput } from './bench-worker-protocol';
 
 export type PatchLookup = ReadonlyMap<string, string>;
 

@@ -13,8 +13,8 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
-import type { AuthResolution, ModelInfo, ModelProvider } from './types.js';
-import { createAuthedFetch, positiveInteger } from './util.js';
+import type { AuthResolution, ModelInfo, ModelProvider } from './types';
+import { createAuthedFetch, positiveInteger } from './util';
 
 const ModelListSchema = v.object({
   data: v.array(v.object({

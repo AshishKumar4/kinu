@@ -14,7 +14,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage, ToolSet } from 'ai';
 import { INTERRUPTED_TOOL_RESULT } from '@proteus/core';
-import { orchestratorHarness } from './helpers/actor-harness.ts';
+import { orchestratorHarness } from './helpers/actor-harness';
 
 const ORPHAN_ID = 'call_ed15d29f352a4735e6b01b5';
 

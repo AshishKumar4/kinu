@@ -69,8 +69,8 @@ import {
 } from '@proteus/core';
 import { makeSql, makeSqlExec, createHostShell, type LocalModelResolver } from '@proteus/cli-backend';
 import * as v from 'valibot';
-import { agentDbPath } from './config.js';
-import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
+import { agentDbPath } from './config';
+import { createConfiguredLocalModelResolver } from './local-model-resolver';
 
 type SqliteDb = Database;
 

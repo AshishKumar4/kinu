@@ -27,9 +27,9 @@ import { diagnostics, toProteusError } from '@proteus/core/obs';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { makeSql, makeExecRaw, buildCLIHeadRuntime } from './runtime.js';
-import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
-import { proteusHome } from './home.js';
+import { makeSql, makeExecRaw, buildCLIHeadRuntime } from './runtime';
+import { createNodeExecuteToolFactory } from './execute-tools-factory';
+import { proteusHome } from './home';
 import * as v from 'valibot';
 
 export interface CLIHeadRuntimeDeps {

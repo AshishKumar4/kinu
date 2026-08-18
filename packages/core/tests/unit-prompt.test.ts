@@ -18,7 +18,7 @@ import {
   workModeForTurnMetadata,
   splitPromptSections,
   type ParsedSkill,
-} from '../src/index.ts';
+} from '../src/index';
 import { createTestRuntime } from '@proteus/test-utils';
 
 describe('buildSystemPromptSync', () => {

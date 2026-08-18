@@ -37,7 +37,7 @@
  * docs/OBSERVABILITY.md § "Why not neverthrow".
  */
 
-import { errnoCode } from './expected-failure.js';
+import { errnoCode } from './expected-failure';
 
 /**
  * Why an operation did not do what it was asked.

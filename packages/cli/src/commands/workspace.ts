@@ -1,8 +1,8 @@
-import { resolveAgentTarget } from '../agent-target.js';
-import { deleteCloudAgent } from '../cloud-api.js';
-import { removeCloudAgentConfig, requireStoredAuthConfig } from '../config.js';
-import { ACCENT, DIM, OK } from '../display.js';
-import { canPrompt, confirm } from '../prompt.js';
+import { resolveAgentTarget } from '../agent-target';
+import { deleteCloudAgent } from '../cloud-api';
+import { removeCloudAgentConfig, requireStoredAuthConfig } from '../config';
+import { ACCENT, DIM, OK } from '../display';
+import { canPrompt, confirm } from '../prompt';
 
 export async function workspaceDeleteCommand(name: string, opts: { yes?: boolean }): Promise<void> {
   const target = resolveAgentTarget(name);

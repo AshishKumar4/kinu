@@ -14,10 +14,10 @@
  * The RRF merge surfaces the best of both regardless.
  */
 
-import type { Memory } from '../types/primitives.js';
-import type { VectorStore, VectorSearchHit } from './vector-store.js';
-import { reciprocalRankFusion } from './vector-store.js';
-import { diagnostics, toProteusError } from '../obs/index.js';
+import type { Memory } from '../types/primitives';
+import type { VectorStore, VectorSearchHit } from './vector-store';
+import { reciprocalRankFusion } from './vector-store';
+import { diagnostics, toProteusError } from '../obs/index';
 
 export interface LexicalHit {
   readonly id: string;

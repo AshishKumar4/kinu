@@ -13,18 +13,18 @@
  * Paper: Agrawal et al., ICLR 2026 — https://arxiv.org/abs/2507.19457
  */
 
-export * from './types.js';
-export { computeParetoFront, sampleParentByWeight, bestAggregate, parentSelectionWeights } from './pareto.js';
-export { rolloutMinibatch, renderReflectionPrompt, stripMarkdownFences, proposeMutation } from './mutate.js';
-export { runGepa } from './engine.js';
+export * from './types';
+export { computeParetoFront, sampleParentByWeight, bestAggregate, parentSelectionWeights } from './pareto';
+export { rolloutMinibatch, renderReflectionPrompt, stripMarkdownFences, proposeMutation } from './mutate';
+export { runGepa } from './engine';
 export {
   findComplementaryPair, renderMergePrompt, proposeMerge,
   type MergePair,
-} from './merge.js';
+} from './merge';
 export {
   runScaffoldGepa,
   type RunScaffoldGepaOpts, type RunScaffoldGepaResult,
-} from './scaffold-bridge.js';
+} from './scaffold-bridge';
 export {
   initGepaTables, startGepaRun, finishGepaRun,
   persistGepaCandidate, persistGepaParetoSnapshot,
@@ -32,4 +32,4 @@ export {
   listGepaRuns, loadGepaCandidates,
   makePersistingHook,
   type GepaRunSummary,
-} from './persistence.js';
+} from './persistence';

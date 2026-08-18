@@ -32,8 +32,8 @@ import {
 } from '@proteus/core';
 import { diagnostics, ProteusError } from '@proteus/core/obs';
 import * as v from 'valibot';
-import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver.js';
-import { createFileCodexAuthStore } from './codex-auth-store.js';
+import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver';
+import { createFileCodexAuthStore } from './codex-auth-store';
 
 const dbPath = process.argv[2];
 if (!dbPath) {

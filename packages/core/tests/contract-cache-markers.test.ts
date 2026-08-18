@@ -22,7 +22,7 @@ import {
   JsonObjectSchema, JsonValueSchema, parseJsonObject,
   type JsonObject, type JsonValue,
   type ProviderDeps, type AuthResolution, type CacheRetention,
-} from '../src/index.ts';
+} from '../src/index';
 import { createMockFetch, type MockFetchHandle } from '@proteus/test-utils';
 
 function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {

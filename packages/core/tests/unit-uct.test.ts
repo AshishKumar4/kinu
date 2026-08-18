@@ -5,9 +5,9 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers.js';
-import { selectNode } from '../src/mcts/uct.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
+import { makeSql, makeExecRaw } from './helpers';
+import { selectNode } from '../src/mcts/uct';
+import { initSearchTables } from '../src/mcts/schemas';
 
 function setup() {
   const db = new Database(':memory:');

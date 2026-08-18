@@ -10,7 +10,7 @@ import {
   createTasksCodemodeProvider, TaskListStore, initAgentConfigTable,
   buildSystemPromptSync, createAgentConfigStore, AGENT_STANCES,
   type AgentRuntime, type CodemodeProvider, type JsonValue,
-} from '../src/index.ts';
+} from '../src/index';
 
 type TasksResult = object | string | number | boolean | null | undefined;
 interface TasksTestInput {

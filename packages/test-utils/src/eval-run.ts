@@ -32,9 +32,9 @@ import {
   BUILTIN_TOOLS, minimumPairsForSignificance, requiredPairs,
   type SqlExecutor,
 } from '@proteus/core';
-import { gitEnv } from './git.js';
-import { BEHAVIOUR_SCORERS, type BehaviourScorer } from './agent-evals.js';
-import { TASK_OUTCOME, isCovariateRow } from './eval-outcome.js';
+import { gitEnv } from './git';
+import { BEHAVIOUR_SCORERS, type BehaviourScorer } from './agent-evals';
+import { TASK_OUTCOME, isCovariateRow } from './eval-outcome';
 
 /**
  * The two DeepSeek arms, verified against the account's own model list rather

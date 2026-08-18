@@ -46,11 +46,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { assertMeasured, blocked, finding } from './gate-ratchet.ts';
+import { assertMeasured, blocked, finding } from './gate-ratchet';
 import {
   REPORT_ENV, REPORT_SENTINEL, REVIEWED_ADVISORIES, SEVERITIES,
   type AdvisoryScan, type Exposure, type ReviewedPackage,
-} from './security-scanner.ts';
+} from './security-scanner';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 

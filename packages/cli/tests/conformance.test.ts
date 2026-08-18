@@ -27,7 +27,7 @@ import {
 import { LocalAgentSession, openWorkspaceCLI, type LocalModelResolver } from '@proteus/cli-backend';
 import { createCliAgent } from '../src/agent-create';
 import { resolveLLMConfig, agentDbPath, agentDir, AGENT_HOME, updateConfigFile } from '../src/config';
-import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model.js';
+import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 
 // Dummy provider config so resolveLLMConfig succeeds offline — the capturing
 // model below intercepts before any network call could happen.

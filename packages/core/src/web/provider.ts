@@ -22,11 +22,11 @@
  */
 
 import * as v from 'valibot';
-import { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './url-safety.js';
-import { htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images } from './markdown.js';
-import type { AuthResolver } from '../providers/types.js';
-import { TOOL_REACH } from '../tools/registry.js';
-import { tolerate } from '../obs/index.js';
+import { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './url-safety';
+import { htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images } from './markdown';
+import type { AuthResolver } from '../providers/types';
+import { TOOL_REACH } from '../tools/registry';
+import { tolerate } from '../obs/index';
 
 /** Credential key for the optional Tavily search upgrade. */
 export const TAVILY_CRED_KEY = 'tavily';

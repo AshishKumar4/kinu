@@ -6,7 +6,7 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, JsonValueSchema, parseJsonValue,
   type JsonObject, type JsonValue,
 } from "@proteus/core";
-import { validateAliasName, validateAgentName } from "../src/config.js";
+import { validateAliasName, validateAgentName } from "../src/config";
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];

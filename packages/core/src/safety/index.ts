@@ -26,7 +26,7 @@ export {
   type ShellApprovalPolicy,
   type InheritedApprovalSource,
   type DeferredApprovalChannel,
-} from './approval-gate.js';
+} from './approval-gate';
 
 export {
   EGRESS_PLACEHOLDER_PREFIX,
@@ -48,7 +48,7 @@ export {
   type EgressSubstitution,
   type EgressPlan,
   type ScrubReplacement,
-} from './egress-gate.js';
+} from './egress-gate';
 
 export {
   DeferredApprovalQueue,
@@ -64,13 +64,13 @@ export {
   type DeferredApprovalVerdict,
   type DeferredApprovalNotice,
   type DeferredApprovalQueueDeps,
-} from './deferred-approval.js';
+} from './deferred-approval';
 
 export {
   argumentDigest,
   sha256Hex,
   stableStringify,
-} from './argument-digest.js';
+} from './argument-digest';
 
 export {
   DeviceConsentRegistry,
@@ -90,4 +90,4 @@ export {
   type PendingDeviceConsent,
   type DeviceConsentNotice,
   type DeviceConsentRegistryDeps,
-} from './device-consent.js';
+} from './device-consent';

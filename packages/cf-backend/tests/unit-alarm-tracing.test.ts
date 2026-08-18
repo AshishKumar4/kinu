@@ -26,8 +26,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
   recordedNativeSpans, renderNativeSpanTree, resetNativeSpans,
-} from './helpers/agents-sdk.js';
-import { orchestratorHarness } from './helpers/actor-harness.js';
+} from './helpers/agents-sdk';
+import { orchestratorHarness } from './helpers/actor-harness';
 
 import {
   createAgentTracing, createRecordingTracer, ProteusError,

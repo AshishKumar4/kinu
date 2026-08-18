@@ -12,7 +12,7 @@ import {
   codexCredentialToHeaders,
   type Credential,
 } from '@proteus/core';
-import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth.js';
+import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth';
 
 /** The credential-key shapes that resolve to a model provider — the same set
  *  `listConnectedProviders` derives the model picker from: the two OAuth

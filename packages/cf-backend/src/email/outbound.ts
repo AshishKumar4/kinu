@@ -13,8 +13,8 @@
  */
 
 import { JsonValueSchema, type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore } from '@proteus/core';
-import { agentEmailAddress } from './inbound.js';
-import type { EmailOutbox } from './outbox.js';
+import { agentEmailAddress } from './inbound';
+import type { EmailOutbox } from './outbox';
 import { diagnostics, ProteusError } from '@proteus/core/obs';
 import * as v from 'valibot';
 

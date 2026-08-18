@@ -9,8 +9,8 @@
  * anything cut is truncated/omitted with an explicit note.
  */
 
-import type { VFS } from '../types/primitives.js';
-import type { ExecutorProvider } from '../execution/types.js';
+import type { VFS } from '../types/primitives';
+import type { ExecutorProvider } from '../execution/types';
 
 export interface AgentsMdFile {
   /** Where the file was found — shown to the model as provenance. */

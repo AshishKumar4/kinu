@@ -12,30 +12,30 @@
  */
 
 export * from '@better-compact/core';
-export { proteusCodec, proteusConventions, proteusSpec, type ToolPairHandle } from './codec.js';
+export { proteusCodec, proteusConventions, proteusSpec, type ToolPairHandle } from './codec';
 export {
   createCompactionExtension,
   type CompactionExtensionDeps,
   type CompactionOutcomeEvent,
-} from './extension.js';
+} from './extension';
 export {
   deriveArchiveRange,
   renderArchiveManifest,
   withArchiveManifest,
   type ArchiveIndexStore,
   type ArchiveRange,
-} from './manifest.js';
+} from './manifest';
 export {
   compactionTranscriptPath,
   createVfsTranscriptStore,
   createCompactionStateStore,
   type CompactionStateStore,
-} from './stores.js';
-export { createModelSummarizer, SUMMARIZER_TIMEOUT_MS } from './summarizer.js';
+} from './stores';
+export { createModelSummarizer, SUMMARIZER_TIMEOUT_MS } from './summarizer';
 // The compaction-ladder layer-gate slice (core declares the layer; this
 // package measures it — see scripts/layergate.ts for the merged report).
 export {
   COMPACTION_LAYERS, COMPACTION_FAULTS, createCompactionLadderSubjects,
   type CompactionLadderSubjects,
-} from './layergate.js';
-export { COMPACTION_LOCKED_BASELINE } from './layergate-baseline.js';
+} from './layergate';
+export { COMPACTION_LOCKED_BASELINE } from './layergate-baseline';

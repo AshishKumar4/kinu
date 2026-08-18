@@ -15,12 +15,12 @@
 // same database a previous process left behind.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { TestLanguageModelV2 } from './test-language-model.js';
+import { TestLanguageModelV2 } from './test-language-model';
 import { HeadJournal, initHeadsTables, initBackgroundJobsTable } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
-import { createCLIRuntime } from '../src/runtime.js';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
-import { makeExecRaw, makeSql } from '../src/runtime.js';
+import { createCLIRuntime } from '../src/runtime';
+import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import { makeExecRaw, makeSql } from '../src/runtime';
 import { scratchPath } from '@proteus/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {

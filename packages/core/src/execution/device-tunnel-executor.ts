@@ -18,21 +18,21 @@
 
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
-import type { VFS } from '../types/primitives.js';
-import { makeVfsError } from '../vfs/errno.js';
-import { shellQuote } from '../utils/shell.js';
-import { base64ToBytes, bytesToBase64 } from '../utils/base64.js';
-import { formatExecResult, parseStatLine, refusalText } from './exec-result.js';
-import { ProteusError, toProteusError } from '../obs/index.js';
-import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types.js';
-import type { DeviceStatus } from './device-status.js';
-import { isDeviceNotConnectedError } from './device-tunnel.js';
-import { readExecSignal } from './signal.js';
+import type { VFS } from '../types/primitives';
+import { makeVfsError } from '../vfs/errno';
+import { shellQuote } from '../utils/shell';
+import { base64ToBytes, bytesToBase64 } from '../utils/base64';
+import { formatExecResult, parseStatLine, refusalText } from './exec-result';
+import { ProteusError, toProteusError } from '../obs/index';
+import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
+import type { DeviceStatus } from './device-status';
+import { isDeviceNotConnectedError } from './device-tunnel';
+import { readExecSignal } from './signal';
 import {
   isJsonObject,
   JsonValueSchema,
   type JsonValue,
-} from '../utils/json.js';
+} from '../utils/json';
 
 const NOT_CONNECTED =
   'No device connected. Connect your machine once at the user level ' +

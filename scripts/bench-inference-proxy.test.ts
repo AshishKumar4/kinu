@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { createBenchInferenceProxy } from './bench-inference-proxy.js';
+import { createBenchInferenceProxy } from './bench-inference-proxy';
 
 const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
 

@@ -11,7 +11,7 @@ import {
   DeviceConsentRegistry,
   type DeviceConsentNotice,
   type DeviceConsentRequest,
-} from '../src/index.js';
+} from '../src/index';
 
 const REQUEST: DeviceConsentRequest = {
   deviceId: 'dev-1',

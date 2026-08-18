@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { createMockSession, createTestRuntime } from './helpers.js';
-import { runMCTS } from '../src/mcts/engine.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
-import { initMctsSearchTable, MctsSearchStore } from '../src/mcts/search-store.js';
-import type { WorkMode } from '../src/prompting/surface.js';
+import { createMockSession, createTestRuntime } from './helpers';
+import { runMCTS } from '../src/mcts/engine';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initCraftScoreTables } from '../src/craft/schemas';
+import { initMctsSearchTable, MctsSearchStore } from '../src/mcts/search-store';
+import type { WorkMode } from '../src/prompting/surface';
 
 function initTables(runtime: ReturnType<typeof createTestRuntime>['rt']): void {
   initSearchTables(runtime.storage.execRaw, runtime.storage.sql);

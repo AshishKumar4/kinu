@@ -5,7 +5,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw, createMockLLM, createTestWorkspace } from './helpers.js';
+import { makeSql, makeExecRaw, createMockLLM, createTestWorkspace } from './helpers';
 import {
   isTrivialTurn, classifyTurnOutcome, outcomeToFeedback, outcomeQuality, feedbackToQuality,
   executionVerdict, executionVerdictOutcome, isUserVerdictSource, isPureLookupCall,
@@ -13,10 +13,10 @@ import {
   realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
   describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
-} from '../src/evolution/outcomes.js';
-import type { ScaffoldArchiveEntry } from '../src/scaffold/archive.js';
-import { RunEventRecorder } from '../src/events/recorder.js';
-import type { ToolCallRecord } from '../src/evolution/types.js';
+} from '../src/evolution/outcomes';
+import type { ScaffoldArchiveEntry } from '../src/scaffold/archive';
+import { RunEventRecorder } from '../src/events/recorder';
+import type { ToolCallRecord } from '../src/evolution/types';
 
 /** The PRODUCTION schema, not this module's own tables alone: the eval split
  *  reconstructs process evidence from the message and run-event ledgers, and a

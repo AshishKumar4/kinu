@@ -6,9 +6,9 @@
 // workspace can only ever publish as itself and can never be handed back its
 // own entries — and that an owner session, which is not any workspace, cannot
 // publish at all.
-import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do.js';
+import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import type { UserCaller } from '../src/user/workspace-capability';
 import type { PublishableCandidate } from '@proteus/core';
 
 const ALPHA = 'workspace-a';

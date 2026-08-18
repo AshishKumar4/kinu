@@ -14,20 +14,20 @@
 // reasoning from a stale transcript; the runtime was asserting the falsehood.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { HeadJournal, initHeadsTables } from '../src/heads/index.js';
+import { HeadJournal, initHeadsTables } from '../src/heads/index';
 import {
   reconcileInterruptedForks, FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
-} from '../src/heads/reconcile.js';
-import { RunEventRecorder, initRunEventTables } from '../src/events/recorder.js';
-import { headPhaseRunEvent } from '../src/orchestrator/heads-support.js';
-import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store.js';
-import { SignalDelivery } from '../src/orchestrator/signals.js';
+} from '../src/heads/reconcile';
+import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
+import { headPhaseRunEvent } from '../src/orchestrator/heads-support';
+import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
+import { SignalDelivery } from '../src/orchestrator/signals';
 import {
   agentDynamicContext, renderDynamicContextBlock, DynamicContextLedger,
-} from '../src/prompting/volatile-context.js';
-import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host.js';
+} from '../src/prompting/volatile-context';
+import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { ModelMessage } from 'ai';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { makeSql, makeExecRaw } from './helpers';
 
 const HEADS = 4;
 const ROOT = 'root-research';

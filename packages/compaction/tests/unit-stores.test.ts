@@ -19,7 +19,7 @@ import {
   createVfsTranscriptStore,
   type ArchiveRange,
   type PlanSnapshot,
-} from '../src/index.js';
+} from '../src/index';
 
 /** The compaction tables come from core's one workspace-schema list; a store
  *  test needs exactly those two tables, so it runs the same entry point. */

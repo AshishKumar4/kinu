@@ -4,9 +4,9 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime } from './helpers.js';
-import { periodicCraftConsolidation } from '../src/craft/consolidation.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
+import { createTestRuntime } from './helpers';
+import { periodicCraftConsolidation } from '../src/craft/consolidation';
+import { initCraftScoreTables } from '../src/craft/schemas';
 
 describe('CraftStore consolidation', () => {
   test('does nothing with empty CraftStore', async () => {

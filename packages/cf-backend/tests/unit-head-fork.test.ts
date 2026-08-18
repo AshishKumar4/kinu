@@ -29,8 +29,8 @@ import {
   type SqlExecRow,
   type SqlValue,
 } from '@proteus/core';
-import { mockAgentsSdk } from './helpers/agents-sdk.js';
-import { platformGatewayEnv } from './helpers/platform-gateway.js';
+import { mockAgentsSdk } from './helpers/agents-sdk';
+import { platformGatewayEnv } from './helpers/platform-gateway';
 import * as v from 'valibot';
 
 mockAgentsSdk();
@@ -69,7 +69,7 @@ mock.module('@cloudflare/sandbox', () => ({
   },
 }));
 
-const { ExplorationAgent } = await import('../src/exploration.ts');
+const { ExplorationAgent } = await import('../src/exploration');
 
 function nativeBindings(values: SqlValue[]): SQLQueryBindings[] {
   return values.map((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value);
@@ -213,7 +213,7 @@ interface Facet {
   setSharedParent(name: string): Promise<{ ok: true }>;
   initHead(input: HeadInput): Promise<{ ok: true; id: HeadId }>;
   runAsHead(): Promise<HeadReport>;
-  headRuntime(capture: HeadCapture): import('../src/runtime.js').CFRuntime;
+  headRuntime(capture: HeadCapture): import('../src/runtime').CFRuntime;
 }
 
 const HeadRuntimeProbeSchema = v.object({

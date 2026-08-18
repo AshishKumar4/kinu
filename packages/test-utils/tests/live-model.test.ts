@@ -19,7 +19,7 @@ import { describe, test, expect, beforeEach } from 'bun:test';
 import type { LanguageModelUsage } from 'ai';
 import {
   liveModelSpend, recordLiveModelSpend, reportLiveModelSpend, resetLiveModelSpend,
-} from '../src/live-model.js';
+} from '../src/live-model';
 
 // Module-level counters, so each case starts from a stated zero rather than from
 // whatever the previous one left behind.

@@ -44,15 +44,15 @@ import {
 } from '@proteus/core';
 import type { JsonValue } from '@proteus/core';
 import * as v from 'valibot';
-import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
-import { defaultTranscriptRoot, mineTranscripts, renderMineSkips, type MineResult } from '../cc-transcript.js';
-import { requireAuthConfig } from '../config.js';
-import { callAgentRpc } from '../cloud-api.js';
-import { ACCENT, DIM, OK, WARN } from '../display.js';
+import { resolveAgentTarget, type AgentTarget } from '../agent-target';
+import { defaultTranscriptRoot, mineTranscripts, renderMineSkips, type MineResult } from '../cc-transcript';
+import { requireAuthConfig } from '../config';
+import { callAgentRpc } from '../cloud-api';
+import { ACCENT, DIM, OK, WARN } from '../display';
 import {
   getLocalCalibration, getLocalEnsemble, recordLocalOutcomeLabels, runLocalCorpusEval,
   runLocalOutcomeEnsemble, sampleLocalLabeling,
-} from '../local-inspection.js';
+} from '../local-inspection';
 
 interface LabelOpts {
   out?: string;

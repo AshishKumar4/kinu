@@ -10,15 +10,15 @@ export {
   VIEW_SPEC_VERSION, VIEW_LIMITS, ViewSpecSchema, parseViewSpec, resolveViewPath,
   type ViewSpec, type ViewBlock, type ViewLeafBlock, type ViewSource, type ViewColumn,
   type ViewSpecResult,
-} from './spec.js';
+} from './spec';
 
 export {
   VIEW_DATA_SOURCES, RESERVED_VIEW_TITLES, normalizeViewTitle, type ViewDataSource,
-} from './sources.js';
+} from './sources';
 
 export {
   initViewTables, createView, deleteView, listViews, listViewVersions, readView, revertView,
   viewSlug,
   type AgentViewSummary, type AgentViewVersion, type CreateViewResult, type ReadViewResult,
   type ViewStatus, type ViewStoreDeps,
-} from './store.js';
+} from './store';

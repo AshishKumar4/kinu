@@ -36,15 +36,15 @@ import {
   createParentExecutor, createSandboxExecutor,
   DefaultExecutionRouter, isFailingResultText,
   type ExecutorProvider, type ToolFailureCensus,
-} from '../src/index.js';
+} from '../src/index';
 import {
   classifyErrorCode, createRecordingLogger, ERROR_CODES, ProteusError,
   type ErrorCode, type RecordingLogger,
-} from '../src/obs/index.js';
-import { refusalText } from '../src/execution/exec-result.js';
-import { JsonObjectSchema, parseJsonValue } from '../src/utils/json.js';
-import { createTestRuntime } from './helpers.js';
-import type { RunEvent } from '../src/events/types.js';
+} from '../src/obs/index';
+import { refusalText } from '../src/execution/exec-result';
+import { JsonObjectSchema, parseJsonValue } from '../src/utils/json';
+import { createTestRuntime } from './helpers';
+import type { RunEvent } from '../src/events/types';
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
 
 let nextIndex = 0;

@@ -8,9 +8,9 @@ import {
   type AgentSession,
 } from '@earendil-works/pi-coding-agent';
 import { InMemoryCredentialStore } from '@earendil-works/pi-ai';
-import { createBenchInferenceProxy } from './bench-inference-proxy.js';
-import { scoreSandbox } from './bench-sandbox.js';
-import { parsePiWorkerInput, type WorkerOutput } from './bench-worker-protocol.js';
+import { createBenchInferenceProxy } from './bench-inference-proxy';
+import { scoreSandbox } from './bench-sandbox';
+import { parsePiWorkerInput, type WorkerOutput } from './bench-worker-protocol';
 
 const PROVIDER_ID = 'bench-workers-ai';
 

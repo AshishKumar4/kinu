@@ -156,8 +156,10 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 
 ## Code Style
 
-- TypeScript strict mode, ES2022 target, ESNext modules, bundler resolution
-- All imports use `.js` extension (ESM convention, even for .ts source files)
+- TypeScript strict mode, ES2022 target, ESNext modules, bundler resolution, `verbatimModuleSyntax`
+- **Relative imports carry NO extension.** `import { x } from './thing'`, never `'./thing.js'` and never `'./thing.ts'`. Nothing here emits: every project is `noEmit`, there is no `outDir`, and all three runtimes read the TypeScript directly — Vite/wrangler bundle the Worker, Bun runs the CLI and the suites from source, the deploy ships a CLI source archive. So there is no `.js` file for a specifier to name, and `.ts` is redundant where the resolver already finds it. `tsconfig.base.json` omits `allowImportingTsExtensions` so a `.ts` specifier is a type error, and `anti-slop/require-runtime-import-extension` rejects both spellings
+  - **One exception, and it is enforced, not honoured.** `tools/oxlint/anti-slop/**` plus `scripts/sources.ts` run under raw `node --experimental-strip-types` (oxlint's `RuleTester` needs Node's raw transfer and throws under Bun), and Node's ESM resolver takes a complete path — no extensionless specifier, no directory index. Those files keep explicit `.ts`. `import-extension.gate.test.ts` recomputes that closure from the entrypoints and fails if it stops matching, so the exception cannot quietly widen
+  - An extension is correct only when it names a file that is really there: `.json` data, the `.mjs`/`.cjs` test fixtures, and `packages/pc-agent/src/index.js`, which is a genuinely CommonJS package
 - Tagged-template SQL via `SqlExecutor` for parameterized queries
 - `RawSqlExec` (plain string) only for DDL (CREATE TABLE, CREATE INDEX)
 - All DDL uses `IF NOT EXISTS` — schema init is idempotent

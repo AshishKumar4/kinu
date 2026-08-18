@@ -11,8 +11,8 @@
 // agent ultimately drives a command.
 
 import * as v from 'valibot';
-import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json.js';
-import { tolerate } from '../obs/index.js';
+import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json';
+import { tolerate } from '../obs/index';
 
 /** Minimal socket surface — platform WebSocket or any send()/readyState impl. */
 export interface TunnelSocket {

@@ -16,7 +16,7 @@
  * Safe under DO single-writer semantics.
  */
 
-import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
+import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 
 export interface MigrationReport {
   ranMigration: boolean;

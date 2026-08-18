@@ -30,15 +30,15 @@ import { tmpdir } from 'node:os';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 
-import type { AgentRuntime, EvalCase, LLMProviderConfig, RunEvent, SeekCursor } from '../../packages/core/src/index.js';
+import type { AgentRuntime, EvalCase, LLMProviderConfig, RunEvent, SeekCursor } from '../../packages/core/src/index';
 import {
   censusToolFailures, classifyToolFailure, DefaultExecutionRouter, initWorkspaceSchema,
   listRuns, RunEventRecorder,
-} from '../../packages/core/src/index.js';
-import { DIGEST_LIMIT, JsonObjectSchema } from '../../packages/core/src/utils/json.js';
-import { createWorkspace } from '../../packages/core/src/identity/index.js';
-import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime.js';
-import { openWorkspaceCLI } from '../../packages/cli-backend/src/open.js';
+} from '../../packages/core/src/index';
+import { DIGEST_LIMIT, JsonObjectSchema } from '../../packages/core/src/utils/json';
+import { createWorkspace } from '../../packages/core/src/identity/index';
+import { makeSql, makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
+import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   HARD_TASKS, liveModelSpend, recordLiveModelEpisode, resetLiveModelSpend,
   REFERENCE_FILE, SOLUTION_FILE, hardTaskCases, type EvalArmState,
@@ -48,8 +48,8 @@ import {
   DegenerateRunError, DegenerateRuntimeError, requireExecutorSurface,
   requireSandboxedExecutors, runBehaviourTask, UnsandboxedRuntimeError,
   type BehaviourScoreJson,
-} from './harness.js';
-import { parseSpend, renderSpend } from '../../scripts/eval-spend.js';
+} from './harness';
+import { parseSpend, renderSpend } from '../../scripts/eval-spend';
 
 const LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',

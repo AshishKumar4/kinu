@@ -15,7 +15,7 @@ import {
   type PeerMessage, type ProteusEvent, type ReceiveResult, type SqlExec,
 } from '@proteus/core';
 import { createMemoryVfs } from '@proteus/test-utils';
-import { sqlExec } from './helpers/user-do.js';
+import { sqlExec } from './helpers/user-do';
 
 function makeSql(): SqlExec {
   return sqlExec(new Database(':memory:'));

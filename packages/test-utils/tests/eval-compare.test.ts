@@ -13,12 +13,12 @@ import { describe, test, expect } from 'bun:test';
 import {
   compareRuns, formatComparison,
   type AttributableComparison, type EvalComparison, type ScorerComparison,
-} from '../src/eval-compare.js';
+} from '../src/eval-compare';
 import {
   EVAL_MODELS, FULL_TOOL_SURFACE, assessAdmissibility,
   type EvalArmState, type EvalObservation, type EvalRunRecord, type EvalScoreRow,
-} from '../src/eval-run.js';
-import { TASK_OUTCOME } from '../src/eval-outcome.js';
+} from '../src/eval-run';
+import { TASK_OUTCOME } from '../src/eval-outcome';
 
 /** Fixed so every interval below is reproducible; small so the suite is fast. */
 const OPTS = { seed: 1, iterations: 500 };

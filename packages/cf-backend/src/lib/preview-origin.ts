@@ -1,4 +1,4 @@
-import { parseNimbusPreviewLabel } from './nimbus-preview-host.js';
+import { parseNimbusPreviewLabel } from './nimbus-preview-host';
 import * as v from 'valibot';
 
 /**

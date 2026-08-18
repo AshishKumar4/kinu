@@ -15,9 +15,9 @@ import {
   revokeWorkspaceCapability,
   setWorkspaceTier,
   type WorkspaceCapability,
-} from '../src/user/workspace-capability.js';
-import { isModelInferenceCredentialKey } from '../src/user/credential-headers.js';
-import { TEST_USER_ENV, sqlExec, testOwner } from './helpers/user-do.js';
+} from '../src/user/workspace-capability';
+import { isModelInferenceCredentialKey } from '../src/user/credential-headers';
+import { TEST_USER_ENV, sqlExec, testOwner } from './helpers/user-do';
 
 function setup() {
   const db = new Database(':memory:');

@@ -2,7 +2,7 @@
 // pivot lookup in a canonical store, robust to duplicate texts and extra rows
 // (programmatic turns) that surfaces don't render as user messages.
 import { describe, expect, test } from 'bun:test';
-import { findForkPivot, forkCandidates } from '../src/agent-client.js';
+import { findForkPivot, forkCandidates } from '../src/agent-client';
 
 describe('forkCandidates', () => {
   test('lists user messages newest first with per-text occurrence indices', () => {

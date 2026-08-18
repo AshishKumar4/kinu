@@ -8,7 +8,7 @@
  */
 
 import type { Command, Option } from 'commander';
-import { commandEntries, GLOBAL_ENVIRONMENT, HELP_EXAMPLES } from './display.js';
+import { commandEntries, GLOBAL_ENVIRONMENT, HELP_EXAMPLES } from './display';
 
 const DISCLAIMER =
   '> Maintained by Claude (AI-edited documentation, presented as-is); '

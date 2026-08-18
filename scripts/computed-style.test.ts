@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Browser } from 'puppeteer';
 
-import { type PageAudit, auditPage } from './computed-style.ts';
-import { withGallery } from './gallery-harness.ts';
+import { type PageAudit, auditPage } from './computed-style';
+import { withGallery } from './gallery-harness';
 
 interface Scenarios {
   /** The tree as it ships. */

@@ -5,10 +5,10 @@
 // (never a second copy of it), it is deterministic, and its scan of the live
 // scaffold source reads code rather than prose.
 import { describe, expect, test } from 'bun:test';
-import { indexScaffoldSites, renderScaffoldHandbook } from '../src/evolution/scaffold-handbook.js';
-import { LAYERS } from '../src/layergate/layers.js';
-import { SUBJECT_SOURCE } from '../src/layergate/subjects.js';
-import { INITIAL_SCAFFOLD_SOURCE } from '../src/scaffold/bootstrap.js';
+import { indexScaffoldSites, renderScaffoldHandbook } from '../src/evolution/scaffold-handbook';
+import { LAYERS } from '../src/layergate/layers';
+import { SUBJECT_SOURCE } from '../src/layergate/subjects';
+import { INITIAL_SCAFFOLD_SOURCE } from '../src/scaffold/bootstrap';
 
 describe('the handbook renders the layer gate’s taxonomy, not a second one', () => {
   const handbook = renderScaffoldHandbook(INITIAL_SCAFFOLD_SOURCE);

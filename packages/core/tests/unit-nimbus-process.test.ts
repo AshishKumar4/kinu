@@ -11,7 +11,7 @@
  * handle cannot start one.
  */
 import { describe, expect, test } from "bun:test";
-import { createNimbusExecutor, type NimbusSandboxHandle, type NimbusStartResult } from "../src/index.ts";
+import { createNimbusExecutor, type NimbusSandboxHandle, type NimbusStartResult } from "../src/index";
 
 const baseFiles: NimbusSandboxHandle["files"] = {
   read: async () => null,

@@ -8,7 +8,7 @@ import {
   availableJudgeSpecs, selectEnsembleJudges, selectJudgeModel,
   type EnsembleJudgeSelection, type JudgeModelSelection,
 } from '@proteus/core';
-import type { AgentProviderRegistry } from './agent-registry.js';
+import type { AgentProviderRegistry } from './agent-registry';
 
 const candidatesFor = (registry: AgentProviderRegistry) => (): Promise<string[]> =>
   availableJudgeSpecs(registry.registry, registry.deps);

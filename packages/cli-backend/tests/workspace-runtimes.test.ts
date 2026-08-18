@@ -15,7 +15,7 @@ import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { createWorkspace, nextWorkspaceGeneration } from '@proteus/core/workspace';
 import type { WorkspaceBundle } from '@proteus/core/workspace';
-import { nimbusSql, localTransactions } from '../src/runtime.js';
+import { nimbusSql, localTransactions } from '../src/runtime';
 
 const RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRuntime];
 

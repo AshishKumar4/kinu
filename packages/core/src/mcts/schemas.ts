@@ -17,8 +17,8 @@
  * were missing it while every reader selected it by name.
  */
 
-import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
-import { reconcileColumns } from '../identity/columns.js';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import { reconcileColumns } from '../identity/columns';
 
 /**
  * Columns `search_nodes` gained after its first release, and the one place they are listed.

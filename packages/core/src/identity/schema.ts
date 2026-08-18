@@ -7,11 +7,11 @@
  * file plane, sessions, evolution state, and its default orchestrator agent).
  */
 
-import { reconcileColumns } from './columns.js';
-import { initSearchTables } from '../mcts/schemas.js';
-import { initScaffoldTables } from '../scaffold/schemas.js';
-import { initViewTables } from '../views/store.js';
-import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
+import { reconcileColumns } from './columns';
+import { initSearchTables } from '../mcts/schemas';
+import { initScaffoldTables } from '../scaffold/schemas';
+import { initViewTables } from '../views/store';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
 export const WORKSPACE_IDENTITY_DDL =
   // ── Workspace identity — the ownership root ────────────────────

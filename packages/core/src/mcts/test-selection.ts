@@ -13,10 +13,10 @@
  * argmax over self-rated value (arXiv:2501.14723).
  */
 
-import type { SearchNode } from '../types/mcts.js';
-import type { LLM, Executor } from '../types/primitives.js';
-import { findNearTiedRivals } from './takes.js';
-import { checkFraction, generateAssertionSuite, runForVerdict } from './evaluation.js';
+import type { SearchNode } from '../types/mcts';
+import type { LLM, Executor } from '../types/primitives';
+import { findNearTiedRivals } from './takes';
+import { checkFraction, generateAssertionSuite, runForVerdict } from './evaluation';
 
 export interface TestSelectionDeps {
   executor: Executor;

@@ -30,11 +30,11 @@ import { Database } from 'bun:sqlite';
 import { scratchPath } from '@proteus/test-utils';
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { runChat, INTERRUPTED_TURN, type ChatEvent } from '../src/chat.ts';
-import { createChatModel } from '../src/llm.ts';
-import { initRunEventTables, RunEventRecorder } from '../src/events/recorder.ts';
-import { TurnAccumulator, type StepLike } from '../src/orchestrator/turn-accumulator.ts';
-import { makeSql, makeExecRaw } from './helpers.ts';
+import { runChat, INTERRUPTED_TURN, type ChatEvent } from '../src/chat';
+import { createChatModel } from '../src/llm';
+import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
+import { TurnAccumulator, type StepLike } from '../src/orchestrator/turn-accumulator';
+import { makeSql, makeExecRaw } from './helpers';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 

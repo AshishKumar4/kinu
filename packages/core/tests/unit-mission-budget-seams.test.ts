@@ -12,28 +12,28 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
-import { createTestRuntime, makeExecRaw, makeSql } from './helpers.js';
+import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import {
   MissionGovernor,
   MissionBudgetExhausted,
   type MissionBudgetRefusal,
   type MissionScope,
-} from '../src/mission-budget.js';
+} from '../src/mission-budget';
 import {
   createAgentsCodemodeProvider, createStrategyRegistry, FORK_STRATEGY_ID,
   type AgentsToolDeps, type ExplorationStrategy, type StrategyContext,
-} from '../src/index.js';
-import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth.js';
-import { composePrepareStep } from '../src/prompting/prepare-step.js';
-import type { SubordinateHandoff } from '../src/index.js';
+} from '../src/index';
+import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
+import { composePrepareStep } from '../src/prompting/prepare-step';
+import type { SubordinateHandoff } from '../src/index';
 
 /** The admission facts every handoff carries back to the sender. */
 function handoff(): SubordinateHandoff {
   return { eventId: 'evt-1', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } };
 }
-import { TurnAccumulator } from '../src/orchestrator/turn-accumulator.js';
-import { buildDrainBatch } from '../src/events/hub/drain.js';
-import type { ProteusEvent } from '../src/events/hub/types.js';
+import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
+import { buildDrainBatch } from '../src/events/hub/drain';
+import type { ProteusEvent } from '../src/events/hub/types';
 
 function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   const db = new Database(':memory:');

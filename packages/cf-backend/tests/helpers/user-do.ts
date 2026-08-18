@@ -6,14 +6,14 @@
 // guard the owner's credentials rather than a re-description of them.
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
-import { mockAgentsSdk } from './agents-sdk.js';
-import { sha256Hex } from '../../src/lib/crypto.js';
-import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability.js';
+import { mockAgentsSdk } from './agents-sdk';
+import { sha256Hex } from '../../src/lib/crypto';
+import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability';
 import type { SqlExec, SqlExecRow, SqlExecutor, SqlValue } from '@proteus/core';
 
 mockAgentsSdk();
 
-const { UserDO } = await import('../../src/user/user-do.js');
+const { UserDO } = await import('../../src/user/user-do');
 type UserDOInstance = InstanceType<typeof UserDO>;
 
 /** A `SqlExec` over bun:sqlite — the same seam the Durable Object provides. */

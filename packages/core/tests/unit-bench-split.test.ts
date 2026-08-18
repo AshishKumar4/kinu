@@ -2,8 +2,8 @@ import { describe, test, expect } from 'bun:test';
 import {
   SEAL_SALT, DEFAULT_SEALED_FRACTION, splitOf, taskHash, manifestHash,
   partitionCorpus, promptLeaksFix, SealedSplit, validateWithRetries,
-} from '../src/index.ts';
-import type { BenchTask } from '../src/index.ts';
+} from '../src/index';
+import type { BenchTask } from '../src/index';
 
 function task(id: string, overrides: Partial<BenchTask> = {}): BenchTask {
   return {

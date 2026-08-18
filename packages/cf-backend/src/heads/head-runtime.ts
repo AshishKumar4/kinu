@@ -19,11 +19,11 @@ import {
   reasoningEffortOptions,
 } from "@proteus/core";
 import type { Think } from "@cloudflare/think";
-import { spawnHeadFacet } from "../facet-spawn.js";
-import { createAgentProviderRegistry } from "../providers/agent-registry.js";
+import { spawnHeadFacet } from "../facet-spawn";
+import { createAgentProviderRegistry } from "../providers/agent-registry";
 import { agentAffinityKey } from "@proteus/core";
-import type { UserDO } from "../user/user-do.js";
-import type { UserCaller } from "../user/workspace-capability.js";
+import type { UserDO } from "../user/user-do";
+import type { UserCaller } from "../user/workspace-capability";
 
 type HeadHost = Think<Env>;
 

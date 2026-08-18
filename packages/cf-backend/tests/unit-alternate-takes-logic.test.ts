@@ -7,7 +7,7 @@ import type { AlternateTakeSet } from '@proteus/core';
 import { takeEvidence } from '@proteus/core';
 import {
   currentTakeIndex, cycleTakeIndex, hasComparableTakes, takeChipLabel,
-} from '../src/components/alternate-takes-logic.js';
+} from '../src/components/alternate-takes-logic';
 
 function makeSet(overrides: Partial<AlternateTakeSet> = {}): AlternateTakeSet {
   return {

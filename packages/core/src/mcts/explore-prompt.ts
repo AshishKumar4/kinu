@@ -17,9 +17,9 @@
  * path were therefore scored against branches asked something else.
  */
 
-import { diversityDirective } from './diversity.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
-import type { WorkMode } from '../prompting/surface.js';
+import { diversityDirective } from './diversity';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import type { WorkMode } from '../prompting/surface';
 
 /** A crafted tool as a branch is told about it — name and description only. A
  *  branch reasons, it does not call tools. */

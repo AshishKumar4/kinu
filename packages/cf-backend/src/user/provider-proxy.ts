@@ -33,11 +33,11 @@ import {
   PROXY_CRED_HEADER, PROXY_DENIED_CRED_KEYS, PROXY_TARGET_HEADER,
   providerProxyBaseURL, proxyTargetAllowed,
 } from '@proteus/core';
-import type { UserDO } from './user-do.js';
-import { errorResponse } from '../providers/cloudflare-ai-fetch.js';
-import { json } from '../lib/http.js';
-import { ownerCaller, type UserCaller } from './workspace-capability.js';
-import { validateCredentialKey } from './validate.js';
+import type { UserDO } from './user-do';
+import { errorResponse } from '../providers/cloudflare-ai-fetch';
+import { json } from '../lib/http';
+import { ownerCaller, type UserCaller } from './workspace-capability';
+import { validateCredentialKey } from './validate';
 
 export const USER_AI_PROXY_FORWARD_PREFIX = PROVIDER_PROXY_PATH;
 

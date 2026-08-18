@@ -12,7 +12,7 @@ import { createScriptedLLM } from '@proteus/test-utils';
 import {
   BEHAVIOR_RULES, corpusStats, renderCorpusReport, runCorpusEval, weakLabel,
   type CorpusTurn, type TurnSignals,
-} from '../src/index.js';
+} from '../src/index';
 
 function turn(over: {
   id?: string;

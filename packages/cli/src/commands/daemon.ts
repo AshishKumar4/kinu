@@ -20,10 +20,10 @@ import {
   listAgentDirs,
   resolveMcpServers,
   resolveProviderCredentials,
-} from '../config.js';
-import { createConfiguredLocalModelResolver } from '../local-model-resolver.js';
-import { appendDaemonLog, readDaemonLogTail } from '../daemon-log.js';
-import { DIM, OK, WARN } from '../display.js';
+} from '../config';
+import { createConfiguredLocalModelResolver } from '../local-model-resolver';
+import { appendDaemonLog, readDaemonLogTail } from '../daemon-log';
+import { DIM, OK, WARN } from '../display';
 
 const PID_PATH = join(AGENT_HOME, 'daemon.pid');
 const LOG_PATH = join(AGENT_HOME, 'daemon.log');

@@ -15,13 +15,13 @@
  *   mtls    the edge verified a client certificate; no secret is involved.
  */
 
-import type { EventLog } from '../hub/log.js';
-import type { ReplyChannelStore } from '../hub/reply-channel.js';
-import type { TriggerRegistry } from '../hub/triggers.js';
-import { spillEventContent } from '../hub/content-spill.js';
-import type { SqlExec, VFS } from '../../types/primitives.js';
-import { hmacSha256Hex, timingSafeEqual } from '../../utils/crypto.js';
-import { normalizeWebhookRateLimitPerMin, tryConsumeWebhookRateLimit } from './rate-limit.js';
+import type { EventLog } from '../hub/log';
+import type { ReplyChannelStore } from '../hub/reply-channel';
+import type { TriggerRegistry } from '../hub/triggers';
+import { spillEventContent } from '../hub/content-spill';
+import type { SqlExec, VFS } from '../../types/primitives';
+import { hmacSha256Hex, timingSafeEqual } from '../../utils/crypto';
+import { normalizeWebhookRateLimitPerMin, tryConsumeWebhookRateLimit } from './rate-limit';
 
 /** How far an HMAC delivery's timestamp may be from the receiver's clock. */
 const HMAC_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;

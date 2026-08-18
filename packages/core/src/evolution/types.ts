@@ -4,9 +4,9 @@
 
 import type { ModelMessage } from 'ai';
 
-import type { MCTSProgressEvent } from '../types/mcts.js';
-import type { Usage } from '../usage.js';
-import type { JsonObject, JsonValue } from '../utils/json.js';
+import type { MCTSProgressEvent } from '../types/mcts';
+import type { Usage } from '../usage';
+import type { JsonObject, JsonValue } from '../utils/json';
 
 /** A tool call as reported by the AI SDK's structured result */
 export interface ToolCallRecord {

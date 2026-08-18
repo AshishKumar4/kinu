@@ -3,7 +3,7 @@ import {
   createAgentConfigStore, initAgentConfigTable, AGENT_CONFIG_KEYS,
   DEFAULT_AUTO_GEPA_EVERY_N_TURNS, DEFAULT_GEPA_EVAL_BUDGET,
   setReasoningEffort,
-} from '../src/index.ts';
+} from '../src/index';
 import { createTestSql } from '@proteus/test-utils';
 
 function setup() {

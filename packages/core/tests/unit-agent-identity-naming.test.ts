@@ -11,7 +11,7 @@ import {
   workspaceSlug,
   workspaceTitleFromMission,
   type WorkspaceTitleState,
-} from '../src/index.ts';
+} from '../src/index';
 
 // The slug is the workspace's PERMANENT address (its URL, and the Durable
 // Object name on the cloud backend); the display name is what anyone reads and

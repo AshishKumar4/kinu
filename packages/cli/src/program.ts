@@ -6,22 +6,22 @@
  */
 
 import { Command, Option } from 'commander';
-import { createCommand } from './commands/create.js';
-import { acpCommand } from './commands/acp.js';
-import { chatCommand } from './commands/chat.js';
-import { execCommand, runCommand } from './commands/run.js';
-import { authCommand, logoutCommand, whoamiCommand } from './commands/auth.js';
-import { aliasCommand, aliasesCommand, unaliasCommand } from './commands/alias.js';
-import { desktopCommand } from './commands/desktop.js';
-import { daemonCommand } from './commands/daemon.js';
-import { setupCommand } from './commands/setup.js';
-import { providersCommand } from './commands/providers.js';
-import { sessionsCommand } from './commands/sessions.js';
-import { doctorCommand, uninstallCommand, updateCommand } from './commands/self.js';
-import { evolveCommand } from './commands/evolve.js';
-import { statusCommand } from './commands/status.js';
-import { listCommand } from './commands/list.js';
-import { effortCommand, jobsCommand, modelCommand, toolsCommand, triggersCommand } from './commands/control.js';
+import { createCommand } from './commands/create';
+import { acpCommand } from './commands/acp';
+import { chatCommand } from './commands/chat';
+import { execCommand, runCommand } from './commands/run';
+import { authCommand, logoutCommand, whoamiCommand } from './commands/auth';
+import { aliasCommand, aliasesCommand, unaliasCommand } from './commands/alias';
+import { desktopCommand } from './commands/desktop';
+import { daemonCommand } from './commands/daemon';
+import { setupCommand } from './commands/setup';
+import { providersCommand } from './commands/providers';
+import { sessionsCommand } from './commands/sessions';
+import { doctorCommand, uninstallCommand, updateCommand } from './commands/self';
+import { evolveCommand } from './commands/evolve';
+import { statusCommand } from './commands/status';
+import { listCommand } from './commands/list';
+import { effortCommand, jobsCommand, modelCommand, toolsCommand, triggersCommand } from './commands/control';
 import {
   alignmentCommand,
   eventsCommand,
@@ -35,14 +35,14 @@ import {
   stopCommand,
   timelineCommand,
   webhookCommand,
-} from './commands/inspect.js';
-import { debugCommand } from './commands/debug.js';
-import { labelCommand } from './commands/label.js';
-import { exportCommand, importCommand } from './commands/export-import.js';
-import { tokensCommand } from './commands/tokens.js';
-import { workspaceDeleteCommand } from './commands/workspace.js';
-import { printFailure, VERSION } from './display.js';
-import type { ProviderFailure } from './provider-guidance.js';
+} from './commands/inspect';
+import { debugCommand } from './commands/debug';
+import { labelCommand } from './commands/label';
+import { exportCommand, importCommand } from './commands/export-import';
+import { tokensCommand } from './commands/tokens';
+import { workspaceDeleteCommand } from './commands/workspace';
+import { printFailure, VERSION } from './display';
+import type { ProviderFailure } from './provider-guidance';
 
 /** Help groups, in the order the branded help renders them (first registration
  *  of a group fixes its position). */

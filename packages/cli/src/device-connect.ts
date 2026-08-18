@@ -12,8 +12,8 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rm
 import { join } from 'node:path';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { classify, tolerate } from '@proteus/core/obs';
-import { AGENT_HOME, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config.js';
-import { listCloudDevices, registerCloudDevice } from './cloud-api.js';
+import { AGENT_HOME, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
+import { listCloudDevices, registerCloudDevice } from './cloud-api';
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
 const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');

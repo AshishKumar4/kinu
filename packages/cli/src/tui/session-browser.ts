@@ -1,4 +1,4 @@
-import type { CliSessionInfo } from '../session.js';
+import type { CliSessionInfo } from '../session';
 
 export type SessionBrowserMode = 'list' | 'resume';
 

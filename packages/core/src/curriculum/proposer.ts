@@ -11,11 +11,11 @@
 // `proposed_tasks`. The user (or an autonomous loop) picks one and runs it.
 
 import * as v from 'valibot';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { LLM } from '../types/primitives.js';
-import type { TurnOutcome } from '../evolution/outcomes.js';
-import { extractJsonArray, jsonArrayOnlyInstruction } from '../prompts/structured.js';
-import { parseJsonValue } from '../utils/json.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { LLM } from '../types/primitives';
+import type { TurnOutcome } from '../evolution/outcomes';
+import { extractJsonArray, jsonArrayOnlyInstruction } from '../prompts/structured';
+import { parseJsonValue } from '../utils/json';
 
 const ProposedTaskStatusSchema = v.picklist([
   'pending',

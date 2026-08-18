@@ -18,8 +18,8 @@ import {
   grantsAreSubset, resolveInheritedGrants, reviewEgressBinding,
   type ApprovalGrant, type ShellApprovalMode,
 } from '@proteus/core';
-import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate.js';
-import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface.js';
+import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
+import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
 
 const root = new URL('../', import.meta.url).pathname;
 

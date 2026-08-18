@@ -37,8 +37,8 @@ import {
   initRunEventTables, RunEventRecorder,
   // Approval
   reviewCommand, gateExec,
-} from '../src/index.js';
-import { makeSql, makeExecRaw, createTestRuntime } from './helpers.js';
+} from '../src/index';
+import { makeSql, makeExecRaw, createTestRuntime } from './helpers';
 
 interface HeadReportIndex {
   [headId: string]: HeadReport;

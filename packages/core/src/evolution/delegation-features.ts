@@ -1,7 +1,7 @@
-import type { CompletedTurn, ToolCallRecord } from './types.js';
+import type { CompletedTurn, ToolCallRecord } from './types';
 import * as v from 'valibot';
-import { decodeJsonValue, isJsonObject, type JsonValue } from '../utils/json.js';
-import { stableStringify } from '../safety/argument-digest.js';
+import { decodeJsonValue, isJsonObject, type JsonValue } from '../utils/json';
+import { stableStringify } from '../safety/argument-digest';
 
 /** Execution-path validity: three things a trace proves on its own, with no
  *  judge and therefore no judge bias. All three are wasted motion — the agent

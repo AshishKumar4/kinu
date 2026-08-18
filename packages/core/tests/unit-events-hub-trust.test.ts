@@ -6,7 +6,7 @@ import {
   deriveEventTrust, derivePriority, deriveDefaultVisibility, deriveFields,
   IngressRejectedError,
   type IngressDescriptor, type TrustLevel,
-} from '../src/events/hub/index.ts';
+} from '../src/events/hub/index';
 
 describe('meetTrust', () => {
   test('returns the lower-trust side', () => {

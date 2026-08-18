@@ -18,7 +18,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
-import { createTestRuntime } from './helpers.js';
+import { createTestRuntime } from './helpers';
 import {
   BUILTIN_TOOLS,
   TOOL_REACH,
@@ -40,7 +40,7 @@ import {
   type ReleaseSource,
   type ReleaseChange,
   type AgentRuntime,
-} from '../src/index.js';
+} from '../src/index';
 
 /** `createAgentSelfProvider` reads nothing off the host at construction — the
  *  host is consumed inside each member's execute, which unit-agent-self.test.ts

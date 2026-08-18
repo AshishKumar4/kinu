@@ -12,8 +12,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   admissibility, armSpend, flipAccounting, pairArms, readHarborJob,
-} from './bench-external.js';
-import type { Admissibility, AdmissibilityCondition } from './bench-external.js';
+} from './bench-external';
+import type { Admissibility, AdmissibilityCondition } from './bench-external';
 
 const scratch: string[] = [];
 afterAll(() => {

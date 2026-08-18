@@ -53,12 +53,12 @@
  * such feature deliberately left off every surface.
  */
 
-import { AGENT_RPC_ACCESS } from './cli/rpc-gate.js';
-import type { ActorAgent } from './actor-agent.js';
-import type { ExplorationAgent } from './exploration.js';
-import type { OrchestratorAgent } from './orchestrator.js';
-import type { SubordinateAgent } from './subordinate-agent.js';
-import type { UserDO } from './user/user-do.js';
+import { AGENT_RPC_ACCESS } from './cli/rpc-gate';
+import type { ActorAgent } from './actor-agent';
+import type { ExplorationAgent } from './exploration';
+import type { OrchestratorAgent } from './orchestrator';
+import type { SubordinateAgent } from './subordinate-agent';
+import type { UserDO } from './user/user-do';
 
 /**
  * The names the Workers runtime and the two SDKs dispatch on a stub, which

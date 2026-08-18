@@ -4,10 +4,10 @@
 //   Layer 2: judge ensemble — k samples, median, parse-failures dropped;
 //            prose-only branches are judge-only at reduced confidence.
 import { describe, test, expect } from 'bun:test';
-import { evaluateWithMultiModelJudging } from '../src/index.ts';
-import { executionObservation, isParseFailure } from '../src/mcts/evaluation.ts';
+import { evaluateWithMultiModelJudging } from '../src/index';
+import { executionObservation, isParseFailure } from '../src/mcts/evaluation';
 import { createScriptedLLM, createJSONLLM } from '@proteus/test-utils';
-import type { Executor, LLM } from '../src/index.ts';
+import type { Executor, LLM } from '../src/index';
 
 function exec(verdict: { error?: string } = {}, languages: readonly [string, ...string[]] = ['javascript']): Executor {
   return {

@@ -5,7 +5,7 @@
  */
 
 import * as v from 'valibot';
-import type { AgentRuntime } from '../types/agent-runtime.js';
+import type { AgentRuntime } from '../types/agent-runtime';
 
 export async function rollbackScaffold(
   rt: AgentRuntime,

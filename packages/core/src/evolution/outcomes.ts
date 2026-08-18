@@ -17,20 +17,20 @@
 
 import * as v from 'valibot';
 import type { ModelMessage } from 'ai';
-import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives.js';
-import type { CompletedTurn, ToolCallRecord } from './types.js';
-import type { EvalInstance } from './gepa/types.js';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
-import { reconcileColumns } from '../identity/columns.js';
-import type { ScaffoldArchiveEntry } from '../scaffold/archive.js';
-import { RunEventRecorder } from '../events/recorder.js';
-import { nanoid } from '../utils/nanoid.js';
-import { nowMs } from '../utils/date.js';
-import { parseJsonValue, projectJsonValue, JsonObjectSchema, type JsonValue } from '../utils/json.js';
-import { tolerate } from '../obs/index.js';
-import { isFailingResultText } from '../execution/exec-result.js';
-import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
+import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives';
+import type { CompletedTurn, ToolCallRecord } from './types';
+import type { EvalInstance } from './gepa/types';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { reconcileColumns } from '../identity/columns';
+import type { ScaffoldArchiveEntry } from '../scaffold/archive';
+import { RunEventRecorder } from '../events/recorder';
+import { nanoid } from '../utils/nanoid';
+import { nowMs } from '../utils/date';
+import { parseJsonValue, projectJsonValue, JsonObjectSchema, type JsonValue } from '../utils/json';
+import { tolerate } from '../obs/index';
+import { isFailingResultText } from '../execution/exec-result';
+import { delegationFeatures, renderDelegationFeatures } from './delegation-features';
 
 /** Every outcome kind, in the ledger's canonical order. The one list — the
  *  table's CHECK constraint, the query filter and the changelog tally all

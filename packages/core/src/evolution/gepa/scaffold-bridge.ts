@@ -17,16 +17,16 @@
  * proposal generator.
  */
 
-import type { AgentRuntime } from '../../types/agent-runtime.js';
-import { modifyScaffold } from '../../scaffold/modify.js';
+import type { AgentRuntime } from '../../types/agent-runtime';
+import { modifyScaffold } from '../../scaffold/modify';
 import {
   SCAFFOLD_FORBIDDEN_PATTERNS, SCAFFOLD_REQUIRED_SIGNATURE,
-} from '../../scaffold/safety-patterns.js';
-import { formatScoreInterval, scoreInterval, type ScoreInterval } from '../../utils/stats.js';
-import { runGepa } from './engine.js';
+} from '../../scaffold/safety-patterns';
+import { formatScoreInterval, scoreInterval, type ScoreInterval } from '../../utils/stats';
+import { runGepa } from './engine';
 import type {
   EvalInstance, GepaConfig, GepaMetric, GepaResult, ReflectionLM,
-} from './types.js';
+} from './types';
 
 /** Maximum scaffold source size — keeps candidate explosion bounded.
  *  Aligned with Hermes-Self-Evolution's ≤15KB skill size cap (skills and

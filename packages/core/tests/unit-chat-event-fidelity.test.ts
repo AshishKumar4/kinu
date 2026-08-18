@@ -10,7 +10,7 @@ import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
-import { runChat, ExtensionHost, type ChatEvent, type ProteusExtension, type Usage } from '../src/index.ts';
+import { runChat, ExtensionHost, type ChatEvent, type ProteusExtension, type Usage } from '../src/index';
 
 type FinishPart = Extract<LanguageModelV3StreamPart, { type: 'finish' }>;
 

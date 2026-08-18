@@ -27,19 +27,19 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestRuntime, createMockSession, makeSql, makeExecRaw } from './helpers.js';
-import { runMCTS } from '../src/mcts/engine.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
+import { createTestRuntime, createMockSession, makeSql, makeExecRaw } from './helpers';
+import { runMCTS } from '../src/mcts/engine';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initCraftScoreTables } from '../src/craft/schemas';
 import {
   MissionGovernor, localMissionScope, type MissionScope,
-} from '../src/mission-budget.js';
-import type { LLM, SqlExecutor, RawSqlExec, SqlValue } from '../src/types/primitives.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { Usage } from '../src/usage.js';
-import { usageTotal } from '../src/usage.js';
-import type { ModelCallReport, ModelCallSink } from '../src/events/model-call.js';
+} from '../src/mission-budget';
+import type { LLM, SqlExecutor, RawSqlExec, SqlValue } from '../src/types/primitives';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { Usage } from '../src/usage';
+import { usageTotal } from '../src/usage';
+import type { ModelCallReport, ModelCallSink } from '../src/events/model-call';
 
 /** A ledger over real SQLite that records every statement issued through it. */
 function countingLedger() {

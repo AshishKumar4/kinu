@@ -11,7 +11,7 @@
 // arriving) and a part the stream is still writing reports itself.
 import { describe, test, expect } from 'bun:test';
 import type { ReasoningUIPart, TextUIPart, ToolUIPart, UIMessage } from 'ai';
-import { liveTail } from '../src/components/message-live-tail.ts';
+import { liveTail } from '../src/components/message-live-tail';
 
 type Part = UIMessage['parts'][number];
 

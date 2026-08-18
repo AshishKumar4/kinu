@@ -20,14 +20,14 @@ import type {
   ExecuteResult,
   ResolvedProvider,
   VFS,
-} from '../src/types/primitives.js';
-import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-runtime.js';
-import type { CraftedTool } from '../src/types/craft.js';
-import { JsonValueSchema, type JsonValue } from '../src/utils/json.js';
-import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives.js';
-import { createWorkspace, nextWorkspaceGeneration } from '../src/vfs/nimbus-workspace.js';
-import { initWorkspaceSchema } from '../src/identity/workspace-schema.js';
-import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff.js';
+} from '../src/types/primitives';
+import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-runtime';
+import type { CraftedTool } from '../src/types/craft';
+import { JsonValueSchema, type JsonValue } from '../src/utils/json';
+import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
+import { createWorkspace, nextWorkspaceGeneration } from '../src/vfs/nimbus-workspace';
+import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff';
 
 /** One in-memory workspace database with the three SQL handles onto it. */
 export interface TestWorkspace {
@@ -449,7 +449,7 @@ export function createTestRuntime(opts?: {
 
 // ── Mock session writer ──────────────────────────────────────────
 
-export function createMockSession(): import('../src/mcts/record-node.js').SessionWriter {
+export function createMockSession(): import('../src/mcts/record-node').SessionWriter {
   const messages: Array<{ id: string; parentId?: string | null; role: string; content: string }> = [];
 
   return {

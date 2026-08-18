@@ -5,11 +5,11 @@
  */
 
 import * as v from 'valibot';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import { upsertCraftedTool } from './conflict.js';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
-import { EVIDENCE_BUDGETS } from '../prompts/evidence-window.js';
-import { tolerate } from '../obs/index.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import { upsertCraftedTool } from './conflict';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { EVIDENCE_BUDGETS } from '../prompts/evidence-window';
+import { tolerate } from '../obs/index';
 
 /** Head-only cut with a named omission — code must stay contiguous for a
  *  rewriter (same rationale as gepaParentSource). */

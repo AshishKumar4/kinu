@@ -18,16 +18,16 @@
  */
 
 import * as v from 'valibot';
-import type { EventLog } from '../hub/log.js';
-import type { ReplyChannelStore } from '../hub/reply-channel.js';
-import type { TriggerRegistry } from '../hub/triggers.js';
-import type { EmailAttachmentMeta, EmailPayload, EventId } from '../hub/types.js';
-import { spillEventContent } from '../hub/content-spill.js';
-import type { SqlExec, VFS } from '../../types/primitives.js';
-import type { MissingCapability } from '../../prompting/volatile-context.js';
-import { argumentDigest } from '../../safety/argument-digest.js';
-import { tryConsumeWebhookRateLimit } from './rate-limit.js';
-import { diagnostics, toProteusError } from '../../obs/index.js';
+import type { EventLog } from '../hub/log';
+import type { ReplyChannelStore } from '../hub/reply-channel';
+import type { TriggerRegistry } from '../hub/triggers';
+import type { EmailAttachmentMeta, EmailPayload, EventId } from '../hub/types';
+import { spillEventContent } from '../hub/content-spill';
+import type { SqlExec, VFS } from '../../types/primitives';
+import type { MissingCapability } from '../../prompting/volatile-context';
+import { argumentDigest } from '../../safety/argument-digest';
+import { tryConsumeWebhookRateLimit } from './rate-limit';
+import { diagnostics, toProteusError } from '../../obs/index';
 
 /**
  * Inbound-email budget per agent (all senders combined). Email is a wake

@@ -1,1 +1,1 @@
-export * from './proposer.js';
+export * from './proposer';

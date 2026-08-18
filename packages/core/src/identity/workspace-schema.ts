@@ -21,30 +21,30 @@
  * so calling it on an existing workspace only ever adds what is missing.
  */
 
-import type { RawSqlExec, SqlExec, SqlExecutor } from '../types/primitives.js';
+import type { RawSqlExec, SqlExec, SqlExecutor } from '../types/primitives';
 import { initMemoryChunkTables } from '@proteus/agent-utils/memory';
-import { initAllTables, migrateWorkspaceStorage, tableExists } from './schema.js';
-import { reconcileColumns } from './columns.js';
-import { initAgentConfigTable } from '../config/store.js';
-import { initCraftScoreTables } from '../craft/schemas.js';
-import { initCurriculumTable } from '../curriculum/proposer.js';
-import { initEventsHubTables } from '../events/hub/schema.js';
-import { initRunEventTables } from '../events/recorder.js';
-import { initGepaTables } from '../evolution/gepa/persistence.js';
-import { initTurnOutcomeTables } from '../evolution/outcomes.js';
-import { initReplayTables } from '../evolution/replay.js';
-import { initImportedExperienceTable } from '../experience/imports.js';
-import { initHeadsTables } from '../heads/schema.js';
-import { initBackgroundJobsTable } from '../jobs/store.js';
-import { initDeferredApprovalsTable } from '../safety/deferred-approval.js';
-import { initPlanReviewTable } from '../plans/review.js';
-import { initSearchTables, SEARCH_NODES_POST_RELEASE_COLUMNS } from '../mcts/schemas.js';
-import { initAlternateTakesTable } from '../mcts/takes.js';
-import { initMctsSearchTable } from '../mcts/search-store.js';
-import { initFactsTable } from '../memory/facts.js';
-import { initScaffoldTables } from '../scaffold/schemas.js';
-import { initShadowTables } from '../scaffold/shadow.js';
-import { initTaskListTable } from '../tasks/store.js';
+import { initAllTables, migrateWorkspaceStorage, tableExists } from './schema';
+import { reconcileColumns } from './columns';
+import { initAgentConfigTable } from '../config/store';
+import { initCraftScoreTables } from '../craft/schemas';
+import { initCurriculumTable } from '../curriculum/proposer';
+import { initEventsHubTables } from '../events/hub/schema';
+import { initRunEventTables } from '../events/recorder';
+import { initGepaTables } from '../evolution/gepa/persistence';
+import { initTurnOutcomeTables } from '../evolution/outcomes';
+import { initReplayTables } from '../evolution/replay';
+import { initImportedExperienceTable } from '../experience/imports';
+import { initHeadsTables } from '../heads/schema';
+import { initBackgroundJobsTable } from '../jobs/store';
+import { initDeferredApprovalsTable } from '../safety/deferred-approval';
+import { initPlanReviewTable } from '../plans/review';
+import { initSearchTables, SEARCH_NODES_POST_RELEASE_COLUMNS } from '../mcts/schemas';
+import { initAlternateTakesTable } from '../mcts/takes';
+import { initMctsSearchTable } from '../mcts/search-store';
+import { initFactsTable } from '../memory/facts';
+import { initScaffoldTables } from '../scaffold/schemas';
+import { initShadowTables } from '../scaffold/shadow';
+import { initTaskListTable } from '../tasks/store';
 
 /**
  * The three SQL handles onto one workspace database.

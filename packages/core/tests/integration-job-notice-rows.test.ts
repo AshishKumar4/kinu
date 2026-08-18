@@ -33,15 +33,15 @@
 // loses: the announcement's identity is the row's primary key.
 import { describe, test, expect } from 'bun:test';
 import type { Database } from 'bun:sqlite';
-import { BackgroundJobRunner, backgroundJobWakeTrigger } from '../src/jobs/runner.js';
-import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store.js';
-import { SignalDelivery } from '../src/orchestrator/signals.js';
-import { EventLog, initEventsHubTables } from '../src/events/hub/index.js';
-import { getChatHistoryPage } from '../src/read-models/status.js';
-import { PROGRAMMATIC_MESSAGE_ID_PREFIX, uiMessageText } from '../src/utils/ui-message.js';
-import type { BackendHost } from '../src/types/backend-host.js';
-import type { Schedule, SqlExecutor } from '../src/types/primitives.js';
-import { createTestWorkspace, makeSql, makeExecRaw, makeSqlExec, SDK_SESSION_DDL } from './helpers.js';
+import { BackgroundJobRunner, backgroundJobWakeTrigger } from '../src/jobs/runner';
+import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
+import { SignalDelivery } from '../src/orchestrator/signals';
+import { EventLog, initEventsHubTables } from '../src/events/hub/index';
+import { getChatHistoryPage } from '../src/read-models/status';
+import { PROGRAMMATIC_MESSAGE_ID_PREFIX, uiMessageText } from '../src/utils/ui-message';
+import type { BackendHost } from '../src/types/backend-host';
+import type { Schedule, SqlExecutor } from '../src/types/primitives';
+import { createTestWorkspace, makeSql, makeExecRaw, makeSqlExec, SDK_SESSION_DDL } from './helpers';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
 

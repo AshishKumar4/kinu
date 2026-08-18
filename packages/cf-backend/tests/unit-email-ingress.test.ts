@@ -13,10 +13,10 @@ import {
 import {
   agentEmailAddress, agentNameFromRecipient,
   parseInboundMime, stripQuotedReply,
-} from '../src/email/inbound.js';
-import { routeInboundEmail, type EmailDeliveryTarget } from '../src/email/route.js';
+} from '../src/email/inbound';
+import { routeInboundEmail, type EmailDeliveryTarget } from '../src/email/route';
 import { createMemoryVfs } from '@proteus/test-utils';
-import { sqlExec } from './helpers/user-do.js';
+import { sqlExec } from './helpers/user-do';
 
 function makeSql(): SqlExec {
   return sqlExec(new Database(':memory:'));

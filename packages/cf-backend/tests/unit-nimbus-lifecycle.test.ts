@@ -6,9 +6,9 @@ import {
 } from '@proteus/core';
 import { createInlineWorkspace } from '@proteus/core/identity';
 import { Database } from 'bun:sqlite';
-import { orchestratorHarness } from './helpers/actor-harness.js';
-import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do.js';
-import { createNimbusWorkspaceSandbox } from '../src/nimbus-route.js';
+import { orchestratorHarness } from './helpers/actor-harness';
+import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
+import { createNimbusWorkspaceSandbox } from '../src/nimbus-route';
 import * as v from 'valibot';
 
 const OWNER = '0123456789abcdef0123456789abcdef';

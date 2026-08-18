@@ -4,8 +4,8 @@ import { Database } from 'bun:sqlite';
 import {
   BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, withSpawnDetach,
   isBackgroundHandle, serializeJobResult, BACKGROUND_POLICY, readSpawnStarted, SPAWN_STARTED_OPTION,
-} from '../src/jobs/index.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+} from '../src/jobs/index';
+import { makeSql, makeExecRaw } from './helpers';
 
 function newStore() {
   const db = new Database(':memory:');

@@ -1,5 +1,5 @@
-import type { AgentClientEvent, AgentClientMode } from './agent-client.js';
-import type { CliSession } from './session.js';
+import type { AgentClientEvent, AgentClientMode } from './agent-client';
+import type { CliSession } from './session';
 
 interface AssistantTurnMetadata {
   steps: number;

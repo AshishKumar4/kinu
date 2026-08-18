@@ -25,14 +25,14 @@
  * fork now arrive on the page the fork is on.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import type { SearchNode } from '../types/mcts.js';
-import { HeadJournal } from '../heads/journal.js';
-import type { HeadRunView } from '../heads/types.js';
-import { listForkRuns, type ForkRunSummary } from './fork-runs.js';
-import { readForkRunParams, type ForkRunParams } from './fork-params.js';
-import { readSearchTree } from './search-tree.js';
-import { mapPage, type Page, type SeekCursor } from './page.js';
+import type { SqlExecutor } from '../types/primitives';
+import type { SearchNode } from '../types/mcts';
+import { HeadJournal } from '../heads/journal';
+import type { HeadRunView } from '../heads/types';
+import { listForkRuns, type ForkRunSummary } from './fork-runs';
+import { readForkRunParams, type ForkRunParams } from './fork-params';
+import { readSearchTree } from './search-tree';
+import { mapPage, type Page, type SeekCursor } from './page';
 
 /** One fork on the canvas, with everything the canvas draws for it. */
 export interface ExplorationCanvasRun {

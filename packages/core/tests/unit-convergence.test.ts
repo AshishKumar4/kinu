@@ -3,11 +3,11 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, createMockSession } from './helpers.js';
-import { converge } from '../src/mcts/convergence.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initAlternateTakesTable, latestAlternateTakeSet, listAlternateTakeSets } from '../src/mcts/takes.js';
+import { createTestRuntime, createMockSession } from './helpers';
+import { converge } from '../src/mcts/convergence';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initAlternateTakesTable, latestAlternateTakeSet, listAlternateTakeSets } from '../src/mcts/takes';
 
 describe('Convergence', () => {
   test('throws when no nodes exist', async () => {

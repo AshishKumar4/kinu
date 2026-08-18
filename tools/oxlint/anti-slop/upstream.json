@@ -15,9 +15,13 @@
     "no-sentinel-catch",
     "no-untyped-console",
     "no-wait-until-in-durable-object",
-    "require-cause-on-rethrow"
+    "require-cause-on-rethrow",
+    "require-runtime-import-extension"
   ],
   "proteusRuleGates": {
+    "import-extension.gate.test.ts": [
+      "require-runtime-import-extension"
+    ],
     "no-ambient-git.gate.test.ts": [
       "no-ambient-git-in-tests"
     ],
@@ -44,10 +48,13 @@
     "gate.test.ts": {
       "proteusOnly": true
     },
+    "import-extension.gate.test.ts": {
+      "proteusOnly": true
+    },
     "index.ts": {
       "upstream": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f",
-      "local": "141961d396f15115bcb774d61dda7b9bccef8160f18003d20d21aa8a8111d6cd",
-      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the four no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, no-copy-rpc-stub, and no-untyped-console. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
+      "local": "b8f15fd88a2adbaa02510c39ce6b37cc6efedbe3c0f29acfd37366b2f0dc3958",
+      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the four no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, no-copy-rpc-stub, no-untyped-console, and require-runtime-import-extension. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
     },
     "no-ambient-git.gate.test.ts": {
       "proteusOnly": true
@@ -201,6 +208,12 @@
       "proteusOnly": true
     },
     "rules/require-cause-on-rethrow.ts": {
+      "proteusOnly": true
+    },
+    "rules/require-runtime-import-extension.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/require-runtime-import-extension.ts": {
       "proteusOnly": true
     },
     "rules/require-safety-comment-for-type-assertion.local.test.ts": {

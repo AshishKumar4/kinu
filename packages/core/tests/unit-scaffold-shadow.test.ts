@@ -24,9 +24,9 @@ import {
   initScaffoldTables,
   type PendingScaffold,
   type ShadowConfig,
-} from '../src/index.js';
-import { makeSql, makeExecRaw } from './helpers.js';
-import { createTestRuntime } from './helpers.js';
+} from '../src/index';
+import { makeSql, makeExecRaw } from './helpers';
+import { createTestRuntime } from './helpers';
 
 function setup() {
   const db = new Database(':memory:');

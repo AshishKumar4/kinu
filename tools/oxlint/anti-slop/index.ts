@@ -22,12 +22,14 @@ import { noUnsafeDictionaryTypeRule } from "./rules/no-unsafe-dictionary-type.ts
 import { noWaitUntilInDurableObjectRule } from "./rules/no-wait-until-in-durable-object.ts";
 import { noWidenThenAssertRule } from "./rules/no-widen-then-assert.ts";
 import { requireCauseOnRethrowRule } from "./rules/require-cause-on-rethrow.ts";
+import { requireRuntimeImportExtensionRule } from "./rules/require-runtime-import-extension.ts";
 import { requireSafetyCommentForTypeAssertionRule } from "./rules/require-safety-comment-for-type-assertion.ts";
 
 /**
  * Generic Oxlint rules that reject low-evidence and low-signal implementation patterns, plus the
  * Proteus-local rules (see upstream.json's `proteusRules`): the no-swallow family,
- * no-wait-until-in-durable-object, no-copy-rpc-stub, and no-untyped-console.
+ * no-wait-until-in-durable-object, no-copy-rpc-stub, no-untyped-console, and
+ * require-runtime-import-extension.
  */
 const antiSlopPlugin = eslintCompatPlugin({
 	meta: { name: "anti-slop" },
@@ -54,6 +56,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-wait-until-in-durable-object": noWaitUntilInDurableObjectRule,
 		"no-widen-then-assert": noWidenThenAssertRule,
 		"require-cause-on-rethrow": requireCauseOnRethrowRule,
+		"require-runtime-import-extension": requireRuntimeImportExtensionRule,
 		"require-safety-comment-for-type-assertion": requireSafetyCommentForTypeAssertionRule,
 	},
 });

@@ -11,7 +11,7 @@ import {
   composePrepareStep,
   STEP_CONTEXT_BUDGET_RATIO,
   STEP_RECENT_TOOL_BUDGET_TOKENS,
-} from '../src/index.ts';
+} from '../src/index';
 
 function toolExchange(i: number, outputChars: number): ModelMessage[] {
   const id = `call_${i}`;

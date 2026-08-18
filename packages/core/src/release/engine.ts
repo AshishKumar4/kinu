@@ -40,13 +40,13 @@ import type {
   ReleaseStatus,
   ReleaseDeployment,
   ReleaseSource,
-} from './types.js';
-import { shellQuote } from '../utils/shell.js';
+} from './types';
+import { shellQuote } from '../utils/shell';
 import {
   approvalTypeForEnvironment,
   deployApprovalDigest,
   deployTargetAsCommand,
-} from './approval-digest.js';
+} from './approval-digest';
 
 // ── Seams ────────────────────────────────────────────────────────────────
 

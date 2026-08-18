@@ -19,8 +19,8 @@
  * testable decision rather than five call sites.
  */
 
-import type { BackgroundJob } from '../jobs/store.js';
-import type { DeferredApproval } from '../safety/deferred-approval.js';
+import type { BackgroundJob } from '../jobs/store';
+import type { DeferredApproval } from '../safety/deferred-approval';
 
 export type PendingActionKind =
   | 'release_approval'

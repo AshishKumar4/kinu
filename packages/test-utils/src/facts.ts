@@ -1,6 +1,6 @@
 // FactsStore fixture — uses the in-memory SQL backing.
 import { createFactsStore, initFactsTable, type FactsStore } from '@proteus/core';
-import { createTestSql, type TestSql } from './sql.js';
+import { createTestSql, type TestSql } from './sql';
 
 export interface TestFacts {
   facts: FactsStore;

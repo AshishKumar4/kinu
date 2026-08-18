@@ -2,8 +2,8 @@
 // no IO. Turns raw EvalResult[] into a persistable/renderable report and applies
 // a committed quality floor so CI can fail on a regression. Shared by the eval
 // script (scripts/eval.ts) and any surface that renders a benchmark run.
-import { summarizeEval } from './types.js';
-import type { EvalResult, EvalSummary } from './types.js';
+import { summarizeEval } from './types';
+import type { EvalResult, EvalSummary } from './types';
 
 /** Committed quality floor for the CI benchmark gate and the quality panel's
  *  reference line — the single source of truth both share. Calibrate after the

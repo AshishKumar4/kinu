@@ -17,8 +17,8 @@ import {
   LOCALIZATION_OTHER_MAX_PP, LOCALIZATION_OWN_MIN_PP,
   observePipeline, runFaultMatrix, runLayerGate,
   type SubjectName,
-} from '../src/layergate/index.js';
-import { createTestRuntime } from './helpers.js';
+} from '../src/layergate/index';
+import { createTestRuntime } from './helpers';
 
 const SRC = resolve(import.meta.dir, '../src');
 // The gate reads no storage: every prompt probe passes soulOverride, so the
@@ -67,10 +67,12 @@ function importsOf(file: string): Import[] {
 
 function resolveImport(from: string, spec: string): string | null {
   if (!spec.startsWith('.')) return null;
-  const direct = resolve(dirname(from), spec).replace(/\.js$/, '.ts');
-  if (existsSync(direct)) return direct;
-  const barrel = direct.replace(/\.ts$/, '/index.ts');
-  return existsSync(barrel) ? barrel : null;
+  // One spelling: a relative specifier under Bun names the module without an
+  // extension, so the module is `<spec>.ts` or the directory's barrel. This used
+  // to rewrite a trailing `.js` and returned null for every extensionless
+  // specifier, which walks no edges and finds no subject reachable at all.
+  const base = resolve(dirname(from), spec);
+  return [`${base}.ts`, `${base}/index.ts`].find((path) => existsSync(path)) ?? null;
 }
 
 /** Every subject symbol imported anywhere in `entry`'s transitive closure. */

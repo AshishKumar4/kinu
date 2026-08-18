@@ -12,23 +12,23 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExecutor } from '../types/primitives.js';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { FactsStore } from '../memory/facts.js';
-import { listScaffoldArchive } from '../scaffold/archive.js';
-import { getPendingScaffold, applyPromotionDecision } from '../scaffold/shadow.js';
-import { rollbackScaffold } from '../scaffold/rollback.js';
-import { revertView } from '../views/store.js';
-import { listGepaRuns } from './gepa/persistence.js';
-import { listReplayEvals } from './replay.js';
+import type { SqlExecutor } from '../types/primitives';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { FactsStore } from '../memory/facts';
+import { listScaffoldArchive } from '../scaffold/archive';
+import { getPendingScaffold, applyPromotionDecision } from '../scaffold/shadow';
+import { rollbackScaffold } from '../scaffold/rollback';
+import { revertView } from '../views/store';
+import { listGepaRuns } from './gepa/persistence';
+import { listReplayEvals } from './replay';
 import {
   listTurnOutcomes, TURN_OUTCOMES, TURN_OUTCOME_SOURCES,
   type TurnOutcomeSource, type TurnOutcomeRow,
-} from './outcomes.js';
-import { describePathology } from './pathology.js';
-import { formatScoreInterval, lossInterval } from '../utils/stats.js';
-import { parseJsonValue } from '../utils/json.js';
-import { tolerate } from '../obs/index.js';
+} from './outcomes';
+import { describePathology } from './pathology';
+import { formatScoreInterval, lossInterval } from '../utils/stats';
+import { parseJsonValue } from '../utils/json';
+import { tolerate } from '../obs/index';
 
 const ScaffoldRunEventSchema = v.object({
   fromVersion: v.optional(v.number()),

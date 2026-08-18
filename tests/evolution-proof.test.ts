@@ -32,8 +32,8 @@ import {
   type LLMProviderConfig,
   type CompletedTurn,
   type ToolCallRecord,
-} from '../packages/core/src/index.js';
-import { createWorkspace } from '../packages/core/src/identity/index.js';
+} from '../packages/core/src/index';
+import { createWorkspace } from '../packages/core/src/identity/index';
 import {
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';

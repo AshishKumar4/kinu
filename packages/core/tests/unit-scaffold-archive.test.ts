@@ -17,10 +17,10 @@ import {
   initShadowTables,
   buildScaffoldProposalPrompt,
   type ScaffoldArchiveEntry,
-} from '../src/index.js';
-import { clusterPathologies } from '../src/evolution/pathology.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import { createTestRuntime } from './helpers.js';
+} from '../src/index';
+import { clusterPathologies } from '../src/evolution/pathology';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import { createTestRuntime } from './helpers';
 
 const RATIONALE = 'A rationale comfortably longer than the fifty-character gate-1 minimum length.';
 

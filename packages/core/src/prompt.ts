@@ -4,14 +4,14 @@
  * details layered in only when they are actually true for the current turn.
  */
 
-import type { AgentRuntime } from './types/agent-runtime.js';
+import type { AgentRuntime } from './types/agent-runtime';
 import {
   AGENT_STANCE_SPECS,
   BUILTIN_TOOL_SPECS,
   type BuiltinToolName,
-} from './tools/registry.js';
-import { renderActiveSkillsSection, renderSkillsIndexSection } from './skills/render.js';
-import type { ActiveSkillSet, ParsedSkill } from './skills/types.js';
+} from './tools/registry';
+import { renderActiveSkillsSection, renderSkillsIndexSection } from './skills/render';
+import type { ActiveSkillSet, ParsedSkill } from './skills/types';
 import {
   compilePromptSurface,
   executorIsSelectable,
@@ -20,27 +20,27 @@ import {
   type PromptExternalToolInfo,
   type PromptSurface,
   type PromptSurfaceOptions,
-} from './prompting/surface.js';
-import { DEFAULT_SOUL_MD } from './identity/soul.js';
-import { renderAgentsMdSection, type AgentsMdFile } from './prompting/agents-md.js';
-import { BUILTIN_TOOL_LINE } from './prompting/section-templates.js';
-import { WORKSPACE_ROOT } from './vfs/workspace-path.js';
-import { PLATFORM_CATALOG } from './platform-catalog.js';
+} from './prompting/surface';
+import { DEFAULT_SOUL_MD } from './identity/soul';
+import { renderAgentsMdSection, type AgentsMdFile } from './prompting/agents-md';
+import { BUILTIN_TOOL_LINE } from './prompting/section-templates';
+import { WORKSPACE_ROOT } from './vfs/workspace-path';
+import { PLATFORM_CATALOG } from './platform-catalog';
 
-export type { AgentStance } from './tools/registry.js';
+export type { AgentStance } from './tools/registry';
 export type {
   PromptBackend,
   PromptExecutorInfo,
   PromptExternalToolInfo,
   TurnProvenance,
   WorkMode,
-} from './prompting/surface.js';
+} from './prompting/surface';
 export type {
   PromptModelCapability,
   PromptModelContext,
   PromptModelFamily,
   PromptModelProfile,
-} from './prompting/model-profile.js';
+} from './prompting/model-profile';
 
 export interface SystemPromptOptions extends PromptSurfaceOptions {
   /** Override the SOUL.md lookup. Tests and head runtimes use this for isolated prompt construction. */

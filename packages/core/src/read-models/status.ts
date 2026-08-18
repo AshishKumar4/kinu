@@ -8,16 +8,16 @@
  * it runs.
  */
 
-import type { AgentConfigStore } from '../config/store.js';
-import { readForkLineage, type ForkLineageRow } from '../identity/fork.js';
-import { readSoul, summarizeSoul } from '../identity/soul.js';
-import { BUILTIN_TOOLS } from '../tools/registry.js';
-import type { CraftStore } from '../types/agent-runtime.js';
-import type { VFS, SqlExecutor } from '../types/primitives.js';
-import type { CraftedTool } from '../types/craft.js';
-import type { ReasoningEffort } from '../strategy/effort.js';
-import { transcriptRole, uiMessageText } from '../utils/ui-message.js';
-import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from './page.js';
+import type { AgentConfigStore } from '../config/store';
+import { readForkLineage, type ForkLineageRow } from '../identity/fork';
+import { readSoul, summarizeSoul } from '../identity/soul';
+import { BUILTIN_TOOLS } from '../tools/registry';
+import type { CraftStore } from '../types/agent-runtime';
+import type { VFS, SqlExecutor } from '../types/primitives';
+import type { CraftedTool } from '../types/craft';
+import type { ReasoningEffort } from '../strategy/effort';
+import { transcriptRole, uiMessageText } from '../utils/ui-message';
+import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from './page';
 
 /** Widest transcript page a surface may ask for. */
 const MAX_HISTORY_LIMIT = 200;

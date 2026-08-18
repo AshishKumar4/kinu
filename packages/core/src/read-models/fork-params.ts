@@ -18,8 +18,8 @@
  */
 
 import * as v from 'valibot';
-import { tolerate } from '../obs/index.js';
-import type { SqlExecutor } from '../types/primitives.js';
+import { tolerate } from '../obs/index';
+import type { SqlExecutor } from '../types/primitives';
 
 /** The settle policy as the caller names it — `agents(action:'fork', settle)`. */
 export type ForkSettlePolicy = 'merge' | 'mcts';

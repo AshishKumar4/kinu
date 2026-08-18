@@ -18,7 +18,7 @@ import {
   type ProteusExtension,
   type ChatEvent,
   type Usage,
-} from '../src/index.ts';
+} from '../src/index';
 
 /** A v2 language-model stub that requests the `ping` tool on step 1, then
  *  answers with text on step 2. Captures the tool names it was handed so a test

@@ -6,16 +6,16 @@
  * how bytes are stored differs between this path and a deployed agent.
  */
 
-import { createWorkspace as createWorkspaceFilesystem, nextWorkspaceGeneration } from '../vfs/nimbus-workspace.js';
-import type { WorkspaceBundle } from '../vfs/nimbus-workspace.js';
+import { createWorkspace as createWorkspaceFilesystem, nextWorkspaceGeneration } from '../vfs/nimbus-workspace';
+import type { WorkspaceBundle } from '../vfs/nimbus-workspace';
 import { chunkMarkdown, initMemoryChunkTables } from '@proteus/agent-utils/memory';
-import type { CraftStore } from '../types/agent-runtime.js';
+import type { CraftStore } from '../types/agent-runtime';
 import type {
   Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExecutor, VFS,
-} from '../types/primitives.js';
-import type { CraftedTool } from '../types/craft.js';
-import { nanoid } from '../utils/nanoid.js';
-import { decodeJsonValue } from '../utils/json.js';
+} from '../types/primitives';
+import type { CraftedTool } from '../types/craft';
+import { nanoid } from '../utils/nanoid';
+import { decodeJsonValue } from '../utils/json';
 
 /** Database interface — satisfied by bun:sqlite Database */
 export interface AgentDatabase {

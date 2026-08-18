@@ -30,6 +30,7 @@
     "anti-slop/no-wait-until-in-durable-object": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-cause-on-rethrow": "error",
+    "anti-slop/require-runtime-import-extension": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error"
   },
   "ignorePatterns": [

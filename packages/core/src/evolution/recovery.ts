@@ -55,8 +55,8 @@
  * in-memory note dies exactly when it was about to matter.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import { listLessons, recordLesson } from './outcomes.js';
+import type { SqlExecutor } from '../types/primitives';
+import { listLessons, recordLesson } from './outcomes';
 
 /**
  * One execution-proven recovery, as the failure ledger observed it. The arg

@@ -5,13 +5,13 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { diversityAngle, siblingAngles, diversityDirective } from '../src/mcts/diversity.js';
+import { diversityAngle, siblingAngles, diversityDirective } from '../src/mcts/diversity';
 import {
   explorePrompt,
   reflectionPrompt,
   type ExplorePromptInput,
-} from '../src/mcts/explore-prompt.js';
-import { EVIDENCE_BUDGETS } from '../src/prompts/evidence-window.js';
+} from '../src/mcts/explore-prompt';
+import { EVIDENCE_BUDGETS } from '../src/prompts/evidence-window';
 
 describe('diversity angles', () => {
   test('single branch gets no siblings and an empty directive', () => {

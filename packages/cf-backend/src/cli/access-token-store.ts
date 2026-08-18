@@ -11,7 +11,7 @@
  * meaning intact; thrown errors are real infra failures.
  */
 import { nanoid, type SqlExec } from '@proteus/core';
-import { sha256Hex } from '../lib/crypto.js';
+import { sha256Hex } from '../lib/crypto';
 import * as v from 'valibot';
 
 // Scopes renamed from agent.read/agent.exec with no back-compat migration by

@@ -1,26 +1,26 @@
 import * as oauth from 'oauth4webapi';
-import { AuthError, SESSION_COOKIE_NAME, authenticateRequest, readSessionToken } from './session.js';
+import { AuthError, SESSION_COOKIE_NAME, authenticateRequest, readSessionToken } from './session';
 import {
   cleanupExpiredAuthRows, clearD1BookmarkCookie, consumeOAuthState, createOAuthState,
   createSession, d1BookmarkCookie, revokeSession, sanitizeReturnTo, withD1Bookmark,
   type OAuthProfile,
-} from './d1-store.js';
-import { escapeHtml, json } from '../lib/http.js';
-import { publicHtmlHeaders } from '../lib/security-headers.js';
+} from './d1-store';
+import { escapeHtml, json } from '../lib/http';
+import { publicHtmlHeaders } from '../lib/security-headers';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
   type OAuthProviderConfig,
-} from './providers.js';
+} from './providers';
 import {
   CLOUDFLARE_OAUTH_CRED_KEY,
   cloudflareTokenToCredential,
   isCloudflareCredentialUsable,
   type CloudflareTokenPayload,
-} from '../lib/cloudflare-oauth.js';
+} from '../lib/cloudflare-oauth';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, JsonValueSchema, type JsonObject } from '@proteus/core';
 import { diagnostics, toProteusError } from '@proteus/core/obs';
-import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access.js';
-import { ownerCaller } from '../user/workspace-capability.js';
+import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
+import { ownerCaller } from '../user/workspace-capability';
 import * as v from 'valibot';
 
 const CloudflareUserEnvelopeSchema = v.object({

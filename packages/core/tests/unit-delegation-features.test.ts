@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
   delegationFeatures, renderDelegationFeatures, executionPathSignals,
-} from '../src/evolution/delegation-features.js';
-import type { ToolCallRecord } from '../src/evolution/types.js';
-import type { JsonObject } from '../src/utils/json.js';
+} from '../src/evolution/delegation-features';
+import type { ToolCallRecord } from '../src/evolution/types';
+import type { JsonObject } from '../src/utils/json';
 
 const call = (name: string, args: JsonObject = {}): ToolCallRecord =>
   ({ name, args, result: null });

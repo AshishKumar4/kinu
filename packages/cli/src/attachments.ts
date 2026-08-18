@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
 import type { PromptFile } from '@proteus/core';
 import { tolerateAsync } from '@proteus/core/obs';
-import { formatBytes } from './display.js';
+import { formatBytes } from './display';
 
 /** File types worth inlining as model-visible parts. Everything else is
  *  reachable through the agent's read tools, so inlining would only burn

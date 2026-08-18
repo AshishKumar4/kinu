@@ -22,10 +22,10 @@
  * second notification path, and nothing here picks a mechanism.
  */
 
-import type { RunEventInput } from '../events/types.js';
-import type { SignalDeliverer } from '../types/signals.js';
-import type { AbandonedHeadRun, HeadJournal } from './journal.js';
-import { diagnostics, toProteusError } from '../obs/index.js';
+import type { RunEventInput } from '../events/types';
+import type { SignalDeliverer } from '../types/signals';
+import type { AbandonedHeadRun, HeadJournal } from './journal';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** What this reconciliation needs of the run-event recorder: find the run a
  *  fork was dispatched from, and append to it. Structural so core's heads layer

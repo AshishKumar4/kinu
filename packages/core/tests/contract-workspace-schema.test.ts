@@ -18,10 +18,10 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
-import { initWorkspaceSchema } from '../src/identity/workspace-schema.js';
-import { wrapDatabase } from '../src/identity/create.js';
+import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { wrapDatabase } from '../src/identity/create';
 import { resolve } from 'node:path';
-import { makeSqlExec } from './helpers.js';
+import { makeSqlExec } from './helpers';
 
 const REPO = resolve(import.meta.dir, '../../..');
 const read = (path: string): string => readFileSync(resolve(REPO, path), 'utf8');

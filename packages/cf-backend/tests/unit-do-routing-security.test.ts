@@ -5,8 +5,8 @@ import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath,
-} from '../src/agent-routing.js';
-import { deriveUserId } from '../src/auth/session.js';
+} from '../src/agent-routing';
+import { deriveUserId } from '../src/auth/session';
 
 /**
  * F1 account-takeover regression.

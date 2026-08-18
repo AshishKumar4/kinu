@@ -8,7 +8,7 @@ import {
   initAllTables,
   type MemoryToolInput,
   type JsonValue,
-} from '../src/index.ts';
+} from '../src/index';
 
 function setup() {
   const { rt, testSql } = createTestRuntime();

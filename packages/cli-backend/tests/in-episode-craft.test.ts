@@ -9,11 +9,11 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { TestLanguageModelV2 } from './test-language-model.js';
+import { TestLanguageModelV2 } from './test-language-model';
 import type { LLMProviderConfig, RunEvent } from '@proteus/core';
 import { CRAFT_NEUTRAL_PRIOR } from '@proteus/core';
-import { createCLIRuntime } from '../src/runtime.js';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
+import { createCLIRuntime } from '../src/runtime';
+import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { scratchPath } from '@proteus/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {

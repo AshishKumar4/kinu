@@ -7,8 +7,8 @@ import type {
   DeviceConsentDecision,
   DeviceConsentSurface,
   PendingDeviceConsent,
-} from '../src/agent-client.js';
-import { watchDeviceConsents, type ConsentNoteKind } from '../src/consent-watch.js';
+} from '../src/agent-client';
+import { watchDeviceConsents, type ConsentNoteKind } from '../src/consent-watch';
 
 const POLL_MS = 5;
 

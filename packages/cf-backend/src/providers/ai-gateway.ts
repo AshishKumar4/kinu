@@ -23,7 +23,7 @@ import {
 import {
   WORKERS_AI_FALLBACK_MODEL_CATALOG,
   WORKERS_AI_PREFERRED_MODEL_IDS,
-} from './workers-ai-catalog.js';
+} from './workers-ai-catalog';
 
 export const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
 

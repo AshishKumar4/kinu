@@ -12,10 +12,10 @@ import { Database } from 'bun:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createWorkspace } from '../../core/src/identity/index.js';
-import { initWorkspaceSchema, type LLMProviderConfig } from '../../core/src/index.js';
-import { openWorkspaceCLI, makeWorkspaceSchemaSql } from '../../cli-backend/src/index.js';
-import { assertExecutableRuntime, createTestRuntime } from '../src/runtime.js';
+import { createWorkspace } from '../../core/src/identity/index';
+import { initWorkspaceSchema, type LLMProviderConfig } from '../../core/src/index';
+import { openWorkspaceCLI, makeWorkspaceSchemaSql } from '../../cli-backend/src/index';
+import { assertExecutableRuntime, createTestRuntime } from '../src/runtime';
 
 // Never called: both runtimes are constructed and inspected, never asked to
 // generate. The unroutable baseURL is deliberate — if anything here reaches the

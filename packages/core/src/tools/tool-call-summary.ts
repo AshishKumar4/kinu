@@ -15,8 +15,8 @@
  * read as `edit, /a/b.ts, [{"old":"…` there and `Edited b.ts — 3 replacements`
  * on the web. One vocabulary, one home, both surfaces.
  */
-import { isFailingToolResult } from '../orchestrator/turn-steering.js';
-import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json.js';
+import { isFailingToolResult } from '../orchestrator/turn-steering';
+import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import * as v from 'valibot';
 
 /** Chip budget — long enough for a command or a short task, short enough to

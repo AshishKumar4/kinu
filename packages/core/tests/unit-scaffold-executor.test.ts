@@ -15,10 +15,10 @@ import {
   runScaffold,
   type ScaffoldEvent,
   type ScaffoldEmitFn,
-} from '../src/scaffold/executor.js';
-import type { Executor, ResolvedProvider } from '../src/types/primitives.js';
-import type { JsonObject } from '../src/utils/json.js';
-import { createTestRuntime } from './helpers.js';
+} from '../src/scaffold/executor';
+import type { Executor, ResolvedProvider } from '../src/types/primitives';
+import type { JsonObject } from '../src/utils/json';
+import { createTestRuntime } from './helpers';
 
 function makeRtWithMockedExecutor(execute: Executor['execute']) {
   const { rt } = createTestRuntime();

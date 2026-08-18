@@ -3,7 +3,7 @@
 // surfaced as thrown messages.
 import { describe, expect, test } from 'bun:test';
 import { JsonValueSchema, type JsonValue } from '@proteus/core';
-import { callAgentRpc } from '../src/cloud-api.js';
+import { callAgentRpc } from '../src/cloud-api';
 import * as v from 'valibot';
 
 describe('callAgentRpc', () => {

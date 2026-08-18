@@ -9,7 +9,7 @@
 
 import type { ContentBlock } from '@agentclientprotocol/sdk';
 import type { PromptFile } from '@proteus/core';
-import type { AgentPrompt } from '../agent-client.js';
+import type { AgentPrompt } from '../agent-client';
 
 /** Text of a single block, or null when it carries no readable text. */
 function blockText(block: ContentBlock): string | null {

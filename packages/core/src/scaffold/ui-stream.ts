@@ -23,8 +23,8 @@
  */
 
 import { uiMessageChunkSchema, type UIMessageChunk } from 'ai';
-import type { ScaffoldRunResult, ScaffoldEmitFn } from './executor.js';
-import { pumpScaffoldEvents } from './event-pump.js';
+import type { ScaffoldRunResult, ScaffoldEmitFn } from './executor';
+import { pumpScaffoldEvents } from './event-pump';
 
 /** Run a scaffold (via the supplied runner) and yield a UI message stream. */
 export async function* scaffoldEventsToUIStream(

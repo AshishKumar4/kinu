@@ -11,7 +11,7 @@ import {
   type LexicalSearchFn,
   type VectorStore,
   type VectorSearchHit,
-} from '../src/index.js';
+} from '../src/index';
 
 const lexicalCorpus: LexicalHit[] = [
   { id: 'l-1', path: 'a.md', startLine: 1, endLine: 5, score: 0.9, snippet: 'exact match line' },

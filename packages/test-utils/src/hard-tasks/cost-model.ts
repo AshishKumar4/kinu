@@ -60,7 +60,7 @@
  */
 import * as v from 'valibot';
 import type { ExecOutcome } from '@proteus/core';
-import type { VerifierContext } from '../eval-outcome.js';
+import type { VerifierContext } from '../eval-outcome';
 
 /** The file every task asks the agent to write. */
 export const SOLUTION_FILE = 'solution.mjs';

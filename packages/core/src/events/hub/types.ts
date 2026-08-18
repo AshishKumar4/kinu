@@ -15,8 +15,8 @@
  * See docs/ARCHITECTURE.md — "Events and ingress" for the authoritative spec.
  */
 
-import type { WorkMode } from '../../prompting/surface.js';
-import type { JsonObject, JsonValue } from '../../utils/json.js';
+import type { WorkMode } from '../../prompting/surface';
+import type { JsonObject, JsonValue } from '../../utils/json';
 
 // ── Trust ────────────────────────────────────────────────────────
 

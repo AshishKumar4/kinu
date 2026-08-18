@@ -11,23 +11,23 @@ export type {
   ExecutorInfo,
   ResourceLimits,
   ExecutionRouter,
-} from './types.js';
-export { EXECUTOR_CAPABILITIES } from './types.js';
+} from './types';
+export { EXECUTOR_CAPABILITIES } from './types';
 
 export {
   formatExecResult, isFailingResultText, type ExecOutcome,
   STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
-} from './exec-result.js';
+} from './exec-result';
 export {
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
-} from './escalation.js';
-export { DefaultExecutionRouter } from './router.js';
-export { createInlineExecutor, type InlineExecutorDeps } from './inline.js';
-export { withApprovalGatedShell, gateProviderExec } from './approval.js';
+} from './escalation';
+export { DefaultExecutionRouter } from './router';
+export { createInlineExecutor, type InlineExecutorDeps } from './inline';
+export { withApprovalGatedShell, gateProviderExec } from './approval';
 export {
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError,
-} from './sandbox.js';
+} from './sandbox';
 export {
   createWorkspaceSnapshots, type WorkspaceSnapshots, type WorkspaceSnapshotPorts,
   type WorkspaceSnapshotState, type WorkspaceRestoreOutcome, type WorkspaceSnapshotOutcome,
@@ -39,18 +39,18 @@ export {
   WORKSPACE_RESTORE_DEADLINE_MS, isDirectoryOverlayMounted,
   snapshotIntegrityFailure, snapshotObjectKeys, withContainerStartDeadline,
   type SnapshotObjectKeys, type LateStartFailure,
-} from './workspace-snapshot.js';
-export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunnel-executor.js';
-export { explainNativeToolReferenceError } from './sandbox-errors.js';
+} from './workspace-snapshot';
+export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunnel-executor';
+export { explainNativeToolReferenceError } from './sandbox-errors';
 export {
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   DEVICE_PRESENCE_CONFIG_KEY,
   type DeviceStatus, type DevicePresence, type DevicePresenceStore,
-} from './device-status.js';
+} from './device-status';
 export {
   DeviceTunnel, type TunnelSocket,
   TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
-} from './device-tunnel.js';
+} from './device-tunnel';
 
 // Reusable Nimbus adapter. Cloudflare composes the session as its authoritative
 // workspace; the standalone factory remains available to other backends.
@@ -64,14 +64,14 @@ export {
   type NimbusExecOptions,
   type NimbusExecResult,
   type NimbusStartResult,
-} from './nimbus.js';
+} from './nimbus';
 
 export {
   createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentExecResult,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
-} from './parent.js';
-export { sandboxFiles } from './sandbox.js';
-export { nimbusSessionFiles } from './nimbus.js';
-export { deviceFiles, type DeviceFileConsent } from './device-tunnel-executor.js';
-export { parseStatLine } from './exec-result.js';
+} from './parent';
+export { sandboxFiles } from './sandbox';
+export { nimbusSessionFiles } from './nimbus';
+export { deviceFiles, type DeviceFileConsent } from './device-tunnel-executor';
+export { parseStatLine } from './exec-result';

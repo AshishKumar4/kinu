@@ -1,10 +1,10 @@
 import { statSync } from 'node:fs';
 import { diagnostics, toProteusError } from '@proteus/core/obs';
-import { listCloudAgents } from '../cloud-api.js';
-import { reconcileAgentRefs } from '../agent-list.js';
-import { agentDbPath, listAgentDirs, loadConfigFile, resolveCloudSession } from '../config.js';
-import { printAgentList } from '../display.js';
-import { getLocalAgentInfo } from '../local-inspection.js';
+import { listCloudAgents } from '../cloud-api';
+import { reconcileAgentRefs } from '../agent-list';
+import { agentDbPath, listAgentDirs, loadConfigFile, resolveCloudSession } from '../config';
+import { printAgentList } from '../display';
+import { getLocalAgentInfo } from '../local-inspection';
 
 export async function listCommand(): Promise<void> {
   const localAgents = listAgentDirs();

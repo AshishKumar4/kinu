@@ -4,8 +4,8 @@ import {
   minimumDetectableEffect, requiredPairs, pairedBinaryComparison, computeGain,
   floorPValue, minimumPairsForSignificance, summarizeRepeats,
   DEFAULT_ALPHA,
-} from '../src/index.ts';
-import type { PairedOutcome } from '../src/index.ts';
+} from '../src/index';
+import type { PairedOutcome } from '../src/index';
 
 describe('normalQuantile', () => {
   test('matches the textbook z values', () => {

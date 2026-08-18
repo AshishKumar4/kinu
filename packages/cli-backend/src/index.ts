@@ -6,42 +6,42 @@ export {
   createCLIRuntime, buildCLIHeadRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql,
   createHostShell, withCheckpointedShell,
   type CLIRuntime, type CLIRuntimeConfig, type LocalDb,
-} from './runtime.js';
-export { createHostCheckpoints, type HostCheckpointsOpts } from './checkpoints.js';
-export { proteusHome } from './home.js';
+} from './runtime';
+export { createHostCheckpoints, type HostCheckpointsOpts } from './checkpoints';
+export { proteusHome } from './home';
 export {
   writeSecretFile, enforceOwnerOnly, ensureSecretDir, SECRET_FILE_MODE, SECRET_DIR_MODE,
-} from './secret-file.js';
-export { openWorkspaceCLI, type WorkspaceInfo, type CLIOpenConfig } from './open.js';
-export { createSandboxedExecutor, createNodeExecutor } from './executor.js';
-export { createLinuxFiber, detectOrphanedFibers } from './fiber.js';
-export { createBranchSpawner } from './branch-process.js';
-export { createNodeCraftedExecute } from './craft-executor.js';
-export { discoverAgentsMd } from './agents-md.js';
-export { createNodeExecuteToolFactory, type NodeExecuteToolFactoryDeps } from './execute-tools-factory.js';
+} from './secret-file';
+export { openWorkspaceCLI, type WorkspaceInfo, type CLIOpenConfig } from './open';
+export { createSandboxedExecutor, createNodeExecutor } from './executor';
+export { createLinuxFiber, detectOrphanedFibers } from './fiber';
+export { createBranchSpawner } from './branch-process';
+export { createNodeCraftedExecute } from './craft-executor';
+export { discoverAgentsMd } from './agents-md';
+export { createNodeExecuteToolFactory, type NodeExecuteToolFactoryDeps } from './execute-tools-factory';
 export {
   LocalAgentSession, resolveChatModel, LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   type LocalAgentSessionOpts, type SessionEvent, type LocalSessionDb,
   type ShellApprovalHandler,
-} from './local-session.js';
+} from './local-session';
 export {
   createLocalModelResolver, cloudProxyBaseURL, CLOUD_PROXY_PROVIDER_IDS,
   type LocalModelResolver, type LocalModelResolverConfig, type LocalCloudSession,
   type LocalProviderCredentials, type LocalOpenAICompatCredential,
-} from './model-resolver.js';
-export { createFileCodexAuthStore, type LocalCodexAuthStore } from './codex-auth-store.js';
+} from './model-resolver';
+export { createFileCodexAuthStore, type LocalCodexAuthStore } from './codex-auth-store';
 export {
   createClaudeCliProvider, checkClaudeAvailability, buildClaudePrompt,
   CLAUDE_CLI_PROVIDER_ID, CLAUDE_CLI_DEFAULT_MODEL,
   type ClaudeCliProviderOptions, type ClaudeSpawn, type SpawnedClaude, type ClaudeAvailability,
-} from './claude-cli-provider.js';
+} from './claude-cli-provider';
 
 export {
   createOpenCodeProvider, probeOpenCode, checkOpenCodeAvailability,
   OPENCODE_PROVIDER_ID, OPENCODE_LABEL,
   type OpenCodeProviderOptions, type OpenCodeAvailability,
   type OpenCodeModelInfo, type OpenCodeSpawn, type SpawnedOpenCode,
-} from './opencode-provider.js';
+} from './opencode-provider';
 
-export { createCLIHeadRuntime } from './head-runtime.js';
-export { connectMcpServers, type McpServerConfig, type McpConnection } from './mcp.js';
+export { createCLIHeadRuntime } from './head-runtime';
+export { connectMcpServers, type McpServerConfig, type McpConnection } from './mcp';

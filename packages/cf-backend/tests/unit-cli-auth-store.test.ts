@@ -1,16 +1,16 @@
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import {
   approveCliAuth,
   inspectCliAuth,
   pollCliAuth,
   startCliAuth,
-} from '../src/cli/auth-store.js';
-import { createAuthDatabase, makeD1 } from './helpers/d1.js';
+} from '../src/cli/auth-store';
+import { createAuthDatabase, makeD1 } from './helpers/d1';
 import { Database } from 'bun:sqlite';
-import { RateLimitError } from '../src/cli/auth-store.js';
-import { handleCliRequest } from '../src/cli/routes.js';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import { RateLimitError } from '../src/cli/auth-store';
+import { handleCliRequest } from '../src/cli/routes';
+import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 const ErrorResponseSchema = v.object({ error: v.string() });

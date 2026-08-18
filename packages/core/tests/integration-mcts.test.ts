@@ -9,14 +9,14 @@
 
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
-import { createTestRuntime, createMockSession } from './helpers.js';
-import { runMCTS } from '../src/mcts/engine.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
-import type { MCTSProgressEvent, SearchNode } from '../src/types/mcts.js';
-import type { Executor, LLM } from '../src/types/primitives.js';
-import type { BranchHandle } from '../src/types/agent-runtime.js';
+import { createTestRuntime, createMockSession } from './helpers';
+import { runMCTS } from '../src/mcts/engine';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initCraftScoreTables } from '../src/craft/schemas';
+import type { MCTSProgressEvent, SearchNode } from '../src/types/mcts';
+import type { Executor, LLM } from '../src/types/primitives';
+import type { BranchHandle } from '../src/types/agent-runtime';
 
 /** Executor that fails any code containing FAIL_MARKER, passes the rest. */
 function markerExecutor(): Executor {
@@ -619,7 +619,7 @@ describe('MCTS strategy — stored operator overrides', () => {
     // This is the seam the backends use to inject AgentConfigStore.getMctsOverrides():
     // think({strategy:'mcts'}) without an explicit budget must run with the
     // stored knobs, not hardcoded defaults.
-    const { createMCTSStrategy } = await import('../src/strategy/mcts.js');
+    const { createMCTSStrategy } = await import('../src/strategy/mcts');
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => ({
       explore: async () => ({ text: 'explored' }),
@@ -644,7 +644,7 @@ describe('MCTS strategy — stored operator overrides', () => {
   });
 
   test('options.mcts.judgeSamples flows through to the evaluator', async () => {
-    const { createMCTSStrategy } = await import('../src/strategy/mcts.js');
+    const { createMCTSStrategy } = await import('../src/strategy/mcts');
     const llm = countingLLM('{"score": 0.5}');
     const { rt } = createTestRuntime();
     rt.llm = llm;

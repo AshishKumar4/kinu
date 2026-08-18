@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { withRateLimitRetry } from '../src/providers/rate-limit-retry.ts';
-import { asFetchFunction } from '../src/providers/fetch-shim.js';
+import { withRateLimitRetry } from '../src/providers/rate-limit-retry';
+import { asFetchFunction } from '../src/providers/fetch-shim';
 
 function retryHarness(
   responses: Response[],

@@ -9,10 +9,10 @@
 
 import { describe, test, expect } from 'bun:test';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
-import { userCredentialSource } from './helpers/user-credentials.js';
+import { userCredentialSource } from './helpers/user-credentials';
 import { createMockFetch } from '@proteus/test-utils';
-import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
-import { resolveJudgeModelSelection } from '../src/providers/judge-model.ts';
+import { createAgentProviderRegistry } from '../src/providers/agent-registry';
+import { resolveJudgeModelSelection } from '../src/providers/judge-model';
 
 const CLOUDFLARE_BASE = 'https://api.cloudflare.com/client/v4/accounts/acct';
 const KIMI = 'workers-ai/@cf/moonshotai/kimi-k2.6';

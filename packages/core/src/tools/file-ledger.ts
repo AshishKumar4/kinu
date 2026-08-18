@@ -32,8 +32,8 @@
  * ledger, which is correct: a fork reads its own files.
  */
 
-import { fnv1a64 } from '../prompting/volatile-context.js';
-import type { FileEditFailure } from './file-edit.js';
+import { fnv1a64 } from '../prompting/volatile-context';
+import type { FileEditFailure } from './file-edit';
 
 /** Why an edit attempt did not land. The text-surgery failures plus the two the
  *  ledger itself raises and the I/O ones the VFS raises. */

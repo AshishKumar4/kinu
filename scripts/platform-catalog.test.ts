@@ -6,11 +6,11 @@ import {
   platformFact,
   platformFactEntries,
   type PlatformFact,
-} from '../packages/core/src/platform-catalog.ts';
+} from '../packages/core/src/platform-catalog';
 import { readFileSync } from 'node:fs';
 
-import { PROSE_EXEMPT_FILES, auditSchema, auditSources, findProseMentions } from './platform-catalog.ts';
-import { readSources } from './sources.ts';
+import { PROSE_EXEMPT_FILES, auditSchema, auditSources, findProseMentions } from './platform-catalog';
+import { readSources } from './sources';
 
 /**
  * The fixture is not invented. This is the shape that produced the whole
@@ -280,8 +280,8 @@ describe('against the real tree', () => {
     // resolve after this file's own module graph, exactly as the core suites do.
     // That also means this test loads all of `packages/core`, so it fails while
     // any sibling is mid-write — which is why the invariant above stands alone.
-    const { createTestRuntime } = await import('../packages/test-utils/src/index.ts');
-    const { buildSystemPromptSync } = await import('../packages/core/src/prompt.ts');
+    const { createTestRuntime } = await import('../packages/test-utils/src/index');
+    const { buildSystemPromptSync } = await import('../packages/core/src/prompt');
     const { rt } = createTestRuntime();
     const rendered = buildSystemPromptSync(rt, {
       backend: 'cf',

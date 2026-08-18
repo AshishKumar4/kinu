@@ -115,14 +115,14 @@ import {
   priceCall, WORKSPACE_RUN_ID,
 } from '@proteus/core';
 import { diagnostics, ProteusError, toProteusError } from '@proteus/core/obs';
-import { makeSqlExec, type CLIRuntime } from './runtime.js';
-import { discoverAgentsMd } from './agents-md.js';
-import { createNodeCraftedExecute } from './craft-executor.js';
-import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
-import { createCLIHeadRuntime } from './head-runtime.js';
-import { detectOrphanedFibers } from './fiber.js';
-import { connectMcpServers, type McpServerConfig } from './mcp.js';
-import type { LocalModelResolver } from './model-resolver.js';
+import { makeSqlExec, type CLIRuntime } from './runtime';
+import { discoverAgentsMd } from './agents-md';
+import { createNodeCraftedExecute } from './craft-executor';
+import { createNodeExecuteToolFactory } from './execute-tools-factory';
+import { createCLIHeadRuntime } from './head-runtime';
+import { detectOrphanedFibers } from './fiber';
+import { connectMcpServers, type McpServerConfig } from './mcp';
+import type { LocalModelResolver } from './model-resolver';
 
 /** Build the ai-SDK chat model both frontends drive runChat with.
  *  Provider-style model switching uses

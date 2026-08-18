@@ -51,7 +51,7 @@
 
 import type { Agent } from "agents";
 import type { BranchHandle, HeadInput, SpawnedHead } from "@proteus/core";
-import { ExplorationAgent } from "./exploration.js";
+import { ExplorationAgent } from "./exploration";
 
 /** The facet substrate a spawner rides. Both the workspace DO and a head
  *  splitting further expose it, so both can spawn — and both must reclaim. */

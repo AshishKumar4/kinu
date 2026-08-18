@@ -16,7 +16,7 @@
 import { describe, test, expect } from 'bun:test';
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { runChat, createChatModel, type ChatEvent } from '../src/index.ts';
+import { runChat, createChatModel, type ChatEvent } from '../src/index';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 

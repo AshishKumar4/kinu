@@ -8,8 +8,8 @@
  * Lean formalization: lean/Proteus/Execution/{Capabilities,ToolSystem}.lean
  */
 
-import type { VFS } from '../types/primitives.js';
-import type { JsonValue } from '../utils/json.js';
+import type { VFS } from '../types/primitives';
+import type { JsonValue } from '../utils/json';
 
 export type ExecutorToolResult = JsonValue | undefined;
 

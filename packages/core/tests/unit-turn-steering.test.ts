@@ -22,9 +22,9 @@ import {
   STEPS_WITHOUT_PROGRESS_BEFORE_STEER,
   TURN_STEERING_HEADER, ExtensionHost, EvolutionEngine, EventLog, initEventsHubTables,
   type BackendHost,
-} from '../src/index.js';
-import type { JsonObject } from '../src/utils/json.js';
-import { makeSqlExec } from './helpers.js';
+} from '../src/index';
+import type { JsonObject } from '../src/utils/json';
+import { makeSqlExec } from './helpers';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });

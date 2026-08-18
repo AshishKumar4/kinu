@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { readWebhookBodyText } from '../src/events/body.js';
+import { readWebhookBodyText } from '../src/events/body';
 import {
   initWebhookRateLimitTables,
   normalizeWebhookRateLimitPerMin,
   tryConsumeWebhookRateLimit,
   type SqlExec,
 } from '@proteus/core';
-import { sqlExec } from './helpers/user-do.js';
+import { sqlExec } from './helpers/user-do';
 
 function sqlFor(db: Database): SqlExec {
   return sqlExec(db);

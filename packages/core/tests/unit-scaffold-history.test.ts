@@ -14,11 +14,11 @@ import {
   SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS, SCAFFOLD_HISTORY_MAX_PAGE_CHARS,
   createScaffoldHistory, runScaffold,
   type ScaffoldHistoryPage,
-} from '../src/index.js';
-import { SCAFFOLD_HOST_TYPES } from '../src/scaffold/executor.js';
-import type { Executor } from '../src/types/primitives.js';
-import type { JsonValue } from '../src/utils/json.js';
-import { createTestRuntime } from './helpers.js';
+} from '../src/index';
+import { SCAFFOLD_HOST_TYPES } from '../src/scaffold/executor';
+import type { Executor } from '../src/types/primitives';
+import type { JsonValue } from '../src/utils/json';
+import { createTestRuntime } from './helpers';
 
 function conversation(n: number): ModelMessage[] {
   return Array.from({ length: n }, (_, i): ModelMessage => ({

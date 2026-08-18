@@ -1,5 +1,5 @@
 import { callable, type AgentContext, type SubAgentClass } from 'agents';
-import { SUBORDINATE_RPC_SURFACE, sealRpcSurface } from './rpc-surface.js';
+import { SUBORDINATE_RPC_SURFACE, sealRpcSurface } from './rpc-surface';
 import { convertToModelMessages } from 'ai';
 import type { ChatResponseResult } from '@cloudflare/think';
 import {
@@ -20,8 +20,8 @@ import {
 import {
   ActorAgent,
   type ActorToolDeps,
-} from './actor-agent.js';
-import { OrchestratorAgent } from './orchestrator.js';
+} from './actor-agent';
+import { OrchestratorAgent } from './orchestrator';
 import {
   SubordinateIdentityStore,
   admitSubordinateTask,

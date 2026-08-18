@@ -3,9 +3,9 @@
  * Architecture reference: docs/MCTS.md — "UCT Formula" (budget defaults)
  */
 
-import type { CostEstimate } from '../types/evaluation.js';
-import { DEFAULT_CONFIG } from '../config.js';
-import { BLENDED_USD_PER_1K_TOKENS } from '../llm.js';
+import type { CostEstimate } from '../types/evaluation';
+import { DEFAULT_CONFIG } from '../config';
+import { BLENDED_USD_PER_1K_TOKENS } from '../llm';
 
 /** Rough blended tokens per LLM call (prompt in + completion out) across the
  *  explore / assertion / judge / reflection call mix. Static, same caveat. */

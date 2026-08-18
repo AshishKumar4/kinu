@@ -44,7 +44,7 @@
  * finishes far inside the harness deadline. Both ends are asserted by
  * `hard-tasks.test.ts` against MEASURED counts, not argued here.
  */
-import { ratioTask, type HardTask } from './cost-model.js';
+import { ratioTask, type HardTask } from './cost-model';
 
 /**
  * The comparison oracle, as harness source.

@@ -1,8 +1,8 @@
-import type { AuthIdentity } from '../auth/session.js';
-import type { UserDO } from '../user/user-do.js';
-import { randomToken, sha256Hex } from '../lib/crypto.js';
-import { parseAccessTokenUserId, type AccessTokenScope } from './access-token-store.js';
-import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability.js';
+import type { AuthIdentity } from '../auth/session';
+import type { UserDO } from '../user/user-do';
+import { randomToken, sha256Hex } from '../lib/crypto';
+import { parseAccessTokenUserId, type AccessTokenScope } from './access-token-store';
+import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability';
 
 /** Thrown when a CLI auth rate limit trips — routes map this (and only
  *  this) to HTTP 429; every other failure is a real error. */

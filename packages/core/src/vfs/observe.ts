@@ -9,8 +9,8 @@
  * smears all of their work into one pile.
  */
 
-import type { VFS } from '../types/primitives.js';
-import { isVfsError } from './errno.js';
+import type { VFS } from '../types/primitives';
+import { isVfsError } from './errno';
 
 /** A write or delete that landed, reported to an observer. */
 export interface WriteEvent {

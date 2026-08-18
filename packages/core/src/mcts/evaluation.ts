@@ -67,13 +67,13 @@
  */
 
 import * as v from 'valibot';
-import type { LLM, Executor } from '../types/primitives.js';
-import type { EvaluationGrounding } from '../types/evaluation.js';
-import { fencedBlocks, readProposalCode } from '../execution/code-fence.js';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
-import { tolerate } from '../obs/index.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
-import { DEFAULT_CONFIG } from '../config.js';
+import type { LLM, Executor } from '../types/primitives';
+import type { EvaluationGrounding } from '../types/evaluation';
+import { fencedBlocks, readProposalCode } from '../execution/code-fence';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { tolerate } from '../obs/index';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { DEFAULT_CONFIG } from '../config';
 
 /** Score bands. Execution verdicts dominate: fail ceiling < pass floor, and
  *  prose confidence is capped below a passing branch with a median judge.

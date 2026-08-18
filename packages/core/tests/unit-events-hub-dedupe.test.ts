@@ -1,7 +1,7 @@
 // Dedupe key derivation per variant — pure function.
 import { describe, test, expect } from 'bun:test';
-import { dedupeKeyFor } from '../src/events/hub/index.ts';
-import type { ProteusEvent } from '../src/events/hub/index.ts';
+import { dedupeKeyFor } from '../src/events/hub/index';
+import type { ProteusEvent } from '../src/events/hub/index';
 
 function base(): Extract<ProteusEvent, { variant: 'webhook' }> {
   return {

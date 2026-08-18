@@ -20,11 +20,11 @@ import { type AgentContext, type Connection, type ConnectionContext, type SubAge
 // Type-only, so it is erased and the base class carries no runtime import of
 // its own subclass. The VALUE comes from `subordinateFacet()`, which each
 // concrete root supplies.
-import type { SubordinateAgent } from './subordinate-agent.js';
-import type { SubordinateActivityEvent } from './lib/protocol.js';
+import type { SubordinateAgent } from './subordinate-agent';
+import type { SubordinateActivityEvent } from './lib/protocol';
 import { parseProtocolMessage } from "agents/chat";
-import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate.js";
-import { createWorkersTracer } from "./obs/cf-tracer.js";
+import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate";
+import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, type AgentTracing } from "@proteus/core/obs";
 import {
   createCompactionExtension, createVfsTranscriptStore,
@@ -37,7 +37,7 @@ import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessag
 import {
   SerializableToolDescriptorSchema,
   type SerializableToolDescriptor,
-} from "./user/mcp.js";
+} from "./user/mcp";
 import type {
   TurnContext, TurnConfig,
   ToolCallResultContext, StepContext, ChunkContext,
@@ -158,11 +158,11 @@ import {
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject, type JsonValue,
 } from "@proteus/core";
-import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime.js";
-import { createExecuteToolsTool } from "./execute-tools.js";
-import { createCFHeadRuntime } from "./heads/head-runtime.js";
-import type { AgentProviderRegistry } from "./providers/agent-registry.js";
-import { OwnedModelServices } from "./owned-model-services.js";
+import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
+import { createExecuteToolsTool } from "./execute-tools";
+import { createCFHeadRuntime } from "./heads/head-runtime";
+import type { AgentProviderRegistry } from "./providers/agent-registry";
+import { OwnedModelServices } from "./owned-model-services";
 import {
   // Prompt-cache breakpoints — single source in core prompting/cache-breakpoints.ts
   promptCachePlan, hasCacheMarkers, markLastToolForAnthropicCache,
@@ -170,9 +170,9 @@ import {
 } from "@proteus/core";
 import type { CodemodeProvider, DeferredApprovalChannel } from "@proteus/core";
 import { diagnostics, ProteusError, toProteusError, tolerate } from "@proteus/core/obs";
-import type { UserDO } from "./user/user-do.js";
-import type { UserCaller } from "./user/workspace-capability.js";
-import { sha256Hex } from "./lib/crypto.js";
+import type { UserDO } from "./user/user-do";
+import type { UserCaller } from "./user/workspace-capability";
+import { sha256Hex } from "./lib/crypto";
 import * as v from 'valibot';
 
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections

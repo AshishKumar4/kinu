@@ -13,9 +13,9 @@ export type {
   CraftCycleRecord,
   ExecutionRecoveryRecord,
   StepCost,
-} from './types.js';
+} from './types';
 
-export { FAILURE_WITHOUT_ERROR } from './types.js';
+export { FAILURE_WITHOUT_ERROR } from './types';
 
 export {
   initRunEventTables,
@@ -23,7 +23,7 @@ export {
   RunEventRecorder,
   type RunEventListener,
   type RunEventQuery,
-} from './recorder.js';
+} from './recorder';
 
 export {
   cacheHitRate,
@@ -31,7 +31,7 @@ export {
   CACHE_HIT_EMA_ALPHA,
   type CacheHitStats,
   type StepTelemetry,
-} from './step-stats.js';
+} from './step-stats';
 
 export {
   SPEND_SOURCES,
@@ -42,4 +42,4 @@ export {
   type ModelCallSpend,
   type ModelCallSink,
   type SpendSource,
-} from './model-call.js';
+} from './model-call';

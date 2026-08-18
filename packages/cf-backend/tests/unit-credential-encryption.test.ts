@@ -8,14 +8,14 @@
 //     plaintext on first access
 //   - a key rotation re-seals the store; the retired key stays readable
 //   - no key configured is a refusal, not a silent plaintext fallback
-import { testOwner } from './helpers/user-do.js';
+import { testOwner } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, sqlExec,
-} from './helpers/user-do.js';
-import { createCredentialCipher, isSealedCredential } from '../src/user/credential-envelope.js';
-import { ownerCaller } from '../src/user/workspace-capability.js';
+} from './helpers/user-do';
+import { createCredentialCipher, isSealedCredential } from '../src/user/credential-envelope';
+import { ownerCaller } from '../src/user/workspace-capability';
 
 /** The owner capability of a deployment whose key has been rotated. */
 const rotatedOwner = () => ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: NEXT_KEY });

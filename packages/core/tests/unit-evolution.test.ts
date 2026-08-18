@@ -8,13 +8,13 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { createTestRuntime } from './helpers.js';
-import { EvolutionEngine, type EvolutionEvent, type CompletedTurn, type CompletedSession } from '../src/evolution/index.js';
-import { listTurnOutcomes, listLessons, recordLesson } from '../src/evolution/outcomes.js';
-import { alignmentConvergence } from '../src/evolution/alignment.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
+import { createTestRuntime } from './helpers';
+import { EvolutionEngine, type EvolutionEvent, type CompletedTurn, type CompletedSession } from '../src/evolution/index';
+import { listTurnOutcomes, listLessons, recordLesson } from '../src/evolution/outcomes';
+import { alignmentConvergence } from '../src/evolution/alignment';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initCraftScoreTables } from '../src/craft/schemas';
 
 const CLASSIFY = 'Classify what the follow-up reveals';
 

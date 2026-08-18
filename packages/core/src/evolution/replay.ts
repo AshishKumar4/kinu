@@ -18,21 +18,21 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives.js';
+import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives';
 import {
   isNegativeOutcome,
   listTurnOutcomes,
   TURN_OUTCOMES,
   type TurnOutcomeRow,
-} from './outcomes.js';
-import { reconcileColumns } from '../identity/columns.js';
-import { tolerate } from '../obs/index.js';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
-import { nanoid } from '../utils/nanoid.js';
-import { nowMs } from '../utils/date.js';
-import { parseJsonValue } from '../utils/json.js';
-import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stats.js';
+} from './outcomes';
+import { reconcileColumns } from '../identity/columns';
+import { tolerate } from '../obs/index';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { nanoid } from '../utils/nanoid';
+import { nowMs } from '../utils/date';
+import { parseJsonValue } from '../utils/json';
+import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stats';
 
 /**
  * Instances per replay pass. Each one costs a full re-run of a past task

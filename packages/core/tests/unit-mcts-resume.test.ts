@@ -11,13 +11,13 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, createMockSession, makeSql } from './helpers.js';
-import { runMCTS } from '../src/mcts/engine.js';
-import { initSearchTables } from '../src/mcts/schemas.js';
-import { initScaffoldTables } from '../src/scaffold/schemas.js';
-import { initCraftScoreTables } from '../src/craft/schemas.js';
-import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store.js';
-import type { AgentRuntime } from '../src/types/agent-runtime.js';
+import { createTestRuntime, createMockSession, makeSql } from './helpers';
+import { runMCTS } from '../src/mcts/engine';
+import { initSearchTables } from '../src/mcts/schemas';
+import { initScaffoldTables } from '../src/scaffold/schemas';
+import { initCraftScoreTables } from '../src/craft/schemas';
+import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
+import type { AgentRuntime } from '../src/types/agent-runtime';
 
 function initTables(rt: AgentRuntime): void {
   initSearchTables(rt.storage.execRaw, rt.storage.sql);

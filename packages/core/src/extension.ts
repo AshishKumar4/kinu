@@ -17,8 +17,8 @@
  */
 
 import type { ModelMessage, ToolSet } from 'ai';
-import type { JsonObject } from './utils/json.js';
-import { diagnostics, toProteusError } from './obs/index.js';
+import type { JsonObject } from './utils/json';
+import { diagnostics, toProteusError } from './obs/index';
 
 export interface TurnStartContext {
   readonly system: string;

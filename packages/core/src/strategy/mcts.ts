@@ -10,12 +10,12 @@
 // (AgentConfigStore.getMctsOverrides) alongside the session; an explicit
 // caller budget (ctx.budget.maxIterations) still wins.
 import * as v from 'valibot';
-import { runMCTS } from '../mcts/engine.js';
-import { DEFAULT_CONFIG } from '../config.js';
-import { strategyOption, type ExplorationStrategy, type StrategyContext, type StrategyResult } from './types.js';
-import type { SessionWriter } from '../mcts/record-node.js';
-import { MctsSearchStore } from '../mcts/search-store.js';
-import type { MCTSProgressEvent } from '../types/mcts.js';
+import { runMCTS } from '../mcts/engine';
+import { DEFAULT_CONFIG } from '../config';
+import { strategyOption, type ExplorationStrategy, type StrategyContext, type StrategyResult } from './types';
+import type { SessionWriter } from '../mcts/record-node';
+import { MctsSearchStore } from '../mcts/search-store';
+import type { MCTSProgressEvent } from '../types/mcts';
 
 interface MCTSStrategyOptions {
   /** Default iteration budget when the caller doesn't pass one explicitly. */

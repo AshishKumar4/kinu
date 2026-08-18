@@ -11,26 +11,26 @@
  */
 
 // Data
-export * from './types.js';
-export * from './ulid.js';
-export * from './dedupe.js';
-export * from './trust.js';
-export * from './visibility.js';
-export * from './content-spill.js';
-export * from './drain.js';
-export * from './cron.js';
-export { initEventsHubTables } from './schema.js';
+export * from './types';
+export * from './ulid';
+export * from './dedupe';
+export * from './trust';
+export * from './visibility';
+export * from './content-spill';
+export * from './drain';
+export * from './cron';
+export { initEventsHubTables } from './schema';
 
 // Storage
 export {
   EventLog,
   type PublishResult, type PendingFilter, type QueryFilter,
-} from './log.js';
+} from './log';
 export {
   ReplyChannelStore,
   type ReplyDispatcher, type OpenChannelOpts, type ReplyOutcome,
-} from './reply-channel.js';
+} from './reply-channel';
 export {
   TriggerRegistry, DEFAULT_FORK_POLICY,
   type RegisterSpec, type AlarmScheduler, type ForkPolicy,
-} from './triggers.js';
+} from './triggers';

@@ -26,7 +26,7 @@
  * `editFile`. One read of TOOL_REACH makes the sentence true for all eight.
  */
 
-import { isBuiltinToolName, TOOL_REACH } from '../tools/registry.js';
+import { isBuiltinToolName, TOOL_REACH } from '../tools/registry';
 
 /** V8's ReferenceError message for a bare undefined identifier — the exact,
  *  stable shape Node/workerd/browsers all emit, so matching it precisely

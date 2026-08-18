@@ -8,15 +8,15 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { isE2EConfigured, loadAIGatewayProviders } from './ai-gateway-llm.js';
-import { runMCTS } from '../../src/mcts/engine.js';
-import { initSearchTables } from '../../src/mcts/schemas.js';
-import { initScaffoldTables } from '../../src/scaffold/schemas.js';
-import { initCraftScoreTables } from '../../src/craft/schemas.js';
-import type { SearchNode } from '../../src/types/mcts.js';
-import type { AgentRuntime, BranchHandle } from '../../src/types/agent-runtime.js';
-import type { LLM } from '../../src/types/primitives.js';
-import type { SessionWriter, SessionMessage } from '../../src/mcts/record-node.js';
+import { isE2EConfigured, loadAIGatewayProviders } from './ai-gateway-llm';
+import { runMCTS } from '../../src/mcts/engine';
+import { initSearchTables } from '../../src/mcts/schemas';
+import { initScaffoldTables } from '../../src/scaffold/schemas';
+import { initCraftScoreTables } from '../../src/craft/schemas';
+import type { SearchNode } from '../../src/types/mcts';
+import type { AgentRuntime, BranchHandle } from '../../src/types/agent-runtime';
+import type { LLM } from '../../src/types/primitives';
+import type { SessionWriter, SessionMessage } from '../../src/mcts/record-node';
 import {
   makeSql,
   makeExecRaw,
@@ -25,7 +25,7 @@ import {
   createMemoryCraftStore,
   createMockExecutor,
   createMemorySchedule,
-} from '../helpers.js';
+} from '../helpers';
 
 async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
   const db = new Database(':memory:');

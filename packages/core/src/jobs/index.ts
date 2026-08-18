@@ -5,7 +5,7 @@ export {
   type BackgroundJob,
   type BackgroundJobStatus,
   type JobClaim,
-} from './store.js';
+} from './store';
 export {
   withBackgroundThreshold,
   withSpawnDetach,
@@ -19,7 +19,7 @@ export {
   type DetachOutcome,
   type SessionSurface,
   type ThresholdDeps,
-} from './threshold.js';
+} from './threshold';
 export {
   BackgroundJobRunner,
   JobNotResumable,
@@ -28,4 +28,4 @@ export {
   MAX_CONCURRENT_DETACHED_JOBS,
   type BackgroundJobRunnerDeps,
   type JobResumer,
-} from './runner.js';
+} from './runner';

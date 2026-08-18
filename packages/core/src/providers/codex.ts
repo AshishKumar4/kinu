@@ -14,14 +14,14 @@
 // Workers egress is CF data-center IPs — runtime probe needed.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo, ModelInputModality } from './types.js';
-import { MODEL_INPUT_MODALITIES } from './types.js';
-import { asFetchFunction } from './fetch-shim.js';
-import { withRateLimitRetry } from './rate-limit-retry.js';
-import { authCacheKey, cloneModelInfos, nonEmptyString, positiveInteger } from './util.js';
+import type { ModelProvider, ModelInfo, ModelInputModality } from './types';
+import { MODEL_INPUT_MODALITIES } from './types';
+import { asFetchFunction } from './fetch-shim';
+import { withRateLimitRetry } from './rate-limit-retry';
+import { authCacheKey, cloneModelInfos, nonEmptyString, positiveInteger } from './util';
 import * as v from 'valibot';
-import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json.js';
-import { diagnostics, ProteusError } from '../obs/index.js';
+import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
+import { diagnostics, ProteusError } from '../obs/index';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 export const CODEX_CRED_KEY = 'codex.oauth';

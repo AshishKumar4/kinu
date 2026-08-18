@@ -22,9 +22,9 @@
 
 import type {
   GepaCandidate, EvalInstance, ReflectionLM,
-} from './types.js';
-import { renderInput, truncate } from './text.js';
-import { stripMarkdownFences } from '../../prompts/structured.js';
+} from './types';
+import { renderInput, truncate } from './text';
+import { stripMarkdownFences } from '../../prompts/structured';
 
 export interface MergePair {
   a: GepaCandidate;

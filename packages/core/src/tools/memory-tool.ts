@@ -7,18 +7,18 @@
  * execute_tools (tools/memory-codemode.ts) that the native `memory` tool
  * calls — one dispatcher, two callers, mirroring tools/agents-tool.ts.
  */
-import type { Memory, SqlExecutor } from '../types/primitives.js';
+import type { Memory, SqlExecutor } from '../types/primitives';
 import * as v from 'valibot';
-import type { FactsStore } from '../memory/facts.js';
-import type { VectorStore } from '../memory/vector-store.js';
-import { appendMemoryNote } from '../memory/note.js';
-import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search.js';
-import { SessionSearchStore } from '../memory/session-search.js';
-import { decodeJsonValue, type JsonValue } from '../utils/json.js';
+import type { FactsStore } from '../memory/facts';
+import type { VectorStore } from '../memory/vector-store';
+import { appendMemoryNote } from '../memory/note';
+import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search';
+import { SessionSearchStore } from '../memory/session-search';
+import { decodeJsonValue, type JsonValue } from '../utils/json';
 import {
   memoryActionsFor, unknownActionError,
   type MemoryToolAction, type MEMORY_FACT_ACTIONS,
-} from './registry.js';
+} from './registry';
 
 const FactKeySchema = v.pipe(v.string(), v.nonEmpty());
 

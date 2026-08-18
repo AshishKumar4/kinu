@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { estimateCost } from '../src/mcts/cost.js';
+import { estimateCost } from '../src/mcts/cost';
 
 describe('Cost estimation', () => {
   test('calculates correct total calls', () => {

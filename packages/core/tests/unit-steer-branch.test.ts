@@ -6,19 +6,19 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw, createTestWorkspace } from './helpers.js';
+import { makeSql, makeExecRaw, createTestWorkspace } from './helpers';
 import {
   initAlternateTakesTable, recordBranchTakeSet, claimAlternateTakesForTurn,
   latestAlternateTakeSet, recordTakePick, buildTakeContinuationPrompt,
-} from '../src/mcts/takes.js';
-import { HeadJournal } from '../src/heads/journal.js';
-import type { HeadRuntime, SpawnedHead } from '../src/heads/controller.js';
-import type { HeadInput, HeadReport } from '../src/heads/types.js';
+} from '../src/mcts/takes';
+import { HeadJournal } from '../src/heads/journal';
+import type { HeadRuntime, SpawnedHead } from '../src/heads/controller';
+import type { HeadInput, HeadReport } from '../src/heads/types';
 import {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, startBranchHead, settleBranchIntoTakes,
   settlePendingBranches, type BranchStatusEvent, type PendingBranch,
-} from '../src/steer-branch.js';
-import { headPhaseRunEvent } from '../src/orchestrator/heads-support.js';
+} from '../src/steer-branch';
+import { headPhaseRunEvent } from '../src/orchestrator/heads-support';
 
 function setup() {
   const ws = createTestWorkspace();

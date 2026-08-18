@@ -56,37 +56,37 @@
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
-import type { AgentRuntime } from '../types/agent-runtime.js';
+import type { AgentRuntime } from '../types/agent-runtime';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
   memoryActionsFor, TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS, unknownActionError, type WebToolAction,
   AGENT_STANCES, STANCE_CHOICES,
-} from './registry.js';
-import { TaskListStore, TASK_STATUSES } from '../tasks/store.js';
-import { createAgentConfigStore } from '../config/store.js';
-import { clampToolResult, withClampedToolResult } from './clamp.js';
-import { dispatchReport, type ReportToolInput } from './report-tool.js';
-import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types.js';
-import { createFileToolSteer } from './run-file-steer.js';
-import { createFileTool } from './file-tool.js';
-import { TurnFileLedger } from './file-ledger.js';
-import { TurnContextBudget } from '../context-budget.js';
-import { isMcpToolKey } from './mcp-naming.js';
-import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executor.js';
-import { filterByEffectiveScore } from '../craft/ema.js';
-import { craftInvocationError } from '../craft/in-episode.js';
-import { DEFAULT_CONFIG } from '../config.js';
-import { formatExecResult, isFailingResultText, refusalText } from '../execution/exec-result.js';
-import { TurnEscalationLedger } from '../execution/escalation.js';
-import { createAgentsTool, type AgentsToolDeps } from './agents-tool.js';
-import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool.js';
-import { createTasksDispatcher, type TasksToolInput } from './tasks-tool.js';
-import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index.js';
-import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review.js';
-import type { JsonValue } from '../utils/json.js';
+} from './registry';
+import { TaskListStore, TASK_STATUSES } from '../tasks/store';
+import { createAgentConfigStore } from '../config/store';
+import { clampToolResult, withClampedToolResult } from './clamp';
+import { dispatchReport, type ReportToolInput } from './report-tool';
+import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types';
+import { createFileToolSteer } from './run-file-steer';
+import { createFileTool } from './file-tool';
+import { TurnFileLedger } from './file-ledger';
+import { TurnContextBudget } from '../context-budget';
+import { isMcpToolKey } from './mcp-naming';
+import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executor';
+import { filterByEffectiveScore } from '../craft/ema';
+import { craftInvocationError } from '../craft/in-episode';
+import { DEFAULT_CONFIG } from '../config';
+import { formatExecResult, isFailingResultText, refusalText } from '../execution/exec-result';
+import { TurnEscalationLedger } from '../execution/escalation';
+import { createAgentsTool, type AgentsToolDeps } from './agents-tool';
+import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool';
+import { createTasksDispatcher, type TasksToolInput } from './tasks-tool';
+import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index';
+import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review';
+import type { JsonValue } from '../utils/json';
 import {
   createConsoleLogger, diagnostics, ProteusError, toProteusError, type Logger,
-} from '../obs/index.js';
+} from '../obs/index';
 
 type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
 type ExecutableToolEntry = NonNullable<ToolSet[string]>;
@@ -156,10 +156,10 @@ export interface BuiltinToolDeps {
    * RRF) instead of FTS5-only. Falls back gracefully when not provided OR
    * when the underlying binding is unavailable.
    */
-  vectorStore?: import('../memory/vector-store.js').VectorStore;
+  vectorStore?: import('../memory/vector-store').VectorStore;
   /** agent_facts world model. When provided, the `memory` tool also exposes
    *  the keyed-fact actions (remember / recall / forget). */
-  facts?: import('../memory/facts.js').FactsStore;
+  facts?: import('../memory/facts').FactsStore;
   /** Voyager/Tool-Search-style relevance filter for crafted tool surfacing.
    *  Default 'all'. In 'relevant' mode, only top-K matches (FTS5 by `query`
    *  ∪ frequently-used recent) are injected — saves context as the store
@@ -224,7 +224,7 @@ export {
   type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
-} from './agents-tool.js';
+} from './agents-tool';
 
 // ── Report (subordinate → parent) tool contract ─────────────────────────────
 
@@ -232,7 +232,7 @@ export interface ReportToolDeps {
   /** Publish a `subordinate_report` event into the PARENT workspace's
    *  EventLog (via the parent stub). */
   report(input: {
-    status: import('../events/hub/types.js').SubordinateReportStatus;
+    status: import('../events/hub/types').SubordinateReportStatus;
     content: string;
   }): Promise<JsonValue | undefined>;
 }

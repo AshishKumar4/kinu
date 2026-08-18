@@ -14,7 +14,7 @@ import {
   type VectorMemoryChunk,
   type JsonObject,
   type VectorRecord,
-} from '../src/index.js';
+} from '../src/index';
 
 // ── Reciprocal Rank Fusion ───────────────────────────────────────────
 

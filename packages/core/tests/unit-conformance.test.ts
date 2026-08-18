@@ -14,9 +14,9 @@ import {
   renderConformanceFindings,
   AGENTS_TOOL_ACTIONS, BUILTIN_TOOLS,
   type ConformanceManifest, type ObservedSurface, type RootStatuses,
-} from '../src/index.ts';
-import { renderForLLM } from '../src/events/hub/index.ts';
-import type { ProteusEvent } from '../src/events/hub/index.ts';
+} from '../src/index';
+import { renderForLLM } from '../src/events/hub/index';
+import type { ProteusEvent } from '../src/events/hub/index';
 
 // ── Falsifiability: every finding kind can fire ─────────────────────────────
 

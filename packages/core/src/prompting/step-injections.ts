@@ -15,7 +15,7 @@
  */
 
 import type { ModelMessage } from 'ai';
-import type { PrepareStepContext } from '../extension.js';
+import type { PrepareStepContext } from '../extension';
 
 /** A recorded injection: the caller's entry (message + any bookkeeping it
  *  carries) pinned to the base-coordinate index where the model first saw it. */

@@ -6,8 +6,8 @@
 // and a generative head almost always ends on a tool-call / reasoning turn —
 // so reading `result.text` alone yielded an empty per-head merge summary.
 
-import { digestJsonValue } from '../utils/json.js';
-import type { HeadReport, HeadStep } from "./types.js";
+import { digestJsonValue } from '../utils/json';
+import type { HeadReport, HeadStep } from "./types";
 
 /**
  * Did this head bank anything a merge may cite?

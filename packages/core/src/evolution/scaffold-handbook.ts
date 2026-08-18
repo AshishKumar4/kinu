@@ -30,8 +30,8 @@
  * rewriting itself is worse than one that stays silent.
  */
 
-import { LAYERS } from '../layergate/layers.js';
-import { SUBJECT_SOURCE } from '../layergate/subjects.js';
+import { LAYERS } from '../layergate/layers';
+import { SUBJECT_SOURCE } from '../layergate/subjects';
 
 /** A top-level site in the live scaffold source. */
 export interface ScaffoldSite {

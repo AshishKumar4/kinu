@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Command } from 'commander';
-import { buildProgram } from '../src/program.js';
-import { renderHelp } from '../src/display.js';
+import { buildProgram } from '../src/program';
+import { renderHelp } from '../src/display';
 
 /** Every runnable path in the registered tree, as the user would type it. */
 function registeredPaths(cmd: Command, prefix = ''): string[] {

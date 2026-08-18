@@ -16,10 +16,10 @@
 //      agent under evaluation cannot read any task definition, dev or sealed.
 //   5. Every evaluation appends to an append-only ledger; the report prints the
 //      ordinal, so repeated peeking at the held-out set is countable.
-import { fnv1a64 } from '../prompting/volatile-context.js';
-import { pairedBinaryComparison, unitHash } from './stats.js';
-import type { BootstrapOptions, PairedBinaryStats, PairedOutcome } from './stats.js';
-import type { BenchTask } from './types.js';
+import { fnv1a64 } from '../prompting/volatile-context';
+import { pairedBinaryComparison, unitHash } from './stats';
+import type { BootstrapOptions, PairedBinaryStats, PairedOutcome } from './stats';
+import type { BenchTask } from './types';
 
 /** Committed salt. Changing it re-rolls every task's assignment and invalidates
  *  historical sealed results — the manifest hash in each report is what makes

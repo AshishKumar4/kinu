@@ -20,7 +20,7 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { tolerate } from '@proteus/core/obs';
-import { writeSecretFile } from './secret-file.js';
+import { writeSecretFile } from './secret-file';
 
 const storedCodexCredentialSchema = v.object({
   accessToken: v.optional(v.string()),

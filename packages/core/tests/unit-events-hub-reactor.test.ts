@@ -1,6 +1,6 @@
 // Reactor decision legality matrix.
 import { describe, test, expect } from 'bun:test';
-import { isLegalDecision, type ReactorDecision } from '../src/events/hub/index.ts';
+import { isLegalDecision, type ReactorDecision } from '../src/events/hub/index';
 
 const ctxAuth = {
   reactor_head_trust: 'authenticated' as const,

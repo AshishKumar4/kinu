@@ -13,11 +13,11 @@
  * measures it.
  */
 
-import { fnv1a64 } from '../prompting/volatile-context.js';
-import { stableStringify } from '../safety/argument-digest.js';
-import { parseJsonValue } from '../utils/json.js';
-import { LAYERS, type Layer, type LayerObservation } from './layers.js';
-import type { PipelineSubjects } from './subjects.js';
+import { fnv1a64 } from '../prompting/volatile-context';
+import { stableStringify } from '../safety/argument-digest';
+import { parseJsonValue } from '../utils/json';
+import { LAYERS, type Layer, type LayerObservation } from './layers';
+import type { PipelineSubjects } from './subjects';
 
 /** Probe id → observation digest. */
 export type Baseline = Readonly<Record<string, string>>;

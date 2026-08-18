@@ -47,28 +47,28 @@
 // waiting — which is exactly what the durable window is for.
 
 import type { ModelMessage } from 'ai';
-import { TurnAccumulator, type TurnSinks } from './turn-accumulator.js';
-import { TurnSteering } from './turn-steering.js';
-import { CraftCycle } from './craft-cycle.js';
-import { DrainScheduler } from './drain-scheduler.js';
-import { SignalDelivery, readSignalId } from './signals.js';
-import { buildDrainBatch } from '../events/hub/drain.js';
-import type { EventLog } from '../events/hub/log.js';
-import type { ExecutionRecoveryRecord } from '../events/types.js';
-import type { PrepareStepContext, ProteusExtension } from '../extension.js';
-import type { BackendHost } from '../types/backend-host.js';
-import type { AgentSignal } from '../types/signals.js';
-import type { EvolutionEngine } from '../evolution/engine.js';
-import type { ClaimedWindow } from '../evolution/session-window.js';
-import type { RecoveryFinding } from '../evolution/recovery.js';
-import type { CompletedTurn } from '../evolution/types.js';
+import { TurnAccumulator, type TurnSinks } from './turn-accumulator';
+import { TurnSteering } from './turn-steering';
+import { CraftCycle } from './craft-cycle';
+import { DrainScheduler } from './drain-scheduler';
+import { SignalDelivery, readSignalId } from './signals';
+import { buildDrainBatch } from '../events/hub/drain';
+import type { EventLog } from '../events/hub/log';
+import type { ExecutionRecoveryRecord } from '../events/types';
+import type { PrepareStepContext, ProteusExtension } from '../extension';
+import type { BackendHost } from '../types/backend-host';
+import type { AgentSignal } from '../types/signals';
+import type { EvolutionEngine } from '../evolution/engine';
+import type { ClaimedWindow } from '../evolution/session-window';
+import type { RecoveryFinding } from '../evolution/recovery';
+import type { CompletedTurn } from '../evolution/types';
 import {
   MISSION_LABELS_METADATA_KEY, readMissionLabels, type MissionGovernor,
-} from '../mission-budget.js';
-import { nanoid } from '../utils/nanoid.js';
-import { workModeForTurnMetadata, type WorkMode } from '../prompting/surface.js';
-import type { JsonObject } from '../utils/json.js';
-import { diagnostics, toProteusError } from '../obs/index.js';
+} from '../mission-budget';
+import { nanoid } from '../utils/nanoid';
+import { workModeForTurnMetadata, type WorkMode } from '../prompting/surface';
+import type { JsonObject } from '../utils/json';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /**
  * Whether an arriving user message is a genuine conversational follow-up —

@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { MCTSProgressEvent } from '@proteus/core';
-import { formatMctsProgress } from '../src/commands/evolve.js';
+import { formatMctsProgress } from '../src/commands/evolve';
 
 describe('evolve progress rendering', () => {
   test('a phase becomes transient status with the iteration and branch count', () => {

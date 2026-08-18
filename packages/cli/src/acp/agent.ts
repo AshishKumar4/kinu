@@ -25,8 +25,8 @@ import {
 } from '@agentclientprotocol/sdk';
 import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@proteus/core';
 import { diagnostics, toProteusError } from '@proteus/core/obs';
-import type { AgentClient, AgentClientEvent } from '../agent-client.js';
-import { toAgentPrompt } from './prompt.js';
+import type { AgentClient, AgentClientEvent } from '../agent-client';
+import { toAgentPrompt } from './prompt';
 import * as v from 'valibot';
 
 /** Opens the AgentClient backing one ACP session. The command supplies the

@@ -1,5 +1,5 @@
-import type { WorkspaceAgent } from './protocol.js';
-import type { WorkspaceEntry } from '../user/user-do.js';
+import type { WorkspaceAgent } from './protocol';
+import type { WorkspaceEntry } from '../user/user-do';
 
 /** The owner's other workspaces as cross-workspace peers — self excluded. */
 export function teamPeers(

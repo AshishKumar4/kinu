@@ -10,15 +10,15 @@
  */
 
 import type { ModelMessage } from 'ai';
-import type { ContextBudgetSnapshot } from '../context-budget.js';
-import type { JsonValue } from '../utils/json.js';
-import type { ContextComposition } from '../context-meter.js';
-import type { FileEditSnapshot } from '../tools/file-ledger.js';
-import type { EscalationSnapshot } from '../execution/escalation.js';
-import type { MissionBudgetRefusal } from '../mission-budget.js';
-import type { HeadFileChangeSet } from '../heads/types.js';
-import type { Usage } from '../usage.js';
-import type { SpendSource } from './model-call.js';
+import type { ContextBudgetSnapshot } from '../context-budget';
+import type { JsonValue } from '../utils/json';
+import type { ContextComposition } from '../context-meter';
+import type { FileEditSnapshot } from '../tools/file-ledger';
+import type { EscalationSnapshot } from '../execution/escalation';
+import type { MissionBudgetRefusal } from '../mission-budget';
+import type { HeadFileChangeSet } from '../heads/types';
+import type { Usage } from '../usage';
+import type { SpendSource } from './model-call';
 
 /**
  * What one finished step cost — the provider's own report, plus what we priced

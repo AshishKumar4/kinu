@@ -9,17 +9,17 @@
 
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
-import type { VFS } from '../types/primitives.js';
-import type { Shell } from '../types/primitives.js';
-import { createInlineExecutor, type InlineExecutorDeps } from './inline.js';
-import { makeVfsError } from '../vfs/errno.js';
-import { workspacePath } from '../vfs/workspace-path.js';
-import { shellQuote } from '../utils/shell.js';
-import type { ExecutorCapability, ExecutorProvider } from './types.js';
-import { readExecSignal } from './signal.js';
-import { formatExecResult, refusalText } from './exec-result.js';
-import { ProteusError, toProteusError } from '../obs/index.js';
-import type { JsonValue } from '../utils/json.js';
+import type { VFS } from '../types/primitives';
+import type { Shell } from '../types/primitives';
+import { createInlineExecutor, type InlineExecutorDeps } from './inline';
+import { makeVfsError } from '../vfs/errno';
+import { workspacePath } from '../vfs/workspace-path';
+import { shellQuote } from '../utils/shell';
+import type { ExecutorCapability, ExecutorProvider } from './types';
+import { readExecSignal } from './signal';
+import { formatExecResult, refusalText } from './exec-result';
+import { ProteusError, toProteusError } from '../obs/index';
+import type { JsonValue } from '../utils/json';
 
 export interface NimbusExecOptions {
   cwd?: string;

@@ -9,12 +9,12 @@
 import { existsSync } from 'node:fs';
 import { Writable } from 'node:stream';
 import { ndJsonStream } from '@agentclientprotocol/sdk';
-import { createAcpAgent } from '../acp/agent.js';
-import { createAgentClient } from '../client-factory.js';
-import { resolveAgentTarget } from '../agent-target.js';
-import { agentDbPath, resolveAgentRef } from '../config.js';
-import { ensureLocalDaemonRunning } from './daemon.js';
-import { VERSION } from '../display.js';
+import { createAcpAgent } from '../acp/agent';
+import { createAgentClient } from '../client-factory';
+import { resolveAgentTarget } from '../agent-target';
+import { agentDbPath, resolveAgentRef } from '../config';
+import { ensureLocalDaemonRunning } from './daemon';
+import { VERSION } from '../display';
 
 export interface AcpCommandOptions {
   model?: string;

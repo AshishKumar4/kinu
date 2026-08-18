@@ -6,19 +6,19 @@
 //
 // The store is a deep module (small interface, real behavior): typed getters
 // for known keys, generic get/set/delete for everything else, all() for fork.
-import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
-import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort.js';
+import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
 import {
   DEFAULT_AGENT_STANCE,
   isAgentStance,
   type AgentStance,
-} from '../tools/registry.js';
+} from '../tools/registry';
 import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
-} from '../prompting/cache-breakpoints.js';
+} from '../prompting/cache-breakpoints';
 import {
   formatApprovalGrant, parseApprovalGrant, type ApprovalGrant,
-} from '../safety/approval-gate.js';
+} from '../safety/approval-gate';
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 

@@ -7,7 +7,7 @@ import { generateText } from 'ai';
 import * as v from 'valibot';
 import {
   USAGE_FIELDS, UsageSchema, addUsage, normalizeUsage, usageReported, usageTotal, type Usage,
-} from '../src/usage.ts';
+} from '../src/usage';
 
 /**
  * The provider shapes are driven through the REAL SDK provider adapters rather

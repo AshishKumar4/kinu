@@ -15,7 +15,7 @@ import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@proteus/test-utils';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime } from './helpers.js';
+import { createTestRuntime } from './helpers';
 import {
   buildBuiltinTools,
   createDefaultWebSearchProvider,
@@ -32,7 +32,7 @@ import {
   type CreateExecuteToolFactory,
   type JsonValue,
   type WebSearchProvider,
-} from '../src/index.js';
+} from '../src/index';
 
 const unusedCraftedExecute: CraftedToolExecute = () => async () => {
   throw new Error('This web-tool suite does not install crafted tools');

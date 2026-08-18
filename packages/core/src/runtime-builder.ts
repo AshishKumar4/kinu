@@ -17,11 +17,11 @@ import type {
   Executor,
   Schedule,
   Shell,
-} from './types/primitives.js';
-import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch, ReleaseBranch, RequestShellApproval } from './types/agent-runtime.js';
-import type { ExecutionRouter } from './execution/types.js';
-import type { FileCheckpoints } from './checkpoints/types.js';
-import type { TurnFileLedger } from './tools/file-ledger.js';
+} from './types/primitives';
+import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch, ReleaseBranch, RequestShellApproval } from './types/agent-runtime';
+import type { ExecutionRouter } from './execution/types';
+import type { FileCheckpoints } from './checkpoints/types';
+import type { TurnFileLedger } from './tools/file-ledger';
 
 export interface RuntimeComponents {
   sql: SqlExecutor;

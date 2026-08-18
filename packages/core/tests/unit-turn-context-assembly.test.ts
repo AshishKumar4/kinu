@@ -8,10 +8,10 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { Database } from 'bun:sqlite';
-import { assembleTurnMessages } from '../src/orchestrator/turn-context.js';
-import { ExtensionHost } from '../src/extension.js';
-import { createMemoryVFS } from './helpers.js';
-import type { MediaModality } from '../src/prompting/attachment-sanitizer.js';
+import { assembleTurnMessages } from '../src/orchestrator/turn-context';
+import { ExtensionHost } from '../src/extension';
+import { createMemoryVFS } from './helpers';
+import type { MediaModality } from '../src/prompting/attachment-sanitizer';
 
 const HISTORY: ModelMessage[] = [
   { role: 'user', content: 'hello' },

@@ -6,8 +6,8 @@
  */
 
 import { isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@proteus/core';
-import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client.js';
-import { setDefaultModel, setDefaultReasoningEffort } from './config.js';
+import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client';
+import { setDefaultModel, setDefaultReasoningEffort } from './config';
 
 export interface SlashCommandInfo {
   name: string;

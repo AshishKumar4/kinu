@@ -17,12 +17,12 @@
 // Output: updated agent_facts (upsert new observations, decay stale facts).
 
 import * as v from 'valibot';
-import type { LLM } from '../types/primitives.js';
-import type { FactsStore } from './facts.js';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
-import { tolerate } from '../obs/index.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
-import { JsonValueSchema, type JsonValue } from '../utils/json.js';
+import type { LLM } from '../types/primitives';
+import type { FactsStore } from './facts';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { tolerate } from '../obs/index';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
 
 export interface SleepTimeInput {
   /** Last completed turn's task. */

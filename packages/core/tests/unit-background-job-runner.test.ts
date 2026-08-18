@@ -4,17 +4,17 @@
 // the real signal-delivery seam on a fake BackendHost, with no DO.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, type JobResumer } from '../src/jobs/runner.js';
-import { SignalDelivery } from '../src/orchestrator/signals.js';
+import { BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, type JobResumer } from '../src/jobs/runner';
+import { SignalDelivery } from '../src/orchestrator/signals';
 import {
   BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY,
   type BackgroundPolicy, type BackgroundJob, type SessionSurface,
-} from '../src/jobs/index.js';
-import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hub/index.js';
-import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host.js';
-import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives.js';
-import type { JsonValue } from '../src/utils/json.js';
-import { makeSql, makeExecRaw, makeSqlExec } from './helpers.js';
+} from '../src/jobs/index';
+import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hub/index';
+import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
+import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives';
+import type { JsonValue } from '../src/utils/json';
+import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
 
 /** A fiber that runs the body inline + captures each ctx.stash + exposes the
  *  in-flight body promises so a test can await detach completion. */

@@ -6,9 +6,9 @@
  * (over a scaled-integer model of the EMA update)
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import { DEFAULT_CONFIG } from '../config.js';
-import { nowMs } from '../utils/date.js';
+import type { SqlExecutor } from '../types/primitives';
+import { DEFAULT_CONFIG } from '../config';
+import { nowMs } from '../utils/date';
 
 const MS_PER_DAY = 86_400_000;
 

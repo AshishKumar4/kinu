@@ -48,8 +48,8 @@ import {
   type EgressRequestFacts,
   type EgressSecretBinding,
 } from '@proteus/core';
-import { randomToken } from '../lib/crypto.js';
-import type { CredentialCipher } from './credential-envelope.js';
+import { randomToken } from '../lib/crypto';
+import type { CredentialCipher } from './credential-envelope';
 
 /** A binding id is owner-authored and lands in a rule name and a SQL key, so
  *  it is held to the same shape as a credential key. */

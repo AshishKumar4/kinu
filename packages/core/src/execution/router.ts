@@ -7,9 +7,9 @@ import type {
   ExecutorProvider,
   ExecutorInfo,
   ExecutorProviderSurface,
-} from './types.js';
-import { gateProviderExec } from './approval.js';
-import { STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate.js';
+} from './types';
+import { gateProviderExec } from './approval';
+import { STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 
 export class DefaultExecutionRouter implements ExecutionRouter {
   private providers = new Map<string, ExecutorProvider>();

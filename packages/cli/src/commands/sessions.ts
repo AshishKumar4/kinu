@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
-import { resolveAgentRef, agentDbPath, loadConfigFile, listAgentDirs } from '../config.js';
-import { ACCENT, DIM, OK, WARN } from '../display.js';
-import { exportSessionPath, listCliSessions } from '../session.js';
+import { resolveAgentRef, agentDbPath, loadConfigFile, listAgentDirs } from '../config';
+import { ACCENT, DIM, OK, WARN } from '../display';
+import { exportSessionPath, listCliSessions } from '../session';
 
 export async function sessionsCommand(agentName: string | undefined, opts: {
   sessionDir?: string;

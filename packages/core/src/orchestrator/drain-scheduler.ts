@@ -18,7 +18,7 @@
 // EventLog until markConsumed, and the next trigger (ingress, cron alarm,
 // post-turn drain) picks the backlog up.
 
-import { diagnostics, toProteusError } from '../obs/index.js';
+import { diagnostics, toProteusError } from '../obs/index';
 
 /** The coalescing window. Long enough to absorb a same-cause burst, short
  *  enough to be imperceptible against a multi-second agent turn. */

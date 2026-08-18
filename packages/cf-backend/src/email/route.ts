@@ -8,7 +8,7 @@
  * existence oracle for probes.
  */
 
-import { agentNameFromRecipient, isAutoReplyEmail, parseInboundMime } from './inbound.js';
+import { agentNameFromRecipient, isAutoReplyEmail, parseInboundMime } from './inbound';
 
 /** The structural slice of ForwardableEmailMessage this routing consumes —
  *  the mock seam for tests. */

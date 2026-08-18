@@ -24,9 +24,9 @@
  */
 
 import type { ModelMessage } from 'ai';
-import type { PrepareStepContext } from '../extension.js';
-import { StepInjections } from '../prompting/step-injections.js';
-import type { PromptFile } from '../types/backend-host.js';
+import type { PrepareStepContext } from '../extension';
+import { StepInjections } from '../prompting/step-injections';
+import type { PromptFile } from '../types/backend-host';
 
 /** One thing the user typed mid-turn, with any attachments it carried. */
 export interface UserSteer {

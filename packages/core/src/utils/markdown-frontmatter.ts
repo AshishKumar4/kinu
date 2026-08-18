@@ -19,7 +19,7 @@
  */
 
 import * as v from 'valibot';
-import { isJsonObject, type JsonObject, type JsonValue } from './json.js';
+import { isJsonObject, type JsonObject, type JsonValue } from './json';
 
 /** Successful parse: full front-matter map + body. */
 export interface MarkdownDoc {

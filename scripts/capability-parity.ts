@@ -67,12 +67,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, normalize } from 'node:path';
 import * as v from 'valibot';
 
-import { assertMeasured, finding, reconcile, report, writeLock } from './gate-ratchet.ts';
-import { isParseable, readSources } from './sources.ts';
+import { assertMeasured, finding, reconcile, report, writeLock } from './gate-ratchet';
+import { isParseable, readSources } from './sources';
 import {
   declarationOf, declaredName, identifierText, isOptionalMember, moduleSpecifiers, parse,
   type SyntaxNode, walk,
-} from './syntax.ts';
+} from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
 const LOCK = `${root}scripts/capability-parity.lock.json`;
@@ -179,7 +179,7 @@ const isShared = (file: string): boolean => SHARED.some((prefix) => file.startsW
 
 /**
  * The type a collaborator annotation names, for the shapes one arrives in: `X`,
- * `A.X`, `import('./x.js').X` and `X | undefined`. The name is always the LAST
+ * `A.X`, `import('./x').X` and `X | undefined`. The name is always the LAST
  * identifier of the type's own head, so a qualified name yields its tail; type
  * ARGUMENTS are skipped, because `ReadonlyMap<string, VectorStore>` is a map and
  * not a vector store.
@@ -439,11 +439,12 @@ function resolveLocal(
     ? normalize(join(dirname(from), spec))
     : alias === undefined ? undefined : `${alias[1]}${spec.slice(alias[0].length)}`;
   if (base === undefined) return { kind: 'external' };
-  // `./x.js` is how TypeScript's ESM resolution spells `./x.ts`; the tree writes
-  // both forms.
-  const stem = base.replace(/\.jsx?$/, '');
+  // One spelling per regime: no extension under a bundler or Bun, an explicit
+  // `.ts` inside the raw-Node closure. `base` covers the second and the genuine
+  // assets (`.css`, `.json`, `packages/pc-agent/src/index.js`); the rest is the
+  // extensionless form resolving to a module or a barrel.
   for (const candidate of [
-    base, `${stem}.ts`, `${stem}.tsx`, `${stem}/index.ts`, `${stem}/index.tsx`,
+    base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`,
   ]) {
     if (known.has(candidate)) return { kind: 'file', file: candidate };
   }

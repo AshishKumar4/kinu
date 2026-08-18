@@ -13,14 +13,14 @@ import type {
   Schedule,
   Identity,
   Shell,
-} from './primitives.js';
-import type { CraftedTool } from './craft.js';
-import type { Usage } from '../usage.js';
-import type { ExecutionRouter } from '../execution/types.js';
-import type { FileCheckpoints } from '../checkpoints/types.js';
-import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate.js';
-import type { WorkMode } from '../prompting/surface.js';
-import type { TurnFileLedger } from '../tools/file-ledger.js';
+} from './primitives';
+import type { CraftedTool } from './craft';
+import type { Usage } from '../usage';
+import type { ExecutionRouter } from '../execution/types';
+import type { FileCheckpoints } from '../checkpoints/types';
+import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate';
+import type { WorkMode } from '../prompting/surface';
+import type { TurnFileLedger } from '../tools/file-ledger';
 
 /** A live channel a surface that owns a user (ACP's `session/request_permission`)
  *  offers for 'gate'-tier shell approvals — see AgentRuntime.setShellApprovalChannel. */

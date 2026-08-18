@@ -8,18 +8,18 @@
  * (no retry policy, no fallback). This is a documented behavioral underspecification.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { SearchNode } from '../types/mcts.js';
-import type { ConvergenceResult } from '../types/evaluation.js';
-import type { SessionWriter } from './record-node.js';
-import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery.js';
-import { captureAlternateTakes, findNearTiedRivals } from './takes.js';
-import { selectWinnerByTest } from './test-selection.js';
-import { DEFAULT_CONFIG } from '../config.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
-import { isoDate } from '../utils/date.js';
-import type { WorkMode } from '../prompting/surface.js';
+import type { SqlExecutor } from '../types/primitives';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { SearchNode } from '../types/mcts';
+import type { ConvergenceResult } from '../types/evaluation';
+import type { SessionWriter } from './record-node';
+import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery';
+import { captureAlternateTakes, findNearTiedRivals } from './takes';
+import { selectWinnerByTest } from './test-selection';
+import { DEFAULT_CONFIG } from '../config';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { isoDate } from '../utils/date';
+import type { WorkMode } from '../prompting/surface';
 
 export async function converge(
   rt: AgentRuntime,

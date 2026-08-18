@@ -1,5 +1,5 @@
 import { existsSync, statSync } from 'node:fs';
-import { agentDbPath, requireAuthConfig } from '../config.js';
+import { agentDbPath, requireAuthConfig } from '../config';
 import {
   callAgentRpc,
   CloudAgentStatusSchema,
@@ -7,11 +7,11 @@ import {
   CloudToolDescriptionsSchema,
   CloudTriggerListSchema,
   type CloudAgentStatus,
-} from '../cloud-api.js';
+} from '../cloud-api';
 import * as v from 'valibot';
-import { ACCENT, DIM, OK, printAgentStatus, printError } from '../display.js';
-import { resolveAgentTarget } from '../agent-target.js';
-import { getLocalAgentInfo } from '../local-inspection.js';
+import { ACCENT, DIM, OK, printAgentStatus, printError } from '../display';
+import { resolveAgentTarget } from '../agent-target';
+import { getLocalAgentInfo } from '../local-inspection';
 
 export async function statusCommand(name: string): Promise<void> {
   const target = resolveAgentTarget(name);

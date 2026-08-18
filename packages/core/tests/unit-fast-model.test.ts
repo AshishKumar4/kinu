@@ -7,7 +7,7 @@
  * nothing smaller.
  */
 import { describe, test, expect } from 'bun:test';
-import { selectFastModel } from '../src/providers/fast-model.js';
+import { selectFastModel } from '../src/providers/fast-model';
 
 const PROVIDERS = [
   { id: 'anthropic', fastModel: 'claude-haiku-4-5' },

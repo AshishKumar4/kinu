@@ -1,7 +1,7 @@
 // A clipboard write can reject (denied permission, insecure origin, unfocused
 // document). The label must never claim success for one that did.
 import { describe, test, expect } from 'bun:test';
-import { copyLabel } from '../src/hooks/use-copy.ts';
+import { copyLabel } from '../src/hooks/use-copy';
 
 describe('copy button label', () => {
   test('only a resolved write reads as copied', () => {

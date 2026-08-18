@@ -11,7 +11,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   checkedProjects, coveredPrefixes, testDirectories, UNTYPECHECKED_TEST_DIRS,
-} from './typecheck-coverage.ts';
+} from './typecheck-coverage';
 
 describe('checkedProjects', () => {
   test('follows `bun run <script>` transitively', () => {

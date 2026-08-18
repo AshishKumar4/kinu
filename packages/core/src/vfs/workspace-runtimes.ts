@@ -57,8 +57,8 @@ import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { CommandRegistry } from '@nimbus-sh/core/substrate/lifo/commands/registry.js';
 import type { Command } from '@nimbus-sh/core/substrate/lifo/commands/types.js';
-import type { ExecutorCapability } from '../execution/types.js';
-import { WORKSPACE_ROOT } from './workspace-path.js';
+import type { ExecutorCapability } from '../execution/types';
+import { WORKSPACE_ROOT } from './workspace-path';
 
 /**
  * The capability names a workspace holding `runtimes` may honestly declare.

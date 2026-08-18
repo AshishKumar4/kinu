@@ -6,13 +6,13 @@
 //     mergeStrategy?, maxDepth?, inheritedContext?, onPhase? }
 // `controller`, `inheritedContext` and `onPhase` are host-injected (via the
 // agents tool's fork defaultOptions); `heads` / `mergeStrategy` come from the LLM.
-import type { HeadController, SplitPhaseEvent } from '../heads/controller.js';
+import type { HeadController, SplitPhaseEvent } from '../heads/controller';
 import type {
   HeadBudget, SerializedMessage, SplitRequest, MergeStrategy, MergeResult,
-} from '../heads/types.js';
-import { DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY } from '../heads/types.js';
-import { formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE } from '../heads/file-changes.js';
-import { strategyOption, type ExplorationStrategy, type StrategyContext, type StrategyResult } from './types.js';
+} from '../heads/types';
+import { DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY } from '../heads/types';
+import { formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE } from '../heads/file-changes';
+import { strategyOption, type ExplorationStrategy, type StrategyContext, type StrategyResult } from './types';
 
 interface HeadsStrategyOptions {
   controller: HeadController;

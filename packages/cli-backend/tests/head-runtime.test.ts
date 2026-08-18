@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 import { writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
-import { TestLanguageModelV2 } from './test-language-model.js';
+import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture,
@@ -18,8 +18,8 @@ import {
   type ModelCallReport,
 } from '@proteus/core';
 import { scratchDir, scratchPath, toolExecute } from '@proteus/test-utils';
-import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime.js';
-import { makeSql, makeExecRaw, createCLIRuntime, buildCLIHeadRuntime } from '../src/runtime.js';
+import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
+import { makeSql, makeExecRaw, createCLIRuntime, buildCLIHeadRuntime } from '../src/runtime';
 
 // A local head's scratch is a real store under PROTEUS_HOME (home.ts is the
 // isolation boundary), so point that boundary at a temp dir before anything

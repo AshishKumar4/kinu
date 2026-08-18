@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   beginLoad, loadSucceeded, loadFailed, lastValue, describeError,
   type AsyncResource,
-} from '../src/hooks/use-async-resource.ts';
+} from '../src/hooks/use-async-resource';
 
 const LOADING: AsyncResource<number[]> = { status: 'loading' };
 

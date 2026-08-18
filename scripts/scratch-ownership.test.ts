@@ -11,7 +11,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { auditScratchOwnership, readScannableSources } from './scratch-ownership.ts';
+import { auditScratchOwnership, readScannableSources } from './scratch-ownership';
 import { SCRATCH_PREFIXES } from '@proteus/test-utils';
 
 /** One file, as the gate reads its corpus. */

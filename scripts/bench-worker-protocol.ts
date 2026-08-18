@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { parseJsonValue, type JsonValue } from '../packages/core/src/index.js';
+import { parseJsonValue, type JsonValue } from '../packages/core/src/index';
 
 const NonNegativeIntegerSchema = v.pipe(v.number(), v.finite(), v.integer(), v.minValue(0));
 const PositiveIntegerSchema = v.pipe(NonNegativeIntegerSchema, v.minValue(1));

@@ -11,7 +11,7 @@ import {
   SPILL_DIRS,
   DEFAULT_TURN_ADMIT_BUDGET_CHARS,
   TIGHTENED_RESULT_MAX_CHARS,
-} from '../src/context-budget.js';
+} from '../src/context-budget';
 
 describe('TurnContextBudget', () => {
   test('the per-result cap is the configured one until the turn spends its admit budget', () => {

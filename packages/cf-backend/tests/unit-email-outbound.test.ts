@@ -16,9 +16,9 @@ import { createMemoryVfs, createTestRuntime } from '@proteus/test-utils';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
   threadingHeaders,
-} from '../src/email/outbound.js';
-import { EmailOutbox } from '../src/email/outbox.js';
-import { sqlExec } from './helpers/user-do.js';
+} from '../src/email/outbound';
+import { EmailOutbox } from '../src/email/outbox';
+import { sqlExec } from './helpers/user-do';
 
 function makeSql(): SqlExec {
   return sqlExec(new Database(':memory:'));

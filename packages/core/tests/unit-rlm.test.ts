@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { createRLMProvider, type RLMModelResolver } from '../src/rlm.ts';
+import { createRLMProvider, type RLMModelResolver } from '../src/rlm';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';

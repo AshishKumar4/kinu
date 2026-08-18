@@ -1,8 +1,8 @@
 // buildDrainBatch — pick externally-triggered pending events for one autonomous
 // turn, excluding the agent's own self-emitted/internal events (anti-self-wake).
 import { describe, test, expect } from 'bun:test';
-import { buildDrainBatch } from '../src/events/hub/index.ts';
-import type { BaseEvent, IngressKind, PeerAgentPayload, ProteusEvent } from '../src/events/hub/index.ts';
+import { buildDrainBatch } from '../src/events/hub/index';
+import type { BaseEvent, IngressKind, PeerAgentPayload, ProteusEvent } from '../src/events/hub/index';
 
 const EVENT_BASE = {
   trace_id: 'tid', caused_by: null, trust: 'authenticated', priority: 'normal',

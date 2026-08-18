@@ -3,14 +3,14 @@
 // token) to the user's UserDO in the same authorization — one login grants
 // both app access and AI. Drives the real /auth/cloudflare/callback handler
 // against the real D1 auth schema, faking only the network seams.
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
-import { handleAuthRequest } from '../src/auth/routes.js';
-import { createOAuthState } from '../src/auth/d1-store.js';
-import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../src/lib/cloudflare-oauth.js';
+import { handleAuthRequest } from '../src/auth/routes';
+import { createOAuthState } from '../src/auth/d1-store';
+import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../src/lib/cloudflare-oauth';
 import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, type OAuthCredential } from '@proteus/core';
-import { createAuthDatabase, makeD1 } from './helpers/d1.js';
-import type { UserCaller } from '../src/user/workspace-capability.js';
+import { createAuthDatabase, makeD1 } from './helpers/d1';
+import type { UserCaller } from '../src/user/workspace-capability';
 
 const ORIGIN = 'https://proteus.example.com';
 

@@ -59,7 +59,7 @@ import {
   DEFAULT_SHADOW_CONFIG,
   type PendingScaffold,
   type ShadowConfig,
-} from '../packages/core/src/index.js';
+} from '../packages/core/src/index';
 
 // ── Reproducible RNG (mulberry32) ──────────────────────────────────
 function mulberry32(seed: number): () => number {

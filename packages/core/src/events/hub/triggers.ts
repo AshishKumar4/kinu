@@ -32,10 +32,10 @@
 import * as v from 'valibot';
 import {
   type TriggerId, type TriggerKind, type TriggerRow, type TrustLevel,
-} from './types.js';
-import { ulid } from './ulid.js';
-import type { SqlExec, SqlValue } from '../../types/primitives.js';
-import { parseJsonObject, type JsonObject } from '../../utils/json.js';
+} from './types';
+import { ulid } from './ulid';
+import type { SqlExec, SqlValue } from '../../types/primitives';
+import { parseJsonObject, type JsonObject } from '../../utils/json';
 
 export type ForkPolicy = 'copy' | 'sever' | 'share';
 

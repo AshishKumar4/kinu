@@ -13,16 +13,16 @@
 // the way through to the ledger.
 
 import type { ModelMessage } from 'ai';
-import type { ToolCallRecord } from '../evolution/types.js';
-import { TurnContextBudget, citesSpillAddress } from '../context-budget.js';
-import { TurnContextMeter } from '../context-meter.js';
-import { FAILURE_WITHOUT_ERROR, type RunEventInput } from '../events/types.js';
-import { TurnFileLedger } from '../tools/file-ledger.js';
-import { TurnEscalationLedger } from '../execution/escalation.js';
-import { priceCall, type MissionGovernor } from '../mission-budget.js';
-import { USAGE_FIELDS, addUsage, usageReported, usageTotal, type Usage } from '../usage.js';
+import type { ToolCallRecord } from '../evolution/types';
+import { TurnContextBudget, citesSpillAddress } from '../context-budget';
+import { TurnContextMeter } from '../context-meter';
+import { FAILURE_WITHOUT_ERROR, type RunEventInput } from '../events/types';
+import { TurnFileLedger } from '../tools/file-ledger';
+import { TurnEscalationLedger } from '../execution/escalation';
+import { priceCall, type MissionGovernor } from '../mission-budget';
+import { USAGE_FIELDS, addUsage, usageReported, usageTotal, type Usage } from '../usage';
 import * as v from 'valibot';
-import { digestJsonValue, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json.js';
+import { digestJsonValue, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 
 const UndefinedSchema = v.undefined();
 const StringSchema = v.string();

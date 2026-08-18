@@ -12,16 +12,16 @@
  * it: work completed before the owner first opens Output must still be shown.
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { RawSqlExec, VfsEntryStat } from '../types/primitives.js';
-import { PLATFORM_CATALOG } from '../platform-catalog.js';
-import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus } from '../vfs/diff.js';
-import { nanoid } from '../utils/nanoid.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { RawSqlExec, VfsEntryStat } from '../types/primitives';
+import { PLATFORM_CATALOG } from '../platform-catalog';
+import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus } from '../vfs/diff';
+import { nanoid } from '../utils/nanoid';
 // The ONE failure predicate. What stood here was a local regex over
 // `Error (exit N)` and `exec error:` — the second is prose no executor writes any
 // more, and neither shape covered the refusal payload they return, so an
 // unconfigured executor's refusal would have been parsed as a git diff.
-import { isFailingResultText } from '../execution/exec-result.js';
+import { isFailingResultText } from '../execution/exec-result';
 
 /**
  * Files bigger than this are excluded from the snapshot — a change-set is a

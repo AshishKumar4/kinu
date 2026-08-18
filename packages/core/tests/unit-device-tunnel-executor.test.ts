@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor.js';
-import type { DeviceStatus } from '../src/execution/device-status.js';
-import type { JsonValue } from '../src/utils/json.js';
+import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
+import type { DeviceStatus } from '../src/execution/device-status';
+import type { JsonValue } from '../src/utils/json';
 
 function staticTransport(status: DeviceStatus, rpc: DeviceTransport['rpc']): DeviceTransport {
   return { status: () => status, refreshStatus: async () => status, rpc };

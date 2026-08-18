@@ -19,7 +19,7 @@
  * tool call, so nothing the model does mid-turn can join it.
  */
 
-import type { ParsedSkill, ActiveSkillSet, ActivationReason } from './types.js';
+import type { ParsedSkill, ActiveSkillSet, ActivationReason } from './types';
 
 export interface LoadActiveSkillsOpts {
   /** Every skill the agent can see (built-ins + VFS). */

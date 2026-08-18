@@ -67,12 +67,12 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import * as v from 'valibot';
 
-import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet.ts';
-import { isProductSource, isTestScaffold } from './sources.ts';
+import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
+import { isProductSource, isTestScaffold } from './sources';
 import {
   declarationOf, declaredBindings, declaredName, exportedLocalNames, importedNames,
   isReExport, parse,
-} from './syntax.ts';
+} from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
 const LOCK = `${root}scripts/dead-code.lock.json`;

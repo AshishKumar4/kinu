@@ -30,17 +30,17 @@
  * checkpoint.
  */
 
-import { readExecSignal } from '../execution/signal.js';
+import { readExecSignal } from '../execution/signal';
 import * as v from 'valibot';
-import type { CodemodeProvider } from '../rlm.js';
-import { TOOL_REACH, type AgentsToolAction } from './registry.js';
-import { isJsonObject, JsonValueSchema, type JsonObject } from '../utils/json.js';
+import type { CodemodeProvider } from '../rlm';
+import { TOOL_REACH, type AgentsToolAction } from './registry';
+import { isJsonObject, JsonValueSchema, type JsonObject } from '../utils/json';
 import {
   agentsActionsFor,
   dispatchAgentsAction,
   parseAgentsToolInput,
   type AgentsToolDeps,
-} from './agents-tool.js';
+} from './agents-tool';
 
 /**
  * The sandbox-visible declaration of each action, one block per member.

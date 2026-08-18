@@ -10,18 +10,18 @@
  */
 
 import type { LanguageModel } from 'ai';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import { createStrategyRegistry } from '../strategy/types.js';
-import { createSingleShotStrategy } from '../strategy/single-shot.js';
-import { createMCTSStrategy } from '../strategy/mcts.js';
-import { createHeadsStrategy } from '../strategy/heads.js';
-import type { AgentsForkDeps } from '../tools/agents-tool.js';
-import type { SessionWriter } from '../mcts/record-node.js';
-import type { MctsSearchStore } from '../mcts/search-store.js';
-import type { MCTSProgressEvent } from '../types/mcts.js';
-import type { HeadController, SplitPhaseEvent } from '../heads/controller.js';
-import type { MergeResult, SerializedMessage } from '../heads/types.js';
-import type { MctsOverrides } from '../config/store.js';
+import type { AgentRuntime } from '../types/agent-runtime';
+import { createStrategyRegistry } from '../strategy/types';
+import { createSingleShotStrategy } from '../strategy/single-shot';
+import { createMCTSStrategy } from '../strategy/mcts';
+import { createHeadsStrategy } from '../strategy/heads';
+import type { AgentsForkDeps } from '../tools/agents-tool';
+import type { SessionWriter } from '../mcts/record-node';
+import type { MctsSearchStore } from '../mcts/search-store';
+import type { MCTSProgressEvent } from '../types/mcts';
+import type { HeadController, SplitPhaseEvent } from '../heads/controller';
+import type { MergeResult, SerializedMessage } from '../heads/types';
+import type { MctsOverrides } from '../config/store';
 
 export interface ForkDepsWiring {
   rt: AgentRuntime;

@@ -15,8 +15,8 @@ import type {
   ReasoningEffort, Usage, RunEvent, JsonObject, JsonValue,
 } from '@proteus/core';
 import type { ShellApprovalHandler } from '@proteus/cli-backend';
-import type { CliSession, CliSessionInfo } from './session.js';
-import type { AgentModelMenu } from './model-catalog.js';
+import type { CliSession, CliSessionInfo } from './session';
+import type { AgentModelMenu } from './model-catalog';
 import * as v from 'valibot';
 
 export type AgentClientMode = 'local' | 'cloud';

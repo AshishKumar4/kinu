@@ -2,11 +2,11 @@
 // implementation of workspace creation and ownership-claiming shared by the web routes
 // (user/routes.ts, server.ts), the CLI control plane (cli/routes.ts), and
 // the MCP surface — so status mapping and ownership semantics cannot drift.
-import type { OrchestratorAgent } from '../orchestrator.js';
-import type { UserDO } from './user-do.js';
-import { createCloudWorkspaceForUser } from './workspace-create.js';
-import { err, json, safeJson } from '../lib/http.js';
-import { ownerCaller } from './workspace-capability.js';
+import type { OrchestratorAgent } from '../orchestrator';
+import type { UserDO } from './user-do';
+import { createCloudWorkspaceForUser } from './workspace-create';
+import { err, json, safeJson } from '../lib/http';
+import { ownerCaller } from './workspace-capability';
 import { diagnostics, toProteusError } from '@proteus/core/obs';
 import * as v from 'valibot';
 

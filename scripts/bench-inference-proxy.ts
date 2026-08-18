@@ -1,6 +1,6 @@
 import * as v from 'valibot';
-import { parseJsonValue, type JsonValue } from '../packages/core/src/index.js';
-import { tolerate } from '../packages/core/src/obs/index.js';
+import { parseJsonValue, type JsonValue } from '../packages/core/src/index';
+import { tolerate } from '../packages/core/src/obs/index';
 
 const TokenCountSchema = v.pipe(v.number(), v.finite(), v.integer(), v.minValue(0));
 const UsageSchema = v.object({

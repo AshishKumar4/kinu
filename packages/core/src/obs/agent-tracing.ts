@@ -54,10 +54,10 @@
  * point, so a continuation running after the invocation would still find a
  * parent. Passing the handle down is the enforcement.
  */
-import { ProteusError } from './error.js';
+import { ProteusError } from './error';
 import {
   renderSelfPath, type ScopedSpan, type SpanOpenAttributes, type Tracer,
-} from './tracer.js';
+} from './tracer';
 
 /** Span attribute holding the in-memory invocation counter. Not persisted, by
  *  design — see mechanism 3. */

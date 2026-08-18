@@ -2,9 +2,9 @@
  * Slash-command result views rendered inline in the TUI chat.
  */
 
-import type { AgentClientStatus } from '../agent-client.js';
-import { renderStatusLines } from '../slash-commands.js';
-import { tuiColors } from './theme.js';
+import type { AgentClientStatus } from '../agent-client';
+import { renderStatusLines } from '../slash-commands';
+import { tuiColors } from './theme';
 
 export function StatusView({ status }: { status: AgentClientStatus }) {
   return (

@@ -7,9 +7,9 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { buildProgram } from '../src/program.js';
-import { renderCliReference } from '../src/cli-reference.js';
-import { commandEntries } from '../src/display.js';
+import { buildProgram } from '../src/program';
+import { renderCliReference } from '../src/cli-reference';
+import { commandEntries } from '../src/display';
 
 const docPath = join(resolve(__dirname, '../../..'), 'docs/CLI.md');
 

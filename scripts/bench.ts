@@ -34,33 +34,33 @@ import { join } from 'node:path';
 import {
   DEFAULT_ATTEMPT_BUDGET, buildBenchReport, buildGainReport, decodeJsonValue,
   renderBenchSummary, renderGainSummary, runOrder, fnv1a64, unitHash,
-} from '../packages/core/src/index.js';
+} from '../packages/core/src/index';
 import type {
   AttemptBudget, AttemptOutcome, BenchCorpus, BenchRunConfig, BenchTask, GainTaskScore,
   JsonObject, LLMProviderConfig, SealedScorecard, Solver,
-} from '../packages/core/src/index.js';
-import { loadBenchCorpus } from './bench-corpus.js';
+} from '../packages/core/src/index';
+import { loadBenchCorpus } from './bench-corpus';
 import {
   applyPatch, budgetSignal, createAttemptSandbox, ensureRunRoot, scoreSandbox,
-} from './bench-sandbox.js';
+} from './bench-sandbox';
 import {
   createAgentSolver, createNoisyOracleSolver, createOracleSolver, createPanelSolver, createPiSolver,
   nullSolver, type AgentSolverOptions, type PatchLookup, type PanelSolverOptions,
-} from './bench-solvers.js';
+} from './bench-solvers';
 import {
   createLongHorizonAgentSolver, createLongHorizonNoisySolver, createLongHorizonOracleSolver,
   createLongHorizonPiSolver,
   loadLongHorizonCorpus, materializeLongHorizon, specFor,
   type LongHorizonAgentSolverOptions,
-} from './bench-longhorizon.js';
+} from './bench-longhorizon';
 import {
   MIN_PILOT_REPEATS, MIN_PILOT_TASKS, benchProviderHash, buildPilotReport,
   loadAndValidatePilotReport, type PilotReport,
-} from './bench-pilot.js';
-import { runValidation, type WellFormedAttempt } from './bench-validation.js';
+} from './bench-pilot';
+import { runValidation, type WellFormedAttempt } from './bench-validation';
 import {
   ARTIFACT_DIRNAME, openRunRetention, resolveArtifactRoot, type RunRetention,
-} from './bench-retention.js';
+} from './bench-retention';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const SEAL_LEDGER = join(REPO_ROOT, 'tests', 'bench', 'seal-ledger.jsonl');

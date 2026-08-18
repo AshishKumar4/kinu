@@ -10,8 +10,8 @@
  * Every entry point is fail-soft: a version check must never slow down, block,
  * or break the CLI.
  */
-import { VERSION } from './display.js';
-import { loadConfigFile, updateConfigFile, type ProteusConfig } from './config.js';
+import { VERSION } from './display';
+import { loadConfigFile, updateConfigFile, type ProteusConfig } from './config';
 import * as v from 'valibot';
 import { classify, tolerateAsync } from '@proteus/core/obs';
 

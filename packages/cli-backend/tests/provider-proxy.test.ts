@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import { asFetchFunction, type LLMProviderConfig } from '@proteus/core';
-import { createLocalModelResolver } from '../src/model-resolver.js';
+import { createLocalModelResolver } from '../src/model-resolver';
 
 const ORIGIN = 'https://proteus.example.com';
 const LLM: LLMProviderConfig = {

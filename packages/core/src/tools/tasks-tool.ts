@@ -17,13 +17,13 @@ import {
   TASK_STATUSES,
   type TaskAddRejection,
   type TaskStatus,
-} from '../tasks/store.js';
-import type { AgentConfigStore } from '../config/store.js';
+} from '../tasks/store';
+import type { AgentConfigStore } from '../config/store';
 import * as v from 'valibot';
 import {
   isAgentStance, AGENT_STANCES, TASKS_TOOL_ACTIONS, unknownActionError,
   type AgentStance, type TasksToolAction,
-} from './registry.js';
+} from './registry';
 
 const TaskStatusSchema = v.picklist(TASK_STATUSES);
 const TasksActionSchema = v.picklist(TASKS_TOOL_ACTIONS);

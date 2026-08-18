@@ -12,11 +12,11 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   readSoul, readMission, writeSoul, seedSoul, summarizeSoul, SOUL_PATH,
-} from '../src/identity/soul.js';
-import { initAllTables } from '../src/identity/schema.js';
-import { createWorkspace } from '../src/identity/create.js';
-import { openWorkspace } from '../src/identity/open.js';
-import { makeSql, makeExecRaw, createWorkspaceBundle, makeAgentDatabase } from './helpers.js';
+} from '../src/identity/soul';
+import { initAllTables } from '../src/identity/schema';
+import { createWorkspace } from '../src/identity/create';
+import { openWorkspace } from '../src/identity/open';
+import { makeSql, makeExecRaw, createWorkspaceBundle, makeAgentDatabase } from './helpers';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
 

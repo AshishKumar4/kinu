@@ -30,12 +30,12 @@
  */
 
 import { jsonSchema, tool, type ToolSet } from 'ai';
-import { buildBuiltinTools } from '../tools/builtins.js';
-import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference.js';
-import { budgetExhausted } from './types.js';
-import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { Decision, HeadId, HeadInput, MergeStrategy } from './types.js';
-import type { WebSearchProvider } from '../web/index.js';
+import { buildBuiltinTools } from '../tools/builtins';
+import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
+import { budgetExhausted } from './types';
+import type { AgentRuntime } from '../types/agent-runtime';
+import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
+import type { WebSearchProvider } from '../web/index';
 
 /** The builtin tools a head keeps. `file` is the runtime's native file plane,
  *  `execute_tools` its executor namespaces, `run` its shell router, and `web`

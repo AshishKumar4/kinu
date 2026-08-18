@@ -14,13 +14,13 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { TestLanguageModelV2 } from './test-language-model.js';
+import { TestLanguageModelV2 } from './test-language-model';
 import {
   bootstrapScaffold, initWorkspaceSchema, listGepaRuns, recordTurnOutcome, seedSoul,
   type LLMProviderConfig,
 } from '@proteus/core';
-import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from '../src/runtime.js';
-import { LocalAgentSession } from '../src/local-session.js';
+import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from '../src/runtime';
+import { LocalAgentSession } from '../src/local-session';
 import { scratchPath } from '@proteus/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {

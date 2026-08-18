@@ -23,9 +23,9 @@ import {
   resolveMcpServers,
   resolveProviderCredentials,
   upsertAgentConfig,
-} from './config.js';
-import { suggestAgentIdentityFromMission, type SuggestAgentIdentityOptions } from './agent-create.js';
-import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
+} from './config';
+import { suggestAgentIdentityFromMission, type SuggestAgentIdentityOptions } from './agent-create';
+import { createConfiguredLocalModelResolver } from './local-model-resolver';
 import {
   createCliSession,
   defaultConversationIdForCliOptions,
@@ -35,15 +35,15 @@ import {
   type CliSession,
   type CliSessionInfo,
   type CliSessionOptions,
-} from './session.js';
-import { SessionRecorder } from './session-recorder.js';
-import { normalizeModelMenu, type AgentModelMenu } from './model-catalog.js';
+} from './session';
+import { SessionRecorder } from './session-recorder';
+import { normalizeModelMenu, type AgentModelMenu } from './model-catalog';
 import {
   findForkPivot,
   asRecord,
   promptFiles,
   promptText,
-} from './agent-client.js';
+} from './agent-client';
 import type {
   AgentChangelogView,
   AgentClient,
@@ -60,7 +60,7 @@ import type {
   FileCheckpointSurface,
   ForkPoint,
   LocalSessionControls,
-} from './agent-client.js';
+} from './agent-client';
 
 export interface LocalAgentClientOptions {
   model?: string;

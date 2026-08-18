@@ -25,12 +25,12 @@
  */
 
 import { raceAbort } from '@proteus/agent-utils';
-import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types.js';
-import type { VFS } from '../types/primitives.js';
-import { makeVfsError, type VfsErrorCode } from '../vfs/errno.js';
-import { WORKSPACE_ROOT } from '../vfs/workspace-path.js';
-import { readExecSignal } from './signal.js';
-import { formatExecResult } from './exec-result.js';
+import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
+import type { VFS } from '../types/primitives';
+import { makeVfsError, type VfsErrorCode } from '../vfs/errno';
+import { WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { readExecSignal } from './signal';
+import { formatExecResult } from './exec-result';
 
 type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
 

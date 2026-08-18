@@ -61,7 +61,7 @@ import type { Readable } from 'node:stream';
 import { build } from 'esbuild';
 import { Miniflare, NoOpLog } from 'miniflare';
 import * as v from 'valibot';
-import { assertMeasured, finding } from './gate-ratchet.js';
+import { assertMeasured, finding } from './gate-ratchet';
 
 const REPO = new URL('..', import.meta.url).pathname;
 

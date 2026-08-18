@@ -7,7 +7,7 @@ import {
   observeDevicePresence,
   parseDevicePresence,
   type DevicePresenceStore,
-} from '../src/execution/device-status.js';
+} from '../src/execution/device-status';
 
 function memoryStore(): DevicePresenceStore {
   const kv = new Map<string, string>();

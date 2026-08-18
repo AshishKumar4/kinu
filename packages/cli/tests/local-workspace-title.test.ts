@@ -14,8 +14,8 @@ import { createCLIRuntime } from '@proteus/cli-backend';
 const HOME = mkdtempSync(join(tmpdir(), 'proteus-title-home-'));
 process.env.PROTEUS_HOME = HOME;
 afterAll(() => rmSync(HOME, { recursive: true, force: true }));
-const { autoTitleLocalWorkspace } = await import('../src/local-agent-client.js');
-const { loadConfigFile, upsertAgentConfig } = await import('../src/config.js');
+const { autoTitleLocalWorkspace } = await import('../src/local-agent-client');
+const { loadConfigFile, upsertAgentConfig } = await import('../src/config');
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'openai-compat', baseURL: 'http://localhost:0', headers: { Authorization: 'x' }, model: 'fake-model',

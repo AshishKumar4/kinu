@@ -8,12 +8,12 @@
 
 import type {
   EvalInstance, GepaCandidate, GepaMetric, MetricOutcome, ReflectionLM,
-} from './types.js';
-import { renderInput, truncate } from './text.js';
-import { stripMarkdownFences } from '../../prompts/structured.js';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../../prompts/evidence-window.js';
+} from './types';
+import { renderInput, truncate } from './text';
+import { stripMarkdownFences } from '../../prompts/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../../prompts/evidence-window';
 
-export { stripMarkdownFences } from '../../prompts/structured.js';
+export { stripMarkdownFences } from '../../prompts/structured';
 
 export interface MutationContext<I = unknown, E = unknown> {
   parent: GepaCandidate;

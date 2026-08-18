@@ -9,7 +9,7 @@
  */
 
 import * as v from 'valibot';
-import { JsonObjectSchema, type JsonObject } from '../utils/json.js';
+import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import {
   BACKEND_CONFORMANCE,
   CONFORMANCE_PLANES,
@@ -19,7 +19,7 @@ import {
   type ConformanceRoot,
   type ObservedSurface,
   type RootStatuses,
-} from './manifest.js';
+} from './manifest';
 
 export type ConformanceFindingKind =
   /** Declared wired on this root, but the real composition output lacks it. */

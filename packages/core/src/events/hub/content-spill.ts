@@ -15,10 +15,10 @@
  * a redelivered event renders a byte-identical brief.
  */
 
-import { sha256Hex } from '../../safety/argument-digest.js';
-import type { VFS } from '../../types/primitives.js';
-import { EVENT_BRIEF_MAX_CHARS } from './visibility.js';
-import { diagnostics, toProteusError } from '../../obs/index.js';
+import { sha256Hex } from '../../safety/argument-digest';
+import type { VFS } from '../../types/primitives';
+import { EVENT_BRIEF_MAX_CHARS } from './visibility';
+import { diagnostics, toProteusError } from '../../obs/index';
 
 /** Workspace VFS directory spilled event content is offloaded to. */
 export const EVENT_CONTENT_DIR = '.proteus/event-content';

@@ -8,15 +8,15 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeExecRaw, makeSql } from './helpers.js';
+import { makeExecRaw, makeSql } from './helpers';
 import {
   MissionGovernor, MissionBudgetExhausted, priceCall, readMissionLimits,
   type MissionBudgetRefusal,
-} from '../src/mission-budget.js';
-import type { Usage } from '../src/usage.js';
-import { estimateUsdCost } from '../src/llm.js';
-import type { LLM } from '../src/types/primitives.js';
-import type { ModelPricing } from '../src/providers/types.js';
+} from '../src/mission-budget';
+import type { Usage } from '../src/usage';
+import { estimateUsdCost } from '../src/llm';
+import type { LLM } from '../src/types/primitives';
+import type { ModelPricing } from '../src/providers/types';
 
 function makeGovernor(opts: {
   onExhausted?: (r: MissionBudgetRefusal) => void;

@@ -4,14 +4,14 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from '../../../tests/helpers.js';
+import { makeSql, makeExecRaw } from '../../../tests/helpers';
 import {
   initGepaTables, startGepaRun, persistGepaCandidate,
   persistGepaParetoSnapshot, finishGepaRun,
   listGepaRuns, loadGepaCandidates, makePersistingHook,
   runGepa,
   type GepaCandidate, type EvalInstance, type MetricOutcome,
-} from './index.js';
+} from './index';
 
 function setup() {
   const db = new Database(':memory:');

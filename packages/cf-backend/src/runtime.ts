@@ -44,34 +44,34 @@ import {
 import type { SandboxHandle } from "@proteus/core";
 import { diagnostics, toProteusError } from "@proteus/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
-import { configureContainerEgress, withConfiguredEgress } from "./egress/configure.js";
-import { previewHostSuffix } from "./lib/preview-origin.js";
+import { configureContainerEgress, withConfiguredEgress } from "./egress/configure";
+import { previewHostSuffix } from "./lib/preview-origin";
 import { MemoryStore } from "@proteus/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
 import { generateText, type LanguageModelUsage } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
-import { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
+import { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet } from "./facet-spawn";
 import {
   createHubDeviceTransport,
   type DeviceHubClient,
   type HubDeviceTransportOpts,
-} from "./device-transport.js";
+} from "./device-transport";
 import {
   createAgentProviderRegistry,
   type UserCredentialClient,
   type UserCredentialSource,
-} from "./providers/agent-registry.js";
-import { resolveJudgeModelSelection } from "./providers/judge-model.js";
-import { ownerCaller, type UserCaller } from "./user/workspace-capability.js";
-import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
+} from "./providers/agent-registry";
+import { resolveJudgeModelSelection } from "./providers/judge-model";
+import { ownerCaller, type UserCaller } from "./user/workspace-capability";
+import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
 import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@proteus/core";
-import type { ProteusSandbox } from "./proteus-sandbox.js";
+import type { ProteusSandbox } from "./proteus-sandbox";
 import {
   createNimbusWorkspaceSandbox,
   nimbusPreviewConfigured,
   nimbusPreviewUrl,
-} from "./nimbus-route.js";
+} from "./nimbus-route";
 import * as v from 'valibot';
 
 /**

@@ -4,7 +4,7 @@
 // could be deleted outright with the test still green. The property that
 // prevents a repeat is that a missing anchor THROWS, so it is asserted first.
 import { describe, expect, test } from 'bun:test';
-import { anchor, between, memberBody } from '../src/index.js';
+import { anchor, between, memberBody } from '../src/index';
 
 describe('anchor', () => {
   test('returns the offset when present', () => {
