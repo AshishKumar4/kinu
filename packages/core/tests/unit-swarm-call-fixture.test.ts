@@ -326,7 +326,15 @@ describe('pending the implementation, pinned so the fixture cannot be bypassed',
     // are each a value export, so landing any of them turns this red — which is
     // the point: entry zero must then be rewired to the real thing instead of
     // continuing to assert its own reading of the prose.
-    expect(Object.keys(objectiveModule).sort()).toEqual(['floorMargin', 'isBetter']);
+    //
+    // The four publication-seal exports are LISTED rather than excluded: they landed
+    // with §4.4's enumeration and are none of the four things this pin watches for, so
+    // naming them keeps the pin sensitive to what it is actually for. Adding them
+    // without a thought would have been the pass-by-omission the seal finding is about.
+    expect(Object.keys(objectiveModule).sort()).toEqual([
+      'PUBLICATION_SURFACES', 'PUBLISHING_CARRIES', 'admitsPublication',
+      'carrySuppression', 'floorMargin', 'isBetter',
+    ]);
     expect(Object.keys(swarmModule).sort()).toEqual([
       'SWARM_ADVANCES', 'SWARM_CARRIES', 'SWARM_DECORRELATES', 'SWARM_EXPANDS',
       'SWARM_OBSERVES', 'SWARM_PRESETS', 'SWARM_SCORES', 'SWARM_UNITS', 'settleOf',
