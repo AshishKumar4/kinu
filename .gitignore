@@ -62,6 +62,11 @@ CC-CORPUS-*.md
 # citations escaped — into a shipped production constant.
 /docs/research/
 
+# Raw owner/session transcripts are private harness memory, never repository source.
+# Requirements may cite local turn numbers, but the transcript itself stays under
+# ~/.claude/projects/.../memory/requirements/.
+/docs/requirements/OWNER-MESSAGES-VERBATIM.md
+
 # UI verification screenshots — proof-of-work, regenerated on demand, never source.
 /.ui-proof/
 
