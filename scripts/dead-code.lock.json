@@ -9,7 +9,6 @@
   "packages/cf-backend/src/lib/user-api.ts#listConnectedProviders (unreferenced)",
   "packages/cf-backend/src/lib/user-api.ts#listTriggers (unreferenced)",
   "packages/cf-backend/src/lib/user-api.ts#updateMcpServer (unreferenced)",
-  "packages/cf-backend/src/obs/cf-tracer.ts (unreachable-file)",
   "packages/cf-backend/src/user/credential-envelope.ts#isSealedCredential (test-only)",
   "packages/cf-backend/src/user/mcp.ts#McpServerConfig (unreferenced)",
   "packages/cf-backend/src/user/workspace-capability.ts#setWorkspaceTier (test-only)",
