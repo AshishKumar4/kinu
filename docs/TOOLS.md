@@ -20,7 +20,7 @@ action of `agents`.
 | `execute_tools` | Codemode sandbox — LLM writes JS with `workspace.*`, `codemode.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `release.*`, and `tools.<name>` crafted-tool APIs |
 | `run` | One shell command in one explicitly selected runtime |
 | `file` | The one file plane — `read` a file, `edit` exact text inside it, `write` it whole — over the same workspace filesystem every other surface addresses |
-| `agents` | The whole delegation surface — `fork \| hire \| ask \| send \| reply \| list \| dismiss` |
+| `agents` | The whole delegation surface — `swarm \| hire \| ask \| send \| reply \| list \| dismiss` |
 | `memory` | The one durable-state tool — `save \| search` prose memory, `remember \| recall \| forget` typed keyed facts, `sessions` to recall past session transcripts |
 | `tasks` | The agent's own task list — `add` titles (with a `parent` for subtasks), `update` one item's status, `list` it back. One row per item in `agent_tasks`; the open half renders into the live context block every step, and into the Tasks tab |
 | `web` | Live web access — `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
@@ -163,14 +163,14 @@ There is **one** delegation tool. `think`, `team` and `peers` were three tools
 for one decision; they are now three groups of actions on `agents`, gated by
 the deps a backend wires (`agentsActionsFor`).
 
-The spawn rungs are **one ladder keyed on lifetime**, because lifetime is the
-only axis the model has to decide on to pick between them; the measured rung
-sits beside them on its own axis, keyed on whether the answer can be measured
-instead of judged. The system prompt's `## Delegation`
-section (`packages/core/src/prompt.ts`) indexes the rungs and carries the
-operational doctrine no schema does; each rung's *triggers* live in
-`BUILTIN_TOOL_SPECS` (`registry.ts`, the single source) and reach the model
-through the `agents` schema description, which providers weight for selection.
+Two rungs spawn, on two different axes. `hire` is keyed on lifetime: the helper
+outlives this turn and stays in the roster. `swarm` is keyed on measurement: a
+verifier the caller registered scores every candidate, and the run settles back
+this turn. The system prompt's `## Delegation` section
+(`packages/core/src/prompt.ts`) indexes the rungs and carries the operational
+doctrine no schema does; each rung's *triggers* live in `BUILTIN_TOOL_SPECS`
+(`registry.ts`, the single source) and reach the model through the `agents`
+schema description, which providers weight for selection.
 
 The section opens on a **default**, not on a choice: *"Delegate once the shape
 of the work is settled: naming the parts is yours, running them is theirs."*
@@ -194,33 +194,33 @@ The rungs themselves:
    `llm.query` each slice inside `execute_tools`. Rendered only where the RLM
    provider is actually wired, and weight-ordered here because it is the
    cheapest helper there is.
-2. **Ephemeral fork** (`fork`) — spawns 2–6 copies of you on the same
-   workspace, sandbox and files; each runs its own multi-step tool loop
-   concurrently; findings merge back into this turn and the forks disappear.
-   `forks` is **required**: a fork runs the briefs it is given, and a call that
-   supplies none is refused (`forkBriefsRefusal`) naming `action:'swarm'` as the
-   place a search writes its own candidates.
-3. **Configured search** (`swarm`) — the measured rung, on the same deps as
-   `fork`. `preset` fixes the shape of the search and `depth` how deep it may
-   go; every candidate is scored against the `objective` the caller declares,
-   by a verifier registered in `strategy/verifier-registry.ts` that runs in this
-   workspace. Tree search of every depth lives here.
-4. **Persistent subordinate** (`hire`) — long-lived, starts from a blank context, keeps its own
+2. **Configured search** (`swarm`) — the measured rung. `preset` fixes the
+   shape of the search, `objective` says what is measured, and `depth` says how
+   deep the search may go. A verifier registered in
+   `strategy/verifier-registry.ts` scores every candidate, and it runs in this
+   workspace. Each node is a full agent with its own multi-step tool loop. Tree
+   search of every depth lives here; [EXPLORATION.md](./EXPLORATION.md) is the
+   document for the search itself.
+3. **Persistent subordinate** (`hire`) — long-lived, starts from a blank context, keeps its own
    across turns, stays in the roster.
 
-`fork` and `swarm` are not two settlements of one primitive. `fork` has ONE
-settlement, a merge: it reconciles what the briefs reported. A swarm has no
-settlement to choose — its candidates are measured, and the number decides.
-That is why a swarm needs an `objective` and a fork does not, and why there is
-no route from a swarm to a judged ensemble: ranking by a panel of model opinions
-is not something the surface offers.
+A swarm has no settlement to choose. Its candidates are measured and the number
+decides. That is why a swarm needs an `objective`, and why there is no route
+from a swarm to a judged ensemble: ranking by a panel of model opinions is not
+something this surface offers.
 
-The MCTS engine itself is unchanged and still registered (`strategy/mcts.ts` in
-the `StrategyRegistry`; UCT selection, backprop, pruning, convergence,
-search-store resume, sibling diversity, execution-grounded rewards all intact).
-What it no longer has is a model-facing route: it is reached programmatically,
-by the durable search store and by the eval harness. See
-[MCTS.md](./MCTS.md).
+**The `fork` action is gone.** It took 2-6 briefs the caller wrote, ran one copy
+of the agent per brief, and merged what they reported. `AGENTS_TOOL_ACTIONS`
+lists seven actions now and `fork` is not one of them, so the call is refused by
+the action picklist. No field carries a brief and nothing on the surface selects
+the old behaviour. A search that writes its own candidates and measures them
+covers the same work with a number behind the ranking.
+
+The MCTS engine is unchanged and still registered (`strategy/mcts.ts` in the
+`StrategyRegistry`; UCT selection, backprop, pruning, convergence, search-store
+resume, sibling diversity, execution-grounded rewards all intact). It has no
+model-facing route. It is reached programmatically, by the durable search store
+and by the eval harness. See [MCTS.md](./MCTS.md).
 
 Talking to what already exists is not a rung either — `ask`, `send`, `reply`
 and `list` address agents by name, and the name decides the transport:
@@ -258,28 +258,57 @@ that names the field meant:
 
 ```
 unknown field "budgetUsd" — did you mean "budget_usd"?
-field "budget_usd" does not apply to action "hire" — it is read by fork, and hire
-would ignore it. action "hire" takes: agent, role, mission, model, scope, message,
-timeout_seconds.
+field "budget_usd" does not apply to action "hire" — it is read by swarm, and
+hire would ignore it. action "hire" takes: agent, role, mission, model, scope,
+message, timeout_seconds.
 ```
 
-This exists because the schema was one flat `v.object`, and valibot's `object`
-**excludes** an unknown entry instead of rejecting it. Measured against the
-shipped parser on 2026-08-18, `{ action:'fork', task:'x', budgetUsd:5,
+The declared relation, action by action:
+
+| Action | Fields its handler reads |
+|---|---|
+| `swarm` | `task`, `preset`, `objective`, `key`, `config`, `from`, `label`, `branches`, `depth`, `budget_usd`, `budget_tokens`, `budget_label` |
+| `hire` | `agent`, `role`, `mission`, `model`, `scope`, `message`, `timeout_seconds` |
+| `ask` | `agent`, `message`, `topic`, `timeout_seconds`, `deliverable`, `deadline_hint` |
+| `send` | `agent`, `message`, `topic` |
+| `reply` | `event_id`, `message` |
+| `list` | `agent` |
+| `dismiss` | `agent`, `keep_history` |
+
+A verifier is not a field of its own. `verify` is `{kind, spec}` nested inside
+`objective`, so a metric and the instrument that measures it arrive together.
+
+**A swarm takes no iteration cap and no wall-clock cap, and the absence is the
+design.** Nothing in the runner cuts a search off on either one. A surface that
+takes a cap it never applies is the defect this repository is written against, so
+neither field is declared, and a caller who sends one is told which actions read
+it. `depth`, `branches`, `budget_usd` and `budget_tokens` are the caps that are
+enforced. The two absent ones join the list when something enforces them.
+
+`models` was removed on 2026-08-19 for that same reason. It promised per-node
+model routing and no runner read it, so a caller who named a cheap model for the
+deep levels got the workspace model and no error.
+
+The contract exists because the schema was one flat `v.object`, and valibot's
+`object` **excludes** an unknown entry instead of rejecting it. Measured against
+the shipped parser on 2026-08-18, `{ action:'fork', task:'x', budgetUsd:5,
 wallClockMs:1000 }` parsed to `{ action:'fork', task:'x' }`: two spend caps
 asked for, neither applied, no error and nothing in the run record saying the
-request had vanished. `gate:agents-fields` holds the declaration to the code —
-per action, the `input.<field>` reads its `case` arm performs (followed through
-every whole-input hand-off, including into `readMissionLimits`, where
-`budget_usd` is actually read) must be exactly the fields declared for it, and
-every declared field must be in the parse. The JSON Schema the model sees is
-derived from the same map at compile time.
+request had vanished. That exact call is refused twice over now, because `fork`
+has left the picklist too — but the mistake the surface provokes is unchanged,
+since every cap on it is snake_case and camelCase is what a model reaches for.
+`gate:agents-fields` holds the declaration to the code — per action, the
+`input.<field>` reads its `case` arm performs (followed through every
+whole-input hand-off, including into `readMissionLimits`, where `budget_usd` is
+actually read) must be exactly the fields declared for it, and every declared
+field must be in the parse. The JSON Schema the model sees is derived from the
+same map at compile time.
 
-One deliberate asymmetry: the resume filter (`resumableForkInput`) DROPS an
+One deliberate asymmetry: the resume filter (`resumableAgentsInput`) DROPS an
 unknown field instead of refusing it. A durable job row was recorded verbatim
 from the model's original call, no model is listening for a correction, and the
 field was already dropped when the row was first dispatched — so refusing it
-would turn a replayable fork into a hard failure. It is logged
+would turn a replayable search into a hard failure. It is logged
 (`agents.resume.fields_dropped`) rather than dropped silently.
 
 The same filter also TRANSLATES. A stored row carrying a `settle` is a tree
@@ -381,14 +410,13 @@ craft. There is no workflow DSL, graph engine or step store, because
 
 ```javascript
 // Inside execute_tools — a workflow is just code.
-const settled = await Promise.all(areas.map((area) => agents.fork({
+const settled = await Promise.all(areas.map((area) => agents.swarm({
   task: `review ${area}`,
-  forks: [
-    { task: `read ${area}`, rationale: "ground it" },
-    { task: `test ${area}`, rationale: "check it" },
-  ],
+  preset: "ideate",
 })));
-return settled.filter((s) => !s.error && s.score > 0.6).map((s) => s.text);
+return settled
+  .filter((run) => !("reason" in run))
+  .flatMap((run) => run.candidates.map((c) => c.artifact));
 ```
 
 `createAgentsCodemodeProvider` (`packages/core/src/tools/agents-codemode.ts`)
@@ -396,17 +424,15 @@ builds the namespace, and every member lands in the same `dispatchAgentsAction`
 the top-level `agents` tool calls, over the same deps — one delegation path with
 one more caller, not a second spawn/join implementation. Which members exist is
 `agentsActionsFor(deps)`, the identical gate behind the tool's action enum: an
-orchestrator gets all eight, a subordinate or a local CLI session gets `fork`
-and `swarm` — a swarm rides the same deps as a fork, so no deps set grants one
-without the other — and a head, handed no delegation deps, has no `agents`
-namespace at all. The workspace-clone `forkAgent` RPC is deliberately not
-projected.
+orchestrator gets all seven, a subordinate or a local CLI session gets `swarm`
+alone, and a head, handed no delegation deps, has no `agents` namespace at all.
+The workspace-clone `forkAgent` RPC is deliberately not projected.
 
-One limitation to know: a fork started inside the sandbox rides the enclosing
+One limitation to know: a search started inside the sandbox rides the enclosing
 `execute_tools` call, and that job kind declines background resume (its side
 effects cannot be safely re-run). Quick orchestration belongs in the sandbox; a
 single long search that must survive an eviction belongs at the top-level tool,
-whose durable job row is re-driven on resume (`resumableForkInput`).
+whose durable job row is re-driven on resume (`resumableAgentsInput`).
 
 ### Example usage
 
@@ -549,27 +575,32 @@ unless the workspace's shell approval mode is `allow_all`.
 The live executor status is authoritative for which workspace programs and
 runtimes are installed. Do not infer capability from older backend labels.
 
-## agents fork — the ephemeral-fork rung
+## agents swarm — the configured-search rung
 
-`agents` with `action: fork` dispatches through the strategy registry
-(`core/src/strategy/`) to `FORK_STRATEGY_ID` (`heads`) — the only strategy the
-action reaches, because a fork has one settlement. The briefs in `forks` —
-**required** — each become an independent fork of the agent running its own
-multi-step tool loop (`HEAD_BUILTIN_TOOLS`, narrowed by the brief's own
-`allowedTools`) over a fork of the parent workspace, merged back into the turn.
+`agents` with `action: swarm` resolves the call, checks it, then runs it.
+`runSwarmAction` (`core/src/tools/agents-tool.ts`) dispatches into `runSwarm`
+(`core/src/strategy/swarm-run.ts`). The order is load-bearing: resolution turns
+`preset` into a full axis tuple, validity is checked over that tuple, and only
+the last step spends anything.
 
-The requirement is enforced at the seam (`forkBriefsRefusal` in
-`core/src/tools/agents-tool.ts`) rather than documented: a call that supplies no
-briefs is refused with `reason: 'bad_input'`, and the refusal names
-`action:'swarm'` as the place a search writes its own competing approaches and
-ranks them. Before that refusal existed, such a call announced its spawn,
-detached, and reported the strategy's throw as a wake about spawned work
-failing.
+Three refusal classes, kept apart by vocabulary:
 
-A tree search of any depth is `action:'swarm'` with a `depth`: it reads `task`
-and writes its own candidates, each measured against the `objective` the caller
-declared by a verifier from `strategy/verifier-registry.ts`. It is not a
-settlement of `fork`, and there is no field on `fork` that selects it.
+| `reason` | What it says |
+|---|---|
+| `bad_input` | the call does not describe a legal search |
+| `unsupported` | a legal search this tree has no engine for |
+| `unavailable` | a legal search whose instrument this actor does not have |
+
+Only one of the three is worth correcting, which is why they are not one bucket.
+
+A run that started returns a report: the axes in force, the caps, the settle
+report, the publication marker, the best candidate and every candidate. A run
+that did not start returns a refusal. Those are two shapes on purpose — a caller
+branching on `reason` asks a different question from one reading a report.
+
+[EXPLORATION.md](./EXPLORATION.md) is the normative document for the search
+itself: the six axes, the seven presets, what a node is, and what the engine
+refuses.
 
 ## experience — cross-workspace transfer
 
