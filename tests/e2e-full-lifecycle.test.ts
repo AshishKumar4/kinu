@@ -18,9 +18,7 @@ import {
   buildBuiltinTools,
   BUILTIN_TOOLS,
   collectStepText,
-  initSearchTables,
-  initScaffoldTables,
-  initCraftScoreTables,
+  initWorkspaceSchema,
   readSoul,
   JsonObjectSchema,
   projectJsonValue,
@@ -30,6 +28,9 @@ import {
   type ToolCallRecord,
 } from '../packages/core/src/index';
 import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index';
+import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
+import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
+import { requireSandboxedExecutors } from './evals/harness';
 import {
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
@@ -126,14 +127,25 @@ describe('E2E Full Lifecycle', () => {
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
 
-    rt = await createWorkspace(db, {
+    // BIRTH, then the WHOLE schema, then OPEN. The birth runtime carries no
+    // `preBuilt` deps, so `execute_tools` answered every call with
+    // "execute_tools is not configured on this runtime" — measured live, while
+    // step 4 ("code execution") still passed, because it asserts only that the
+    // reply is non-empty. `openWorkspaceCLI` builds `createCLIRuntime`, the same
+    // spine `proteus exec` runs, so the tool the prompt names actually exists.
+    await createWorkspace(db, {
       name: 'lifecycle-test',
       purpose: 'A coding assistant that helps write and test JavaScript code.',
       llm: LLM_CONFIG,
     });
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftScoreTables(rt.storage.execRaw);
+    // One function declares a workspace's tables. The three calls this replaced
+    // omitted `initShadowTables`, and a sibling suite died on the table it
+    // creates 102s into a paid run.
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    // `hostRoot: null` keeps every executor off the repo this suite launched
+    // from; the next line asserts that rather than trusting it.
+    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
+    requireSandboxedExecutors('e2e-full-lifecycle', rt);
 
     tools = buildBuiltinTools({ rt });
     model = liveChatModel(LLM_CONFIG);

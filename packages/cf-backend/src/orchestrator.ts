@@ -139,6 +139,7 @@ import {
   readNodeTranscript, type NodeTranscriptView,
   readExplorationCanvas, type ExplorationCanvasRun,
   type HeadStep,
+  type BranchProposal, type BranchDecision, type NodeArbiter,
   buildPendingActions, type PendingAction,
   type ChatHistoryEntry, type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
@@ -261,6 +262,17 @@ function clampLimit(requested: number | undefined, max: number): number {
 
 export class OrchestratorAgent extends ActorAgent {
   private _planReviews: PlanReviewStore | null = null;
+
+  /**
+   * The arbiters of searches running in THIS isolate right now, by node id.
+   *
+   * In memory and not a table, because that is what it is: a verdict is decided
+   * against a live remaining-children count, so an entry outliving its wave would
+   * be answering for a budget that no longer exists. A `Map` rather than a record
+   * because the keys are minted ids and entries are added and deleted as waves
+   * open and settle.
+   */
+  private readonly nodeArbiters = new Map<string, NodeArbiter>();
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -2560,6 +2572,54 @@ export class OrchestratorAgent extends ActorAgent {
     this.headJournal.appendStep(headId, seq, step);
     this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
     return { ok: true };
+  }
+
+  /**
+   * Arbitrate a HOSTED node's branch request, on behalf of the search that owns
+   * the budget.
+   *
+   * Why this exists when `recordHeadStep` was reusable and this is not: a step is
+   * a write to a table this actor holds, so any caller can perform it. A verdict
+   * is a decision against a LIVE budget — the remaining-children count of a
+   * search that is running right now, in this isolate — and that budget is not a
+   * row anyone can read. So the arbiter registers itself here for the life of its
+   * wave and this method is the route a facet reaches it by.
+   *
+   * Refuses rather than assumes when no arbiter is registered. A node whose
+   * search has already settled must not be handed a grant nobody will honour: the
+   * children would be reserved against a budget that is gone, and the node would
+   * report having been given work the engine never created.
+   */
+  @callable()
+  async nodeArbitrate(nodeId: string, proposal: BranchProposal): Promise<BranchDecision> {
+    const arbiter = this.nodeArbiters.get(nodeId);
+    if (!arbiter) {
+      // `budget-exhausted` rather than a sixth policy value: the vocabulary is
+      // closed on purpose, and this IS that fact — a settled search has no
+      // remaining children, so none can be reserved. The prose carries the
+      // detail, and the prose is what the node reads.
+      return {
+        kind: 'refused',
+        policy: 'budget-exhausted',
+        error: 'The search that spawned this node is no longer arbitrating, so no branch can be '
+          + 'reserved. Finish your own task and report.',
+      };
+    }
+    return await arbiter(proposal);
+  }
+
+  /**
+   * Register a hosted node's arbiter for the life of its run, and return the
+   * handle that unregisters it.
+   *
+   * A returned disposer rather than a second `unregister` call, because the two
+   * MUST be paired: an entry that outlived its wave would answer a later node
+   * against a settled budget, which is the exact failure the refusal above
+   * describes and this shape makes hard to cause.
+   */
+  registerNodeArbiter(nodeId: string, arbiter: NodeArbiter): () => void {
+    this.nodeArbiters.set(nodeId, arbiter);
+    return () => { this.nodeArbiters.delete(nodeId); };
   }
 
   /**

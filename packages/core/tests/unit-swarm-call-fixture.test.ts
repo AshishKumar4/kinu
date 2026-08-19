@@ -354,6 +354,36 @@ describe('validity over entry zero, as far as the document defines it', () => {
   });
 });
 
+/**
+ * §6.3's other half: `resolve(preset)` for a COMPOSITION, where `config` is the
+ * override and `from` names the base.
+ *
+ * Written because the precedence was stated and unguarded. The docstring on the
+ * tuple table says "`config` overrides `from`'s row, so state only what differs",
+ * and inverting the merge that implements it — spreading the row over the call
+ * instead of under it — failed 0 of 3611 core tests: every `custom` call in the
+ * suite omitted `from`, so the base spread to nothing and either order agreed.
+ * A caller's explicit axis being silently replaced by a preset's is the same
+ * defect class `tests/bench/patches/think-caller-tuning-clobbered.patch` seeds,
+ * and it was the one shape of it this tree could not have noticed.
+ */
+describe('resolve(custom): `config` overrides `from`\'s row, and only where it speaks', () => {
+  test('the axes a composition states are its own; the rest come from the base', () => {
+    const composed = resolveSwarm({
+      ...swarmCall(), preset: 'custom', from: 'optimise',
+      label: 'optimise, run fresh and carrying nothing forward',
+      config: { context: 'fresh', carry: { kind: 'none' } },
+    });
+    if ('reason' in composed) throw new Error(composed.error);
+    // Both directions in one equality: the two axes the call named are the call's,
+    // and the four it did not are the row's, verifier and selector included.
+    expect(composed.config).toEqual({ ...VERIFIER_TREE, context: 'fresh', carry: { kind: 'none' } });
+    // And the composition a caller is entitled to state is LEGAL — turning off the
+    // carry of a verified tree is a narrowing, not a refusal.
+    expect(swarmValidity(composed)).toBeNull();
+  });
+});
+
 describe('what the live tool surface does with entry zero', () => {
   test('swarm IS an action, and the call parses', () => {
     // FLIPPED (was: "swarm is not an action, so the call is refused by the enum" —
@@ -447,13 +477,20 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // `every_refusal_is_reachable` proves none of is unreachable. `SWARM_CONTEXTS` is
     // §8.4's axis, which arrived with agent nodes and is the trigger of the fifth
     // refusal. Named here because that is what this pin is for: growth stays a decision.
+    //
+    // GROWN BY TWO AGAIN, and both came from the records store landing.
+    // `configDigestOf` is `ExplorationRecord.configDigest`, computed beside the
+    // resolution because what it digests is what the resolution produced.
+    // `judgeMarginalisationRefusal` is §6.5's marginalisation floor extracted out of
+    // `swarmValidity` so that `runSwarm` — which the tool surface does not route
+    // through — enforces the same bound rather than a second copy of it.
     expect(Object.keys(swarmModule).sort()).toEqual([
       'BRANCH_PROPOSAL_WIDTH', 'BRANCH_REFUSAL_POLICIES',
       'JUDGE_MARGINALISATION_MIN', 'NAMED_SWARM_PRESETS', 'SWARM_ADVANCES', 'SWARM_CARRIES',
       'SWARM_CONTEXTS', 'SWARM_EXPANDS',
       'SWARM_PRESETS', 'SWARM_PRESET_POINTS', 'SWARM_SCORES', 'SWARM_TREE_ADVANCES',
-      'SWARM_UNITS', 'arbitrateBranch', 'isPresetPoint', 'isTreeAdvance', 'resolveSwarm',
-      'settleOf', 'swarmValidity',
+      'SWARM_UNITS', 'arbitrateBranch', 'configDigestOf', 'isPresetPoint', 'isTreeAdvance',
+      'judgeMarginalisationRefusal', 'resolveSwarm', 'settleOf', 'swarmValidity',
     ]);
   });
 

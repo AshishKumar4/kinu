@@ -118,6 +118,7 @@ async function memberOf(
   nodeId: string,
   files: readonly MemberFileChange[],
   module: MergeBackModule = pristine,
+  deps: readonly string[] = [],
 ): Promise<MergeMember> {
   const diff = {
     nodeId,
@@ -133,7 +134,7 @@ async function memberOf(
       clean: true,
     },
     scope: null,
-    deps: [],
+    deps,
     score: 1,
   };
 }
@@ -311,6 +312,59 @@ describe('the stale-verdict refusal is load-bearing', () => {
   });
 });
 
+/* ── Red-proof 3: §9.1's derived order ────────────────────────────────────── */
+
+const DERIVED_ORDER = 'dependencyOrder(members, settled)';
+
+// A fan-in and one of its parents, with the DEPENDENT offered first — which is the order a
+// level hands over, since a vertex is created after the parents it consumed and is
+// therefore held after them. Different paths, so nothing here is a conflict: the only
+// thing that decides whether both land is the order.
+async function vertexBeforeParent(origin: Origin, module: MergeBackModule) {
+  return [
+    await memberOf(
+      origin, 'vertex', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], module, ['parent'],
+    ),
+    await memberOf(origin, 'parent', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }], module),
+  ];
+}
+
+describe("§9.1's derived order is load-bearing", () => {
+  test('GREEN: the order comes off the edges, so both members land', async () => {
+    const origin = tearingOrigin({ 'a.ts': 'A0\n', 'c.ts': 'C0\n' });
+    const members = await vertexBeforeParent(origin, pristine);
+
+    const report = await runWith(pristine, origin, 'sequential-rebase', members);
+
+    expect(report.order).toEqual(['parent', 'vertex']);
+    expect(report.outcomes.map((o) => o.kind)).toEqual(['applied', 'applied']);
+    expect(origin.at.get('c.ts')).toBe('C1\n');
+  });
+
+  // THE ACCEPTANCE MUTATION: apply the members in the order they were offered. Rule 1 then
+  // refuses the dependent, the merge stops at the first member, and a DAG whose vertices
+  // are created after the parents they consumed can never land anything — which is what
+  // makes the derivation the mechanism rather than a tidy-up.
+  test('RED: apply them as offered and the dependent refuses for want of its dependency', async () => {
+    const mutant = await mutate('offered-order', [[
+      DERIVED_ORDER, "({ kind: 'ordered' as const, members })",
+    ]]);
+    const origin = tearingOrigin({ 'a.ts': 'A0\n', 'c.ts': 'C0\n' });
+    const members = await vertexBeforeParent(origin, mutant);
+
+    const report = await runWith(mutant, origin, 'sequential-rebase', members);
+
+    expect(report.order).toEqual(['vertex', 'parent']);
+    const [outcome] = report.outcomes;
+    if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
+    expect(outcome.refusal.cause).toBe('dependency-unsettled');
+    expect(report.stoppedAt).toBe('vertex');
+    // Nothing landed at all: the parent was never reached either.
+    expect(origin.at.get('c.ts')).toBe('C0\n');
+    expect(origin.at.get('a.ts')).toBe('A0\n');
+  });
+});
+
 /* ── The mutation harness itself ──────────────────────────────────────────── */
 
 describe('the harness cannot prove a guard it did not remove', () => {
@@ -319,10 +373,11 @@ describe('the harness cannot prove a guard it did not remove', () => {
       .rejects.toThrow('found 0');
   });
 
-  test('the pristine module still holds both comparisons this file mutates', async () => {
+  test('the pristine module still holds every snippet this file mutates', async () => {
     const source = await Bun.file(SOURCE).text();
     expect(source.split(STALE_COMPARISON).length - 1).toBe(1);
     expect(source.split('const exceeded = memberApplyBound(plan);').length - 1).toBe(1);
     expect(source.split('if (fresh.baseDigest !== baseDigest) {').length - 1).toBe(1);
+    expect(source.split(DERIVED_ORDER).length - 1).toBe(1);
   });
 });

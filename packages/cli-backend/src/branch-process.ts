@@ -18,6 +18,32 @@ import type { LocalProviderCredentials } from './model-resolver';
 
 const activeBranches = new Map<string, ChildProcess>();
 
+/**
+ * Wall clock on ONE branch RPC — an `explore` is a whole agent turn, not a single
+ * completion.
+ *
+ * It was 120_000, commented "2 minutes per exploration", and that is under the
+ * work. Measured against @cf/deepseek-ai/deepseek-v4-pro-0813 in one eval-tier
+ * run: single turns of 151s and 294s, a five-turn conversation of 509s, and eight
+ * algorithmic challenges averaging 92s each. So on the default model EVERY rollout
+ * hit this ceiling — `Branch RPC timeout: explore` three times out of three — and
+ * the consequence is not a visible error. The engine scores a failed branch 0
+ * (mcts/engine.ts:351), every node keeps the DDL's `value = 0`, and `converge`
+ * then correctly refuses to crown a winner over a zero-signal tree and abandons
+ * it (mcts/convergence.ts:96-113). A CLI search therefore returned no winner and
+ * said only that nothing scored, which is why this was invisible until a driven
+ * eval wired `onProgress` and read the branch failures.
+ *
+ * 600_000 clears the longest turn measured here by roughly 2x. It stays a BOUND
+ * rather than becoming unbounded, because the judge seam documents the failure it
+ * prevents: an upstream that accepts a request and never answers leaves a promise
+ * pending inside a background fiber that carries no wall clock, and the stall is
+ * permanent (mcts/evaluation.ts DEFAULT_JUDGE_CALL_TIMEOUT_MS). It also sits under
+ * the 900s ceiling the live suites give a search, so a stuck branch surfaces as a
+ * named branch failure rather than as the test being killed with no account.
+ */
+export const BRANCH_RPC_TIMEOUT_MS = 600_000;
+
 export interface BranchSpawnerConfig {
   llm: LLMProviderConfig;
   providerCredentials?: LocalProviderCredentials;
@@ -103,33 +129,33 @@ export function createBranchSpawner(
       activeBranches.delete(branchId);
     });
 
-    const rpc = <T>(method: string, args: BranchRpcArgs): Promise<T> =>
-      new Promise((resolve, reject) => {
-        const timeoutMs = 120_000; // 2 minutes per exploration
-        const timeout = setTimeout(() => {
-          child.off('message', handler);
-          reject(new Error(`Branch RPC timeout: ${method}`));
-        }, timeoutMs);
+    const rpc = <T>(method: string, args: BranchRpcArgs): Promise<T> => {
+      const { promise, resolve, reject } = Promise.withResolvers<T>();
+      const timeout = setTimeout(() => {
+        child.off('message', handler);
+        reject(new Error(`Branch RPC timeout: ${method}`));
+      }, BRANCH_RPC_TIMEOUT_MS);
 
-        const handler = (msg: { method: string; result?: T; error?: string }) => {
-          if (msg.method === method) {
-            clearTimeout(timeout);
-            child.off('message', handler);
-            // Presence, not truthiness: an error whose message is empty is
-            // still a failure, and treating it as success used to surface far
-            // away as a TypeError inside the search loop.
-            if (msg.error !== undefined) {
-              reject(new Error(msg.error || `Branch worker failed ${method} without a message`));
-            } else if (msg.result === undefined) {
-              reject(new Error(`Branch worker returned no result for ${method}`));
-            } else {
-              resolve(msg.result);
-            }
+      const handler = (msg: { method: string; result?: T; error?: string }) => {
+        if (msg.method === method) {
+          clearTimeout(timeout);
+          child.off('message', handler);
+          // Presence, not truthiness: an error whose message is empty is
+          // still a failure, and treating it as success used to surface far
+          // away as a TypeError inside the search loop.
+          if (msg.error !== undefined) {
+            reject(new Error(msg.error || `Branch worker failed ${method} without a message`));
+          } else if (msg.result === undefined) {
+            reject(new Error(`Branch worker returned no result for ${method}`));
+          } else {
+            resolve(msg.result);
           }
-        };
-        child.on('message', handler);
-        child.send({ method, args });
-      });
+        }
+      };
+      child.on('message', handler);
+      child.send({ method, args });
+      return promise;
+    };
 
     // Wait for child to signal readiness
     await new Promise<void>((resolve, reject) => {

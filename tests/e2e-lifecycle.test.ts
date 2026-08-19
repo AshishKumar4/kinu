@@ -14,9 +14,7 @@ import {
   collectStepText,
   EvolutionEngine,
   buildBuiltinTools,
-  initSearchTables,
-  initScaffoldTables,
-  initCraftScoreTables,
+  initWorkspaceSchema,
   type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
@@ -31,8 +29,12 @@ import {
   projectJsonValue,
 } from '../packages/core/src/index';
 import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index';
+import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
+import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
+import { requireSandboxedExecutors } from './evals/harness';
 import {
-  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
+  liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode,
+  recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
@@ -132,10 +134,23 @@ describe('E2E Lifecycle', () => {
     mkdirSync(TEST_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
-    rt = await createWorkspace(db, { name: 'e2e-test', purpose: 'A coding assistant that helps write TypeScript.', llm: LLM_CONFIG });
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftScoreTables(rt.storage.execRaw);
+    // BIRTH, then OPEN. `createWorkspace` returns the birth runtime, whose
+    // `spawnBranch` throws by design (identity/create.ts:80) because a stub
+    // result would be indistinguishable from a real exploration — so `MCTS
+    // evolution` below could never pass on it, and did not, for as long as this
+    // suite had a credential. `openWorkspaceCLI` builds `createCLIRuntime`,
+    // which registers the real branch spawner, and is the same spine
+    // `proteus exec` runs.
+    await createWorkspace(db, { name: 'e2e-test', purpose: 'A coding assistant that helps write TypeScript.', llm: LLM_CONFIG });
+    // The whole schema from the one function that declares it, replacing three
+    // hand-picked init calls. They omitted `initShadowTables`, so
+    // `scaffold_evaluations` was absent — which is what a sibling suite died on
+    // mid-run. A hand-maintained subset of a schema drifts from it by default.
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    // `hostRoot: null` keeps every registered executor off the repo this suite
+    // was launched from, and the next line asserts it rather than trusting it.
+    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
+    requireSandboxedExecutors('e2e-lifecycle', rt);
     events = [];
     engine = new EvolutionEngine(rt, { enabled: true });
     tools = buildBuiltinTools({ rt });
@@ -198,12 +213,29 @@ describe('E2E Lifecycle', () => {
 
   liveTest('MCTS evolution', async () => {
     const session = makeSessionWriter();
-    const result = await runMCTS(rt, session, 'How can I improve as a TypeScript assistant?', { budget: 1, branches: 2, maxCostUSD: 5 });
+    const result = await runMCTS(rt, session, 'How can I improve as a TypeScript assistant?', {
+      budget: 1, branches: 2, maxCostUSD: 5,
+      // Every other test here holds an SDK result and reports it directly. A search
+      // does not: its rollouts and judge samples are made deeper down, so with no
+      // sink they happen and go unattributed — this step ran for 456s and reported
+      // `0 model call(s)`, which is the floor-as-a-total shape the tier's own
+      // liveness verdict refuses.
+      reportModelCall: liveModelCallSink(rt.storage.sql),
+    });
+    recordLiveModelEpisode(rt.storage.sql);
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
     console.log(`  Nodes: ${nodes.length}`);
     expect(nodes.length).toBe(3);
     expect(nodes.some((node) => node.id === result.winnerId)).toBe(true);
-  }, 300_000);
+    // The search is already at its floor — `budget: 1, branches: 2` is the
+    // smallest shape that can produce the three nodes asserted above — so the
+    // ceiling is what had to move. It was 300s against a step MEASURED at 290s
+    // one run and killed past 300s the next, which is a coin toss rather than a
+    // gate. Per-call latency on @cf/deepseek-ai/deepseek-v4-pro-0813 spans 22s to
+    // 293s inside a single run of this very suite, so a ceiling needs multiples
+    // of the measurement and not percent. 900s is what the sibling MCTS step in
+    // `exploration.eval.test.ts` uses, and these two are the same kind of step.
+  }, 900_000);
 
   liveTest('persistence', async () => {
     const msgsBefore = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM messages').get()?.c ?? 0;

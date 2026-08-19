@@ -60,8 +60,8 @@
     "reason": "needs a live model transitively: its denominator is the search the WORKS test writes, and it must assert a NON-ZERO rootsWritten. The reader/writer agreement itself is covered credential-free at packages/test-utils/tests/agent-evals.test.ts, including both directions of the twice-shipped empty pane."
   },
   {
-    "key": "tests/evals/exploration.eval.test.ts › Exploration evals — MCTS reached, ranked, and readable › WORKS: a driven mcts fork branches and ranks, durably",
-    "reason": "needs a live model: an MCTS search is model calls all the way down — branch rollouts plus judge samples. The harness drives the fork so the model cannot decline, but it cannot fake the search."
+    "key": "tests/evals/exploration.eval.test.ts › Exploration evals — MCTS reached, ranked, and readable › WORKS: a driven mcts search branches and ranks, durably",
+    "reason": "needs a live model: an MCTS search is model calls all the way down — branch rollouts plus judge samples. The harness drives the strategy directly so the model cannot decline, but it cannot fake the search."
   },
   {
     "key": "tests/evolution-proof.test.ts › Evolution Proof › evolution artifacts exist after session 1",

@@ -50,7 +50,7 @@
  */
 
 import type { Agent } from "agents";
-import type { BranchHandle, HeadInput, SpawnedHead } from "@proteus/core";
+import type { BranchHandle, HeadId, HeadInput, NodeLoopResult, NodeRunSpec, SpawnedHead } from "@proteus/core";
 import { ExplorationAgent } from "./exploration";
 
 /** The facet substrate a spawner rides. Both the workspace DO and a head
@@ -94,9 +94,12 @@ function errorText<Thrown>(thrown: Thrown): string {
  * nothing is deleted. That is the right verb only while something else still
  * owns the terminal release: cutting a head short so its own `run()` can settle
  * and release, or dropping a branch the search has stopped selecting.
+ *
+ * `reason` is that call's own reason channel, for a caller with no graceful-stop
+ * RPC to carry it: a node's loop has none, so eviction is the whole of its abort.
  */
-export function abortExplorationFacet(host: FacetHost, id: string): void {
-  host.abortSubAgent(ExplorationAgent, id);
+export function abortExplorationFacet(host: FacetHost, id: string, reason?: string): void {
+  host.abortSubAgent(ExplorationAgent, id, reason);
 }
 
 /**
@@ -228,6 +231,75 @@ export async function spawnHeadFacet(
       } finally {
         abortExplorationFacet(host, input.id);
       }
+    },
+  };
+}
+
+/** A hosted swarm node's handle — `SpawnedHead`'s shape over a node's result,
+ *  because it is the spawner's side of core's `NodeLoopHost`: one call, one
+ *  result. */
+export interface SpawnedNode {
+  readonly id: HeadId;
+  /** Kicks off the node's loop; resolves with everything the search reads out of it. */
+  run(): Promise<NodeLoopResult>;
+  /** Best-effort abort — used when the search stops wanting this node. */
+  abort(reason: string): void;
+}
+
+/** Swarm node: the same facet hosting core's node loop over `spec`.
+ *
+ *  Releases itself for a head's reason — `run()` settling IS the terminal point,
+ *  because a `NodeLoopResult` carries the whole of what the search takes out of a
+ *  node (its report, its own report call, the branch it was granted, and the
+ *  messages it produced) and the journal rows for all of it live on the search
+ *  rather than on this facet.
+ *
+ *  The node's home is NOT provisioned here: `runNodeAgent` provisions it before it
+ *  calls a host, which is why `spec.home` is already a path by the time this runs. */
+export async function spawnNodeFacet(
+  host: FacetHost,
+  spec: NodeRunSpec,
+  identity: ExplorationFacetIdentity,
+): Promise<SpawnedNode> {
+  const id = spec.headInput.id;
+  const stub = await host.subAgent(ExplorationAgent, id);
+  try {
+    await seedExplorationIdentity(stub, identity);
+    await stub.initNode(spec);
+  } catch (err) {
+    await discardHalfSeededFacet(host, id, err);
+  }
+  return {
+    id,
+    run: async () => {
+      // Settle the run BEFORE reclaiming, so a reclamation failure and a run
+      // failure can never mask one another.
+      const settled = await stub.runAsNode().then(
+        (result) => ({ ok: true as const, result }),
+        <Thrown,>(thrown: Thrown) => ({ ok: false as const, thrown }),
+      );
+      try {
+        await deleteExplorationFacet(host, id);
+      } catch (cleanupError) {
+        // Deliberately NOT swallowed, for the reason spawnHeadFacet states: the
+        // quota this leaks into overflows as an uncatchable reset.
+        throw new Error(
+          `Node facet ${id} settled but its storage was not reclaimed `
+          + `(leaked into the root's quota): ${errorText(cleanupError)}`,
+          { cause: cleanupError },
+        );
+      }
+      if (!settled.ok) throw settled.thrown;
+      return settled.result;
+    },
+    /** Cut a node short. An ABORT and not a release, for the reason a head's is:
+     *  `run()` is still in flight and owns the terminal release, and evicting the
+     *  instance is what makes its pending `runAsNode` RPC reject so that release
+     *  actually happens. Nothing is asked of the facet first — a node's only
+     *  in-loop stopping seam is `NodeLoopDeps.signal`, which lives on the search's
+     *  side of this RPC — so eviction is the whole of the abort. */
+    abort: (reason) => {
+      abortExplorationFacet(host, id, reason);
     },
   };
 }

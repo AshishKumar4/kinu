@@ -23,7 +23,7 @@ import {
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
   DefaultExecutionRouter, createInlineExecutor, formatExecResult,
   withApprovalGatedShell,
-  selectFastModel, createAgentConfigStore, initAgentConfigTable,
+  selectFastModel, createAgentConfigStore, initAgentConfigTable, initActorTables,
   type ModelCallSink,
 } from '@proteus/core';
 import {
@@ -492,6 +492,19 @@ export function buildCLIHeadRuntime(
   const { parentRuntime: parent } = opts;
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
+
+  // The scratch is a full-loop actor's storage, and this function is the only
+  // thing that provisions it: no `initWorkspaceSchema` runs over a head's
+  // database, and none should — a head has no workspace identity and no fork
+  // lineage of its own. `initActorTables` is exactly that distinction, and the
+  // three stores below are not the whole of what a head reads. The inline
+  // executor registered on this same `sql` quotes the crafted-tool EMA from
+  // `craft_scores` in `listTools`, seeds it in `createTool`, files a
+  // misevolution veto in `evolution_events` and publishes to `agent_views`;
+  // with only the VFS, memory and craft schemas below, a head raised
+  // `no such table: craft_scores` on its first `workspace.listTools()` and a
+  // tool it crafted was written and then reported as a failure.
+  initActorTables(execRaw, sql);
 
   const workspace = createWorkspaceFilesystem({
     sql: nimbusSql(db),

@@ -27,7 +27,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import { MAX_TX_BLOB_BYTES } from '@nimbus-sh/core/constants.js';
 import { Database } from 'bun:sqlite';
 import { createTestRuntime, makeSql, makeExecRaw } from './helpers';
-import { createRecordingLogger, type RecordingLogger } from '../src/obs/index';
+import { createRecordingLogger, type LogFields, type RecordingLogger } from '../src/obs/index';
 import { initSearchTables } from '../src/mcts/schemas';
 import { insertSearchNode } from '../src/mcts/record-node';
 import { backpropagate } from '../src/mcts/backpropagation';
@@ -41,7 +41,10 @@ import {
   type BranchProposal, type BranchRefusalPolicy, type ResolvedSwarm,
   type ResolvedSwarmCaps, type SwarmConfig, type SwarmResult,
 } from '../src/strategy/swarm';
-import type { Objective } from '../src/strategy/objective';
+import { recordsFor, verifierDigestOf } from '../src/strategy/records';
+import { resolveVerifier } from '../src/strategy/verifier-registry';
+import type { Floor, Objective, ObjectiveIdentity } from '../src/strategy/objective';
+import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { SearchNode } from '../src/types/mcts';
 import type { SqlExecutor } from '../src/types/primitives';
 
@@ -434,7 +437,17 @@ const OPTIMAL = `export function solve(input, oracle) {
 }
 `;
 
-function objective(): Objective {
+/**
+ * The suite's objective.
+ *
+ * `floor` is an override rather than a constant because one thing this file has to reach
+ * is a REFUTED bound. The shipped floor of ceil(n/2) is sound, and no honest candidate
+ * can cross it, so a seal is unreachable through it — which is correct and also means
+ * the seal's own wiring would go untested. A caller passing a floor ABOVE the optimum
+ * gets a bound the run's first correct candidate refutes, which is hypothesis H1 exactly:
+ * the floor is wrong.
+ */
+function objective(floor?: Floor): Objective {
   return {
     kind: 'scalar',
     metric: 'oracle_calls',
@@ -453,7 +466,7 @@ function objective(): Objective {
         lowerBoundOps: Math.ceil(N / 2),
       },
     },
-    floor: {
+    floor: floor ?? {
       value: Math.ceil(N / 2),
       kind: 'certificate',
       bestKnownHonest: N - 1,
@@ -465,8 +478,11 @@ function objective(): Objective {
 
 /** A model that answers with the optimal solution, and — when asked to — appends a
  *  branch proposal of `proposeWidth` sub-questions. `solution` is a parameter so a test
- *  can vary the ANSWER without a second copy of this model. */
-function answering(proposeWidth: number | null, solution: string = OPTIMAL): MockLanguageModelV3 {
+ *  can vary the ANSWER without a second copy of this model; `seen` collects the prompts
+ *  it was sent, for the one test that has to assert what a child was TOLD. */
+function answering(
+  proposeWidth: number | null, solution: string = OPTIMAL, seen?: string[],
+): MockLanguageModelV3 {
   const branch = proposeWidth === null ? '' : `\n\nPROPOSE-BRANCH\n${JSON.stringify({
     rationale: 'the tail of this task deserves its own thread',
     branches: Array.from({ length: proposeWidth }, (_unused, i) => ({
@@ -478,27 +494,35 @@ function answering(proposeWidth: number | null, solution: string = OPTIMAL): Moc
   return new MockLanguageModelV3({
     provider: 'fake',
     modelId: 'fake-swarm',
-    doGenerate: async () => ({
-      content: [{ type: 'text', text: `Here is my approach.\n\n\`\`\`javascript\n${solution}\`\`\`${branch}` }],
-      finishReason: { unified: 'stop' as const, raw: undefined },
-      usage: {
-        inputTokens: { total: 12, noCache: 12, cacheRead: undefined, cacheWrite: undefined },
-        outputTokens: { total: 34, text: 34, reasoning: undefined },
-      },
-      warnings: [],
-    }),
+    doGenerate: async (options) => {
+      seen?.push(JSON.stringify(options.prompt));
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Here is my approach.\n\n\`\`\`javascript\n${solution}\`\`\`${branch}`,
+        }],
+        finishReason: { unified: 'stop' as const, raw: undefined },
+        usage: {
+          inputTokens: { total: 12, noCache: 12, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 34, text: 34, reasoning: undefined },
+        },
+        warnings: [],
+      };
+    },
   });
 }
 
 /** A resolved `custom` composition, through the real resolver and the real validity
  *  predicate — a test that hand-built a `ResolvedSwarm` could assert a tree the tool
  *  surface cannot actually ask for. */
-function resolved(depth: number, branches: number, over?: Partial<SwarmConfig>): ResolvedSwarm {
+function resolved(
+  depth: number, branches: number, over?: Partial<SwarmConfig>, floor?: Floor,
+): ResolvedSwarm {
   const call = resolveSwarm({
     preset: 'custom',
     label: 'depth-suite',
     task: `Return the largest of ${String(N)} opaque tokens using the fewest oracle calls.`,
-    objective: objective(),
+    objective: objective(floor),
     config: treeConfig(over),
     depth,
     branches,
@@ -513,6 +537,9 @@ interface Run {
   readonly logger: RecordingLogger;
   readonly nodes: readonly SearchNode[];
   readonly result: SwarmResult | Refusal;
+  /** Every prompt the model was actually sent, serialized. The only way to assert what a
+   *  child was TOLD rather than what the engine computed. */
+  readonly prompts: readonly string[];
 }
 
 async function run(input: {
@@ -520,16 +547,22 @@ async function run(input: {
   readonly branches: number;
   readonly proposeWidth: number | null;
   readonly config?: Partial<SwarmConfig>;
+  /** A bound the run will refute, for the seal's own wiring. */
+  readonly floor?: Floor;
+  /** The workspace to run IN. Supplied where a test needs two runs to share one store,
+   *  which is the only way "a record survives a run" can be asserted at all. */
+  readonly rt?: AgentRuntime;
 }): Promise<Run> {
-  const { rt } = createTestRuntime();
+  const rt = input.rt ?? createTestRuntime().rt;
   const logger = createRecordingLogger();
+  const prompts: string[] = [];
   const result = await runSwarm(
-    { rt, model: answering(input.proposeWidth), mode: 'build', logger },
-    resolved(input.depth, input.branches, input.config),
+    { rt, model: answering(input.proposeWidth, OPTIMAL, prompts), mode: 'build', logger },
+    resolved(input.depth, input.branches, input.config, input.floor),
   );
   const nodes = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
-  return { logger, nodes, result };
+  return { logger, nodes, result, prompts };
 }
 
 describe('a swarm at depth 2 expands, and its tree is measured', () => {
@@ -735,6 +768,315 @@ describe('carry admission at the settle barrier', () => {
   }, 120_000);
 });
 
+/* ── The records store: what one run reached, the next one starts from ────── */
+
+// LIVES HERE FOR THE REASON THE BLOCK ABOVE DOES: the only harness in this repository
+// that drives a genuine settle with real candidates carrying real measured values is
+// this one. `unit-exploration-records.test.ts` proves what the store DECIDES — the seal,
+// the monotone rule, the floor-carrying key, the displacement counter — over rows it
+// writes directly. These prove the decisions are REACHED, and that the read half exists:
+// a writer nothing reads back persists rows no run ever starts from, which is the same
+// per-invocation search with a table beside it.
+
+/**
+ * The identity a run of this suite's objective resolves to.
+ *
+ * DERIVED the way the run derives it — the spec the objective names, and the code that
+ * name resolved to through the registry — rather than restated beside it. A restated
+ * digest would go green while the run wrote a different key, which is the one failure a
+ * test that reads the store back has to be unable to have.
+ *
+ * A function and not a module constant: it hashes, and this repository has already had
+ * a module-scope digest reach `node:crypto` on an import path where the bundler shims it
+ * to a throwing stub. The rule is cheap to keep everywhere rather than remembered where
+ * it bites.
+ */
+function identityOf(): ObjectiveIdentity {
+  const scalar = objective();
+  if (scalar.kind !== 'scalar' || !('kind' in scalar.verify)) {
+    throw new Error("the suite's objective is a scalar naming a registered verifier kind");
+  }
+  const instrument = resolveVerifier(scalar.verify);
+  if ('reason' in instrument) {
+    throw new Error(`the suite's own verifier does not resolve: ${instrument.error}`);
+  }
+  return {
+    metric: scalar.metric,
+    unit: scalar.unit,
+    direction: scalar.direction,
+    scale: scalar.scale,
+    verifierDigest: verifierDigestOf(scalar.verify, instrument.implementation),
+  };
+}
+
+const SUITE_FLOOR: Floor = {
+  value: Math.ceil(N / 2),
+  kind: 'certificate',
+  bestKnownHonest: N - 1,
+  proof: 'Every token must appear in at least one comparison and a comparison '
+    + 'touches two, so covering n needs at least ceil(n/2) calls.',
+};
+
+/** A bound the optimum itself refutes: the optimum spends n-1 calls, so a floor above
+ *  that is crossed by the first correct candidate. H1, in a fixture. */
+const REFUTED_FLOOR: Floor = {
+  value: N + 6,
+  kind: 'certificate',
+  bestKnownHonest: N + 16,
+  proof: 'A deliberately wrong bound, so the run has a breach to be sealed by.',
+};
+
+describe('the records store: what one run reached, the next one starts from', () => {
+  test("A RECORD SURVIVES ONE RUN AND THE NEXT RUN READS IT", async () => {
+    // THE WHOLE TICKET, end to end. Two runs, one workspace. The first writes what it
+    // reached; the second reads it before it expands anything and says so on its own
+    // report. Without the read half this passes on a store nothing consults.
+    const { rt } = createTestRuntime();
+
+    const first = await run({
+      depth: 1, branches: 2, proposeWidth: null, rt,
+      config: { carry: { kind: 'elites' } },
+    });
+    expect('reason' in first.result).toBe(false);
+    if ('reason' in first.result) return;
+    // Nothing to carry in — this is the first run of this objective in this workspace.
+    expect(first.result.report.records).toMatchObject({ carriedIn: 0, carriedInBest: null });
+    expect(first.result.report.records?.written).toBeGreaterThan(0);
+
+    // The row is REALLY there, read back the way a consumer reads it: scoped by the
+    // identity and the floor, never by the objective id alone.
+    const persisted = recordsFor(rt.storage.sql, { identity: identityOf(), floor: SUITE_FLOOR });
+    expect(persisted.length).toBeGreaterThan(0);
+    expect(persisted[0]?.value).toBe(first.result.best?.measured?.value ?? -1);
+    expect(persisted[0]?.rootId).toBe(first.nodes[0]?.id ?? '');
+
+    const second = await run({
+      depth: 1, branches: 2, proposeWidth: null, rt,
+      config: { carry: { kind: 'elites' } },
+    });
+    expect('reason' in second.result).toBe(false);
+    if ('reason' in second.result) return;
+
+    // READ. The number the first run reached is the number the second one started from.
+    expect(second.result.report.records?.carriedIn).toBe(persisted.length);
+    expect(second.result.report.records?.carriedInBest).toBe(persisted[0]?.value ?? -1);
+    const carried = second.logger.emitted.filter((line) => line.event === 'swarm.records_carried_in');
+    expect(carried).toHaveLength(1);
+    expect(carried[0]?.fields).toMatchObject({ carry: 'elites', best: persisted[0]?.value ?? -1 });
+
+    // AND THE SEARCH WAS TOLD. Without this the read is a number on a report and the
+    // store is still something no run starts FROM: `carriedIn` would hold while the
+    // prompt-side wiring was dead code. Asserted over what the model was actually sent.
+    const told = second.prompts.filter((sent) => sent.includes('An earlier run of this same objective'));
+    expect(told).toHaveLength(second.prompts.length);
+    // The number to beat AND the program that reached it — the number alone is a bar with
+    // no way to clear it, and the program alone is code with no reason to trust it.
+    expect(told[0]).toContain(String(persisted[0]?.value ?? -1));
+    expect(told[0]).toContain('function solve');
+    // The FIRST run had nothing to inherit, so this is not passing on a string the
+    // prompt always carries.
+    expect(first.prompts.some((sent) => sent.includes('An earlier run of this same objective')))
+      .toBe(false);
+  }, 120_000);
+
+  test('re-running the same search does not lower what the store holds', async () => {
+    // The monotone rule through the real path. The model answers with the same optimum
+    // both times, so the second run re-records one artifact at the same number — a tie,
+    // which does not displace — and the store says so instead of silently rewriting.
+    const { rt } = createTestRuntime();
+    const first = await run({
+      depth: 1, branches: 1, proposeWidth: null, rt, config: { carry: { kind: 'elites' } },
+    });
+    expect('reason' in first.result).toBe(false);
+    const before = recordsFor(rt.storage.sql, { identity: identityOf(), floor: SUITE_FLOOR });
+
+    const second = await run({
+      depth: 1, branches: 1, proposeWidth: null, rt, config: { carry: { kind: 'elites' } },
+    });
+    expect('reason' in second.result).toBe(false);
+    if ('reason' in second.result) return;
+    expect(second.result.report.records?.notBetter).toBeGreaterThan(0);
+    expect(second.result.report.records?.written).toBe(0);
+
+    const after = recordsFor(rt.storage.sql, { identity: identityOf(), floor: SUITE_FLOOR });
+    expect(after).toHaveLength(before.length);
+    expect(after[0]?.value).toBe(before[0]?.value ?? -1);
+  }, 120_000);
+
+  test("`carry:'artifacts'` admissions reach persistence, and a refused one writes nothing", async () => {
+    // Both publishing carries land in this store — `SWARM_CARRIES` says the store IS
+    // where the axis lands — so the threshold that gates admission gates the write too.
+    const clears = await run({
+      depth: 1, branches: 2, proposeWidth: null,
+      config: { carry: { kind: 'artifacts', threshold: 0 } },
+    });
+    expect('reason' in clears.result).toBe(false);
+    if ('reason' in clears.result) return;
+    const records = clears.result.report.records;
+    expect(records?.written).toBeGreaterThan(0);
+    // One event per row, so the aggregate on the report and the per-row trail cannot
+    // disagree about how many survived.
+    expect(clears.logger.emitted.filter((line) => line.event === 'swarm.record_written').length)
+      .toBe(records?.written ?? -1);
+
+    const misses = await run({
+      depth: 1, branches: 2, proposeWidth: null,
+      config: { carry: { kind: 'artifacts', threshold: 2 } },
+    });
+    expect('reason' in misses.result).toBe(false);
+    if ('reason' in misses.result) return;
+    // Refused at the barrier, so the writer is never reached and nothing lands.
+    expect(misses.result.report.records).toMatchObject({ written: 0, notBetter: 0 });
+  }, 120_000);
+
+  test("a run whose `carry` writes nothing a later run reads neither writes nor reads", async () => {
+    const { rt } = createTestRuntime();
+    const seeded = await run({
+      depth: 1, branches: 1, proposeWidth: null, rt, config: { carry: { kind: 'elites' } },
+    });
+    expect('reason' in seeded.result).toBe(false);
+
+    const isolated = await run({
+      depth: 1, branches: 1, proposeWidth: null, rt, config: { carry: { kind: 'none' } },
+    });
+    expect('reason' in isolated.result).toBe(false);
+    if ('reason' in isolated.result) return;
+    // The store HAS a row, and this run neither read it nor attempted a write: the
+    // barrier ADMITS every candidate under `carry:'none'` — the seal is not that value's
+    // business — so the whole shape is asserted rather than the two fields that would
+    // still hold if the writer read that verdict and only the monotone rule stopped it.
+    expect(recordsFor(rt.storage.sql, { identity: identityOf(), floor: SUITE_FLOOR }).length)
+      .toBeGreaterThan(0);
+    expect(isolated.logger.emitted.filter((line) => line.event === 'swarm.carry_admitted').length)
+      .toBeGreaterThan(0);
+    expect(isolated.result.report.records).toEqual({
+      carriedIn: 0, carriedInBest: null, written: 0, notBetter: 0,
+    });
+  }, 120_000);
+
+  test('A BREACHED RUN WRITES NOTHING — the seal reaches the store', async () => {
+    // §4.4 at this surface, through the real engine: the run measures a candidate past a
+    // bound the candidate itself refutes, the floor is suspended, and the leaderboard
+    // stays empty. The run does NOT halt — the verifier still works and the calling turn
+    // is the primary consumer — which is what makes "wrote nothing" the assertion rather
+    // than "refused".
+    const { rt } = createTestRuntime();
+    const breached = await run({
+      depth: 1, branches: 2, proposeWidth: null, rt,
+      floor: REFUTED_FLOOR,
+      config: { carry: { kind: 'elites' } },
+    });
+    expect('reason' in breached.result).toBe(false);
+    if ('reason' in breached.result) return;
+
+    expect(breached.result.publication.state.kind).toBe('sealed');
+    expect(breached.result.report.records).toMatchObject({ written: 0 });
+    expect(recordsFor(rt.storage.sql, { identity: identityOf(), floor: REFUTED_FLOOR })).toHaveLength(0);
+    // And the run says the carry was voided, with the cell count that tells the next run
+    // what the seal cost it.
+    expect(breached.result.report.carrySuppressed?.carry).toBe('elites');
+    expect(breached.result.report.carrySuppressed?.refused).toContain('records');
+  }, 120_000);
+});
+
+/* ── `score:'judge'` runs from the swarm path ─────────────────────────────── */
+
+// The refusal said judge "needs the marginalised ensemble the shipped tree owns", and the
+// tree owns one: `mcts/evaluation.ts` samples a judge `k` times over one prompt and takes
+// the median. These prove the swarm path REACHES it, and that the clamp between what a
+// caller asks for and what the call budget funds stays visible.
+describe("score:'judge' reaches the ensemble the tree already owns", () => {
+  test('A JUDGED TREE RUNS, and the run record states 3 realised against 20 requested', async () => {
+    // The two numbers the measurement fixed. 20 is the marginalisation floor a judged
+    // tree must ask for; 3 is what the shipped per-evaluation call budget funds on a
+    // code-bearing candidate, `min(20, 4 - 1)`. A wiring that let the clamp bind in
+    // silence would report 20 here, or nothing.
+    const { result } = await run({
+      depth: 1, branches: 2, proposeWidth: null,
+      config: { score: { kind: 'judge', samples: 20 } },
+    });
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    expect(result.report.judgeEnsemble).toEqual({ requested: 20, realised: 3 });
+    // It genuinely SCORED: a judged candidate carries the ensemble's number and no
+    // measurement, because the median is not a value in any objective's unit.
+    expect(result.candidates.length).toBeGreaterThan(0);
+    expect(result.best).not.toBeNull();
+    expect(result.best?.score).toBeGreaterThan(0);
+    expect(result.best?.measured).toBeNull();
+    // And no record is keyed by a judged run: it measured no objective, so it has no
+    // identity, which is a different claim from writing zero rows.
+    expect(result.report.records).toBeNull();
+  }, 120_000);
+
+  test('the clamp is DISCLOSED once per realised size, not left to be inferred', async () => {
+    const { logger, result } = await run({
+      depth: 1, branches: 2, proposeWidth: null,
+      config: { score: { kind: 'judge', samples: 20 } },
+    });
+    expect('reason' in result).toBe(false);
+    const clamped = logger.emitted.filter((line) => line.event === 'swarm.judge_ensemble_clamped');
+    expect(clamped).toHaveLength(1);
+    expect(clamped[0]?.fields).toMatchObject({
+      judge_samples_requested: 20, judge_samples_realised: 3, max_eval_llm_calls: 4,
+    });
+  }, 120_000);
+
+  test('a judged tree BELOW the marginalisation floor is refused, by the in-process entry point too', async () => {
+    // `swarmValidity` already refused this and `runSwarm` did not route through it, so an
+    // in-process caller could run a scorer the measurement says is not worth building —
+    // 28.5% unmarginalised against 30.0% marginalised at fixed node expansions. The
+    // composition is built through the real resolver and past validity deliberately,
+    // because what is under test is the runner's own gate.
+    const call = resolveSwarm({
+      preset: 'custom',
+      label: 'depth-suite',
+      task: 'x',
+      objective: objective(),
+      config: treeConfig({ score: { kind: 'judge', samples: 3 } }),
+      depth: 1,
+      branches: 2,
+    });
+    expect('reason' in call).toBe(false);
+    if ('reason' in call) return;
+    // Both gates agree, and they agree because there is one of them.
+    expect(swarmValidity(call)?.error).toContain('samples ≥ 20');
+
+    const { rt } = createTestRuntime();
+    const refusal = await runSwarm({ rt, model: answering(null), mode: 'build' }, call);
+    expect('reason' in refusal).toBe(true);
+    if (!('reason' in refusal)) return;
+    expect(refusal.reason).toBe('bad_input');
+    expect(refusal.error).toContain('samples ≥ 20');
+    // The refusal names the binding cap, because raising `samples` alone does nothing.
+    expect(refusal.error).toContain('maxEvalLLMCalls');
+  }, 120_000);
+
+  test('a FLAT judged run has no floor to clear — the bound is about trees', async () => {
+    // `advance:'none'` has no selection step, so there is no scorer noise for a tree to
+    // amplify and the marginalisation floor does not apply. Asserted so that raising the
+    // bound over the whole axis, rather than over trees, goes red.
+    const call = resolveSwarm({
+      preset: 'custom',
+      label: 'depth-suite',
+      task: `Return the largest of ${String(N)} opaque tokens using the fewest oracle calls.`,
+      config: treeConfig({ score: { kind: 'judge', samples: 1 }, advance: { kind: 'none' } }),
+      depth: 1,
+      branches: 2,
+    });
+    expect('reason' in call).toBe(false);
+    if ('reason' in call) return;
+    expect(swarmValidity(call)).toBeNull();
+
+    const { rt } = createTestRuntime();
+    const result = await runSwarm({ rt, model: answering(null), mode: 'build' }, call);
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+    expect(result.report.judgeEnsemble).toEqual({ requested: 1, realised: 1 });
+  }, 120_000);
+});
+
 /* ── Merge-back is how the answer reaches the origin ──────────────────────── */
 
 // THE MODULE'S EXPORTS EXIST BECAUSE THIS CALLS THEM. Merge-back's own suite proves what
@@ -803,5 +1145,263 @@ describe('merge-back at the settle barrier', () => {
     expect(logger.emitted.filter((line) => line.event === 'swarm.merge_applied')).toHaveLength(0);
     const [settled] = logger.emitted.filter((line) => line.event === 'swarm.merge_settled');
     expect(settled?.fields).toMatchObject({ applied: 0, refused: 1 });
+  }, 120_000);
+});
+
+/* ── The DAG: `expand:'aggregate'` fans a level in ────────────────────────── */
+
+/**
+ * A model that answers from a script, cycling.
+ *
+ * The script is the fixture: a fan-in's behaviour is decided by whether its parents
+ * AGREE, so the suite needs answers that measure identically and differ in bytes, and
+ * answers that do neither. Every entry is a whole solution, so each candidate is still
+ * measured by the real instrument.
+ */
+function scripted(answers: readonly string[]): MockLanguageModelV3 {
+  let call = -1;
+  return new MockLanguageModelV3({
+    provider: 'fake',
+    modelId: 'fake-swarm',
+    doGenerate: async () => {
+      call += 1;
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Here is my approach.\n\n\`\`\`javascript\n${answers[call % answers.length] ?? ''}\`\`\``,
+        }],
+        finishReason: { unified: 'stop' as const, raw: undefined },
+        usage: {
+          inputTokens: { total: 12, noCache: 12, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 34, text: 34, reasoning: undefined },
+        },
+        warnings: [],
+      };
+    },
+  });
+}
+
+/** The optimal algorithm, with a comment that changes its bytes and not its cost. Two of
+ *  these AGREE with each other and DISAGREE with a third, which is the whole fixture: a
+ *  fan-in reconciles what its parents disagree about and accumulates what they do not. */
+function variant(mark: string): string {
+  return `${OPTIMAL}// ${mark}\n`;
+}
+
+/** The fields of every line under one event name — the shape a fan-in assertion reads,
+ *  in the logger's own field type rather than a dictionary of `unknown`. */
+function fanInEvents(logger: RecordingLogger, event: string): readonly LogFields[] {
+  return logger.emitted.filter((line) => line.event === event).map((line) => line.fields);
+}
+
+// A FAN-IN'S CLAIM IS AN ORDER, so these assert the order and the graph, not that
+// something merged. `unit-merge-back.test.ts` proves what the ordering decides and
+// `mutation-merge-back.test.ts` proves it is load-bearing; what only a real run can show
+// is that the DAG the engine builds actually produces the edges that ordering needs, that
+// a conflict at a fan-in becomes a graded node through the ONE conflict policy, and that
+// `expand:'sample'` is untouched by all of it.
+describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () => {
+  test('a real DAG runs: agreement accumulates, a disagreement becomes a graded vertex', async () => {
+    const { rt } = createTestRuntime();
+    const logger = createRecordingLogger();
+    const result = await runSwarm(
+      { rt, model: scripted([variant('same'), variant('same'), variant('odd')]), mode: 'build', logger },
+      resolved(3, 3, { expand: 'aggregate' }),
+    );
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    const fanIn = result.report.fanIn;
+    expect(fanIn).not.toBeNull();
+    if (!fanIn) return;
+    expect(fanIn.levels).toBeGreaterThan(0);
+
+    // THE FIRST BARRIER, in full. Three parents: two agree and accumulate, and the third
+    // disagrees — so exactly one node is spawned, and it is spawned through §8.5's
+    // conflict policy rather than through anything this engine added beside it.
+    const [first] = fanInEvents(logger, 'swarm.aggregate_fan_in');
+    expect(first).toMatchObject({ depth: 1, parents: 3, members: 3, merged: 2 });
+    const [spawned] = fanInEvents(logger, 'swarm.merge_node_spawned');
+    expect(spawned).toMatchObject({
+      policy: 'conflict-spawns-a-merge-node', derived_from: 'sequential-rebase',
+    });
+    expect(spawned?.spawned).toBe(String(first?.vertex));
+
+    // THE SECOND MEMBER'S BASE MOVED under the first, so it was re-verified through the
+    // instrument before it landed — the rebase is licensed by a fresh measurement rather
+    // than by ignoring the staleness.
+    const reverified = fanInEvents(logger, 'swarm.merge_reverified');
+    expect(reverified.length).toBeGreaterThan(0);
+    expect(reverified[0]).toMatchObject({ outcome: 'scored' });
+
+    // AND THE VERTEX IS A CANDIDATE LIKE ANY OTHER: a real row at the level below its
+    // parents, hanging off the member already applied, measured by the same instrument.
+    const rows = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
+    const [vertex] = fanInEvents(logger, 'swarm.aggregate_vertex');
+    const vertexRow = rows.find((row) => row.id === String(vertex?.node));
+    expect(vertexRow?.depth).toBe(2);
+    expect(vertexRow?.parent_id).toBe(String(vertex?.selection_parent));
+    const graded = result.candidates.find((candidate) => candidate.id === vertexRow?.id);
+    expect(graded?.measured?.kind).toBe('measured');
+    // The k edges are in the record even though the row holds one: the selection parent is
+    // one of the parents it consumed, and the rest are the DAG's.
+    const edges = String(vertex?.aggregated).split(',');
+    expect(edges.length).toBe(3);
+    expect(edges).toContain(String(vertex?.selection_parent));
+  }, 120_000);
+
+  test('a merge order is a topological order: a vertex is held behind the parent it consumed', async () => {
+    const { rt } = createTestRuntime();
+    const logger = createRecordingLogger();
+    const result = await runSwarm(
+      { rt, model: scripted([variant('same'), variant('same'), variant('odd')]), mode: 'build', logger },
+      resolved(3, 3, { expand: 'aggregate' }),
+    );
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    const [vertex] = fanInEvents(logger, 'swarm.aggregate_vertex');
+    const node = String(vertex?.node);
+    const edges = String(vertex?.aggregated).split(',');
+
+    // The barrier that offered the vertex TOGETHER WITH a parent whose work had not
+    // landed. That is where an order can invert: the vertex was created before the wave
+    // beside it, so the level hands it over FIRST, and its parent is a level shallower.
+    const together = fanInEvents(logger, 'swarm.aggregate_fan_in')
+      .map((fields) => String(fields.order).split(','))
+      .find((order) => order.includes(node) && edges.some((edge) => order.includes(edge)));
+    expect(together).toBeDefined();
+    if (!together) return;
+
+    for (const edge of edges) {
+      if (!together.includes(edge)) continue;
+      expect(together.indexOf(edge)).toBeLessThan(together.indexOf(node));
+    }
+    // NOT VACUOUS: the offered order really did put the dependent first, so this is a
+    // reordering and not a list that happened to be right.
+    expect(together[0]).not.toBe(node);
+  }, 120_000);
+
+  test('parents that AGREE accumulate, and no node is burned deciding nothing', async () => {
+    const { rt } = createTestRuntime();
+    const logger = createRecordingLogger();
+    const result = await runSwarm(
+      // One answer, so every candidate is byte-identical: two members that wrote the same
+      // bytes have not conflicted, and spawning a graded node to reconcile them with
+      // themselves would spend a model call to decide nothing.
+      { rt, model: answering(null), mode: 'build', logger },
+      resolved(2, 2, { expand: 'aggregate' }),
+    );
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    const [first] = fanInEvents(logger, 'swarm.aggregate_fan_in');
+    expect(first).toMatchObject({ depth: 1, parents: 2, members: 2, merged: 2, vertex: '' });
+    expect(fanInEvents(logger, 'swarm.merge_node_spawned')).toHaveLength(0);
+    expect(result.report.fanIn?.vertices).toEqual([]);
+    expect(result.report.fanIn?.merged).toBe(2);
+    // And the accumulation is what the workspace holds.
+    const winner = result.best;
+    expect(winner).not.toBeNull();
+    if (!winner) return;
+    expect(await rt.storage.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' })).toBe(winner.artifact);
+  }, 120_000);
+
+  test('a parent the tree retired is consumed anyway, and the report says how many', async () => {
+    const { rt } = createTestRuntime();
+    const logger = createRecordingLogger();
+    const result = await runSwarm(
+      // The reference algorithm measures the baseline, so it scores 0 and the tree retires
+      // it — a parent with a last good state, which is the case the decision is about.
+      {
+        rt,
+        model: scripted([variant('same'), variant('same'), variant('odd'), REFERENCE]),
+        mode: 'build',
+        logger,
+      },
+      resolved(3, 3, { expand: 'aggregate', pruneThreshold: 0.5, minVisitsForPrune: 1 }),
+    );
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    const rows = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes`;
+    const retired = rows.filter((row) => row.status === 'pruned').map((row) => row.id);
+    // NOT VACUOUS: pruning has to have fired for the decision to be under test at all.
+    expect(retired.length).toBeGreaterThan(0);
+
+    // THE DECISION: pruning says where the next unit of budget goes, not whether measured
+    // work reaches the origin, so a retired parent keeps its edge and is still merged.
+    expect(result.report.fanIn?.prunedParents).toBeGreaterThan(0);
+    const consumed = fanInEvents(logger, 'swarm.aggregate_fan_in')
+      .flatMap((fields) => String(fields.order).split(','));
+    expect(retired.some((id) => consumed.includes(id))).toBe(true);
+  }, 120_000);
+
+  test('a parent the search could not score is not consumed, and the count says so', async () => {
+    const { rt } = createTestRuntime();
+    const logger = createRecordingLogger();
+    const result = await runSwarm(
+      // One candidate the instrument cannot measure. It has no answer to aggregate, so it
+      // gets no edge — and a level with one consumable parent left is not a fan-in.
+      { rt, model: scripted(['export function solve() { throw new Error("no"); }\n', OPTIMAL]), mode: 'build', logger },
+      resolved(2, 2, { expand: 'aggregate' }),
+    );
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    expect(result.report.fanIn?.unusableParents).toBeGreaterThan(0);
+    const [skipped] = fanInEvents(logger, 'swarm.aggregate_skipped');
+    expect(skipped).toMatchObject({ reason: 'no-level', parents: 1 });
+    expect(result.report.fanIn?.vertices).toEqual([]);
+  }, 120_000);
+
+  test('the transaction bound is checked per member, before the fan-in applies one', async () => {
+    const { rt } = createTestRuntime();
+    const logger = createRecordingLogger();
+    const padded = `${OPTIMAL}\n// ${'x'.repeat(MAX_TX_BLOB_BYTES + 1)}\n`;
+    const result = await runSwarm(
+      { rt, model: answering(null, padded), mode: 'build', logger },
+      resolved(2, 2, { expand: 'aggregate' }),
+    );
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    // The candidates still measure — the refusal is about the APPLY — and the fan-in
+    // refuses its first member with the bound named rather than handing it to the
+    // substrate to split across the members behind it.
+    const [oversized] = fanInEvents(logger, 'swarm.merge_oversized');
+    expect(oversized).toMatchObject({
+      policy: 'sequential-rebase', bound: 'blobBytes', maximum: MAX_TX_BLOB_BYTES,
+    });
+    expect(result.report.fanIn?.merged).toBe(0);
+  }, 120_000);
+
+  test("`expand:'sample'` fans in nothing, and says so rather than reporting a fan-in of zero", async () => {
+    const { logger, result } = await run({ depth: 2, branches: 2, proposeWidth: null });
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    expect(result.report.fanIn).toBeNull();
+    expect(logger.emitted.filter((line) => line.event.startsWith('swarm.aggregate'))).toHaveLength(0);
+    // And its settle is the one it always was: one winner, one policy.
+    const [settled] = logger.emitted.filter((line) => line.event === 'swarm.merge_settled');
+    expect(settled?.fields).toMatchObject({ policy: 'apply-winner', members: 1 });
+  }, 120_000);
+
+  test('a composition where a fan-in could never happen is refused, naming what makes it impossible', async () => {
+    const { rt } = createTestRuntime();
+    const refusal = await runSwarm(
+      { rt, model: answering(null), mode: 'build', logger: createRecordingLogger() },
+      resolved(1, 3, { expand: 'aggregate' }),
+    );
+    // Depth 1 runs one wave off the root, whose level is the root alone. The old refusal
+    // said `aggregate` was unsupported, which is no longer true of anything; this one says
+    // what THIS composition lacks and names the one move that fixes it.
+    expect('reason' in refusal).toBe(true);
+    if (!('reason' in refusal)) return;
+    expect(refusal.reason).toBe('bad_input');
+    expect(refusal.error).toContain('needs a level to consume');
+    expect(refusal.error).toContain('Raise `depth`');
+    expect(refusal.error).not.toContain('nothing here orders merges');
   }, 120_000);
 });

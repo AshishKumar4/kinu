@@ -22,9 +22,7 @@ import {
   buildBuiltinTools,
   collectStepText,
   EvolutionEngine,
-  initSearchTables,
-  initScaffoldTables,
-  initCraftScoreTables,
+  initWorkspaceSchema,
   readSoul,
   JsonObjectSchema,
   projectJsonValue,
@@ -34,6 +32,9 @@ import {
   type ToolCallRecord,
 } from '../packages/core/src/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
+import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
+import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
+import { requireSandboxedExecutors } from './evals/harness';
 import {
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
@@ -191,14 +192,21 @@ describe('Evolution Proof', () => {
     mkdirSync(TEST_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
-    rt = await createWorkspace(db, {
+    // BIRTH, then OPEN, then the WHOLE schema — the three hand-picked init calls
+    // this replaced omitted `initShadowTables`, so `scaffold_evaluations` did not
+    // exist and `engine.onSessionComplete` below died on it 102s into a paid run.
+    // `initWorkspaceSchema` is the one function that declares a workspace's
+    // tables; a subset maintained by hand drifts from it by default.
+    await createWorkspace(db, {
       name: 'evolution-proof',
       purpose: 'A crypto and algorithm expert that solves CTF-style challenges using code execution.',
       llm: LLM_CONFIG,
     });
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftScoreTables(rt.storage.execRaw);
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    // The real runtime rather than the birth one, so evolution reaches a genuine
+    // branch spawner, and `hostRoot: null` keeps its executors off this repo.
+    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
+    requireSandboxedExecutors('evolution-proof', rt);
     model = liveChatModel(LLM_CONFIG);
     engine = new EvolutionEngine(rt, { enabled: true });
     engine.onEvent(e => console.log(`    [evolution] ${e.type}: ${e.message.slice(0, 80)}`));
@@ -310,29 +318,81 @@ describe('Evolution Proof', () => {
   // ── Verify evolution happened ────────────────────────────────
 
   liveTest('evolution artifacts exist after session 1', async () => {
-    // Check memory has reflections
-    const memory = await rt.memory.read('memory/MEMORY.md');
-    if (!memory) throw new Error('session reflection did not write memory');
-    console.log(`    Memory size: ${memory.length} chars`);
+    // THE DENOMINATOR, first, because every claim below is about what the
+    // GRADED turns produced. Nothing here grades a turn conversationally — a
+    // proof drives challenges, never a follow-up — so the verdict comes from the
+    // execution channel, which grades exactly the turns that ran tools and
+    // leaves the rest ungraded (evolution/engine.ts:364-376). Asserted against
+    // that set rather than against 3, so a challenge the model happened to
+    // answer in prose does not read as evolution declining to fire.
+    const outcomes = rt.storage.sql<{ outcome: string; source: string }>`
+      SELECT outcome, source FROM turn_outcomes`;
+    const accepted = outcomes.filter(o => o.outcome === 'accepted');
+    const turnsThatRanTools = session1Results.filter(r => r.toolCalls.length > 0).length;
+    console.log(`    Graded turns: ${outcomes.map(o => `${o.outcome}/${o.source}`).join(', ')}`);
+    expect(turnsThatRanTools).toBeGreaterThan(0);
+    expect(accepted.length).toBe(turnsThatRanTools);
 
-    // Check for crafted tools
+    // WHAT THE RUN RECORDED, as content rather than as a size.
+    //
+    // This assertion was `memory.length > 100`, and it could neither fail for
+    // the reason it claimed nor pass for one. MEMORY.md is the CORROBORATED
+    // lesson file: a turn's reflection reaches it only on a negative verdict
+    // from a PERSON (engine.ts:453) and a session reflection only on a window
+    // carrying negative signal at all (engine.ts:606 via
+    // sessionWarrantsReflection, whose doc states that an all-accepted window
+    // returns false). Every turn above is accepted, so nothing reflects and
+    // nothing is appended — and what was being measured was the BIRTH header,
+    // whose length is the workspace name plus 38 characters. A live run
+    // reported 53 with three tools extracted and all three executable; a longer
+    // workspace name would have turned the same empty file green.
+    //
+    // So the artifact is the one evolution produces from an ACCEPTED turn:
+    // extractPattern generalizes the turn's tool calls and upsertCraftedTool
+    // admits the result only after compiling it to a callable and seeding the
+    // EMA row (craft/conflict.ts:90-126). Asserted per tool, because a count
+    // alone is what let a stored "tool" whose body was `await ({ runtime })(…)`
+    // read as an artifact.
     const crafted = rt.craftStore.list();
+    const scores = new Map(rt.storage.sql<{ tool_name: string; score: number }>`
+      SELECT tool_name, score FROM craft_scores`.map(r => [r.tool_name, r.score]));
     console.log(`    Crafted tools: ${crafted.length}`);
+    expect(crafted.length).toBeGreaterThan(0);
     for (const t of crafted) {
-      console.log(`      ${t.name}: ${t.description.slice(0, 60)}`);
+      console.log(`      ${t.name} (score ${String(scores.get(t.name))}): ${t.description.slice(0, 60)}`);
       console.log(`        code: ${t.code.slice(0, 80)}...`);
+      // Named, so a later turn can ask for it by name.
+      expect(t.name).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
+      // CALLABLE, compiled exactly as the CLI invokes a crafted tool. The
+      // store's own admission gate ran this before the write; running it here
+      // is what makes "3 crafted tools" a claim about artifacts rather than
+      // about rows.
+      expect(new Function(`return (${t.code})`)()).toBeInstanceOf(Function);
+      // Scored, or the effective-score floor exempts it from retirement
+      // forever however it behaves (craft/ema.ts:39-42).
+      expect(scores.has(t.name)).toBe(true);
     }
 
-    // Check memory chunks
+    // Memory itself: the birth record survived the reopen, and carries no
+    // lesson or reflection heading, because this window corroborated none. The
+    // absence is asserted beside the reason for it rather than left to a
+    // character count that cannot tell it from a truncated write.
+    const memory = await rt.memory.read('memory/MEMORY.md');
+    if (!memory) throw new Error('the workspace lost memory/MEMORY.md between birth and this read');
+    console.log(`    Memory (${memory.length} chars): ${JSON.stringify(memory.slice(0, 120))}`);
+    expect(memory).toContain('# evolution-proof');
+    expect(memory).not.toContain('### Lesson');
+    expect(memory).not.toContain('## Session reflection');
+
+    // Indexing rides an append, so an all-accepted window indexes nothing —
+    // reported, and the reason is the line above.
     const chunks = rt.storage.sql<{ path: string }>`SELECT DISTINCT path FROM memory_chunks`;
     console.log(`    Memory chunks: ${chunks.length}`);
 
-    // Check messages stored
+    // Both halves of every turn are on the session tree the next session reads.
     const msgCount = rt.storage.sql<{ c: number }>`SELECT COUNT(*) as c FROM messages`[0]?.c ?? 0;
     console.log(`    Messages: ${msgCount}`);
-
-    // At minimum, memory should have content and reflections should exist
-    expect(memory.length).toBeGreaterThan(100);
+    expect(msgCount).toBe(session1Results.length * 2);
   });
 
   // ── SESSION 2: Similar challenges — should benefit from evolution ──
@@ -340,14 +400,19 @@ describe('Evolution Proof', () => {
   let session2Results: TurnResult[] = [];
 
   liveTest('session 2, turn 1: similar RSA challenge (should benefit from pattern)', async () => {
-    // Rebuild tools — should now include crafted tools from session 1
     const tools = buildBuiltinTools({ rt });
-    const toolNames = Object.keys(tools);
-    console.log(`    Tools available: ${toolNames.join(', ')}`);
+    console.log(`    Tools available: ${Object.keys(tools).join(', ')}`);
 
-    // Count crafted tools included
-    const craftedCount = toolNames.length - 6; // 6 built-in
-    console.log(`    Crafted tools loaded: ${craftedCount}`);
+    // What session 2 inherits, from the store it inherits it in. Crafted tools
+    // are codemode-only — reached as `codemode.<name>` inside `execute_tools`,
+    // never as SDK tools (evolution/engine.ts:433-436) — so subtracting a
+    // hardcoded builtin count from the list above measures nothing: it printed
+    // `Crafted tools loaded: -1` beside a correct `Crafted tools: 3` as soon as
+    // the builtin count moved. The transfer is what this session is for, so it
+    // is asserted rather than counted wrong.
+    const inherited = rt.craftStore.list().map(t => t.name);
+    console.log(`    Crafted tools inherited from session 1: ${inherited.join(', ')}`);
+    expect(inherited.length).toBeGreaterThan(0);
 
     const result = await chatTurn(model, rt, tools, RSA_CHALLENGE_2, 'session-2');
     session2Results.push(result);
@@ -404,12 +469,15 @@ describe('Evolution Proof', () => {
       console.log(`    Dijkstra 2: ${dj2.steps} steps, ${dj2.toolCalls.length} tools, ${(dj2.durationMs / 1000).toFixed(1)}s`);
     }
 
-    // Check crafted tools
+    // Check crafted tools. No `✓ executable` verdict is computed here: the label
+    // printed one from `!code.startsWith('//')`, which is the admission test the
+    // compile gate replaced (craft/conflict.ts:47-52) and which passed prose and
+    // statement fragments. Whether these compile is asserted, once, where the
+    // artifacts are checked.
     const crafted = rt.craftStore.list();
     console.log(`\n    Crafted tools: ${crafted.length}`);
     for (const t of crafted) {
-      const hasCode = t.code && !t.code.startsWith('//');
-      console.log(`      ${t.name} ${hasCode ? '✓ executable' : '✗ no code'}: ${t.description.slice(0, 50)}`);
+      console.log(`      ${t.name}: ${t.description.slice(0, 50)}`);
     }
 
     // DB state
@@ -427,7 +495,7 @@ describe('Evolution Proof', () => {
     // 2. Tools were used in session 1
     expect(s1Tools).toBeGreaterThan(0);
 
-    // 3. Memory grew (reflections were stored)
+    // 3. Every turn of both sessions is on the session tree
     expect(msgCount).toBeGreaterThan(0);
   });
 });

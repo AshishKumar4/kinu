@@ -21,6 +21,7 @@ import { describe, expect, mock, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import {
+  CRAFT_NEUTRAL_PRIOR,
   HeadCapture,
   type HeadId,
   type HeadInput,
@@ -408,6 +409,31 @@ describe('a head forks its parent workspace', () => {
 
     expect(capture.files.snapshot()).toEqual([
       { path: 'repo/parser.ts', status: 'changed', added: 1, removed: 0 },
+    ]);
+  });
+
+  /**
+   * A head's SQL ledgers are its FACET's own storage, and `initWorkspaceSchema`
+   * runs on no facet that only explores — so the runtime that builds the head's
+   * `workspace.*` plane is the only thing that can provision what that plane
+   * reads. `listTools` quotes the crafted-tool EMA out of `craft_scores` and
+   * `createTool` seeds it, so with the memory and craft stores alone a head
+   * raised `no such table: craft_scores` on its first call. Pinned on both
+   * backends: the CLI head hit exactly this inside a paid delegation run.
+   */
+  test("the head's own workspace plane scores the tools it crafts", async () => {
+    const { facet } = makeFacet();
+    await facet.setOwner('user-1', 'pwc_parent');
+    await facet.setSharedParent('proteus-main');
+
+    const workspace = facet.headRuntime(new HeadCapture()).executionRouter!.getProvider('workspace')!;
+
+    expect(await workspace.tools.listTools.execute()).toEqual([]);
+    expect(await workspace.tools.createTool.execute(
+      'echo_back', 'Return its argument.', 'async (args) => args',
+    )).toEqual({ ok: true, name: 'echo_back', action: 'created' });
+    expect(await workspace.tools.listTools.execute()).toEqual([
+      { name: 'echo_back', description: 'Return its argument.', qualityScore: CRAFT_NEUTRAL_PRIOR },
     ]);
   });
 

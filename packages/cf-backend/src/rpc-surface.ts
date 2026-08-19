@@ -368,6 +368,7 @@ const ORCHESTRATOR_METHODS = [
   'listRecentEventsWire',
   'listTriggersWire',
   'listRuns',
+  'nodeArbitrate',
   'rawCopyFromFork',
   'receivePeerMessage',
   'recordHeadStep',
@@ -426,7 +427,9 @@ const EXPLORATION_METHODS = [
   'explore',
   'generateReflection',
   'initHead',
+  'initNode',
   'runAsHead',
+  'runAsNode',
   'setOwner',
   'setSharedParent',
 ] as const satisfies readonly (keyof ExplorationAgent)[];

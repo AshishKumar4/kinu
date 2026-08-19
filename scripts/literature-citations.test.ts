@@ -8,12 +8,12 @@
  * locator naming the wrong table. A gate whose rules are only ever exercised by a
  * clean tree cannot tell you whether it still works.
  *
- * ONE RULE IS CURRENTLY UNEXERCISED, named here rather than left to be discovered:
- * `unitWords`, which refuses a number whose unit has a confusable twin unless the
- * paragraph says which one is meant. Every claim that declared a confusable unit was
- * a Chen et al. entry, and that work left the register when the last document citing
- * it left the repository. The rule is untouched and still runs; the next claim to
- * declare a confusable unit re-arms its proof.
+ * `unitWords` is the one direction that had to be RE-ANCHORED rather than inherited.
+ * Every claim declaring a confusable unit was a Chen et al. entry, and that work left
+ * the register when the last document citing it left the repository. The register's
+ * own CL-Bench pair carries the same property — one board reports one leader as
+ * `22.3%` normalised reward and `25.4%` gain, three points apart, so a bare `25.4%`
+ * reads as the level rather than the delta — and the rule is proven against that.
  *
  * The false positives at the bottom are equally load-bearing, and each one cost a
  * design change: this gate reads prose, and earlier versions demanded a paper
@@ -112,6 +112,32 @@ describe('a hedge the source states and our prose drops', () => {
   test('and passes when the hedge is kept', () => {
     expect(audit(
       'Self-MoA 2502.00674 Table 4 puts quality over diversity by up to 3.2×.',
+    )).toEqual([]);
+  });
+});
+
+describe('a unit whose twin says something else', () => {
+  test('a bare CL-Bench percentage does not say whether it is the level or the gain', () => {
+    // Read as the level, 25.4% puts the leader above the 22.3% the register records
+    // for it and states no gain at all — the shape of the Chen defect this rule was
+    // written for, in the one surviving register entry that still has it.
+    const found = audit("CL-Bench's leader reaches 25.4% on the public leaderboard.");
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('has a confusable twin');
+  });
+
+  test('and passes once the unit is named', () => {
+    expect(audit("CL-Bench's leader reaches 25.4% gain over the stateless arm.")).toEqual([]);
+  });
+
+  test('the unit is named once and then argued, so the window carries it', () => {
+    // Read over the paragraph rather than the sentence on purpose: an author names the
+    // quantity and then reasons about it in sentences that do not repeat the noun.
+    // `docs/BENCH.md` is exactly this, and dropping the word from the whole paragraph
+    // is what makes the live site red.
+    expect(audit(
+      "CL-Bench's leader reaches 22.3% normalized reward and 25.4%."
+      + ' A gain near zero is the normal outcome, not a harness bug.',
     )).toEqual([]);
   });
 });

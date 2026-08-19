@@ -116,6 +116,8 @@ interface Harness {
       readonly applyMember?: MemberApply | undefined;
       readonly reverify?: Reverifier;
       readonly spawnMergeNode?: (request: MergeNodeRequest) => Promise<string>;
+      /** What a previous barrier of the same run already landed. */
+      readonly settled?: readonly string[];
     },
   ) => Promise<MergeBackReport>;
 }
@@ -126,7 +128,7 @@ function harness(initial: Record<string, string> = {}): Harness {
   return {
     origin,
     log,
-    run: (policy, members, over = {}) => mergeBack({ policy, members }, {
+    run: (policy, members, over = {}) => mergeBack({ policy, members, settled: over.settled }, {
       log,
       preset: 'test',
       readOrigin: origin.readOrigin,
@@ -403,6 +405,148 @@ describe('sequential-rebase', () => {
     expect(settled?.fields).toMatchObject({
       policy: 'sequential-rebase', members: 2, applied: 1, refused: 1, stopped_at: 'n2',
     });
+  });
+});
+
+/* ── §9.1's order, and the cycle that has none ────────────────────────────── */
+
+// THE ORDER IS THE CLAIM `expand:'aggregate'` MAKES, so it is asserted where it can
+// actually invert: a member set whose dependent is offered FIRST. Rule 1 already refuses
+// a dependent whose dependency has not landed, which is what makes a wrong order visible
+// rather than merely suboptimal — so each test below reads "did the derived order satisfy
+// rule 1", never "did a sort return a permutation".
+describe('the members are applied in the dependency order they declare', () => {
+  test('a dependent offered first is applied last, and rule 1 never fires', async () => {
+    const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n', 'c.ts': 'C0\n' });
+    const a = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
+    const b = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }]);
+    // The fan-in vertex: it consumed both, so its work goes on top of theirs.
+    const c = await memberOf(h.origin, 'n3', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], {
+      deps: ['n1', 'n2'],
+    });
+
+    const report = await h.run('sequential-rebase', [c, a, b]);
+
+    expect(report.order).toEqual(['n1', 'n2', 'n3']);
+    expect(report.outcomes.map((o) => o.kind)).toEqual(['applied', 'applied', 'applied']);
+    expect(report.stoppedAt).toBeNull();
+    // And the reader can see the order it used without reconstructing it from N events.
+    const [settled] = named(h.log, 'swarm.merge_settled');
+    expect(settled?.fields.order).toBe('n1,n2,n3');
+  });
+
+  test('a set with no edges keeps the order it was offered in', async () => {
+    const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n' });
+    const a = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
+    const b = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }]);
+
+    // Stability is load-bearing rather than tidy: a scored settle offers its incumbent
+    // first, and a sort that reshuffled an unordered set would change which member the
+    // one-member policies apply.
+    expect((await h.run('sequential-rebase', [b, a])).order).toEqual(['n2', 'n1']);
+  });
+
+  test('a dependency this run already landed is settled, and its dependent applies', async () => {
+    const h = harness({ 'c.ts': 'C0\n' });
+    const c = await memberOf(h.origin, 'n3', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], {
+      deps: ['n1'],
+    });
+
+    // `n1` is not a member of THIS merge because an earlier barrier of the same run
+    // already applied it. Rule 1 asks whether the dependency has settled, and it has.
+    const report = await h.run('sequential-rebase', [c], { settled: ['n1'] });
+
+    expect(report.outcomes.map((o) => o.kind)).toEqual(['applied']);
+    expect(h.origin.at.get('c.ts')).toBe('C1\n');
+  });
+
+  test('the same dependent refuses by name when nothing says the dependency landed', async () => {
+    const h = harness({ 'c.ts': 'C0\n' });
+    const c = await memberOf(h.origin, 'n3', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], {
+      deps: ['n1'],
+    });
+
+    const report = await h.run('sequential-rebase', [c]);
+
+    const [outcome] = report.outcomes;
+    if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
+    expect(outcome.refusal.cause).toBe('dependency-unsettled');
+    expect(outcome.refusal.error).toContain('n1');
+    // A dependency no order can satisfy is rule 1's business, not the ordering's: the
+    // remedy it names is the one a caller can act on.
+    expect(outcome.refusal.error).toContain('Order the members');
+    expect(h.origin.at.get('c.ts')).toBe('C0\n');
+  });
+
+  test('a cycle is refused by name, naming the cycle, and nothing is applied', async () => {
+    const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n' });
+    const a = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }], {
+      deps: ['n2'],
+    });
+    const b = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }], {
+      deps: ['n1'],
+    });
+
+    const report = await h.run('sequential-rebase', [a, b]);
+
+    const [outcome] = report.outcomes;
+    if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
+    expect(outcome.refusal.cause).toBe('dependency-cycle');
+    expect(outcome.refusal.reason).toBe('bad_input');
+    // THE CYCLE ITSELF, not the fact of one: a refusal that says "there is a cycle"
+    // leaves the reader to find it, and a hang or an arbitrary tie-break would say
+    // nothing at all.
+    expect(outcome.refusal.error).toContain('n1 -> n2 -> n1');
+    expect(report.stoppedAt).toBe('n1');
+    expect(report.order).toEqual([]);
+    expect(h.origin.transactions).toHaveLength(0);
+    expect(h.origin.at.get('a.ts')).toBe('A0\n');
+    // Still one settle event, so a reader always gets the aggregate line.
+    expect(named(h.log, 'swarm.merge_settled')).toHaveLength(1);
+    expect(named(h.log, 'swarm.merge_refused')[0]?.fields).toMatchObject({
+      node: 'n1', cause: 'dependency-cycle',
+    });
+  });
+
+  test('a cycle is refused whatever order it is offered in', async () => {
+    const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n', 'c.ts': 'C0\n' });
+    const a = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
+    const b = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }], {
+      deps: ['n3'],
+    });
+    const c = await memberOf(h.origin, 'n3', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], {
+      deps: ['n2'],
+    });
+
+    // `n1` is orderable and the cycle sits behind it. Nothing is applied even so: the
+    // order is a property of the SET, and applying its orderable prefix would publish
+    // half a merge whose remainder can never land.
+    const report = await h.run('sequential-rebase', [a, b, c]);
+
+    const [outcome] = report.outcomes;
+    if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
+    expect(outcome.refusal.cause).toBe('dependency-cycle');
+    expect(outcome.refusal.error).toContain('n2 -> n3 -> n2');
+    expect(h.origin.at.get('a.ts')).toBe('A0\n');
+  });
+
+  test('only sequential-rebase orders — apply-winner applies the member it was handed', async () => {
+    const h = harness({ 'a.ts': 'A0\n', 'c.ts': 'C0\n' });
+    const a = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
+    const c = await memberOf(h.origin, 'n3', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], {
+      deps: ['n1'],
+    });
+
+    // THE RED DIRECTION OF THE ORDER, without touching the source: the same set that
+    // applies cleanly above refuses under the policy that does not reorder, because the
+    // dependent is still first. So the ordering is what makes the fan-in work, and
+    // `apply-winner` keeping the caller's choice of winner is what makes it right that
+    // only one policy reorders.
+    const winner = await h.run('apply-winner', [c, a]);
+    const [outcome] = winner.outcomes;
+    if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
+    expect(outcome.refusal.cause).toBe('dependency-unsettled');
+    expect(winner.order).toEqual(['n3', 'n1']);
   });
 });
 
