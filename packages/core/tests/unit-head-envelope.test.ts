@@ -13,7 +13,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import type { LanguageModel } from 'ai';
-import { MockLanguageModelV3 } from 'ai/test';
+import { scriptedTurnModel } from '@proteus/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { DEFAULT_MAX_STEPS } from '../src/config';
 import {
@@ -107,7 +107,7 @@ function loopingHeadModel(perStep: {
   stopAfterSteps?: number;
 }): LanguageModel {
   let step = 0;
-  return new MockLanguageModelV3({
+  return scriptedTurnModel({
     provider: 'fake', modelId: 'fake-loop',
     doGenerate: async () => {
       const finishes = perStep.stopAfterSteps !== undefined && step >= perStep.stopAfterSteps;

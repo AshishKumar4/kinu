@@ -19,7 +19,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { MockLanguageModelV3 } from 'ai/test';
+import { scriptedTurnModel } from '@proteus/test-utils';
 import { DEFAULT_MAX_STEPS } from '../src/config';
 import { DEFAULT_HEAD_BUDGET, type HeadInput } from '../src/heads/types';
 import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
@@ -34,7 +34,7 @@ import { makeSql, makeExecRaw } from './helpers';
  *  reporting a fixed spend per step. */
 function steppingModel(perStep: { input: number; output: number; stopAfter?: number }): LanguageModel {
   let step = 0;
-  return new MockLanguageModelV3({
+  return scriptedTurnModel({
     doGenerate: async () => {
       const finishes = perStep.stopAfter !== undefined && step >= perStep.stopAfter;
       step++;

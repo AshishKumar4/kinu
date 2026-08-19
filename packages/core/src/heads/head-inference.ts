@@ -1,23 +1,31 @@
-// Backend-agnostic head inference loop — the divergent-reasoning-thread run that
-// produces a HeadReport. Both backends drive this: the cf-backend's Facet head
-// (ExplorationAgent.runAsHead) and the CLI's subprocess head-worker. Previously
-// this loop lived only inside the cf Facet; hoisting it here keeps ONE tested
-// implementation so a CLI head behaves identically to a DO head.
+// The backend-agnostic run of an agent that reports rather than chats — the
+// divergent-reasoning-thread fork that produces a HeadReport, and the swarm node
+// that produces one too. Every backend drives this: the cf-backend's Facet head
+// (ExplorationAgent.runAsHead), the CLI's in-process head-worker, and both
+// transports of a swarm node (strategy/node-agent.ts).
+//
+// IT OWNS NO LOOP OF ITS OWN. The turn body is `runChat` (../chat.ts) — the one
+// place a model request is issued, tools are dispatched, the stream is watched
+// for a stall, the step context is pruned and an unpaired tool call is repaired.
+// This module owns what that body cannot know: how many TURNS this agent gets,
+// the record_evidence / record_decision accumulator tools, the head system
+// prompt + inherited-context messages, the per-step journal trace, the mission
+// ledger it charges, and the HeadReport assembly (via the shared head-summary
+// helpers).
 //
 // The backend provides the model + a HeadCapture + its own tool surface (the cf
 // head forks its parent workspace's; the CLI head runs in-process over an
-// ephemeral scratch). This module owns the record_evidence /
-// record_decision accumulator tools, the head system prompt + inherited-context
-// messages, the generateText loop (with the abort/step/budget stop condition),
-// and the HeadReport assembly (via the shared head-summary helpers).
+// ephemeral scratch).
 //
 // What a forking child inherits is specified by docs/EXPLORATION.md — "Inherited
 // context".
 
 import {
-  generateText, tool, jsonSchema,
-  type ToolSet, type LanguageModel, type ModelMessage,
+  tool, jsonSchema,
+  type ToolSet, type LanguageModel, type ModelMessage, type StepResult,
 } from 'ai';
+import { runChat, type ChatOptions } from '../chat';
+import type { PromptModelContext } from '../prompting/model-profile';
 import {
   type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
   type Evidence, type Decision, type ArtifactRef,
@@ -29,8 +37,9 @@ import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from 
 import { nanoid } from '../utils/nanoid';
 import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summary';
 import { HeadFileChanges } from './file-changes';
+import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, renderCauseChain, toProteusError } from '../obs/index';
 
 /**
  * The mutable findings a head accumulates as it runs — evidence/decisions
@@ -428,8 +437,22 @@ export interface HeadInferenceDeps {
    * derived from a private token pool.
    */
   maxSteps: number;
-  /** Polled in stopWhen + read for the final status. */
+  /**
+   * Whether the spawner has cancelled this run. Polled at step boundaries and
+   * read for the final status. Still needed alongside {@link signal}: a host
+   * hands its facet an RPC-shaped flag rather than an AbortSignal, which does
+   * not cross a Durable Object boundary.
+   */
   isAborted: () => boolean;
+  /**
+   * The spawner's abort signal, when one crosses into this isolate.
+   *
+   * Given to the SDK, so an abort cuts the step in flight instead of waiting
+   * for the next boundary. That distinction is the whole of a hang: a run
+   * inside a request that never returns reaches no step boundary, so a polled
+   * flag can never observe it.
+   */
+  signal?: AbortSignal;
   /** Abort reason, surfaced in errorMessage. */
   abortReason?: () => string | null;
   /**
@@ -481,7 +504,7 @@ export interface HeadInferenceDeps {
   };
   /**
    * The conversation this loop PRODUCED — every step's assistant and tool
-   * messages, in order — handed over once, when the loop finishes normally.
+   * messages, in order, across every turn it took.
    *
    * This is what a forking child inherits: under *Inherited context* a child's
    * context is its parent's *"unchanged, with the new material appended"*, and an
@@ -490,19 +513,67 @@ export interface HeadInferenceDeps {
    * (`record_evidence`, `record_decision`) rather than forking a conversation, and
    * then nothing is accumulated at all.
    *
-   * Not called on the error path: a loop that threw produced no conversation a
-   * child could be given, and half of one is worse than none.
+   * Handed over once, for whatever the loop settled: a cut turn still yields a
+   * conversation whose tool calls are all paired, and a child given that can be
+   * assembled into a request. Only a turn that never settled one at all — a
+   * provider stream that died before its first step — reports nothing.
    */
   reportMessages?: (messages: readonly ModelMessage[]) => void;
+  /**
+   * HOW THIS AGENT GETS ANOTHER TURN, or `null` when it has none coming.
+   *
+   * Absent is one turn and exactly one, which is every head: a fork answers the
+   * question it was split off to answer and merges its findings.
+   *
+   * A swarm node is the other case, and it is the reason this exists. A node
+   * detaches work that crosses `BACKGROUND_POLICY.interactive.detachAfterMs`
+   * (jobs/threshold.ts) — `wakesAfterTurn` is what makes that legal — so a
+   * node's turn can END with work still running, and the settled result arrives
+   * afterwards as a wake. Returning the wake's messages resumes the SAME agent
+   * on the SAME conversation, appended; returning null ends it.
+   *
+   * The caller owns BOTH halves of its own termination rule, which is why this
+   * is one function rather than a flag plus a queue: a node returns null the
+   * moment it has called `report`, and otherwise waits on the job it is holding.
+   * ENDING A TURN WITHOUT REPORTING IS THEREFORE NORMAL — the loop asks this,
+   * and only a `null` answer makes the run terminal.
+   */
+  resume?: () => Promise<readonly ModelMessage[] | null>;
 }
 
+/** A model that was CONSTRUCTED rather than named — the shape that reports its
+ *  own id and provider. Duck-typed structurally, the same way every other
+ *  vendor-shaped value in this tree is read, so it survives an SDK spec bump. */
+const ConstructedModelSchema = v.object({ modelId: v.string(), provider: v.string() });
+
 /**
- * Run one head's inference loop and assemble its HeadReport. A multi-step
- * generateText run that stops on abort, on the parent turn's step envelope, or
- * on a caller-requested deadline; the final text (last text-bearing step)
- * becomes the summary, with a recorded-findings fallback. Never throws —
- * failures become an `errored` report (the controller treats a thrown run() as
- * budget_exceeded anyway).
+ * RUN ONE AGENT — every kind that is not an actor's own chat — AND ASSEMBLE ITS
+ * REPORT.
+ *
+ * THE TURN BODY IS {@link runChat} AND NOTHING HERE REPEATS IT. This function
+ * used to hold a second `generateText` call, which is how a fork came to be the
+ * only agent in the tree with no stall watchdog, no dead-stream detection, no
+ * mid-step abort, no step-boundary pruning and no unpaired-tool-call repair:
+ * each of those exists once, in the turn body, and a second call site simply
+ * did not reach them. Driving the same body instead is a deletion, and the
+ * capabilities arrive with it.
+ *
+ * WHAT IS LEFT HERE is what a turn body cannot know: how many turns this agent
+ * gets, what a finished step means to its journal, which ledger it charges, and
+ * how its outcome reads as a {@link HeadReport}.
+ *
+ * MANY TURNS, ONE RUN. A head takes exactly one turn — it answers the question
+ * it was split off to answer. A node takes as many as it needs: its tools
+ * detach work that crosses the background threshold, so a turn can end with
+ * work still running, and ENDING A TURN WITHOUT REPORTING IS A NORMAL OUTCOME.
+ * {@link HeadInferenceDeps.resume} is the only thing that decides, and a `null`
+ * from it is the only thing that makes the run terminal. Across turns the
+ * conversation is ONE append-only array, the step sequence is ONE dense
+ * counter, and the findings are ONE capture — so the report says what the whole
+ * run did rather than what its last turn did.
+ *
+ * NEVER THROWS: a failure becomes an `errored` report, because the controller
+ * treats a thrown run() as budget_exceeded and that is a different claim.
  */
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
   const { capture, maxSteps, mission } = deps;
@@ -520,120 +591,193 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   };
 
   // Steps recorded so far — the trace's dense sequence and the report's count.
-  // A step with no prose, reasoning or tool call is padding and is not recorded,
-  // exactly as the whole-run walk used to drop it.
+  // ONE counter across every turn, because `head_steps` is keyed `${id}-s${seq}`
+  // and a per-turn counter would overwrite the first turn's trace with the
+  // second's. A step with no prose, reasoning or tool call is padding and is not
+  // recorded, exactly as the whole-run walk used to drop it.
   let recorded = 0;
-  // The conversation this loop PRODUCED, accumulated per step rather than read off
-  // the result: `result.response.messages` is the last step's, and what a forking
-  // child inherits is every step's (the append-only rule of *Inherited context*).
-  // Collected only when someone asked for it — a head merges findings and has no
-  // use for the transcript as messages.
-  const produced: ModelMessage[] = [];
+  // The LAST turn's step count and finish reason — the two facts that say
+  // whether this run was cut off at the envelope rather than choosing to stop.
+  let stepsThisTurn = 0;
+  let finishReason = '';
+  // `extractFinalText`'s two inputs, tracked as the steps land: the last
+  // text-bearing step's prose, and the last reasoning. A whole-run walk is not
+  // available here — the turn body reports steps as they finish — and it was
+  // never wanted: the summary is the agent's final answer, not its commentary.
+  let lastText = '';
+  let lastReasoning = '';
+
+  // The conversation this run issues, extended at every turn boundary by the
+  // turn's own output and then by the wake that resumed it. ONE array and
+  // append-only, which is *Inherited context*'s rule and also what makes a
+  // resumed turn's request a prefix of the previous one that a provider can
+  // cache. The seed is the prefix a child inherits UP TO, so what this run
+  // produced is everything past it.
+  const history: ModelMessage[] = deps.framing ? [...deps.framing.messages] : buildHeadMessages(input);
+  const seeded = history.length;
+  const system = deps.framing?.system
+    ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout);
+  // The resolved model as the prompt layer names it, read off the model the
+  // caller already resolved rather than asked for as a second dep nobody would
+  // set. It buys two things the fork loop had neither of: the real context
+  // window, which is what step-boundary tool-output pruning is measured against,
+  // and the tool-capability check the actor already refuses a turn on — a fork
+  // handed a model that cannot call tools used to burn its whole envelope
+  // producing none, and now says so in its report instead.
+  //
+  // PARSED, not type-narrowed: `LanguageModel` is the SDK's "constructed model OR
+  // bare id", two representations of one domain value, and the third arm is a
+  // reading rather than a failure — a model that reports no identity still runs,
+  // on the default window, because this field is read by the prompt layer alone.
+  const constructed = v.safeParse(ConstructedModelSchema, deps.model);
+  const named = v.safeParse(v.string(), deps.model);
+  const modelContext: PromptModelContext = constructed.success
+    ? { id: constructed.output.modelId, provider: constructed.output.provider }
+    : named.success ? { id: named.output } : {};
+
+  /** Whether any turn settled a conversation at all. A provider stream that
+   *  died before its first step never yields `done`, and half a conversation is
+   *  worse for a child than none. */
+  let settled = false;
+  /** What ended the run early, when something threw. Classified below with the
+   *  natural path rather than in a catch of its own, so an aborted run reads the
+   *  same whether the abort landed between steps or inside one. */
+  let failure: unknown;
+
+  const onStep = async (step: StepResult<ToolSet>): Promise<void> => {
+    stepsThisTurn = step.stepNumber + 1;
+    finishReason = step.finishReason;
+    if (step.text.trim()) lastText = step.text;
+    if (step.reasoningText?.trim()) lastReasoning = step.reasoningText;
+    const traced = toHeadStep(step);
+    if (traced) {
+      const seq = recorded++;
+      // A failed trace write must not kill the work it was watching — the sink
+      // can be an RPC to another Durable Object. Same treatment the actor gives
+      // its own step events.
+      try {
+        await deps.reportStep?.(seq, traced);
+      } catch (err) {
+        diagnostics.failure(
+          'head.step_trace_failed',
+          toProteusError({ doing: 'record a head step trace', cause: err, otherwise: 'io' }),
+          { headId: input.id, seq },
+        );
+      }
+    }
+    const usage = normalizeUsage(step.usage);
+    // A step the provider said nothing about meters nothing: neither the report
+    // nor the ledger may be moved by a guess.
+    if (!usageReported(usage)) return;
+    capture.recordStepUsage(usage);
+    // Charged per step, from the provider's own report, so the ledger is current
+    // when the guard reads it — rather than one lump debit after the whole fork
+    // has already been paid for. The `?? 0` is the running cumulative ledger's
+    // own plain-number contract, reached only because the guard above
+    // established this step was really reported.
+    await mission?.port.debit(usageTotal(usage) ?? 0, {
+      labels: mission.labels, calls: 1, usage,
+    });
+  };
 
   try {
-    // Before the first call as well as between steps: a head spawned into an
-    // already-spent mission must not get one free inference out of it.
-    if (await outOfBudget()) {
-      return exhaustedMissionReport(input, capture, refusal!, Date.now() - startedAt);
+    for (;;) {
+      // Before the first call, between steps, AND between turns: an agent
+      // spawned into an already-spent mission must not get one free inference
+      // out of it, and neither must a resumed one.
+      if (await outOfBudget()) break;
+      stepsThisTurn = 0;
+      const turn: ChatOptions = {
+        model: deps.model,
+        system,
+        history,
+        tools: deps.tools,
+        maxSteps,
+        modelContext,
+        stopWhen: async () => {
+          if (deps.isAborted()) return true;
+          if (budgetExhausted(input.budget).exhausted) return true;
+          return outOfBudget();
+        },
+        onStep,
+      };
+      if (deps.signal !== undefined) turn.signal = deps.signal;
+      for await (const event of runChat(turn)) {
+        if (event.type !== 'done') continue;
+        settled = true;
+        // The turn's own response messages, tool calls already paired by the
+        // turn body. Appended, never accumulated per step: every step's
+        // `response.messages` is CUMULATIVE (ai 6 builds one array and clones it
+        // onto each step), so pushing them per step handed a forking child the
+        // same assistant message once per remaining step.
+        history.push(...event.responseMessages);
+      }
+      // A run the spawner cancelled, or one past the deadline it was granted,
+      // gets no further turn however much work it is still holding.
+      if (deps.isAborted() || budgetExhausted(input.budget).exhausted) break;
+      const resumed = await deps.resume?.();
+      if (!resumed) break;
+      history.push(...resumed);
     }
-    const result = await generateText({
-      model: deps.model,
-      system: deps.framing?.system
-        ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout),
-      messages: deps.framing ? [...deps.framing.messages] : buildHeadMessages(input),
-      tools: deps.tools,
-      onStepFinish: async (step) => {
-        const traced = toHeadStep(step);
-        if (traced) {
-          const seq = recorded++;
-          // A failed trace write must not kill the work it was watching — the
-          // sink can be an RPC to another Durable Object. Same treatment the
-          // actor gives its own step events.
-          try {
-            await deps.reportStep?.(seq, traced);
-          } catch (err) {
-            diagnostics.failure(
-              'head.step_trace_failed',
-              toProteusError({ doing: 'record a head step trace', cause: err, otherwise: 'io' }),
-              { headId: input.id, seq },
-            );
-          }
-        }
-        if (deps.reportMessages) produced.push(...step.response.messages);
-        const usage = normalizeUsage(step.usage);
-        // A step the provider said nothing about meters nothing: neither the
-        // report nor the ledger may be moved by a guess.
-        if (!usageReported(usage)) return;
-        capture.recordStepUsage(usage);
-        // Charged per step, from the provider's own report, so the ledger is
-        // current when the guard below reads it — rather than one lump debit
-        // after the whole fork has already been paid for. The `?? 0` is the
-        // running cumulative ledger's own plain-number contract, reached only
-        // because the guard above established this step was really reported.
-        await mission?.port.debit(usageTotal(usage) ?? 0, {
-          labels: mission.labels, calls: 1, usage,
-        });
-      },
-      stopWhen: async ({ steps }) => {
-        if (deps.isAborted()) return true;
-        if (steps.length >= maxSteps) return true;
-        if (budgetExhausted(input.budget).exhausted) return true;
-        return outOfBudget();
-      },
-    });
-    deps.reportMessages?.(produced);
+    if (settled) deps.reportMessages?.(history.slice(seeded));
+  } catch (err) {
+    failure = err;
+  }
 
-    if (refusal) {
-      return exhaustedMissionReport(input, capture, refusal, Date.now() - startedAt, recorded);
-    }
+  if (refusal) {
+    return exhaustedMissionReport(input, capture, refusal, Date.now() - startedAt, recorded);
+  }
 
-
-    const budgetGate = budgetExhausted(input.budget);
-    // A run that used the whole step envelope without the model ever choosing to
-    // stop was cut off mid-flight — reporting it 'completed' would hand the
-    // parent a mid-flight thought as a finished answer, the exact fabrication
-    // incompleteHeadSummary exists to prevent.
-    const ranOutOfSteps = result.steps.length >= maxSteps && result.finishReason !== 'stop';
-    const status: HeadReport['status'] = deps.isAborted()
+  const budgetGate = budgetExhausted(input.budget);
+  const aborted = deps.isAborted();
+  // A run that used the whole step envelope without the model ever choosing to
+  // stop was cut off mid-flight — reporting it 'completed' would hand the parent
+  // a mid-flight thought as a finished answer, the exact fabrication
+  // incompleteHeadSummary exists to prevent.
+  const ranOutOfSteps = stepsThisTurn >= maxSteps && finishReason !== 'stop';
+  // A throw the abort or the deadline already explains is NOT a failure of the
+  // work: the turn body ends a cut turn by yielding `done` and then throwing, so
+  // the steps it recorded are already in this report and the throw only says the
+  // turn did not finish. Anything else — a dead provider stream, a stalled one,
+  // a model that cannot call the tools it was given — IS the failure.
+  const broke = failure !== undefined && !aborted && !budgetGate.exhausted;
+  const status: HeadReport['status'] = broke
+    ? 'errored'
+    : aborted
       ? 'aborted'
       : budgetGate.exhausted || ranOutOfSteps ? 'budget_exceeded' : 'completed';
-    const stopReason = deps.abortReason?.()
+  // THE CAUSE CHAIN, not the bare message. `runNodeAgent`'s transport catch
+  // renders one for the same column of the same store, and a run whose LOOP
+  // failed used to get the outermost sentence only — so two terminal rows written
+  // minutes apart read at different depths and the one with the real reason in it
+  // was the one nobody had to debug.
+  const stopReason = broke
+    ? renderCauseChain(toProteusError({
+      doing: `run agent ${input.id} to a report`, cause: failure, otherwise: 'unavailable',
+    }))
+    : deps.abortReason?.()
       ?? (budgetGate.exhausted
         ? `${budgetGate.reason} budget exhausted`
         : ranOutOfSteps ? `reached the turn step envelope (${maxSteps} steps) without finishing` : null);
-    const summary = status === 'completed'
-      ? (extractFinalText(result)
-        || synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })
-        || `Head ${input.id} completed without producing a textual summary.`)
+  const summary = status === 'completed'
+    ? (extractFinalText({ text: lastText, reasoningText: lastReasoning })
+      || synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })
+      || `Head ${input.id} completed without producing a textual summary.`)
+    : status === 'errored'
+      ? `Head ${input.id} errored: ${stopReason ?? 'no reason reported'}`
       : incompleteHeadSummary(input, status, capture, stopReason);
 
-    return {
-      id: input.id, status, summary,
-      evidence: [...capture.evidence],
-      decisions: [...capture.decisions],
-      artifactRefs: [...capture.artifacts],
-      fileChanges: capture.files.snapshot(),
-      childHeadIds: [...capture.childHeadIds],
-      toolCalls: [...capture.toolCalls],
-      stepCount: recorded,
-      usage: capture.usage,
-      wallClockMs: Date.now() - startedAt,
-      errorMessage: status === 'completed' ? undefined : stopReason ?? undefined,
-    };
-  } catch (err) {
-    return {
-      id: input.id, status: 'errored',
-      summary: `Head ${input.id} errored: ${err instanceof Error ? err.message : String(err)}`,
-      evidence: [...capture.evidence],
-      decisions: [...capture.decisions],
-      artifactRefs: [...capture.artifacts],
-      fileChanges: capture.files.snapshot(),
-      childHeadIds: [...capture.childHeadIds],
-      toolCalls: [...capture.toolCalls],
-      stepCount: recorded,
-      usage: capture.usage,
-      wallClockMs: Date.now() - startedAt,
-      errorMessage: err instanceof Error ? err.message : String(err),
-    };
-  }
+  return {
+    id: input.id, status, summary,
+    evidence: [...capture.evidence],
+    decisions: [...capture.decisions],
+    artifactRefs: [...capture.artifacts],
+    fileChanges: capture.files.snapshot(),
+    childHeadIds: [...capture.childHeadIds],
+    toolCalls: [...capture.toolCalls],
+    stepCount: recorded,
+    usage: capture.usage,
+    wallClockMs: Date.now() - startedAt,
+    errorMessage: status === 'completed' ? undefined : stopReason ?? undefined,
+  };
 }

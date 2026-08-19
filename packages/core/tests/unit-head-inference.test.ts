@@ -3,9 +3,8 @@
 // assembly that used to live inside the cf Facet is locked behind a test both
 // backends rely on.
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@proteus/test-utils';
+import { scriptedTurnModel, toolExecute } from '@proteus/test-utils';
 import type { LanguageModel } from 'ai';
-import { MockLanguageModelV3 } from 'ai/test';
 import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, type HeadInferenceDeps,
@@ -21,7 +20,7 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/prompts/evidence-window
  *  finishReason 'stop' so the head ends in a single step (no tool calls). */
 function fakeHeadModel(answer: string, opts?: { throwError?: string; usage?: { inputTokens: number; outputTokens: number } }): LanguageModel {
   const usage = opts?.usage ?? { inputTokens: 10, outputTokens: 20 };
-  return new MockLanguageModelV3({
+  return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-head',
     doGenerate: async () => {
@@ -182,7 +181,7 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
 
   test('the provider sees the structured conversation, not one user blob', async () => {
     const prompts: Array<Array<{ role: string }>> = [];
-    const model = new MockLanguageModelV3({
+    const model = scriptedTurnModel({
       provider: 'fake', modelId: 'fake-head',
       doGenerate: async (options) => {
         prompts.push(options.prompt.map((m) => ({ role: m.role })));

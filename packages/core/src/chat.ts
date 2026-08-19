@@ -16,6 +16,7 @@ import {
   type TextPart,
   type ToolCallPart,
   type StepResult,
+  type StopCondition,
 } from 'ai';
 import { combineAbortSignals } from '@proteus/agent-utils';
 import { DEFAULT_MAX_STEPS } from './config';
@@ -131,6 +132,32 @@ export interface ChatOptions {
   budget?: MissionGovernor;
   /** Stream-inactivity watchdog override (tests). Default STALL_TIMEOUT_MS. */
   stallTimeoutMs?: number;
+  /**
+   * One more reason this turn may stop, ORed with the step cap.
+   *
+   * A fork's turn stops for things a chat's does not: the abort flag its
+   * spawner polls, the wall clock the search granted it, and an ASYNC mission
+   * guard — a hosted head charges its parent's ledger over an RPC, which the
+   * synchronous {@link ChatOptions.budget} governor cannot express. One extra
+   * condition rather than a second loop; the SDK ORs an array of them.
+   */
+  stopWhen?: StopCondition<ToolSet>;
+  /**
+   * Each finished step, raw, in process, awaited.
+   *
+   * The event stream is the SERIALIZABLE projection of a turn: it crosses the
+   * scaffold seam's valibot schema and the ACP/TUI boundary, so it carries
+   * rendered text and parsed args. A head's journal row needs what a
+   * projection cannot carry — the step's reasoning text, and its tool calls
+   * paired with their outputs by id. Awaited, because the sink can be an RPC
+   * to another Durable Object and the next request must not be issued while
+   * the trace of the previous step is still in flight.
+   *
+   * Errors are the sink's own: a throw here rejects the turn, exactly as a
+   * throw from `prepareStep` does, so a sink that must survive its own
+   * failures handles them (heads/head-inference.ts does).
+   */
+  onStep?: (step: StepResult<ToolSet>) => Promise<void> | void;
 }
 
 /** Abort the turn when NOTHING flows for this long — no provider chunk, no
@@ -271,7 +298,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     system: cache.system,
     messages: cache.messages,
     tools,
-    stopWhen: stepCountIs(maxSteps),
+    // The step cap always applies; a fork's driver ORs its own reasons onto it
+    // (abort flag, granted wall clock, async mission guard) rather than running
+    // a second loop that would have to re-derive everything below.
+    stopWhen: opts.stopWhen ? [stepCountIs(maxSteps), opts.stopWhen] : stepCountIs(maxSteps),
     abortSignal: opts.signal ? combineAbortSignals([opts.signal, watchdog.signal]) : watchdog.signal,
     // The SDK's default onError is `console.error(error)`, which dumped the
     // raw provider payload to the terminal alongside our own rendering of it.
@@ -293,13 +323,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         dynamic: opts.dynamicContext,
         meter: opts.meter,
       }, { stepNumber, messages }),
-    onStepFinish: (step) => {
+    onStepFinish: async (step) => {
       stepCount++;
       const usage = normalizeUsage(step.usage);
       responseSoFar = step.response.messages;
       const event: PendingStepEvent = { stepIndex: stepCount, responseMessages: responseSoFar };
       if (usageReported(usage)) event.usage = usage;
       pendingStepEvents.push(event);
+      await opts.onStep?.(step);
     },
   });
 

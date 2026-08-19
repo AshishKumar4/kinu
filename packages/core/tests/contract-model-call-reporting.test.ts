@@ -53,10 +53,11 @@ const EXEMPT = {
   // one: it never names an AI-SDK entry point, so the scan does not see it, and
   // the caller that drives it is the producer. `claude-cli-provider.ts` was
   // listed here until this test's own stale-exemption check rejected it.
-  // The head loop's usage is stored per head in `head_journal` and aggregated
-  // from there. Two writers for one call is how a total learns to double-count.
-  'packages/core/src/heads/head-inference.ts':
-    'head usage is aggregated from head_journal, which is its one durable record',
+  // `heads/head-inference.ts` was listed here and no longer is: it stopped
+  // invoking a model at all when the fork/node loop was collapsed onto the turn
+  // loop below, so it is out of this gate's scope rather than excused by it. Head
+  // usage is still aggregated from `head_journal`, which is still its one durable
+  // record.
   // THE turn loop. Its spend reaches the same log as `step_finish`, which the
   // total reads as the `agent` producer — a `model_call` row here would count
   // every step twice, and would drop a judge's cold prompt into the prefix-cache

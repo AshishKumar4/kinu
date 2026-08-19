@@ -20,7 +20,7 @@
  * STEP, and a step is the unit the bound is built out of.
  */
 import { describe, expect, test } from 'bun:test';
-import { MockLanguageModelV3 } from 'ai/test';
+import { scriptedTurnModel } from '@proteus/test-utils';
 import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
@@ -117,7 +117,7 @@ describe('what the node deadline reaches, and what it does not', () => {
       rt,
       // A node that never stops on its own: every step asks for another tool call, so
       // the ONLY thing that can end this loop is a bound.
-      model: new MockLanguageModelV3({
+      model: scriptedTurnModel({
         provider: 'fake',
         modelId: 'fake-never-stops',
         doGenerate: async () => {

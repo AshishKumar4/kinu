@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { MockLanguageModelV3 } from 'ai/test';
+import { scriptedTurnModel } from '@proteus/test-utils';
 import * as v from 'valibot';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import {
@@ -50,7 +50,7 @@ const PER_EXPANSION_TOKENS = 8;
 /** A model that answers once per expansion. `usage: 'silent'` is a provider that
  *  reported nothing, which is a different fact from reporting zero. */
 function expandingModel(usage: 'reported' | 'silent' = 'reported') {
-  return new MockLanguageModelV3({
+  return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-spawn-seam',
     doGenerate: async () => ({

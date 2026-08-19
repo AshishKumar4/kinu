@@ -43,7 +43,8 @@
  * credential or twenty minutes to reproduce.
  */
 import { describe, expect, test } from 'bun:test';
-import { MockLanguageModelV3 } from 'ai/test';
+import type { MockLanguageModelV3 } from 'ai/test';
+import { scriptedTurnModel } from '@proteus/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
@@ -162,7 +163,7 @@ function resolved(): ResolvedSwarm {
 
 /** Raises the upstream authentication error on every call, exactly as the expired
  *  credential did. Stateless, so one instance serves every arm. */
-const RAISING_MODEL = new MockLanguageModelV3({
+const RAISING_MODEL = scriptedTurnModel({
   provider: 'fake',
   modelId: 'fake-raising',
   doGenerate: () => Promise.reject(new Error(UPSTREAM)),
@@ -170,7 +171,7 @@ const RAISING_MODEL = new MockLanguageModelV3({
 
 /** Never answers and never fails — the promise the barrier used to wait on forever.
  *  `withResolvers` without its resolvers is the honest spelling of that. */
-const SILENT_MODEL = new MockLanguageModelV3({
+const SILENT_MODEL = scriptedTurnModel({
   provider: 'fake',
   modelId: 'fake-silent',
   doGenerate: () => Promise.withResolvers<never>().promise,
@@ -187,7 +188,7 @@ const SILENT_MODEL = new MockLanguageModelV3({
  */
 function oneAnsweringProvider(): MockLanguageModelV3 {
   let chosen: string | null = null;
-  return new MockLanguageModelV3({
+  return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-one-answers',
     doGenerate: ({ prompt }) => {
@@ -239,7 +240,7 @@ function oneAnsweringProvider(): MockLanguageModelV3 {
  * of VFS and SQL per node instead of three sleeps.
  */
 function slowSteppingProvider(pauseMs: number): MockLanguageModelV3 {
-  return new MockLanguageModelV3({
+  return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-slow-stepping',
     doGenerate: async ({ prompt }) => {

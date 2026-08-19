@@ -18,7 +18,8 @@
  * the seams are the parts under test and the provider is the part under control.
  */
 import { describe, expect, test } from 'bun:test';
-import { MockLanguageModelV3 } from 'ai/test';
+import type { MockLanguageModelV3 } from 'ai/test';
+import { scriptedTurnModel } from '@proteus/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
@@ -65,7 +66,7 @@ function grant(): BranchDecision {
  */
 function scriptedReporter(answer: string, offered?: Set<string>): MockLanguageModelV3 {
   let call = 0;
-  return new MockLanguageModelV3({
+  return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-node-host',
     doGenerate: async ({ tools }) => {
