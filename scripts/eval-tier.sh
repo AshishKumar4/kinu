@@ -8,29 +8,37 @@
 # ever needs to do. So they live here, at `ci`, and this script is the whole
 # tier.
 #
-# It runs TWO ARMS, because two runners are needed and neither can see the
-# other's files: `bun test ./tests/` for `*.test.ts`, and vitest for
-# `tests/evals/**/*.eval.ts`, which bun's matcher does not select. Everything
-# below is done for both, and per arm where a reader needs the split.
+# It runs THREE ARMS. Two of them exist because two runners are needed and neither
+# can see the other's files: `bun test ./tests/` for `*.test.ts`, and vitest for
+# `tests/evals/**/*.eval.ts`, which bun's matcher does not select. The third is one
+# FILE on the vitest side — the live swarm eval — split off for cost accounting
+# rather than for runners: an arm is the unit a spend file is written per, so an arm
+# is the unit liveness can be asserted per, and the assertion that matters most is
+# the one about the suite whose whole subject is a live search. Everything below is
+# done for all three, and per arm where a reader needs the split.
 #
-# It does six things, in this order, and the order matters:
+# It does seven things, in this order, and the order matters:
 #
 #   1. Names the target and the cost basis BEFORE spending anything, so a run
 #      that goes somewhere unexpected is visible at the top of the log rather
 #      than in a bill.
-#   2. Runs both arms once, capturing a JUnit report and a spend file EACH.
+#   2. Runs every arm once, capturing a JUnit report and a spend file EACH.
 #   3. Enforces the skip ratchet over those reports — the same run, not a second
-#      one, and both arms rather than one. A skipped test is a declared skip or a
+#      one, and every arm rather than one. A skipped test is a declared skip or a
 #      failure. Until the vitest arm produced a report this step governed the bun
 #      suites alone, and the arm it could not see reported 36 tests of which 35
 #      skipped, exiting 0 with nothing declaring any of them.
 #   4. Reports what each ARM spent and how long it took. One combined figure hid
 #      which half of the tier the time was in, which is how "add roughly an hour
 #      for the vitest behaviour arm" came to stand in for a measurement.
-#   5. Reports what the whole run spent, summed from every suite process.
-#   6. HOLDS the run to that report. With a target resolved, a run that reports
-#      no model call, or calls it cannot account for, exits non-zero. Step 5 has
-#      always printed the defect; until step 6 existed it printed it and returned
+#   5. HOLDS THE LIVE SWARM ARM to its own report, over its own spend file. A
+#      tier-wide total cannot fail on one arm's behalf: it sums every suite, so a
+#      swarm eval that stopped reaching a model would hide behind whatever the
+#      behaviour arm spent.
+#   6. Reports what the whole run spent, summed from every suite process.
+#   7. HOLDS the run to that report. With a target resolved, a run that reports
+#      no model call, or calls it cannot account for, exits non-zero. Step 6 has
+#      always printed the defect; until step 7 existed it printed it and returned
 #      success, which is how `TOTAL: 0 model call(s)` passed a deploy gate.
 #
 # Credentials, either pair (see packages/test-utils/src/live-model.ts):
@@ -79,6 +87,22 @@ cd "$(dirname "$0")/.."
 # run every eval twice and double the bill for nothing.
 TARGETS=(./tests/)
 
+# The LIVE SWARM arm, named as one file because it is billed as one.
+#
+# It is a `*.eval.ts` and so invisible to the bun arm above, which is what makes a
+# THIRD arm possible at all: it gets its own process, therefore its own
+# PROTEUS_EVAL_SPEND_FILE, therefore its own liveness assertion. That last step is
+# the reason it is separate rather than tidy — `livenessVerdict` sums the lines in
+# the file it is given, so a swarm eval sharing a spend file with five paid suites
+# could stop calling a model entirely and the tier would still report `proven`. The
+# arm whose whole subject is a live search is the one arm whose zero has to be its
+# own failure.
+#
+# Named here rather than twice below: the behaviour arm EXCLUDES this path and this
+# arm SELECTS it, and the two spellings have to be one string or the file runs twice
+# and is billed twice.
+SWARM_EVAL=tests/evals/swarm.eval.ts
+
 # Per ARM, because "what did the tier cost" is not one number and reporting it as
 # one hides the arm that dominates it: measured here, the bun arm is ~54 minutes
 # and the vitest behaviour arm is the larger half, and until each was timed
@@ -87,11 +111,14 @@ TARGETS=(./tests/)
 REPORT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/proteus-eval-tier-XXXXXX")"
 JUNIT="$REPORT_DIR/junit-bun.xml"
 JUNIT_EVALS="$REPORT_DIR/junit-vitest.xml"
+JUNIT_SWARM="$REPORT_DIR/junit-swarm.xml"
 SPEND_BUN="$REPORT_DIR/spend-bun.jsonl"
 SPEND_EVALS="$REPORT_DIR/spend-vitest.jsonl"
+SPEND_SWARM="$REPORT_DIR/spend-swarm.jsonl"
 SPEND="$REPORT_DIR/spend.jsonl"
 : > "$SPEND_BUN"
 : > "$SPEND_EVALS"
+: > "$SPEND_SWARM"
 trap 'rm -rf "$REPORT_DIR"' EXIT
 
 # The ONE place this is set. `liveModelTarget` refuses to spend without it, so a
@@ -168,13 +195,37 @@ BUN_SECONDS=$((SECONDS - ARM_STARTED))
 # progress at all, and this arm takes hours.
 ARM_STARTED=$SECONDS
 export PROTEUS_EVAL_SPEND_FILE="$SPEND_EVALS"
+# `--exclude "$SWARM_EVAL"`: the live swarm eval is a `*.eval.ts` too, so this
+# config's own `include` selects it, and without the exclusion it would run in this
+# arm as well as its own — one search, two bills, and a spend file per arm that
+# double-counts. The arm below is where it runs.
 bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts \
+  --exclude "$SWARM_EVAL" \
   --reporter=default --reporter=junit --outputFile="$JUNIT_EVALS"
 EVAL_STATUS=$?
 EVALS_SECONDS=$((SECONDS - ARM_STARTED))
 if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$EVAL_STATUS; fi
 
-for arm in "bun suites:$JUNIT" "behaviour evals:$JUNIT_EVALS"; do
+# The live swarm arm: `agents({action:'swarm'})` through the real tool surface,
+# graded by the caller's own verifier. One file, selected by path, so the arm's
+# spend file holds exactly this suite's line and the assertion below is about this
+# suite and nothing else.
+#
+# Same runner and same config as the arm above — it needs `bun:sqlite` for the agent
+# store, the hook timeout for opening a workspace, and `fileParallelism: false` so a
+# tree of real tool-using nodes is not racing another suite's model calls against one
+# account — so this is a second INVOCATION rather than a second config. Its status is
+# captured and never allowed to abort for the reason both arms above are: what a
+# failed run cost before it failed is what a reader needs.
+ARM_STARTED=$SECONDS
+export PROTEUS_EVAL_SPEND_FILE="$SPEND_SWARM"
+bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$SWARM_EVAL" \
+  --reporter=default --reporter=junit --outputFile="$JUNIT_SWARM"
+SWARM_STATUS=$?
+SWARM_SECONDS=$((SECONDS - ARM_STARTED))
+if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$SWARM_STATUS; fi
+
+for arm in "bun suites:$JUNIT" "behaviour evals:$JUNIT_EVALS" "live swarm:$JUNIT_SWARM"; do
   if [[ ! -f "${arm#*:}" ]]; then
     echo "eval-tier: the ${arm%%:*} arm produced no JUnit report (exit $TEST_STATUS) — nothing to" \
       "measure, and an unmeasured arm is what this tier exists to make impossible" >&2
@@ -187,7 +238,7 @@ echo
 # governed one arm; the flag is what stops a locked skip that RAN — which is the
 # tier working — from being read as the lock owing an update, a verdict that made
 # this script unable to exit 0 on any machine holding a credential.
-RATCHET_ARGS=(--junit "$JUNIT" --junit "$JUNIT_EVALS")
+RATCHET_ARGS=(--junit "$JUNIT" --junit "$JUNIT_EVALS" --junit "$JUNIT_SWARM")
 if [[ $EXPECT_LIVE -eq 1 ]]; then RATCHET_ARGS+=(--expect-live); fi
 bun scripts/skip-ratchet.ts "${RATCHET_ARGS[@]}"
 RATCHET_STATUS=$?
@@ -198,14 +249,31 @@ printf 'bun suites       %5ds  %s\n' "$BUN_SECONDS" "$(bun scripts/eval-spend.ts
   | sed -n 's/^  TOTAL: //p')"
 printf 'behaviour evals  %5ds  %s\n' "$EVALS_SECONDS" "$(bun scripts/eval-spend.ts "$SPEND_EVALS" \
   | sed -n 's/^  TOTAL: //p')"
-printf 'tier             %5ds\n' "$((BUN_SECONDS + EVALS_SECONDS))"
+printf 'live swarm       %5ds  %s\n' "$SWARM_SECONDS" "$(bun scripts/eval-spend.ts "$SPEND_SWARM" \
+  | sed -n 's/^  TOTAL: //p')"
+printf 'tier             %5ds\n' "$((BUN_SECONDS + EVALS_SECONDS + SWARM_SECONDS))"
+echo "──────────────────────────────────────────────────────────"
+
+echo
+# THE LIVE SWARM ARM'S OWN LIVENESS, before the tier-wide one, because the tier-wide
+# one cannot fail on its behalf: the totals below are summed across every suite, so a
+# silent swarm eval hides behind whatever the behaviour arm spent. `--expect-live`
+# comes from the SAME `EXPECT_LIVE` the banner printed — one target resolution, so
+# the line a reader saw and the assertion this arm is held to cannot disagree — and
+# with no target it is absent, which keeps the reproduce-anywhere path intact: no
+# credential, no calls, nothing to prove, exit 0.
+echo "── live swarm arm ────────────────────────────────────────"
+SWARM_SPEND_ARGS=("$SPEND_SWARM")
+if [[ $EXPECT_LIVE -eq 1 ]]; then SWARM_SPEND_ARGS+=(--expect-live); fi
+bun scripts/eval-spend.ts "${SWARM_SPEND_ARGS[@]}"
+SWARM_SPEND_STATUS=$?
 echo "──────────────────────────────────────────────────────────"
 
 echo
 # `--expect-live` turns a resolved target into an obligation: the tier must show
 # a model call and a token count or exit non-zero. Without it, this reports and
 # returns 0 — which is what let `TOTAL: 0 model call(s)` pass a deploy gate.
-cat "$SPEND_BUN" "$SPEND_EVALS" > "$SPEND"
+cat "$SPEND_BUN" "$SPEND_EVALS" "$SPEND_SWARM" > "$SPEND"
 SPEND_ARGS=("$SPEND")
 if [[ $EXPECT_LIVE -eq 1 ]]; then SPEND_ARGS+=(--expect-live); fi
 bun scripts/eval-spend.ts "${SPEND_ARGS[@]}"
@@ -220,6 +288,13 @@ if [[ $TEST_STATUS -ne 0 ]]; then
   exit "$TEST_STATUS"
 fi
 if [[ $RATCHET_STATUS -ne 0 ]]; then exit "$RATCHET_STATUS"; fi
+# The per-arm verdict before the tier-wide one: "the live swarm arm reached no model"
+# is a sharper sentence than "the tier reached no model", and it is the only one of
+# the two that a paid behaviour arm cannot mask.
+if [[ $SWARM_SPEND_STATUS -ne 0 ]]; then
+  echo "eval-tier: the live swarm arm proved no liveness (exit $SWARM_SPEND_STATUS)" >&2
+  exit "$SWARM_SPEND_STATUS"
+fi
 if [[ $SPEND_STATUS -ne 0 ]]; then
   echo "eval-tier: the run proved no liveness (exit $SPEND_STATUS)" >&2
   exit "$SPEND_STATUS"

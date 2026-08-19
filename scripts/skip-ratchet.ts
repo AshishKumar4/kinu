@@ -62,7 +62,7 @@ const root = new URL('..', import.meta.url).pathname;
 export const SKIP_RATCHET_TARGETS: readonly string[] = ['./tests/'];
 
 /**
- * The vitest half of the eval tier, named as a FILE rather than a directory.
+ * The vitest side of the eval tier, named as FILES rather than a directory.
  *
  * `./tests/` is satisfied by the bun arm alone, so before this existed the gate
  * could not tell a MISSING vitest report from a clean one — and the vitest arm
@@ -71,10 +71,18 @@ export const SKIP_RATCHET_TARGETS: readonly string[] = ['./tests/'];
  * these files (it matches only `*.test.*` / `*_test.*` / `*.spec.*`), so they can
  * never appear in the bun report and a directory target cannot distinguish them.
  *
+ * ONE ENTRY PER ARM, because `unmatchedTargets` proves a target non-empty and an arm
+ * is what can go missing: `eval-tier.sh` runs the behaviour eval and the live swarm
+ * eval as separate invocations with separate spend files, so a target naming only the
+ * first would be satisfied while the second produced no report at all.
+ *
  * A rename therefore fails this gate loudly with the path it looked for, which is
  * the correct outcome: the arm moved and nobody re-pointed the gate at it.
  */
-export const SKIP_RATCHET_VITEST_TARGETS: readonly string[] = ['./tests/evals/behaviour.eval.ts'];
+export const SKIP_RATCHET_VITEST_TARGETS: readonly string[] = [
+  './tests/evals/behaviour.eval.ts',
+  './tests/evals/swarm.eval.ts',
+];
 
 /** Every target, both runners. What `unmatchedTargets` proves by default. */
 export const ALL_SKIP_RATCHET_TARGETS: readonly string[] = [
