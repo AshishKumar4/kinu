@@ -88,6 +88,7 @@ import {
   HeadController, type HeadJournal,
   type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
   type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type MergeResult,
+  type NodeLoopHost, type NodeArbiter, type BranchProposal, type BranchDecision,
   // Canonical memory-note read (the dynamic-context MEMORY.md tail)
   readMemoryTail,
   // Durable run-event log
@@ -161,6 +162,7 @@ import {
 import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
 import { createCFHeadRuntime } from "./heads/head-runtime";
+import { spawnNodeFacet } from "./facet-spawn";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
 import {
@@ -1439,6 +1441,7 @@ export abstract class ActorAgent extends Think<Env> {
   protected get host(): BackendHost {
     if (!this._host) {
       const getHeadRuntime = () => this.getCFHeadRuntime();
+      const getNodeHost = () => this.getCFNodeHost();
       this._host = {
         broadcast: (event) => this.broadcast(JSON.stringify(event)),
         enqueueTurn: async ({ text, metadata, idempotencyKey }) => {
@@ -1517,6 +1520,10 @@ export abstract class ActorAgent extends Think<Env> {
         // heads need the owner for UserDO auth, set by first-turn time. undefined
         // before then ⇒ heads degrade (getHeadController throws the no-owner error).
         get headRuntime() { return getHeadRuntime(); },
+        // Same lazy shape and the same reason: a node facet needs the owner for
+        // UserDO auth, so before first turn there is no host and a node's loop
+        // runs in this isolate.
+        get nodeHost() { return getNodeHost(); },
       };
     }
     return this._host;
@@ -1791,6 +1798,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  when the toolset does. */
   private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
     const actorDeps = this.actorToolDeps();
+    const nodeLoopHost = this.host.nodeHost;
     const deps: AgentsToolDeps = {
       mode: workMode,
       fork: buildStrategyForkDeps({
@@ -1803,6 +1811,10 @@ export abstract class ActorAgent extends Think<Env> {
           spec: this.effectiveModelSpec(),
           pricing: this.modelCatalog.pricing(),
         }),
+        // Where a tool-using node's loop runs. Through the same BackendHost seam
+        // `headRuntime` uses, because it is the same question one level down: the
+        // CLI wires none and its nodes run in process.
+        nodeHost: nodeLoopHost === undefined ? undefined : () => nodeLoopHost,
         mcts: {
           session: () => this.createMCTSSession(),
           search: this.mctsSearchStore,
@@ -2448,6 +2460,110 @@ export abstract class ActorAgent extends Think<Env> {
       models,
     );
     return this._cfHeadRuntime;
+  }
+
+  /**
+   * Run a tool-using node's loop in an `ExplorationAgent` facet.
+   *
+   * Undefined before the agent has an owner, for `getCFHeadRuntime`'s reason: a
+   * facet reaches the owner's credentials as its workspace, so without an owner
+   * there is nothing to attenuate. Undefined is not a failure here — an absent
+   * host runs the same loop in this isolate.
+   *
+   * The arbiter is published under this node's id for the LIFE OF THE RUN and
+   * withdrawn in `finally`, because that registration is the only route a facet
+   * has back to a budget that exists solely in this isolate. Withdrawing it is
+   * not tidiness: an entry that outlived its run would answer a later node
+   * against a settled search, and `nodeArbitrate` refuses rather than granting
+   * children nobody would create.
+   *
+   * A facet per node buys a storage boundary and a teardown verb, NOT
+   * parallelism — `do.facet.cpu_shared` is the governing fact, so a wave of
+   * hosted nodes serialises exactly as one isolate's `Promise.allSettled`
+   * already did. No concurrency bound is imposed here because none is needed for
+   * that reason: the width cap the search already enforces bounds how many
+   * facets exist at once, and adding a second limiter would be one policy in two
+   * places.
+   */
+  protected getCFNodeHost(): NodeLoopHost | undefined {
+    const ownerUserId = this.getOwnerUserId();
+    if (!ownerUserId) return undefined;
+    return async (spec, arbitrate) => {
+      const release = arbitrate
+        ? this.registerNodeArbiter(spec.headInput.id, arbitrate)
+        : null;
+      try {
+        const node = await spawnNodeFacet(this, spec, {
+          ownerUserId,
+          capabilityToken: await this.workspaceCapabilityToken(),
+          // The PARENT's workspace, never this facet's own name: the file plane
+          // is keyed by it, so a self-named node would derive a second, empty
+          // filesystem — the regression unit-head-fork.test.ts pins.
+          sharedParent: this.workspaceName(),
+        });
+        return await node.run();
+      } finally {
+        release?.();
+      }
+    };
+  }
+
+  /**
+   * The arbiters of searches running in THIS isolate right now, by node id.
+   *
+   * In memory and not a table, because that is what it is: a verdict is decided
+   * against a live remaining-children count, so an entry outliving its wave would
+   * be answering for a budget that no longer exists. A `Map` rather than a record
+   * because the keys are minted ids and entries are added and deleted as waves
+   * open and settle.
+   */
+  private readonly nodeArbiters = new Map<string, NodeArbiter>();
+
+  /**
+   * Arbitrate a HOSTED node's branch request, on behalf of the search that owns
+   * the budget.
+   *
+   * Why this exists when `recordHeadStep` was reusable and this is not: a step is
+   * a write to a table this actor holds, so any caller can perform it. A verdict
+   * is a decision against a LIVE budget — the remaining-children count of a
+   * search that is running right now, in this isolate — and that budget is not a
+   * row anyone can read. So the arbiter registers itself here for the life of its
+   * wave and this method is the route a facet reaches it by.
+   *
+   * Refuses rather than assumes when no arbiter is registered. A node whose
+   * search has already settled must not be handed a grant nobody will honour: the
+   * children would be reserved against a budget that is gone, and the node would
+   * report having been given work the engine never created.
+   */
+  async nodeArbitrate(nodeId: string, proposal: BranchProposal): Promise<BranchDecision> {
+    const arbiter = this.nodeArbiters.get(nodeId);
+    if (!arbiter) {
+      // `budget-exhausted` rather than a sixth policy value: the vocabulary is
+      // closed on purpose, and this IS that fact — a settled search has no
+      // remaining children, so none can be reserved. The prose carries the
+      // detail, and the prose is what the node reads.
+      return {
+        kind: 'refused',
+        policy: 'budget-exhausted',
+        error: 'The search that spawned this node is no longer arbitrating, so no branch can be '
+          + 'reserved. Finish your own task and report.',
+      };
+    }
+    return await arbiter(proposal);
+  }
+
+  /**
+   * Register a hosted node's arbiter for the life of its run, and return the
+   * handle that unregisters it.
+   *
+   * A returned disposer rather than a second `unregister` call, because the two
+   * MUST be paired: an entry that outlived its wave would answer a later node
+   * against a settled budget, which is the exact failure the refusal above
+   * describes and this shape makes hard to cause.
+   */
+  registerNodeArbiter(nodeId: string, arbiter: NodeArbiter): () => void {
+    this.nodeArbiters.set(nodeId, arbiter);
+    return () => { this.nodeArbiters.delete(nodeId); };
   }
 
   /**

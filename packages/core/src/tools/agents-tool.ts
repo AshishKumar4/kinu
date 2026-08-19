@@ -36,6 +36,7 @@ import {
 import { SwarmConfigSchema, SwarmObjectiveSchema } from './swarm-input';
 import { resolveSwarm, swarmValidity, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../strategy/swarm';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
+import type { NodeLoopHost } from '../strategy/node-agent';
 import type { NamedSwarmPreset, SwarmConfig, SwarmPreset } from '../strategy/swarm';
 import type { Objective } from '../strategy/objective';
 import { readSpawnStarted } from '../jobs/threshold';
@@ -248,6 +249,16 @@ export interface AgentsForkDeps {
    *  starting. Backends wire the ModelCatalogSession they already hold;
    *  absence makes the gate blend and say so. */
   costModel?: () => CostModel;
+  /**
+   * Where a tool-using swarm node's loop runs, resolved per call.
+   *
+   * A FACTORY for the same reason `costModel` and `heads.controller` are: a
+   * backend may not be able to build one until the actor has an owner, so
+   * resolving it at dispatch keeps the refusal where it can be reported rather
+   * than at wiring time. Absent is a backend with no facets, and then a node's
+   * loop runs in this isolate — the same body, without a storage boundary.
+   */
+  nodeHost?: () => NodeLoopHost;
   /** Per-strategy infrastructure options the LLM must not set — e.g.
    *  `{ mcts: { session }, heads: { controller, inheritedContext, onPhase } }`. */
   defaultOptions?: () => BuiltinStrategyOptions;
@@ -874,6 +885,11 @@ async function runSwarmAction(
   const runDeps: SwarmRunDeps = { rt, model: deps.model, mode };
   const signal = readAbortSignal(toolOptions);
   if (signal) Object.assign(runDeps, { signal });
+  // Resolved here rather than at wiring time, so a backend that cannot build a
+  // host yet refuses where the refusal is reportable. Assigned only when there is
+  // one: an absent key is what runs the loop in this isolate.
+  const host = deps.nodeHost?.();
+  if (host) Object.assign(runDeps, { host });
   readSpawnStarted(toolOptions)?.();
   const result = await runSwarm(runDeps, resolved);
   if ('reason' in result) return result;

@@ -113,7 +113,7 @@ import { contextWindowForModel } from '../context-window';
 import { HeadJournal } from '../heads/journal';
 import { initHeadsTables } from '../heads/schema';
 import { runNodeAgent } from './node-agent';
-import type { NodeAgentDeps } from './node-agent';
+import type { NodeAgentDeps, NodeLoopHost } from './node-agent';
 import { SwarmBudget, type BranchDecision, type BranchGrant } from './swarm-budget';
 import { sha256Hex } from '../safety/argument-digest';
 import type { NodeWorkspaceProvisioner } from './node-workspace';
@@ -196,9 +196,26 @@ export interface SwarmRunDeps {
    * a different run from one whose caller had nothing to inherit.
    */
   readonly originContext?: readonly ModelMessage[];
-  /** §8.6's per-node home provisioner. Absent until the substrate lands, and then
+  /** The per-node home provisioner. Absent on a host with no uid-0 view, and then
    *  every node reports `shared-origin-plane` rather than pretending otherwise. */
   readonly provisionHome?: NodeWorkspaceProvisioner;
+  /**
+   * Where a TOOL-USING node's loop runs.
+   *
+   * Present hands each answer or generator node to a host that gives it its own
+   * storage and its own shell state — on the Cloudflare backend an
+   * `ExplorationAgent` facet, the same host a fork's head already runs in. Absent
+   * runs the loop in this isolate, which is the honest answer for a backend with
+   * no facets rather than a refusal: the body is the same function either way, so
+   * an absent host costs a node nothing but its storage boundary.
+   *
+   * `unit:'thought'` NEVER reaches this, and that is the rule rather than an
+   * omission: a thought node is one toolless `generateText` call that acquires no
+   * tools, no journal row and no shell, so there is nothing for a facet to
+   * isolate and the storage-isolation proof already covers it for exactly that
+   * reason. The dispatch that enforces it is `agentNodes` below.
+   */
+  readonly host?: NodeLoopHost;
   /** Backend-built `execute_tools` and live research, handed to every agent node.
    *  Absent means the node's surface is narrower, not broken. */
   readonly executeTool?: unknown;
@@ -1552,6 +1569,10 @@ export async function runSwarm(
   if (deps.reportModelCall !== undefined) nodeDeps.reportModelCall = deps.reportModelCall;
   if (deps.mission !== undefined) nodeDeps.mission = deps.mission;
   if (deps.provisionHome !== undefined) nodeDeps.provisionHome = deps.provisionHome;
+  // Only reached by an agent node: the toolless `thought` branch below never
+  // builds `nodeDeps` at all, which is what makes the split structural rather
+  // than a condition someone has to remember.
+  if (deps.host !== undefined) nodeDeps.host = deps.host;
   if (deps.executeTool !== undefined) nodeDeps.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
 

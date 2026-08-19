@@ -49,9 +49,15 @@ import { nodeWorkspace, isolationDisclosure } from './node-workspace';
 import { BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS } from './swarm';
 import type { Logger } from '../obs/index';
 import type { Usage } from '../usage';
-import type { BranchContext, BranchProposal, SwarmSettle } from './swarm';
+import type { BranchContext, SwarmSettle } from './swarm';
 import type { BranchDecision } from './swarm-budget';
 import type { NodeIdentity, NodeIsolation, NodeWorkspaceProvisioner } from './node-workspace';
+import type {
+  CapturedReport, NodeArbiter, NodeLoopHost, NodeLoopResult, NodeRunSpec,
+} from './node-host';
+export type {
+  CapturedReport, NodeArbiter, NodeLoopHost, NodeLoopResult, NodeRunSpec,
+} from './node-host';
 import type { HeadBudget, HeadInput, HeadReport, HeadStep, SerializedMessage } from '../heads/types';
 import type { HeadJournal } from '../heads/journal';
 import type { MissionScope } from '../mission-budget';
@@ -80,16 +86,6 @@ export const NODE_BUILTIN_TOOLS = [...HEAD_BUILTIN_TOOLS, 'report'] as const;
  *  which tool asked for budget. */
 export const PROPOSE_BRANCH_TOOL = 'propose_branch';
 
-/**
- * Arbitrates one node's branch request.
- *
- * May answer asynchronously, and that is not decoration: when a node runs in a
- * facet rather than in the search's own isolate, the arbiter is on the other
- * side of an RPC and the search's budget is not a value the node's host holds.
- * A synchronous-only arbiter would make hosting a node unrepresentable, so the
- * seam is async and the in-process caller simply returns a value.
- */
-export type NodeArbiter = (proposal: BranchProposal) => BranchDecision | Promise<BranchDecision>;
 
 /** What the engine hands one node before it runs. Identity and depth come from the
  *  engine's own row — a node states neither (§8.3) — and the seed is assembled by
@@ -210,56 +206,9 @@ export interface NodeAgentDeps {
   maxWallClockMs?: number;
 }
 
-/** What the node's `report` call left behind, before the engine reads it. */
-export interface CapturedReport {
-  readonly status: string;
-  readonly content: string;
-}
 
-/**
- * Everything a host needs to run one node's loop.
- *
- * Every field is DATA, deliberately: a host may be a Durable Object facet on the
- * far side of an RPC, so anything that cannot be serialised cannot be in here.
- * That constraint is what keeps the in-process and hosted paths honest — if the
- * spec were allowed a closure, the two paths would quietly diverge into two
- * runtimes again, because only one of them could carry it.
- */
-export interface NodeRunSpec {
-  readonly headInput: HeadInput;
-  /** The base system prompt this node's framing is built on. */
-  readonly base: string;
-  /** The conversation the engine assembled for this node, task last. */
-  readonly messages: readonly ModelMessage[];
-  readonly isolation: NodeIsolation;
-  readonly home: string;
-  readonly maxSteps: number;
-  /**
-   * Whether a proposal could be granted at all — the BUILD-TIME half of the
-   * arbitration rule. A request that can only ever be refused must not be
-   * offered, because offering it spends a step to learn a limit the surface
-   * already knew. Carried as data rather than inferred from the arbiter, because
-   * a host's arbiter is an RPC stub and always present.
-   */
-  readonly canPropose: boolean;
-}
 
-/** What one node's loop produced. Serialisable, for the spec's reason. */
-export interface NodeLoopResult {
-  readonly report: HeadReport;
-  readonly reported: CapturedReport | null;
-  readonly granted: BranchDecision | null;
-  readonly produced: readonly ModelMessage[];
-}
 
-/**
- * A host that runs a node's loop somewhere else.
- *
- * The implementation is a backend's, because only a backend can reach both the
- * facet API and the parent stub the loop's live seams have to call back through
- * — which is exactly how a head's mission ledger already works.
- */
-export type NodeLoopHost = (spec: NodeRunSpec) => Promise<NodeLoopResult>;
 
 /**
  * The live seams {@link runNodeLoop} needs and a {@link NodeRunSpec} cannot
@@ -617,7 +566,7 @@ export async function runNodeAgent(
 
   const run = deps.host === undefined
     ? await runNodeLoop(spec, nodeLoopDeps(input, deps))
-    : await deps.host(spec);
+    : await deps.host(spec, input.arbitrate);
 
   deps.journal.recordReport(run.report);
   deps.reportModelCall?.({ source: 'swarm', usage: run.report.usage });

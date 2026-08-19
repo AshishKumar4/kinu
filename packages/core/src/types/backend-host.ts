@@ -25,6 +25,7 @@
 // A seam here would have no core caller to serve (deletion test).
 
 import type { HeadRuntime } from '../heads/controller';
+import type { NodeLoopHost } from '../strategy/node-host';
 import type { JsonObject } from '../utils/json';
 
 /** A typed event fanned out to connected clients (mcts-progress, device_consent,
@@ -111,5 +112,21 @@ export interface BackendHost {
    *  createCFHeadRuntime (Facet sub-agents). CLI: subprocess-backed. Required
    *  for full agents-fork parity. */
   readonly headRuntime?: HeadRuntime;
+
+  /**
+   * Where a TOOL-USING swarm node's loop runs, when the backend can host it
+   * apart from the search.
+   *
+   * CF: an `ExplorationAgent` facet — the same host a fork's head already runs
+   * in, which is why this sits beside `headRuntime` rather than beside a new
+   * mechanism. CLI: wires nothing, and that is an honest answer rather than a
+   * degrade, because the loop body is one function either way; an absent host
+   * costs a node its storage boundary and nothing else, and it is exactly what
+   * every node did before this seam existed.
+   *
+   * `unit:'thought'` never reaches it: a thought node acquires no tools, no
+   * journal row and no shell, so there is nothing for a host to isolate.
+   */
+  readonly nodeHost?: NodeLoopHost;
 
 }
