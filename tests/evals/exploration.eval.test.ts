@@ -6,10 +6,13 @@
  * reasons and conflating them is how "MCTS works" got believed while the
  * Exploration pane was empty.
  *
- *   WORKS   — driven by the harness through the real `agents` tool, so the model
- *             cannot decline. A pass means the mechanism produces a branched,
- *             ranked, reader-visible search. Deterministic in shape; the model
- *             only supplies the content.
+ *   WORKS   — driven by the harness through the MCTS strategy itself, so the
+ *             model cannot decline. A pass means the mechanism produces a
+ *             branched, ranked, reader-visible search. Deterministic in shape;
+ *             the model only supplies the content. Driven at the strategy and
+ *             not through `agents.execute`, because the tool no longer routes
+ *             anything here — see the WORKS test for why that is the supported
+ *             path rather than a bypass.
  *   VISIBLE — the written store and the reader the pane calls agree. The
  *             assertion the twice-shipped empty pane needed.
  *   USED    — the model, handed a task that warrants exploration and the tool to
@@ -37,8 +40,11 @@ import {
   createStrategyRegistry,
   initWorkspaceSchema,
   readSoul,
+  RunEventRecorder,
+  WORKSPACE_RUN_ID,
   type AgentRuntime,
   type LLMProviderConfig,
+  type ModelCallSink,
   type SessionMessage,
   type SessionWriter,
   type StrategyRegistry,
@@ -48,8 +54,8 @@ import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
 import { requireSandboxedExecutors } from './harness';
 import {
-  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend,
-  scoreExploration, scoreSettleVisibility, UNCONFIGURED_LLM,
+  liveChatModel, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
+  reportLiveModelSpend, scoreExploration, scoreSettleVisibility, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
 
 const TARGET = liveModelTarget('Exploration Evals');
@@ -94,6 +100,31 @@ function makeSessionWriter(): SessionWriter {
   };
 }
 
+/**
+ * Where this suite's driven search reports what each call cost.
+ *
+ * A search's rollouts and judge calls never surface here as an SDK result — the
+ * strategy makes them through the runtime and reports them to whatever sink its
+ * caller supplies. Production's caller is `LocalAgentSession`, whose sink writes
+ * one `model_call` run event per completed call (local-session.ts:336-353); with
+ * no sink at all the calls still happen and simply go unattributed, which is how
+ * a suite spends real tokens and then reports none.
+ *
+ * So the same row, written to the same log, filed under {@link WORKSPACE_RUN_ID}
+ * because a driven strategy belongs to no turn. Unpriced deliberately: this suite
+ * holds no catalog session, and an absent `usd` reads as "not priced here" rather
+ * than as free. `recordLiveModelEpisode` then reads these through the
+ * workspace-spend seam — no second meter.
+ */
+function makeModelCallSink(rt: AgentRuntime): ModelCallSink {
+  const events = new RunEventRecorder(rt.storage.sql);
+  return (report) => {
+    events.emit(WORKSPACE_RUN_ID, {
+      type: 'model_call', source: report.source, usage: report.usage,
+    });
+  };
+}
+
 describe('Exploration evals — MCTS reached, ranked, and readable', () => {
   let db: InstanceType<typeof Database>;
   let rt: AgentRuntime;
@@ -128,8 +159,14 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     requireSandboxedExecutors('exploration-eval', rt);
     model = liveChatModel(LLM_CONFIG);
 
-    // Only `mcts` is registered, so `settle` has exactly one destination and a
-    // fork that lands anywhere else is a wiring fault rather than a choice.
+    // `mcts` is registered for the WORKS test to drive DIRECTLY. It is no longer
+    // reachable from the tool's own surface — `agents-tool.ts:911` dispatches
+    // `fork` to the heads strategy and nothing else — and the eval harness is
+    // named in that decision: `unit-agents-tool.test.ts:71-73` records that
+    // fork-deps.ts keeps the registration "for the durable search store and the
+    // eval harness", so a fork that routed here would be a silent misdispatch.
+    // Driving the strategy is therefore the SUPPORTED programmatic path, not a
+    // way around the tool.
     registry = createStrategyRegistry();
     registry.register(createMCTSStrategy());
 
@@ -160,14 +197,41 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     expect(Object.keys(tools)).toContain('agents');
   });
 
-  liveTest('WORKS: a driven mcts fork branches and ranks, durably', async () => {
-    const agents = tools.agents;
-    if (!agents?.execute) throw new Error('agents tool has no execute');
+  liveTest('WORKS: a driven mcts search branches and ranks, durably', async () => {
+    // Driven through the STRATEGY, not through `agents.execute`. The tool used to
+    // reach this with `{ action:'fork', settle:'mcts' }`; `settle` is gone from
+    // the model-facing surface (it survives only as a stored-row translation in
+    // `resumableForkInput`, which reports that it cannot carry the RANKING), and
+    // `fork` now dispatches to the heads strategy alone. So that call refused
+    // before writing anything, and every assertion below failed on its own
+    // denominator guard in milliseconds — the guards working exactly as intended.
+    //
+    // `action:'swarm'` is the tool's tree search now, and it is NOT what belongs
+    // here: it writes the same `search_nodes` rows, but it marks `terminal` per
+    // node that seals past its floor and never converges to one winner
+    // (`swarm-run.ts:980`). The durability assertion below — exactly one terminal
+    // node, so a later reader sees the winner this run picked — is an MCTS
+    // convergence property (`mcts/convergence.ts:146-153`). Re-pointing at swarm
+    // would have meant deleting that assertion, which is the opposite of the job.
+    const mcts = registry.get('mcts');
+    if (!mcts) throw new Error('mcts strategy is not registered');
 
-    await agents.execute(
-      { action: 'fork', task: EXPLORATION_TASK, settle: 'mcts' },
-      { toolCallId: 'eval-mcts-1', messages: [] },
-    );
+    await mcts.explore({
+      task: EXPLORATION_TASK,
+      mode: 'build',
+      rt,
+      model,
+      options: { mcts: { session: makeSessionWriter() } },
+      reportModelCall: makeModelCallSink(rt),
+    });
+
+    // The search's calls never reach this process as an SDK result, so the ledger
+    // the sink above wrote is the only place their usage exists. Reading it here
+    // is what stops this suite reporting `TOTAL: 0 model call(s)` over a search
+    // that spent real tokens — and if the sink ever stops being wired, this
+    // records an UNMEASURED EPISODE rather than a silent zero, which the tier's
+    // liveness verdict then refuses.
+    recordLiveModelEpisode(rt.storage.sql);
 
     const score = scoreExploration(rt.storage.sql);
     console.log(`    searches: ${String(score.competedRuns)}, branched: ${String(score.branchedRuns)}, `
