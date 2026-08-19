@@ -38,6 +38,7 @@
     "gate:policy-drift": "bun scripts/policy-drift.ts",
     "gate:skip-ratchet": "bun scripts/skip-ratchet.ts",
     "gate:typecheck-coverage": "bun scripts/typecheck-coverage.ts",
+    "test:mutation": "bun test packages/core/tests/mutation-*.test.ts",
     "test:eval": "bash scripts/eval-tier.sh",
     "ladder": "bun scripts/ladder.ts",
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",

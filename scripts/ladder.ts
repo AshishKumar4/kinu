@@ -767,6 +767,29 @@ export const LADDER: readonly Gate[] = [
       + 'unit-agents-tool.test.ts, so this gate deliberately does not build a tool.',
   },
   {
+    run: 'bun run test:mutation',
+    tier: 'commit',
+    seconds: 0.15,
+    catches: 'a policy decision inverted with nothing to notice. Seven of them — the archive '
+      + 'novelty floor and the nearest-occupant search beside it, `isBetter`\'s direction and '
+      + 'its strictness, the publication seal, the merge policy derived from settle, the cycle '
+      + 'scan that makes a refusal all-or-nothing, budget conservation, and the clamp\'s '
+      + 'head/tail split — are each mutated in an isolated copy of the module and the NAMED '
+      + 'test that defends them is required to fail against the mutant. Every one of the nine '
+      + 'mutations typechecks, throws nothing, and changes one comparison: measured 2026-08-19, '
+      + 'admitting a tie reports the re-record as `recorded, displaced: true`, skipping the '
+      + 'cycle scan reports `applied` where a refusal belongs, and giving the tail the whole '
+      + 'cap returns 1796 characters against a budget of 1400. A suite that only ever asserts '
+      + '"something was refused" is green through all nine, which is why this is a tier gate '
+      + 'and not a comment.',
+    blind: 'any decision not on the list, and the list is hand-written — nothing enumerates the '
+      + 'comparisons a policy module contains, so a new threshold arrives uncovered and this '
+      + 'gate stays green over it. It also proves only that ONE named test catches each '
+      + 'mutation, never that the mutation is the worst reading available, and a mutant that '
+      + 'merely crashed would satisfy a weaker harness: the rejection is required to be a '
+      + 'failed `expect` rather than any throw.',
+  },
+  {
     run: 'bun run gate:infra',
     tier: 'deploy',
     seconds: 43,
