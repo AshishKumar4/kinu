@@ -59,6 +59,7 @@ import type { CommandRegistry } from '@nimbus-sh/core/substrate/lifo/commands/re
 import type { Command } from '@nimbus-sh/core/substrate/lifo/commands/types.js';
 import type { ExecutorCapability } from '../execution/types';
 import { WORKSPACE_ROOT } from './workspace-path';
+import { renderThrownChain } from '../obs/index';
 
 /**
  * The capability names a workspace holding `runtimes` may honestly declare.
@@ -198,7 +199,7 @@ function provisioningStub(deps: {
       await deps.install();
     } catch (error) {
       ctx.stderr.write(`${deps.binName}: installing the ${deps.runtimeName} runtime failed: `
-        + `${error instanceof Error ? error.message : String(error)}\n`);
+        + `${renderThrownChain({ cause: error })}\n`);
       return 127;
     }
     const command = await deps.registry.resolve(deps.binName);

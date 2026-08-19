@@ -20,7 +20,7 @@ import { nanoid } from '../utils/nanoid';
 import type { WorkMode } from '../prompting/surface';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, renderThrownChain, toProteusError } from '../obs/index';
 
 /** The terminal error a non-recoverable job records when it is interrupted by a
  *  DO eviction (no durable checkpoint / not safe to re-run).
@@ -317,7 +317,7 @@ export class BackgroundJobRunner {
       // A kind the resumer can't re-drive is a clean interruption, not a crash:
       // record the same eviction message a non-resumable job always has.
       const error = err instanceof JobNotResumable ? EVICTION_INTERRUPT_ERROR
-        : err instanceof Error ? err.message : String(err);
+        : renderThrownChain({ cause: err });
       outcome = { ok: false, error };
     }
     this.controllers.delete(jobId);
@@ -346,7 +346,7 @@ export class BackgroundJobRunner {
     try {
       const job = this.deps.store.get(jobId);
       if (!job || job.status !== 'running') return true;
-      this.deps.store.fail(jobId, job.epoch, err instanceof Error ? err.message : String(err), Date.now());
+      this.deps.store.fail(jobId, job.epoch, renderThrownChain({ cause: err }), Date.now());
       this.notifySettled(jobId);
       return true;
     } catch (failErr) {

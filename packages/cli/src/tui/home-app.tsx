@@ -26,6 +26,7 @@ import { DeviceConnectOverlay, ModelPickerOverlay } from './overlays';
 import { clipText } from './format';
 import { useDeviceConnectPrompt } from './use-device-connect';
 import { tuiColors } from './theme';
+import { renderThrownChain } from '@proteus/core/obs';
 
 export type HomeTuiAction =
   | { type: 'open-agent'; name: string }
@@ -88,7 +89,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       .catch((err) => {
         if (cancelled) return;
         // A list that could not be refreshed must not read as the list itself.
-        setCloudSyncError(`Cloud workspaces could not be refreshed: ${err instanceof Error ? err.message : String(err)}`);
+        setCloudSyncError(`Cloud workspaces could not be refreshed: ${renderThrownChain({ cause: err })}`);
       });
     return () => { cancelled = true; };
   }, [cloudReady]);
@@ -125,7 +126,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       setModelPicker({ menu, loading: false, error: null });
     } catch (err) {
       if (modelPickerRequestRef.current !== request) return;
-      const detail = err instanceof Error ? err.message : String(err);
+      const detail = renderThrownChain({ cause: err });
       const current = defaultModel || 'provider default';
       const message = `Catalog unavailable: ${detail} Current default: ${current}. Esc keeps it.`;
       setCatalogHint('Catalog unavailable — the current default remains active.');
@@ -142,7 +143,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       setModelPicker(null);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(renderThrownChain({ cause: err }));
     }
   }, []);
 
@@ -152,7 +153,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       setReasoningEffortState(effort);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(renderThrownChain({ cause: err }));
     }
   }, []);
 
@@ -190,7 +191,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       if (created.mode === 'cloud') await deviceConnect.offerIfUnconnected();
       finishHome?.({ type: 'open-agent', name: created.name });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(renderThrownChain({ cause: err }));
       setBusy(false);
     }
   }, [busy, cloudReady, defaultModel, deviceConnect.offerIfUnconnected, draft, localReady, mode, opts, reasoningEffort, setupRequired]);

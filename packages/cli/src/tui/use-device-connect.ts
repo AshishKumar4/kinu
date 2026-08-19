@@ -14,6 +14,7 @@ import {
   dismissDeviceConnectPrompt,
   shouldOfferDeviceConnect,
 } from '../device-connect';
+import { renderThrownChain } from '@proteus/core/obs';
 
 export type DeviceConnectPromptState =
   | { phase: 'ask'; statusLine: string }
@@ -85,7 +86,7 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
         const outcome = describeConnectOutcome(result, session);
         update({ phase: 'result', ok: outcome.ok, message: outcome.message });
       } catch (err) {
-        update({ phase: 'result', ok: false, message: err instanceof Error ? err.message : String(err) });
+        update({ phase: 'result', ok: false, message: renderThrownChain({ cause: err }) });
       }
       lingerRef.current = setTimeout(close, RESULT_LINGER_MS);
     })();

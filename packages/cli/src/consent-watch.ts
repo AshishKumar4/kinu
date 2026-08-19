@@ -17,6 +17,7 @@ import type {
   PendingDeviceConsent,
 } from './agent-client';
 import { DIM, ERR, MUTED, WARN } from './display';
+import { renderThrownChain } from '@proteus/core/obs';
 
 const CONSENT_POLL_MS = 750;
 
@@ -75,7 +76,7 @@ export function watchDeviceConsents(
         try {
           await consents.resolve(consent.consentId, 'deny');
         } catch (err) {
-          opts.note('error', `Could not withdraw the PC access request — the device waits out its timeout: ${err instanceof Error ? err.message : String(err)}`);
+          opts.note('error', `Could not withdraw the PC access request — the device waits out its timeout: ${renderThrownChain({ cause: err })}`);
         }
         return;
       }
@@ -86,7 +87,7 @@ export function watchDeviceConsents(
       else opts.note('stale', 'That PC access request is no longer pending.');
     } catch (err) {
       if (!abort.signal.aborted) {
-        opts.note('error', err instanceof Error ? err.message : String(err));
+        opts.note('error', renderThrownChain({ cause: err }));
       }
     } finally {
       presenting = false;

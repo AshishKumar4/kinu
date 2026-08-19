@@ -18,6 +18,7 @@ import { stableStringify } from '../safety/argument-digest';
 import { parseJsonValue } from '../utils/json';
 import { LAYERS, type Layer, type LayerObservation } from './layers';
 import type { PipelineSubjects } from './subjects';
+import { renderThrownChain } from '../obs/index';
 
 /** Probe id → observation digest. */
 export type Baseline = Readonly<Record<string, string>>;
@@ -66,7 +67,7 @@ async function observeLayers<S>(
       try {
         value = await probe.observe(subjects);
       } catch (err) {
-        value = { threw: err instanceof Error ? err.message : String(err) };
+        value = { threw: renderThrownChain({ cause: err }) };
       }
       observations.set(probe.id, digest(value));
     }

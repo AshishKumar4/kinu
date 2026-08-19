@@ -17,6 +17,7 @@ import {
 } from "@plannotator/ui/utils/parser";
 import type { Rpc } from "@/lib/protocol";
 import { createPlanAnnotationSaveQueue } from "./plan-annotation-save";
+import { renderThrownChain } from "@proteus/core/obs";
 
 function annotationType(value: PlanReviewAnnotation["type"]): AnnotationType {
   if (value === "DELETION") return AnnotationType.DELETION;
@@ -108,7 +109,7 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
       return true;
     } catch (cause) {
       if (activePlanKey.current === planKey) {
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(renderThrownChain({ cause: cause }));
       }
       return false;
     }
@@ -175,7 +176,7 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
         setError(`Decision saved, but the next turn could not start${result.queueError ? `: ${result.queueError}` : "."}`);
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(renderThrownChain({ cause: cause }));
     } finally {
       decisionInFlight.current = false;
       setDecisionBusy(null);

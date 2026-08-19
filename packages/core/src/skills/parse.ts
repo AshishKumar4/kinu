@@ -27,6 +27,7 @@ import type { ParsedSkill, SkillParseResult, SkillSource } from './types';
 import { SkillError } from './types';
 import * as v from 'valibot';
 import type { JsonObject, JsonValue } from '../utils/json';
+import { renderThrownChain } from '../obs/index';
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const NAME_MAX_LEN = 64;
@@ -53,7 +54,7 @@ export function parseSkillFile(
     if (err instanceof MarkdownFrontmatterError) {
       return { ok: false, error: err.detail.message, line: err.detail.line };
     }
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: renderThrownChain({ cause: err }) };
   }
 
   if (Object.keys(doc.frontmatter).length === 0) {

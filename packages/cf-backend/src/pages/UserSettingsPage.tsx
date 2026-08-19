@@ -37,6 +37,7 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { CopyButton } from "@/components/ui/CopyButton";
 import * as v from "valibot";
+import { renderThrownChain } from '@proteus/core/obs';
 
 const ProviderCatalogEntrySchema = v.object({
   id: v.string(),
@@ -52,9 +53,6 @@ function providerCatalogEntry<Input>(input: Input): ProviderCatalogEntry | null 
   return parsed.success ? parsed.output : null;
 }
 
-function errorMessage<Thrown>(thrown: Thrown): string {
-  return thrown instanceof Error ? thrown.message : String(thrown);
-}
 
 interface Account {
   profile: UserProfile | null;
@@ -219,7 +217,7 @@ export default function UserSettingsPage() {
               onChange={async (spec) => {
                 setDefaultModel(spec);
                 try { await setConfig('default_model', spec); }
-                catch (err) { setDefaultModel(null); alert(errorMessage(err)); }
+                catch (err) { setDefaultModel(null); alert(renderThrownChain({ cause: err })); }
               }}
               clearable
               placeholder="(use system default)"
@@ -269,7 +267,7 @@ function DevicesCard() {
   const refreshDevices = useCallback(() => {
     listDevices().then(
       (roster) => { setDevices(roster); setRosterErr(null); },
-      (e) => { setRosterErr(`Could not list devices: ${errorMessage(e)}`); },
+      (e) => { setRosterErr(`Could not list devices: ${renderThrownChain({ cause: e })}`); },
     );
   }, []);
   useEffect(() => {
@@ -290,7 +288,7 @@ function DevicesCard() {
     setIssuing(true);
     setErr(null);
     try { const r = await registerDevice(); setInstall(r.installCommand); refreshDevices(); }
-    catch (e) { setErr(`Could not register device: ${errorMessage(e)}`); }
+    catch (e) { setErr(`Could not register device: ${renderThrownChain({ cause: e })}`); }
     finally { setIssuing(false); }
   }, [refreshDevices]);
 
@@ -298,7 +296,7 @@ function DevicesCard() {
     if (!confirm(`Revoke "${label}"? Agents lose access to this device immediately.`)) return;
     setErr(null);
     try { await revokeDevice(id); }
-    catch (e) { setErr(`Could not revoke device: ${errorMessage(e)}`); }
+    catch (e) { setErr(`Could not revoke device: ${renderThrownChain({ cause: e })}`); }
     refreshDevices();
   }, [refreshDevices]);
 
@@ -410,7 +408,7 @@ function CloudflareAccountSection({ status, onChanged }: {
     setSaving(true);
     setError(null);
     try { await selectCloudflareAccount(id); onChanged(); }
-    catch (e) { setError(errorMessage(e)); }
+    catch (e) { setError(renderThrownChain({ cause: e })); }
     finally { setSaving(false); }
   };
 
@@ -451,7 +449,7 @@ function CloudflareGatewaySection({ status, onChanged }: {
     setSaving(true);
     setError(null);
     try { await selectCloudflareGateway(id || null); onChanged(); }
-    catch (e) { setError(errorMessage(e)); }
+    catch (e) { setError(renderThrownChain({ cause: e })); }
     finally { setSaving(false); }
   };
 
@@ -541,17 +539,17 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
         } catch (e) {
           // Thrown = the poll request itself failed (network blip) — show it
           // but keep polling; the flow may still complete.
-          setError(errorMessage(e));
+          setError(renderThrownChain({ cause: e }));
         }
       }, Math.max(3, f.pollIntervalSec) * 1000);
     } catch (e) {
-      setError(errorMessage(e));
+      setError(renderThrownChain({ cause: e }));
     }
   }, [onChanged]);
 
   const disconnect = useCallback(async () => {
     if (!confirm('Disconnect ChatGPT? All your agents will lose access to Codex models.')) return;
-    try { await disconnectCodex(); onChanged(); } catch (e) { setError(errorMessage(e)); }
+    try { await disconnectCodex(); onChanged(); } catch (e) { setError(renderThrownChain({ cause: e })); }
   }, [onChanged]);
 
   if (status?.connected) {
@@ -618,7 +616,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
 
   const remove = useCallback(async (key: string, name: string) => {
     if (!confirm(`Remove the saved API key for "${name}"?`)) return;
-    try { await deleteCredential(key); onChanged(); } catch (e) { alert(errorMessage(e)); }
+    try { await deleteCredential(key); onChanged(); } catch (e) { alert(renderThrownChain({ cause: e })); }
   }, [onChanged]);
 
   // Connect-a-provider form — any models.dev catalog provider, searchable.
@@ -637,7 +635,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       setApiKey('');
       onChanged();
     } catch (e) {
-      alert(errorMessage(e));
+      alert(renderThrownChain({ cause: e }));
     } finally {
       setSavingKey(null);
     }
@@ -660,7 +658,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       setCompatName(''); setCompatBaseURL(''); setCompatApiKey('');
       onChanged();
     } catch (e) {
-      alert(errorMessage(e));
+      alert(renderThrownChain({ cause: e }));
     } finally {
       setSavingKey(null);
     }

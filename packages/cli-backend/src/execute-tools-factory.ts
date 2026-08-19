@@ -26,7 +26,7 @@ import type {
   ExecutorProvider,
   JsonValue,
 } from '@proteus/core';
-import { diagnostics, toProteusError } from '@proteus/core/obs';
+import { diagnostics, renderThrownChain, toProteusError } from '@proteus/core/obs';
 import { decodeJsonValue, explainNativeToolReferenceError, renderExecuteToolsDescription } from '@proteus/core';
 import { tool, jsonSchema } from 'ai';
 import { addImplicitReturn } from './executor';
@@ -150,7 +150,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           // into an actionable correction, same as the CF codemode sandbox.
           const payload: ExecuteFailure = {
             result: undefined,
-            error: explainNativeToolReferenceError(errorMessage({ error })),
+            error: explainNativeToolReferenceError(renderThrownChain({ cause: error })),
           };
           if (logs.length > 0) payload.logs = logs;
           return payload;
@@ -227,6 +227,3 @@ function readAbortSignal(input: { options: unknown }): AbortSignal | undefined {
   return parsed.success ? parsed.output.abortSignal : undefined;
 }
 
-function errorMessage(input: { error: unknown }): string {
-  return input.error instanceof Error ? input.error.message : String(input.error);
-}

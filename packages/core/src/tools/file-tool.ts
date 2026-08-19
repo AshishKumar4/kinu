@@ -29,6 +29,7 @@ import { applyFileEdits, readFileSlice, BOM, type FileEdit } from './file-edit';
 import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from './file-ledger';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS } from './clamp';
 import type { JsonValue } from '../utils/json';
+import { renderThrownChain } from '../obs/index';
 
 export interface FileToolDeps {
   /** The agent's canonical workspace filesystem (rt.storage.vfs). */
@@ -90,7 +91,7 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
 }> {
   const err = input.error;
   if (!isVfsError(err)) {
-    return { reason: 'io', error: `${action} ${path} failed: ${err instanceof Error ? err.message : String(err)}` };
+    return { reason: 'io', error: `${action} ${path} failed: ${renderThrownChain({ cause: err })}` };
   }
   const reason: FileEditOutcomeReason = err.code === 'ENOENT' ? 'missing' : 'io';
   // ENOENT and EISDIR are the model's own addressing mistakes, and the hint

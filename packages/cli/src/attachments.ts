@@ -14,7 +14,7 @@ import { stat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
 import type { PromptFile } from '@proteus/core';
-import { tolerateAsync } from '@proteus/core/obs';
+import { renderThrownChain, tolerateAsync } from '@proteus/core/obs';
 import { formatBytes } from './display';
 
 /** File types worth inlining as model-visible parts. Everything else is
@@ -171,7 +171,7 @@ export async function resolvePromptAttachments(
       attached.push({ path: found.path, filename, mediaType, size: found.size });
       inlineBudget -= found.size;
     } catch (err) {
-      errors.push(`Could not read ${filename}: ${err instanceof Error ? err.message : String(err)}`);
+      errors.push(`Could not read ${filename}: ${renderThrownChain({ cause: err })}`);
     }
   }
 

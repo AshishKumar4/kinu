@@ -170,7 +170,7 @@ function recordingTool<Entry extends ToolSet[string]>(
         capture.recordToolCall(name, args, projectJsonValue({ value: result }));
         return result;
       } catch (err) {
-        capture.recordToolCall(name, args, `error: ${err instanceof Error ? err.message : String(err)}`);
+        capture.recordToolCall(name, args, `error: ${renderThrownChain({ cause: err })}`);
         throw err;
       }
     },

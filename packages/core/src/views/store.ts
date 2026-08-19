@@ -15,6 +15,7 @@ import * as v from 'valibot';
 import { ensureDir } from '../utils/vfs-helpers';
 import { VIEW_LIMITS, parseViewSpec, type ViewSpec } from './spec';
 import { parseJsonValue, type JsonValue } from '../utils/json';
+import { renderThrownChain } from '../obs/index';
 
 export interface ViewStoreDeps {
   vfs: VFS;
@@ -198,7 +199,7 @@ export async function readView(deps: ViewStoreDeps, slug: string): Promise<ReadV
   try {
     raw = await readJson(deps.vfs, livePath(slug));
   } catch (err) {
-    return { ok: false, error: `View "${slug}" could not be read: ${errText(err)}` };
+    return { ok: false, error: `View "${slug}" could not be read: ${renderThrownChain({ cause: err })}` };
   }
 
   const parsed = parseViewSpec(raw);
@@ -256,14 +257,14 @@ export async function revertView(
     const raw = await deps.vfs.readFile(versionPath(slug, target), { encoding: 'utf8' });
     restored = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
   } catch (err) {
-    return { ok: false, error: `Version ${target} of "${slug}" is unreadable: ${errText(err)}` };
+    return { ok: false, error: `Version ${target} of "${slug}" is unreadable: ${renderThrownChain({ cause: err })}` };
   }
 
   let restoredValue: JsonValue;
   try {
     restoredValue = parseJsonValue(restored);
   } catch (err) {
-    return { ok: false, error: `Version ${target} of "${slug}" is not JSON: ${errText(err)}` };
+    return { ok: false, error: `Version ${target} of "${slug}" is not JSON: ${renderThrownChain({ cause: err })}` };
   }
   const parsed = parseViewSpec(restoredValue);
   if (!parsed.ok) return { ok: false, error: `Version ${target} no longer validates: ${parsed.error}` };
@@ -274,6 +275,3 @@ export async function revertView(
   return { ok: true, revertedTo: target };
 }
 
-function errText<E>(err: E): string {
-  return err instanceof Error ? err.message : String(err);
-}

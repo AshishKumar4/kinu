@@ -50,7 +50,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics } from '../obs/index';
+import { diagnostics, renderThrownChain } from '../obs/index';
 import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import {
   delegationDepthRefusal,
@@ -1233,7 +1233,7 @@ export async function dispatchAgentsAction(
         });
     }
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    return { error: renderThrownChain({ cause: err }) };
   }
 }
 
@@ -1298,7 +1298,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
       } catch (error) {
         // Reason FIRST, the vocabulary every refusal on this surface uses: a call
         // the parse refused is bad input, not a tool that broke.
-        return { reason: 'bad_input', error: error instanceof Error ? error.message : String(error) };
+        return { reason: 'bad_input', error: renderThrownChain({ cause: error }) };
       }
       return dispatchAgentsAction(deps, parsed, toolOptions);
     },

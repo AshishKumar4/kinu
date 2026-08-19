@@ -49,6 +49,7 @@ export {
   ProteusError,
   refusalOf,
   renderCauseChain,
+  renderThrownChain,
   toProteusError,
   type ErrorCode,
   type Refusal,

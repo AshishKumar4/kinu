@@ -20,6 +20,7 @@
 
 import { argumentDigest, type SqlExec } from '@proteus/core';
 import * as v from 'valibot';
+import { renderThrownChain } from '@proteus/core/obs';
 
 const EmailAddressSchema = v.object({ email: v.string(), name: v.string() });
 const OutboundEmailMessageSchema = v.object({
@@ -175,7 +176,7 @@ export class EmailOutbox {
       );
       return { status: 'sent', messageId };
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+      const error = renderThrownChain({ cause: err });
       await this.recordFailure(key, error, now);
       return { status: 'failed', messageId, error };
     }

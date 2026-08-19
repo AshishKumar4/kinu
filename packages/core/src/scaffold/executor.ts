@@ -45,6 +45,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from '../utils/json';
+import { renderThrownChain } from '../obs/index';
 
 type SandboxFunction = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
 interface SandboxFunctions {
@@ -276,9 +277,6 @@ const HistoryQuerySchema = v.object({
   maxChars: v.optional(v.number()),
 });
 
-function errorMessage(input: { error: unknown }): string {
-  return input.error instanceof Error ? input.error.message : String(input.error);
-}
 
 /** Build the codemode provider that bridges scaffold ↔ host. */
 function buildHostProvider(opts: {
@@ -323,7 +321,7 @@ function buildHostProvider(opts: {
         await pushEvent({ type: 'tool_result', toolCallId: callId, result });
         return result;
       } catch (err) {
-        const msg = errorMessage({ error: err });
+        const msg = renderThrownChain({ cause: err });
         await pushEvent({ type: 'tool_result', toolCallId: callId, result: { error: msg } });
         return { error: msg };
       }
@@ -342,7 +340,7 @@ function buildHostProvider(opts: {
         }
         return acc;
       } catch (err) {
-        const msg = errorMessage({ error: err });
+        const msg = renderThrownChain({ cause: err });
         await pushEvent({ type: 'error', message: `llmStream failed: ${msg}` });
         return { error: msg };
       }
@@ -362,7 +360,7 @@ function buildHostProvider(opts: {
         }
         return 'done';
       } catch (err) {
-        const msg = errorMessage({ error: err });
+        const msg = renderThrownChain({ cause: err });
         await pushEvent({ type: 'error', message: `defaultInference failed: ${msg}` });
         return { error: msg };
       }
@@ -376,14 +374,14 @@ function buildHostProvider(opts: {
         assertJsonValue(page);
         return page.value;
       } catch (err) {
-        return { error: errorMessage({ error: err }) };
+        return { error: renderThrownChain({ cause: err }) };
       }
     },
     readMemory: async (...args: unknown[]) => {
       const path = v.safeParse(v.string(), args[0]);
       if (!path.success) return { error: 'host.readMemory: path must be a string' };
       try { return await readMemory(path.output); }
-      catch (err) { return { error: errorMessage({ error: err }) }; }
+      catch (err) { return { error: renderThrownChain({ cause: err }) }; }
     },
     appendMemory: async (...args: unknown[]) => {
       const path = v.safeParse(v.string(), args[0]);
@@ -392,7 +390,7 @@ function buildHostProvider(opts: {
         return { error: 'host.appendMemory: path and content must be strings' };
       }
       try { await appendMemory(path.output, content.output); return 'appended'; }
-      catch (err) { return { error: errorMessage({ error: err }) }; }
+      catch (err) { return { error: renderThrownChain({ cause: err }) }; }
     },
   } satisfies Record<string, (...args: unknown[]) => Promise<JsonValue | undefined>>;
 
@@ -425,7 +423,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   try {
     code = scaffoldCodeOverride ?? (await rt.identity.scaffold.read());
   } catch (err) {
-    const msg = `scaffold read failed: ${errorMessage({ error: err })}`;
+    const msg = `scaffold read failed: ${renderThrownChain({ cause: err })}`;
     await emit({ type: 'error', message: msg });
     return {
       ok: false, doneEmitted: false, emitCount: 0, events: [], durationMs: Date.now() - startedAt, error: msg,

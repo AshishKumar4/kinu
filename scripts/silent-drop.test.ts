@@ -60,7 +60,7 @@ export function readCredential(read: () => string): string | null {
 `,
   },
   message_only: {
-    seenAt: 'the 26 local copies of `errorMessage`, e.g. packages/cf-backend/src/mcp-server.ts',
+    seenAt: '176 inline sites across 89 files at 2b7b020f, e.g. packages/core/src/eval/runner.ts',
     bad: `declare const log: { warn: (m: string) => void };
 export function save(write: () => void): void {
   try {
@@ -78,6 +78,19 @@ export function save(write: () => void): void {
   } catch (error) {
     log.warn(\`save failed: \${renderThrownChain({ cause: error })}\`);
   }
+}
+`,
+  },
+  projecting_helper: {
+    seenAt: '26 files at 2b7b020f, under eight names — errorMessage, errorText, '
+      + 'formatMcpError, describe, reasonText, errText, providerFailureReason, message',
+    bad: `export function errorMessage<Thrown>(thrown: Thrown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
+}
+`,
+    good: `declare const renderThrownChain: (input: { cause: unknown }) => string;
+export function errorMessage<Thrown>(thrown: Thrown): string {
+  return renderThrownChain({ cause: thrown });
 }
 `,
   },
@@ -181,6 +194,47 @@ const load = async (): Promise<void> => {
 };
 export function mount(): void { void load(); }
 `)).toEqual(['message_only']);
+  });
+
+  test('containment is about the awaits, not the shape of the body', () => {
+    // The React spelling: two state calls, then the try. An earlier draft demanded
+    // the whole body BE the try and reported 19 of these.
+    expect(classesIn(`declare const setLoading: (v: boolean) => void;
+declare const setError: (m: string | null) => void;
+declare const fetchRows: () => Promise<void>;
+const load = async (): Promise<void> => {
+  setLoading(true);
+  setError(null);
+  try { await fetchRows(); } catch (error) { setError(renderThrownChain({ cause: error })); }
+  finally { setLoading(false); }
+};
+export function mount(): void { void load(); }
+`)).toEqual([]);
+  });
+
+  test('an await OUTSIDE the guarded try is still a floating rejection', () => {
+    // The other direction of the same judgement: containment must not be granted
+    // by the mere PRESENCE of a try somewhere in the body.
+    expect(classesIn(`declare const setError: (m: string) => void;
+declare const fetchRows: () => Promise<void>;
+declare const commit: () => Promise<void>;
+const load = async (): Promise<void> => {
+  try { await fetchRows(); } catch (error) { setError(renderThrownChain({ cause: error })); }
+  await commit();
+};
+export function mount(): void { void load(); }
+`)).toEqual(['voided_promise']);
+  });
+
+  test('a typed `.message` field that is not an error is not a dropped chain', () => {
+    // 11 of the first 15 `projecting_helper` findings were this: valibot issues,
+    // chat events and timeline rows all carry a `message`, and reading one is not
+    // flattening an error. The function has to say it is handling an error.
+    expect(classesIn(`import * as v from 'valibot';
+export function reasons(issues: readonly v.BaseIssue<unknown>[]): readonly string[] {
+  return issues.map((issue) => issue.message);
+}
+`)).toEqual([]);
   });
 
   test('a one-statement sentinel handler is left to no-sentinel-catch', () => {

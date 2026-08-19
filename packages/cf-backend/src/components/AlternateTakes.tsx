@@ -22,6 +22,7 @@ import { MarkdownContent } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { TranscriptBody, useNodeTranscript } from "@/components/NodeTranscript";
 import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "./alternate-takes-logic";
+import { renderThrownChain } from "@proteus/core/obs";
 
 export function TakesChip({ set, onPick }: {
   set: AlternateTakeSet;
@@ -86,7 +87,7 @@ function TakesComparison({ set, onPick, onClose }: {
         onClose();
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(renderThrownChain({ cause: e }));
     } finally {
       setBusy(false);
     }

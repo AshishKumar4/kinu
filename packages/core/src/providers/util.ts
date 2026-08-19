@@ -5,6 +5,7 @@ import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './t
 import { asFetchFunction } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import * as v from 'valibot';
+import { renderThrownChain } from '../obs/index';
 
 export interface AuthedFetchOptions {
   /** Credential key passed to the AuthResolver on every request. */
@@ -163,7 +164,7 @@ function jsonOrString<T>(value: T): string {
     const json = JSON.stringify(value);
     if (json !== undefined) return json;
   } catch (error) {
-    thrownReason = error instanceof Error ? error.message : String(error);
+    thrownReason = renderThrownChain({ cause: error });
   }
   const record = v.safeParse(v.record(v.string(), v.unknown()), value);
   if (record.success) {

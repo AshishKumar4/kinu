@@ -36,6 +36,7 @@ import type { TimerTrigger } from '../events/ingress/triggers';
 import { nanoid } from '../utils/nanoid';
 import { TOOL_REACH } from './registry';
 import { decodeJsonValue, JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { renderThrownChain } from '../obs/index';
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
@@ -192,9 +193,6 @@ const ScheduleOptionsSchema = v.object({
   budget_label: v.optional(v.string()),
 });
 
-function errorMessage(input: { error: unknown }): string {
-  return input.error instanceof Error ? input.error.message : String(input.error);
-}
 
 export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
   return {
@@ -209,7 +207,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           if (!parsed.success) return { error: 'agent.proposeCurriculum: count must be a number when given' };
           const count = parsed.output;
           try { return await host.proposeCurriculumTasks(count); }
-          catch (err) { return { error: `agent.proposeCurriculum: ${errorMessage({ error: err })}` }; }
+          catch (err) { return { error: `agent.proposeCurriculum: ${renderThrownChain({ cause: err })}` }; }
         },
       },
       listCurriculum: {
@@ -219,7 +217,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           if (!parsed.success) return { error: 'agent.listCurriculum: invalid status' };
           const status = parsed.output;
           try { return await host.listCurriculumTasks(status); }
-          catch (err) { return { error: `agent.listCurriculum: ${errorMessage({ error: err })}` }; }
+          catch (err) { return { error: `agent.listCurriculum: ${renderThrownChain({ cause: err })}` }; }
         },
       },
       acceptCurriculumTask: {
@@ -228,7 +226,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
           if (!parsed.success) return { error: 'agent.acceptCurriculumTask: id must be a non-empty string' };
           try { return await host.setCurriculumTaskStatus(parsed.output, 'accepted'); }
-          catch (err) { return { error: `agent.acceptCurriculumTask: ${errorMessage({ error: err })}` }; }
+          catch (err) { return { error: `agent.acceptCurriculumTask: ${renderThrownChain({ cause: err })}` }; }
         },
       },
       proposeScaffold: {
@@ -242,7 +240,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           const parsedBase = v.safeParse(OptionalBaseVersionSchema, baseVersion);
           if (!parsedBase.success) return { error: 'agent.proposeScaffold: baseVersion must be a non-negative integer when given' };
           try { return await host.proposeScaffold(parsedRationale.output, parsedCode.output, parsedBase.output); }
-          catch (err) { return { error: `agent.proposeScaffold: ${errorMessage({ error: err })}` }; }
+          catch (err) { return { error: `agent.proposeScaffold: ${renderThrownChain({ cause: err })}` }; }
         },
       },
       scaffoldVersions: {
@@ -251,7 +249,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           const parsed = v.safeParse(OptionalNumberSchema, args[0]);
           if (!parsed.success) return { error: 'agent.scaffoldVersions: limit must be a number when given' };
           try { return await host.listScaffoldVersions(parsed.output); }
-          catch (err) { return { error: `agent.scaffoldVersions: ${errorMessage({ error: err })}` }; }
+          catch (err) { return { error: `agent.scaffoldVersions: ${renderThrownChain({ cause: err })}` }; }
         },
       },
       schedule: {
@@ -280,7 +278,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
               });
             if (budget) result.budget = decodeJsonValue({ value: budget });
             return result;
-          } catch (err) { return { error: `agent.schedule: ${errorMessage({ error: err })}` }; }
+          } catch (err) { return { error: `agent.schedule: ${renderThrownChain({ cause: err })}` }; }
         },
       },
       budget: {
@@ -289,7 +287,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           const parsed = v.safeParse(v.optional(v.string()), args[0]);
           if (!parsed.success) return { error: 'agent.budget: label must be a string when given' };
           try { return host.budget.snapshot(parsed.output); }
-          catch (err) { return { error: `agent.budget: ${errorMessage({ error: err })}` }; }
+          catch (err) { return { error: `agent.budget: ${renderThrownChain({ cause: err })}` }; }
         },
       },
       cancelSchedule: {
@@ -298,7 +296,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
           if (!parsed.success) return { error: 'agent.cancelSchedule: id must be a non-empty string' };
           try { return await host.cancelTrigger(parsed.output); }
-          catch (err) { return { error: `agent.cancelSchedule: ${errorMessage({ error: err })}` }; }
+          catch (err) { return { error: `agent.cancelSchedule: ${renderThrownChain({ cause: err })}` }; }
         },
       },
       jobResult: {
@@ -307,7 +305,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
           if (!parsed.success) return { error: 'agent.jobResult: jobId must be a non-empty string' };
           try { return formatJobRead(await host.jobResult(parsed.output)); }
-          catch (err) { return { error: `agent.jobResult: ${errorMessage({ error: err })}` }; }
+          catch (err) { return { error: `agent.jobResult: ${renderThrownChain({ cause: err })}` }; }
         },
       },
       backgroundJobs: {
@@ -316,7 +314,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           const parsed = v.safeParse(OptionalNumberSchema, args[0]);
           if (!parsed.success) return { error: 'agent.backgroundJobs: limit must be a number when given' };
           try { return await host.listBackgroundJobs(parsed.output); }
-          catch (err) { return { error: `agent.backgroundJobs: ${errorMessage({ error: err })}` }; }
+          catch (err) { return { error: `agent.backgroundJobs: ${renderThrownChain({ cause: err })}` }; }
         },
       },
       compactNow: {
@@ -325,7 +323,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           try {
             host.armCompactNow();
             return { armed: true, appliesAt: 'next-turn-assembly' };
-          } catch (err) { return { error: `agent.compactNow: ${errorMessage({ error: err })}` }; }
+          } catch (err) { return { error: `agent.compactNow: ${renderThrownChain({ cause: err })}` }; }
         },
       },
       replayEvals: {
@@ -334,7 +332,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           const parsed = v.safeParse(OptionalNumberSchema, args[0]);
           if (!parsed.success) return { error: 'agent.replayEvals: limit must be a number when given' };
           try { return await host.getReplayEvals(parsed.output); }
-          catch (err) { return { error: `agent.replayEvals: ${errorMessage({ error: err })}` }; }
+          catch (err) { return { error: `agent.replayEvals: ${renderThrownChain({ cause: err })}` }; }
         },
       },
     },

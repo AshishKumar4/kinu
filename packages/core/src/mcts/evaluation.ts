@@ -71,7 +71,7 @@ import type { LLM, Executor } from '../types/primitives';
 import type { EvaluationGrounding } from '../types/evaluation';
 import { fencedBlocks, readProposalCode } from '../execution/code-fence';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
-import { tolerate } from '../obs/index';
+import { renderThrownChain, tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { DEFAULT_CONFIG, TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 
@@ -516,7 +516,7 @@ export async function runForVerdict(
       const { error } = await executor.execute(source, [], { language });
       return error ?? null;
     } catch (e) {
-      return e instanceof Error ? e.message : String(e);
+      return renderThrownChain({ cause: e });
     }
   };
 

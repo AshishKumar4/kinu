@@ -18,6 +18,7 @@ import type { VFS } from '../types/primitives';
 import { nanoid } from '../utils/nanoid';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
 import { assertJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
+import { renderThrownChain } from '../obs/index';
 
 /** Workspace VFS directory full outputs are offloaded to. */
 export const TOOL_OUTPUT_DIR = SPILL_DIRS.toolOutput;
@@ -165,7 +166,7 @@ function normalizeToolOutput(input: { output: unknown }): JsonValue | undefined 
       const serialized = JSON.stringify(input.output);
       if (serialized !== undefined) return parseJsonValue(serialized);
     } catch (error) {
-      return `unserializable tool output: ${error instanceof Error ? error.message : String(error)}`;
+      return `unserializable tool output: ${renderThrownChain({ cause: error })}`;
     }
     return String(input.output);
   }

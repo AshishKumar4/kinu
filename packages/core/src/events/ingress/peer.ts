@@ -49,6 +49,7 @@ import {
   JsonValueSchema, parseJsonObject,
   type JsonObject, type JsonValue,
 } from '../../utils/json';
+import { renderThrownChain } from '../../obs/index';
 
 // ── Wire shapes ──────────────────────────────────────────────────
 
@@ -212,7 +213,7 @@ export async function receivePeerMessage(
     if (admitted && msg.reply_expected) deps.openPeerBackChannel?.(id, msg);
     return { admitted, event_id: id };
   } catch (err) {
-    return { admitted: false, reason: err instanceof Error ? err.message : String(err) };
+    return { admitted: false, reason: renderThrownChain({ cause: err }) };
   }
 }
 
@@ -506,7 +507,7 @@ export class PeerHub {
             );
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = renderThrownChain({ cause: err });
           const attempts = row.attempt_count + 1;
           if (attempts >= MAX_DELIVERY_ATTEMPTS) {
             this.deps.sql.exec(

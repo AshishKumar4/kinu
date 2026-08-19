@@ -13,6 +13,7 @@
 
 import { normalizePath } from '@proteus/agent-utils';
 import type { VFS } from '../types/primitives';
+import { renderThrownChain } from '../obs/index';
 
 /** Just enough of the router to find one executor's files, and to ask that
  *  environment where its own relative paths resolve. */
@@ -155,7 +156,7 @@ export async function getExecutorFiles(
     }
     return { path: dir, entries: sortDirEntries(entries) };
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    return { error: renderThrownChain({ cause: err }) };
   }
 }
 
@@ -178,7 +179,7 @@ export async function readExecutorFile(
     if (text.length > MAX_VIEWABLE_BYTES) return { content: text.slice(0, MAX_VIEWABLE_BYTES), truncated: true };
     return { content: text };
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    return { error: renderThrownChain({ cause: err }) };
   }
 }
 
@@ -204,6 +205,6 @@ export async function writeExecutorFileOp(
     await vfs.writeFile(path, bytes);
     return { ok: true };
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    return { error: renderThrownChain({ cause: err }) };
   }
 }

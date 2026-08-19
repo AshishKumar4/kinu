@@ -8,6 +8,7 @@ import { JsonObjectSchema, mcpToolKey } from '@proteus/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import * as v from 'valibot';
+import { renderThrownChain } from '@proteus/core/obs';
 
 /**
  * Startup budget — spawning the child and listing its tools happens inside a
@@ -100,7 +101,7 @@ export async function connectMcpServers(
               );
               return formatMcpResult(res);
             } catch (err) {
-              return `mcp error: ${err instanceof Error ? err.message : String(err)}`;
+              return `mcp error: ${renderThrownChain({ cause: err })}`;
             }
           },
         });
@@ -113,11 +114,11 @@ export async function connectMcpServers(
       // on the half-open transport is a second, different fact — a child process
       // still running — so it is appended to the reason instead of dropped,
       // which is what made a leaked server read as a clean skip.
-      const reasons = [formatMcpError({ error: err })];
+      const reasons = [renderThrownChain({ cause: err })];
       try {
         await client.close();
       } catch (closeError) {
-        reasons.push(`closing it also failed: ${formatMcpError({ error: closeError })}`);
+        reasons.push(`closing it also failed: ${renderThrownChain({ cause: closeError })}`);
       }
       const reason = reasons.join('; ');
       const stderrText = stderr.trim();
@@ -166,6 +167,3 @@ function formatMcpResult(res: McpToolResult): string {
   return (res?.isError ? 'MCP tool error: ' : '') + (text || '(no output)');
 }
 
-function formatMcpError(input: { error: unknown }): string {
-  return input.error instanceof Error ? input.error.message : String(input.error);
-}

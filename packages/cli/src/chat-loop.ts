@@ -32,6 +32,7 @@ import {
   printToolCall, printToolResult, printEvolutionEvent, createTypingIndicator, formatFailure,
   ACCENT, DIM, MUTED, ERR, OK, WARN,
 } from './display';
+import { renderThrownChain } from '@proteus/core/obs';
 
 export interface ChatLoopOpts {
   client: AgentClient;
@@ -391,7 +392,7 @@ async function runDeviceConnect(session: boolean): Promise<void> {
     const outcome = describeConnectOutcome(result, session);
     console.log(`  ${outcome.ok ? OK('✓') : ERR('✗')} ${outcome.message}`);
   } catch (err) {
-    console.log(`  ${ERR('✗')} ${err instanceof Error ? err.message : String(err)}`);
+    console.log(`  ${ERR('✗')} ${renderThrownChain({ cause: err })}`);
   }
 }
 

@@ -38,6 +38,7 @@ import { errorResponse } from '../providers/cloudflare-ai-fetch';
 import { json } from '../lib/http';
 import { ownerCaller, type UserCaller } from './workspace-capability';
 import { validateCredentialKey } from './validate';
+import { renderCauseChain } from '@proteus/core/obs';
 
 export const USER_AI_PROXY_FORWARD_PREFIX = PROVIDER_PROXY_PATH;
 
@@ -119,7 +120,7 @@ async function forwardUpstream(
   if (!credKey) return errorResponse(400, `${PROXY_CRED_HEADER} is required — name the credential to attach.`);
   if (!target) return errorResponse(400, `${PROXY_TARGET_HEADER} is required — name the upstream URL.`);
   try { validateCredentialKey(credKey); }
-  catch (err) { return errorResponse(400, err instanceof Error ? err.message : 'Invalid credential key.'); }
+  catch (err) { return errorResponse(400, err instanceof Error ? renderCauseChain(err) : 'Invalid credential key.'); }
   if (PROXY_DENIED_CRED_KEYS.includes(credKey)) {
     return errorResponse(403, `${credKey} is not served by this proxy — Cloudflare-backed models go through /api/user/ai/v1, and Codex must be connected on the machine that uses it.`);
   }

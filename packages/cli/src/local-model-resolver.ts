@@ -6,6 +6,7 @@ import {
   resolveLLMConfig,
   resolveProviderCredentials,
 } from './config';
+import { renderThrownChain } from '@proteus/core/obs';
 
 export interface LocalModelResolverOptions {
   model?: string;
@@ -51,7 +52,7 @@ export async function findUnusableModel(opts: LocalModelResolverOptions = {}): P
     // null said "usable", and the workspace then died on its first turn with this very error.
     return {
       spec: opts.model ?? 'The configured model',
-      reason: error instanceof Error ? error.message : String(error),
+      reason: renderThrownChain({ cause: error }),
     };
   }
   const info = (await resolver.listProviders()).find((entry) => entry.id === provider);

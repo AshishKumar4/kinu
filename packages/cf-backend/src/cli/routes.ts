@@ -21,6 +21,7 @@ import { handleUserAIProxyRequest } from '../user/ai-proxy';
 import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '../user/workspace-capability';
 import * as v from 'valibot';
+import { renderThrownChain } from '@proteus/core/obs';
 
 const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
 const WebhookRequestSchema = v.object({
@@ -194,7 +195,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
       await cli.userDO.removeWorkspace(await ownerCaller(env), name, cli.userId);
       return json({ ok: true });
     } catch (e) {
-      return err(400, e instanceof Error ? e.message : String(e));
+      return err(400, renderThrownChain({ cause: e }));
     }
   }
 
@@ -236,7 +237,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
         rate_limit_per_min: body.rate_limit_per_min,
       }), { status: 201 });
     } catch (e) {
-      return err(400, e instanceof Error ? e.message : String(e));
+      return err(400, renderThrownChain({ cause: e }));
     }
   }
 
@@ -263,12 +264,12 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     if (method === 'POST') {
       const body = await safeJson(request, JsonValueSchema);
       try { await cli.userDO.setCredential(await ownerCaller(env), key, body); }
-      catch (e) { return err(400, e instanceof Error ? e.message : String(e)); }
+      catch (e) { return err(400, renderThrownChain({ cause: e })); }
       return json({ ok: true }, { status: 201 });
     }
     if (method === 'DELETE') {
       try { await cli.userDO.deleteCredential(await ownerCaller(env), key); }
-      catch (e) { return err(400, e instanceof Error ? e.message : String(e)); }
+      catch (e) { return err(400, renderThrownChain({ cause: e })); }
       return json({ ok: true });
     }
   }
@@ -325,7 +326,7 @@ async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity,
   } catch (e) {
     // Same contract as a websocket rpc-error frame: the thrown message goes
     // back to the caller as a request-level failure.
-    return err(400, e instanceof Error ? e.message : String(e));
+    return err(400, renderThrownChain({ cause: e }));
   }
 }
 
@@ -1032,7 +1033,7 @@ exec bun run packages/cli/bin/cli.ts "$@"
 function cliAuthError(e: Error): Response {
   if (e instanceof RateLimitError) return err(429, e.message);
   if (e instanceof CliAuthCodeError) return err(400, e.message);
-  return err(500, e instanceof Error ? e.message : String(e));
+  return err(500, renderThrownChain({ cause: e }));
 }
 
 function accessError(e: Error, request?: Request): Response {
@@ -1048,7 +1049,7 @@ function accessError(e: Error, request?: Request): Response {
     }
     return err(e.status, e.message);
   }
-  return err(500, e instanceof Error ? e.message : String(e));
+  return err(500, renderThrownChain({ cause: e }));
 }
 
 function html(title: string, body: string, status = 200, init: ResponseInit = {}): Response {

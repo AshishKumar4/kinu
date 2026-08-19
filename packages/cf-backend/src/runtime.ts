@@ -42,7 +42,7 @@ import {
   type VectorStore,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
-import { diagnostics, toProteusError } from "@proteus/core/obs";
+import { diagnostics, renderThrownChain, toProteusError } from "@proteus/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
 import { configureContainerEgress, withConfiguredEgress } from "./egress/configure";
 import { previewHostSuffix } from "./lib/preview-origin";
@@ -799,7 +799,7 @@ function createExecutor(loader: WorkerLoader): Executor {
         if (res.logs !== undefined) output.logs = res.logs;
         return output;
       } catch (e) {
-        return { result: undefined, error: e instanceof Error ? e.message : String(e) };
+        return { result: undefined, error: renderThrownChain({ cause: e }) };
       }
     },
   };

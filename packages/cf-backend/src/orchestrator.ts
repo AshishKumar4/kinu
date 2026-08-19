@@ -183,7 +183,7 @@ import {
   type DeferredApprovalNotice, type ApprovalGrant,
 } from "@proteus/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@proteus/core";
-import { diagnostics, toProteusError } from "@proteus/core/obs";
+import { diagnostics, renderThrownChain, toProteusError } from "@proteus/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route';
@@ -407,7 +407,7 @@ export class OrchestratorAgent extends ActorAgent {
             }));
             return { delivered: true };
           } catch (err) {
-            return { delivered: false, detail: err instanceof Error ? err.message : String(err) };
+            return { delivered: false, detail: renderThrownChain({ cause: err }) };
           }
         },
       };
@@ -1376,7 +1376,7 @@ export class OrchestratorAgent extends ActorAgent {
         ok: true,
         plan,
         queued: false,
-        queueError: error instanceof Error ? error.message : String(error),
+        queueError: renderThrownChain({ cause: error }),
       };
     }
   }
@@ -3013,7 +3013,7 @@ export class OrchestratorAgent extends ActorAgent {
 
       return { stdout, stderr: isError ? stdout : '', exitCode: isError ? 1 : 0 };
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
+      const errMsg = renderThrownChain({ cause: err });
       void this.sql`INSERT INTO executor_output (executor, command, stderr, exit_code)
         VALUES (${executorId}, ${command}, ${errMsg}, ${1})`;
       // Broadcast on error too — symmetric with the success branch above.

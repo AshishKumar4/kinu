@@ -8,7 +8,7 @@ import { createCloudWorkspaceForUser } from './workspace-create';
 import { err, json, safeJson } from '../lib/http';
 import { ownerCaller } from './workspace-capability';
 import { classifyTransientDO, retryTransientDO } from '../lib/do-rpc';
-import { diagnostics, toProteusError } from '@proteus/core/obs';
+import { diagnostics, renderThrownChain, toProteusError } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 /** POST /workspaces body → created WorkspaceEntry (201) | mapped error response. */
@@ -32,7 +32,7 @@ export async function handleCreateWorkspaceRequest(
     });
     return json(entry, { status: 201 });
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = renderThrownChain({ cause: e });
     // workspace-create.ts throws plain Errors; this is the single home for the
     // provider-not-connected → 409 mapping.
     const status = message.startsWith('Cloudflare Workers AI is not connected') ? 409 : 400;
@@ -100,7 +100,7 @@ export async function claimOwnedWorkspace(
   try {
     claim = await retryTransientDO('claimOwner', () => agent.claimOwner(userId));
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = renderThrownChain({ cause: e });
     const transient = classifyTransientDO({ cause: e });
     const status = /owned by a different user/i.test(message) ? 403 : transient !== null ? 503 : 500;
     if (status !== 403) {
@@ -120,7 +120,7 @@ export async function claimOwnedWorkspace(
     await retryTransientDO('ensureWorkspaceCapability',
       () => userDO.ensureWorkspaceCapability(workspaceName, claim.capabilityHash));
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = renderThrownChain({ cause: e });
     const transient = classifyTransientDO({ cause: e });
     diagnostics.failure('workspace.capability_provisioning_failed', toProteusError({
       doing: "provisioning the workspace's capability token",

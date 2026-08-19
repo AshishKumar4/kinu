@@ -33,15 +33,12 @@ import {
   type EvalInstance, type GepaCandidate, type GepaConfig, type GepaConstraints,
   type GepaResult, type GepaIterationState, type GepaMetric,
 } from './types';
-import { diagnostics, toProteusError } from '../../obs/index';
+import { diagnostics, renderThrownChain, toProteusError } from '../../obs/index';
 
 type ProposalOutcome =
   | { ok: true; source: string; operator: 'mutate' | 'merge'; metricCallsCharged: number; parentSource?: string }
   | { ok: false; reason: string };
 
-function errorMessage<Failure>(failure: Failure): string {
-  return failure instanceof Error ? failure.message : String(failure);
-}
 
 export async function runGepa<I = unknown, E = unknown>(
   config: GepaConfig<I, E>,
@@ -100,7 +97,7 @@ export async function runGepa<I = unknown, E = unknown>(
         parentSource: parent.source,
       };
     } catch (err) {
-      return { ok: false, reason: `mutate_failed: ${errorMessage(err)}` };
+      return { ok: false, reason: `mutate_failed: ${renderThrownChain({ cause: err })}` };
     }
   }
 
@@ -120,7 +117,7 @@ export async function runGepa<I = unknown, E = unknown>(
         metricCallsCharged: 0,
       };
     } catch (err) {
-      return { ok: false, reason: `merge_failed: ${errorMessage(err)}` };
+      return { ok: false, reason: `merge_failed: ${renderThrownChain({ cause: err })}` };
     }
   }
 
@@ -183,7 +180,7 @@ export async function runGepa<I = unknown, E = unknown>(
       try {
         testPassed = await config.constraints.testRunner(proposal.source);
       } catch (err) {
-        if (await recordRejection(iter, `test_runner_threw: ${errorMessage(err)}`)) { stopReason = 'no_improvement_possible'; break; }
+        if (await recordRejection(iter, `test_runner_threw: ${renderThrownChain({ cause: err })}`)) { stopReason = 'no_improvement_possible'; break; }
         continue;
       }
       if (!testPassed) {

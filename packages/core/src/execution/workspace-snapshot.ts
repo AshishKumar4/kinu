@@ -1,4 +1,5 @@
 import { PLATFORM_CATALOG } from '../platform-catalog';
+import { renderThrownChain } from '../obs/index';
 
 /**
  * Durability for a sandbox container's `/workspace`, as decisions rather than
@@ -426,7 +427,7 @@ export function createWorkspaceSnapshots(ports: WorkspaceSnapshotPorts): Workspa
       change = checked.status;
       version = checked.version;
     } catch (error) {
-      return await fail(state, `checkChanges failed: ${describe({ error })}`);
+      return await fail(state, `checkChanges failed: ${renderThrownChain({ cause: error })}`);
     }
 
     if (!shouldBackupWorkspace(change, state?.at ?? 0, ports.now())) {
@@ -442,7 +443,7 @@ export function createWorkspaceSnapshots(ports: WorkspaceSnapshotPorts): Workspa
     try {
       return await snapshot(state, version);
     } catch (error) {
-      return await fail(state, describe({ error }));
+      return await fail(state, renderThrownChain({ cause: error }));
     }
   };
 
@@ -460,6 +461,3 @@ export function createWorkspaceSnapshots(ports: WorkspaceSnapshotPorts): Workspa
   return { restore, snapshotIfDue };
 }
 
-function describe(input: { error: unknown }): string {
-  return input.error instanceof Error ? input.error.message : String(input.error);
-}

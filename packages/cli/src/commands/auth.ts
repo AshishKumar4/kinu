@@ -3,6 +3,7 @@ import { hostname, platform } from 'node:os';
 import { defaultOrigin, logout, pollCliAuth, startCliAuth, whoami } from '../cloud-api';
 import { loadConfigFile, saveConfigFile } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
+import { renderThrownChain } from '@proteus/core/obs';
 
 export async function authCommand(opts: { origin?: string }): Promise<void> {
   const origin = defaultOrigin(opts);
@@ -59,7 +60,7 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
     } catch (error) {
       // The local session is cleared either way, but a server session that
       // outlived the logout is the one thing the user needs to hear about.
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = renderThrownChain({ cause: error });
       console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
     }
   }

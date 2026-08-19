@@ -79,8 +79,8 @@ const LOCK = join(REPO, 'scripts/silent-drop.lock.json');
  *  cannot be added without a description, and the reporting order is not
  *  whatever `Object.keys` happens to give. */
 export const DROP_CLASSES = [
-  'logged_default', 'message_only', 'handler_absorbs', 'handler_drops_cause',
-  'voided_promise', 'floating_rejection',
+  'logged_default', 'message_only', 'projecting_helper', 'handler_absorbs',
+  'handler_drops_cause', 'voided_promise', 'floating_rejection',
 ] as const;
 
 export type DropClass = (typeof DROP_CLASSES)[number];
@@ -105,6 +105,15 @@ export const DROPS = {
       + 'fault is one `cause` deeper than the one printed',
     fix: 'pass the error itself — `renderThrownChain({ cause: error })`, or `log.failure(name, '
       + 'toProteusError({ doing, cause: error, otherwise }))`, which renders the chain for you',
+  },
+  projecting_helper: {
+    blindTo: 'gate:duplication — one expression is below its node threshold, so 26 copies of '
+      + 'this exact function did not register as duplication either',
+    invariant: 'a function whose whole job is to render a failure must render its chain',
+    silently: 'every caller of it drops the chain, and the defect is one call away from the '
+      + '`catch` a reader inspects — which is why 26 of these were invisible',
+    fix: 'delete it and call `renderThrownChain({ cause })`, or delegate to it and keep only '
+      + 'the part that is genuinely local',
   },
   handler_absorbs: {
     blindTo: 'no-sentinel-catch — a handler body that is not a bare sentinel return',
@@ -231,9 +240,15 @@ interface Fate {
 
 const PROJECTED_PROPERTIES: ReadonlySet<string> = new Set(['message', 'stack', 'toString']);
 const PROJECTING_CALLS: ReadonlySet<string> = new Set(['String']);
+/** A bare use of the binding in one of these positions is the VALUE flowing on
+ *  whole. `ConditionalExpression` and `LogicalExpression` are here because
+ *  `error instanceof Error ? error : String(error)` forwards the error on the arm
+ *  that has one and stringifies only what is not an error — the correct shape, and
+ *  an earlier draft counted it as a drop. */
 const FORWARDING_PARENTS: ReadonlySet<string> = new Set([
   'Property', 'SpreadElement', 'ThrowStatement', 'ReturnStatement',
-  'AssignmentExpression', 'VariableDeclarator',
+  'AssignmentExpression', 'VariableDeclarator', 'ConditionalExpression',
+  'LogicalExpression', 'ArrayExpression',
 ]);
 
 function fateOf(scope: SyntaxNode, binding: string): Fate {
@@ -363,14 +378,27 @@ function asyncDefinitions(root: SyntaxNode): AsyncDefinitions {
     asynchronous.add(name);
     const body = blockBodyOf(fn);
     if (body === undefined) return;
-    // Total containment: the whole body is one try whose handler is present and
-    // does not rethrow. Anything less and a rejection escapes.
-    const only = body.children.length === 1 ? body.children[0] : undefined;
-    if (only?.type !== 'TryStatement') return;
-    const handler = only.children.find((child) => child.type === 'CatchClause');
-    const handlerBody = handler?.children.at(-1);
-    if (handlerBody === undefined) return;
-    if (!ownNodes(handlerBody).some((node) => node.type === 'ThrowStatement')) contained.add(name);
+    // Containment is about the AWAITS, not about the shape of the body. The React
+    // spelling is `setLoading(true); setErr(null); try { await … } catch { setErr(…) }
+    // finally { setLoading(false) }` — three statements, no rejection reachable, and
+    // an earlier draft that demanded the whole body BE the try reported every one of
+    // them. So: some try whose catch does not rethrow, and no `await` outside it.
+    //
+    // What this deliberately does not model: a SYNCHRONOUS throw before the try,
+    // which would reject the promise. Nothing in this tree does that, and modelling
+    // it would mean deciding which sync calls can throw.
+    const own = ownNodes(body);
+    const guarded = own.filter((node) => {
+      if (node.type !== 'TryStatement') return false;
+      const handler = node.children.find((child) => child.type === 'CatchClause');
+      const handlerBody = handler?.children.at(-1);
+      return handlerBody !== undefined
+        && !ownNodes(handlerBody).some((inner) => inner.type === 'ThrowStatement');
+    });
+    if (guarded.length === 0) return;
+    const unguarded = own.some((node) => node.type === 'AwaitExpression'
+      && !guarded.some((tried) => tried.start <= node.start && node.end <= tried.end));
+    if (!unguarded) contained.add(name);
   };
   walk(root, (node) => {
     if (node.type === 'FunctionDeclaration' || node.type === 'MethodDefinition') {
@@ -449,7 +477,75 @@ export function auditFile(file: string, text: string): readonly Drop[] {
     return false;
   };
 
+  /**
+   * A function whose ENTIRE body renders one of its own parameters down to that
+   * parameter's outermost message. The `catch` that calls it is clean by every
+   * rule in the set — it hands the error on WHOLE — and the chain dies one frame
+   * later, inside a two-line helper nobody re-reads. Twenty-six of these existed
+   * at 2b7b020f under eight names.
+   *
+   * Two tests, and both are needed. A SINGLE-RETURN body: anything longer is doing
+   * work, and a function that reads `.message` in the middle of real logic is a
+   * judgement its author made rather than an adapter standing between a caller and
+   * the truth. And a `.message`/`.stack` READ specifically, not `fateOf`'s wider
+   * projection set: `String(x)` and `` `${x}` `` are how every value in the
+   * language reaches a string, so admitting them made this class report 173 sites
+   * of which 147 were `(byte) => byte.toString(16)` and its relatives. Only
+   * `.message` and `.stack` are unambiguously an error being flattened.
+   */
+  const auditAdapter = (fn: SyntaxNode): void => {
+    const block = blockBodyOf(fn);
+    const returned = block === undefined
+      ? fn.children.at(-1)
+      : block.children.length === 1 && block.children[0]?.type === 'ReturnStatement'
+        ? block.children[0]
+        : undefined;
+    if (returned === undefined || returned.type === 'BlockStatement') return;
+    // Parameters only: `children` also holds the body and any type annotation, and
+    // the body is what we are about to search.
+    const parameters = fn.children.filter(
+      (child) => child !== block && child !== returned
+        && (child.type === 'Identifier' || child.type === 'ObjectPattern'),
+    );
+    const bound: string[] = [];
+    for (const parameter of parameters) {
+      walk(parameter, (node) => {
+        const name = node.type === 'Identifier' ? identifierText(node) : undefined;
+        if (name !== undefined) bound.push(name);
+      });
+    }
+    // The value must be EVIDENTLY an error. A `.message` field belongs to a
+    // valibot `Issue`, a chat event and a timeline row as much as to an `Error`,
+    // and 11 of the first 15 findings here were `(issue) => issue.message` over
+    // `safeParse().issues` — reading a typed field of a non-error, which is not a
+    // dropped chain and cannot be one. So the function has to say so itself:
+    // either it narrows with `instanceof Error`, or its parameter arrives
+    // unnarrowed (`unknown`, or a bare type parameter), which is exactly how all
+    // 26 of the real ones were written.
+    const source = text.slice(fn.start, fn.end);
+    const handlesAnError = /instanceof Error|:\s*unknown|<\w+>\s*\(/u.test(source);
+    if (!handlesAnError) return;
+    for (const name of bound) {
+      let flattens = false;
+      walk(returned, (node) => {
+        if (node.type !== 'MemberExpression' || node.children[0]?.type !== 'Identifier') return;
+        if (identifierText(node.children[0]) !== name) return;
+        const property = identifierText(node.children[1] ?? node);
+        if (property === 'message' || property === 'stack') flattens = true;
+      });
+      if (flattens && !fateOf(returned, name).forwarded) {
+        record('projecting_helper', fn, 'wire');
+        return;
+      }
+    }
+  };
+
   walk(root, (node) => {
+    if (node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression'
+      || node.type === 'ArrowFunctionExpression' || node.type === 'MethodDefinition') {
+      auditAdapter(node.type === 'MethodDefinition' ? node.children.at(-1) ?? node : node);
+    }
+
     if (node.type === 'CatchClause') {
       const body = node.children.at(-1);
       if (body === undefined || body.type !== 'BlockStatement') return;

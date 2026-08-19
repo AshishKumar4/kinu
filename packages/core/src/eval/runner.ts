@@ -3,6 +3,7 @@
 // to eval_results table or whatever the host wants).
 import type { ExplorationStrategy, StrategyContext } from '../strategy/types';
 import type { EvalCase, EvalRun, JudgeFn, EvalResult } from './types';
+import { renderThrownChain } from '../obs/index';
 
 export interface RunEvalPairOpts {
   cases: EvalCase[];
@@ -28,7 +29,7 @@ export async function runEvalPair(opts: RunEvalPairOpts): Promise<EvalResult[]> 
     try {
       verdict = await opts.judge(c, runA, runB);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = renderThrownChain({ cause: err });
       verdict = { winner: 'tie' as const, scoreA: 0.5, scoreB: 0.5,
                   rationale: `judge error: ${message}` };
     }
@@ -61,7 +62,7 @@ async function runOne(
       durationMs: Date.now() - t0,
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = renderThrownChain({ cause: err });
     return {
       caseId: c.id,
       strategyId: strategy.id,

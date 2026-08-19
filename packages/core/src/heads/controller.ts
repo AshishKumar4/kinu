@@ -39,7 +39,7 @@ import { DEFAULT_CONFIG } from '../config';
 import type { LLM, Executor } from '../types/primitives';
 import type { WorkMode } from '../prompting/surface';
 import { addUsage, usageTotal, type Usage } from '../usage';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, renderThrownChain, toProteusError } from '../obs/index';
 
 /** What the merge LLM should return. Validated by MergeOutputSchema. */
 export type MergeLLMFn = (
@@ -323,7 +323,7 @@ export class HeadController {
             // off — the honest record is that we do not know how many.
             usage: {},
             wallClockMs: Date.now() - startedAt,
-            errorMessage: err instanceof Error ? err.message : String(err),
+            errorMessage: renderThrownChain({ cause: err }),
           };
           await this.journal.recordReport(failed);
           return failed;
@@ -544,7 +544,7 @@ export class HeadController {
       try {
         out = await this.runtime.mergeLLM(prompt, MergeOutputSchema);
       } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        return { ok: false, error: renderThrownChain({ cause: err }) };
       }
       const parse = v.safeParse(MergeOutputSchema, out);
       return parse.success

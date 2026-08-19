@@ -32,6 +32,7 @@ import { normalizeUsage } from './usage';
 import { REASONING_EFFORTS, reasoningEffortOptions } from './strategy/effort';
 import { parseModelSpec } from './providers/types';
 import { TOOL_REACH } from './tools/registry';
+import { renderThrownChain } from './obs/index';
 
 /** A provider's host-side result before the executor validates the VM boundary
  *  as JSON. Domain objects are allowed here; functions and symbols are not. */
@@ -80,9 +81,6 @@ const RLMOptionsSchema: v.GenericSchema<RLMOptions> = v.object({
   maxOutputTokens: v.optional(v.number()),
 });
 
-function errorMessage(input: { error: unknown }): string {
-  return input.error instanceof Error ? input.error.message : String(input.error);
-}
 
 /**
  * Build the codemode provider that exposes `llm.query(...)` to the sandbox.
@@ -130,7 +128,7 @@ export function createRLMProvider(
             model = resolver.resolveModel(normalizedSpec);
           }
           catch (err) {
-            return { error: `llm.query: model ${spec} unresolvable: ${errorMessage({ error: err })}` };
+            return { error: `llm.query: model ${spec} unresolvable: ${renderThrownChain({ cause: err })}` };
           }
           const providerOptions = reasoningEffortOptions(
             opts.output.reasoning_effort ?? 'low',
@@ -155,7 +153,7 @@ export function createRLMProvider(
             // A throw produced no usage and, as far as this seam can see, no
             // bill — reporting it would count a call that cost nothing against
             // the measured fraction.
-            return { error: `llm.query: ${errorMessage({ error: err })}` };
+            return { error: `llm.query: ${renderThrownChain({ cause: err })}` };
           }
         },
       },

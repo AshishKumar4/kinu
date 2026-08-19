@@ -29,6 +29,7 @@ import { err, json, safeJson } from '../lib/http';
 import { isFreshAuthTime } from '../auth/session';
 import { decodeJsonWire } from '../lib/orchestrator-wire';
 import * as v from 'valibot';
+import { renderThrownChain } from '@proteus/core/obs';
 
 const WebhookRequestSchema = v.object({
   label: v.optional(v.string()),
@@ -193,7 +194,7 @@ async function handleTriggersRoute(
       try {
         rateLimit = normalizeWebhookRateLimitPerMin(body.rate_limit_per_min);
       } catch (e) {
-        return err(400, e instanceof Error ? e.message : String(e));
+        return err(400, renderThrownChain({ cause: e }));
       }
       try {
         return json(await agent.createDurableWebhook({
@@ -204,7 +205,7 @@ async function handleTriggersRoute(
           rate_limit_per_min: rateLimit,
         }), { status: 201 });
       } catch (e) {
-        return err(500, e instanceof Error ? e.message : String(e));
+        return err(500, renderThrownChain({ cause: e }));
       }
     }
     return err(405, 'GET or POST');

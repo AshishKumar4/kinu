@@ -22,6 +22,7 @@ import {
   type ReleaseSource,
 } from '../release/index';
 import type { ReleaseToolAction } from './registry';
+import { renderThrownChain } from '../obs/index';
 
 export interface ReleaseToolDeps {
   board(): Promise<ReleaseBoard>;
@@ -216,6 +217,6 @@ export async function runReleaseAction(
       }
     }
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    return { error: renderThrownChain({ cause: err }) };
   }
 }

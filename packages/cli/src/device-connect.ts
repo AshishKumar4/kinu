@@ -11,7 +11,7 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { classify, tolerate } from '@proteus/core/obs';
+import { classify, renderThrownChain, tolerate } from '@proteus/core/obs';
 import { AGENT_HOME, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
 import { listCloudDevices, registerCloudDevice } from './cloud-api';
 
@@ -176,7 +176,7 @@ export async function deviceStatusLine(): Promise<string> {
     if (devices.length > 0) return `${devices.length} registered device${devices.length === 1 ? '' : 's'}, none connected.`;
     return 'No devices are registered for your account yet.';
   } catch (err) {
-    return `Device status unavailable: ${err instanceof Error ? err.message : String(err)}`;
+    return `Device status unavailable: ${renderThrownChain({ cause: err })}`;
   }
 }
 

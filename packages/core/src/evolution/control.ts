@@ -55,7 +55,7 @@ import {
 import type { EvalInstance, MetricOutcome } from './gepa/types';
 import type { ScoreInterval } from '../utils/stats';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, renderThrownChain, toProteusError } from '../obs/index';
 
 /**
  * The inference surface a candidate scaffold runs against.
@@ -528,7 +528,7 @@ export async function runScaffoldGepaOptimization(
     try {
       output = await runScaffoldCaptureText(control, instance.input, candidate);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = renderThrownChain({ cause: err });
       return { score: 0, feedback: `scaffold execution failed: ${message}` };
     }
     const exp = instance.expected;
@@ -551,7 +551,7 @@ export async function runScaffoldGepaOptimization(
       });
       return { score: obj.score, feedback: obj.feedback };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = renderThrownChain({ cause: err });
       return { score: 0.5, feedback: `judge unavailable: ${message}` };
     }
   };
@@ -582,7 +582,7 @@ export async function runScaffoldGepaOptimization(
       onIteration: makePersistingHook({ sql: control.sql, runId, evalSet, persisted }),
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = renderThrownChain({ cause: err });
     finishGepaRun(control.sql, {
       runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls: 0, iterations: 0,
     });

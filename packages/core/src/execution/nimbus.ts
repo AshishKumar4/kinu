@@ -18,7 +18,7 @@ import { shellQuote } from '../utils/shell';
 import type { ExecutorCapability, ExecutorProvider } from './types';
 import { readExecSignal } from './signal';
 import { formatExecResult, refusalText } from './exec-result';
-import { ProteusError, toProteusError } from '../obs/index';
+import { ProteusError, renderThrownChain, toProteusError } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
@@ -232,9 +232,6 @@ function parseInput<TSchema extends v.GenericSchema>(
   return result.success ? result.output : undefined;
 }
 
-function errorMessage(input: { error: unknown }): string {
-  return input.error instanceof Error ? input.error.message : String(input.error);
-}
 
 function stringifyResult(input: { value: unknown }): string {
   const text = v.safeParse(v.string(), input.value);
@@ -282,7 +279,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
       lastError = undefined;
       return result;
     } catch (err) {
-      lastError = errorMessage({ error: err });
+      lastError = renderThrownChain({ cause: err });
       throw err;
     }
   };

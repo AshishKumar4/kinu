@@ -3,6 +3,7 @@ import type { UserDO } from '../user/user-do';
 import { randomToken, sha256Hex } from '../lib/crypto';
 import { parseAccessTokenUserId, type AccessTokenScope } from './access-token-store';
 import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability';
+import { renderThrownChain } from '@proteus/core/obs';
 
 /** Thrown when a CLI auth rate limit trips — routes map this (and only
  *  this) to HTTP 429; every other failure is a real error. */
@@ -350,8 +351,11 @@ function primarySession(db: D1Database): D1DatabaseSession {
   return db.withSession('first-primary');
 }
 
+/** Matched over the whole cause chain, not `e.message`: the constraint failure
+ *  arrives wrapped by whatever statement ran it, and reading only the outermost
+ *  frame reported a duplicate row as an unknown write failure. */
 function isUniqueConstraintError<Thrown>(e: Thrown): boolean {
-  return e instanceof Error && /UNIQUE constraint failed/i.test(e.message);
+  return /UNIQUE constraint failed/iu.test(renderThrownChain({ cause: e }));
 }
 
 function currentStatus(status: string, expiresAt: number): CliAuthRequestInfo['status'] {

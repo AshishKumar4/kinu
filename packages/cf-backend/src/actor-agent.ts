@@ -26,7 +26,7 @@ import type { SubordinateActivityEvent } from './lib/protocol';
 import { parseProtocolMessage } from "agents/chat";
 import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { createAgentTracing, type AgentTracing } from "@proteus/core/obs";
+import { createAgentTracing, renderThrownChain, type AgentTracing } from "@proteus/core/obs";
 import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer,
@@ -254,9 +254,6 @@ function parseClientRpcFrame<Message>(message: Message): ClientRpcFrame | null {
   return frame.success ? { id: frame.output.id, method: frame.output.method } : null;
 }
 
-function errorMessage<Thrown>(thrown: Thrown): string {
-  return thrown instanceof Error ? thrown.message : String(thrown);
-}
 
 function jsonObject<Input>(input: Input): JsonObject {
   const parsed = v.safeParse(JsonObjectSchema, input);
@@ -687,7 +684,7 @@ export abstract class ActorAgent extends Think<Env> {
             } catch (cleanupError) {
               throw new Error(
                 `Subordinate ${input.name} failed to seed and its storage could not be reclaimed: `
-                + `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+                + `${renderThrownChain({ cause: cleanupError })}`,
                 { cause: error },
               );
             }
@@ -2152,7 +2149,7 @@ export abstract class ActorAgent extends Think<Env> {
       ok: false,
       error: {
         code: isVfsError(error) ? error.code : 'EIO',
-        message: error instanceof Error ? error.message : String(error),
+        message: renderThrownChain({ cause: error }),
         path,
       },
     };
@@ -2787,7 +2784,7 @@ export abstract class ActorAgent extends Think<Env> {
           try {
             const rawResult = await userDOStub.userMcp_callTool(caller, serverId, mcpName, args);
             return projectJsonValue({ value: v.parse(JsonValueSchema, JSON.parse(rawResult)) });
-          } catch (err) { return { isError: true, error: errorMessage(err) }; }
+          } catch (err) { return { isError: true, error: renderThrownChain({ cause: err }) }; }
         },
       });
     }

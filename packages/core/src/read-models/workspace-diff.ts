@@ -22,6 +22,7 @@ import { nanoid } from '../utils/nanoid';
 // more, and neither shape covered the refusal payload they return, so an
 // unconfigured executor's refusal would have been parsed as a git diff.
 import { isFailingResultText } from '../execution/exec-result';
+import { renderThrownChain } from '../obs/index';
 
 /**
  * Files bigger than this are excluded from the snapshot — a change-set is a
@@ -295,7 +296,7 @@ async function getGitDiff(rt: AgentRuntime, executorId: string): Promise<Executo
       .filter(Boolean).join('\n');
     return { files: parseGitDiff(unified), mode: 'git' };
   } catch (err) {
-    return { files: [], mode: 'git', error: err instanceof Error ? err.message : String(err) };
+    return { files: [], mode: 'git', error: renderThrownChain({ cause: err }) };
   }
 }
 

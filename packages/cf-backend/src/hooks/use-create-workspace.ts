@@ -12,6 +12,7 @@ import { useNavigate } from "react-router-dom";
 import { createWorkspaceFromMission } from "@/lib/create-workspace";
 import { listAvailableModels } from "@/lib/user-api";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { renderThrownChain } from '@proteus/core/obs';
 
 /** The creation box's wording, in one place: both surfaces that render it read from here. */
 export const MISSION_LABEL = "Mission";
@@ -48,7 +49,7 @@ export function useCreateWorkspace() {
       onBeforeNavigate?.();
       navigate(`/workspace/${created.name}`);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(renderThrownChain({ cause: e }));
       setBusy(false);
     }
   }, [busy, navigate]);

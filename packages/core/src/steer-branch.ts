@@ -18,6 +18,7 @@ import { raceWithTimeout, type HeadRuntime } from './heads/controller';
 import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
 import { nanoid } from './utils/nanoid';
+import { renderThrownChain } from './obs/index';
 
 /** A branch is one head answering one redirect: depth 1, so it answers rather
  *  than splitting further. Like any head it runs until it is done — the settle
@@ -127,7 +128,7 @@ export async function startBranchHead(
       // recording it as free is a claim nobody measured.
       usage: {},
       wallClockMs: Date.now() - spawnedAt,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: renderThrownChain({ cause: err }),
     }))
     .then((report) => {
       journal.recordReport(report);
@@ -176,7 +177,7 @@ export async function settlePendingBranch(
   try {
     handle = await entry.handle;
   } catch (err) {
-    fail(err instanceof Error ? err.message : String(err));
+    fail(renderThrownChain({ cause: err }));
     return;
   }
   if (!turnId || !liveText.trim()) {

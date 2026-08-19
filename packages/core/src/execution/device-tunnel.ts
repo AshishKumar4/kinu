@@ -12,7 +12,7 @@
 
 import * as v from 'valibot';
 import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { tolerate } from '../obs/index';
+import { renderThrownChain, tolerate } from '../obs/index';
 
 /** Minimal socket surface — platform WebSocket or any send()/readyState impl. */
 export interface TunnelSocket {
@@ -94,7 +94,7 @@ export const NO_DEVICE_CONNECTED = 'no device connected';
 /** Both the hub's "no socket" rejection and the tunnel's "socket dropped"
  *  rejection mean the same thing to callers: the device is not connected. */
 export function isDeviceNotConnectedError<T>(err: T): boolean {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = renderThrownChain({ cause: err });
   return message.includes(NO_DEVICE_CONNECTED) || message.includes(TUNNEL_DISCONNECTED);
 }
 
@@ -112,7 +112,7 @@ export const DEVICE_UNKNOWN_METHOD = 'unknown method';
 
 /** Whether a rejection is the daemon saying it has never heard of the method. */
 export function isDeviceUnknownMethodError<T>(err: T): boolean {
-  return (err instanceof Error ? err.message : String(err)).includes(DEVICE_UNKNOWN_METHOD);
+  return (renderThrownChain({ cause: err })).includes(DEVICE_UNKNOWN_METHOD);
 }
 
 export class DeviceTunnel {

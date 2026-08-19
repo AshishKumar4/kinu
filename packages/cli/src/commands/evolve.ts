@@ -8,6 +8,7 @@ import {
   printSearchTree, printError, createSpinner,
   BRAND, DIM, OK, WARN, ACCENT, MUTED,
 } from '../display';
+import { renderThrownChain } from '@proteus/core/obs';
 
 export async function evolveCommand(name: string, opts: {
   budget?: string; branches?: string; maxCost?: string; model?: string; baseUrl?: string; auth?: string;
@@ -98,7 +99,7 @@ export async function evolveCommand(name: string, opts: {
   } catch (err) {
     spinner.fail('Evolution failed');
     printError(
-      err instanceof Error ? err.message : String(err),
+      renderThrownChain({ cause: err }),
       failed > 0
         ? `${plural(failed, 'branch failure')} preceded it — see the lines above.`
         : undefined,

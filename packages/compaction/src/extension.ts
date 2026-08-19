@@ -63,6 +63,7 @@ import {
   withArchiveManifest,
   type ArchiveIndexStore,
 } from './manifest';
+import { renderThrownChain } from '@proteus/core/obs';
 
 export interface CompactionOutcomeEvent {
   sessionKey: string;
@@ -117,7 +118,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
         deps.ports.logger.warn('Compaction summary call failed', {
           rangeStartMessageId: job.rangeStartMessageId,
           rangeEndMessageId: job.rangeEndMessageId,
-          error: err instanceof Error ? err.message : String(err),
+          error: renderThrownChain({ cause: err }),
         });
         return null;
       }
@@ -250,7 +251,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
       body = await deps.summarize(prompt);
     } catch (err) {
       deps.ports.logger.warn('Compaction prefix-summary call failed; keeping deterministic summary', {
-        error: err instanceof Error ? err.message : String(err),
+        error: renderThrownChain({ cause: err }),
       });
       return null;
     }

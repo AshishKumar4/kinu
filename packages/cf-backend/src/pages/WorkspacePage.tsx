@@ -40,6 +40,7 @@ import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer } from "@/components/Composer";
 import { dataUrlRawBytes } from "@/components/AttachmentChip";
 import type { PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
+import { renderThrownChain } from "@proteus/core/obs";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
 
@@ -250,7 +251,7 @@ function ForkModal({
     try {
       await onSubmit(name.trim());
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(renderThrownChain({ cause: e }));
       setBusy(false);
     }
   }, [name, busy, onSubmit]);
@@ -631,7 +632,7 @@ export default function WorkspacePage() {
         if (r.accepted) setChatInput((current) => current.trim() === t ? "" : current);
         else setBranchNotice(r.reason ?? "Branching is unavailable right now.");
       })
-      .catch((err) => setBranchNotice(err instanceof Error ? err.message : String(err)));
+      .catch((err) => setBranchNotice(renderThrownChain({ cause: err })));
   }, [chatInput, effectiveChatMode, state]);
 
   /**
@@ -763,7 +764,7 @@ export default function WorkspacePage() {
       }
       setRestorePlan({ entries: matches, dirs: plans.map((p) => p.dir), files });
     } catch (err) {
-      setRestoreNotice(`Restore failed: ${err instanceof Error ? err.message : String(err)}`);
+      setRestoreNotice(`Restore failed: ${renderThrownChain({ cause: err })}`);
     } finally {
       setPlanning(false);
     }
@@ -779,7 +780,7 @@ export default function WorkspacePage() {
       setRestoreNotice(`Restored ${restorePlan.files.length} file(s) to before this turn. Restoring again undoes the undo.`);
       setRestorePlan(null);
     } catch (err) {
-      setRestoreNotice(`Restore failed: ${err instanceof Error ? err.message : String(err)}`);
+      setRestoreNotice(`Restore failed: ${renderThrownChain({ cause: err })}`);
       setRestorePlan(null);
     } finally {
       setRestoring(false);

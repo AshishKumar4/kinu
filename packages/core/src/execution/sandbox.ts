@@ -21,7 +21,7 @@ import { isAbortError, raceAbort } from '@proteus/agent-utils';
 import type { ExecutorProvider, ExecutorCapability } from './types';
 import { readExecSignal } from './signal';
 import { formatExecResult, refusalText } from './exec-result';
-import { diagnostics, ProteusError, toProteusError } from '../obs/index';
+import { diagnostics, ProteusError, renderThrownChain, toProteusError } from '../obs/index';
 import type { VFS } from '../types/primitives';
 import { makeVfsError } from '../vfs/errno';
 import { shellQuote } from '../utils/shell';
@@ -103,9 +103,6 @@ const TRANSIENT_MARKERS = [
   'too many containers per second',
 ];
 
-function errorMessage(input: { error: unknown }): string {
-  return input.error instanceof Error ? input.error.message : String(input.error);
-}
 
 function parseInput<TSchema extends v.GenericSchema>(
   schema: TSchema,
@@ -599,7 +596,7 @@ declare namespace sandbox {
           verified_listening: true,
         };
       } catch (err) {
-        return { supported: false, reason: errorMessage({ error: err }) };
+        return { supported: false, reason: renderThrownChain({ cause: err }) };
       }
     },
 

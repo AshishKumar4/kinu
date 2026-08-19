@@ -21,6 +21,7 @@ import * as v from 'valibot';
 import {
   decodeRunEventWire, resumeIndexFromLastEventId, type RunEventWire,
 } from './lib/orchestrator-wire';
+import { renderThrownChain } from '@proteus/core/obs';
 
 const SSE_POLL_MS = 500;
 const SSE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
@@ -70,7 +71,7 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
       const stub = await resolveAgent(env, agentName);
       return Response.json(await stub.listRuns({ limit, cursor: after ? { after } : undefined }));
     } catch (err) {
-      return Response.json({ error: errorMessage(err) }, { status: 500 });
+      return Response.json({ error: renderThrownChain({ cause: err }) }, { status: 500 });
     }
   }
 
@@ -88,7 +89,7 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
       const events = decodeRunEventWire(await stub.getRunEventsWire(runId, opts));
       return Response.json(events);
     } catch (err) {
-      return Response.json({ error: errorMessage(err) }, { status: 500 });
+      return Response.json({ error: renderThrownChain({ cause: err }) }, { status: 500 });
     }
   }
 
@@ -168,7 +169,7 @@ function streamRunEvents(
       } catch (err) {
         if (!closed) {
           controller.enqueue(encoder.encode(
-            `event: error\ndata: ${JSON.stringify({ error: errorMessage(err) })}\n\n`,
+            `event: error\ndata: ${JSON.stringify({ error: renderThrownChain({ cause: err }) })}\n\n`,
           ));
           controller.close();
         }
@@ -190,6 +191,3 @@ function streamRunEvents(
   });
 }
 
-function errorMessage<Thrown>(thrown: Thrown): string {
-  return thrown instanceof Error ? thrown.message : String(thrown);
-}

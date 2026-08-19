@@ -20,6 +20,7 @@ import { Link } from "react-router-dom";
 import { CheckIcon, GearSixIcon, GitBranchIcon, PencilSimpleIcon, XIcon } from "@phosphor-icons/react";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import type { ConnectionStatus } from "@/hooks/use-proteus";
+import { renderCauseChain } from '@proteus/core/obs';
 
 export const ALTITUDES = ["run", "supervise"] as const;
 export type Altitude = (typeof ALTITUDES)[number];
@@ -110,7 +111,7 @@ function InlineWorkspaceTitle({ title, onRename }: {
       setValue(await onRename(displayName));
       setEditing(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Rename failed");
+      setError(err instanceof Error ? renderCauseChain(err) : "Rename failed");
     } finally {
       setSaving(false);
     }

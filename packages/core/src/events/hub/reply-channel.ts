@@ -24,6 +24,7 @@ import {
 import { ulid } from './ulid';
 import type { SqlExec } from '../../types/primitives';
 import { parseJsonValue, type JsonValue } from '../../utils/json';
+import { renderThrownChain } from '../../obs/index';
 
 const TTL_MS = {
   ws_session: 0,          // 0 → bound to holder, no clock-based expiry
@@ -183,7 +184,7 @@ export class ReplyChannelStore {
       return { outcome: 'failed', detail: r.detail };
     } catch (err) {
       this.bumpAttempt(id, now);
-      return { outcome: 'failed', detail: err instanceof Error ? err.message : String(err) };
+      return { outcome: 'failed', detail: renderThrownChain({ cause: err }) };
     }
   }
 

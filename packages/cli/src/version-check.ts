@@ -13,7 +13,7 @@
 import { VERSION } from './display';
 import { loadConfigFile, updateConfigFile, type ProteusConfig } from './config';
 import * as v from 'valibot';
-import { classify, tolerateAsync } from '@proteus/core/obs';
+import { classify, renderThrownChain, tolerateAsync } from '@proteus/core/obs';
 
 export const CLI_VERSION_PATH = '/downloads/proteus-version.json';
 const FETCH_TIMEOUT_MS = 1_500;
@@ -128,7 +128,7 @@ export async function runStartupUpdateCheck(opts: {
   } catch (error) {
     // A startup notice must never break the CLI, but a check that can NEVER succeed — an
     // unwritable config, a malformed origin — has to say so instead of skipping every run.
-    opts.log(`Update check failed: ${error instanceof Error ? error.message : String(error)}`);
+    opts.log(`Update check failed: ${renderThrownChain({ cause: error })}`);
     return null;
   }
 }

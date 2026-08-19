@@ -124,7 +124,7 @@ import { evaluateWithMultiModelJudging } from '../mcts/evaluation';
 import type { BranchEvaluation } from '../mcts/evaluation';
 import { readProposalCode } from '../execution/code-fence';
 import { extractJsonObject } from '../prompts/structured';
-import { diagnostics, type Logger } from '../obs/index';
+import { diagnostics, renderThrownChain, type Logger } from '../obs/index';
 import {
   ProteusError, refusalOf, renderCauseChain, toProteusError, type Refusal,
 } from '../obs/error';
@@ -620,7 +620,7 @@ function readAnswer(text: string): ReadAnswer {
       text: answer,
       proposal: null,
       proposalError: `the ${PROPOSAL_MARKER} block carried no readable JSON object, so the branch `
-        + `could not be arbitrated: ${error instanceof Error ? error.message : String(error)}`,
+        + `could not be arbitrated: ${renderThrownChain({ cause: error })}`,
     };
   }
   const parsed = v.safeParse(BranchProposalSchema, json);
@@ -1346,7 +1346,7 @@ async function measureChild(input: {
   } catch (error) {
     return {
       kind: 'instrument-faulted',
-      error: error instanceof Error ? error.message : String(error),
+      error: renderThrownChain({ cause: error }),
     };
   }
   if (measurement.kind === 'unmeasurable') {
@@ -1437,7 +1437,7 @@ async function judgeChild(input: {
   } catch (error) {
     return {
       kind: 'instrument-faulted',
-      error: error instanceof Error ? error.message : String(error),
+      error: renderThrownChain({ cause: error }),
     };
   }
   return {
@@ -1547,7 +1547,7 @@ export async function runSwarm(
       asFound = await verifier.verify(ctx);
     } catch (error) {
       return unavailable(`the baseline measurement faulted, so this run cannot start: `
-        + `${error instanceof Error ? error.message : String(error)}. That is the instrument `
+        + `${renderThrownChain({ cause: error })}. That is the instrument `
         + 'breaking rather than a candidate failing, and it fails the run by design.');
     }
     baseline = baselineOf(asFound, verifier.baselineKey)
@@ -2178,7 +2178,7 @@ export async function runSwarm(
         lost += 1;
         log.event('swarm.branch_failed', {
           preset: resolved.preset, depth: atDepth + 1,
-          error: error instanceof Error ? error.message : String(error),
+          error: renderThrownChain({ cause: error }),
         });
         return '';
       }

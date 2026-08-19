@@ -5,6 +5,7 @@ import { btnSmCls } from "@/components/ui/form";
 import { HouseIcon, PlusIcon, TrashIcon, UserPlusIcon } from "@phosphor-icons/react";
 import type { SubordinateRosterEntry } from "@proteus/core";
 import { Modal } from "./ui/Modal";
+import { renderThrownChain } from "@proteus/core/obs";
 
 interface SpawnResult {
   name: string;
@@ -52,7 +53,7 @@ function SpawnSubordinateDialog({ onClose, onSpawn }: {
       await onSpawn(role.trim(), mission.trim());
       onClose();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(renderThrownChain({ cause: cause }));
     } finally {
       setSaving(false);
     }
@@ -198,7 +199,7 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
                   if (dismissTarget.name === activeName) navigate(mainPath);
                   setDismissTarget(null);
                 } catch (cause) {
-                  setDismissError(cause instanceof Error ? cause.message : String(cause));
+                  setDismissError(renderThrownChain({ cause: cause }));
                 } finally {
                   setDismissing(false);
                 }

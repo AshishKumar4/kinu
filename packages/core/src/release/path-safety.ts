@@ -1,3 +1,5 @@
+
+import { renderThrownChain } from '../obs/index';
 export interface ReleasePathValidation {
   ok: boolean;
   path?: string;
@@ -53,7 +55,7 @@ export function validateReleasePatchPath(rawPath: string): ReleasePathValidation
   try {
     path = normalizeReleasePath(rawPath);
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: renderThrownChain({ cause: err }) };
   }
   if (SECRET_PATH_PATTERNS.some((pattern) => pattern.test(path))) {
     return { ok: false, path, secret: true, error: `secret/config path is not patchable: ${path}` };

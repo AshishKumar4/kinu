@@ -71,6 +71,7 @@ import { AuthError, authenticateRequest } from "./auth/session";
 import { authenticateCliToken, readBearer } from "./cli/auth-store";
 import { claimOwnedWorkspace } from "./user/workspace-access";
 import { decodeRunEventWire, decodeScaffoldRunWire } from './lib/orchestrator-wire';
+import { renderThrownChain } from '@proteus/core/obs';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -166,7 +167,7 @@ function buildServer(env: Env, agentName: string): McpServer {
             ).join("\n\n");
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `search_memory error: ${errorMessage(err)}` }] };
+        return { content: [{ type: "text", text: `search_memory error: ${renderThrownChain({ cause: err })}` }] };
       }
     },
   );
@@ -183,7 +184,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         await agent.saveNoteFromMcp(content);
         return { content: [{ type: "text", text: "Note saved." }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `save_note error: ${errorMessage(err)}` }] };
+        return { content: [{ type: "text", text: `save_note error: ${renderThrownChain({ cause: err })}` }] };
       }
     },
   );
@@ -208,7 +209,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         }
         return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `list_skills error: ${errorMessage(err)}` }] };
+        return { content: [{ type: "text", text: `list_skills error: ${renderThrownChain({ cause: err })}` }] };
       }
     },
   );
@@ -241,7 +242,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         ].filter(Boolean).join("\n");
         return { content: [{ type: "text", text: summary }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `run_scaffold_once error: ${errorMessage(err)}` }] };
+        return { content: [{ type: "text", text: `run_scaffold_once error: ${renderThrownChain({ cause: err })}` }] };
       }
     },
   );
@@ -258,7 +259,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         const status = await agent.getShadowStatus();
         return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `get_shadow_status error: ${errorMessage(err)}` }] };
+        return { content: [{ type: "text", text: `get_shadow_status error: ${renderThrownChain({ cause: err })}` }] };
       }
     },
   );
@@ -286,7 +287,7 @@ function buildServer(env: Env, agentName: string): McpServer {
           : "(that is every run)");
         return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `list_runs error: ${errorMessage(err)}` }] };
+        return { content: [{ type: "text", text: `list_runs error: ${renderThrownChain({ cause: err })}` }] };
       }
     },
   );
@@ -312,7 +313,7 @@ function buildServer(env: Env, agentName: string): McpServer {
           : events.map((e) => `[${e.eventIndex}] ${e.type}: ${JSON.stringify(e).slice(0, 200)}`).join("\n");
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `list_run_events error: ${errorMessage(err)}` }] };
+        return { content: [{ type: "text", text: `list_run_events error: ${renderThrownChain({ cause: err })}` }] };
       }
     },
   );
@@ -342,7 +343,7 @@ function buildServer(env: Env, agentName: string): McpServer {
           : "Task skipped — a newer turn pre-empted it, or the turn queue rejected it. Nothing ran.";
         return { content: [{ type: "text", text: msg }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `run_task error: ${errorMessage(err)}` }] };
+        return { content: [{ type: "text", text: `run_task error: ${renderThrownChain({ cause: err })}` }] };
       }
     },
   );
@@ -370,7 +371,7 @@ function buildServer(env: Env, agentName: string): McpServer {
           : `Message ${outcome.status} to ${peer} (id ${outcome.message_id}).`;
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `send_peer error: ${errorMessage(err)}` }] };
+        return { content: [{ type: "text", text: `send_peer error: ${renderThrownChain({ cause: err })}` }] };
       }
     },
   );
@@ -390,7 +391,7 @@ function buildServer(env: Env, agentName: string): McpServer {
           : peers.map((p) => `- ${p.name}${p.displayName ? ` (${p.displayName})` : ""}`).join("\n");
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `list_peers error: ${errorMessage(err)}` }] };
+        return { content: [{ type: "text", text: `list_peers error: ${renderThrownChain({ cause: err })}` }] };
       }
     },
   );
@@ -446,7 +447,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         const advanced: ReleaseChange = await agent.transitionReleaseChange(changeId, status);
         return { content: [{ type: "text", text: `Change ${advanced.id} → ${advanced.status}.` }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `release error: ${errorMessage(err)}` }] };
+        return { content: [{ type: "text", text: `release error: ${renderThrownChain({ cause: err })}` }] };
       }
     },
   );
@@ -467,7 +468,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         const content = await agent.getMemoryContent();
         return { contents: [{ uri: uri.href, text: content, mimeType: "text/markdown" }] };
       } catch (err) {
-        return { contents: [{ uri: uri.href, text: `(error: ${errorMessage(err)})`, mimeType: "text/plain" }] };
+        return { contents: [{ uri: uri.href, text: `(error: ${renderThrownChain({ cause: err })})`, mimeType: "text/plain" }] };
       }
     },
   );
@@ -492,7 +493,7 @@ async function authenticateMcpCaller(request: Request, env: Env): Promise<{ user
     return { userId: (await authenticateRequest(request, env)).userId };
   } catch (e) {
     const status = e instanceof AuthError ? e.status : 500;
-    const message = e instanceof Error ? e.message : String(e);
+    const message = renderThrownChain({ cause: e });
     return withCors(Response.json({ error: message }, { status }));
   }
 }
@@ -529,10 +530,7 @@ export async function handleMcpRequest(request: Request, env: Env): Promise<Resp
     const resp = await transport.handleRequest(request);
     return withCors(resp);
   } catch (err) {
-    return withCors(Response.json({ error: errorMessage(err) }, { status: 500 }));
+    return withCors(Response.json({ error: renderThrownChain({ cause: err }) }, { status: 500 }));
   }
 }
 
-function errorMessage<Thrown>(thrown: Thrown): string {
-  return thrown instanceof Error ? thrown.message : String(thrown);
-}
