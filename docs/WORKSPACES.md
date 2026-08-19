@@ -62,11 +62,14 @@ agents are the actors that work inside it.
 - **One default agent, more on demand.** Three kinds of extra actor, and which
   one you get depends on whether the work is ephemeral, durable-in-workspace, or
   cross-workspace:
-  - **Heads** (`agents`, `action: 'fork'`) are ephemeral. Hosted heads run over
-    the canonical workspace with actor-private shell state and scaffold. Local
-    heads use private scratch and address the canonical parent through
-    `parent.*`. Their findings merge back. MCTS rollouts use the same facet
-    class in a separate toolless mode and do not acquire that runtime.
+  - **Search nodes** (`agents`, `action: 'swarm'`) are ephemeral. A node is a full
+    agent on the same turn loop as the orchestrator: it takes as many turns as it
+    needs, backgrounds slow work, and is woken when that work settles. Hosted
+    nodes run over the canonical workspace with actor-private shell state and
+    scaffold. Local nodes use private scratch and address the canonical parent
+    through `parent.*`. Their answers are scored by the verifier the caller
+    declared. MCTS rollouts use the same facet class in a separate toolless mode
+    and do not acquire that runtime.
   - **Subordinates** (`agents`, `action: 'hire'`) are durable. Each is a
     `SubordinateAgent` facet with its own SQL history and full turn loop, using
     the canonical workspace files and the parent's sandbox/laptop planes.
