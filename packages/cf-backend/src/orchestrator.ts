@@ -136,9 +136,9 @@ import {
   // ── Read models: the folds a surface asks for, one implementation each ──
   getAgentStatus, getChatHistoryPage, getToolList, readLatestSearchTree, readSearchTree,
   readSearchNodeDetail, type SearchNodeDetail,
-  listForkRuns, readForkRun, type ForkRunSummary,
+  listForkRuns, type ForkRunSummary,
   readNodeTranscript, type NodeTranscriptView,
-  readExplorationCanvas, type ExplorationCanvasRun,
+  readExplorationCanvas, readExplorationRun, type ExplorationCanvasRun,
   listRecordObjectives, listRecordCells, readRecordCell,
   type RecordObjectiveSummary, type RecordCellSummary,
   type RecordObjectiveHandle, type RecordCellHandle, type ExplorationRecord,
@@ -1748,21 +1748,28 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * A page of every fork this workspace has run, newest first, whichever settle
-   * policy it chose — the one entry point the Exploration surface lists. Detail
-   * stays per-mechanism (`getSearchTree` for a competition, `getHeadRuns` for a
-   * merge); this is the list they are both reached from.
+   * A page of every exploration run this workspace has, newest first — the one entry
+   * point the Exploration surface lists.
    *
-   * Cursored because a bare `LIMIT 20` said "that is every fork" about the
-   * newest twenty, and the twenty-first was then reachable only by permalink.
+   * Cursored because a bare `LIMIT 20` said "that is every run" about the newest
+   * twenty, and the twenty-first was then reachable only by permalink.
    */
   @callable() async listForkRuns(request?: PageRequest): Promise<Page<ForkRunSummary>> {
     return listForkRuns(this.boundSql, request?.cursor ?? null, request?.limit);
   }
 
-  /** One named fork for a permalink, independent of the recent-list window. */
-  @callable() async getForkRun(rootId: string): Promise<ForkRunSummary | null> {
-    return readForkRun(this.boundSql, rootId);
+  /**
+   * One named run for a permalink, independent of the recent-list window — the SAME
+   * composed row {@link getExplorationCanvas} pages.
+   *
+   * The composed row rather than the bare summary, because the parameters used to
+   * travel only on the canvas page: the full-screen drill-down that opens one run by
+   * id had no way to read that run's own knobs, so the judge clamp was visible in the
+   * list column and invisible in the view with room to show it. Fetching a page of
+   * thirty runs and their trees to render one is not the answer.
+   */
+  @callable() async getForkRun(rootId: string): Promise<ExplorationCanvasRun | null> {
+    return readExplorationRun(this.boundSql, rootId);
   }
 
   /**

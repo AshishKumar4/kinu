@@ -31,7 +31,7 @@ import {
 function forkStore(): TestSql {
   const store = createTestSql();
   initSearchTables(store.execRaw, store.sql);
-  initMctsSearchTable(store.execRaw);
+  initMctsSearchTable(store.execRaw, store.sql);
   initAlternateTakesTable(store.execRaw, store.sql);
   initHeadsTables(store.execRaw, store.sql);
   return store;
@@ -77,14 +77,14 @@ function seedHeads(sql: SqlExecutor, opts: { root: string; heads: number }): voi
   }
 }
 
-describe('scoreExploration — MCTS reached, branched and ranked', () => {
+describe('scoreExploration — a search tree reached, branched and ranked', () => {
   test('a converged multi-branch search scores a non-zero denominator and passes', () => {
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-a', branches: 3, winner: 1, value: 0.91 });
 
     const score = scoreExploration(store.sql);
 
-    expect(score.competedRuns).toBe(1);
+    expect(score.searchRuns).toBe(1);
     expect(score.branchedRuns).toBe(1);
     expect(score.rankedRuns).toBe(1);
     expect(score.durablyRankedRuns).toBe(1);
@@ -102,7 +102,7 @@ describe('scoreExploration — MCTS reached, branched and ranked', () => {
 
     const score = scoreExploration(store.sql);
 
-    expect(score.competedRuns).toBe(1);
+    expect(score.searchRuns).toBe(1);
     expect(score.branchedRuns).toBe(1);
     expect(score.rankedRuns).toBe(0);
     expect(score.durablyRankedRuns).toBe(0);
@@ -115,7 +115,7 @@ describe('scoreExploration — MCTS reached, branched and ranked', () => {
 
     const score = scoreExploration(store.sql);
 
-    expect(score.competedRuns).toBe(1);
+    expect(score.searchRuns).toBe(1);
     expect(score.branchedRuns).toBe(0);
     store.close();
   });
@@ -123,21 +123,21 @@ describe('scoreExploration — MCTS reached, branched and ranked', () => {
   test('an empty store reports a ZERO denominator, not a pass', () => {
     const store = forkStore();
     const score = scoreExploration(store.sql);
-    expect(score.competedRuns).toBe(0);
+    expect(score.searchRuns).toBe(0);
     expect(score.branchedRuns).toBe(0);
     expect(score.runs).toEqual([]);
     store.close();
   });
 
-  test('a merged fork is not counted as a competed run', () => {
+  test('a journal-only run is not counted as a run with a search tree', () => {
     const store = forkStore();
     seedHeads(store.sql, { root: 'merge-a', heads: 2 });
-    expect(scoreExploration(store.sql).competedRuns).toBe(0);
+    expect(scoreExploration(store.sql).searchRuns).toBe(0);
     store.close();
   });
 });
 
-describe('scoreSettleVisibility — every settle mode writes where the reader reads', () => {
+describe('scoreSettleVisibility — every half a run writes is where the reader reads', () => {
   test('both stores populated: every written root is visible', () => {
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-a', branches: 2, winner: 0 });
@@ -155,9 +155,9 @@ describe('scoreSettleVisibility — every settle mode writes where the reader re
   });
 
   test('the reader is asked for more rows than were written, so its window is never the failure', () => {
-    // `listForkRuns` slices AFTER merging its two halves. With a default window
-    // of 20 and 25 merged runs, a real search would read as invisible — the
-    // scorer must not be able to blame the reader's limit.
+    // The reader pages its merged order. With a default window of 20 and 25
+    // journalled runs, a real search would read as invisible — the scorer must not
+    // be able to blame the reader's limit.
     const store = forkStore();
     for (let i = 0; i < 25; i++) seedHeads(store.sql, { root: `merge-${String(i)}`, heads: 1 });
     seedSearch(store.sql, { root: 'search-late', branches: 2, winner: 0 });
@@ -170,47 +170,46 @@ describe('scoreSettleVisibility — every settle mode writes where the reader re
   });
 
   test('NEGATIVE CONTROL: a reader that reads only head_journal loses every search', () => {
-    // The Exploration pane as it shipped the first time. `settle=mcts` wrote
-    // search_nodes, the reader read head_journal, and the pane was empty for a
-    // fork that had really run. The scorer must call that a failure and say
-    // which store it happened in.
+    // The Exploration pane as it shipped the first time. A tree search wrote
+    // search_nodes, the reader read head_journal, and the pane was empty for a run
+    // that had really run. The scorer must call that a failure and say which store
+    // it happened in.
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-a', branches: 2, winner: 0 });
     seedHeads(store.sql, { root: 'merge-a', heads: 2 });
 
-    const mergedOnly = (sql: SqlExecutor, limit: number) =>
-      listForkRuns(sql, null, limit).items.filter((run) => run.settle === 'merged');
-    const score = scoreSettleVisibility(store.sql, mergedOnly);
+    const transcriptsOnly = (sql: SqlExecutor, limit: number) =>
+      listForkRuns(sql, null, limit).items.filter((run) => !run.hasSearchTree);
+    const score = scoreSettleVisibility(store.sql, transcriptsOnly);
 
     expect(score.rootsWritten).toBe(2);
     expect(score.invisibleRoots).toEqual(['search-a']);
-    const competed = score.stores.find((half) => half.store === 'search_nodes');
-    expect(competed).toEqual({
-      settle: 'competed', store: 'search_nodes', present: true,
+    const tree = score.stores.find((half) => half.store === 'search_nodes');
+    expect(tree).toEqual({
+      half: 'tree', store: 'search_nodes', present: true,
       rootsWritten: 1, rootsVisible: 0, invisibleRoots: ['search-a'],
     });
     store.close();
   });
 
-  test('NEGATIVE CONTROL: a reader that reads only search_nodes loses every merge', () => {
+  test('NEGATIVE CONTROL: a reader that reads only search_nodes loses every journalled run', () => {
     // The same bug the other way round, which is how it shipped the second
     // time. Both directions must fail, or the scorer only guards one of them.
     const store = forkStore();
     seedSearch(store.sql, { root: 'search-a', branches: 2, winner: 0 });
     seedHeads(store.sql, { root: 'merge-a', heads: 2 });
 
-    const competedOnly = (sql: SqlExecutor, limit: number) =>
-      listForkRuns(sql, null, limit).items.filter((run) => run.settle === 'competed');
-    const score = scoreSettleVisibility(store.sql, competedOnly);
+    const treeOnly = (sql: SqlExecutor, limit: number) =>
+      listForkRuns(sql, null, limit).items.filter((run) => run.hasSearchTree);
+    const score = scoreSettleVisibility(store.sql, treeOnly);
 
     expect(score.invisibleRoots).toEqual(['merge-a']);
     store.close();
   });
 
-  test('NEGATIVE CONTROL: a settle mode writing a store no reader reads is invisible', () => {
-    // `single-shot` is registered and dispatchable and writes NEITHER store, so
-    // a fork settled that way leaves no trace at all. Modelled here as a root
-    // present in a write store that the reader has no query for: the shape any
+  test('NEGATIVE CONTROL: a writer filling a store no reader reads is invisible', () => {
+    // A run that writes NEITHER store leaves no trace at all. Modelled here as a
+    // root present in a write store that the reader has no query for: the shape any
     // future third store would take.
     const store = forkStore();
     seedHeads(store.sql, { root: 'merge-a', heads: 1 });

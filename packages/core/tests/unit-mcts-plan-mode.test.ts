@@ -11,7 +11,7 @@ function initTables(runtime: ReturnType<typeof createTestRuntime>['rt']): void {
   initSearchTables(runtime.storage.execRaw, runtime.storage.sql);
   initScaffoldTables(runtime.storage.execRaw, runtime.storage.sql);
   initCraftScoreTables(runtime.storage.execRaw);
-  initMctsSearchTable(runtime.storage.execRaw);
+  initMctsSearchTable(runtime.storage.execRaw, runtime.storage.sql);
 }
 
 describe('MCTS in Plan mode', () => {

@@ -726,33 +726,42 @@ const FORK_RUNS: ForkRunSummary[] = [
     // Derived, because `forkbig` generates 520 rows for this same run and a hardcoded
     // 105 made the scale frame photograph `105 branches` beside `Branches: 519`.
     id: "n000", task: "Find why the SAVE20 coupon 500s", startedAt: NOW - 36e5,
-    status: "completed", settle: "competed",
+    // Both facts, and they come from the same fixture stores that give each row its
+    // halves below (SEARCH_ROWS_BY_ROOT / JOURNAL_BY_ROOT): a judged MCTS search has
+    // the tree and no journal, and a swarm has both — which is the row no frame could
+    // photograph while one settlement tag admitted a single half per run.
+    status: "completed", hasSearchTree: true, hasNodeTranscripts: false,
     branches: MCTS_ROWS.length - 1, winnerScore: 0.91,
   },
   {
     id: "sw000", task: "Reduce checkout p95 without regressing the coupon guard",
-    startedAt: NOW - 22e5, status: "completed", settle: "competed",
+    startedAt: NOW - 22e5, status: "completed",
+    hasSearchTree: true, hasNodeTranscripts: true,
     branches: SWARM_ROWS.length - 1, winnerScore: 0.93,
   },
   {
     id: "pv000", task: "Prove that applyCoupon terminates for every coupon row",
-    startedAt: NOW - 78e5, status: "completed", settle: "competed",
+    startedAt: NOW - 78e5, status: "completed",
+    hasSearchTree: true, hasNodeTranscripts: true,
     branches: PROVE_ROWS.length - 1, winnerScore: 0.94,
   },
   {
     // Branchless BY CONSTRUCTION: the root is the only row, so `branches` is 0 and
     // the surface owes the reader a cause rather than an empty canvas.
     id: "rf000", task: "Find a coupon row that makes applyCoupon throw",
-    startedAt: NOW - 4e5, status: "failed", settle: "competed",
+    startedAt: NOW - 4e5, status: "failed",
+    hasSearchTree: true, hasNodeTranscripts: true,
     branches: 0, winnerScore: null,
   },
   {
     id: "root-merge-1", task: "Check every other call site that indexes rules by kind",
-    startedAt: NOW - 52e5, status: "completed", settle: "merged", branches: 5, winnerScore: null,
+    startedAt: NOW - 52e5, status: "completed", hasSearchTree: false,
+    hasNodeTranscripts: true, branches: 5, winnerScore: null,
   },
   {
     id: "root-merge-0", task: "Audit the CLI surface", startedAt: NOW - 9 * 36e5,
-    status: "partial", settle: "merged", branches: 2, winnerScore: null,
+    status: "partial", hasSearchTree: false, hasNodeTranscripts: true,
+    branches: 2, winnerScore: null,
   },
   ...olderForks(),
 ];
@@ -773,15 +782,16 @@ function olderForks(): ForkRunSummary[] {
     "Establish whether the 500 predates the pricing refactor",
   ];
   return Array.from({ length: 31 }, (_, i) => {
-    const competed = i % 3 === 0;
+    const searched = i % 3 === 0;
     return {
-      id: competed ? `n${String(100 + i).padStart(3, "0")}` : `root-merge-${100 + i}`,
+      id: searched ? `n${String(100 + i).padStart(3, "0")}` : `root-merge-${100 + i}`,
       task: `${tasks[i % tasks.length]!}${i >= tasks.length ? ` (attempt ${Math.floor(i / tasks.length) + 1})` : ""}`,
       startedAt: NOW - (10 + i) * 36e5,
       status: i % 7 === 5 ? "partial" as const : "completed" as const,
-      settle: competed ? "competed" as const : "merged" as const,
-      branches: competed ? 9 + (i % 5) : 2 + (i % 3),
-      winnerScore: competed ? 0.62 + ((i % 7) * 0.04) : null,
+      hasSearchTree: searched,
+      hasNodeTranscripts: !searched,
+      branches: searched ? 9 + (i % 5) : 2 + (i % 3),
+      winnerScore: searched ? 0.62 + ((i % 7) * 0.04) : null,
     };
   });
 }
@@ -1048,16 +1058,27 @@ const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
  */
 const FORK_PARAMS: ForkRunParams[] = [
   {
-    rootId: "n000", policy: "mcts", budget: 24, branches: 4,
-    maxDepth: 6, explorationWeight: 1.41,
-    // A CLAMPED ensemble, deliberately: `judgeSamples` shares its call pool with
-    // check generation, so this run asked for twenty and ran three. It is the
-    // longest value the parameter list renders, which is the one worth
-    // photographing.
-    judgeSamplesRequested: 20, judgeSamplesRealised: 3, mode: "build",
+    rootId: "n000",
+    search: {
+      budget: 24, branches: 4, maxDepth: 6, explorationWeight: 1.41,
+      // A CLAMPED ensemble, deliberately: `judgeSamples` shares its call pool with
+      // check generation, so this run asked for twenty and was observed running
+      // three. It is the longest value the parameter list renders, which is the one
+      // worth photographing.
+      judgeSamplesRequested: 20, judgeSamplesRealised: 3, mode: "build",
+    },
+    transcripts: null,
   },
-  { rootId: "root-merge-1", policy: "merge", mergeStrategy: "synthesize", branches: 3 },
-  { rootId: "root-merge-0", policy: "merge", mergeStrategy: "best_of", branches: 2 },
+  {
+    rootId: "root-merge-1",
+    search: null,
+    transcripts: { mergeStrategy: "synthesize", branches: 3 },
+  },
+  {
+    rootId: "root-merge-0",
+    search: null,
+    transcripts: { mergeStrategy: "best_of", branches: 2 },
+  },
 ];
 
 /** Every store's rows for one run, keyed by the run's root id — the same key the

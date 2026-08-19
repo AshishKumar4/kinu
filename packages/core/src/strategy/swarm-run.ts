@@ -115,6 +115,7 @@ import { DEFAULT_CONFIG, DEFAULT_MAX_STEPS } from '../config';
 import { diversityAngle, siblingAngles } from '../mcts/diversity';
 import { explorePrompt, type ExplorePrompt } from '../mcts/explore-prompt';
 import { initSearchTables } from '../mcts/schemas';
+import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
 import { insertSearchNode } from '../mcts/record-node';
 import { backpropagate } from '../mcts/backpropagation';
 import { pruneLowValueBranches } from '../mcts/pruning';
@@ -173,6 +174,16 @@ import type {
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ModelCallSink } from '../events/model-call';
 import type { WorkMode } from '../prompting/surface';
+
+/**
+ * The lease epoch every ledger write of a swarm is stamped with.
+ *
+ * Always zero, and that is a property rather than a placeholder: the ledger's fencing
+ * exists so a RESUMED MCTS search can reclaim its lease and invalidate the executor
+ * still holding the old one, and a swarm has no resume to fence against — it settles
+ * or it is gone. `MctsSearchStore.begin` writes epoch 0 and nothing here bumps it.
+ */
+const SWARM_LEDGER_EPOCH = 0;
 
 /** What a run needs that a resolved call does not carry: a model to expand with, and
  *  a workspace to measure in. */
@@ -1471,6 +1482,13 @@ export async function runSwarm(
   // `head_journal`.
   initHeadsTables(deps.rt.storage.execRaw, sql);
   const journal = new HeadJournal(sql);
+  // The run-level ledger every search in this workspace has a row in. Initialised for
+  // the same reason the two above are, and written for the reason *Accepted and
+  // ignored* gives: a swarm wrote a tree and no ledger row, so the surface could read
+  // its structure and not one knob it ran under, and the judge clamp it computes and
+  // discloses was persisted nowhere at all.
+  initMctsSearchTable(deps.rt.storage.execRaw, sql);
+  const searchLedger = new MctsSearchStore(sql);
   // The leaderboard *The records store* governs, initialised for the same reason the two
   // above are: a workspace that has never run a search has no `exploration_records`, and
   // the carry-in read immediately below would be a query against a table that does not
@@ -1585,7 +1603,32 @@ export async function runSwarm(
   // OWNED BY A TYPE rather than by a `let`, because arbitration no longer happens only
   // in this loop: an agent node asks from inside its own concurrent tool loop, so the
   // read and the debit have to be one step (`swarm-budget.ts`).
-  const budget = new SwarmBudget(maxDepth * branches);
+  const expansionBudget = maxDepth * branches;
+  const budget = new SwarmBudget(expansionBudget);
+  // THE RUN'S OWN LEDGER ROW, here rather than beside the other two run headers above
+  // because the budget it records is derived immediately above it. Written at the START
+  // so a live swarm reads as running and a settled one as settled, which is the same
+  // discipline `mcts/engine.ts` keeps: the alternative — one row at the settle barrier —
+  // would leave every in-flight run indistinguishable from one that never recorded
+  // anything. Knobs left `undefined` are omitted by `JSON.stringify`, and the read model
+  // reports an absent knob as unrecorded rather than as a default it invented.
+  searchLedger.begin({
+    rootId,
+    task: resolved.task,
+    engine: 'swarm',
+    // A swarm's root is the workspace as found, not a message in a conversation.
+    rootMsgId: null,
+    config: {
+      budget: expansionBudget,
+      branches,
+      mode: deps.mode,
+      maxDepth,
+      explorationWeight: resolved.config.explorationWeight,
+      judgeSamples: judgeSamples ?? undefined,
+    },
+    budget: expansionBudget,
+    now: Date.now(),
+  });
 
   /**
    * What every agent node of this run is handed, built ONCE.
@@ -2068,6 +2111,9 @@ export async function runSwarm(
       // Every row in this tree was written beside its content, here, in this call. A
       // row with no content is an inconsistency rather than a state, and expanding
       // from an unknown parent would produce children nothing can explain.
+      // The ledger is settled on the way out: a run that returned a refusal is not a
+      // run still going, and this row is what the surface reads its status from.
+      searchLedger.fail(rootId, SWARM_LEDGER_EPOCH, Date.now());
       return unavailable(`the search selected node ${selected.id} of its own tree and this run holds `
         + 'no content for it, so the expansion would have no parent to continue from. That is an '
         + 'inconsistent tree rather than a missing instrument, and it stops the run.');
@@ -2233,6 +2279,7 @@ export async function runSwarm(
         // nothing is published, and the reason reaches the caller intact.
         // NAMED, because there are two scorers now and "the verifier faulted" on a judged
         // run sends a reader to an instrument the run never ran.
+        searchLedger.fail(rootId, SWARM_LEDGER_EPOCH, Date.now());
         return unavailable(`the ${measures ? 'verifier' : 'judge'} faulted while scoring `
           + `${expansion.id}, so no number this run produced can be trusted: ${outcome.error}`);
       }
@@ -2309,6 +2356,11 @@ export async function runSwarm(
         // and not counted as a clamp of zero: an evaluation that short-circuited before
         // the ensemble never asked.
         ensembles.push(outcome.ensemble);
+        // And onto the run's ledger row, which is where a surface can read it: the
+        // settle report discloses this clamp to the caller of THIS call, and a
+        // measurement disclosed once and persisted nowhere is a measurement taken and
+        // dropped. The store keeps the smallest any candidate reached.
+        searchLedger.observeJudgeEnsemble(rootId, outcome.ensemble);
         if (judgeSamples !== null
           && outcome.ensemble < judgeSamples
           && !clampsReported.has(outcome.ensemble)) {
@@ -2651,6 +2703,18 @@ export async function runSwarm(
         ? 'budget'
         : 'settled',
   });
+
+  // THE LEDGER, SETTLED. The progress columns say what the run finished rather than
+  // where it was checkpointed, because a swarm has no checkpoint: its budget unit is
+  // one child, so the candidates it produced ARE its spent iterations and the budget
+  // it never spent is what is left. `aborted` is a failed run here — the caller gets a
+  // settle report either way, but a row that says `converged` about a run cut short
+  // would make the surface claim a search settled that did not.
+  searchLedger.checkpoint(
+    rootId, SWARM_LEDGER_EPOCH, candidates.length, budget.remaining, Date.now(),
+  );
+  if (aborted) searchLedger.fail(rootId, SWARM_LEDGER_EPOCH, Date.now());
+  else searchLedger.converge(rootId, SWARM_LEDGER_EPOCH, Date.now());
   return {
     preset: resolved.preset,
     label: resolved.label,

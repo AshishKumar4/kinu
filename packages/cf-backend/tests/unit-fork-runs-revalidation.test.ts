@@ -13,7 +13,7 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CompetedForkParams, ForkRunParams, ForkRunSummary, HeadRunView } from '@proteus/core';
+import type { ForkRunParams, ForkRunSummary, HeadRunView, SearchRunParams } from '@proteus/core';
 import type { BackgroundJob } from '../src/lib/protocol';
 import {
   FORK_IDLE_REVALIDATE_MS, FORK_REVALIDATE_MS, forkRunsRevalidateMs, hasLiveForkRun,
@@ -24,7 +24,7 @@ import { isCompeted, principalVariation, maxVisits } from '../src/components/swa
 function summary(over: Partial<ForkRunSummary> = {}): ForkRunSummary {
   return {
     id: 'r1', task: 'compare X vs Y', startedAt: 0, status: 'completed',
-    settle: 'merged', branches: 2, winnerScore: null, ...over,
+    hasSearchTree: false, hasNodeTranscripts: true, branches: 2, winnerScore: null, ...over,
   };
 }
 
@@ -64,7 +64,7 @@ function backgroundJob(status: BackgroundJob['status']): BackgroundJob {
 describe('live fork runs', () => {
   test('a run is live while it is still running, whichever way it settles', () => {
     expect(hasLiveForkRun([summary({ status: 'running' })])).toBe(true);
-    expect(hasLiveForkRun([summary({ settle: 'competed', status: 'running' })])).toBe(true);
+    expect(hasLiveForkRun([summary({ hasSearchTree: true, status: 'running' })])).toBe(true);
     // …and a live run anywhere in the list counts.
     expect(hasLiveForkRun([summary(), summary({ id: 'r2', status: 'running' })])).toBe(true);
   });
@@ -255,34 +255,37 @@ describe('a merge is a tree of depth 1', () => {
 // used to render the request alone, so a search that asked for 20 judges and ran
 // 3 read as a search that ran 20.
 describe('the judges row names what the search actually ran', () => {
-  function competed(over: Partial<CompetedForkParams> = {}): ForkRunParams {
+  function searched(over: Partial<SearchRunParams> = {}): ForkRunParams {
     return {
-      rootId: 'r1', policy: 'mcts', budget: 8, branches: 3,
-      maxDepth: null, explorationWeight: null,
-      judgeSamplesRequested: 3, judgeSamplesRealised: 3, mode: null, ...over,
+      rootId: 'r1',
+      search: {
+        budget: 8, branches: 3, maxDepth: null, explorationWeight: null,
+        judgeSamplesRequested: 3, judgeSamplesRealised: 3, mode: null, ...over,
+      },
+      transcripts: null,
     };
   }
 
   test('a clamped ensemble names both numbers, realised first', () => {
-    const rows = forkParamRows(competed({ judgeSamplesRequested: 20, judgeSamplesRealised: 3 }));
+    const rows = forkParamRows(searched({ judgeSamplesRequested: 20, judgeSamplesRealised: 3 }));
     expect(rows.find((row) => row.label === 'judges')?.value).toBe('3 of 20 requested');
   });
 
   test('an unrecoverable realised size is not reported as an honoured request', () => {
-    // The record carried the request but not the call budget, so the realised
-    // size is unknown. Unknown says "requested" and makes no per-branch claim:
-    // "20 per branch" would assert the very thing that cannot be known here.
-    const rows = forkParamRows(competed({ judgeSamplesRequested: 20, judgeSamplesRealised: null }));
+    // No candidate's ensemble was ever observed, so the realised size is unknown.
+    // Unknown says "requested" and makes no per-branch claim: "20 per branch" would
+    // assert the very thing that cannot be known here.
+    const rows = forkParamRows(searched({ judgeSamplesRequested: 20, judgeSamplesRealised: null }));
     expect(rows.find((row) => row.label === 'judges')?.value).toBe('20 requested');
   });
 
   test('a request the budget funded reads as the plain per-branch figure', () => {
-    const rows = forkParamRows(competed());
+    const rows = forkParamRows(searched());
     expect(rows.find((row) => row.label === 'judges')?.value).toBe('3 per branch');
   });
 
   test('a run whose request was never recorded shows no judges row at all', () => {
-    const rows = forkParamRows(competed({ judgeSamplesRequested: null, judgeSamplesRealised: null }));
+    const rows = forkParamRows(searched({ judgeSamplesRequested: null, judgeSamplesRealised: null }));
     expect(rows.some((row) => row.label === 'judges')).toBe(false);
   });
 });

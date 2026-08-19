@@ -14,6 +14,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import { reconcileColumns } from '../identity/columns';
 import type { MCTSConfig } from '../types/mcts';
 import type { WorkMode } from '../prompting/surface';
 
@@ -35,6 +36,39 @@ const PersistedMCTSConfigSchema: v.GenericSchema<PersistedMCTSConfig> = v.object
   maxEvalLLMCalls: v.optional(v.number()),
   takesEpsilon: v.optional(v.number()),
 });
+
+/**
+ * The engines that write this ledger, and the column that tells their rows apart.
+ *
+ * `mcts` is `mcts/engine.ts` — a judged search with a resume loop. `swarm` is
+ * `strategy/swarm-run.ts` — an objective-scored search whose nodes are agents, and
+ * which has no resume: it settles or it is gone. The discriminator is load-bearing
+ * rather than descriptive. {@link MctsSearchStore.findResumable} keys on
+ * `status='running' AND task=?`, so without it a swarm that died mid-run would be
+ * handed to the MCTS loop as a resumable search of the same task, which would then
+ * expand the swarm's tree with judged branches under the swarm's own root id.
+ */
+export type SearchEngine = 'mcts' | 'swarm';
+
+/**
+ * The tree knobs a ledger row records: the subset every engine that writes this
+ * table states, and exactly what `read-models/fork-params.ts` reads back.
+ *
+ * A resumable MCTS search records a superset — {@link PersistedMCTSConfig}, which is
+ * assignable to this — because its loop needs every knob it was configured with. A
+ * swarm records these and nothing else, because these are the knobs it has.
+ */
+export interface PersistedSearchKnobs {
+  /** Expansions the run was given: iterations for `mcts`, children for `swarm`. */
+  readonly budget: number;
+  readonly branches: number;
+  readonly mode?: WorkMode;
+  readonly maxDepth?: number;
+  readonly explorationWeight?: number;
+  /** Judge samples per branch the run ASKED for. What it REALISED is observed
+   *  rather than predicted — see {@link MctsSearchStore.observeJudgeEnsemble}. */
+  readonly judgeSamples?: number;
+}
 
 /** A resumable (interrupted) search: enough to continue the loop from checkpoint. */
 export interface ResumableSearch {
@@ -63,6 +97,10 @@ interface Row {
 export interface MctsSearchRunSummary {
   rootId: string;
   task: string;
+  /** Which engine ran it. Two do, and their rows differ in what the progress
+   *  columns mean: a swarm never checkpoints, so its `iteration` is the children it
+   *  finished and its `budget` is what it had left when it settled. */
+  engine: SearchEngine;
   status: SearchStatus;
   iteration: number;
   budget: number;
@@ -77,19 +115,33 @@ export function persistableMCTSConfig(config: MCTSConfig): PersistedMCTSConfig {
   return rest;
 }
 
-export function initMctsSearchTable(execRaw: RawSqlExec): void {
+/**
+ * Columns `mcts_search_runs` gained after its first release, and the one place they
+ * are listed. `CREATE TABLE IF NOT EXISTS` is a no-op on a workspace whose table
+ * predates one of them while every reader still selects it by name — the failure
+ * `SEARCH_NODES_POST_RELEASE_COLUMNS` exists for.
+ */
+const MCTS_SEARCH_RUNS_POST_RELEASE_COLUMNS = {
+  engine: `TEXT NOT NULL DEFAULT 'mcts'`,
+  judge_samples_realised: 'INTEGER',
+} satisfies Readonly<Record<string, string>>;
+
+export function initMctsSearchTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
   execRaw(`CREATE TABLE IF NOT EXISTS mcts_search_runs (
     root_id      TEXT PRIMARY KEY,
     task         TEXT NOT NULL,
+    engine       TEXT NOT NULL DEFAULT 'mcts',
     root_msg_id  TEXT NOT NULL,
     config_json  TEXT NOT NULL,
     iteration    INTEGER NOT NULL DEFAULT 0,
     budget       INTEGER NOT NULL,
     status       TEXT NOT NULL DEFAULT 'running',
     epoch        INTEGER NOT NULL DEFAULT 0,
+    judge_samples_realised INTEGER,
     created_at   INTEGER NOT NULL,
     updated_at   INTEGER NOT NULL
   )`);
+  reconcileColumns(sql, execRaw, 'mcts_search_runs', MCTS_SEARCH_RUNS_POST_RELEASE_COLUMNS);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_mcts_search_status_task ON mcts_search_runs(status, task, updated_at)`);
 }
 
@@ -100,18 +152,45 @@ const SETTLED_RETENTION_MS = 24 * 60 * 60 * 1000;
 export class MctsSearchStore {
   constructor(private readonly sql: SqlExecutor) {}
 
-  /** Record a fresh search run (status='running', epoch 0). Also prunes old
-   *  settled rows so the table stays bounded. */
+  /**
+   * Record a fresh search run (status='running', epoch 0). Also prunes old settled
+   * rows so the table stays bounded.
+   *
+   * `rootMsgId` is null for an engine whose root is not a chat message — the swarm's
+   * root is the workspace as found. The column is `NOT NULL` and relaxing it would be
+   * a table rebuild, so a rootless run stores the empty string; nothing reads it back
+   * except the resume path, which {@link findResumable} scopes to `mcts` rows.
+   */
   begin(opts: {
-    rootId: string; task: string; rootMsgId: string;
-    config: PersistedMCTSConfig; budget: number; now: number;
+    rootId: string; task: string; engine: SearchEngine; rootMsgId: string | null;
+    config: PersistedSearchKnobs; budget: number; now: number;
   }): void {
     void this.sql`DELETE FROM mcts_search_runs
       WHERE status != 'running' AND updated_at < ${opts.now - SETTLED_RETENTION_MS}`;
     void this.sql`INSERT OR REPLACE INTO mcts_search_runs
-      (root_id, task, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at)
-      VALUES (${opts.rootId}, ${opts.task}, ${opts.rootMsgId}, ${JSON.stringify(opts.config)},
-              0, ${opts.budget}, 'running', 0, ${opts.now}, ${opts.now})`;
+      (root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
+       judge_samples_realised, created_at, updated_at)
+      VALUES (${opts.rootId}, ${opts.task}, ${opts.engine}, ${opts.rootMsgId ?? ''},
+              ${JSON.stringify(opts.config)},
+              0, ${opts.budget}, 'running', 0, NULL, ${opts.now}, ${opts.now})`;
+  }
+
+  /**
+   * Record the ensemble a candidate of this run was OBSERVED to sample, keeping the
+   * SMALLEST any candidate reached.
+   *
+   * The smallest rather than the last, because the number answers "was the request
+   * honoured": the two spend knobs share one per-evaluation call pool, so a candidate
+   * the pool could not fund realises fewer, and a run that funded one candidate and
+   * clamped the next did clamp. Folded in SQL so concurrent nodes of one swarm cannot
+   * lose an observation to a read-modify-write, and never predicted from the knobs —
+   * the pool arithmetic gives the ceiling, which an evaluation that short-circuited
+   * before judging does not reach.
+   */
+  observeJudgeEnsemble(rootId: string, realised: number): void {
+    void this.sql`UPDATE mcts_search_runs
+      SET judge_samples_realised = MIN(COALESCE(judge_samples_realised, ${realised}), ${realised})
+      WHERE root_id = ${rootId}`;
   }
 
   /** Persist loop progress. Fenced: a stale epoch (a zombie executor after a
@@ -121,11 +200,18 @@ export class MctsSearchStore {
       WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
   }
 
-  /** The most recently-updated still-running search for a task — the resume
-   *  source when an evicted tree search is re-driven. */
+  /**
+   * The most recently-updated still-running MCTS search for a task — the resume
+   * source when an evicted tree search is re-driven.
+   *
+   * Scoped to this engine's own rows: a swarm has no resume, and its tree is scored
+   * against an objective this loop has no seam for, so re-entering one here would
+   * grow a swarm's tree with judged branches and report the result under the
+   * swarm's root id.
+   */
   findResumable(task: string, mode: WorkMode = 'build'): ResumableSearch | null {
     const rows = this.sql<Row>`SELECT root_id, task, root_msg_id, config_json, iteration, budget, status, epoch
-      FROM mcts_search_runs WHERE status='running' AND task=${task}
+      FROM mcts_search_runs WHERE status='running' AND task=${task} AND engine='mcts'
       ORDER BY updated_at DESC`;
     for (const row of rows) {
       // `begin` wrote this column with JSON.stringify, so a row that will not
@@ -182,12 +268,14 @@ export class MctsSearchStore {
    *  run, and which root_id does the latest one own" without touching
    *  search_nodes at all. */
   list(limit = 20): MctsSearchRunSummary[] {
-    const rows = this.sql<Row & { created_at: number; updated_at: number }>`
-      SELECT root_id, task, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at
+    const rows = this.sql<Row & { engine: string; created_at: number; updated_at: number }>`
+      SELECT root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
+             created_at, updated_at
       FROM mcts_search_runs ORDER BY updated_at DESC LIMIT ${limit}`;
     return rows.map((r) => ({
       rootId: r.root_id,
       task: r.task,
+      engine: r.engine === 'swarm' ? 'swarm' : 'mcts',
       status: r.status === 'converged' || r.status === 'failed' ? r.status : 'running',
       iteration: r.iteration,
       budget: r.budget,

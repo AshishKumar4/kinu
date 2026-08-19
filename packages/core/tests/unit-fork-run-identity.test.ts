@@ -58,7 +58,7 @@ function freshJournal() {
   const execRaw = makeExecRaw(db);
   initHeadsTables(execRaw, makeSql(db));
   initSearchTables(execRaw, makeSql(db));
-  initMctsSearchTable(execRaw);
+  initMctsSearchTable(execRaw, makeSql(db));
   const sql = makeSql(db);
   return { db, sql, journal: new HeadJournal(sql) };
 }

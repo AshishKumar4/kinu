@@ -169,15 +169,17 @@ const RUN_DOT = {
  * named preset can be described by what it must have reported rather than by
  * which of two internal strategies wrote its rows.
  *
- * Without a resolution it falls back to the dispatch policy, which is all a legacy
- * search recorded. The row used to say only `merged`/`competed` — the outcome
- * vocabulary — so two runs dispatched differently were indistinguishable until
- * one of them happened to have a winner.
+ * Without a resolution it falls back to the half the run leads with, which is all a
+ * legacy search left behind. The row used to say `merged`/`competed` — the two
+ * settlements of a verb that no longer exists — so two runs dispatched differently
+ * were indistinguishable until one of them happened to have a winner, and a run that
+ * never settled read as "merged" with nothing merged.
  */
 export function describeSettle(
   run: ForkRunSummary, params?: ForkRunParams, resolution?: SwarmResolution,
 ): string {
   const branches = `${run.branches} branch${run.branches === 1 ? "" : "es"}`;
+
   const winner = run.winnerScore === null ? "" : ` · winner ${formatScore(run.winnerScore)}`;
   if (resolution === undefined) {
     return `settle=${settlePolicyOf(run, params)} · ${branches}${winner}`;
@@ -244,17 +246,20 @@ function ForkRunRow(
  * One run's per-node journal — why each node exists, what it reported, and how far
  * it got.
  *
- * Read for EVERY run, never only for one settle tag. An agent-unit search writes
- * `search_nodes` for the tree AND `head_journal` for each node's own agent run, so
- * a tag that admits one store per run cannot say whether this read has an answer;
- * asking is the only way to find out, and a run with no journal answers null. It is
- * also the only record of which nodes fanned a level in and of the preset the run
- * resolved, so skipping it for a search is what left both invisible.
+ * Asked for EVERY run that HAS one, never for one settle tag. An agent-unit search
+ * writes `search_nodes` for the tree AND `head_journal` for each node's own agent
+ * run, so a tag that admits one store per run could not say whether this read has an
+ * answer — the run's own `hasNodeTranscripts` can, and a run with none is spared the
+ * request rather than answered null by the server. It is also the only record of
+ * which nodes fanned a level in and of the preset the run resolved, so skipping it
+ * for a search is what left both invisible.
  */
 export function useForkRunDetail(run: ForkRunSummary, rpc: Rpc, hasActiveWork: boolean) {
   const load = useCallback(
-    () => rpc<HeadRunView | null>("getHeadRun", [run.id]),
-    [rpc, run.id],
+    () => run.hasNodeTranscripts
+      ? rpc<HeadRunView | null>("getHeadRun", [run.id])
+      : Promise.resolve<HeadRunView | null>(null),
+    [rpc, run.id, run.hasNodeTranscripts],
   );
   const revalidate = useCallback(
     () => (run.status === "running" || hasActiveWork ? FORK_REVALIDATE_MS : null),
@@ -285,8 +290,10 @@ export function useForkRunTree(
 ) {
   const detail = useForkRunDetail(run, rpc, hasActiveWork);
   const load = useCallback(
-    () => rpc<MctsRow[]>("getSearchTree", [run.id]),
-    [rpc, run.id],
+    () => run.hasSearchTree
+      ? rpc<MctsRow[]>("getSearchTree", [run.id])
+      : Promise.resolve<MctsRow[]>([]),
+    [rpc, run.id, run.hasSearchTree],
   );
   const revalidate = useCallback(
     () => (run.status === "running" || hasActiveWork ? FORK_REVALIDATE_MS : null),
@@ -294,9 +301,11 @@ export function useForkRunTree(
   );
   const { resource, reload } = useAsyncResource(load, revalidate, `search:${run.id}`);
   const rows = lastValue(resource);
-  const searched = rows !== null && rows.length > 0;
+  // The run's own fact, not the arrival of rows: a search still being written has a
+  // tree the reader must wait for rather than a journal to fall back to.
+  const searched = run.hasSearchTree;
   const fetched = searched
-    ? buildTree(rows)
+    ? (rows && rows.length > 0 ? buildTree(rows) : null)
     : (detail.headRun ? headRunToTree(detail.headRun) : null);
   return {
     tree: liveTree ?? fetched,

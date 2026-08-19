@@ -66,7 +66,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
   initRunEventTables(execRaw);
   initHeadsTables(execRaw, makeSql(db));
   initSearchTables(execRaw, makeSql(db));
-  initMctsSearchTable(execRaw);
+  initMctsSearchTable(execRaw, makeSql(db));
   initBackgroundJobsTable(execRaw, makeSql(db));
   const sql = makeSql(db);
 
@@ -120,14 +120,14 @@ function seedInvestigationWorkspace(dbPath: string): void {
   insertNode.run('search-new-c2', 'search-new-c1', 'search-new', 'branch a.1', 2, 5200);
 
   const mcts = new MctsSearchStore(sql);
-  mcts.begin({ rootId: 'search-old', task: 'investigate', rootMsgId: 'm1', config: { budget: 1, branches: 1 }, budget: 1, now: 1000 });
+  mcts.begin({ rootId: 'search-old', task: 'investigate', engine: 'mcts', rootMsgId: 'm1', config: { budget: 1, branches: 1 }, budget: 1, now: 1000 });
   mcts.converge('search-old', 0, 1500);
   // budget=10, checkpointed at iteration=6/budget-remaining=4 — the SAME
   // invariant mcts/engine.ts holds by construction (iteration + remaining
   // budget == the original total), and the exact shape that used to render
   // as the misleading "iter=6/4" fraction (looks like an overrun) instead of
   // "iter=6/10 (4 left)".
-  mcts.begin({ rootId: 'search-new', task: 'investigate', rootMsgId: 'm2', config: { budget: 10, branches: 3 }, budget: 10, now: 5000 });
+  mcts.begin({ rootId: 'search-new', task: 'investigate', engine: 'mcts', rootMsgId: 'm2', config: { budget: 10, branches: 3 }, budget: 10, now: 5000 });
   mcts.checkpoint('search-new', 0, 6, 4, 5300);
 
   // ── Background jobs: the job the run above detached and got polled, PLUS

@@ -252,7 +252,12 @@ export function useExplorationCanvas(
   };
 }
 
-/** One permalink target, independent of the bounded recent-fork list. */
+/**
+ * One permalink target, independent of the bounded recent-run list.
+ *
+ * The same composed row the canvas pages, so the drill-down can read the run's own
+ * dispatch parameters without fetching a page of thirty runs and their trees.
+ */
 export function useExactForkRun(
   rpc: Rpc,
   requestedId: string | null,
@@ -260,22 +265,23 @@ export function useExactForkRun(
 ) {
   const load = useCallback(
     () => requestedId === null
-      ? Promise.resolve<ForkRunSummary | null>(null)
-      : rpc<ForkRunSummary | null>("getForkRun", [requestedId]),
+      ? Promise.resolve<ExplorationCanvasRun | null>(null)
+      : rpc<ExplorationCanvasRun | null>("getForkRun", [requestedId]),
     [requestedId, rpc],
   );
   const revalidate = useCallback(
-    (run: ForkRunSummary | null) => requestedId === null
+    (entry: ExplorationCanvasRun | null) => requestedId === null
       ? null
-      : forkRunsRevalidateMs(run === null ? null : [run], hasActiveWork),
+      : forkRunsRevalidateMs(entry === null ? null : [entry.run], hasActiveWork),
     [hasActiveWork, requestedId],
   );
-  const { resource, reload } = useAsyncResource<ForkRunSummary | null>(
+  const { resource, reload } = useAsyncResource<ExplorationCanvasRun | null>(
     load,
     revalidate,
     requestedId ?? undefined,
   );
-  return { resource, reload, run: lastValue(resource) };
+  const entry = lastValue(resource);
+  return { resource, reload, run: entry?.run ?? null, entry };
 }
 
 /**
@@ -326,18 +332,18 @@ export function headRunToTree(run: HeadRunView): ForkNode {
 /* ── what the run was dispatched with ──────────────────────────── */
 
 /**
- * The policy the run was dispatched under, by the name the store recorded it
- * with: `mcts` for a search, `merge` for a fork.
+ * Which half of the run the surface leads with, by the name of the store that holds
+ * it: `search` for a run with a tree, `transcripts` for one with journalled nodes
+ * only.
  *
- * `ForkRunSummary.settle` is `competed`/`merged`, which is the OUTCOME — what
- * happened to the branches. The surface showed only that, so a reader could not
- * tell which policy had been asked for, and the two are not interchangeable: one
- * ranks its branches by execution and keeps a winner, the other synthesises all
- * of them and ranks nothing. Recovered parameters carry the policy verbatim;
- * without them the outcome still determines it, because only mcts competes.
+ * A run is no longer one of two dispatch policies — a swarm whose nodes are agents has
+ * BOTH halves — so this names what the run leads with rather than what it "was". The
+ * recovered parameters answer it where they survive; the run's own facts answer it
+ * where they do not.
  */
 export function settlePolicyOf(run: ForkRunSummary, params: ForkRunParams | undefined): string {
-  return params?.policy ?? (run.settle === "competed" ? "mcts" : "merge");
+  const hasSearch = params ? params.search !== null : run.hasSearchTree;
+  return hasSearch ? "search" : "transcripts";
 }
 
 /** One parameter as a label and a value. Empty when the run's parameters are no
@@ -350,32 +356,32 @@ export interface ForkParamRow {
 /**
  * The parameters the run was dispatched with, in the order they matter.
  *
- * Per policy, because these are genuinely different objects. A search has an
- * iteration budget, a branching factor, a depth cap and the exploration constant
- * it selected with; a merge has a merge strategy and a head count and no budget
- * at all. Nulls are dropped rather than rendered as "—": an unrecorded knob and
- * a knob left at its default are different facts, and only the first is knowable
- * here.
+ * Per half, and BOTH halves where the run has both: a search has an expansion budget,
+ * a branching factor, a depth cap and the exploration constant it selected with, while
+ * journalled nodes have a strategy label and a count. Nulls are dropped rather than
+ * rendered as "—": an unrecorded knob and a knob left at its default are different
+ * facts, and only the first is knowable here.
  */
 export function forkParamRows(params: ForkRunParams | undefined): ForkParamRow[] {
   if (!params) return [];
-  if (params.policy === "merge") {
-    return [
-      { label: "merge", value: params.mergeStrategy },
-      { label: "forks", value: String(params.branches) },
-    ];
+  const rows: ForkParamRow[] = [];
+  const search = params.search;
+  if (search !== null) {
+    rows.push({ label: "budget", value: `${search.budget} expansions` });
+    rows.push({ label: "branches", value: String(search.branches) });
+    if (search.maxDepth !== null) rows.push({ label: "max depth", value: String(search.maxDepth) });
+    if (search.explorationWeight !== null) {
+      rows.push({ label: "exploration c", value: search.explorationWeight.toFixed(2) });
+    }
+    const judges = judgeEnsembleLabel(params);
+    if (judges !== null) rows.push({ label: "judges", value: judges });
+    if (search.mode !== null) rows.push({ label: "mode", value: search.mode });
   }
-  const rows: ForkParamRow[] = [
-    { label: "budget", value: `${params.budget} iterations` },
-    { label: "branches", value: String(params.branches) },
-  ];
-  if (params.maxDepth !== null) rows.push({ label: "max depth", value: String(params.maxDepth) });
-  if (params.explorationWeight !== null) {
-    rows.push({ label: "exploration c", value: params.explorationWeight.toFixed(2) });
+  if (params.transcripts !== null) {
+    rows.push({ label: "journalled", value: params.transcripts.mergeStrategy });
+    rows.push({ label: "nodes", value: String(params.transcripts.branches) });
   }
-  const judges = judgeEnsembleLabel(params);
-  if (judges !== null) rows.push({ label: "judges", value: judges });
-  if (params.mode !== null) rows.push({ label: "mode", value: params.mode });
+
   return rows;
 }
 
@@ -385,7 +391,7 @@ export function forkParamRows(params: ForkRunParams | undefined): ForkParamRow[]
  * Realised first, and the word "requested" wherever the realised size is not known
  * to equal it. Rendering the request as a per-branch figure is the original defect:
  * a run that asked for twenty and ran three read as one that ran twenty, and a run
- * whose call budget was never recorded read the same way. The two numbers are not
+ * whose ensemble was never observed read the same way. The two numbers are not
  * independent knobs — `judgeSamples` shares one per-evaluation call pool with check
  * generation, so a code-bearing branch realises `min(samples, maxEvalLLMCalls − 1)`
  * — and a clamp binding in silence is the defect class this repository keeps
@@ -396,10 +402,11 @@ export function forkParamRows(params: ForkRunParams | undefined): ForkParamRow[]
  * ensemble at all, which is every run that scored by anything other than a judge.
  */
 export function judgeEnsembleLabel(params: ForkRunParams | undefined): string | null {
-  if (params === undefined || params.policy !== "mcts") return null;
-  const requested = params.judgeSamplesRequested;
+  const search = params?.search;
+  if (search === undefined || search === null) return null;
+  const requested = search.judgeSamplesRequested;
   if (requested === null) return null;
-  const realised = params.judgeSamplesRealised;
+  const realised = search.judgeSamplesRealised;
   if (realised === null) return `${requested} requested`;
   return realised < requested ? `${realised} of ${requested} requested` : `${realised} per branch`;
 }

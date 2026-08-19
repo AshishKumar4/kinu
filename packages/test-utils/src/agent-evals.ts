@@ -26,11 +26,11 @@ import {
   type ForkRunSummary, type RunEvent, type SqlExecutor,
 } from '@proteus/core';
 
-// ── (a) MCTS reached, branched, and ranked ───────────────────────
+// ── (a) A search tree reached, branched, and ranked ──────────────
 
-/** One competed (`settle=mcts`) run as the reader sees it, plus the durable
- *  winner marks the reader's summary does not carry. */
-export interface CompetedRunScore {
+/** One run that grew a SEARCH TREE, as the reader sees it, plus the durable winner
+ *  marks the reader's summary does not carry. */
+export interface SearchRunScore {
   readonly id: string;
   /** Non-root nodes the search opened, per the reader. */
   readonly branches: number;
@@ -52,8 +52,8 @@ export interface CompetedRunScore {
 }
 
 export interface ExplorationScore {
-  /** Competed runs the reader can see — the denominator. */
-  readonly competedRuns: number;
+  /** Runs with a search tree that the reader can see — the denominator. */
+  readonly searchRuns: number;
   /** Of those, runs that opened more than one branch. A one-branch search
    *  ranked nothing: there was no competition to win. */
   readonly branchedRuns: number;
@@ -64,20 +64,20 @@ export interface ExplorationScore {
    *  ever marked — that run reads as ranked to the caller and unranked to
    *  every later reader. */
   readonly durablyRankedRuns: number;
-  readonly runs: readonly CompetedRunScore[];
+  readonly runs: readonly SearchRunScore[];
 }
 
 /**
- * Score every competed fork run the Exploration reader can see.
+ * Score every run with a search tree that the Exploration reader can see.
  *
  * `limit` defaults high enough to cover the whole store rather than the pane's
- * window: `listForkRuns` slices AFTER merging its two halves, so a burst of
- * merged runs can push competed runs out of a 20-row list and make a real
- * search read as absent.
+ * window: `listForkRuns` slices its merged order AFTER positioning both halves, so a
+ * burst of transcript-only runs can push a tree-bearing run out of a 20-row list and
+ * make a real search read as absent.
  */
 export function scoreExploration(sql: SqlExecutor, limit = 1000): ExplorationScore {
-  const competed = listForkRuns(sql, null, limit).items.filter((run) => run.settle === 'competed');
-  const runs = competed.map<CompetedRunScore>((run) => {
+  const searched = listForkRuns(sql, null, limit).items.filter((run) => run.hasSearchTree);
+  const runs = searched.map<SearchRunScore>((run) => {
     const terminal = sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM search_nodes
       WHERE root_id = ${run.id} AND status = 'terminal'`[0]?.n ?? 0;
@@ -94,7 +94,7 @@ export function scoreExploration(sql: SqlExecutor, limit = 1000): ExplorationSco
     };
   });
   return {
-    competedRuns: runs.length,
+    searchRuns: runs.length,
     branchedRuns: runs.filter((r) => r.branches > 1).length,
     rankedRuns: runs.filter((r) => r.winnerScore !== null).length,
     durablyRankedRuns: runs.filter((r) => r.terminalNodes === 1).length,
@@ -102,14 +102,17 @@ export function scoreExploration(sql: SqlExecutor, limit = 1000): ExplorationSco
   };
 }
 
-// ── (b) Every settle mode writes where the reader reads ──────────
+// ── (b) Every half a run can write is where the reader reads ─────
 
-/** A write store, the settle mode that fills it, and how much of it the reader
+/** The two stores a run's branches can land in, named by what they hold. */
+export type ExplorationHalf = 'tree' | 'transcripts';
+
+/** A write store, the half of a run that fills it, and how much of it the reader
  *  can actually see. */
 export interface SettleStoreScore {
-  /** The settle vocabulary the reader reports for this store. */
-  readonly settle: ForkRunSummary['settle'];
-  /** The table the strategy writes. Named so a failure says where to look. */
+  /** Which half of a run this store holds. */
+  readonly half: ExplorationHalf;
+  /** The table the writer fills. Named so a failure says where to look. */
   readonly store: string;
   /**
    * The table exists in this store.
@@ -140,25 +143,24 @@ export interface SettleVisibilityScore {
 }
 
 /**
- * For each settle mode's write store, does the Exploration reader return what
- * was written?
+ * For each half a run can write, does the Exploration reader return what was written?
  *
- * This is the assertion the twice-shipped empty pane needed. It is directional
- * in both senses: a new settle mode that writes a third store shows up here as
- * `rootsWritten` the reader cannot see, and a reader that stops reading one
- * half shows up as that half going invisible.
+ * This is the assertion the twice-shipped empty pane needed. It is directional in both
+ * senses: a writer that fills a third store shows up here as `rootsWritten` the reader
+ * cannot see, and a reader that stops reading one half shows up as that half going
+ * invisible.
  *
- * Two kinds of root are excluded in SQL rather than missed. Steer-as-Branch
- * runs journal through the same seam but are deliberately filtered out of the
- * fork list by their id prefix, and a legacy NULL root is invisible to every
- * root-scoped query — counting either would report a permanent, unfixable
- * failure and teach everyone to ignore this score.
+ * Two kinds of root are excluded in SQL rather than missed. Steer-as-Branch runs
+ * journal through the same seam but are deliberately filtered out of the run list by
+ * their id prefix, and a legacy NULL root is invisible to every root-scoped query —
+ * counting either would report a permanent, unfixable failure and teach everyone to
+ * ignore this score.
  *
- * `read` defaults to the production reader and exists so the scorer's own tests
- * can hand it the reader as it was WHEN THE BUG SHIPPED — one that reads a
- * single half. Without that, this scorer has no way to demonstrate it can go
- * red: today's reader returns any root that exists in either store, so a green
- * result would be indistinguishable from a scorer that never looks.
+ * `read` defaults to the production reader and exists so the scorer's own tests can
+ * hand it the reader as it was WHEN THE BUG SHIPPED — one that reads a single half.
+ * Without that, this scorer has no way to demonstrate it can go red: today's reader
+ * returns any root that exists in either store, so a green result would be
+ * indistinguishable from a scorer that never looks.
  */
 export function scoreSettleVisibility(
   sql: SqlExecutor,
@@ -166,41 +168,41 @@ export function scoreSettleVisibility(
     (readSql, limit) => listForkRuns(readSql, null, limit).items,
 ): SettleVisibilityScore {
   const notSteerBranch = `${STEER_BRANCH_RUN_ID_PREFIX}%`;
-  const mergedPresent = tableExists(sql, 'head_journal');
-  const competedPresent = tableExists(sql, 'search_nodes');
+  const transcriptsPresent = tableExists(sql, 'head_journal');
+  const treePresent = tableExists(sql, 'search_nodes');
   const written = [
     {
-      settle: 'merged' as const,
+      half: 'transcripts' as const,
       store: 'head_journal',
-      present: mergedPresent,
-      roots: !mergedPresent ? [] : sql<{ root: string }>`
+      present: transcriptsPresent,
+      roots: !transcriptsPresent ? [] : sql<{ root: string }>`
         SELECT DISTINCT root_id AS root FROM head_journal
         WHERE root_id IS NOT NULL AND root_id NOT LIKE ${notSteerBranch}`.map((r) => r.root),
     },
     {
-      settle: 'competed' as const,
+      half: 'tree' as const,
       store: 'search_nodes',
-      present: competedPresent,
-      roots: !competedPresent ? [] : sql<{ root: string }>`
+      present: treePresent,
+      roots: !treePresent ? [] : sql<{ root: string }>`
         SELECT DISTINCT root_id AS root FROM search_nodes
         WHERE root_id IS NOT NULL AND root_id NOT LIKE ${notSteerBranch}`.map((r) => r.root),
     },
   ];
 
   const rootsWritten = written.reduce((total, half) => total + half.roots.length, 0);
-  // Ask for more than was written: `listForkRuns` slices AFTER merging its two
-  // halves, so the reader's own page must not be mistaken for a missing row. One
-  // page rather than a walk, deliberately — this scores whether both stores are
-  // READ AT ALL, and a walk would hide a half-blind reader behind enough pages.
-  // The reader queries BOTH stores, so it only runs when both exist.
+  // Ask for more than was written: the reader pages its merged order, so the reader's
+  // own page must not be mistaken for a missing row. One page rather than a walk,
+  // deliberately — this scores whether both stores are READ AT ALL, and a walk would
+  // hide a half-blind reader behind enough pages. The reader queries BOTH stores, so it
+  // only runs when both exist.
   const visible = new Set(
-    mergedPresent && competedPresent ? read(sql, rootsWritten + 1).map((run) => run.id) : [],
+    transcriptsPresent && treePresent ? read(sql, rootsWritten + 1).map((run) => run.id) : [],
   );
 
-  const stores = written.map<SettleStoreScore>(({ settle, store, present, roots }) => {
+  const stores = written.map<SettleStoreScore>(({ half, store, present, roots }) => {
     const invisibleRoots = roots.filter((root) => !visible.has(root));
     return {
-      settle,
+      half,
       store,
       present,
       rootsWritten: roots.length,

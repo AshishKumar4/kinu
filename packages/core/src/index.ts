@@ -1393,13 +1393,13 @@ export {
   type SearchNodeSummary, type SearchNodeDetail,
 } from './read-models/search-tree';
 export { readForkRunParams } from './read-models/fork-params';
-export { readExplorationCanvas } from './read-models/exploration-canvas';
+export { readExplorationCanvas, readExplorationRun } from './read-models/exploration-canvas';
 export type { ExplorationCanvasRun } from './read-models/exploration-canvas';
 export type {
-  ForkRunParams, ForkSettlePolicy, CompetedForkParams, MergedForkParams,
+  ForkRunParams, SearchRunParams, TranscriptRunParams,
 } from './read-models/fork-params';
 export { listForkRuns, readForkRun } from './read-models/fork-runs';
-export type { ForkRunSummary, ForkRunStatus, ForkSettle } from './read-models/fork-runs';
+export type { ForkRunSummary, ForkRunStatus } from './read-models/fork-runs';
 export {
   listRecordCells, listRecordObjectives, readRecordCell,
 } from './read-models/exploration-records';
