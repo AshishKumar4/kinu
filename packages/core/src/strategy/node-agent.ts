@@ -53,6 +53,7 @@ import { buildBuiltinTools } from '../tools/builtins';
 import type { BuiltinToolDeps } from '../tools/builtins';
 import { readProposalCode } from '../execution/code-fence';
 import { nodeWorkspace, isolationDisclosure } from './node-workspace';
+import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import { BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS } from './swarm';
 import type { Logger } from '../obs/index';
 import type { Usage } from '../usage';
@@ -92,6 +93,47 @@ export const NODE_BUILTIN_TOOLS = [...HEAD_BUILTIN_TOOLS, 'report'] as const;
 /** The node's own branch route. One name, so reading a transcript tells a human
  *  which tool asked for budget. */
 export const PROPOSE_BRANCH_TOOL = 'propose_branch';
+
+/**
+ * HOW LONG ONE NODE MAY RUN, derived from the two bounds this repository already
+ * measured and declared, and NOT a number of its own.
+ *
+ * WHY IT IS PER-STEP AND NOT PER-NODE. A node is many turns — one live swarm run of
+ * three tool-using nodes on `@cf/deepseek-ai/deepseek-v4-pro-0813` recorded 22, 25 and
+ * 26 model steps with 25, 27 and 27 tool calls — so giving a whole node ONE
+ * {@link TURN_WALL_CLOCK_ENVELOPE_MS} is the same class of error as the 120_000 that
+ * killed every MCTS rollout, only in the other direction: that run's nodes were still
+ * working at 1,216,358 / 1,310,061 / 1,336,833 ms, each of which is past 600_000. The
+ * unit that run DID measure is a step: 1,216,358 / 22 = 55,289 ms is the largest mean
+ * step of the three, and every one of them is inside the turn envelope, which is
+ * already this tree's ceiling for one model call inside a turn
+ * ({@link DEFAULT_JUDGE_CALL_TIMEOUT_MS}). So the per-step term is the existing
+ * constant, unchanged and re-measured rather than re-reasoned, and the node total
+ * scales with the node's OWN step cap.
+ *
+ * WHY `maxSteps` IS THE MULTIPLIER. It is the bound the swarm already runs a node to —
+ * `runSwarm` hands every node `deps.maxSteps ?? DEFAULT_MAX_STEPS`. A wall clock below
+ * this product cuts a node that is inside its declared step budget, which is exactly
+ * what happened: the run above was given 1_200_000 ms, and 1_200_000 is under
+ * `nodeWallClockEnvelopeMs(26)` by a factor of 13. The two bounds were in different
+ * units and had never been reconciled, so the clock was measuring the step cap's
+ * shadow. `unit-swarm-node-envelope.test.ts` holds this equality and the measured
+ * floor together, so moving either bound fails a test rather than drifting.
+ *
+ * WHAT IT DOES NOT DO. It is observed at STEP BOUNDARIES only — `runHeadInference`'s
+ * `stopWhen` asks `budgetExhausted` between steps — because a cooperative deadline
+ * cannot pre-empt synchronous work, and a node inside one long step observes nothing.
+ * That residue is documented rather than papered over; the binding bound on a node's
+ * work remains its step cap.
+ *
+ * PENDING MEASUREMENT: how many steps a node needs to FINISH on this model. No node in
+ * the run above ever did, so 26 is a floor on the demand and nothing here is entitled
+ * to a step cap below `DEFAULT_MAX_STEPS`. Owed: one run whose nodes are allowed to
+ * complete.
+ */
+export function nodeWallClockEnvelopeMs(maxSteps: number): number {
+  return maxSteps * TURN_WALL_CLOCK_ENVELOPE_MS;
+}
 
 
 /** What the engine hands one node before it runs. Identity and depth come from the
@@ -208,8 +250,10 @@ export interface NodeAgentDeps {
    *  the tool is absent too rather than broken. */
   executeTool?: unknown;
   webSearch?: WebSearchProvider;
-  /** A caller-requested deadline for one node, carried into the loop's own stop
-   *  condition. Absent means the node runs until it finishes or the search aborts. */
+  /** A caller-requested deadline for one node. Absent takes
+   *  {@link nodeWallClockEnvelopeMs} of `maxSteps`, so a node ALWAYS has a deadline it
+   *  can observe between steps — absent used to mean "runs until the search aborts",
+   *  and the search's own signal is a run-level bound that cuts a whole wave at once. */
   maxWallClockMs?: number;
 }
 
@@ -534,11 +578,17 @@ export async function runNodeAgent(
   // node's own budget governs. Recursion is not a node's to spend — the arbiter owns
   // depth, and a node at the search's depth cap must still do its work rather than being
   // stopped before its first step, which is what a depth of 0 would do here
-  // (`budgetExhausted` treats it as exhausted). Assigned rather than spread, so an
-  // undeclared deadline is an ABSENT key.
-  const nodeBudget: HeadBudget = deps.maxWallClockMs === undefined
-    ? { maxDepth: 1, spawnedAt: Date.now() }
-    : { maxDepth: 1, spawnedAt: Date.now(), maxWallClockMs: deps.maxWallClockMs };
+  // (`budgetExhausted` treats it as exhausted).
+  //
+  // THE DEADLINE IS ALWAYS PRESENT. It used to be an absent key when the caller declared
+  // none, and then `stopWhen`'s `budgetExhausted` had nothing to check and the run's
+  // abort signal was the node's only clock — a run-level bound that cuts an entire wave
+  // mid-step. A node observes THIS one between its own steps.
+  const nodeBudget: HeadBudget = {
+    maxDepth: 1,
+    spawnedAt: Date.now(),
+    maxWallClockMs: deps.maxWallClockMs ?? nodeWallClockEnvelopeMs(deps.maxSteps),
+  };
 
   const headInput: HeadInput = {
     id: input.nodeId,

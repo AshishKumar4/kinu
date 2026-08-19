@@ -133,7 +133,7 @@ import { estimateTokens } from '../llm';
 import { contextWindowForModel } from '../context-window';
 import { HeadJournal } from '../heads/journal';
 import { initHeadsTables } from '../heads/schema';
-import { runNodeAgent } from './node-agent';
+import { nodeWallClockEnvelopeMs, runNodeAgent } from './node-agent';
 import type { NodeAgentDeps, NodeLoopHost } from './node-agent';
 import { SwarmBudget, type BranchDecision, type BranchGrant } from './swarm-budget';
 import { sha256Hex } from '../safety/argument-digest';
@@ -212,6 +212,17 @@ export interface SwarmRunDeps {
    * fork. Ignored entirely by `unit:'thought'`, which has one step by construction.
    */
   readonly maxSteps?: number;
+  /**
+   * The wall clock ONE agent node runs to, observed at its step boundaries.
+   *
+   * Absent takes {@link nodeWallClockEnvelopeMs} of `maxSteps`, which is the only
+   * wall clock consistent with the step envelope above: a node cut before its step
+   * budget is a node the clock stopped for reasons that have nothing to do with its
+   * work, and a whole live swarm crowned nothing that way. Present is a caller
+   * declaring a tighter deadline, and a test declaring one small enough to prove a
+   * stall in under a second.
+   */
+  readonly maxWallClockMs?: number;
   /** The mission ledger an agent node's steps charge, when the run has one. */
   readonly mission?: MissionScope;
   /**
@@ -992,6 +1003,24 @@ interface Expansion {
    *  answer text for a thought node. */
   readonly artifact: string;
   /**
+   * WHY THIS NODE NEVER FINISHED, and null when it did.
+   *
+   * THE DISTINCTION THE RANKING DEPENDS ON. An agent node that was aborted, ran out of
+   * steps or errored still returns a report, and that report's summary is deliberately
+   * NOT its mid-flight text (`incompleteHeadSummary`) — but it IS a string, and a string
+   * is what {@link artifact} carries to the instrument. So an unfinished node used to be
+   * measured exactly like a finished one and took whatever the instrument said about its
+   * own status line: on the live run that was "no runnable code", which blames the
+   * verifier for a node the clock stopped. Worse where the summary happens to carry a
+   * fence: then the unfinished node is SCORED, and the tree ranks on how far a node got
+   * before the clock rather than on how good its answer was.
+   *
+   * Non-null therefore means "do not measure this": the scoring loop short-circuits, no
+   * reward is backpropagated, and the caller is told which node stopped and why. Always
+   * null for a thought node, whose one `generateText` either returns an answer or throws.
+   */
+  readonly incomplete: string | null;
+  /**
    * The node's output AS WRITTEN, code fences intact — what a JUDGE grades.
    *
    * It differs from {@link artifact} for a thought node and only there: the artifact is
@@ -1157,6 +1186,24 @@ function answerProposal(input: {
 type ChildOutcome =
   | { readonly kind: 'instrument-faulted'; readonly error: string }
   | { readonly kind: 'unmeasurable'; readonly detail: string }
+  | {
+    /**
+     * THE NODE NEVER FINISHED, so nothing was measured and nothing may be inferred.
+     *
+     * A SEPARATE ARM from `unmeasurable`, and the distinction is the whole point: an
+     * unmeasurable candidate is an answer the INSTRUMENT could not turn into a number,
+     * which is a fact about the answer; an incomplete node has no answer for the
+     * instrument to look at, which is a fact about the run. Collapsing them makes the
+     * verifier's reason ("no runnable code") the story of a node the clock stopped —
+     * and where an unfinished node's status line happens to carry a fence, collapsing
+     * them SCORES it, which is the ranking measuring the clock.
+     *
+     * Neither is backpropagated, both take the node out of selection, and only this one
+     * says the run was cut.
+     */
+    readonly kind: 'incomplete';
+    readonly detail: string;
+  }
   | {
     readonly kind: 'sealed';
     readonly measurement: MeasuredValue;
@@ -1639,9 +1686,15 @@ export async function runSwarm(
    * wired nothing", and that distinction is what decides whether a node's surface holds a
    * tool at all.
    */
+  const nodeSteps = deps.maxSteps ?? DEFAULT_MAX_STEPS;
   const nodeDeps: NodeAgentDeps = {
     rt: deps.rt, model: deps.model, journal, logger: log,
-    maxSteps: deps.maxSteps ?? DEFAULT_MAX_STEPS,
+    maxSteps: nodeSteps,
+    // UNCONDITIONAL, unlike every optional below it: a node with no deadline of its own
+    // leaves the run's abort signal as the only wall clock, and that signal cuts a whole
+    // WAVE at once — which is how three nodes that were each inside their step budget
+    // were all stopped mid-flight and the search crowned nothing.
+    maxWallClockMs: deps.maxWallClockMs ?? nodeWallClockEnvelopeMs(nodeSteps),
   };
   if (deps.signal !== undefined) nodeDeps.signal = deps.signal;
   if (deps.reportModelCall !== undefined) nodeDeps.reportModelCall = deps.reportModelCall;
@@ -1713,6 +1766,9 @@ export async function runSwarm(
       return {
         id, parentId: parent.id, depth: atDepth, aggregated: edges,
         artifact: code?.kind === 'runnable' ? code.code : answer.text,
+        // A thought node has one `generateText`: it returned, so there is nothing
+        // unfinished about it. A throw does not reach here at all.
+        incomplete: null,
         answer: answer.text,
         proposal: answer.proposal,
         proposalError: answer.proposalError,
@@ -1758,6 +1814,16 @@ export async function runSwarm(
     return {
       id, parentId: parent.id, depth: atDepth, aggregated: edges,
       artifact: run.candidate,
+      // THE CLOCK IS NOT A SCORE. `completed` is the only status that produced an
+      // answer; every other one produced a status line, and measuring a status line
+      // ranks the node on when it stopped. The step count and wall clock are carried
+      // because they are what distinguishes "aborted at step 26 of 500" from "errored
+      // on step 1" for whoever reads the report.
+      incomplete: run.report.status === 'completed'
+        ? null
+        : `${run.report.status} after ${String(run.report.stepCount)} step(s) in `
+          + `${String(run.report.wallClockMs)} ms`
+          + (run.report.errorMessage ? `: ${run.report.errorMessage}` : ''),
       // An agent node REPORTS its candidate, so what it wrote and what the
       // instrument measures are the same string and there is nothing to strip.
       answer: run.candidate,
@@ -2258,21 +2324,27 @@ export async function runSwarm(
       const siblings = expansion.aggregated.length > 0
         ? []
         : expansions.filter((other) => other.id !== expansion.id);
-      const outcome = measures && verifier && ctx && measured && baseline !== null
-        ? await measureChild({ ctx, verifier, measured, baseline, artifact: expansion.artifact })
-        : judgeSamples !== null
-          ? await judgeChild({
-            rt: deps.rt, mode: deps.mode, samples: judgeSamples, task: resolved.task,
-            answer: expansion.answer,
-            siblings: siblings.map((other) => other.answer),
-            // WP-A5's band loophole: a prose-only candidate is capped at the fail
-            // ceiling where a sibling actually attempted code, so declining to attempt
-            // it cannot beat attempting and failing.
-            siblingsProducedCode: siblings.some(
-              (other) => readProposalCode(other.answer, languages)?.kind === 'runnable',
-            ),
-          })
-          : null;
+      // AN UNFINISHED NODE IS NOT SCORED AT ALL, and this is the FIRST branch because
+      // every scorer below it would otherwise be handed a status line as an answer. The
+      // instrument is not asked, the ensemble is not sampled, and the run pays for
+      // neither — a node the clock stopped has nothing for either to look at.
+      const outcome = expansion.incomplete !== null
+        ? { kind: 'incomplete' as const, detail: expansion.incomplete }
+        : measures && verifier && ctx && measured && baseline !== null
+          ? await measureChild({ ctx, verifier, measured, baseline, artifact: expansion.artifact })
+          : judgeSamples !== null
+            ? await judgeChild({
+              rt: deps.rt, mode: deps.mode, samples: judgeSamples, task: resolved.task,
+              answer: expansion.answer,
+              siblings: siblings.map((other) => other.answer),
+              // WP-A5's band loophole: a prose-only candidate is capped at the fail
+              // ceiling where a sibling actually attempted code, so declining to attempt
+              // it cannot beat attempting and failing.
+              siblingsProducedCode: siblings.some(
+                (other) => readProposalCode(other.answer, languages)?.kind === 'runnable',
+              ),
+            })
+            : null;
       if (outcome?.kind === 'instrument-faulted') {
         // *The closed verifier registry*: a throw is the INSTRUMENT breaking and is never
         // converted into an unmeasurable candidate. It fails the run: no node is scored,
@@ -2300,6 +2372,7 @@ export async function runSwarm(
         artifact: expansion.artifact,
         measured: measurement,
         unmeasurable: outcome?.kind === 'unmeasurable' ? outcome.detail : null,
+        incomplete: outcome?.kind === 'incomplete' ? outcome.detail : null,
         score,
       };
       candidates.push(candidate);
