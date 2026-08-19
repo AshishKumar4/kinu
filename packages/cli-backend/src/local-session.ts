@@ -59,7 +59,7 @@ import {
   recordGroundedHeadsTake, inheritedContextFromHistory, headPhaseRunEvent,
   ModelCatalogSession,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
-  buildBuiltinTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt,
+  buildActorTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt,
   turnProvenanceForMetadata, workModeForTurnMetadata,
   createChatModel, runChat, resolveMaxSteps, estimateTokens,
   parseModelSpec, agentAffinityKey,
@@ -2524,7 +2524,7 @@ export class LocalAgentSession implements BackendHost {
     this.headController = new HeadController(this._headRuntime, this.headJournal);
 
     for (const mode of ['build'] as const) {
-      const raw = buildBuiltinTools({
+      const raw = buildActorTools({
         rt: this.rt,
       // No shellApprovalMode/requestShellApproval here — the gate lives at
       // the execution seam now (rt.shell / rt.executionRouter, wired once in

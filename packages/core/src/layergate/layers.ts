@@ -1422,7 +1422,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   // is worse than no gate.
   {
     id: 'tool-construction',
-    owns: 'buildBuiltinTools — the per-turn decision of which tools exist, and the crafted-tool surfacing policy',
+    owns: 'buildBuiltinTools + buildActorTools — the per-turn decision of which tools exist, and the crafted-tool surfacing policy',
     subjects: [],
     probes: [],
     unmeasuredBecause:

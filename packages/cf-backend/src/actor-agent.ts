@@ -57,7 +57,7 @@ import {
   SCAFFOLD_TURN_TIMEOUT_MS,
   effortFor, type CompletedTurn, type TurnContinuity,
   // canonical tool + prompt surface — single source of truth
-  buildBuiltinTools,
+  buildActorTools,
   withClampedToolResults,
   type WebSearchProvider,
   buildSystemPromptSync,
@@ -2427,7 +2427,7 @@ export abstract class ActorAgent extends Think<Env> {
       // No registry sync: PreambleCraftedExecutor reads craftStore.list()
       // fresh at every execute. See docs/CRAFT-ARCHITECTURE.md §5.6.
 
-      const builtinDeps: Parameters<typeof buildBuiltinTools>[0] = {
+      const builtinDeps: Parameters<typeof buildActorTools>[0] = {
         rt: this.rt,
         preBuiltExecuteTool: this.getExecuteToolsTool(mode, profileKey),
         // The turn's cumulative bulk budget lives on the accumulator, so the
@@ -2461,7 +2461,7 @@ export abstract class ActorAgent extends Think<Env> {
       };
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
       if (mode === 'plan' && actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
-      const tools = buildBuiltinTools(builtinDeps);
+      const tools = buildActorTools(builtinDeps);
 
       // Anthropic prompt-caching: one breakpoint on the last tool caches the
       // whole stable tool surface (tools precede system+messages in Anthropic's
