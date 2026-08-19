@@ -64,12 +64,55 @@
  */
 import * as v from 'valibot';
 import { argumentDigest, sha256Hex } from '../safety/argument-digest';
+import { reconcileColumns } from '../identity/columns';
 import {
   admitsPublication, isBetter,
   type ExplorationRecord, type Floor, type ObjectiveDirection, type ObjectiveIdentity,
   type PublicationState, type VerifierSpec,
 } from './objective';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+
+/**
+ * The objective's own identity, denormalised beside the digest it hashes to.
+ *
+ * WHY THIS IS SAFE HERE, stated rather than left to be questioned. `objective_id` is
+ * `objectiveIdOf`'s digest over EXACTLY these five values, so a column cannot disagree
+ * with the key beside it: a differing identity hashes to a different `objective_id` and
+ * is a different row. That is the property the table already relies on for
+ * `floor_value`/`floor_proof` beside `floor_digest`, and
+ * `unit-exploration-records.test.ts` re-hashes a stored row's identity back to its own
+ * `objective_id` so a future divergence is a failing test rather than a display bug.
+ *
+ * WHY IT IS NECESSARY. Without it a row carries a bare `value REAL` — no unit, no
+ * direction — and a leaderboard drawn on that shows a number that cannot be read: the
+ * register's own `25.4%` read as a reward LEVEL when it was a DELTA, 3.1 points from the
+ * level for the same leader. It is also what makes a DIGEST-scoped read possible at
+ * all: `read-models/exploration-records.ts` is handed an opaque `objectiveId` and cannot
+ * order a cell without knowing the direction, which only the store can now answer.
+ *
+ * `verifier_digest` is here because `objectiveIdOf` folds it in — the identity is FIVE
+ * fields, not the four a leaderboard displays — and a re-hash test is impossible
+ * without it.
+ *
+ * NULLABLE, and one text feeding both the CREATE and the reconcile, for
+ * `heads/schema.ts`'s reason: SQLite cannot ADD COLUMN a NOT NULL column without a
+ * default, a default here would be a FABRICATED identity, and a stricter CREATE would
+ * leave a fresh workspace and a reconciled one under different constraints — so a test
+ * on one would prove nothing about the other. A row predating these columns therefore
+ * carries NULL, and `describeObjective` reports that as an absence rather than
+ * guessing; see its doc for what the reads then do.
+ */
+const EXPLORATION_RECORDS_IDENTITY_COLUMNS = {
+  metric: 'TEXT',
+  unit: 'TEXT',
+  direction: 'TEXT',
+  scale: 'TEXT',
+  verifier_digest: 'TEXT',
+} as const satisfies Readonly<Record<string, string>>;
+
+const IDENTITY_COLUMN_DDL = Object.entries(EXPLORATION_RECORDS_IDENTITY_COLUMNS)
+  .map(([column, definition]) => `  ${column.padEnd(17)} ${definition}`)
+  .join(',\n');
 
 /**
  * Every column NULLable that {@link ExplorationRecord} declares nullable, and none
@@ -102,16 +145,21 @@ const EXPLORATION_RECORDS_DDL = `CREATE TABLE IF NOT EXISTS exploration_records 
   cost_usd          REAL,
   cost_tokens       INTEGER,
   first_recorded_at INTEGER NOT NULL,
-  displacements     INTEGER NOT NULL DEFAULT 0
+  displacements     INTEGER NOT NULL DEFAULT 0,
+${IDENTITY_COLUMN_DDL}
 )`;
 
-export function initExplorationRecordsTable(execRaw: RawSqlExec): void {
+export function initExplorationRecordsTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
   execRaw(EXPLORATION_RECORDS_DDL);
   // The comparable set is the identity AND the floor, and every read below is scoped
   // by both, so the index is too — a floor-blind index would serve a query nothing
   // here asks.
   execRaw('CREATE INDEX IF NOT EXISTS idx_er_cell ON exploration_records'
     + '(objective_id, floor_digest, descriptor, value)');
+  // Asked rather than attempted-and-caught: a catch cannot tell a missing column from
+  // a locked database, and the table has just been created above so an absent one is a
+  // fault this must not report as reconciled.
+  reconcileColumns(sql, execRaw, 'exploration_records', EXPLORATION_RECORDS_IDENTITY_COLUMNS);
 }
 
 /**
@@ -331,45 +379,201 @@ export interface CellScope extends RecordScope {
 }
 
 /**
- * Every row under this identity and this floor, best FIRST.
+ * The read handle for one comparable set: the objective's digest and the floor's,
+ * both OPAQUE.
  *
- * `IS` rather than `=` on the two nullable key columns, because `NULL = NULL` is
- * unknown in SQL and the unpartitioned cell would then match nothing — the same trap
- * that makes a composite NULLable primary key useless here.
+ * The identity-scoped {@link RecordScope} cannot serve a surface. A UI is handed an
+ * `objectiveId` and has no `ObjectiveIdentity` to rebuild it from — and must not: a
+ * surface that re-derived a handle from parts would be asserting a comparability key
+ * rather than passing back the one it was given, and getting a field wrong there
+ * silently reads another objective's leaderboard. So the digests are the handle, and
+ * {@link RecordScope} DERIVES one.
+ *
+ * `floorDigest: null` is a value — the objective declared no floor — and is required
+ * rather than optional so an omitted floor cannot be mistaken for an unbounded one.
+ */
+export interface RecordObjectiveHandle {
+  readonly objectiveId: string;
+  readonly floorDigest: string | null;
+}
+
+/**
+ * One cell of the comparable set.
+ *
+ * `descriptor: null` means the objective has NO descriptor partition, which is a
+ * different claim from an unnamed or empty-named cell — the distinction
+ * {@link ExplorationRecord.descriptor} carries all the way down to a nullable column
+ * with no default. Required-but-nullable for that reason: `null` is the no-partition
+ * cell, and an ABSENT descriptor is a type error rather than a third meaning.
+ */
+export interface RecordCellHandle extends RecordObjectiveHandle {
+  readonly descriptor: string | null;
+}
+
+/**
+ * The handle a writer's identity resolves to — the one place an `ObjectiveIdentity`
+ * becomes the opaque pair a surface holds.
+ *
+ * Exported because it is the seam between the two vocabularies: the identity-scoped
+ * reads below derive their handle here, and anything that has an identity and wants to
+ * ask a digest-scoped read (the read models, and the tests that seed them) derives it
+ * here too rather than re-spelling `objectiveIdOf`/`floorDigestOf` side by side.
+ */
+export function recordHandleOf(scope: RecordScope): RecordObjectiveHandle {
+  return { objectiveId: objectiveIdOf(scope.identity), floorDigest: floorDigestOf(scope.floor) };
+}
+
+/**
+ * Where a page of a cell ended, in that cell's own best-first order.
+ *
+ * `value` alone is not a position and neither is `(value, firstRecordedAt)`: two rows
+ * can share both, and a boundary with no defined membership drops or repeats exactly
+ * the row it falls on. `artifactDigest` completes it because identity WITHIN a cell is
+ * what the artifact is, so it is unique there — the same reason `record_key` folds it
+ * in.
+ */
+export interface CellSeek {
+  readonly value: number;
+  readonly firstRecordedAt: number;
+  readonly artifactDigest: string;
+}
+
+/** SQLite's documented "no limit" for `LIMIT`, so an unpaged read and a paged one are
+ *  the SAME query rather than two that must agree. */
+const NO_LIMIT = -1;
+
+/**
+ * Every row under one comparable set, best FIRST — ONE query, however it is scoped.
+ *
+ * `IS` rather than `=` on the nullable key column, because `NULL = NULL` is unknown in
+ * SQL and an objective with no floor would then match nothing — the same trap that
+ * makes a composite NULLable primary key useless here.
  *
  * Two literal queries rather than one with an interpolated direction: the direction
  * inverts the ordering, a tagged template cannot parameterise `ASC`/`DESC`, and
  * assembling the clause as a string is how a store starts accepting SQL from its
  * arguments.
+ *
+ * `artifact_digest` closes the order so it is TOTAL. Across cells that is not unique,
+ * which is why this read is not the one that pages: {@link recordsInCell} is.
  */
-export function recordsFor(sql: SqlExecutor, scope: RecordScope): readonly ExplorationRecord[] {
-  const objectiveId = objectiveIdOf(scope.identity);
-  const floorDigest = floorDigestOf(scope.floor);
-  const rows = scope.identity.direction === 'minimise'
+export function recordsUnder(
+  sql: SqlExecutor,
+  handle: RecordObjectiveHandle,
+  direction: ObjectiveDirection,
+  limit: number,
+): readonly ExplorationRecord[] {
+  const { objectiveId, floorDigest } = handle;
+  const rows = direction === 'minimise'
     ? sql<Row>`SELECT * FROM exploration_records
         WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
-        ORDER BY value ASC, first_recorded_at ASC`
+        ORDER BY value ASC, first_recorded_at ASC, artifact_digest ASC LIMIT ${limit}`
     : sql<Row>`SELECT * FROM exploration_records
         WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
-        ORDER BY value DESC, first_recorded_at ASC`;
+        ORDER BY value DESC, first_recorded_at ASC, artifact_digest ASC LIMIT ${limit}`;
   return rows.map(decode);
 }
 
-/** This cell's incumbent, or null when the cell is empty. */
-export function bestInCell(sql: SqlExecutor, scope: CellScope): ExplorationRecord | null {
-  const objectiveId = objectiveIdOf(scope.identity);
-  const floorDigest = floorDigestOf(scope.floor);
-  const rows = scope.identity.direction === 'minimise'
+/**
+ * One cell's POPULATION, best first, optionally resumed past `seek` — ONE query for
+ * the occupancy read the archive admits against AND the page a leaderboard draws.
+ *
+ * Two bodies here would be two orderings that must agree, and the boundary row is
+ * exactly where they would stop agreeing.
+ *
+ * The seek is strictly past `seek` in the SAME total order the ORDER BY declares, and
+ * the direction inverts its first leg with the ordering — a seek that kept `<` while
+ * the ordering flipped would silently return the page it had already delivered.
+ */
+export function recordsInCell(
+  sql: SqlExecutor,
+  handle: RecordCellHandle,
+  direction: ObjectiveDirection,
+  seek: CellSeek | null,
+  limit: number,
+): readonly ExplorationRecord[] {
+  const { objectiveId, floorDigest, descriptor } = handle;
+  const from = seek === null ? 0 : 1;
+  const value = seek?.value ?? 0;
+  const at = seek?.firstRecordedAt ?? 0;
+  const artifact = seek?.artifactDigest ?? '';
+  const rows = direction === 'minimise'
     ? sql<Row>`SELECT * FROM exploration_records
         WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
-          AND descriptor IS ${scope.descriptor}
-        ORDER BY value ASC, first_recorded_at ASC LIMIT 1`
+          AND descriptor IS ${descriptor}
+          AND (${from} = 0 OR value > ${value}
+               OR (value = ${value} AND (first_recorded_at > ${at}
+                   OR (first_recorded_at = ${at} AND artifact_digest > ${artifact}))))
+        ORDER BY value ASC, first_recorded_at ASC, artifact_digest ASC LIMIT ${limit}`
     : sql<Row>`SELECT * FROM exploration_records
         WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
-          AND descriptor IS ${scope.descriptor}
-        ORDER BY value DESC, first_recorded_at ASC LIMIT 1`;
-  const row = rows[0];
-  return row ? decode(row) : null;
+          AND descriptor IS ${descriptor}
+          AND (${from} = 0 OR value < ${value}
+               OR (value = ${value} AND (first_recorded_at > ${at}
+                   OR (first_recorded_at = ${at} AND artifact_digest > ${artifact}))))
+        ORDER BY value DESC, first_recorded_at ASC, artifact_digest ASC LIMIT ${limit}`;
+  return rows.map(decode);
+}
+
+/**
+ * The identity the STORE holds for a handle, and how many rows it holds under it.
+ *
+ * `MAX()` per column rather than one row's values: SQL aggregates skip NULLs, so a set
+ * that has gained even one row since the identity columns existed reports the true
+ * identity, and only an all-legacy set reports none. Every row of a set agrees by
+ * construction — `objective_id` is the digest of exactly these five fields — which is
+ * why an aggregate is exact here rather than a summary.
+ *
+ * `identity: null` with `rows > 0` is therefore NOT "no such objective": it is rows the
+ * store cannot say the unit or direction of. The reads refuse that rather than
+ * inventing a direction, and `rows: 0` is the honest empty answer.
+ *
+ * A stored `direction` or `scale` outside its union THROWS, for `measured_json`'s
+ * reason: a row that cannot be read is not a row that measured nothing.
+ */
+export interface StoredObjective {
+  readonly identity: ObjectiveIdentity | null;
+  readonly rows: number;
+}
+
+const StoredIdentitySchema: v.GenericSchema<ObjectiveIdentity> = v.object({
+  metric: v.string(),
+  unit: v.string(),
+  direction: v.picklist(['minimise', 'maximise']),
+  scale: v.picklist(['linear', 'log']),
+  verifierDigest: v.string(),
+});
+
+export function describeObjective(sql: SqlExecutor, handle: RecordObjectiveHandle): StoredObjective {
+  const row = sql<{
+    row_count: number; metric: string | null; unit: string | null;
+    direction: string | null; scale: string | null; verifier_digest: string | null;
+  }>`SELECT COUNT(*) AS row_count, MAX(metric) AS metric, MAX(unit) AS unit,
+            MAX(direction) AS direction, MAX(scale) AS scale,
+            MAX(verifier_digest) AS verifier_digest
+       FROM exploration_records
+       WHERE objective_id = ${handle.objectiveId} AND floor_digest IS ${handle.floorDigest}`[0];
+  if (!row || row.row_count === 0) return { identity: null, rows: 0 };
+  if (row.metric === null) return { identity: null, rows: row.row_count };
+  return {
+    identity: v.parse(StoredIdentitySchema, {
+      metric: row.metric, unit: row.unit, direction: row.direction,
+      scale: row.scale, verifierDigest: row.verifier_digest,
+    }),
+    rows: row.row_count,
+  };
+}
+
+/** Every row under this identity and this floor, best FIRST. */
+export function recordsFor(sql: SqlExecutor, scope: RecordScope): readonly ExplorationRecord[] {
+  return recordsUnder(sql, recordHandleOf(scope), scope.identity.direction, NO_LIMIT);
+}
+
+/** This cell's incumbent, or null when the cell is empty — the head of the cell's own
+ *  best-first order, so it cannot disagree with the population read below. */
+export function bestInCell(sql: SqlExecutor, scope: CellScope): ExplorationRecord | null {
+  const handle = { ...recordHandleOf(scope), descriptor: scope.descriptor };
+  return recordsInCell(sql, handle, scope.identity.direction, null, 1)[0] ?? null;
 }
 
 /**
@@ -384,23 +588,21 @@ export function bestInCell(sql: SqlExecutor, scope: CellScope): ExplorationRecor
  * written against the incumbent alone would let a cell fill with near-copies of its
  * runners-up while reporting the filter as enforced.
  *
- * Same two-literal-query discipline as the reads above, and `LIMIT 1` is deliberately
- * absent rather than raised to a number: the population's bound is the archive's
- * admission test, not a row cap this store invents.
+ * UNBOUNDED ON PURPOSE, and this is the one read here that must stay so.
+ * `ArchiveAdmission.lean — separated_cells_are_unboundedly_large` builds a separated
+ * cell of n occupants for every n, so this IS a linear read of an unbounded set on
+ * every admission. A `LIMIT` would not fix that cost — it would weaken the test it
+ * serves from "no near-copy is in the cell" to "none is in the first k", which is
+ * `no_near_copy_is_reachable` made false by the reader rather than by the rule. The
+ * cost is answered by BOUNDING THE POPULATION, and that bound needs a bounded
+ * vocabulary nothing here has (`archive.ts`'s header), so no number is invented in its
+ * place. Paging belongs to the surface that DISPLAYS a cell —
+ * `read-models/exploration-records.ts` — where a partial answer is a page and not a
+ * verdict.
  */
 export function cellOccupants(sql: SqlExecutor, scope: CellScope): readonly ExplorationRecord[] {
-  const objectiveId = objectiveIdOf(scope.identity);
-  const floorDigest = floorDigestOf(scope.floor);
-  const rows = scope.identity.direction === 'minimise'
-    ? sql<Row>`SELECT * FROM exploration_records
-        WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
-          AND descriptor IS ${scope.descriptor}
-        ORDER BY value ASC, first_recorded_at ASC`
-    : sql<Row>`SELECT * FROM exploration_records
-        WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
-          AND descriptor IS ${scope.descriptor}
-        ORDER BY value DESC, first_recorded_at ASC`;
-  return rows.map(decode);
+  const handle = { ...recordHandleOf(scope), descriptor: scope.descriptor };
+  return recordsInCell(sql, handle, scope.identity.direction, null, NO_LIMIT);
 }
 
 /**
@@ -442,29 +644,40 @@ export function recordExploration(
   });
   const measuredJson = write.measured === null ? null : JSON.stringify(write.measured);
 
+  const identity = write.identity;
   if (existing) {
     // `first_recorded_at` is untouched: it is when this artifact first entered the
     // store, not when it was last measured.
+    //
+    // The identity columns ARE re-written, and that is not a no-op on a row created
+    // before they existed: this writer holds the identity that hashes to the row's own
+    // `record_key`, so filling them is the one backfill available and it is derived
+    // rather than guessed. On any other row it writes back what is already there,
+    // because a differing identity is a different `objective_id` and a different row.
     void sql`UPDATE exploration_records SET
         artifact = ${write.artifact}, value = ${write.value}, detail = ${write.detail},
         measured_json = ${measuredJson}, preset = ${write.preset}, label = ${write.label},
         root_id = ${write.rootId}, config_digest = ${write.configDigest},
         depth = ${write.depth}, branches = ${write.branches},
         floor_value = ${write.floor?.value ?? null}, floor_proof = ${write.floor?.proof ?? null},
-        cost_usd = ${write.costUsd}, cost_tokens = ${write.costTokens}
+        cost_usd = ${write.costUsd}, cost_tokens = ${write.costTokens},
+        metric = ${identity.metric}, unit = ${identity.unit}, direction = ${identity.direction},
+        scale = ${identity.scale}, verifier_digest = ${identity.verifierDigest}
       WHERE record_key = ${recordKey}`;
   } else {
     void sql`INSERT INTO exploration_records (
         record_key, objective_id, floor_digest, descriptor, artifact_digest, artifact,
         value, detail, measured_json, preset, label, root_id, config_digest, depth,
         branches, floor_value, floor_proof, cost_usd, cost_tokens, first_recorded_at,
-        displacements
+        displacements, metric, unit, direction, scale, verifier_digest
       ) VALUES (
         ${recordKey}, ${objectiveId}, ${floorDigest}, ${write.descriptor}, ${artifactDigest},
         ${write.artifact}, ${write.value}, ${write.detail}, ${measuredJson}, ${write.preset},
         ${write.label}, ${write.rootId}, ${write.configDigest}, ${write.depth},
         ${write.branches}, ${write.floor?.value ?? null}, ${write.floor?.proof ?? null},
-        ${write.costUsd}, ${write.costTokens}, ${write.at}, 0
+        ${write.costUsd}, ${write.costTokens}, ${write.at}, 0,
+        ${identity.metric}, ${identity.unit}, ${identity.direction}, ${identity.scale},
+        ${identity.verifierDigest}
       )`;
   }
 

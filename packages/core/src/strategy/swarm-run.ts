@@ -1475,7 +1475,7 @@ export async function runSwarm(
   // above are: a workspace that has never run a search has no `exploration_records`, and
   // the carry-in read immediately below would be a query against a table that does not
   // exist.
-  initExplorationRecordsTable(deps.rt.storage.execRaw);
+  initExplorationRecordsTable(deps.rt.storage.execRaw, sql);
 
   // CARRY-IN. What earlier runs of THIS objective, under THIS floor, already reached —
   // read before anything is expanded, so the search starts from it rather than

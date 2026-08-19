@@ -45,6 +45,7 @@ import { initFactsTable } from '../memory/facts';
 import { initScaffoldTables } from '../scaffold/schemas';
 import { initShadowTables } from '../scaffold/shadow';
 import { initTaskListTable } from '../tasks/store';
+import { initExplorationRecordsTable } from '../strategy/records';
 
 /**
  * The three SQL handles onto one workspace database.
@@ -182,6 +183,12 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // Created here rather than by "the first MCTS run" so a reader that finds no
   // table is a fault, not an empty result nobody can tell from no takes.
   initAlternateTakesTable(execRaw, sql);
+  // The exploration leaderboard, and the identity columns a workspace created
+  // before them is missing. Created here rather than only by the first swarm run
+  // for the same reason as the takes above: the orchestrator's record RPCs read
+  // it, and `no such table` on a workspace that has merely never searched is a
+  // fault dressed as an empty leaderboard.
+  initExplorationRecordsTable(execRaw, sql);
   initScaffoldTables(execRaw, sql);
   initCraftScoreTables(execRaw);
   // The R3 outcome ledger, including its take_pick CHECK-widening rebuild.
