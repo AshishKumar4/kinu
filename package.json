@@ -36,6 +36,7 @@
     "gate:computed-style": "bun scripts/computed-style.ts",
     "gate:capability-parity": "bun scripts/capability-parity.ts",
     "gate:policy-drift": "bun scripts/policy-drift.ts",
+    "gate:silent-drop": "bun scripts/silent-drop.ts",
     "gate:skip-ratchet": "bun scripts/skip-ratchet.ts",
     "gate:typecheck-coverage": "bun scripts/typecheck-coverage.ts",
     "test:mutation": "bun test packages/core/tests/mutation-*.test.ts",

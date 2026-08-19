@@ -355,6 +355,21 @@ export const LADDER: readonly Gate[] = [
     blind: 'a symbol referenced from live code that does nothing.',
   },
   {
+    run: 'bun run gate:silent-drop',
+    tier: 'push',
+    seconds: 1.4,
+    catches: 'a failure destroyed in one of the six ways the four no-swallow lint rules are '
+      + 'structurally blind to — a sentinel returned behind a log line (the rule fires on a '
+      + 'ONE-statement handler only), a cause chain projected down to `error.message`, an '
+      + 'inline rejection handler that absorbs, a `throw new Error` inside a `.catch()` (the '
+      + 'rule needs a CatchClause ancestor), a `void`-ed promise, and a bare call to an async '
+      + 'function that can reject. 272 instances over 210 sites at 2b7b020f, ratcheted, over '
+      + "the same 665 sources and 709 `catch` occurrences no-swallow's own denominator counts.",
+    blind: 'a rejection handler passed by NAME, a promise stored and never awaited (a '
+      + 'type-level fact, and oxlint\'s type-aware pass is not enabled here), and a wrapper '
+      + 'factory that drops `cause` inside itself.',
+  },
+  {
     run: 'bun scripts/secret-scan.ts',
     tier: 'push',
     seconds: 2,
@@ -371,7 +386,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts',
     tier: 'push',
     seconds: 1.7,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
@@ -388,7 +403,11 @@ export const LADDER: readonly Gate[] = [
       + 'locator for one of our own numbers, and the REACH bound proven in both '
       + 'directions: a recorded 206KB blob yields nothing, the same bytes undeclared '
       + 'still refuse the parity adjective inside them, a claim three paragraphs from '
-      + 'its citation is still governed, and one past the bound is not. '
+      + 'its citation is still governed, and one past the bound is not. For silent-drop, all '
+      + 'six defect classes red on the shape as it appears in this tree and GREEN on its '
+      + 'repair, plus the three judgements that keep the count honest: a handler that FORWARDS '
+      + 'its error is not a drop, an async function whose whole body is a non-rethrowing try '
+      + 'cannot reject, and a one-statement sentinel handler is left to no-sentinel-catch. '
       + 'For infra, the three states a resource lookup can be in kept apart — a required '
       + 'resource absent, an OPTIONAL one absent, and a lookup that FAILED, the last of which '
       + 'fails the gate even on an optional resource because "we could not look" is not softened '
