@@ -8,41 +8,38 @@ Object's SQLite owns relational actor state. The schema is split across several
 subsystems, each owning its tables and creating them idempotently. There is no
 shadow VFS or synchronization path between those authorities.
 
-Three other Durable Object classes hold their own isolated databases:
-`SubordinateAgent` (the full actor schema plus a one-row `subordinate_identity`),
-`ExplorationAgent` (`facet_owner`, `facet_parent`, `traces` — the isolation MCTS
-branches depend on), and `UserDO` (the per-user `user_*` / `device_*` tables and
-the owner's `experience_library`, which are the user's, not any workspace's).
-Four things live outside actor SQLite entirely: browser auth in the `AUTH_DB` D1 database
-(`packages/cf-backend/migrations/auth/`), sandbox `/workspace` backups in the
-`BACKUP_BUCKET` R2 bucket, the authoritative Nimbus workspace, and optional embedding recall in the
-`MEMORY_VECTORS` Vectorize index — which is an addition to FTS5, never the
-source of truth.
+Three other Durable Object classes hold their own isolated databases.
+`SubordinateAgent` gets the full workspace schema plus a one-row
+`subordinate_identity`. `ExplorationAgent` gets `traces` from its own `onStart`
+and a one-row `facet_identity` created on first touch; those two tables carry
+the isolation MCTS branches and heads depend on. `UserDO` holds the per-user
+`user_*` and `device_*` tables and the owner's `experience_library`, which
+belong to the user rather than to any workspace.
+
+Four things live outside actor SQLite entirely: browser auth in the `AUTH_DB` D1
+database (`packages/cf-backend/migrations/auth/`), sandbox `/workspace` backups
+in the `BACKUP_BUCKET` R2 bucket, the authoritative Nimbus workspace, and
+optional embedding recall in the `MEMORY_VECTORS` Vectorize index. Vectorize is
+an addition to FTS5 and never the source of truth.
 
 ## Entity Relationship
 
 The relational workspace tables, as created by the Core schema initializers and
-agent-utils stores:
+agent-utils stores. The workspace's files are not here; they live in the Nimbus
+filesystem described below.
 
 ```mermaid
 erDiagram
     workspace_identity {
         TEXT id "Stable UUID (NOT NULL)"
-        TEXT name "Agent name (NOT NULL)"
+        TEXT name "Workspace name (NOT NULL)"
+        TEXT owner_user_id "Ownership root (NOT NULL, default '')"
+        TEXT mission "One-line summary, written by writeSoul"
         INTEGER created_at "Epoch ms"
     }
     agent_config {
-        TEXT key PK "Config key (model, display_name, etc.)"
-        TEXT value "Config value"
-    }
-    vfs_files {
-        TEXT path "File path"
-        INTEGER chunk_index "Chunk number (0-based)"
-        TEXT parent_path "Parent directory"
-        BLOB data "File content (up to 1.8MB per chunk)"
-        INTEGER is_dir "1 for directories"
-        INTEGER size "Total file size"
-        INTEGER mtime "Last modified (epoch ms)"
+        TEXT key PK "Config key (model, reasoning effort, skills)"
+        TEXT value "Config value (NOT NULL)"
     }
     memory_chunks {
         TEXT id PK "Chunk ID"
@@ -72,6 +69,7 @@ erDiagram
     search_nodes {
         TEXT id PK "Node ID (nanoid)"
         TEXT parent_id FK "Parent node"
+        TEXT root_id "The search run this node belongs to"
         TEXT task "MCTS task"
         TEXT action "Approach taken"
         TEXT observation "Result"
@@ -98,6 +96,9 @@ erDiagram
         TEXT rationale "Why it was changed"
         REAL canary_score "Canary evaluation score"
         REAL baseline_score "Baseline comparison score"
+        TEXT status "current/pending/rolled_back/historical"
+        INTEGER parent_version "DGM lineage — the version this branched from"
+        TEXT pathology "The failure cell this version was written to fix"
     }
     craft_scores {
         TEXT tool_name PK "Crafted tool name"
@@ -134,6 +135,9 @@ erDiagram
         TEXT content "Plain text (flattened for FTS and the outcome joins)"
         INTEGER created_at "Epoch ms"
     }
+    messages_fts {
+        TEXT content "FTS5 virtual table over messages.content"
+    }
     executor_output {
         TEXT id PK "Random hex ID"
         TEXT executor "Executor name"
@@ -150,113 +154,193 @@ erDiagram
         INTEGER elapsed_ms "Duration (default 0)"
         INTEGER created_at "Epoch ms"
     }
+    fork_lineage {
+        INTEGER id PK "Single row, or empty when this is not a fork"
+        TEXT source_workspace_id "The forked-from workspace's UUID"
+        TEXT source_workspace_name "The forked-from workspace's name"
+        TEXT source_message_id "Where the copy stopped"
+        INTEGER source_message_created_at "Epoch ms"
+        INTEGER forked_at "Epoch ms"
+    }
 
-    vfs_files ||--o{ memory_chunks : "CLI only: indexed by"
-    memory_chunks ||--|| memory_chunks_fts : "FTS5 sync"
-    crafted_tools ||--|| crafted_tools_fts : "FTS5 sync"
+    memory_chunks ||--|| memory_chunks_fts : "FTS5 external content"
+    crafted_tools ||--|| crafted_tools_fts : "FTS5 sync triggers"
+    messages ||--|| messages_fts : "FTS5 sync triggers"
+    crafted_tools ||--o| craft_scores : "tool_name"
     search_nodes ||--o{ search_nodes : "parent_id"
+    scaffold_versions ||--o{ task_history : "scaffold_version"
 ```
 
 ## Agent Identity (SOUL.md)
 
-The agent's identity document lives at `SOUL.md` in the workspace VFS. On the
-hosted backend that file is in the authoritative Nimbus session; on the CLI it
-uses the local VFS adapter. `readSoul`/`writeSoul`/`seedSoul`
-(`core/src/identity/soul.ts`) are the accessors; the system prompt, evolution
-engine, and `setSoul` RPC all go through them. The owner may edit SOUL.md; the
+The agent's identity document lives at `SOUL.md` in the workspace filesystem, on
+both backends. `readSoul`/`writeSoul`/`seedSoul` (`core/src/identity/soul.ts`)
+are the accessors; the system prompt, evolution engine, and `setSoul` RPC all go
+through them. `writeSoul` also maintains `workspace_identity.mission`, so a
+read-only listing never has to open the file. The owner may edit SOUL.md; the
 agent does not rewrite its own identity.
 
-## Workspace files and the local SqliteFS adapter
+## The workspace filesystem
 
-The hosted backend uses `NIMBUS_SESSION`; `vfs_files` is not created for a fresh
-cloud workspace. The CLI backend uses the `@proteus/agent-utils` POSIX-like
-filesystem backed by `vfs_files`. Memory indexing reads through the active VFS
-adapter on either backend, so the relational `memory_chunks` index does not
-become a second file authority.
+`SqliteFS`, the hand-rolled `vfs_files` adapter this section used to describe,
+was deleted on 2026-08-12; `core/src/checkpoints/types.ts:29` records the date.
+Both backends now run Nimbus's workspace filesystem over their own SQLite.
 
-**Chunked storage:** Files larger than 1.8MB are split across multiple rows with `chunk_index`. Reads concatenate all chunks. Writes split and store atomically.
+- **Hosted.** The workspace lives in its `NIMBUS_SESSION` Durable Object,
+  reached through the remote session adapter in `core/src/execution/nimbus.ts`.
+  The orchestrator DO creates none of the filesystem tables.
+- **Local.** `createWorkspace` (`core/src/vfs/nimbus-workspace.ts`, imported as
+  `createWorkspaceFilesystem`) builds the same component over `bun:sqlite` in
+  the session's own database (`cli-backend/src/runtime.ts:370-380`).
 
-**Auto-created parent directories:** Writing to `a/b/c/file.txt` automatically creates directory entries for `a`, `a/b`, `a/b/c`.
+Nimbus owns those bytes and their tables. `core/src/conformance/manifest.ts`
+declares the exact set. That set is what `NimbusWorkspace.destroy()` drops, and
+an addition to it means the dependency changed its storage contract:
+`inodes`, `file_chunks`, `content_lifecycle`, `vfs_schema_migrations`,
+`vfs_append_receipts`, `vfs_append_writer_state`, `vfs_append_module_state`,
+`vfs_append_pid_revocations`, `vfs_append_acked_gaps`, plus Proteus's own
+`proteus_workspace_generation`. All ten are declared present on the CLI root and
+absent on both hosted roots.
 
-**Path normalization:** Resolves `.` and `..`, prevents directory traversal attacks.
+Three properties follow from that layout, and none of them was true of the old
+adapter:
 
-**Key operations:**
-- `readFile(path)` — concatenate all chunks for the path
-- `writeFile(path, data)` — delete old chunks, split data into 1.8MB chunks, insert
-- `stat(path)` — return size, mtime, isDir
-- `mkdir(path, {recursive: true})` — create intermediate directories
-- `rename(old, new)` — rename via copy-delete pattern (DELETE old + INSERT new)
+- **Content addressing.** `inodes(path, content_id)` points at
+  `file_chunks(content_id, chunk_id, data)`, with a `content_lifecycle` GC
+  table. A snapshot of the plane copies the small inode index and no blobs.
+- **Real POSIX semantics.** One filesystem, addressed identically by
+  `vfs.readFile('/etc/passwd')` and by `run "cat /etc/passwd"`. Relative paths
+  resolve at `WORKSPACE_ROOT` (`/home/user`). Ownership is uid/gid/mode on real
+  inodes, which is how a swarm node's `/home/<node>` and its private `/tmp` are
+  a boundary rather than a convention (`core/src/vfs/agent-home.ts`).
+- **Chunked blobs.** `@nimbus-sh/core`'s `sqlite-vfs.js` splits file content at
+  `CHUNK_SIZE = 1_800_000` bytes per `file_chunks` row.
+
+`packages/agent-utils` supplies the `VFS` interface both planes satisfy
+(`agent-utils/src/vfs/types.ts`) and nothing else on this axis. It has no
+filesystem implementation and no shell emulator; the shell is Nimbus's
+`runtime-bash`. Memory indexing reads through the active VFS on either backend,
+so the relational `memory_chunks` index never becomes a second file authority.
+
+One table named `vfs_files` still appears in the tree, in
+`packages/cli/tests/export-import.test.ts`, where the test creates it as a blob
+fixture for the archive reader. No product path creates or reads it.
 
 ## MemoryStore (FTS5 Search)
 
-From `@proteus/agent-utils`. Provides full-text search over markdown files stored in the VFS.
+From `@proteus/agent-utils`. Provides full-text search over markdown files stored in the workspace filesystem.
 
-**Schema:** `memory_chunks` table with `memory_chunks_fts` FTS5 virtual table (content-sync via `content='memory_chunks'`).
+**Schema:** `memory_chunks` table with `memory_chunks_fts` FTS5 virtual table (external content via `content='memory_chunks'`). `initMemoryChunkTables` is the one DDL; `MemoryStore.ensureSchema()` delegates to it.
 
-**Indexing:** Files are chunked using a line-aware sliding window (target 1600 chars, 320 char overlap). Each chunk gets a SHA-256 hash for deduplication — unchanged chunks are not re-indexed.
+**Indexing:** Files are chunked using a line-aware sliding window (`DEFAULT_CHUNK_TARGET_CHARS` 1600, `DEFAULT_CHUNK_OVERLAP_CHARS` 320). Each chunk gets a SHA-256 hash for deduplication, so unchanged chunks are not re-indexed.
 
-**Search:** FTS5 MATCH with BM25 ranking. Query sanitization removes FTS5 operators and stop words. Falls back to OR-joined tokens if AND query returns no results.
+**Search:** FTS5 MATCH with BM25 ranking. `sanitizeFtsQuery` removes FTS5 operators and stop words. Falls back to OR-joined tokens if the AND query returns no results.
 
-## Think Message Persistence
+## Think message persistence
 
-Think (via the Session class) manages its own message tables:
-- `cf_agents_chat_messages` — all chat messages (user + assistant)
-- `cf_agents_sessions` — session metadata
-- `cf_agents_contexts` — LLM-writable memory context blocks
+Chat history belongs to the SDK. `Think` extends the agents SDK's
+`Agent` and holds a `Session` from `agents/experimental/memory/session`, which
+creates and owns:
 
-These are managed by Think internally — Proteus reads via `this.messages` but never writes directly.
+- `assistant_messages`: the durable message path
+- `assistant_sessions`: session metadata
+- `assistant_compactions`: the SDK's own compaction records
+- `assistant_config`: session-scoped settings
+- `cf_agents_context_blocks`: LLM-writable memory context blocks
+- `cf_agents_search_entries`: the session's own search index
+
+Proteus reads through `this.messages` and never writes these directly. The
+`messages` table in the ER diagram above is Proteus's own flattened projection,
+which is what `messages_fts` and the outcome joins read.
 
 ## The rest of the schema
 
-The ER diagram above covers the original core; the subsystems added since each
-own their own DDL, all `IF NOT EXISTS` and all run from the same `ensureSchema()`
-pass:
+The ER diagram above covers the shared actor substrate. Every subsystem added
+since owns its own DDL, all of it `IF NOT EXISTS`, and all of it runs from the
+same `initWorkspaceSchema()` pass:
 
 | Subsystem | Tables | Owner |
 |---|---|---|
 | Events hub | `agent_log`, `reply_channels`, `triggers`, `peer_outbox` (+ views `events_v`, `run_event_v`, `turn_phase_log_v`) | `core/src/events/hub/schema.ts` |
 | Run-event log | `run_events` | `core/src/events/recorder.ts` |
-| Turn outcomes | `turn_outcomes`, `lessons` | `core/src/evolution/outcomes.ts` |
+| Turn outcomes | `turn_outcomes`, `lessons`, `outcome_labels`, `outcome_ensemble_labels` | `core/src/evolution/outcomes.ts` |
 | Replay eval | `replay_evals` | `core/src/evolution/replay.ts` |
 | GEPA | `gepa_runs`, `gepa_candidates`, `gepa_pareto_membership` | `core/src/evolution/gepa/persistence.ts` |
 | Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |
 | MCTS | `mcts_search_runs` (durable checkpoints), `alternate_takes` | `core/src/mcts/search-store.ts`, `takes.ts` |
-| Scaffold shadow mode | `scaffold_evaluations` | `core/src/scaffold/shadow.ts` |
+| Swarm leaderboard | `exploration_records` (cumulative across runs) | `core/src/strategy/records.ts` |
+| Scaffold shadow mode | `scaffold_evaluations`, `scaffold_trial_queue` | `core/src/scaffold/shadow.ts` |
 | Facts | `agent_facts` | `core/src/memory/facts.ts` |
 | Session search | `messages_fts` (FTS5 + sync triggers) | `core/src/memory/session-search.ts` |
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
+| Task list | `agent_tasks` (one plan per actor) | `core/src/tasks/store.ts` |
+| Deferred approvals | `deferred_approvals` | `core/src/safety/deferred-approval.ts` |
+| Plan review | `plan_reviews` | `core/src/plans/review.ts` |
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
-| Release lane | `release_sources`, `release_changes`, `release_checks`, `release_approvals`, `release_deployments` | `core/src/release/sql-store.ts` |
-| Agent views | `agent_views` (one row per published version; the specs themselves live in the VFS at `views/<slug>.json[.vN]`) | `core/src/views/store.ts` |
+| Release lane | `release_sources`, `release_changes`, `release_checks`, `release_approvals`, `release_deployments` | `core/src/release/sql-store.ts` (CLI session; on cf the board lives in the owner's UserDO) |
+| Agent views | `agent_views` (one row per published version; the specs themselves live in the workspace filesystem at `views/<slug>.json[.vN]`) | `core/src/views/store.ts` |
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
-| Compaction | `compaction_state` | `compaction/src/stores.ts` |
-| Subordinates | `workspace_subordinates` (parent), `subordinate_identity` (child DO) | `cf-backend/src/subordinate-support.ts` |
-| Orchestrator-local | `agent_config`, `vfs_baseline`, `turn_feedback`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts` |
+| Compaction | `compaction_state`, `compaction_archive` | `core/src/identity/workspace-schema.ts` (the DDL lives in core because `@proteus/compaction` sits above it in the dependency graph) |
+| Typed config | `agent_config` | `core/src/config/store.ts` |
+| Crafted-tool migration marker | `_v2_codegen_migration_done` (hosted orchestrator only) | `core/src/craft/migrate-duplicates.ts` |
+
+Five more groups are created outside that pass, by the root that owns each:
+
+| Subsystem | Tables | Owner |
+|---|---|---|
+| Subordinates | `workspace_subordinates` (every actor that can hire), `subordinate_identity` (child DO) | `core/src/subordinates/support.ts` |
+| Workspace-diff baseline | `vfs_baseline` | `core/src/read-models/workspace-diff.ts`, called by each root's schema pass |
+| Orchestrator-local | `turn_feedback`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
 | Email + webhooks | `email_outbox` | `cf-backend/src/email/outbox.ts` |
 | Ingress gates | `webhook_rate_windows`, `webhook_secrets` (both backends) | `core/src/events/ingress/rate-limit.ts`, `secrets.ts` |
 
-## Schema Initialization
+`session_window` and `mission_budget` are created lazily, by the evolution
+engine's constructor and by the mission governor's first write.
 
-`ensureSchema()` (`cf-backend/src/orchestrator.ts`) runs once per DO wake, before
-`onStart()` and again at the head of any RPC that can arrive first:
+`core/src/conformance/manifest.ts` declares every one of these per root
+(`cf-orchestrator`, `cf-subordinate`, `cli`), as wired or as deliberately absent
+with a stated reason, and the conformance suite compares that declaration
+against the real `sqlite_master`. Read the manifest first. This page is a
+narrative over it.
 
-1. Migration checks — old `vfs_files` without `chunk_index` and old
-   `memory_chunks` without `start_line` are dropped and recreated; `search_nodes`
-   gains `code_used` by ALTER.
-2. `initAllTables` — `workspace_identity`, `search_nodes`, `scaffold_versions`,
-   `scaffold_regression_fixtures`, `task_history`, `craft_scores`, `fibers`,
-   `vfs_files` (via the canonical agent-utils `VFS_SCHEMA_DDL`), `messages`,
-   `evolution_events`, `crafted_tools`, `executor_output`, `activity_log`,
-   `fork_lineage`.
-3. Each subsystem's own `init*` from the table above.
-4. `subordinateRoster.ensureSchema()` and the orchestrator-local inline tables.
-5. `memoryStore.ensureSchema()` and `craftStore.ensureSchema()` create their
-   FTS5 virtual tables — `crafted_tools_fts` with auto-sync triggers,
-   `memory_chunks_fts` synced in code by `indexFile`.
+## Schema initialization
 
-Two consequences worth knowing. Several tables have deliberately duplicated DDL
-in `identity/schema.ts` and in their owning module; where the two differ
-(`scaffold_versions` gains `status` and `parent_version`), the owning module's
-`init*` reconciles by ALTER. And DO SQLite cannot ALTER a `CHECK` constraint and
-forbids explicit transactions, so widening one — as `turn_outcomes` and the
-events-hub tables have both needed — is an in-place table rebuild.
+`initWorkspaceSchema()` (`core/src/identity/workspace-schema.ts`) is the one
+answer to which tables a workspace has. Every composition root calls it: the
+orchestrator DO's `ensureSchema()`, the subordinate DO's, `openWorkspaceCLI`,
+the local session constructor, and `proteus create`. It used to be four
+disagreeing lists, and the disagreements were real bugs. `craft_scores` was
+never created except by `proteus create`, so every EMA read on a workspace
+opened any other way silently no-opped.
+
+The pass runs in this order:
+
+1. `repairLegacyTables`: a `memory_chunks` predating the 7-column FTS5 schema
+   is dropped with its shadow index and rebuilt empty; `search_nodes` gains its
+   post-release columns here, before the CREATE pass builds an index over
+   `root_id`.
+2. `renameReleaseTables`: the five `product_*` tables become `release_*`,
+   guarded both ways so the audit trail survives.
+3. `initAllTables` (`core/src/identity/schema.ts`): `workspace_identity`, then
+   `initActorTables` (the actor substrate plus `initSearchTables`,
+   `initScaffoldTables` and `initViewTables`), then `fork_lineage`.
+4. `migrateWorkspaceStorage` adopts a pre-rename `agent_identity` row and a
+   pre-rename `fork_lineage`.
+5. Each subsystem's own `init*` from the tables above.
+
+Then each root adds what only it carries. The orchestrator DO also runs
+`initWorkspaceBaselineTable`, `initWebhookRateLimitTables`,
+`subordinateRoster.ensureSchema()` and its two inline turn tables; the whole
+call is gated by an in-memory flag so it runs once per activation, and no
+persistent schema version is tracked because a cold activation always re-runs.
+
+Two consequences worth knowing. Each table has exactly one owning module, and
+the duplicate copies that `identity/schema.ts` used to carry are gone. A second
+definition of `search_nodes` is how `code_language` went missing on a live
+workspace, and a second `scaffold_versions` is how `status` and `parent_version`
+did. Where a workspace predates a column, the owning module reconciles it by
+asking `pragma_table_info` (`reconcileColumns`) rather than attempting an ALTER
+and swallowing the failure. And DO SQLite cannot ALTER a `CHECK` constraint and
+forbids explicit transactions. Widening one, as `turn_outcomes` and the
+events-hub tables have both needed, is an in-place table rebuild with a resume
+branch for a crash mid-sequence.
