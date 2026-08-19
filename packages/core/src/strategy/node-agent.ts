@@ -250,11 +250,17 @@ export interface NodeAgentDeps {
    *  the tool is absent too rather than broken. */
   executeTool?: unknown;
   webSearch?: WebSearchProvider;
-  /** A caller-requested deadline for one node. Absent takes
-   *  {@link nodeWallClockEnvelopeMs} of `maxSteps`, so a node ALWAYS has a deadline it
-   *  can observe between steps — absent used to mean "runs until the search aborts",
-   *  and the search's own signal is a run-level bound that cuts a whole wave at once. */
-  maxWallClockMs?: number;
+  /**
+   * THE DEADLINE THIS NODE RUNS TO, observed between its own steps.
+   *
+   * REQUIRED, unlike every other bound-shaped dep here, and that is the fix rather
+   * than a style choice: it was optional, no caller ever set it, and an absent key
+   * left `stopWhen`'s `budgetExhausted` nothing to check — so the search's own abort
+   * signal was a node's only clock, and that signal cuts an entire WAVE at once. A
+   * type that permits no deadline permits that defect again. Callers derive the value
+   * from {@link nodeWallClockEnvelopeMs} and may declare a tighter one.
+   */
+  maxWallClockMs: number;
 }
 
 
@@ -580,14 +586,15 @@ export async function runNodeAgent(
   // stopped before its first step, which is what a depth of 0 would do here
   // (`budgetExhausted` treats it as exhausted).
   //
-  // THE DEADLINE IS ALWAYS PRESENT. It used to be an absent key when the caller declared
-  // none, and then `stopWhen`'s `budgetExhausted` had nothing to check and the run's
-  // abort signal was the node's only clock — a run-level bound that cuts an entire wave
-  // mid-step. A node observes THIS one between its own steps.
+  // THE DEADLINE IS ALWAYS PRESENT, and the caller resolved it: one `??` for a node's
+  // clock in the whole tree, so a caller and this function cannot end up disagreeing
+  // about what it is. It used to be an absent key, and then `stopWhen`'s
+  // `budgetExhausted` had nothing to check and the run's abort signal was a node's only
+  // clock — a run-level bound that cuts an entire wave mid-step.
   const nodeBudget: HeadBudget = {
     maxDepth: 1,
     spawnedAt: Date.now(),
-    maxWallClockMs: deps.maxWallClockMs ?? nodeWallClockEnvelopeMs(deps.maxSteps),
+    maxWallClockMs: deps.maxWallClockMs,
   };
 
   const headInput: HeadInput = {

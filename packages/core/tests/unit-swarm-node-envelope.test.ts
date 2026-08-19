@@ -20,8 +20,12 @@
  * STEP, and a step is the unit the bound is built out of.
  */
 import { describe, expect, test } from 'bun:test';
+import { MockLanguageModelV3 } from 'ai/test';
+import { createTestRuntime } from './helpers';
+import { createRecordingLogger } from '../src/obs/index';
+import { HeadJournal } from '../src/heads/journal';
 import { DEFAULT_MAX_STEPS, TURN_WALL_CLOCK_ENVELOPE_MS } from '../src/config';
-import { nodeWallClockEnvelopeMs } from '../src/strategy/node-agent';
+import { nodeWallClockEnvelopeMs, runNodeAgent } from '../src/strategy/node-agent';
 
 /** The three nodes of that run, exactly as it reported them. */
 const MEASURED_NODES = [
@@ -85,5 +89,74 @@ describe('a node envelope is derived from a step, not chosen', () => {
     for (const node of MEASURED_NODES) {
       expect(RUN_ENVELOPE_THAT_ABORTED_MS).toBeLessThan(node.wallClockMs);
     }
+  });
+});
+
+/**
+ * WHERE THE DEADLINE IS READ, AND WHAT THAT LEAVES UNBOUNDED.
+ *
+ * A cooperative deadline cannot pre-empt synchronous work. The honest response is to
+ * bound a MANY-STEP node at its step boundaries and to state the residue rather than
+ * pretend a signal reaches inside a step — one measured step held the runner at 91% CPU
+ * for 26 minutes and neither this deadline nor the caller's `AbortSignal.timeout` had
+ * any effect on it. So the limit is asserted here in both directions: the deadline DOES
+ * stop a node, and it does NOT stop the step that was running when it passed.
+ */
+describe('what the node deadline reaches, and what it does not', () => {
+  test('an already-passed deadline stops the node at its NEXT step boundary, not inside one', async () => {
+    const { rt } = createTestRuntime();
+    const journal = new HeadJournal(rt.storage.sql);
+    let steps = 0;
+    const run = await runNodeAgent({
+      nodeId: 'n-deadline', rootId: 'r-deadline', parentId: null, depth: 0,
+      task: 'answer the task', rationale: 'the run asked for it',
+      base: 'You are a node under test.',
+      messages: [{ role: 'user', content: 'Answer the task.' }],
+      inherited: [], context: 'fresh', mode: 'build', settle: 'best', arbitrate: null,
+    }, {
+      rt,
+      // A node that never stops on its own: every step asks for another tool call, so
+      // the ONLY thing that can end this loop is a bound.
+      model: new MockLanguageModelV3({
+        provider: 'fake',
+        modelId: 'fake-never-stops',
+        doGenerate: async () => {
+          steps += 1;
+          return {
+            content: [{
+              type: 'tool-call' as const,
+              toolCallId: `read-${String(steps)}`,
+              toolName: 'file',
+              input: JSON.stringify({ action: 'read', path: 'nothing/here.txt' }),
+            }],
+            finishReason: { unified: 'tool-calls' as const, raw: undefined },
+            usage: {
+              inputTokens: { total: 4, noCache: 4, cacheRead: undefined, cacheWrite: undefined },
+              outputTokens: { total: 3, text: 3, reasoning: undefined },
+            },
+            warnings: [],
+          };
+        },
+      }),
+      journal,
+      // Room for 40 steps, and a deadline that has already passed by the time the first
+      // one finishes. The step cap is therefore NOT what stops this node.
+      maxSteps: 40,
+      maxWallClockMs: 1,
+      logger: createRecordingLogger(),
+    });
+
+    // IT STOPS THE NODE, and says which bound did it.
+    expect(run.report.status).toBe('budget_exceeded');
+    expect(run.report.errorMessage).toContain('wall-clock');
+    expect(steps).toBeLessThan(40);
+
+    // AND IT DID NOT STOP THE STEP. The deadline expires no later than the end of the
+    // first step, and that step still ran to completion — one whole model call and its
+    // tool result, banked. That is the residue, measured rather than asserted away: a
+    // deadline that could pre-empt would have produced no steps at all, and a node
+    // whose one step took 26 minutes would still take 26 minutes here.
+    expect(steps).toBe(1);
+    expect(run.report.stepCount).toBe(1);
   });
 });
