@@ -275,6 +275,10 @@ describe('the live tree', () => {
   });
 
   test('every non-repository declaration still names a gate that enumerates', () => {
+    // The declaration list is this test's denominator. Emptied — by a cleanup that
+    // dropped the entries rather than the gates — every assertion below is true of
+    // nothing, and the escape hatch it documents becomes undocumented silently.
+    expect(NON_REPOSITORY_SCANS.size).toBeGreaterThan(0);
     for (const [file, reason] of NON_REPOSITORY_SCANS) {
       expect(trackedFiles()).toContain(file);
       expect(reason.length).toBeGreaterThan(40);

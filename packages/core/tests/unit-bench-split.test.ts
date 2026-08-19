@@ -51,6 +51,12 @@ describe('partitionCorpus', () => {
 
   test('the dev split provably contains no sealed task', () => {
     const corpus = partitionCorpus(tasks);
+    // `dev` is what the partition produced, so it is the denominator. The sibling
+    // above asserts `dev.length + sealed.size === tasks.length`, which an empty
+    // dev satisfies too — a partition that sealed everything would leave this
+    // claim true of nothing while destroying the dev split it names.
+    expect(corpus.dev.length).toBeGreaterThan(0);
+    expect(corpus.dev.length).toBeLessThan(tasks.length);
     for (const t of corpus.dev) expect(splitOf(t.id)).toBe('dev');
   });
 

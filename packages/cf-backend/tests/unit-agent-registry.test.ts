@@ -113,10 +113,16 @@ describe('AgentProviderRegistry composition', () => {
       env: {},
       userDO: null,
     });
+    const gated = [
+      'workers-ai', 'my-gateway', 'codex', 'openai', 'anthropic', 'openrouter', 'openai-compat',
+    ];
     const list = await reg.registry.listProviders(reg.deps);
-    const credGated = list.filter((p) =>
-      ['workers-ai', 'my-gateway', 'codex', 'openai', 'anthropic', 'openrouter', 'openai-compat'].includes(p.id),
-    );
+    const credGated = list.filter((p) => gated.includes(p.id));
+    // Every one of them, by name. A filter is a denominator: an empty list, or an
+    // id renamed out from under this array, would make "no credential-gated
+    // provider is available without a UserDO" a claim about nothing — which is
+    // the reading a provider that silently became reachable would produce.
+    expect(credGated.map((p) => p.id).sort()).toEqual([...gated].sort());
     for (const p of credGated) expect(p.available).toBe(false);
   });
 });
