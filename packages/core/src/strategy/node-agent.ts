@@ -52,7 +52,7 @@ import type { Usage } from '../usage';
 import type { BranchContext, BranchProposal, SwarmSettle } from './swarm';
 import type { BranchDecision } from './swarm-budget';
 import type { NodeIdentity, NodeIsolation, NodeWorkspaceProvisioner } from './node-workspace';
-import type { HeadBudget, HeadInput, HeadReport, SerializedMessage } from '../heads/types';
+import type { HeadBudget, HeadInput, HeadReport, HeadStep, SerializedMessage } from '../heads/types';
 import type { HeadJournal } from '../heads/journal';
 import type { MissionScope } from '../mission-budget';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -79,6 +79,17 @@ export const NODE_BUILTIN_TOOLS = [...HEAD_BUILTIN_TOOLS, 'report'] as const;
 /** The node's own branch route. One name, so reading a transcript tells a human
  *  which tool asked for budget. */
 export const PROPOSE_BRANCH_TOOL = 'propose_branch';
+
+/**
+ * Arbitrates one node's branch request.
+ *
+ * May answer asynchronously, and that is not decoration: when a node runs in a
+ * facet rather than in the search's own isolate, the arbiter is on the other
+ * side of an RPC and the search's budget is not a value the node's host holds.
+ * A synchronous-only arbiter would make hosting a node unrepresentable, so the
+ * seam is async and the in-process caller simply returns a value.
+ */
+export type NodeArbiter = (proposal: BranchProposal) => BranchDecision | Promise<BranchDecision>;
 
 /** What the engine hands one node before it runs. Identity and depth come from the
  *  engine's own row — a node states neither (§8.3) — and the seed is assembled by
@@ -118,7 +129,7 @@ export interface NodeAgentInput extends NodeIdentity {
    * for what can still change mid-run — the budget can empty between the
    * invitation and the answer, which is why this is a function and not a boolean.
    */
-  readonly arbitrate: ((proposal: BranchProposal) => BranchDecision) | null;
+  readonly arbitrate: NodeArbiter | null;
 }
 
 /** What a node's own run produced, as the engine consumes it. */
@@ -169,9 +180,27 @@ export interface NodeAgentDeps {
   signal?: AbortSignal;
   reportModelCall?: ModelCallSink;
   mission?: MissionScope;
-  /** §8.6's home provisioner. Absent is the pre-substrate default and it is
-   *  reported rather than assumed — see {@link nodeWorkspace}. */
+  /** The node's home provisioner. Absent is a host with no uid-0 view, and then
+   *  the shared plane is REPORTED — see {@link nodeWorkspace}. */
   provisionHome?: NodeWorkspaceProvisioner;
+  /**
+   * Where this node's loop RUNS, when somewhere other than here.
+   *
+   * Absent runs {@link runNodeLoop} in this isolate, which is the whole of the
+   * difference: the body is the same function either way, so a host is a
+   * TRANSPORT and never a second runtime. Present hands the node to a host that
+   * gives it its own storage and its own shell state — on the Cloudflare backend
+   * an `ExplorationAgent` facet, the same host a fork's head already runs in.
+   *
+   * What a host does NOT buy is parallelism. `do.facet.cpu_shared` is the
+   * governing fact: facets of one object share a single execution thread, so
+   * hosting a wave of nodes serialises exactly as `Promise.allSettled` in one
+   * isolate already does. It buys a storage boundary and a teardown verb. The
+   * FILE boundary is independent of it and needs no host at all, because a home
+   * is uid/gid/mode on real inodes in the one view and a credential is an
+   * argument to `exec`.
+   */
+  host?: NodeLoopHost;
   /** Backend-built `execute_tools`; absent on a runtime that wired none, and then
    *  the tool is absent too rather than broken. */
   executeTool?: unknown;
@@ -182,9 +211,76 @@ export interface NodeAgentDeps {
 }
 
 /** What the node's `report` call left behind, before the engine reads it. */
-interface CapturedReport {
+export interface CapturedReport {
   readonly status: string;
   readonly content: string;
+}
+
+/**
+ * Everything a host needs to run one node's loop.
+ *
+ * Every field is DATA, deliberately: a host may be a Durable Object facet on the
+ * far side of an RPC, so anything that cannot be serialised cannot be in here.
+ * That constraint is what keeps the in-process and hosted paths honest — if the
+ * spec were allowed a closure, the two paths would quietly diverge into two
+ * runtimes again, because only one of them could carry it.
+ */
+export interface NodeRunSpec {
+  readonly headInput: HeadInput;
+  /** The base system prompt this node's framing is built on. */
+  readonly base: string;
+  /** The conversation the engine assembled for this node, task last. */
+  readonly messages: readonly ModelMessage[];
+  readonly isolation: NodeIsolation;
+  readonly home: string;
+  readonly maxSteps: number;
+  /**
+   * Whether a proposal could be granted at all — the BUILD-TIME half of the
+   * arbitration rule. A request that can only ever be refused must not be
+   * offered, because offering it spends a step to learn a limit the surface
+   * already knew. Carried as data rather than inferred from the arbiter, because
+   * a host's arbiter is an RPC stub and always present.
+   */
+  readonly canPropose: boolean;
+}
+
+/** What one node's loop produced. Serialisable, for the spec's reason. */
+export interface NodeLoopResult {
+  readonly report: HeadReport;
+  readonly reported: CapturedReport | null;
+  readonly granted: BranchDecision | null;
+  readonly produced: readonly ModelMessage[];
+}
+
+/**
+ * A host that runs a node's loop somewhere else.
+ *
+ * The implementation is a backend's, because only a backend can reach both the
+ * facet API and the parent stub the loop's live seams have to call back through
+ * — which is exactly how a head's mission ledger already works.
+ */
+export type NodeLoopHost = (spec: NodeRunSpec) => Promise<NodeLoopResult>;
+
+/**
+ * The live seams {@link runNodeLoop} needs and a {@link NodeRunSpec} cannot
+ * carry: a model, a runtime, and the two callbacks that reach the search while
+ * the node is still running.
+ *
+ * In this isolate they are plain functions. In a facet they are RPCs to the
+ * parent, assembled host-side — the same shape `mission.port` already takes.
+ */
+export interface NodeLoopDeps {
+  rt: AgentRuntime;
+  model: LanguageModel;
+  logger: Logger;
+  signal?: AbortSignal;
+  mission?: MissionScope;
+  /** Where each finished step lands WHILE the node still runs. */
+  reportStep?: (seq: number, step: HeadStep) => Promise<void> | void;
+  /** The search's arbiter, or null when no branch could be granted. */
+  arbitrate: NodeArbiter | null;
+  executeTool?: unknown;
+  webSearch?: WebSearchProvider;
 }
 
 /** Where a node's own report and its granted branch land while it runs. A holder
@@ -207,7 +303,7 @@ interface NodeScratch {
  * for the node rather than for the log.
  */
 function buildProposeTool(
-  arbitrate: (proposal: BranchProposal) => BranchDecision,
+  arbitrate: NodeArbiter,
   scratch: NodeScratch,
 ): ToolSet {
   return {
@@ -251,7 +347,7 @@ function buildProposeTool(
         // unrepresentable and therefore unexplainable. `minItems`/`maxItems` are a
         // hint to the provider, and the AI SDK does not validate a `jsonSchema`
         // tool input at all.
-        const decision = arbitrate({
+        const decision = await arbitrate({
           rationale,
           branches: branches.map((branch) => ({
             task: branch.task,
@@ -287,10 +383,10 @@ function buildProposeTool(
  * can audit and a paragraph of prose.
  */
 function buildNodeToolSet(input: {
-  readonly deps: NodeAgentDeps;
+  readonly deps: NodeLoopDeps;
   readonly capture: HeadCapture;
   readonly scratch: NodeScratch;
-  readonly arbitrate: ((proposal: BranchProposal) => BranchDecision) | null;
+  readonly arbitrate: NodeArbiter | null;
 }): ToolSet {
   const { deps, scratch } = input;
   const builtinDeps: BuiltinToolDeps = {
@@ -391,12 +487,81 @@ export function nodeSystemPrompt(input: {
 }
 
 /**
+ * THE NODE LOOP. One body, wherever a node runs.
+ *
+ * Exported because a host calls it too: on the Cloudflare backend an
+ * `ExplorationAgent` facet receives a {@link NodeRunSpec} over RPC, rebuilds the
+ * live seams against its own runtime, and calls exactly this function. So a
+ * hosted node and an in-process node are not two implementations that must be
+ * kept in step — they are one function reached by two transports, which is the
+ * only arrangement that cannot drift.
+ *
+ * It journals NOTHING. The ledger belongs to the search, which is on the other
+ * side of the boundary when a host is in play, and a loop that wrote to its own
+ * copy would be the second store the journal rule forbids.
+ */
+export async function runNodeLoop(
+  spec: NodeRunSpec,
+  deps: NodeLoopDeps,
+): Promise<NodeLoopResult> {
+  const capture = new HeadCapture();
+  const scratch: NodeScratch = { reported: null, granted: null, produced: [] };
+  // The arbiter is offered only when the search said a branch could be granted.
+  // Both halves are required: a host's arbiter is an RPC stub and therefore
+  // always non-null, so presence alone cannot answer whether to offer the tool.
+  const tools = buildNodeToolSet({
+    deps,
+    capture,
+    scratch,
+    arbitrate: spec.canPropose ? deps.arbitrate : null,
+  });
+
+  const inference: HeadInferenceDeps = {
+    model: deps.model,
+    tools,
+    // The layout the node is TOLD matches the boundary it actually got, and the
+    // prompt says the same thing in its own words through `isolationDisclosure`,
+    // so the two cannot disagree.
+    workspaceLayout: spec.isolation === 'private-home' ? 'private-scratch' : 'shared-workspace',
+    capture,
+    maxSteps: spec.maxSteps,
+    isAborted: () => deps.signal?.aborted ?? false,
+    abortReason: () => (deps.signal?.aborted ? 'the search was aborted' : null),
+    framing: {
+      system: nodeSystemPrompt({
+        base: spec.base,
+        isolation: spec.isolation,
+        home: spec.home,
+        toolNames: Object.keys(tools),
+      }),
+      messages: spec.messages,
+    },
+    reportMessages: (messages) => { scratch.produced = messages; },
+  };
+  // Assigned rather than spread: an absent seam must be an ABSENT KEY, because
+  // `runHeadInference` reads presence to decide whether the behaviour exists.
+  if (deps.mission !== undefined) inference.mission = deps.mission;
+  if (deps.reportStep !== undefined) inference.reportStep = deps.reportStep;
+
+  const report = await runHeadInference(spec.headInput, inference);
+  return {
+    report,
+    reported: scratch.reported,
+    granted: scratch.granted,
+    produced: scratch.produced,
+  };
+}
+
+/**
  * Run one node as an agent, and journal it.
  *
  * Never throws: the loop turns a provider failure into an `errored` report, and a
  * node that errored is a candidate the search could not measure rather than a run
  * that stops. The engine decides what an unmeasurable candidate means; this
  * function's contract is that it always returns one.
+ *
+ * This function owns everything the loop must not: the home, the ledger, and the
+ * decision of WHERE the loop runs. The loop owns the inference and nothing else.
  */
 export async function runNodeAgent(
   input: NodeAgentInput,
@@ -415,9 +580,6 @@ export async function runNodeAgent(
   const nodeBudget: HeadBudget = deps.maxWallClockMs === undefined
     ? { maxDepth: 1, spawnedAt: Date.now() }
     : { maxDepth: 1, spawnedAt: Date.now(), maxWallClockMs: deps.maxWallClockMs };
-  const capture = new HeadCapture();
-  const scratch: NodeScratch = { reported: null, granted: null, produced: [] };
-  const tools = buildNodeToolSet({ deps, capture, scratch, arbitrate: input.arbitrate });
 
   const headInput: HeadInput = {
     id: input.nodeId,
@@ -443,47 +605,56 @@ export async function runNodeAgent(
 
   deps.journal.insertSpawn(headInput);
 
-  const inference: HeadInferenceDeps = {
-    model: deps.model,
-    tools,
-    // A node's plane is the origin's until §8.6 lands, which is what the shared layout
-    // means; the prompt says the same thing in its own words through
-    // `isolationDisclosure`, so the two cannot disagree.
-    workspaceLayout: home.isolation === 'private-home' ? 'private-scratch' : 'shared-workspace',
-    capture,
+  const spec: NodeRunSpec = {
+    headInput,
+    base: input.base,
+    messages: input.messages,
+    isolation: home.isolation,
+    home: home.home,
     maxSteps: deps.maxSteps,
-    isAborted: () => deps.signal?.aborted ?? false,
-    abortReason: () => (deps.signal?.aborted ? 'the search was aborted' : null),
-    framing: {
-      system: nodeSystemPrompt({
-        base: input.base,
-        isolation: home.isolation,
-        home: home.home,
-        toolNames: Object.keys(tools),
-      }),
-      messages: input.messages,
-    },
-    reportStep: (seq, step) => { deps.journal.appendStep(input.nodeId, seq, step); },
-    reportMessages: (messages) => { scratch.produced = messages; },
+    canPropose: input.arbitrate !== null,
   };
-  if (deps.mission !== undefined) inference.mission = deps.mission;
-  const report = await runHeadInference(headInput, inference);
 
-  deps.journal.recordReport(report);
-  deps.reportModelCall?.({ source: 'swarm', usage: report.usage });
+  const run = deps.host === undefined
+    ? await runNodeLoop(spec, nodeLoopDeps(input, deps))
+    : await deps.host(spec);
+
+  deps.journal.recordReport(run.report);
+  deps.reportModelCall?.({ source: 'swarm', usage: run.report.usage });
 
   const read = readNodeReport({
-    report,
-    reported: scratch.reported,
+    report: run.report,
+    reported: run.reported,
     languages: deps.rt.executor.languages,
   });
   return {
-    report,
+    report: run.report,
     candidate: read.candidate,
-    granted: scratch.granted,
-    usage: report.usage,
+    granted: run.granted,
+    usage: run.report.usage,
     isolation: home.isolation,
-    reportedItself: scratch.reported !== null,
-    produced: scratch.produced,
+    reportedItself: run.reported !== null,
+    produced: run.produced,
   };
+}
+
+/**
+ * The in-isolate seams: the search's own journal and arbiter, called directly.
+ *
+ * A host builds the same shape out of RPCs to the parent instead. Separated so
+ * the two transports differ in this function alone.
+ */
+function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps): NodeLoopDeps {
+  const loop: NodeLoopDeps = {
+    rt: deps.rt,
+    model: deps.model,
+    logger: deps.logger,
+    arbitrate: input.arbitrate,
+    reportStep: (seq, step) => { deps.journal.appendStep(input.nodeId, seq, step); },
+  };
+  if (deps.signal !== undefined) loop.signal = deps.signal;
+  if (deps.mission !== undefined) loop.mission = deps.mission;
+  if (deps.executeTool !== undefined) loop.executeTool = deps.executeTool;
+  if (deps.webSearch !== undefined) loop.webSearch = deps.webSearch;
+  return loop;
 }
