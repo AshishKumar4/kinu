@@ -92,7 +92,7 @@ export interface InlineExecutorDeps {
    * any tool here actually runs, a turn has always already begun.
    *
    * Returns `undefined`, not omitted, for an actor that has no turn-scoped
-   * ledger at all (ExplorationAgent — a head/fork): the caller can supply
+   * ledger at all (ExplorationAgent — a head or a swarm node): the caller can supply
    * the thunk unconditionally without itself touching whatever lazily-built
    * state decides the answer, which is what keeps this safe to wire from
    * inside another lazy getter's own construction. Undefined (from the
@@ -304,7 +304,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         'Create or update a reusable tool in CraftStore. ' +
         'Code must be an async arrow: `async (args) => { ... }`. ' +
         'Inside the body you may call `workspace.*`, `codemode.*`, and other crafted tools as `tools.<name>(args)`. ' +
-        'Callable as `codemode.<name>(args)` or `tools.<name>(args)` on the NEXT execute_tools call in the same turn. ' +
+        'Callable as `tools.<name>(args)` on the NEXT execute_tools call in the same turn — not `codemode.<name>`, which the hosted dispatcher refuses by name. ' +
         'Returns { ok, name, action: "created"|"updated" }.',
       execute: async (...args: unknown[]): Promise<JsonValue> => {
         const name = parseInput(StringSchema, { value: args[0] });
@@ -480,8 +480,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   /** Returns Array<{name, description, qualityScore}> of crafted tools. */
   function listTools(): Promise<Array<{ name: string; description: string; qualityScore: number }>>;
   /**
-   * Create or update a crafted tool. Immediately callable as
-   * \`codemode.<name>(args)\` in the SAME turn — no turn boundary needed.
+   * Create or update a crafted tool. Callable as \`tools.<name>(args)\` on the NEXT
+   * execute_tools call in this turn: the sandbox that created it is already built,
+   * so the new tool is not in it. \`codemode.<name>(args)\` is NOT the spelling —
+   * the hosted dispatcher throws on it by design and names \`tools.<name>\` instead.
    * Name is sanitized to a valid JS identifier; original case preserved.
    */
   function createTool(

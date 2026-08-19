@@ -21,7 +21,7 @@
  *                       exact-match, atomic and unique-or-refused; the read is
  *                       capped and names the offset that continues it.
  *                       Unconditional — every runtime has rt.storage.vfs.
- *   4. agents         — the ONE delegation tool: ephemeral forks (heads /
+ *   4. agents         — the ONE delegation tool: ephemeral swarm nodes (heads /
  *                       mcts settle), persistent subordinates, and peer
  *                       workspace messaging behind a single action surface.
  *                       NOT registered here — see tools/actor-tools.ts, which
@@ -58,7 +58,7 @@
  *
  * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
  * execute_tools) are injected through BuiltinToolDeps so the factory stays
- * portable; the agents fork substrate rides ActorToolDeps for the reason above.
+ * portable; the agents spawn substrate rides ActorToolDeps for the reason above.
  */
 
 import { tool, jsonSchema } from 'ai';
@@ -197,7 +197,7 @@ export interface BuiltinToolDeps {
   /** The turn's cumulative context budget — the per-result clamp tightens once
    *  a turn has admitted its budget, and every spill trip is counted for the
    *  durable `context_budget` row. Backends pass their TurnAccumulator's; a
-   *  caller that omits it (a fork's own toolset, tests) gets a fresh one, so
+   *  caller that omits it (a node's own toolset, tests) gets a fresh one, so
    *  the policy is per-root by construction. */
   contextBudget?: TurnContextBudget;
   /** The turn's escalation decisions — which provisioned environments `run` was

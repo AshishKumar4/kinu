@@ -176,6 +176,20 @@ the letter of a rule that makes a sentence worse.
 the date, or it says the number is not measured. A prose figure nobody can reproduce is the defect
 this repository keeps finding in its own gates, and it is worse in a doc, because a doc has no test.
 
+**One name per referent, and the referent decides the name.** A swarm's agent is a **swarm node**,
+or a bare **node** once the context has established it. It is never a "search node", because
+`search_nodes` is a TABLE and a row in it is a tree vertex the engine writes, not an agent with a
+turn loop, a home and a credential. Two similar names for two different kinds of thing is worse
+than one long name for one of them: a reader who meets both has to work out which is which, and the
+answer is not guessable from either. The table identifier stays `search_nodes` — identifiers never
+change for prose reasons, and prose about a row may say so.
+
+This one is review, not a gate, and the reason is worth keeping. `gate:doc-claims` derives every
+verdict FROM CODE: a symbol resolves against an identifier index, a path against the tracked file
+list, a stated count against the measured length of a named enumerable. A banned phrase has no code
+side. Its only implementable form is a word list of size one wearing a derivation, and putting that
+in a code-derived gate gives the gate a second failure mode and its own drift surface.
+
 ## Package Structure
 
 ```
@@ -287,7 +301,7 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
 - Enforced mechanically by the `no-empty-catch`, `no-sentinel-catch`, `require-cause-on-rethrow` and `no-ddl-in-catch` anti-slop rules. Never add an `oxlint-disable` to pass one
 - A refusal carries its classification, reason FIRST — `{ reason: ErrorCode, error }` via `refusalOf` — because every seam that shows a result to a human or hashes it for steering bounds it to a head slice, and the prose is the long part. Precedents: `tools/file-tool.ts:82`, `execution/inline.ts:398`, `tools/agents-tool.ts:458`
 - `classifyErrorCode` answers `null` when nothing pinned recognises a failure, and `toProteusError` therefore REQUIRES an `otherwise` from its caller. An unknowable cause is a value, never a guessed code: `Worker exceeded resource limits` is what the client sees for BOTH an isolate memory kill and a CPU-time kill, so it is not in the OOM matcher
-- The `Observability`/`Tracer` seam is WIRED, at exactly one production call site: `orchestrator.ts:1574` opens `this.tracing.invocation('alarm', 'tick', …)` on the live alarm path, through the `tracing` getter at `actor-agent.ts:1980-1988` which builds `createAgentTracing({tracer: createWorkersTracer(), isolateGen, selfPath})` once per construction. `createWorkersTracer` (`obs/cf-tracer.ts:33`) goes through `cloudflare:workers`' `tracing.enterSpan`, the only entry point available at our pin. Measured 2026-08-19: `this.tracing.` occurs **once** in `packages/cf-backend/src/`, so this is a seam in real use on one path rather than an unwired one — an earlier version of this bullet claimed a test fixture was the only caller and was wrong, and every other boundary is still unconverted and routes through logs. `selfPath` rather than `ctx.id` because two facets with distinct ids both reported under the ROOT's `durableObjectId` on the deployed runtime, so an id-keyed trace collapses every head and subordinate into one orchestrator (`do.facet.id_is_root_namespace`). Spans are always scoped, and trace context does not survive a hibernation wake or a cold start. Across `alarm()` it is not merely absent but ENFORCED absent: `tracing.invocation` revokes the handle when the method's promise settles, so a span opened from anything that escaped the tick throws — the turn that armed a trigger finished minutes or days ago, possibly in a since-reset isolate, and a span covering both would measure an interval nothing observed
+- The `Observability`/`Tracer` seam is WIRED at **six** production boundaries, measured 2026-08-19 by grepping `this.tracing.invocation`: `orchestrator.ts:1581` (`alarm`/`tick`), `orchestrator.ts:2554` (`rpc`/`head.record_step`), `actor-agent.ts:2620` (`rpc`/`swarm.arbitrate`), `exploration.ts:267` (`rpc`/`mcts.branch`), `:341` (`rpc`/`head.run`), `:401` (`rpc`/`swarm.node`). Two of the four `InvocationKind` values are in use — `alarm` and `rpc` — while `fetch` and `websocket` are declared and unused. This bullet has now been wrong in BOTH directions within one day: it first claimed a test fixture was the only caller, then claimed exactly one production call site, and the second was stale the moment five more landed. Re-grep rather than trusting the sentence. The handle comes from the `tracing` getter on `ActorAgent`, which builds `createAgentTracing({tracer: createWorkersTracer(), isolateGen, selfPath})` once per construction; `createWorkersTracer` (`obs/cf-tracer.ts`) goes through `cloudflare:workers`' `tracing.enterSpan`, the only entry point available at our pin. `selfPath` rather than `ctx.id` because two facets with distinct ids both reported under the ROOT's `durableObjectId` on the deployed runtime, so an id-keyed trace collapses every head and node into one orchestrator. Spans are always scoped, and trace context does not survive a hibernation wake or a cold start. Across `alarm()` it is not merely absent but ENFORCED absent: `tracing.invocation` revokes the handle when the method's promise settles, so a span opened from anything that escaped the tick throws
 - The full contract, its status table and the unconverted boundary: [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)
 
 ## CF Backend Specifics

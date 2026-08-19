@@ -4,8 +4,9 @@
 
 Proteus is a self-evolving agent **workspace**. You create a workspace (a durable
 container with its own filesystem, execution environments, and sessions) and its
-agent answers chat, runs tools, explores strategies with Monte Carlo Tree Search,
-learns reusable tools, and can rewrite its own agentic loop.
+agent answers chat, runs tools, searches a tree of agent nodes against an
+objective you declare, learns reusable tools, and can rewrite its own agentic
+loop.
 
 The design has one rule: **one shared brain, thin adapters.**
 Everything platform-independent lives in `packages/core`. The cloud backend
@@ -36,12 +37,12 @@ graph TB
             S["sandbox.* — full Linux container (when configured)"]
             P["laptop.* — the user's own machine (connect + consent)"]
         end
-        State["Actor SQL: sessions · plans · task/evolution ledgers<br/>Nimbus files: SOUL.md · memory · actor scaffolds"]
+        State["Actor SQL: sessions · plans · task/evolution/search ledgers<br/>Nimbus files: SOUL.md · memory · actor scaffolds"]
     end
 
     Orch["orchestrator (default agent)<br/>the workspace's voice"] --> WS
     Subs["subordinates<br/>SubordinateAgent facets (subordinate-agent.ts)<br/>shared workspace, actor-scoped shell + scaffold"] -.->|assigned-work reports| Orch
-    Heads["heads / MCTS branches<br/>ExplorationAgent facets (exploration.ts)<br/>shared workspace, actor-scoped shell + private scaffold"] -.->|findings merge back| Orch
+    Heads["swarm nodes · heads · MCTS branches<br/>ExplorationAgent facets (exploration.ts)<br/>shared workspace file plane, private scaffold and shell state"] -.->|findings merge back| Orch
     Peers["peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
 ```
 
@@ -64,9 +65,9 @@ graph TB
     A["Agent&lt;Env&gt; — agents SDK"]
     T["Think — @cloudflare/think"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · Think hook bridge"]
-    O["OrchestratorAgent<br/>agents: fork · hire · ask/send/reply · list/dismiss<br/>codemode: release · plan submit"]
-    S["SubordinateAgent<br/>agents: fork · report on assigned turns"]
-    E["ExplorationAgent<br/>hand-built head tools only"]
+    O["OrchestratorAgent<br/>agents: swarm · hire · ask/send/reply · list/dismiss<br/>codemode: release · plan submit"]
+    S["SubordinateAgent<br/>agents: swarm · hire · ask/send · list/dismiss<br/>report on parent-assigned turns"]
+    E["ExplorationAgent<br/>head tools, and the host a swarm node runs in"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
 
     A --> T --> AA
@@ -80,26 +81,36 @@ graph TB
 `ActorAgent` owns everything a full-loop actor needs once: the CF runtime
 assembly, the `BackendHost`, the shared `AgentOrchestrator`, `ExtensionHost` +
 compaction, the dynamic-context ledger, the prompt/model/tool caches, and the Think
-hook bridge. A subclass supplies only a four-member profile — `getOwnerUserId`,
-`actorToolDeps`, `engine`, `notifyOwner` — plus three optional hooks
-(`workspaceName`, `extraCodemodeProviders`, `isClientRpcMethodDenied`).
+hook bridge. A subclass supplies a seven-member profile — `getOwnerUserId`,
+`ensureSchema`, `actorToolDeps`, `engine`, `notifyOwner`, `delegationBudget` and
+`subordinateFacet` — plus three optional hooks (`workspaceName`,
+`extraCodemodeProviders`, `isClientRpcMethodDenied`).
 
-**Tool gating is structural, not prompt-only.** Every full-loop actor gets the
-ordinary built-ins. The `agents` schema is derived from the capabilities its
-profile wires: every actor can fork, while only the orchestrator wires durable
-hiring and peer transport. `report` is present only for a subordinate's
-parent-assigned turn. Release is a codemode provider only on the orchestrator
-and is omitted from Plan-mode tool construction; `submit_plan` is present only
-for an orchestrator Plan turn.
+**Tool gating is structural.** A prompt never decides it. Every full-loop actor
+gets the ordinary built-ins, and the `agents` schema is derived from the
+capabilities its profile wires (`actorAgentsActions`,
+`cf-backend/src/actor-agent.ts`). Every actor can `swarm`, because the search
+substrate is wired unconditionally. `hire`, `ask`, `send` and `list` need a
+subordinate roster or peer transport; `dismiss` needs the roster; `reply` needs
+peers, and only the orchestrator wires those. At the delegation depth cap
+`teamProfile()` returns nothing, so the roster and the hire rung disappear
+together. `report` is present only for a subordinate's parent-assigned turn.
+Release is a codemode provider only on the orchestrator and is omitted from
+Plan-mode tool construction; `submit_plan` is present only for an orchestrator
+Plan turn.
 
-**`ExplorationAgent` deliberately stays on the bare `Agent`.** It has two
+**`ExplorationAgent` deliberately stays on the bare `Agent`.** It has three
 explicit modes. An MCTS rollout gets no tools or runtime at all. A branching
 head gets the hand-built head surface — evidence, decisions, `execute_tools`,
 `run`, `file`, `web`, and depth-budgeted subheads — over the canonical parent
-workspace. It shares files/processes/ports, while its SQL journal, scaffold path,
-and `shellId` are private. It never inherits the full actor tool surface.
-Recursion is bounded by construction: `split_subheads` decrements `maxDepth` on
-every spawn and refuses once the budget is exhausted.
+workspace. A swarm node arrives as a serialisable `NodeRunSpec` over RPC, and
+`runAsNode` calls the same `runNodeLoop` an in-isolate node runs, so the facet
+is a transport. Hosting buys a storage boundary and a teardown verb, never a
+second runtime. A head and a node share the workspace's files, processes and
+ports, while their SQL journal, scaffold path, and `shellId` are private.
+Neither inherits the full actor tool surface. Recursion is bounded by
+construction: `split_subheads` decrements `maxDepth` on every spawn and refuses
+once the budget is exhausted.
 
 All three share the owner/provider/model/web substrate by **composition**, not
 inheritance: `OwnedModelServices`
@@ -111,9 +122,10 @@ owner from the `facet_owner` row its parent seeds.
 
 ## Subordinates
 
-`agents({action:'hire', ...})` calls
-`orchestrator.subAgent(SubordinateAgent, name)` and immediately seeds the
-facet's identity. That identity is single-row and
+`agents({action:'hire', ...})` calls `this.subAgent(subordinateFacet(), name)`
+on the hiring actor (`cf-backend/src/actor-agent.ts`) and immediately seeds the
+facet's identity. Any actor with a roster can hire, so a subordinate tree is
+recursive down to the delegation depth cap. That identity is single-row and
 immutable after seeding: re-seeding with a different name, parent workspace, or
 owner throws, and the seeding RPC is denied to client sockets, so only a
 worker-held parent stub can create one.
@@ -148,6 +160,17 @@ cloud the `OrchestratorAgent` bridges Think's subclass hooks onto that host;
 on the CLI, `LocalAgentSession` (`cli-backend/src/local-session.ts`) drives
 `runChat` with the same host. There is deliberately no private callback path
 running parallel to the plugin API.
+
+Three kinds of agent run turns here, and there are two turn bodies rather than
+three. `runChat` (`core/src/chat.ts`) is the body for a CLI session and for a
+swarm node alike, because a node reaches it through `runHeadInference`, which
+owns no loop of its own (`core/src/heads/head-inference.ts`). One implementation
+therefore holds the stall watchdog, the dead-stream detection, the mid-step
+abort, the step-boundary pruning and the unpaired-tool-call repair for both. The
+cloud actor is the exception because its loop belongs to Think. The vendor
+drives the steps and Proteus binds to the hooks below. A node registers no
+extensions, so compaction and signal delivery belong to an actor's turn and
+never to a node's.
 
 ```mermaid
 flowchart TB
@@ -362,7 +385,7 @@ timescales, each feeding the next:
 
 MCTS branch rewards are **execution-grounded on both backends** — the single
 scorer (`core/src/mcts/evaluation.ts`) lets execution outcome dominate the judge
-for CF Facets, the CF inline fallback, and CLI forked branches alike. Scaffold
+for CF Facets, the CF inline fallback, and CLI child-process branches alike. Scaffold
 mutations are guarded before they can take effect: a **misevolution gate**
 (`core/src/scaffold/misevolution.ts`) rejects harmful edits by fixed criteria, a
 **shadow-veto** (`core/src/scaffold/shadow.ts`, `maxRegressions: 1`,
@@ -379,8 +402,8 @@ and [MCTS.md](./MCTS.md).
 ```mermaid
 graph TB
     subgraph pkgs["packages/"]
-        Core["core/<br/>turn pipeline + ExtensionHost, canonical VFS,<br/>ExecutionRouter, MCTS, EvolutionEngine,<br/>CraftStore, scaffold, eight builtin tools, EventLog"]
-        Utils["agent-utils/<br/>SqliteFS · MemoryStore (FTS5)<br/>CraftStore (FTS5) · POSIX shell emulator"]
+        Core["core/<br/>turn pipeline + ExtensionHost, canonical VFS,<br/>ExecutionRouter, swarm engine, MCTS, EvolutionEngine,<br/>CraftStore, scaffold, eight builtin tools, EventLog"]
+        Utils["agent-utils/<br/>MemoryStore (FTS5) · CraftStore (FTS5)<br/>VFS types · path addressing · abort helpers"]
         Compact["compaction/<br/>vendored better-compact ladder + Proteus codec"]
         CF["cf-backend/<br/>ActorAgent → OrchestratorAgent + SubordinateAgent,<br/>ExplorationAgent (Facets), UserDO, React UI"]
         CLI["cli/<br/>proteus create/chat/exec/evolve/…"]
@@ -402,11 +425,13 @@ graph TB
         Think["@cloudflare/think 0.15.1 (^0.15.1)"]
         Agents["agents (Agents SDK)"]
         AISDK["ai (Vercel AI SDK v6)"]
+        Nimbus["@nimbus-sh/core 0.5.0 — the workspace filesystem"]
     end
 
     CF --> Think
     CF --> Agents
     Core --> AISDK
+    Core --> Nimbus
 ```
 
 ## Backends and the AgentRuntime contract
@@ -418,13 +443,14 @@ SQLite, workspace files/execution to Nimbus, and the turn driver to Think;
 
 | Primitive | CF backend | CLI backend |
 |---|---|---|
-| Storage | Nimbus VFS + actor DO SQL | SqliteFS over `bun:sqlite` |
+| Storage | Nimbus VFS + actor DO SQL | Nimbus VFS over `bun:sqlite` + actor SQL |
 | Memory | MemoryStore (FTS5 BM25) | MemoryStore (FTS5 BM25) |
 | Executor | codemode LOADER / `new Function()` fallback | Bun subprocess sandbox |
 | LLM | Workers AI binding or AI Gateway | AI Gateway via AI SDK |
 | Schedule | `agent.runFiber()` (durable) + DO `alarm()` | SQLite-backed fiber |
 | Identity | DO id + `SOUL.md` (VFS) | UUID + `~/.proteus/` + `SOUL.md` (VFS) |
 | Turn driver | `OrchestratorAgent` (Think hooks) | `LocalAgentSession` (`runChat`) |
+| Swarm nodes | `ExplorationAgent` Facets (`spawnNodeFacet`) | the search's own process (no host wired) |
 | MCTS branches | `ExplorationAgent` Facets (`subAgent`) | `child_process.fork` |
 | Subordinates | `SubordinateAgent` Facets (`subAgent`) | not available (one agent per process) |
 
@@ -475,12 +501,14 @@ MCTS rollouts run `low`, scaffold mutation runs `high`.
 Workspace state has two explicit authorities. The Nimbus session owns files,
 including `SOUL.md`, memory markdown, and scaffolds. The workspace actor's
 SQLite owns relational state: plans, messages, memory/craft indexes, MCTS,
-evolution, event logs, and Think session tables. The schema and boundaries are
-documented in [STORAGE.md](./STORAGE.md).
+search records, evolution, event logs, and Think session tables. The schema and
+boundaries are documented in [STORAGE.md](./STORAGE.md).
 
-Selected core algorithms are modeled in Lean 4 (`lean/`): 84 named theorems over
-hand-maintained abstract models of agent, evolution, execution, MCTS, safety, and
-storage properties. Their axiom reports use only Lean's three kernel axioms; one
+Selected core algorithms are modeled in Lean 4 (`lean/`): 330 named theorems over
+hand-maintained abstract models of agent, evolution, execution, exploration,
+MCTS, safety, and storage properties, enrolled against 43 requirements with no
+`sorry` (counted 2026-08-19 by `lean/check-traceability.mjs --list-declarations`).
+Their axiom reports use only Lean's three kernel axioms; one
 separate SQLite FTS5 assumption is documented and enrolled. CI
 (`.github/workflows/lean-verify.yml` → `scripts/verify-lean.sh`) gates
 compilation, negative consistency, axiom closure, and requirement-to-proof-to-source

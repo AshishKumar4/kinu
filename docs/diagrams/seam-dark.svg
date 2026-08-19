@@ -83,7 +83,7 @@
   <path d="M739 144 L739 166" fill="none" stroke="var(--pinkLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-pink)"/>
   <rect x="24" y="166" width="852" height="218" rx="10" fill="var(--bandFill)" stroke="var(--bandStroke)"/>
   <text class="band" x="38" y="186">PACKAGES/CORE — PLATFORM-CLEAN</text>
-  <text class="xs" x="862" y="186" text-anchor="end">one workspace dependency · no import of agents, @cloudflare/* or cloudflare:workers</text>
+  <text class="xs" x="862" y="186" text-anchor="end">two dependencies · no import of agents, @cloudflare/* or cloudflare:workers</text>
   <rect x="38" y="196" width="824" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b mono" x="50" y="217" text-anchor="start">AgentOrchestrator  ·  the turn pipeline</text>
   <text class="s" x="50" y="232" text-anchor="start">turn-context → prepare-step → stream → signals → completeTurn</text>
@@ -94,7 +94,7 @@
   <rect x="247" y="254" width="197" height="58" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="259" y="275" text-anchor="start">Delegation</text>
   <text class="xs" x="259" y="290" text-anchor="start">the agents tool</text>
-  <text class="xs" x="259" y="305" text-anchor="start">strategy registry</text>
+  <text class="xs" x="259" y="305" text-anchor="start">the swarm engine</text>
   <rect x="456" y="254" width="197" height="58" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="468" y="275" text-anchor="start">Evolution</text>
   <text class="xs" x="468" y="290" text-anchor="start">MCTS · CraftStore</text>
@@ -105,7 +105,7 @@
   <text class="xs" x="677" y="305" text-anchor="start">block · compaction ladder</text>
   <rect x="38" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="50" y="345" text-anchor="start">Workspace files</text>
-  <text class="xs" x="50" y="360" text-anchor="start">/home/user · one durable file plane</text>
+  <text class="xs" x="50" y="360" text-anchor="start">/home/user, plus one home per agent</text>
   <rect x="316" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="328" y="345" text-anchor="start">ExecutionRouter</text>
   <text class="xs" x="328" y="360" text-anchor="start">workspace · sandbox · laptop · parent</text>
@@ -156,7 +156,7 @@
   <rect x="681" y="478" width="86" height="21" rx="10.5" stroke-dasharray="3 3" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="xs mono" x="724" y="492.1" text-anchor="middle" fill="var(--fg)">headRuntime</text>
   <text class="xs" x="24" y="519">dashed = optional — its absence degrades one capability rather than breaking the loop</text>
-  <text class="xs" x="24" y="535">Declared, the seam is this small. Effectively it is not: core exports 1,338 symbols, of which cf-backend names 424 and cli-backend 253.</text>
+  <text class="xs" x="24" y="535">Declared, the seam is this small. Effectively it is not: cf-backend imports 650 distinct core names and cli-backend 361 (src only, 2026-08-19).</text>
   <line x1="24" y1="545" x2="876" y2="545" stroke="var(--orangeLine)" stroke-width="2"/>
   <path d="M231 547 L231 569" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-orange)"/>
   <path d="M669 547 L669 569" fill="none" stroke="var(--greenLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-green)"/>
@@ -164,14 +164,14 @@
   <text class="b" x="36" y="590" text-anchor="start" fill="var(--orange)">cf-backend  ·  Cloudflare</text>
   <text class="s" x="36" y="605" text-anchor="start">OrchestratorAgent → ActorAgent → Think, one Durable Object per workspace</text>
   <text class="xs" x="36" y="629" fill="var(--fg)">storage</text>
-  <text class="xs" x="154" y="629">the DO’s own SQLite + SqliteFS at /local</text>
+  <text class="xs" x="154" y="629">the DO’s own SQLite; Nimbus VFS for files</text>
   <text class="xs" x="36" y="646" fill="var(--fg)">shell</text>
-  <text class="xs" x="154" y="646">the POSIX emulator over the VFS</text>
+  <text class="xs" x="154" y="646">Nimbus’s own shell over the file plane</text>
   <text class="xs" x="36" y="663" fill="var(--fg)">schedule</text>
   <text class="xs" x="154" y="663">DO alarms, cron, durable fibers</text>
   <text class="xs" x="36" y="680" fill="var(--fg)">executor</text>
   <text class="xs" x="154" y="680">a Worker Loader isolate</text>
-  <text class="xs" x="36" y="697" fill="var(--fg)">forks</text>
+  <text class="xs" x="36" y="697" fill="var(--fg)">swarm nodes</text>
   <text class="xs" x="154" y="697">ExplorationAgent facets (co-located DOs)</text>
   <text class="xs" x="36" y="714" fill="var(--fg)">subordinates</text>
   <text class="xs" x="154" y="714">SubordinateAgent facets</text>
@@ -181,17 +181,17 @@
   <text class="b" x="474" y="590" text-anchor="start" fill="var(--green)">cli-backend  ·  your machine</text>
   <text class="s" x="474" y="605" text-anchor="start">LocalAgentSession implements BackendHost, driving the same orchestrator</text>
   <text class="xs" x="474" y="629" fill="var(--fg)">storage</text>
-  <text class="xs" x="592" y="629">a bun:sqlite file + SqliteFS at /local</text>
+  <text class="xs" x="592" y="629">one bun:sqlite file; Nimbus VFS for files</text>
   <text class="xs" x="474" y="646" fill="var(--fg)">shell</text>
   <text class="xs" x="592" y="646">the real host process, checkpointed</text>
   <text class="xs" x="474" y="663" fill="var(--fg)">schedule</text>
   <text class="xs" x="592" y="663">setTimeout + SQLite-backed fibers</text>
   <text class="xs" x="474" y="680" fill="var(--fg)">executor</text>
   <text class="xs" x="592" y="680">a Bun subprocess</text>
-  <text class="xs" x="474" y="697" fill="var(--fg)">forks</text>
-  <text class="xs" x="592" y="697">in-process forks of the parent runtime</text>
+  <text class="xs" x="474" y="697" fill="var(--fg)">swarm nodes</text>
+  <text class="xs" x="592" y="697">run in the search’s own process</text>
   <text class="xs" x="474" y="714" fill="var(--fg)">MCTS branches</text>
   <text class="xs" x="592" y="714">child processes, one SQLite file each</text>
   <text class="xs" x="474" y="731" fill="var(--fg)">subordinates</text>
-  <text class="xs" x="592" y="731">not wired — fork is the only rung</text>
+  <text class="xs" x="592" y="731">not wired — swarm is the only rung</text>
 </svg>

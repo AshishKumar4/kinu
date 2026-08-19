@@ -2,9 +2,13 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus uses Bun's test runner across the shared core, Cloudflare backend,
-local backend, and root end-to-end suites. This doc covers the conventions,
-where things live, and how to add tests when shipping a new feature.
+Proteus runs most of its tests on Bun, across the shared core, the Cloudflare
+backend, the local backend and the CLI. Two things Bun cannot do have their own
+runners: the Durable Object suites run under vitest inside workerd, and the
+behavioural eval arms run under vitest. The two UI gates run under `bun test`
+but drive a real Chrome through puppeteer. This doc gives the commands, the
+counts and their dates, the conventions, and how to add a test with a new
+feature.
 
 ## TL;DR
 
@@ -16,26 +20,119 @@ bash scripts/test.sh packages/core/tests/contract-providers.test.ts   # one file
 bun run check                            # TypeScript type-check (every package)
 ```
 
-Two things about `scripts/test.sh` worth knowing. It runs four packages —
-`core`, `cf-backend`, `cli-backend`, `cli` — so `agent-utils`, `compaction`, and
-`pc-agent` are **not** in "all tests". And the root `bun run test` script is a
-different, partly disjoint set (`agent-utils`, `core`, `compaction`). To
-actually cover everything:
+With no pattern, `scripts/test.sh` runs four directories in one `bun test`
+invocation (`scripts/test.sh:36-40`):
+
+    packages/core/tests
+    packages/cf-backend/tests
+    packages/cli-backend/tests
+    packages/cli/tests
+
+So `agent-utils`, `compaction` and `pc-agent` are not in "all tests". The root
+`bun run test` script is a different, partly disjoint set (`agent-utils`,
+`core`, `compaction`), and `scripts/deploy.sh` runs both that and
+`bun test packages/pc-agent/` as separate gates (`scripts/deploy.sh:132,181`).
+Given a pattern, `scripts/test.sh` passes it straight to `bun test`. Flags are
+forwarded unchanged.
+
+To cover the packages `scripts/test.sh` skips:
 
 ```bash
 bash scripts/test.sh
 bun test packages/agent-utils/tests packages/compaction/tests
 ```
 
-For focused local checks:
+### A bare package path is a substring filter
+
+`bun test packages/cli` does not mean "the cli package". The argument is matched
+against the whole path, so it also selects `packages/cli-backend/tests`.
+Measured 2026-08-19: `bun test packages/cli/tests` runs 312 tests and
+`bun test packages/cli` runs 625, which is those 312 plus cli-backend's 313.
+Name the directory when you mean the directory.
+
+`--cwd` has a second trap. There is no `bunfig.toml` under any package, so
+`bun test --cwd packages/cf-backend` reads no config: it loses the root
+`preload` and the root `pathIgnorePatterns`, and then walks into
+`tests/workerd/`, whose files import `cloudflare:workers` and fail instantly
+outside the Workers runtime. Run the directory from the repo root instead:
 
 ```bash
-bun test --cwd packages/core
+bun test packages/core/tests
 bun test packages/cf-backend/tests
 bun test packages/cli-backend/tests
 ```
 
-## The eval tier — the suites that call a real model
+## The counts, measured 2026-08-19
+
+One `scripts/test.sh` run in this worktree: **5,658 pass, 3 skip, 0 fail. 5,661
+tests ran across 451 files in 175.49 s.** Per directory, from separate runs the
+same day:
+
+| Directory | Pass | Skip | Fail | Files |
+|---|---|---|---|---|
+| `packages/core/tests` | 3,680 | 3 | 0 | 242 |
+| `packages/cf-backend/tests` | 1,353 | 0 | 0 | 134 |
+| `packages/cli-backend/tests` | 313 | 0 | 0 | 32 |
+| `packages/cli/tests` | 312 | 0 | 0 | 43 |
+
+The four sum to 5,658, so they account for the aggregate exactly.
+
+`bun test packages/compaction packages/agent-utils` is **110 pass, 0 fail over
+12 files, measured 2026-08-19.** The two were measured together and not apart:
+`compaction/tests` holds 7 test files and `agent-utils/tests` holds 5, but their
+pass counts are not measured separately.
+
+Type a bare package path and you get a different number, for the two reasons
+above. Measured the same day, for contrast:
+
+| Command | Pass | Files | Why it differs |
+|---|---|---|---|
+| `bun test packages/core` | 3,807 | 248 | the 242 in `tests/` plus 6 colocated under `src/` |
+| `bun test packages/cf-backend` | 1,353 | 134 | `tests/` holds 139 files; root `bunfig.toml` excludes the 5 in `tests/workerd` |
+| `bun test packages/cli` | 625 | 75 | the substring also selects `packages/cli-backend/tests` |
+
+Two suites are not measured today, so do not quote a test count for either:
+
+- **workerd.** `bun run test:workerd` is `vitest run --root packages/cf-backend
+  tests/workerd/`. That directory holds 5 test files, verified 2026-08-19:
+  `do-alarm`, `do-init-gate`, `do-retention`, `do-socket-attachment`,
+  `do-transaction`. Its test count is not measured.
+- **The UI gates.** `bun test scripts/chat-and-files-ux.test.ts
+  scripts/computed-style.test.ts` drives a real Chromium over the component
+  gallery. `scripts/ladder.ts:703-705` declares it at ci tier and 23 s. Its test
+  count is not measured, and `gate:computed-style` itself (vite plus Chrome over
+  19 frames, declared at ~68 s) stays a standalone run.
+
+### A signed-in shell no longer changes what a suite measures
+
+`bun test packages/cli/tests` used to depend on whose shell ran it.
+`resolveCloudSession()` prefers `PROTEUS_TOKEN` over the config file and
+`resolveCloudOrigin()` prefers `PROTEUS_ORIGIN` over it, so a shell that had run
+`proteus chat` or `bun run test:eval` moved thirteen tests across six files onto
+their signed-in branch, even though each had built an isolated `PROTEUS_HOME`
+holding no session. Measured 2026-08-19 at `3ec8eded`, one variable pair changed
+and nothing else (`packages/test-utils/src/ambient-env.ts:12-25`):
+
+    unset PROTEUS_ORIGIN PROTEUS_TOKEN   312 pass,  0 fail
+    both exported                        302 pass, 10 fail
+
+Which ten of the thirteen went red depended on what the ambient origin answered,
+so the failures moved between runs and read as a defect in the code under test.
+
+`scripts/test-scratch-home.ts` now strips the ambient credentials at preload, in
+every test process, for both runners. It names the variables it removed on
+stderr rather than doing it quietly. `PROTEUS_EVAL_LIVE=1` is the one exception,
+because that is already the consent boundary for the tier that means to spend.
+The names come from `LIVE_MODEL_ENV`, so a target the resolver learns to read is
+a target the strip removes on the same commit.
+
+The same preload gives every test process a throwaway `PROTEUS_HOME`. That
+started as a containment fix: `createCLIRuntime` builds a shadow-git checkpoint
+engine under `$PROTEUS_HOME/checkpoints`, and
+`packages/cli-backend/tests/mount-plane.test.ts` put ~580 checkpoint stores into
+the developer's real home before it existed.
+
+## The eval tier, which calls a real model
 
 ```bash
 bun run test:eval                        # every arm, and it RESOLVES A CREDENTIAL BY ITSELF
@@ -44,30 +141,30 @@ bun run test:eval                        # every arm, and it RESOLVES A CREDENTI
 Read the next paragraph before running that.
 
 **It spends your money without being asked to.** If the environment names no
-model target, `scripts/eval-tier.sh` borrows the signed-in CLI session — the same
-`~/.proteus/config.json` credential `proteus chat` uses — via
-`scripts/eval-credentials.ts`. So on any machine that has run `proteus auth`,
+model target, `scripts/eval-tier.sh` borrows the signed-in CLI session via
+`scripts/eval-credentials.ts`. That is the same `~/.proteus/config.json`
+credential `proteus chat` uses. On any machine that has run `proteus auth`,
 `bun run test:eval` bills the token owner's Cloudflare account. That is
-deliberate: the tier previously asked for two environment variables nothing on
+deliberate. The tier previously asked for two environment variables nothing on
 the owner's own machine ever exported, so it ran to completion reporting
 `TOTAL: 0 model call(s)` with every live test skipped, and passed a deploy gate.
-It is also why the script prints the target and the cost basis **before** spending
-anything — a run that goes somewhere unexpected is visible at the top of the log
+It is also why the script prints the target and the cost basis before spending
+anything: a run that goes somewhere unexpected is visible at the top of the log
 rather than in a bill.
 
-`bun run test:eval` is a **ci-tier and deploy-tier gate**: `bun scripts/ladder.ts
---tier=ci` runs it, which the CI workflow runs on every push and PR, and
-`scripts/deploy.sh` runs it as "Behavioural evals". On a GitHub runner there is no
-session to borrow, so it is free there and everything live skips. On your machine
-it is not.
+`bun run test:eval` is a ci-tier and deploy-tier gate. `bun scripts/ladder.ts
+--tier=ci` runs it, the CI workflow runs that on every push and PR, and
+`scripts/deploy.sh` runs it as "Behavioural evals". On a GitHub runner there is
+no session to borrow, so it is free there and everything live skips. On your
+machine it is not.
 
 ### The three arms
 
-Two of them exist because two runners are needed and neither can see the other's
-files — `bun test` matches only `*.test.ts` / `*_test.*` / `*.spec.*`, never
-`*.eval.ts`. The third is one file on the vitest side, split off for **cost
-accounting**: an arm is the unit a spend file is written per, so an arm is the unit
-liveness can be asserted per.
+Two arms exist because two runners are needed and neither can see the other's
+files: `bun test` matches only `*.test.ts` / `*_test.*` / `*.spec.*`, never
+`*.eval.ts`. The third is one file on the vitest side, split off for cost
+accounting. An arm is the unit a spend file is written per, so an arm is also
+the unit liveness can be asserted per.
 
 | Arm | What runs | What it measures |
 |---|---|---|
@@ -75,138 +172,174 @@ liveness can be asserted per.
 | behaviour evals | `vitest --config vitest.evals.config.ts`, excluding the swarm file | 17 corpus tasks × 2 repetitions = 34 full agent episodes, graded by eight scorers over the `run_events` ledger |
 | live swarm | `vitest --config vitest.evals.config.ts tests/evals/swarm.eval.ts` | one `agents({action:'swarm'})` call through the real tool surface: a `depth:2 branches:3` verifier-scored search with `expand:'aggregate'`, graded on the caller's own `exec-ratio` instrument |
 
-**Why the swarm eval is its own arm.** `scripts/eval-spend.ts --expect-live` sums
-the lines in the spend file it is given, so a swarm eval sharing a file with five
-paid suites could stop reaching a model entirely and the tier would still report
-`proven`. The arm whose whole subject is a live search is the one arm whose zero has
-to be its own failure, so it gets its own spend file and its own assertion — driven
-by the same `EXPECT_LIVE` the banner printed, so the line you read and the assertion
-the run is held to cannot disagree. Everything it asserts is measured rather than
-judged: a winner crowned, its artifact's oracle-call count against the run's own
-measured baseline, `exploration_records` rows read back through the store's own
-reader under the objective's identity and floor digest, and the
-`judgeEnsemble`/`fanIn`/`carry` disclosures checked against the axes the report
-itself carries. Its credential-free half — the action is offered, and the strict
-parse refuses an unknown field naming the field it meant — runs at every tier.
+**Why the swarm eval is its own arm.** `scripts/eval-spend.ts --expect-live`
+sums the lines in the spend file it is given, so a swarm eval sharing a file
+with five paid suites could stop reaching a model entirely and the tier would
+still report `proven`. The arm whose whole subject is a live search is the one
+arm whose zero has to be its own failure, so it gets its own spend file and its
+own assertion, driven by the same `EXPECT_LIVE` the banner printed. The line you
+read and the assertion the run is held to cannot disagree.
 
-The behaviour arm's own knobs, none of which are documented anywhere else:
-`PROTEUS_EVAL_TIER=flash|pro` picks the model (`flash` is the volume arm and the
-default), `PROTEUS_EVAL_REPEATS` the repetitions per task (default 2 for flash, 1
-for pro), `PROTEUS_EVAL_SEED` the run seed, `PROTEUS_EVAL_EVOLUTION=0` turns
-evolution off, and `PROTEUS_EVAL_RECORD` names where the run record is written
-(default: beside the retained transcripts under `bench-artifacts/`).
+Everything that arm asserts is measured rather than judged: a winner crowned,
+its artifact's oracle-call count against the run's own measured baseline,
+`exploration_records` rows read back through the store's own reader under the
+objective's identity and floor digest, and the `judgeEnsemble` / `fanIn` /
+`carry` disclosures checked against the axes the report itself carries. Its
+credential-free half runs at every tier: the action is offered, and the strict
+parse refuses an unknown field, naming the field it meant.
+
+The behaviour arm's own knobs, documented nowhere else
+(`tests/evals/behaviour.eval.ts:81-83,111,327`):
+
+| Variable | Effect |
+|---|---|
+| `PROTEUS_EVAL_TIER=flash\|pro` | picks the model; `flash` is the volume arm and the default |
+| `PROTEUS_EVAL_REPEATS` | repetitions per task; default 2 for flash, 1 for pro |
+| `PROTEUS_EVAL_SEED` | the run seed; default 1 |
+| `PROTEUS_EVAL_EVOLUTION=0` | turns evolution off |
+| `PROTEUS_EVAL_RECORD` | where the run record is written; default is beside the retained transcripts under `bench-artifacts/` |
 
 ### What it costs and how long it takes
 
-Measured, not estimated. Every figure below came from a run whose log said so; a
-cell that has not been measured says so instead of carrying a guess.
+Every figure below came from a run whose log said so. A cell that has not been
+measured says so instead of carrying a guess. The two bun-arm rows and the
+credential-free row are corroborated by `scripts/ladder.ts:654-670`. No
+measurement date is recorded for any of these runs, so treat each as "the run
+whose spend file survives" rather than as today's cost.
 
 | | wall clock | model calls | input tokens |
 |---|---|---|---|
 | whole tier, credential-free | 3 s | 0 | — |
 | bun suites, credentialed | 2,745 s | 48 | 601.6k |
 | bun suites, credentialed (second run) | 3,843 s | 49 | 600.8k |
-| behaviour evals, credentialed | not yet measured — see below | | |
+| behaviour evals, credentialed | not measured | not measured | not measured |
 | live swarm, credentialed | 1,338 s | 3 | 2,453.4k (134.1k out) |
 | `tests/live-smoke.test.ts` alone | 74 s | 3 | 55.6k |
 
-The two bun-half rows are the two runs whose spend files still exist. `ladder.ts`
-declares this gate at 3,228 s / 64 calls / 967k from a third run whose artifact does
-not survive; both surviving runs show ~48 calls and ~601k, so treat the declared
-figure as a budgeted ceiling rather than a typical cost. The 3,843 s run also
-contains 1,200 s of tests being killed rather than working (a 900 s exploration
-timeout and a 300 s MCTS one, both since fixed — those same steps now complete in
-437 s and 456 s), so do not derive a post-fix cost from it.
+The two bun-half rows are the two runs whose spend files still exist.
+`scripts/ladder.ts` declares this gate at 3,228 s / 64 calls / 967k from a third
+run whose artifact does not survive. Both surviving runs show ~48 calls and
+~601k, so the declared figure is a budgeted ceiling rather than a typical cost.
+The 3,843 s run also contains 1,200 s of tests being killed rather than working:
+a 900 s exploration timeout and a 300 s MCTS one, both since fixed, those same
+steps now completing in 437 s and 456 s. Do not derive a post-fix cost from it.
 
-The behaviour arm is 34 full agent episodes and dominates the tier. Its wall clock
-is the number this row is waiting on; the tier now reports it per arm, and the run
-record it writes carries per-episode `ms`, so the figure is read off an artifact
-rather than estimated. It had never been measured because the arm produced no
-report at all until this change.
+The behaviour arm is 34 full agent episodes and dominates the tier. Its wall
+clock is the number that row is waiting on. The tier now reports per arm, and
+the run record it writes carries per-episode `ms`, so the figure will be read
+off an artifact rather than estimated. It had never been measured because the
+arm produced no report at all until that change.
 
-**What that live swarm row is, and it is a RED run rather than a passing one.** One
-credentialed run completed and reported: 1,338 s wall, 3 model calls accounted for,
-2,453,377 input / 134,076 output tokens, baseline 2,880,000 oracle calls (exactly
-2·1200² — the reference counting every token against every other, on both instances),
-`stop: aborted`, `expansions: 3`, **no winner**, `records.written: 0`, `fanIn.levels:
-0` with all three parents unusable. The eval failed on its first assertion,
-`expect(report.stop).not.toBe('aborted')`, which is the bound working: a run that did
-not settle is refused rather than measured. What is still OWED is a run that SETTLES,
-and with it the winner and the winner/baseline ratio.
+**The live swarm row is a RED run rather than a passing one.** One credentialed
+run completed and reported 1,338 s wall, 3 model calls accounted for, 2,453,377
+input / 134,076 output tokens, baseline 2,880,000 oracle calls (exactly 2·1200²,
+the reference counting every token against every other, on both instances),
+`stop: aborted`, `expansions: 3`, no winner, `records.written: 0`, and
+`fanIn.levels: 0` with all three parents unusable. The eval failed on its first
+assertion, `expect(report.stop).not.toBe('aborted')`, which is the bound
+working: a run that did not settle is refused rather than measured. What is
+still owed is a run that SETTLES, and with it the winner and the
+winner/baseline ratio.
 
-Three earlier attempts, each stopped for a stated reason rather than by a guess:
+Three earlier attempts, each stopped for a stated reason:
 
-1. Refused before any model call — the objective's floor was sent camelCase and
-   `SwarmObjectiveSchema` answered `Invalid key: Expected "best_known_honest"`. The
-   wire boundary working; the eval's transform is now in one named place.
-2. The worker proxy's upstream Cloudflare login had expired: three depth-1 heads
+1. Refused before any model call. The objective's floor was sent camelCase and
+   `SwarmObjectiveSchema` answered `Invalid key: Expected "best_known_honest"`.
+   The wire boundary worked; the eval's transform is now in one named place.
+2. The worker proxy's upstream Cloudflare login had expired. Three depth-1 heads
    errored in ~1 s with `Your Cloudflare login is no longer valid … (upstream:
-   Authentication error)`, three more sat at `status:'running'`, zero steps, for 63
-   minutes with no store write and no exit. `tests/live-smoke.test.ts` passed 5 calls
-   / 55.7k tokens an hour later, so that was a window rather than an outage.
-3. Healthy credential, real work, wrong instance: three heads read the reference,
-   found the measure harness, wrote and ran their own benchmark — and then one step
-   ran 26 minutes on the 50,000-token `hard-select-kth` instance while the runner held
-   91% CPU. The eval now uses `hard-majority-vote` (n=1200) for that measured reason:
-   instance size is what a NODE'S own experimentation costs, and the workspace
-   substrate executes in-process.
+   Authentication error)`, and three more sat at `status:'running'`, zero steps,
+   for 63 minutes with no store write and no exit. `tests/live-smoke.test.ts`
+   passed 5 calls / 55.7k tokens an hour later, so that was a window rather than
+   an outage.
+3. Healthy credential, real work, wrong instance. Three heads read the
+   reference, found the measure harness, and wrote and ran their own benchmark.
+   Then one step ran 26 minutes on the 50,000-token `hard-select-kth` instance
+   while the runner held 91% CPU. The eval now uses `hard-majority-vote`
+   (n=1200) for that measured reason: instance size is what a node's own
+   experimentation costs, and the workspace substrate executes in-process.
 
-**Sizing this arm, which is the part worth knowing before you run it — and the finding
-the run produced.** A swarm node runs to `DEFAULT_MAX_STEPS` (500) because
-`SwarmRunDeps.maxSteps` exists and `runSwarmAction` never sets it, so there is no
-per-node step or time budget on this surface at all: `AGENTS_ACTION_FIELDS.swarm`
-records that an iteration cap and a wall-clock cap are DELIBERATELY ABSENT until
-something enforces them. Measured, one wave of three: 22, 25 and 26 model steps and
-25, 27 and 27 tool calls per node, 1,216–1,337 s each, ~2.45M input tokens between
-them, and not one measurable candidate. `depth × branches` bounds the SHAPE and
-nothing bounds the depth of one node's own loop.
+### Sizing this arm before you run it
 
-The caller's `abortSignal` is the only bound `runSwarmAction` forwards, and it does
-work: all three nodes settled `status:'aborted'` with their step counts recorded when
-the 20-minute envelope fired. It is consulted BETWEEN steps (`node-agent.ts:487`), so
-it bounds a run to one step past the deadline and a step has no bound of its own —
-measured on attempt 3, where neither that timer nor vitest's own `testTimeout` fired
-at all while the substrate executed in-process for 26 minutes.
+A swarm node gets two budgets, and `runSwarmAction` sets neither, so both take
+their derived default (`core/src/strategy/swarm-run.ts:1776-1785`):
 
-Cost here is **time, not rate**: the account's limit is 300 requests/minute and a
-full tier run averages under one. Nothing you can do to this tier makes it hit a
-rate limit; what it costs you is an afternoon. The tier prints a `── per arm ──`
-block with each arm's own seconds and tokens, so you never have to infer which
-half the time was in.
+- **Steps.** `deps.maxSteps ?? DEFAULT_MAX_STEPS`, which is 500
+  (`core/src/config.ts:118`).
+- **Wall clock.** `deps.maxWallClockMs ?? nodeWallClockEnvelopeMs(maxSteps)`,
+  which is `maxSteps × TURN_WALL_CLOCK_ENVELOPE_MS` = 500 × 600,000 ms
+  (`core/src/config.ts:116`, `core/src/strategy/node-agent.ts:183`). This one is
+  assigned unconditionally, because a node with no deadline of its own leaves
+  the run's abort signal as the only clock, and that signal cuts a whole WAVE at
+  once. `core/tests/unit-swarm-node-envelope.test.ts` holds the wall clock and
+  the step cap in the same equality, so moving either fails a test rather than
+  drifting.
+
+Both are observed at STEP BOUNDARIES. `runHeadInference`'s `stopWhen` asks
+`budgetExhausted` between steps, so a node inside one long step observes nothing
+and the binding bound on its work is the step cap. A stream-inactivity watchdog
+sits beside them at `STALL_TIMEOUT_MS`, 300,000 ms
+(`core/src/chat.ts:170`), and fires only when nothing flows.
+
+`AGENTS_ACTION_FIELDS.swarm` (`core/src/tools/agents-tool.ts:440-446`) records
+that an iteration cap and a wall-clock cap are absent from the tool's INPUT
+fields, deliberately, until something enforces a caller-supplied one. The
+derived defaults above are not caller-settable through the tool.
+
+Measured over one wave of three nodes: 22, 25 and 26 model steps; 25, 27 and 27
+tool calls per node; 1,216-1,337 s each; ~2.45M input tokens between them; and
+not one measurable candidate. No node in that run finished, so 26 steps is a
+floor on the demand rather than a typical cost, and how many steps a node needs
+to FINISH on this model is not measured. `depth × branches` bounds the shape of
+the search; a node's own loop is bounded by the two budgets above.
+
+The caller's `abortSignal` is the third bound, and it works: all three nodes
+settled `status:'aborted'` with their step counts recorded when the 20-minute
+envelope fired. That envelope was the defect the derived wall clock replaced.
+1,200,000 ms is under `nodeWallClockEnvelopeMs(26)` by a factor of 13, so the
+clock was measuring the step cap's shadow and cut three nodes that were each
+inside their step budget. The signal is consulted between steps too
+(`core/src/strategy/node-agent.ts:656`, the `isAborted` predicate the inference
+loop calls), which is why attempt 3 saw neither that timer nor vitest's own
+`testTimeout` fire while the substrate executed in-process for 26 minutes.
+
+Cost here is time rather than rate. The account's limit is 300 requests/minute
+and a full tier run averages under one, so nothing you do to this tier makes it
+hit a rate limit. What it costs you is an afternoon. The tier prints a
+`── per arm ──` block with each arm's own seconds and tokens, so you never have
+to infer which half the time was in.
 
 **Do not run two live tiers against one account.** Two concurrent runs produce
-`orchestrator.detached_work_failed / Request Timeout` and turns that come back with
-zero steps — the same signature as a deployment outage, and neither run's wall clock
-is then the tier's cost.
+`orchestrator.detached_work_failed / Request Timeout` and turns that come back
+with zero steps. That is the same signature as a deployment outage, and neither
+run's wall clock is then the tier's cost.
 
-If you only need to prove one thing, run one suite rather than the tier:
+To prove one thing, run one suite rather than the tier.
 `PROTEUS_EVAL_LIVE=1 bun test ./tests/live-smoke.test.ts` is 74 s and proves the
 deployed worker and the local session spine each take a real turn.
 
 ### What a failure means
 
-Four different things, and the tier keeps them apart because they need opposite
-repairs.
+Four different things, kept apart because they need opposite repairs.
 
-- **A suite failed.** Either the model answered wrongly (a finding) or the
-  environment never answered (an outage). The tier does not guess: a failure
-  counts as infrastructure only where the code raising it said so through
-  `infraBoundary`, and the skip ratchet prints the two lists separately. An
-  unmarked failure lands in the behavioural list, which under-claims outages
-  rather than over-claiming them.
+- **A suite failed.** Either the model answered wrongly, which is a finding, or
+  the environment never answered, which is an outage. The tier does not guess. A
+  failure counts as infrastructure only where the code raising it said so
+  through `infraBoundary` (`packages/test-utils/src/live-model.ts`), and the
+  skip ratchet prints the two lists separately. An unmarked failure lands in the
+  behavioural list, which under-claims outages rather than over-claiming them.
 - **An undeclared skip.** A test skipped that `scripts/skip-ratchet.lock.json`
-  does not declare. Make it run, or add it to the lock with the reason it cannot
-  — which is a sentence you will have to defend.
+  does not declare. Make it run, or add it to the lock with the reason it
+  cannot, which is a sentence you will have to defend.
 - **The run proved no liveness.** A target was resolved and the run cannot show
-  it reached a model. That is the tier reporting on itself; `eval-spend.ts` names
-  which of the four shapes it is. It is asserted TWICE — once over the live swarm
-  arm's own spend file and once over the tier's total — because a tier-wide sum
-  cannot fail on one arm's behalf, and `the live swarm arm proved no liveness` is
-  the sharper sentence of the two.
-- **Nothing at all, loudly.** With no credential anywhere the tier still runs and
-  still passes: every live test skips, the ratchet proves the skips are the
-  declared ones, and the liveness assertion says it has nothing to prove. That is
-  the path that reproduces anywhere.
+  it reached a model. That is the tier reporting on itself, and
+  `eval-spend.ts` names which of the four shapes it is. It is asserted twice,
+  once over the live swarm arm's own spend file and once over the tier's total,
+  because a tier-wide sum cannot fail on one arm's behalf.
+- **Nothing at all, loudly.** With no credential anywhere the tier still runs
+  and still passes. Every live test skips, the ratchet proves the skips are the
+  declared ones, and the liveness assertion says it has nothing to prove. That
+  is the path that reproduces anywhere.
 
 ### Credentials, if you want to point it somewhere else
 
@@ -221,21 +354,21 @@ AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the 
 `PROTEUS_BASE_URL` + `PROTEUS_AUTH` are accepted as aliases of the second pair.
 
 `PROTEUS_EVAL_LIVE=1` is the consent switch, and `scripts/eval-tier.sh` is the
-only thing that sets it — so a credential sitting in your shell cannot make a
+only thing that sets it, so a credential sitting in your shell cannot make a
 commit hook bill anyone. Running a live suite by hand means setting it yourself.
 
 ### The bench harness is a different thing
 
 `bun scripts/bench.ts` scores whether self-evolution helps, against 159 seeded
-defects in this repo. It shares no credentials with the eval tier (it reads
-`BENCH_BASE_URL` / `BENCH_AUTH` / `BENCH_MODEL` and borrows nothing), and its
+defects in this repo (`scripts/bench-corpus-gate.ts:13`, which re-checks all 159
+patches still apply). It shares no credentials with the eval tier: it reads
+`BENCH_BASE_URL` / `BENCH_AUTH` / `BENCH_MODEL` and borrows nothing, and its
 deterministic variants need no model at all. See [Bench](BENCH.md).
 
 ## Test categories
 
-Each test file lives in `packages/<pkg>/tests/` and is named to indicate the
-category. Categories are conventions enforced by filename — no separate
-config:
+Each test file is named to indicate its category. The categories are conventions
+enforced by filename, with no separate config:
 
 | Prefix | What it covers | Speed | Real I/O? |
 |---|---|---|---|
@@ -246,32 +379,43 @@ config:
 | `smoke-*.test.ts` | "Does it boot / import" | <100ms | None |
 
 The convention holds in `core` and `cf-backend`, where nearly every file carries
-a prefix. `cli-backend/tests` and `cli/tests` use bare `<name>.test.ts` instead,
-so treat the prefix as a strong convention rather than a rule the tooling
-enforces.
+a prefix. `cli-backend/tests` and `cli/tests` use bare `<name>.test.ts`, so
+treat the prefix as a strong convention rather than a rule the tooling enforces.
+
+Most tests live in `packages/<pkg>/tests/`. Six in `core` are colocated beside
+the code instead: `core/src/skills/skills.test.ts`,
+`core/src/scaffold/ui-stream.test.ts`, and four under
+`core/src/evolution/gepa/`. That is why `bun test packages/core` counts 248
+files and `packages/core/tests` counts 242.
 
 ## What lives where
 
+File counts verified 2026-08-19.
+
 ```
 packages/
-├─ core/tests/                (152 files)
+├─ core/tests/                (242 files)
 │  ├─ unit-*.test.ts          (pure logic)
 │  ├─ integration-*.test.ts   (multi-module flows)
 │  ├─ contract-providers.test.ts  (HTTP wire format per provider)
+│  ├─ e2e/                    (mcts-e2e, scaffold-e2e, + the real-LLM helper)
+│  ├─ fixtures/log-ban/       (a tsconfig project the log-ban test runs tsc over)
 │  └─ helpers.ts              (package-local helpers)
-├─ cf-backend/tests/           (78 files)
+├─ cf-backend/tests/          (139 files; bun runs 134)
 │  ├─ unit-agent-registry.test.ts  (provider registry composition)
+│  ├─ unit-alarm-tracing.test.ts   (the span seam on the alarm and RPC paths)
 │  ├─ unit-auth-security.test.ts   (browser OAuth and CLI auth invariants)
 │  ├─ unit-cli-auth-store.test.ts  (D1-backed device-code flow)
-│  ├─ unit-rlm.test.ts             (Recursive Language Model bridge)
-│  └─ unit-webhook-ingress.test.ts (webhook body/rate-limit helpers)
-├─ cli-backend/tests/          (23 files)
+│  ├─ unit-webhook-ingress.test.ts (webhook body/rate-limit helpers)
+│  └─ workerd/                (5 files — vitest inside workerd, not bun)
+├─ cli-backend/tests/         (32 files)
 │  ├─ local-session.test.ts        (local agent session behavior)
 │  ├─ model-resolver.test.ts       (provider/model selection)
 │  └─ executor.test.ts             (local execution tools)
-├─ cli/tests/                  (38 files — CLI commands, config, TUI)
-├─ agent-utils/tests/          (5 files — SqliteFS, MemoryStore, shell)
-├─ compaction/tests/           (7 files — the ladder and the codec)
+├─ cli/tests/                 (43 files — CLI commands, config, TUI)
+├─ agent-utils/tests/         (5 files — memory absence, append, index delta,
+│                              search ranking, workspace resolution)
+├─ compaction/tests/          (7 files — the ladder, the codec, the stores)
 └─ test-utils/src/
    ├─ sql.ts            ── createTestSql()
    ├─ llm.ts            ── createScriptedLLM / createJSONLLM / createEchoLLM
@@ -279,32 +423,46 @@ packages/
    ├─ runtime.ts        ── createTestRuntime()
    ├─ provider.ts       ── createTestStrategy
    ├─ credentials.ts    ── createTestAuth
+   ├─ ambient-env.ts    ── stripAmbientCredentials, LIVE_MODEL_ENV
    └─ facts.ts          ── createTestFactsStore
 tests/
 ├─ e2e-lifecycle.test.ts
 ├─ e2e-full-lifecycle.test.ts
 ├─ deep-evolution.test.ts
-└─ evolution-proof.test.ts
+├─ evolution-proof.test.ts
+├─ live-smoke.test.ts
+├─ eval-corpus-quality.test.ts
+├─ evals-artifact-contract.test.ts
+└─ evals/               (behaviour.eval.ts, swarm.eval.ts, the vitest arms)
 ```
+
+`bun test tests` and `bun test tests/` both match nothing. Only `./tests/`
+selects the root suites, which `scripts/ladder.ts:626-628` calls out as exactly
+the kind of silent zero the ladder asserts against.
+
+`packages/agent-utils` holds no `SqliteFS` and no shell. `SqliteFS` was deleted
+on 2026-08-12 (`core/src/checkpoints/types.ts:29`), both backends now run
+Nimbus's workspace filesystem over their own SQLite, and the shell is Nimbus's
+`runtime-bash`. The five `agent-utils` test files are the memory and
+workspace-resolution ones listed above.
 
 ## Mocking philosophy
 
-Mock at real seams, never at internal functions. Internal mocks couple tests
-to implementation and produce false confidence:
+Mock at real seams, never at internal functions. Internal mocks couple tests to
+implementation and produce false confidence.
 
 | Seam | Mock how |
 |---|---|
-| LLM calls | `createScriptedLLM(['answer 1', 'answer 2'])` — predictable, deterministic |
+| LLM calls | `createScriptedLLM(['answer 1', 'answer 2'])`: predictable, deterministic |
 | Structured-output LLM | `createJSONLLM({ /* the JSON */ })` |
-| HTTP (provider wire) | `createMockFetch([{ match, respond }])` — assert URLs/headers/body |
-| SQL (DO storage) | `createTestSql()` — bun:sqlite `:memory:` + template tag |
-| Credentials | `createTestAuth({ key: { headers: { Authorization: 'Bearer tok' } } })` — resolved auth headers, not raw secrets |
-| AgentRuntime | `createTestRuntime()` — full minimal AgentRuntime |
+| HTTP (provider wire) | `createMockFetch([{ match, respond }])`: assert URLs/headers/body |
+| SQL (DO storage) | `createTestSql()`: bun:sqlite `:memory:` + template tag |
+| Credentials | `createTestAuth({ key: { headers: { Authorization: 'Bearer tok' } } })`: resolved auth headers, not raw secrets |
+| AgentRuntime | `createTestRuntime()`: full minimal AgentRuntime |
 | Crafted-tool sandbox | already mocked by `createNodeCraftedExecute` from `@proteus/cli-backend` |
 
-What **not** to mock: pure functions inside the same package. If `parseModelSpec`
-or `effortFor` is what you're testing, call it directly. Mocking it produces
-nothing useful.
+Do not mock a pure function inside the same package. If `parseModelSpec` or
+`effortFor` is what you are testing, call it directly.
 
 ## Writing a new test
 
@@ -386,19 +544,29 @@ test('my-strategy explores within budget', async () => {
 });
 ```
 
-## What's NOT testable in pure Bun
+## What Bun cannot load
 
-The `@cloudflare/agents` package transitively imports `cloudflare:email`,
-which only resolves inside the Workers runtime. Anything that imports the
-`agents` package directly — `ActorAgent` and its subclasses,
-`ExplorationAgent`, the auth/routes dispatcher — is testable only via miniflare
-or wrangler dev, not from `bun test`.
+The `@cloudflare/agents` package transitively imports `cloudflare:email`, which
+resolves only inside the Workers runtime. Anything importing the `agents`
+package directly is unreachable from `bun test`: `ActorAgent` and its
+subclasses, `ExplorationAgent`, and the auth/routes dispatcher.
 
-The pattern we use: extract the pure URL/parsing/policy logic into its own file
-with no `agents` import, unit-test that in Bun, and leave the orchestration file
-that wires it to actual DO calls to the integration and e2e harness. That is why
-`cf-backend/tests` can still hold 78 passing Bun files despite the constraint —
-most of what matters there was written to be reachable without a DO.
+Two runners cover it:
+
+- **`bun run test:workerd`** runs `packages/cf-backend/tests/workerd/` under
+  vitest inside workerd. Those 5 files import `cloudflare:workers` and
+  `cloudflare:test`, so the root `bunfig.toml` excludes the directory from
+  `bun test` and `packages/cf-backend/vitest.config.ts:63` includes exactly it.
+  `scripts/ladder.test.ts` asserts the two globs are disjoint, that each selects
+  a non-empty set, and that every excluded file is claimed by some other runner.
+- **The eval tier's vitest arms**, for the behavioural episodes that need
+  `bun:sqlite` under vitest.
+
+For everything else the pattern is to extract the pure URL, parsing and policy
+logic into a file with no `agents` import, unit-test that in Bun, and leave the
+orchestration file that wires it to real DO calls to the integration and e2e
+harness. That is why `packages/cf-backend/tests` holds 1,353 passing Bun tests
+over 134 files despite the constraint.
 
 ## Running with coverage
 
@@ -406,24 +574,21 @@ most of what matters there was written to be reachable without a DO.
 bash scripts/test.sh --coverage
 ```
 
-Coverage is per-file with funcs % / lines %. Useful for finding gaps but
-NOT a goal — the goal is "behaviors I care about are tested." Don't game
-the number.
-
-Current baseline, from `bash scripts/test.sh`:
-- 1975 pass, 3 skip, 0 fail — 1978 tests across 214 files, ~53 s
-- plus 86 more in `agent-utils` + `compaction`, which that script does not run
+Coverage is per-file with funcs % / lines %. It is useful for finding gaps and
+it is not a goal. The goal is that the behaviours you care about are tested, so
+do not game the number.
 
 Areas with intentionally low coverage:
-- `packages/core/tests/e2e/ai-gateway-llm.ts` — real-LLM helper, expected to be
+
+- `packages/core/tests/e2e/ai-gateway-llm.ts`, a real-LLM helper, expected to be
   uncovered in the unit pass
-- `test-utils/src/runtime.ts` — itself a fixture; gets exercised indirectly
-- DO/Worker integration paths — covered by the deploy smoke test, not
-  visible to bun test
+- `packages/test-utils/src/runtime.ts`, itself a fixture, exercised indirectly
+- DO and Worker integration paths, covered by `bun run test:workerd` and the
+  deploy smoke test rather than by `bun test`
 
 ## Adding a new package to the test suite
 
-1. Create `packages/<your-pkg>/tests/` (matching the existing pattern).
+1. Create `packages/<your-pkg>/tests/`, matching the existing pattern.
 2. Add `"@proteus/test-utils": "workspace:*"` to your package's
    `devDependencies` so the fixtures resolve.
 3. Update `scripts/test.sh` to include the new test directory.
@@ -431,6 +596,5 @@ Areas with intentionally low coverage:
 
 ## CI
 
-`scripts/test.sh` is intended for both local dev and CI. It exits non-zero
-on failure. For CI, wrap with `--bail` if you want to fail fast on the
-first error.
+`scripts/test.sh` is for both local dev and CI. It exits non-zero on failure.
+For CI, add `--bail` if you want to stop at the first error.

@@ -9,9 +9,9 @@
 under `<PREVIEW_HOST_SUFFIX>`
 
 Previewed apps are agent-written HTML, so each exposed port gets a capability
-hostname of its own. Sandbox uses the @cloudflare/sandbox SDK hostname; the
+hostname of its own. Sandbox uses the @cloudflare/sandbox SDK hostname. The
 authoritative Workspace uses a Nimbus session capability bound into the same
-preview-host trust boundary. The suffix needs a wildcard DNS record;
+preview-host trust boundary. The suffix needs a wildcard DNS record.
 `PREVIEW_HOST_SUFFIX` below has the two steps, and
 `packages/cf-backend/src/lib/preview-origin.ts` has the reasoning and the
 remaining Public Suffix List prerequisite for complete cookie-site isolation.
@@ -48,12 +48,14 @@ EOF
 bun run dev
 ```
 
-Open http://localhost:5173 in your browser. The Vite cloudflare() plugin runs real Durable Objects locally via Miniflare.
+`bun run dev` runs `vite dev --host 0.0.0.0` in `packages/cf-backend`. Open
+http://localhost:5173, which is Vite's default port and is not overridden. The
+Vite cloudflare() plugin runs real Durable Objects locally through Miniflare.
 
 That URL gets you the platform AI Gateway provider, billed to the account the
-Worker runs in. For the primary path — models billed to the signed-in user's own
-Cloudflare account — you also need `CLOUDFLARE_OAUTH_CLIENT_ID` and
-`CLOUDFLARE_OAUTH_CLIENT_SECRET` in `.dev.vars`, or `DEV_USER_EMAIL` to skip auth
+Worker runs in. The primary path bills models to the signed-in user's own
+Cloudflare account, and for that you also need `CLOUDFLARE_OAUTH_CLIENT_ID` and
+`CLOUDFLARE_OAUTH_CLIENT_SECRET` in `.dev.vars`. `DEV_USER_EMAIL` skips auth
 entirely for headless work.
 
 ### CLI
@@ -66,7 +68,7 @@ jarvis "summarize this checkout"
 ```
 
 For a source checkout, use `bun run cli -- setup` and `bun run cli -- ...`.
-The CLI app origin defaults to `https://proteus.ashishkumarsingh.com`; use
+The CLI app origin defaults to `https://proteus.ashishkumarsingh.com`. Use
 `--origin` or `PROTEUS_ORIGIN` only for alternate deployments.
 
 ## Zero to production
@@ -81,13 +83,13 @@ bun run infra:provision      # the secrets — `wrangler secret put` needs the W
 bun run gate:infra           # every declared resource exists and is bound
 ```
 
-The two provision runs are not a workaround: `wrangler secret put` refuses on a
-Worker that does not exist yet, so on a fresh account the root secret can only
-be installed after the first deploy. The first run says so rather than appearing
-to have succeeded, and the second creates nothing the first created.
+`wrangler secret put` refuses on a Worker that does not exist yet, so on a fresh
+account the root secret can only be installed after the first deploy. That is
+why provisioning runs twice. The first run says so rather than appearing to have
+succeeded, and the second creates nothing the first created.
 
-`bun run deploy` remains the only supported production deploy path. Provisioning
-creates the account-level resources the deploy binds and never deploys anything
+`bun run deploy` is the only supported production deploy path. Provisioning
+creates the account-level resources the deploy binds, and never deploys anything
 itself.
 
 ### Before you start
@@ -99,67 +101,78 @@ re-checks each one.
 | Prerequisite | Why nothing here can create it |
 | --- | --- |
 | A Cloudflare account on the **Workers Paid** plan | SQLite Durable Objects, Containers, `worker_loaders` and 7-day Workers Logs retention are all plan-gated. No wrangler command reports or changes a plan. |
-| The `account_id`, in `packages/cf-backend/wrangler.jsonc` | It names the account; it does not create one. |
+| The `account_id`, in `packages/cf-backend/wrangler.jsonc` | It names the account. It does not create one. |
 | A wrangler login (`npx wrangler login`) with Workers, D1, R2, Vectorize, Containers and Email scopes | Every command below rides it. `npx wrangler whoami` lists what you have. |
 | A **zone** you control, and the DNS records under it | `zone_name` in `routes` assumes an active zone. wrangler has no DNS command at all. |
-| A proxied wildcard DNS record `*.proteus` on that zone | The `pattern + zone_name` route matches requests; it does not make the hostname resolve. Without it every preview URL is NXDOMAIN while the route reads as present. |
-| An **AI Gateway** in the same account, named in `AI_GATEWAY_URL` | wrangler 4.97 has no `ai-gateway` command, and the wrangler OAuth session carries no `aig` scope — the REST API answers 403. Dashboard only. |
+| A proxied wildcard DNS record `*.proteus` on that zone | The `pattern + zone_name` route matches requests. It does not make the hostname resolve. Without it every preview URL is NXDOMAIN while the route reads as present. |
+| An **AI Gateway** in the same account, named in `AI_GATEWAY_URL` | wrangler has no `ai-gateway` command. Checked 2026-08-19 against both versions this tree installs, 4.97.0 at the root and 4.123.0 in `packages/cf-backend`: the only `ai-gateway` strings in either binary belong to the bundled REST client. The wrangler OAuth session also carries no `aig` scope, so the REST API answers 403. Dashboard only. |
 | OAuth applications at Google, GitHub and/or Cloudflare | Created on three other websites. See § OAuth Setup for the exact redirect URLs and scopes. |
 | Email Routing onboarding for `EMAIL_DOMAIN` | MX records, a verified destination, and a rule delivering to this Worker. The `send_email` binding is OUTBOUND only. See `docs/EMAIL-INGRESS.md`. |
 
 ### What each command does
 
-**`bun run infra:provision`** reads the inventory out of `wrangler.jsonc` —
-there is no second list — and creates what is missing, in dependency order:
-D1 databases, their migrations, R2 buckets, the Vectorize index. It prints
+**`bun run infra:provision`** reads the inventory out of `wrangler.jsonc`. There
+is no second list. It creates what is missing, in dependency order: D1
+databases, their migrations, R2 buckets, the Vectorize index. It prints
 `CREATED` or `existed` per resource, so a second run is visibly a no-op. A
-resource whose lookup FAILED is refused rather than created: "the network was
-down" and "it does not exist" are different states, and creating a bucket on the
-first one is how an account ends up with two answers to which bucket holds the
-snapshots. Everything wrangler cannot create is printed as a manual worklist,
-every run, green or not.
+resource whose lookup FAILED is refused rather than created, because "the
+network was down" and "it does not exist" are different states, and creating a
+bucket on the first one is how an account ends up with two answers to which
+bucket holds the snapshots. Everything wrangler cannot create is printed as a
+manual worklist, every run, green or not.
 
 **`bun run gate:infra`** checks that every declared resource exists **and that
 the deployed Worker is bound to it**, and exits non-zero when it is not. It is
-deploy gate 43 and runs on every `bun run deploy`. It reports a count rather
-than dying on the first problem — "production declares 22 resources; 19 observed
-present, 1 absent, 0 unreadable, 2 unobservable by any CLI" — because the next
-move depends on which one. It takes an environment: `bun run gate:infra` checks
-production, `bun scripts/infra-verify.ts staging` checks staging, and each run
-names the environments it did not check.
+the last of the 49 required gates `scripts/deploy.sh` runs, and the only one
+that talks to Cloudflare. It reports a verdict per resource rather than dying on
+the first problem, because the next move depends on which resource is affected.
+There are four verdicts, and `scripts/infra-verify.ts` explains why there are
+four rather than two:
+
+| Verdict | Meaning |
+| --- | --- |
+| `present` | observed to exist |
+| `absent` | observed not to exist. Fails when `env.d.ts` declares the field required |
+| `unknown` | the lookup failed. Always a failure, because a check that could not look did not pass |
+| `unobservable` | no CLI path can confirm it. Declared in `UNOBSERVABLE` with its manual check, and pinned by equality so the blind spot can only shrink |
+
+One environment per run, defaulting to production. `bun run gate:infra` checks
+production and `bun scripts/infra-verify.ts staging` checks staging. Each run
+names the environments it did not check, with the command that checks them.
+Without a Cloudflare session the gate reports BLOCKED and exits non-zero.
 
 **`bun run infra:teardown <environment>`** deletes what provisioning created, in
 reverse dependency order, and refuses without a typed sentence naming the
 environment (`destroy proteus production`). It prints WHAT IS INSIDE every
 data-bearing resource before asking. It will not delete a resource another
-environment binds — `proteus-backups` and `nimbus-runtime-cache` are held by
+environment binds: `proteus-backups` and `nimbus-runtime-cache` are held by
 both, so tearing down one environment retains them and says who still holds
 them. Nothing imports it and no other command can reach it.
 
 ### Every value the Worker reads, and where it comes from
 
-Derived from `Env` in `packages/cf-backend/env.d.ts` and pinned: a new field
+Derived from `Env` in `packages/cf-backend/env.d.ts` and pinned. A new field
 that neither a binding nor a `vars` entry supplies fails `bun run gate:infra`
 until somebody records how it is obtained. `wrangler secret list` returns names
-only — Cloudflare never returns a value, and nothing here asks for one.
+only. Cloudflare never returns a value, and nothing here asks for one.
 
 | Value | Handling | Required | Absent means |
 | --- | --- | --- | --- |
-| `CREDENTIAL_ENCRYPTION_KEY` | **prompt** — paste one, or press enter and provisioning generates 32 random bytes and displays them **once** | yes, everywhere | Every signed-in surface answers 503 while public routes answer 200, so the site looks healthy. |
+| `CREDENTIAL_ENCRYPTION_KEY` | **prompt**: paste one, or press enter and provisioning generates 32 random bytes and displays them **once** | yes, everywhere | Every signed-in surface answers 503 while public routes answer 200, so the site looks healthy. |
 | `CLOUDFLARE_OAUTH_CLIENT_SECRET` | **prompt** | where `CLOUDFLARE_OAUTH_CLIENT_ID` is a var | Chat falls back to the platform gateway and bills the **platform** account instead of each user's. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | **prompt** | where `GOOGLE_OAUTH_CLIENT_ID` is a var | Google is not on `/login`. **Absent on production today.** |
 | `GITHUB_OAUTH_CLIENT_SECRET` | **prompt** | where `GITHUB_OAUTH_CLIENT_ID` is a var | GitHub is not on `/login`. **Absent on production today.** |
-| `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | **out of band** — the outgoing key, during a rotation | no | Nothing. It is the read-only half of a rotation. |
-| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | **out of band** — an R2 API token from the dashboard; wrangler cannot mint one | no | Snapshots move through the `BACKUP_BUCKET` binding and restore by extracting rather than mounting. All four presigned-mode values are all-or-nothing. |
-| `BACKUP_BUCKET_NAME`, `CLOUDFLARE_R2_ACCOUNT_ID` | **config var** — plain values in `vars`, not secrets | no | As above. |
+| `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | **out of band**: the outgoing key, during a rotation | no | Nothing. It is the read-only half of a rotation. |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | **out of band**: an R2 API token from the dashboard; wrangler cannot mint one | no | Snapshots move through the `BACKUP_BUCKET` binding and restore by extracting rather than mounting. All four presigned-mode values are all-or-nothing. |
+| `BACKUP_BUCKET_NAME`, `CLOUDFLARE_R2_ACCOUNT_ID` | **config var**: plain values in `vars`, not secrets | no | As above. |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_ID` | **config var**, beside their secrets | no | That provider is not on `/login`. |
-| `GOOGLE_OAUTH_SCOPES`, `GITHUB_OAUTH_SCOPES`, `CLOUDFLARE_OAUTH_SCOPES` | **config var** — overrides only | no | The provider default applies (`CLOUDFLARE_WORKERS_AI_SCOPES` in `lib/cloudflare-oauth.ts`). |
-| `PROTEUS_MAX_STEPS` | **config var** | no | Core's default per-turn tool-call ceiling applies. |
+| `GOOGLE_OAUTH_SCOPES`, `GITHUB_OAUTH_SCOPES`, `CLOUDFLARE_OAUTH_SCOPES` | **config var**: overrides only | no | The provider default applies (`CLOUDFLARE_WORKERS_AI_SCOPES` in `lib/cloudflare-oauth.ts`). |
+| `PROTEUS_MAX_STEPS` | **config var** | no | Core's `DEFAULT_MAX_STEPS` applies (500, `core/src/config.ts:118`). |
 
 There is deliberately no "generate it silently" handling. The only value this
 repository could mint unattended is the root secret, and a key the program
-invents and never shows anyone is a key nobody can restore from — losing it
-means every user reconnects every provider. So it is a prompt, at a terminal,
+invents and never shows anyone is a key nobody can restore from. Losing it means
+every user reconnects every provider. So it is a prompt, at a terminal,
 displayed exactly once.
 
 ### What the binding manifest cannot express
@@ -172,10 +185,10 @@ that re-checks each one.
 - **The AI Gateway `proteus-ai-gateway`** exists only as a substring of the
   `AI_GATEWAY_URL` var. Neither creatable nor readable by anything here.
 - **The Vectorize index's geometry.** The manifest names `proteus-memory` and
-  stops; creating it needs `--dimensions=384 --metric=cosine`, and an index at
+  stops. Creating it needs `--dimensions=384 --metric=cosine`, and an index at
   the wrong width binds fine and rejects every insert. Provisioning reads the
   dimension back out of the embedder in `packages/cf-backend/src/runtime.ts` so
-  the two cannot drift; the metric appears only in a wrangler.jsonc comment.
+  the two cannot drift. The metric appears only in a wrangler.jsonc comment.
 - **The proxied wildcard DNS record** and **the zone itself.** wrangler has no
   DNS command, and the zone DNS API answers 403 under the wrangler OAuth token.
   Verification resolves a probe hostname instead.
@@ -184,17 +197,16 @@ that re-checks each one.
   custom rules point at a different Worker. **No rule delivers to `proteus`**, so
   Mission Inbox inbound mail does not arrive today even though the binding, the
   var and the `email()` handler are all present and correct.
-- **The cron trigger.** `wrangler deploy` writes it from `triggers.crons`; no
+- **The cron trigger.** `wrangler deploy` writes it from `triggers.crons`. No
   wrangler command reads it back. A declared blind spot.
 - **The container image being pullable and matching `@cloudflare/sandbox` in
   `package.json`.** Measured 2026-08-18: production runs 0.12.7 and matches;
   staging still runs 0.11.0 against a staging manifest that declares 0.12.7,
   because a container image is only reconciled by a deploy of that environment.
 - **An R2 lifecycle rule on the `backups/` prefix.** Not expressible in
-  `wrangler.jsonc`; without it the bucket grows without bound, since the Sandbox
+  `wrangler.jsonc`. Without it the bucket grows without bound, since the Sandbox
   SDK enforces snapshot TTL at restore time only.
 - **The Workers Paid plan**, and **the account**.
-
 
 ## Cloudflare Deployment
 
@@ -218,7 +230,7 @@ cd packages/cf-backend
 # the user plane: it encrypts the credential store (every provider API key and
 # OAuth token a user connects) and derives the owner capability that authorizes
 # every privileged call. Without it the Worker cannot serve a signed-in user at
-# all — sign-in, the CLI, and credentials all return 503; public routes still
+# all. Sign-in, the CLI, and credentials all return 503; public routes still
 # answer. Keep a copy: losing it means every user reconnects every provider.
 openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
 
@@ -243,11 +255,12 @@ openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
 ```
 
 Each user's UserDO re-seals its credentials under the new key on its next
-credential access. Once every account has been active — or after a deliberate
-sweep — delete `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS`. `PREVIOUS` accepts a
-comma-separated list, so an interrupted rotation can be resumed rather than
-unwound. Losing a key with rows still sealed under it is unrecoverable by
-design: those providers must be reconnected.
+credential access (`user/credential-envelope.ts`). Once every account has been
+active, or after a deliberate sweep, delete
+`CREDENTIAL_ENCRYPTION_KEY_PREVIOUS`. `PREVIOUS` accepts a comma-separated list,
+so an interrupted rotation can be resumed rather than unwound. Losing a key with
+rows still sealed under it is unrecoverable by design. Those providers must be
+reconnected.
 
 ### 3. Build and Deploy
 
@@ -255,12 +268,12 @@ design: those providers must be reconnected.
 bun run deploy                # the only supported production deploy path
 ```
 
-That runs `scripts/deploy.sh` (see "Deploy Script" below). Do not deploy
-production with a bare `wrangler deploy`: it uploads a Worker without checking
-that the CLI download assets were built, and production has already shipped
-that way once — the site was fine while `/downloads/proteus-source.tar.gz`,
-its `.sha256`, and `proteus-version.json` all answered with the SPA shell, so
-every fresh install and update died on a checksum mismatch.
+That runs `scripts/deploy.sh` (see § Deploy Script). Do not deploy production
+with a bare `wrangler deploy`. It uploads a Worker without checking that the CLI
+download assets were built, and production has already shipped that way once.
+The site was fine while `/downloads/proteus-source.tar.gz`, its `.sha256`, and
+`proteus-version.json` all answered with the SPA shell, so every fresh install
+and update died on a checksum mismatch.
 
 ### 4. Custom Domain (Optional)
 
@@ -285,7 +298,8 @@ Proteus supports Google, GitHub, and Cloudflare OAuth. A provider is shown on
 
 ### Callback URLs
 
-Register these exact redirect URLs on each provider:
+The Worker matches `/auth/<provider>/callback` (`auth/routes.ts:82`). Register
+these exact redirect URLs on each provider:
 
 ```text
 https://proteus.ashishkumarsingh.com/auth/google/callback
@@ -305,16 +319,16 @@ Workers AI and AI Gateway calls:
 user-details.read account-settings.read ai.write aig.write aig.run offline_access
 ```
 
-`offline_access` is required: `dash.cloudflare.com/oauth2/token` only returns
-a `refresh_token` when the authorization request asked for it (and the client
-has the Refresh Token grant enabled). Without it the stored credential dies at
+`offline_access` is required. `dash.cloudflare.com/oauth2/token` only returns a
+`refresh_token` when the authorization request asked for it, and when the client
+has the Refresh Token grant enabled. Without it the stored credential dies at
 access-token expiry and every visit demands a Workers AI reconnect.
 
-`aig.write` (AI Gateway Write — the client offers no separate Read scope) powers the `my-gateway` provider: listing the
-user's AI Gateways, their stored BYOK provider keys, and the Unified Billing
-credit balance. The OAuth client must have the scope enabled in its dashboard
-configuration, and users who connected before it was added need one re-login
-to grant it.
+`aig.write` (AI Gateway Write; the client offers no separate Read scope) powers
+the `my-gateway` provider: listing the user's AI Gateways, their stored BYOK
+provider keys, and the Unified Billing credit balance. The OAuth client must
+have the scope enabled in its dashboard configuration, and users who connected
+before it was added need one re-login to grant it.
 
 Set:
 
@@ -325,32 +339,33 @@ bunx wrangler secret put CLOUDFLARE_OAUTH_CLIENT_SECRET
 The production client id and token auth method are non-secret vars in
 `packages/cf-backend/wrangler.jsonc`. The scopes' source of truth is the
 `CLOUDFLARE_WORKERS_AI_SCOPES` constant in
-`packages/cf-backend/src/lib/cloudflare-oauth.ts`; set a
+`packages/cf-backend/src/lib/cloudflare-oauth.ts:26`. Set a
 `CLOUDFLARE_OAUTH_SCOPES` var only to override it.
 
 ## Model Providers
 
-Who pays, per provider — this is the property the provider split exists for:
+Who pays, per provider. The provider split exists for this property:
 
 | Provider | Credential | Billed to |
 | --- | --- | --- |
 | `workers-ai` | the signed-in user's Cloudflare OAuth token | **that user's** Cloudflare account |
 | `my-gateway/<provider>/<model>` | the same OAuth token, against the user's own AI Gateway | **that user's** BYOK provider keys or Unified Billing credits |
-| `ai-gateway` (platform) | none — the `AI` binding, pre-authenticated in-account | **the account this Worker runs in** |
+| `ai-gateway` (platform) | none; the `AI` binding, pre-authenticated in-account | **the account this Worker runs in** |
 | `openai` / `anthropic` / `openrouter` / `codex` / `openai-compat` | the user's own stored key | **that user's** provider account |
 
 So user chat rides the user's credential over HTTPS on purpose. The platform
-`ai-gateway` provider is the deploy-time fallback used when no user credential is
-reachable, plus the path platform-side work (embeddings, judges, evals, benches)
-takes; its transport is the Workers AI binding, so it needs no API token and its
-spend lands where it always did. Moving `workers-ai` or `my-gateway` onto the
-binding would silently move every user's model spend onto the platform account —
-don't.
+`ai-gateway` provider is the deploy-time fallback used when no user credential
+is reachable, plus the path platform-side work takes: embeddings, judges, evals,
+benches. Its transport is the Workers AI binding, so it needs no API token and
+its spend lands where it always did. Moving `workers-ai` or `my-gateway` onto
+the binding would silently move every user's model spend onto the platform
+account. Don't.
 
 To set up the platform AI Gateway:
 
 1. Go to [Cloudflare Dashboard > AI > AI Gateway](https://dash.cloudflare.com/?to=/:account/ai/ai-gateway)
-2. Create a new gateway (e.g., `proteus-ai-gateway`) **in the same account as the Worker** — the binding resolves gateway names in-account only
+2. Create a new gateway (e.g., `proteus-ai-gateway`) **in the same account as
+   the Worker**. The binding resolves gateway names in-account only.
 3. Set `AI_GATEWAY_URL` in wrangler vars to `https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/workers-ai/v1`
 
 No API token is required. The Worker reaches the gateway through the `AI`
@@ -359,52 +374,61 @@ binding, which is pre-authenticated inside its own account.
 ### The provider registry
 
 Registration order is the default-preference order. The cloud registers, in
-order: `workers-ai`, the user's own `my-gateway`, the platform `ai-gateway`
-fallback, `codex`, `openai`, `anthropic`, `openrouter`, `openai-compat` (plus
-one `openai-compat:<name>` per extra configured credential), and finally a
-**dynamic source backed by the live models.dev catalog** — any provider id there
-becomes usable once you store a `<id>.bearer` credential. The CLI registers the
-same list minus the dynamic catalog, plus two that only make sense locally:
-`claude` (drives your own Claude Code binary) and `opencode`.
+order (`cf-backend/src/providers/agent-registry.ts:111-125`): `workers-ai`, the
+user's own `my-gateway`, the platform `ai-gateway` fallback, `codex`, `openai`,
+`anthropic`, `openrouter`, `openai-compat`, and finally a **dynamic source
+backed by the live models.dev catalog**. Any provider id in that catalog becomes
+usable once you store a `<id>.bearer` credential. The cloud surfaces each extra
+named OpenAI-compatible credential as a model spec, `openai-compat:<name>/<modelId>`,
+rather than as a registered provider (`user/available-models.ts:55-66`).
+
+The CLI registers a different list (`cli-backend/src/model-resolver.ts:286-351`):
+`workers-ai` and `my-gateway` against the signed-in cloud proxy, or against a
+direct local endpoint when `PROTEUS_BASE_URL` names one; then `claude` (which
+drives your own Claude Code binary), `opencode`, `codex`, `openai`, `anthropic`,
+`openrouter` and `openai-compat`; then one `openai-compat:<name>` per extra
+named credential; and the same models.dev dynamic source the cloud uses.
 
 ### Model catalogs are live
 
 Model lists are fetched from `https://models.dev/api.json` behind a 5-minute
-cache (`core/src/providers/models-dev.ts`), which is where each model's context
-window and capability flags come from. The static lists —
+cache (`core/src/providers/models-dev.ts:9`), which is where each model's
+context window and capability flags come from. The static lists,
 `WORKERS_AI_FALLBACK_MODEL_CATALOG` in
-`packages/cf-backend/src/providers/workers-ai-catalog.ts`, and each provider's
-`FALLBACK_MODELS` — are only what you get when that fetch fails, returns
-non-200, or filters to nothing. OpenRouter is the exception: it queries its own
+`packages/cf-backend/src/providers/workers-ai-catalog.ts` and each provider's
+`FALLBACK_MODELS`, are only what you get when that fetch fails, returns
+non-200, or filters to nothing. OpenRouter is the exception. It queries its own
 `/api/v1/models` instead.
 
 The default model id lives once in `@proteus/core` as
 `DEFAULT_WORKERS_AI_MODEL_ID` / `DEFAULT_WORKERS_AI_MODEL_SPEC`
-(`@cf/deepseek-ai/deepseek-v4-pro-0813`), and is written into the user's `default_model`
-config on first Cloudflare sign-in. The Workers AI fallback catalog carries six
-entries:
+(`@cf/deepseek-ai/deepseek-v4-pro-0813`, `core/src/providers/workers-ai.ts:6`),
+and is written into the user's `default_model` config on first Cloudflare
+sign-in. The Workers AI fallback catalog carries six entries:
 
 | Model ID | Name | Context |
 |----------|------|---------|
-| `@cf/deepseek-ai/deepseek-v4-pro-0813` | DeepSeek V4 Pro 0813 | 1,048k — default; reasoning + tools; paid access required |
-| `@cf/moonshotai/kimi-k2.6` | Kimi K2.6 | 262k — reasoning + tools + vision |
+| `@cf/deepseek-ai/deepseek-v4-pro-0813` | DeepSeek V4 Pro 0813 | 1,048k; default, reasoning + tools, paid access required |
+| `@cf/moonshotai/kimi-k2.6` | Kimi K2.6 | 262k; reasoning + tools + vision |
 | `@cf/nvidia/nemotron-3-120b-a12b` | Nemotron 3 Super 120B | 256k |
 | `@cf/openai/gpt-oss-120b` | GPT OSS 120B | 128k |
 | `@cf/openai/gpt-oss-20b` | GPT OSS 20B | 128k |
 | `@cf/meta/llama-4-scout-17b-16e-instruct` | Llama 4 Scout | 131k |
 
-Model choice interacts with prompt caching: as of the 2026-08-15 account
-catalog check, `deepseek-v4-pro-0813`, `kimi-k2.6`, `kimi-k2.7-code`, and
-`glm-5.2` bill a discounted cached-input rate. Those models can benefit from
-the session-affinity pin; the remaining catalog models bill input at full rate.
+Model choice interacts with prompt caching. The reasoning-era Kimi line (k2.6,
+k2.7-code, k3) is the family this repository records a cached-input rate for
+(`core/src/prompting/model-profile.ts:34-43`), and those models can benefit from
+the session-affinity pin. Per-model cached-input pricing for the rest of the
+catalog is not measured here. Read it off the account's own model catalog before
+relying on it.
 
 ### Rate limits
 
 Every provider fetch goes through `withRateLimitRetry`
 (`core/src/providers/rate-limit-retry.ts`), so a 429 does not surface as a
-failed turn. It retries 429/529 (and overload-shaped 503s) up to 6 attempts
-within a 180-second budget, honoring `Retry-After` verbatim when present and
-otherwise waiting a full-jitter draw under a ceiling that doubles from 2 s to a
+failed turn. It retries 429, 529 and overload-shaped 503s up to 6 attempts
+within a 180-second budget. It honors `Retry-After` verbatim when present, and
+otherwise waits a full-jitter draw under a ceiling that doubles from 2 s to a
 60 s cap. Requests whose body cannot be replayed pass through untouched, and an
 exhausted budget returns the original response rather than throwing.
 
@@ -415,8 +439,7 @@ exhausted budget returns the original response rather than throwing.
 | `CREDENTIAL_ENCRYPTION_KEY` | Wrangler secret | **Required.** Root secret for the user plane: encrypts `user_credentials` at rest and derives the owner capability. Without it no signed-in surface works. |
 | `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | Wrangler secret | Retired encryption keys (comma-separated), read-only, for a rotation window |
 | `AI_GATEWAY_URL` | wrangler.jsonc `vars` | Platform AI Gateway endpoint, in the Worker's own account. Names the gateway, upstream provider and endpoint prefix the `AI` binding transport addresses. No token needed. |
-| `AI` | wrangler.jsonc `ai` binding | Workers AI. Serves the platform `ai-gateway` provider's transport, semantic-memory embeddings and HTML→markdown, all billed to the Worker's account. |
-| `AUTH_DB` | D1 binding | Browser OAuth sessions and identities |
+| `SANDBOX_TRANSPORT` | wrangler.jsonc `vars` | Container control plane, `rpc` in both environments. A stored per-sandbox transport beats this var on a cold start; the var covers a future `getSandbox` that omits the option. |
 | `PREVIEW_HOST_SUFFIX` | wrangler.jsonc `vars` | Zone Workspace and Sandbox previews are served under, one capability hostname per exposed port. Requires a proxied wildcard DNS record on that zone plus a `*.<zone>/*` route; the wrangler.jsonc comment has both steps. Every host under it except the app's own serves previews and nothing else. Empty means previews are unavailable. |
 | `CLI_PUBLIC_ORIGIN` | wrangler.jsonc `vars` | Origin embedded in installer/setup commands |
 | `CLI_APPROVAL_ORIGIN` | wrangler.jsonc `vars` | Browser approval origin for CLI auth |
@@ -437,44 +460,50 @@ exhausted budget returns the original response rather than throwing.
 | `PROTEUS_BASE_URL` | CLI shell env | Advanced direct LLM override for local agents |
 | `PROTEUS_AUTH` | CLI shell env | Advanced direct LLM auth override for local agents |
 | `PROTEUS_MODEL` | CLI shell env | Override local agent model |
-| `PROTEUS_SOURCE_TARBALL` | CLI shell env | Advanced installer/update source override |
+| `PROTEUS_SOURCE_TARBALL` | CLI shell env | Advanced installer/update source override (`cli/routes.ts:957`) |
 | `PROTEUS_SOURCE_SHA256` | CLI shell env | Pin a SHA-256 for the source tarball (default: published `.sha256` asset, always verified) |
 | `PROTEUS_MAX_STEPS` | CLI shell env / wrangler env var | Max tool-call steps (default: 500) |
+
+`SANDBOX_TRANSPORT` is the one `vars` entry `Env` in `env.d.ts` does not
+declare. Read it from `wrangler.jsonc`, not from the type.
 
 ## Wrangler Bindings
 
 | Binding | Type | Description |
 |---------|------|-------------|
 | `OrchestratorAgent` | Durable Object | The workspace agent (extends `ActorAgent` → `Think`) |
-| `ExplorationAgent` | Durable Object | MCTS branches and heads (Facets) |
 | `UserDO` | Durable Object | Per-user profile, CLI tokens, devices, release changes |
 | `MonitorDO` | Durable Object | Synthetic monitoring: open incidents + the alert outbox (one instance, `site`) |
-| `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk` — built-in lightweight sandbox (local DO class, deployed with this Worker) |
-| `Sandbox` | Durable Object + Container | `ProteusSandbox` (@cloudflare/sandbox) — one container per agent |
+| `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk`; built-in lightweight sandbox (local DO class, deployed with this Worker) |
+| `Sandbox` | Durable Object + Container | `ProteusSandbox` (@cloudflare/sandbox); one container per agent |
 | `AUTH_DB` | D1 database | OAuth users, sessions, one-time OAuth state, and CLI browser approval state |
 | `LOADER` | Worker Loader | Sandboxed code execution (codemode) |
 | `AI` | Workers AI | Platform-side embeddings (chat models use the user's OAuth credential) |
-| `MEMORY_VECTORS` | Vectorize | `proteus-memory` (384-dim, cosine) — optional hybrid recall on top of FTS5 |
+| `MEMORY_VECTORS` | Vectorize | `proteus-memory` (384-dim, cosine); optional hybrid recall on top of FTS5 |
 | `EMAIL` | `send_email` | Outbound Mission Inbox replies and owner notifications |
 | `BACKUP_BUCKET` | R2 bucket | Sandbox `/workspace` backups (squashfs archives) |
+| `NIMBUS_RUNTIME_CACHE` | R2 bucket | `nimbus-runtime-cache`, the artifact store a hosted workspace installs its toolchain from. Absent means a hosted `python3`, `ruby` or `clang` exits 127 |
 | `ASSETS` | Static assets | `dist/client` SPA bundle + CLI source archive downloads |
 
-`SubordinateAgent` has no binding of its own — it exists only as a facet of
+Two agent classes have no binding of their own. `ExplorationAgent` (MCTS
+branches and heads) and `SubordinateAgent` both exist only as facets of
 `OrchestratorAgent`, reached through the agents SDK's sub-agent mechanism.
+`ExplorationAgent` still appears in the DO migration list, because a class
+registration and a binding are separate things.
 
 `compatibility_date` is `2025-12-01` with `nodejs_compat`. Durable Object
 migrations are three tags in production (`v1` registering `OrchestratorAgent`,
 `ExplorationAgent`, `ProteusSandbox`, `UserDO`; `v2` adding `NimbusSession`;
-`v3` adding `MonitorDO`) but a **different five-tag sequence** under
+`v3` adding `MonitorDO`) and a **different five-tag sequence** under
 `env.staging`, because the two deployments registered their classes in a
-different order. Wrangler does not
-inherit `env.*` config, so every binding is re-specified there.
+different order. Wrangler does not inherit `env.*` config, so every binding is
+re-specified there.
 
 ## Deploy Script
 
-`scripts/deploy.sh` is the deploy path — `bun run deploy` at the repo root.
-Everything ships as one Worker (name `proteus`); `NimbusSession` is a local
-DO class deployed with it — there is no separate Nimbus deploy.
+`scripts/deploy.sh` is the deploy path, reached by `bun run deploy` at the repo
+root. Everything ships as one Worker (name `proteus`). `NimbusSession` is a
+local DO class deployed with it, so there is no separate Nimbus deploy.
 
 ```bash
 bun run deploy
@@ -482,39 +511,77 @@ bun run deploy
 
 ### Order of operations
 
-Before step 1, the script verifies Wrangler authentication and, when a checkout
-has no root `node_modules`, installs the locked dependency graph with
-`bun install --frozen-lockfile`. It refuses a dirty checkout so the build SHA in
-`/api/health` always identifies the exact source bytes that were published.
+The script refuses a dirty checkout first, so the build SHA in `/api/health`
+always identifies the exact source bytes that were published. Then it runs the
+environment preflight, verifies Wrangler authentication, and installs the locked
+dependency graph with `bun install --frozen-lockfile` when a checkout has no
+root `node_modules`.
 
-1. **Required pre-deploy gates** — unconditionally runs `bun run check`; the
-   deploy contract test; the root, test-utils, Cloudflare-backend, CLI-backend,
-   and full production CLI suites (including its PTY and composition-conformance
-   coverage); deterministic eval and every credential-free benchmark, inference
-   proxy, Pi-worker, accounting, statistics, and report test; the secret-scanner
-   self-test and scan; Layergate conformance and its fault-localization matrix;
-   and the full Lean proof, consistency, and traceability gate. The costly
-   159-task corpus validation remains a separately preserved provenance run,
-   not a per-deploy check. The last gate is the only one that talks to
-   Cloudflare: `bun run gate:infra` checks that every resource `wrangler.jsonc`
-   declares for **production** exists and that the deployed Worker is bound to
-   it. Everything above it proves the source is deployable; that one proves the
-   account is. Any failure exits before Vite, archive generation, or
-   Wrangler. There is no production-deploy skip variable.
-2. **Build** — `vite build`, then `scripts/build-cli-source-archive.sh` (CLI
-   source tarball, `.sha256`,
-   `proteus-version.json`). Fails if any of the three is missing from
-   `packages/cf-backend/dist/client/downloads/`.
-3. **Deploy** — `npx wrangler deploy`. Verifies the `ProteusSandbox` binding
+1. **Required pre-deploy gates.** 49 gates, every one unconditional. Each is a
+   `run_required_gate` line in `scripts/deploy.sh`, which is the full list. They
+   cover `bun run check`; the deploy contract test; the agent-utils, core,
+   compaction, test-utils, Cloudflare-backend, workerd, CLI-backend, full
+   production CLI, local-device daemon and root end-to-end suites; the
+   exploration policy mutation suite; the deterministic eval and benchmark
+   tests; the secret-scanner self-test and its scan; every gate's own
+   self-test; the static gates for dead code, duplication, capability parity,
+   policy drift, silently dropped failures, reachability, typecheck coverage,
+   skip ratchet, set equality, citation registers, commit hygiene, dependency
+   policy and committed-patch parity; Layergate conformance and its
+   fault-localization matrix; behavioural evals; and the full Lean proof,
+   consistency and traceability gate. `gate:computed-style` is deliberately
+   absent: it boots Vite and Chrome over 19 gallery frames and would fail this
+   pipeline for environmental reasons, so only its decision logic is guarded
+   here. `gate:bench-corpus` runs the cheap half of the bench corpus check, 159
+   `git apply --check` invocations measured at 0.15 s for the whole corpus. The
+   other half, `bench.ts validate`, actually runs each task's checks and is a
+   separate nightly run. The last gate is the only one that talks to Cloudflare:
+   `bun run gate:infra` checks that every resource `wrangler.jsonc` declares for
+   **production** exists and that the deployed Worker is bound to it. Everything
+   above it proves the source is deployable; that one proves the account is. Any
+   failure exits before Vite, archive generation, or Wrangler. No variable skips
+   a gate on this path. `PROTEUS_INFRA_ACK` only acknowledges a missing
+   Cloudflare session, and the `npx wrangler whoami` check above already fails
+   the deploy in that case.
+2. **Build.** `vite build`, then `scripts/build-cli-source-archive.sh` (CLI
+   source tarball, `.sha256`, `proteus-version.json`). Fails if any of the three
+   is missing from `packages/cf-backend/dist/client/downloads/`.
+3. **Deploy.** `npx wrangler deploy`. Verifies the `ProteusSandbox` binding
    appears in wrangler output, and that the assets directory wrangler reports
    reading is the one the downloads were staged into.
-4. **Smoke test** — asserts HTTP 200 + app content on the production URL,
-   that `/api/health` reports the build stamp of the commit being deployed,
-   that `/downloads/proteus-version.json` parses as JSON for that same build,
-   that the CLI shim points at the deployed source archive, that the archive
-   downloads and lists expected files, and that the published `.sha256`
-   matches the served archive (the shim verifies it by default).
-5. **Summary** — prints the URL, Version ID, and build sha.
+4. **Smoke test.** Asserts HTTP 200 and app content on the production URL, that
+   `/api/health` reports the build stamp of the commit being deployed, that
+   `/downloads/proteus-version.json` parses as JSON for that same build, that
+   the CLI shim points at the deployed source archive, that the archive
+   downloads and lists expected files, and that the published `.sha256` matches
+   the served archive. The stamp checks retry with backoff, because edge
+   rollout takes up to about two minutes and a stamp that never converges is
+   the real failure.
+5. **Summary.** Prints the URL, Version ID, and build sha.
+
+### Build budget
+
+Two platform limits govern what step 2 may produce. Both limits are recorded in
+`core/src/platform-catalog.ts` under `worker.script_bytes` and
+`worker.startup_ms`, read from Cloudflare's published limits on 2026-08-17.
+Neither figure has a gate, so re-measure rather than deriving either from
+memory.
+
+- **Worker bundle, gzipped.** The cap is 10 MB on Workers Paid, and 64 MB
+  uncompressed. The repository encodes that cap as 10,000,000 bytes
+  (`MB = 1000 * 1000`, `core/src/platform-catalog.ts:217`). Last reading:
+  **7,091.83 KiB gzip, measured 2026-08-19**, about 73% of it. Measure it with
+  `bunx wrangler deploy --dry-run` in `packages/cf-backend` after a vite build.
+  That prints the `Total Upload / gzip` figure the deploy API enforces. Vite's
+  per-chunk `gzip:` line covers one chunk and understates the total by more
+  than 2x.
+- **Worker startup time.** The limit is **1 second** of module top-level
+  evaluation, and every cold activation of every Durable Object pays it. Last
+  reading: **185-252 ms, measured 2026-08-04**, about a fifth of the limit.
+  Cloudflare raised this limit from 400 ms on 2025-10-10. Do not cite 400 ms.
+
+Bundle size charges against startup time as well, so the gzip figure is the one
+to watch.
 
 ### Static assets
 
@@ -526,9 +593,9 @@ There is exactly one assets directory: `packages/cf-backend/dist/client`.
 hand-written `wrangler.jsonc` says `dist/client`. Both resolve to the same
 place, so the choice of config does not change which files are published.
 
-`dist/proteus/assets/` is not an assets directory — it is the Worker bundle's
-code-split chunk output, which wrangler attaches as Worker modules. Anything
-written there is never served over HTTP.
+`dist/proteus/assets/` holds the Worker bundle's code-split chunk output, which
+wrangler attaches as Worker modules. It is not an assets directory, and nothing
+written there is ever served over HTTP.
 
 Step 2 of the deploy asserts the downloads exist in `dist/client/downloads/`,
 and step 3 asserts wrangler read that same directory, so a future config or
@@ -564,25 +631,26 @@ bun run --cwd packages/cf-backend deploy:staging
 ```
 
 It rebuilds with `CLOUDFLARE_ENV=staging` so the Vite plugin generates the
-staging config the deploy redirect points at, then rebuilds for production so
-the working tree is not left holding a staging bundle.
+staging config the deploy redirect points at, builds the CLI source archive,
+deploys, then rebuilds for production so the working tree is not left holding a
+staging bundle.
 
 ### Synthetic monitoring
 
 The deploy smoke gate above only runs at deploy time, and the outage it was
 written for happened to a deploy that never went through it. So the same checks
-run on a schedule: a cron trigger (`*/15 * * * *` in `wrangler.jsonc`) calls
+run on a schedule. A cron trigger (`*/15 * * * *` in `wrangler.jsonc`) calls
 `MonitorDO.check()`, which probes the live origin and emails `OPS_ALERT_EMAIL`
 through the Mission Inbox's outbound path when something breaks.
 
 | Probe | Passes when |
 |-------|-------------|
 | `health` | `/api/health` returns `ok:true` JSON with a build identifier that matches the one `/downloads/proteus-version.json` advertises |
-| `downloads` | `/downloads/proteus-source.tar.gz` hashes to exactly what `…​.sha256` declares — the check the installer itself makes |
+| `downloads` | `/downloads/proteus-source.tar.gz` hashes to exactly what `…​.sha256` declares. This is the check the installer itself makes |
 | `login` | `/login` renders the sign-in page with at least one provider link |
 
-One email per incident, not per tick: a failing probe opens an incident (one
-alert), stays open silently while it keeps failing, and closes with one recovery
+One email per incident, not per tick. A failing probe opens an incident with one
+alert, stays open silently while it keeps failing, and closes with one recovery
 notice. Delivery rides `EmailOutbox`, so a send that fails is re-driven with the
 same Message-ID rather than lost or duplicated.
 
@@ -593,9 +661,10 @@ by design.
 
 ### Rollback
 
-Cloudflare keeps the last 10 Worker versions. Static assets are part of a
-version, so a rollback moves the Worker code and the published `/downloads/*`
-assets together:
+Static assets are part of a Worker version, so a rollback moves the Worker code
+and the published `/downloads/*` assets together. How many versions Cloudflare
+retains is not measured here; `npx wrangler versions list` prints the ones you
+can actually roll back to.
 
 ```bash
 cd packages/cf-backend
@@ -603,7 +672,7 @@ npx wrangler versions list
 npx wrangler rollback --version-id <version-id>
 ```
 
-Then confirm the rollback took, the same way the deploy gate does — the build
+Then confirm the rollback took, the same way the deploy gate does. The build
 stamp must name the commit you rolled back to, and the CLI download path must
 still verify:
 
@@ -615,6 +684,6 @@ sha256sum /tmp/p.tgz
 ```
 
 A rollback that leaves `ok: false`, an unexpected `build.sha`, or a 404 on the
-downloads is not a recovery — redeploy forward with `bun run deploy` instead.
-This rehearsal has not been run against production; the commands are the ones
-`scripts/deploy.sh` runs, reduced to what a rollback needs.
+downloads has not recovered anything. Redeploy forward with `bun run deploy`
+instead. This rehearsal has not been run against production. The commands are
+the ones `scripts/deploy.sh` runs, reduced to what a rollback needs.

@@ -2,19 +2,19 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-This is the path I actually use: get it installed, make one workspace, and then
-live with it. [QUICKSTART.md](../QUICKSTART.md) is the two-minute version,
-[docs/CLI.md](CLI.md) is the generated reference for every command and flag, and
-this page is the middle — what the pieces are and how a day with them goes.
+This is the path I actually use: get it installed, make one workspace, then live
+with it. [QUICKSTART.md](../QUICKSTART.md) is the two-minute version and
+[docs/CLI.md](CLI.md) is the generated reference for every command and flag.
+This page sits between them, on what the pieces are and how a day goes.
 
 ---
 
 ## 1. What you're creating
 
-You create **workspaces**, not agents. A workspace is a durable container: its
-own files, its own execution environments, its own sessions and memory, with an
-agent working inside it. [docs/WORKSPACES.md](WORKSPACES.md) has the object
-model; the practical part is choosing where a workspace lives.
+You create **workspaces**. A workspace is a durable container: its own files,
+its own execution environments, its own sessions and memory, with an agent
+working inside it. [docs/WORKSPACES.md](WORKSPACES.md) has the object model.
+What you decide on day one is where a workspace lives.
 
 | | `--mode cloud` | `--mode local` |
 | --- | --- | --- |
@@ -37,8 +37,8 @@ jarvis "what changed in this repo today?"
 ```
 
 `proteus setup` does the browser sign-in and, if you want, stores local model
-credentials. Signing in with Cloudflare is what makes local workspaces free —
-they default to Workers AI with no key of your own. To bring your own provider
+credentials. Signing in with Cloudflare is what makes local workspaces free.
+They default to Workers AI with no key of your own. To bring your own provider
 instead:
 
 ```bash
@@ -47,17 +47,20 @@ proteus providers connect openai       # or anthropic, openrouter, codex, openai
 ```
 
 Signed in, the key goes to your Proteus account rather than this disk, and this
-machine uses it through Proteus without holding a copy — so the same key works
+machine uses it through Proteus without holding a copy. The same key then works
 from every machine you sign in on, and connecting a provider in the web UI is
-enough. Add `--local` to keep a key on this machine instead (for offline work,
-or an endpoint only this machine can reach); a local key always wins.
+enough. Add `--local` to keep a key on this machine instead, for offline work or
+an endpoint only this machine can reach. Which one answers a turn depends on the
+model you pick. Your account serves the specs it hosts (`@cf/…` and the provider
+ids it proxies) and a local key serves everything else, so naming a provider in
+the spec is how you choose. Signed out, the local key is all there is.
 
 `--alias jarvis` puts a `jarvis` command on your PATH that means
 `proteus run jarvis`. It is the difference between using this daily and not.
 
-If anything above misbehaves, `proteus doctor` prints where the CLI is installed, whether it is on
-your PATH, which origin it talks to, and whether the version you have matches
-the one the site serves — start there, not with a reinstall.
+If anything above misbehaves, run `proteus doctor` before you reinstall. It
+prints where the CLI is installed, whether it is on your PATH, which origin it
+talks to, and whether the version you have matches the one the site serves.
 
 ## 3. Talking to a workspace
 
@@ -75,7 +78,7 @@ one:
 
 | | |
 | --- | --- |
-| `/queue <text>` | send this after the current turn finishes, instead of interrupting |
+| `/queue <text>` | send this after the current turn finishes; a plain line steers the running turn |
 | `/branch <text>` | run a redirect as a parallel branch of the running turn |
 | `/undo [n]` | put your files back to before a turn, then offer to rewind the conversation |
 | `/fork [n]` | walk back: fork the conversation before an earlier message |
@@ -116,9 +119,9 @@ proteus triggers jarvis cancel <id>
 proteus webhook jarvis deploys                   # a durable webhook endpoint
 ```
 
-Each workspace also has an email address —
-`<workspace>@proteus.ashishkumarsingh.com` — once the mail domain is set up
-(see [docs/EMAIL-INGRESS.md](EMAIL-INGRESS.md)). Mail from your verified address
+Each workspace also has an email address once the mail domain is set up,
+`<workspace>@proteus.ashishkumarsingh.com` (see
+[docs/EMAIL-INGRESS.md](EMAIL-INGRESS.md)). Mail from your verified address
 starts a turn, and the reply comes back on the thread.
 
 Compatible background signals that arrive while a turn is running are spliced
@@ -139,31 +142,41 @@ proteus jobs jarvis       # background jobs, and cancel them
 
 The web app at [proteus.ashishkumarsingh.com](https://proteus.ashishkumarsingh.com)
 has the same information, split across six surfaces named for what you go there
-to find out: **Output** (what it produced), **Work** (what it is working
-through: the plan it wrote for itself, the jobs still running, everything
-that has settled, and anything waiting on you at the top), **Releases** (what
-it is shipping, and what you have to approve), **Exploration** (every time it
-forked itself to try more than one approach, each fork drawn as the tree it
-is), **Agent** (what this agent is: identity, memory, learned tools, and
-whether it is measurably getting better), **Environment** (every executor it
-can reach, its files and its terminal). The gauge at the far right of the strip
-is the run's own instrument panel: context, cost and cache-hit rate.
+to find out. **Output** is what it produced. **Work** is what it is working
+through: the plan it wrote for itself, the jobs still running, everything that
+has settled, and anything waiting on you at the top. **Releases** is what it is
+shipping and what you have to approve. **Exploration** is every search it ran.
+**Agent** is what this agent is: identity, memory, learned tools, and whether it
+is measurably getting better. **Environment** is every executor it can reach,
+its files and its terminal. The gauge at the far right of the strip carries the
+run's own meters: context, cost and cache-hit rate.
 
-Two things worth knowing. Anything the agent needs a decision on (a release
-awaiting approval, a rewrite of its own scaffold sitting under trial, a failed
-job, changes to itself you have not read) is counted on the **Work** tab and
-listed at the top of it, and each row takes you to where the decision is
-actually made. And a fork is one list whatever the agent chose to do with it:
-a merge is a tree one level deep, a competition is the same tree deeper with
-scores on it, and past forks are the rows below the newest one.
+Anything the agent needs a decision on is counted on the **Work** tab and listed
+at the top of it. A release awaiting approval, a rewrite of its own scaffold
+sitting under trial, a failed job, changes to itself you have not read: each row
+takes you to where the decision is actually made.
 
-Proteus can add surfaces of its own. Ask it for a dashboard and it publishes
-a **view**: a tab, after the six, marked with a sparkle and labelled *written by
-Proteus*. A view is data, not code — it reads workspace state you can already see
-and draws it with the same components everything else uses, so it can show you
-numbers but can never ask you for anything. It also cannot wear the name of any
-surface Proteus ships, including ones we have retired. "View source" shows
-exactly what it wrote, and the Work tab's journal reverts it.
+**Exploration** is where I go when the agent tried more than one thing. The
+`agents` tool's `swarm` action is the only verb that grows one of these. A swarm
+is a configured tree search over agent nodes: a preset fixes the shape of the
+search and an objective says what is measured. Each node is a whole agent with
+its own home directory, running the same loop as the agent you talk to. A
+candidate can be scored by a verifier you registered rather than judged by a
+model, so what the tab compares is measured. Every search the workspace has run
+is a row, newest first, and all of them are drawn on one canvas as the trees
+they are. Score sits in a node's fill, rollouts in its radius, and the line the
+search paid for along the spine; a ring marks the answer it settled on. Results
+carry across runs, so a later search starts from what an earlier one proved.
+[docs/EXPLORATION.md](EXPLORATION.md) is the spec, with the six axes, the
+presets and what a refusal means.
+
+Proteus can add surfaces of its own. Ask it for a dashboard and it publishes a
+**view**: a tab, after the six, marked with a sparkle and labelled *Written by
+Proteus*. A view is data. It reads workspace state you can already see and draws
+it with the same components everything else uses, so it can show you numbers but
+can never ask you for anything. It also cannot wear the name of any surface
+Proteus ships, including ones we have retired. "View source" shows exactly what
+it wrote, and the Work tab's journal reverts it.
 
 ## 7. Backup, and moving a workspace
 
@@ -180,8 +193,8 @@ archive either way: transcripts, memory, files, crafted tools, evolution
 history. `import` restores it as a **local** workspace, which also makes it the
 way to pull a cloud workspace down onto your machine.
 
-The web app has the same button — workspace settings → Backup → *Download
-archive*.
+The web app has the same button, under workspace settings → Backup →
+*Download archive*.
 
 Exporting a cloud workspace needs an interactive session (`proteus auth`). A
 scoped CI token can run tasks in a workspace but cannot walk off with its
@@ -189,7 +202,7 @@ database.
 
 Two things to know. An archive is a complete copy of everything the workspace
 holds, so keep it where you'd keep a password. And `proteus workspace delete` is
-permanent — export first; the prompt says so too.
+permanent, so export first. The prompt says so too.
 
 ## 8. Keeping the install healthy
 
@@ -216,6 +229,7 @@ Everything is under `~/.proteus` (override with `PROTEUS_HOME`):
   <workspace>/       one directory per LOCAL workspace
     agent.db         its entire state
   sessions/          recorded CLI sessions
+  checkpoints/       shadow-git file snapshots that /undo restores from
   daemon.log         local scheduler log
 ```
 
@@ -226,11 +240,11 @@ environment variable.
 
 | What you see | What it usually is |
 | --- | --- |
-| `Not authenticated. Run: proteus auth` | the CLI session expired — `proteus auth` |
+| `Not authenticated. Run: proteus auth` | the CLI session expired. Run `proteus auth` |
 | `Source checksum mismatch` on install or update | the download and its checksum disagree; the site is mid-deploy or broken. Retry, then check `/api/health` |
-| A model error the moment a turn starts | no usable credential for the chosen model — `proteus providers list`, then `proteus providers connect …` |
-| `No workspaces found` | you have none yet — `proteus create <name>` |
-| A cloud workspace won't run commands on your machine | the daemon isn't attached — `proteus desktop status`, then `proteus connect` |
+| A model error the moment a turn starts | no usable credential for the chosen model. Run `proteus providers list`, then `proteus providers connect …` |
+| `No workspaces found` | you have none yet. Run `proteus create <name>` |
+| A cloud workspace won't run commands on your machine | the daemon isn't attached. Run `proteus desktop status`, then `proteus connect` |
 | The daemon died and timers stopped | `proteus daemon restart`, and `proteus daemon logs` for why |
 
 `proteus doctor` answers the install-shaped ones. If a workspace itself is

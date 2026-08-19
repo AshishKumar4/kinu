@@ -24,11 +24,11 @@ export interface BackgroundPolicy {
   /**
    * Whether this session outlives the turn, and can therefore receive a wake.
    *
-   * It decides what SPAWN-shaped work (a fork) does, and both answers follow
-   * from it. Where a wake can arrive, a fork detaches the moment its spawn is
+   * It decides what SPAWN-shaped work (a swarm node) does, and both answers follow
+   * from it. Where a wake can arrive, a node detaches the moment its spawn is
    * confirmed started — its duration is long by construction, so waiting on a
    * threshold could only ever be dead air. Where no wake can arrive, the turn
-   * is the ONLY consumer the result will ever have, so the fork runs inline to
+   * is the ONLY consumer the result will ever have, so the node runs inline to
    * completion: detaching it there produces an answer with nobody left to read
    * it.
    */
@@ -41,7 +41,7 @@ export interface BackgroundPolicy {
  * `interactive` — a human is watching the stream, so a tool call that outlives
  * their patience must hand back a handle fast; the wake turn arrives in the
  * same live session, and teardown can afford to wait a while for in-flight work
- * because the session was going to stay open anyway. A fork detaches the
+ * because the session was going to stay open anyway. A node detaches the
  * moment it is confirmed started rather than after the threshold: its duration
  * is not unknown — it is long by construction — so the threshold wait could
  * only ever be dead air in the chat.
@@ -50,7 +50,7 @@ export interface BackgroundPolicy {
  * answer. Here a detach is expensive, not cheap: it truncates the turn, forces a
  * second (synthesis) turn, and — measured over an 89-task benchmark run — pushes
  * the model into polling its own jobs instead of doing the work (151 of 202
- * sandbox scripts were `agent.jobResult` polls, and forks were spawned as
+ * sandbox scripts were `agent.jobResult` polls, and nodes were spawned as
  * pollers rather than workers). So ordinary long work — a build, a test suite,
  * an install — runs to completion inline, and only genuinely non-terminating
  * work (a server, a VM) ever crosses. Because anything that DID cross is very
