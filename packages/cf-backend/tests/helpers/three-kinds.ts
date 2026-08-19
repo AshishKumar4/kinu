@@ -56,6 +56,7 @@ import {
   HeadJournal,
   asFetchFunction,
   initHeadsTables,
+  isBackgroundHandle,
   nodeWallClockEnvelopeMs,
   runNodeAgent,
   runNodeLoop,
@@ -405,6 +406,10 @@ export interface NodeFixtureOptions {
    *  (`BuiltinToolDeps.preBuiltExecuteTool`). Supplied where an assertion needs a
    *  tool whose output it knows, rather than whatever a shell-less runtime returns. */
   readonly executeTool?: NodeAgentDeps['executeTool'];
+  /** Detach policy override, so an arm about backgrounding finishes in under a second
+   *  instead of waiting out the shipped 30 s threshold. The RELATIONSHIP is what is
+   *  measured; the magnitude is a fixture. */
+  readonly backgroundPolicy?: NodeAgentDeps['backgroundPolicy'];
 }
 
 /** One swarm node's engine-authored input. */
@@ -453,6 +458,7 @@ export function nodeDeps(model: LanguageModel, opts?: NodeDepsOptions): NodeSeam
   if (opts?.signal) deps.signal = opts.signal;
   if (opts?.host) deps.host = opts.host;
   if (opts?.executeTool !== undefined) deps.executeTool = opts.executeTool;
+  if (opts?.backgroundPolicy !== undefined) deps.backgroundPolicy = opts.backgroundPolicy;
   return { deps, journal };
 }
 
@@ -583,7 +589,10 @@ export function capturingWorkersAIModel(sessionAffinity?: string): CapturingMode
         headers: new Headers(init?.headers),
         body: readChatCompletionBody(init?.body),
       });
-      return chatCompletionResponse();
+      // Read off the RAW body, not the parsed one: `readChatCompletionBody` keeps only
+      // the messages, so a parsed `stream` is always absent and every request would be
+      // answered as a one-shot completion.
+      return chatCompletionResponse(requestsStream(init?.body));
     }),
   };
   // Assigned rather than spread conditionally: absent means "this model is not
@@ -591,6 +600,16 @@ export function capturingWorkersAIModel(sessionAffinity?: string): CapturingMode
   // the same fact as a key nobody set.
   if (sessionAffinity !== undefined) registryOptions.workersAI = { sessionAffinity };
   return { model: createAgentProviderRegistry(registryOptions).resolveModel(CAPTURE_MODEL_SPEC), captured };
+}
+
+/** Whether this request asked for a stream. `runChat` always does; a one-shot
+ *  completion (a judge call, a title) does not. Parsed at the boundary and read as a
+ *  domain value: the same `v.parse(v.string())` `readChatCompletionBody` uses, so a
+ *  body the SDK stopped serialising as JSON fails loudly in one place rather than
+ *  quietly reading as "not streaming" here. */
+function requestsStream(body: RequestInit['body']): boolean {
+  const parsed: unknown = JSON.parse(v.parse(v.string(), body));
+  return v.safeParse(v.looseObject({ stream: v.literal(true) }), parsed).success;
 }
 
 /** The request body, parsed. A body that is not a JSON string would mean the SDK
@@ -601,7 +620,17 @@ function readChatCompletionBody(body: RequestInit['body']): ChatCompletionBody {
   return v.parse(ChatCompletionBodySchema, JSON.parse(text));
 }
 
-function chatCompletionResponse(): Response {
+/**
+ * The canned answer, in whichever shape the request asked for.
+ *
+ * A streaming arm is not a convenience: every agent turn in this tree is issued by
+ * `runChat`, which sets `stream: true`, so a helper that only answers a one-shot
+ * completion measures a request no agent makes and reads back as an errored run. The
+ * capture this helper exists for — the affinity header and the request body — is
+ * identical either way, which is why one function serves both.
+ */
+function chatCompletionResponse(streaming: boolean): Response {
+  if (streaming) return chatCompletionStream();
   return new Response(JSON.stringify({
     id: 'chatcmpl-1',
     object: 'chat.completion',
@@ -614,6 +643,22 @@ function chatCompletionResponse(): Response {
     }],
     usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
   }), { headers: { 'content-type': 'application/json' } });
+}
+
+/** The same answer as server-sent events, in the frame shape this account's
+ *  OpenAI-compatible endpoint really sends (see unit-stream-usage-repair.test.ts,
+ *  whose frames are captured from the wire): a content delta with an explicit null
+ *  finish_reason, then a usage frame carrying the stop, then the sentinel. */
+function chatCompletionStream(): Response {
+  const head = '"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,'
+    + '"model":"@cf/moonshotai/kimi-k2.6"';
+  const delta = `data: {${head},"choices":[{"index":0,"delta":{"role":"assistant",`
+    + '"content":"Sort once instead of comparing every pair."},"finish_reason":null}]}';
+  const finish = `data: {${head},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],`
+    + '"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}';
+  return new Response(`${delta}\n\n${finish}\n\ndata: [DONE]\n\n`, {
+    headers: { 'content-type': 'text/event-stream' },
+  });
 }
 
 // ── The two actor fixtures ────────────────────────────────────────────────────
@@ -771,7 +816,11 @@ export interface KindFixture {
    */
   useModel(spec: string): Promise<'resolves-its-own' | 'is-handed-one'>;
   /** Whether this kind's composition wires a background job runner. */
-  background(): 'wired' | 'absent';
+  /** Whether this kind's composition really backgrounds a slow call. ASYNC because
+   *  one kind can only be asked by DRIVING it: a node's runner is private to its loop,
+   *  and a hardcoded verdict is a declaration that cannot go stale — which is exactly
+   *  how this probe kept reading 'absent' after the gap closed. */
+  background(): Promise<'wired' | 'absent'>;
   /**
    * What this kind's DURABLE transcript records for one settled tool call — the row a
    * human auditing the finished run reads, as distinct from what the model saw.
@@ -871,7 +920,7 @@ function actorFixture(
     },
     // Observed on the real instance rather than declared: the runner is a lazy
     // getter, so reading it is the same act production performs.
-    background: () => hasJobRunner(agent) ? 'wired' : 'absent',
+    background: async () => hasJobRunner(agent) ? 'wired' : 'absent',
     terminalOnFailure: async (error) => {
       await openActorTurn(agent);
       // Think's own field. `ChatResponseResult.error` is declared `string`, so the
@@ -956,6 +1005,29 @@ function readToolCallEnd(db: Database): string {
   return JSON.stringify(payload.result ?? payload.error ?? null);
 }
 
+/**
+ * An `execute_tools` entry whose work outlives the detach threshold and then settles
+ * on its own.
+ *
+ * Self-settling rather than released by the test, because the observation is of the
+ * WHOLE run: the call has to cross the threshold (so it detaches) and then finish (so
+ * the wake has something to deliver). 120 ms against a 40 ms threshold is three times
+ * the bound, which is the smallest honest margin — a value below it would be measuring
+ * the scheduler.
+ */
+function selfSettlingTool(): NodeAgentDeps['executeTool'] {
+  return tool({
+    description: 'Run a command in the sandbox.',
+    inputSchema: jsonSchema<{ command: string }>({
+      type: 'object', required: ['command'], properties: { command: { type: 'string' } },
+    }),
+    execute: async ({ command }) => {
+      await new Promise((settle) => { setTimeout(settle, 120); });
+      return `${command}: exit 0`;
+    },
+  });
+}
+
 /** The swarm node, driven end to end through `runNodeAgent`. */
 function nodeKindFixture(differences: readonly Difference[]): KindFixture {
   const firstRequestOf = async (script: ScriptedTurn, opts?: NodeFixtureOptions) => {
@@ -1010,7 +1082,31 @@ function nodeKindFixture(differences: readonly Difference[]): KindFixture {
       if (!recorded) throw new Error('the node transcript recorded no execute_tools call');
       return JSON.stringify(recorded.result);
     },
-    background: () => 'absent',
+    // OBSERVED by DRIVING a node against a tool that outlives a sub-second detach
+    // threshold. One observation answers C4 and C5 together, which is the pairing the
+    // suite insists on: the recorded output being a BackgroundHandle proves a runner
+    // exists and the threshold fired, and the run REACHING a terminal report proves the
+    // settled job woke the node into a second turn. Neither is assertable from a
+    // constant.
+    background: async () => {
+      const slow = selfSettlingTool();
+      const drive = await driveNode(
+        {
+          steps: [
+            { toolCall: { name: 'execute_tools', input: { command: 'sleep' } } },
+            { text: 'Launched it; waiting on the result.' },
+          ],
+        },
+        {
+          executeTool: slow,
+          backgroundPolicy: () => ({ detachAfterMs: 40, settleGraceMs: 400, wakesAfterTurn: true }),
+        },
+      );
+      const call = drive.run?.report.toolCalls.find((entry) => entry.name === 'execute_tools');
+      return isBackgroundHandle(call?.result) && drive.outcome.terminal !== null
+        ? 'wired'
+        : 'absent';
+    },
     terminalOnFailure: async (error) => {
       const drive = await driveNode({
         steps: [{ text: 'unreachable' }],

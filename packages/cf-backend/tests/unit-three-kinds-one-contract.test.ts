@@ -37,14 +37,20 @@
  *     with it still running.
  *     SHOULD HOLD FOR ALL THREE — but only where a wake can arrive, which is C5.
  *     Detaching into a kind with no wake path loses the work instead of
- *     backgrounding it, so C4 and C5 stand or fall together. Held by the actor
- *     kinds; ABSENT for a node, and correctly absent until C5 exists.
+ *     backgrounding it, so C4 and C5 stand or fall together. NOW HELD BY ALL THREE:
+ *     `runNodeLoop` builds a BackgroundJobRunner and its tool surface threads it, so
+ *     a node's slow call detaches and its turn may end holding live work. Observed
+ *     rather than declared — `background()` drives a real node against a real slow
+ *     tool, because a hardcoded verdict is a declaration that cannot go stale.
  *
  * C5 WAKE. Work that settled after the turn ended resumes the agent.
- *     SHOULD HOLD FOR ALL THREE. ABSENT for a node: `BackgroundJobRunner.wake` is
- *     the one entry point and nothing on the node path constructs a runner, so a
- *     node participates in a wake only as its SUBJECT (`reconcileInterruptedForks`
- *     wakes the ROOT about abandoned nodes) and never as its receiver.
+ *     SHOULD HOLD FOR ALL THREE, and NOW DOES. A node supplies its own
+ *     `SignalDeliverer` — `AgentWakeQueue`, the in-process counterpart of the actor's
+ *     durable message queue — so `BackgroundJobRunner.wake` reaches it through the
+ *     same single entry point, and `runHeadInference`'s `resume` seam turns the wake
+ *     into the node's next turn. A node is therefore a wake's RECEIVER as well as its
+ *     subject (`reconcileInterruptedForks` still wakes the ROOT about abandoned
+ *     nodes).
  *
  * C6 ABORT. An abort is honoured and the terminal record says the turn was aborted
  *     rather than reporting a finished answer.
@@ -169,24 +175,6 @@ const DIFFERENCES = {
   ],
   'swarm-node': [
     {
-      capability: 'C4 backgrounding',
-      verdict: 'defect',
-      reason:
-        'No BackgroundJobRunner is constructed anywhere on the node path and '
-        + 'buildNodeToolSet threads no jobRunner into BuiltinToolDeps, so a node\'s '
-        + 'slow tool call cannot detach — it blocks the step instead. Correctly '
-        + 'absent only for as long as C5 is: see that entry.',
-    },
-    {
-      capability: 'C5 wake',
-      verdict: 'defect',
-      reason:
-        'A node has no wake path. BackgroundJobRunner.wake is the single entry point '
-        + 'and the node path builds no runner, so settled work has no turn to resume '
-        + 'into. This is why C4 must not be fixed without C5: detaching into a kind '
-        + 'with no wake would lose the work silently rather than background it.',
-    },
-    {
       capability: 'C8 compaction',
       verdict: 'asymmetry',
       reason:
@@ -195,16 +183,6 @@ const DIFFERENCES = {
         + 'of the model window) because every sibling must receive a byte-identical '
         + 'prefix — the shared cacheable prefix the inheritance rule is designed '
         + 'around. Same trigger quantity, engine-owned site.',
-    },
-    {
-      capability: 'C7 terminal record with cause',
-      verdict: 'defect',
-      reason:
-        'A node\'s LOOP failure records err.message alone (head-inference.ts catch), '
-        + 'while the SAME node\'s TRANSPORT failure records renderCauseChain of a '
-        + 'wrapped error into the SAME head_journal column (node-agent.ts:658). One '
-        + 'store, two renderings, and the loop path is the one that held the Error and '
-        + 'threw its cause away.',
     },
     {
       capability: 'C9 cache breakpoints',
@@ -388,9 +366,9 @@ describe('C4/C5 backgrounding, and the wake without which it loses work', () => 
   });
 
   for (const kind of KINDS) {
-    test(`${kind}: whether a background job runner is wired at all`, () => {
+    test(`${kind}: whether a slow call really detaches, and a wake really resumes it`, async () => {
       const fixture = fixtureFor(kind);
-      const wiring = fixture.background();
+      const wiring = await fixture.background();
       const declared = differenceFor(fixture, 'C4 backgrounding');
 
       if (declared) {
@@ -404,6 +382,10 @@ describe('C4/C5 backgrounding, and the wake without which it loses work', () => 
         return;
       }
       expect(wiring, `${kind} declares no difference, so it must wire a runner`).toBe('wired');
+      // C5, ASSERTED AND NOT ASSUMED, for every kind that has no declaration left: the
+      // pairing runs in the other direction too. A kind that detaches must be able to
+      // be told the work settled, so neither capability may be declared away alone.
+      expect(differenceFor(fixture, 'C5 wake')).toBeUndefined();
     });
   }
 });
@@ -699,8 +681,12 @@ describe('the declared differences are declarations and not decoration', () => {
         expect(difference.reason.length).toBeGreaterThan(80);
       }
     }
-    // Denominator: the loop really ran over declarations.
-    expect(declarations).toBe(9);
+    // Denominator: the loop really ran over declarations. SIX, down from nine — the
+    // three the node declared against C4, C5 and C7 are gone because those gaps closed
+    // when a node was put on the shared turn loop and given a job runner and a wake
+    // queue. Pinned rather than bounded, so a declaration added back without an
+    // argument, or deleted without the behaviour changing, fails here.
+    expect(declarations).toBe(6);
   });
 
   test('no kind declares away a capability every kind actually has', () => {
