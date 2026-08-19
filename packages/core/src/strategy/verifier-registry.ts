@@ -35,7 +35,7 @@
  * tell. {@link ResolvedVerifier.implementation} is that missing half.
  */
 import * as v from 'valibot';
-import { EXEC_RATIO_IMPLEMENTATION, SOLUTION_FILE, runRatioMeasurement } from './exec-ratio';
+import { SOLUTION_FILE, execRatioImplementation, runRatioMeasurement } from './exec-ratio';
 import { ProteusError, refusalOf } from '../obs/error';
 import type { Measurement, Verifier, VerifierSpec } from './objective';
 import { renderIssues, type JsonValue } from '../utils/json';
@@ -107,8 +107,12 @@ interface VerifierKindEntry {
    * pass, and naming the key is what lets a caller read it without knowing the kind.
    */
   readonly baselineKey: string | null;
-  /** The instrument's own content digest. §5.1's identity, completed. */
-  readonly implementation: string;
+  /** The instrument's own content digest. §5.1's identity, completed.
+   *
+   *  A producer, not a string: a digest is computed from source bytes, and a
+   *  registry entry is built at module load — in a barrel the browser bundle
+   *  imports. Resolving it here is what keeps the hash off the import path. */
+  readonly implementation: () => string;
   /** The instrument bound to this `spec`, or the fields this kind rejected. */
   readonly bind: (spec: JsonValue) => { readonly verify: Verifier } | { readonly issues: string };
 }
@@ -116,7 +120,7 @@ interface VerifierKindEntry {
 const EXEC_RATIO: VerifierKindEntry = {
   artifact: SOLUTION_FILE,
   baselineKey: 'refOps',
-  implementation: EXEC_RATIO_IMPLEMENTATION,
+  implementation: execRatioImplementation,
   bind: (spec) => {
     const parsed = v.safeParse(ExecRatioSpecSchema, spec);
     // Named fields, not a shape complaint: the caller has to know WHICH one.
@@ -210,7 +214,7 @@ export function resolveVerifier(source: VerifierSpec): ResolvedVerifier | SwarmR
     kind,
     artifact: entry.artifact,
     baselineKey: entry.baselineKey,
-    implementation: entry.implementation,
+    implementation: entry.implementation(),
     verify: bound.verify,
   };
 }
