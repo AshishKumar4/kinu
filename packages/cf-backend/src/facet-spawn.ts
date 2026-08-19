@@ -3,7 +3,7 @@
  * and back again to reclaimed storage.
  *
  * Proteus's parallel workers (MCTS branches and heads) all run as the same
- * Cloudflare Facet: `subAgent(ExplorationAgent, id)` resolves-or-creates a
+ * Cloudflare Facet: `subAgent(host.explorationFacet(), id)` resolves-or-creates a
  * co-located child DO, then a short bootstrap sequence seeds the identity it
  * needs. Every bootstrap RPC persists into the FACET's own SQLite, so a facet
  * that hibernates between spawn and run recovers on cold activation — which is
@@ -49,13 +49,18 @@
  * plumbing stays behind the SubordinateRuntime seam on the orchestrator.
  */
 
-import type { Agent, SubAgentStub } from "agents";
+import type { Agent, SubAgentClass, SubAgentStub } from "agents";
 import type { BranchHandle, HeadId, HeadInput, NodeLoopResult, NodeRunSpec, SpawnedHead } from "@proteus/core";
-import { ExplorationAgent } from "./exploration";
+import type { ExplorationAgent } from "./exploration";
 
 /** The facet substrate a spawner rides. Both the workspace DO and a head
  *  splitting further expose it, so both can spawn — and both must reclaim. */
-export type FacetHost = Pick<Agent<Env>, "subAgent" | "abortSubAgent" | "deleteSubAgent">;
+export interface FacetHost extends Pick<Agent<Env>, "subAgent" | "abortSubAgent" | "deleteSubAgent"> {
+  /** The class an exploration facet of this host is created as. Type-only above,
+   *  so this module carries no runtime import of the facet it spawns — the same
+   *  rule ActorAgent.subordinateFacet() follows for SubordinateAgent. */
+  explorationFacet(): SubAgentClass<ExplorationAgent>;
+}
 
 /** The stub `subAgent` hands back, named once so the bootstrap seam can take a
  *  mode's own init RPC as an argument. */
@@ -95,7 +100,7 @@ function errorText<Thrown>(thrown: Thrown): string {
  * RPC to carry it: a node's loop has none, so eviction is the whole of its abort.
  */
 export function abortExplorationFacet(host: FacetHost, id: string, reason?: string): void {
-  host.abortSubAgent(ExplorationAgent, id, reason);
+  host.abortSubAgent(host.explorationFacet(), id, reason);
 }
 
 /**
@@ -113,7 +118,7 @@ export function abortExplorationFacet(host: FacetHost, id: string, reason?: stri
  * so a raced abort and settle both landing here is safe.
  */
 export async function deleteExplorationFacet(host: FacetHost, id: string): Promise<void> {
-  await host.deleteSubAgent(ExplorationAgent, id);
+  await host.deleteSubAgent(host.explorationFacet(), id);
 }
 
 /**
@@ -158,7 +163,7 @@ async function bootstrapFacet(
   identity: ExplorationFacetIdentity,
   init?: (stub: ExplorationStub) => Promise<FacetInitAck>,
 ): Promise<ExplorationStub> {
-  const stub = await host.subAgent(ExplorationAgent, id);
+  const stub = await host.subAgent(host.explorationFacet(), id);
   try {
     if (identity.ownerUserId) await stub.setOwner(identity.ownerUserId, identity.capabilityToken);
     if (identity.sharedParent) await stub.setSharedParent(identity.sharedParent);

@@ -17,6 +17,7 @@
  */
 
 import { callable, type AgentContext, type Connection, type ConnectionContext, type SubAgentClass } from "agents";
+import { ExplorationAgent } from './exploration';
 // Type-only, so it is erased and the base class carries no runtime import of
 // its own subclass. The VALUE comes from `subordinateFacet()`, which each
 // concrete root supplies.
@@ -553,6 +554,12 @@ export abstract class ActorAgent extends Think<Env> {
    *  base class must not import its own subclass — the TYPE is imported (and
    *  erased), the VALUE comes from here. */
   protected abstract subordinateFacet(): SubAgentClass<SubordinateAgent>;
+
+  /** Exploration facets (heads, branches, swarm nodes) of this actor. The VALUE
+   *  lives here rather than in facet-spawn.ts so that helper carries no runtime
+   *  import of the class it spawns — that import closed a cycle through
+   *  runtime.ts and head-runtime.ts. */
+  explorationFacet(): SubAgentClass<ExplorationAgent> { return ExplorationAgent; }
 
   /**
    * The roster half of the actor profile — wired only while this actor has room

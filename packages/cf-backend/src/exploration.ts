@@ -43,7 +43,7 @@
  *   • LLM config derived per-call from the owner user's provider registry
  */
 
-import { Agent, callable, type AgentContext } from "agents";
+import { Agent, callable, type AgentContext, type SubAgentClass } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import { generateText } from "ai";
 import { explorePrompt, formatInheritedContext, isWorkMode, normalizeUsage, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
@@ -86,6 +86,11 @@ export class ExplorationAgent extends Agent<Env> {
     super(ctx, env);
     sealRpcSurface(this, EXPLORATION_RPC_SURFACE);
   }
+
+  /** A facet that splits further spawns the class it already is. Satisfies
+   *  `FacetHost` — facet-spawn.ts imports this class type-only, so the VALUE has
+   *  to come from the host, and here that is a plain self reference. */
+  explorationFacet(): SubAgentClass<ExplorationAgent> { return ExplorationAgent; }
 
   // ── Head-mode state (MCTS mode is stateless beyond the traces table) ──
   private headInput: HeadInput | null = null;
