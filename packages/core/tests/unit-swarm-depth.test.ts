@@ -41,7 +41,7 @@ import {
   type BranchProposal, type BranchRefusalPolicy, type ResolvedSwarm,
   type ResolvedSwarmCaps, type SwarmConfig, type SwarmResult,
 } from '../src/strategy/swarm';
-import { recordsFor, verifierDigestOf } from '../src/strategy/records';
+import { bestInCell, recordsFor, verifierDigestOf } from '../src/strategy/records';
 import { resolveVerifier } from '../src/strategy/verifier-registry';
 import type { Floor, Objective, ObjectiveIdentity } from '../src/strategy/objective';
 import type { AgentRuntime } from '../src/types/agent-runtime';
@@ -476,13 +476,22 @@ function objective(floor?: Floor): Objective {
   };
 }
 
-/** A model that answers with the optimal solution, and — when asked to — appends a
- *  branch proposal of `proposeWidth` sub-questions. `solution` is a parameter so a test
- *  can vary the ANSWER without a second copy of this model; `seen` collects the prompts
- *  it was sent, for the one test that has to assert what a child was TOLD. */
+/**
+ * A model that answers with the optimal solution, and — when asked to — appends a branch
+ * proposal of `proposeWidth` sub-questions.
+ *
+ * `answers` is a parameter so a test can vary the ANSWER without a second copy of this
+ * model, and it is a LIST cycled one per call: an archive needs a wave whose members
+ * differ, either in the cell their measurement puts them in or in how far apart their text
+ * is, and one fixed answer produces neither. `seen` collects the prompts it was sent, for
+ * the tests that have to assert what a child was TOLD.
+ */
 function answering(
-  proposeWidth: number | null, solution: string = OPTIMAL, seen?: string[],
+  proposeWidth: number | null,
+  answers: readonly [string, ...string[]] = [OPTIMAL],
+  seen?: string[],
 ): MockLanguageModelV3 {
+  let answered = 0;
   const branch = proposeWidth === null ? '' : `\n\nPROPOSE-BRANCH\n${JSON.stringify({
     rationale: 'the tail of this task deserves its own thread',
     branches: Array.from({ length: proposeWidth }, (_unused, i) => ({
@@ -499,7 +508,8 @@ function answering(
       return {
         content: [{
           type: 'text' as const,
-          text: `Here is my approach.\n\n\`\`\`javascript\n${solution}\`\`\`${branch}`,
+          text: `Here is my approach.\n\n\`\`\`javascript\n${
+            answers[answered++ % answers.length] ?? OPTIMAL}\`\`\`${branch}`,
         }],
         finishReason: { unified: 'stop' as const, raw: undefined },
         usage: {
@@ -516,7 +526,7 @@ function answering(
  *  predicate — a test that hand-built a `ResolvedSwarm` could assert a tree the tool
  *  surface cannot actually ask for. */
 function resolved(
-  depth: number, branches: number, over?: Partial<SwarmConfig>, floor?: Floor,
+  depth: number, branches: number, over?: Partial<SwarmConfig>, floor?: Floor, key?: string,
 ): ResolvedSwarm {
   const call = resolveSwarm({
     preset: 'custom',
@@ -526,6 +536,7 @@ function resolved(
     config: treeConfig(over),
     depth,
     branches,
+    key,
   });
   if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
   const illegal = swarmValidity(call);
@@ -549,6 +560,13 @@ async function run(input: {
   readonly config?: Partial<SwarmConfig>;
   /** A bound the run will refute, for the seal's own wiring. */
   readonly floor?: Floor;
+  /** The coverage descriptor `advance:'archive'` bins by, and which every other advance
+   *  is refused for supplying. */
+  readonly key?: string;
+  /** The answers the wave produces, cycled one per model call. One fixed answer where a
+   *  test does not care, several where the cells or the distances between candidates are
+   *  what it is about. */
+  readonly answers?: readonly [string, ...string[]];
   /** The workspace to run IN. Supplied where a test needs two runs to share one store,
    *  which is the only way "a record survives a run" can be asserted at all. */
   readonly rt?: AgentRuntime;
@@ -557,8 +575,8 @@ async function run(input: {
   const logger = createRecordingLogger();
   const prompts: string[] = [];
   const result = await runSwarm(
-    { rt, model: answering(input.proposeWidth, OPTIMAL, prompts), mode: 'build', logger },
-    resolved(input.depth, input.branches, input.config, input.floor),
+    { rt, model: answering(input.proposeWidth, input.answers ?? [OPTIMAL], prompts), mode: 'build', logger },
+    resolved(input.depth, input.branches, input.config, input.floor, input.key),
   );
   const nodes = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
@@ -950,7 +968,7 @@ describe('the records store: what one run reached, the next one starts from', ()
     expect(isolated.logger.emitted.filter((line) => line.event === 'swarm.carry_admitted').length)
       .toBeGreaterThan(0);
     expect(isolated.result.report.records).toEqual({
-      carriedIn: 0, carriedInBest: null, written: 0, notBetter: 0,
+      carriedIn: 0, carriedInBest: null, carriedInCells: 0, written: 0, notBetter: 0, tooClose: 0,
     });
   }, 120_000);
 
@@ -1127,7 +1145,7 @@ describe('merge-back at the settle barrier', () => {
     const padded = `${OPTIMAL}\n// ${'x'.repeat(MAX_TX_BLOB_BYTES + 1)}\n`;
 
     const result = await runSwarm(
-      { rt, model: answering(null, padded), mode: 'build', logger },
+      { rt, model: answering(null, [padded]), mode: 'build', logger },
       resolved(1, 1),
     );
     expect('reason' in result).toBe(false);
@@ -1360,7 +1378,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const logger = createRecordingLogger();
     const padded = `${OPTIMAL}\n// ${'x'.repeat(MAX_TX_BLOB_BYTES + 1)}\n`;
     const result = await runSwarm(
-      { rt, model: answering(null, padded), mode: 'build', logger },
+      { rt, model: answering(null, [padded]), mode: 'build', logger },
       resolved(2, 2, { expand: 'aggregate' }),
     );
     expect('reason' in result).toBe(false);
@@ -1404,4 +1422,341 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     expect(refusal.error).toContain('Raise `depth`');
     expect(refusal.error).not.toContain('nothing here orders merges');
   }, 120_000);
+});
+
+/* ── `advance:'archive'` runs: cells, admission, and what survives a run ───── */
+
+// LIVES HERE FOR THE REASON THE BLOCKS ABOVE DO, and one more of its own: an archive's
+// cell is WITNESSED by the instrument, so a suite that stood up its own fake measurement
+// would prove the wiring against a descriptor no registered verifier reports. This harness
+// runs the real `exec-ratio` instrument, which reports `refOps`/`candOps`/`refMs`/`candMs`
+// — and `candOps` is a genuine behaviour descriptor for this task: how many oracle calls
+// the answer spends. Two answers with different op counts land in different cells; two
+// answers with the same op count land in one, which is where the admission test bites.
+//
+// `unit-exploration-records.test.ts` proves what the archive DECIDES over rows it writes
+// directly. These prove the decisions are REACHED: that a run bins, that a second run
+// starts from the occupants, and that the seal reaches this surface too.
+
+/** Correct and wasteful: the optimal scan followed by one redundant confirming pass, so
+ *  n-1 + n oracle calls. A different cell from the optimum under `key:'candOps'`, which is
+ *  what makes a single wave fill more than one. */
+const THOROUGH = `export function solve(input, oracle) {
+  const t = input.tokens;
+  let best = t[0];
+  for (let i = 1; i < t.length; i += 1) {
+    if (oracle.greater(t[i], best)) best = t[i];
+  }
+  for (let i = 0; i < t.length; i += 1) {
+    if (oracle.greater(t[i], best)) best = t[i];
+  }
+  return best;
+}
+`;
+
+/** The optimum, restated with a comment: the SAME oracle calls, so the same cell, and a
+ *  handful of tokens of difference. The near-copy an archive exists to refuse — ten
+ *  variants of one answer are one finding. */
+const RESTATED = `${OPTIMAL}// the same single scan, said again\n`;
+
+/** The cells the two answers above are witnessed into, spelled out: n-1 calls for the
+ *  optimum and (n-1) + n for the wasteful pass. Written rather than computed, so a change
+ *  to how a coordinate is built fails here instead of quietly re-binning every cell. */
+const OPTIMAL_CELL = `candOps=${String(N - 1)}`;
+const THOROUGH_CELL = `candOps=${String(N - 1 + N)}`;
+
+/** The archive axes: the grid, a rejection test strict enough that a restated answer
+ *  cannot clear it and loose enough that a different algorithm can, and the carry that
+ *  makes the occupants the next run's starting population. */
+const ARCHIVE: Partial<SwarmConfig> = {
+  advance: { kind: 'archive', novelty: 0.4 },
+  carry: { kind: 'elites' },
+};
+
+describe("advance:'archive' bins a wave into cells, and the next run starts from them", () => {
+  test('A REAL RUN FILLS THE CELLS ITS INSTRUMENT WITNESSED, one elite each', async () => {
+    // THE WHOLE TICKET. This composition was `unsupported` — "reports a front or an
+    // archive, and both need a store this run has no writer for" — and the store it named
+    // is the one it now writes: a row per cell, keyed by the descriptor the MEASUREMENT
+    // carried rather than by anything a node said about itself.
+    const { rt } = createTestRuntime();
+    const { result, logger } = await run({
+      depth: 1, branches: 2, proposeWidth: null, rt, key: 'candOps',
+      answers: [OPTIMAL, THOROUGH], config: ARCHIVE,
+    });
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    // Derived, never chosen: `settleOf` maps this advance onto the archive settle.
+    expect(result.report.settle).toBe('archive');
+    expect(result.report.records?.written).toBe(2);
+    expect(result.report.records?.tooClose).toBe(0);
+
+    // TWO CELLS, and each holds the answer whose measurement put it there.
+    const rows = recordsFor(rt.storage.sql, { identity: identityOf(), floor: SUITE_FLOOR });
+    expect(rows.map((row) => row.descriptor).sort()).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
+    expect(bestInCell(rt.storage.sql, {
+      identity: identityOf(), floor: SUITE_FLOOR, descriptor: OPTIMAL_CELL,
+    })?.value).toBe(N - 1);
+    expect(bestInCell(rt.storage.sql, {
+      identity: identityOf(), floor: SUITE_FLOOR, descriptor: THOROUGH_CELL,
+    })?.value).toBe(N - 1 + N);
+
+    // And the trail says which cell each row landed in, so the coverage on the report and
+    // the descriptors in the store cannot disagree.
+    const written = logger.emitted.filter((line) => line.event === 'swarm.record_written');
+    expect(written.map((line) => line.fields.cell).sort()).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
+  }, 120_000);
+
+  test('A SECOND RUN READS THE OCCUPANTS, and reports the COVERAGE it started from', async () => {
+    // `carry:'elites'` made concrete: elites ARE the archive's occupants, and the point of
+    // the whole records/carry chain is that the next run starts from them. `carriedIn`
+    // counts rows; `carriedInCells` is the coverage, which is the number an archive that
+    // collapsed onto one cell would otherwise still report as full.
+    const { rt } = createTestRuntime();
+    const first = await run({
+      depth: 1, branches: 2, proposeWidth: null, rt, key: 'candOps',
+      answers: [OPTIMAL, THOROUGH], config: ARCHIVE,
+    });
+    expect('reason' in first.result).toBe(false);
+    if ('reason' in first.result) return;
+    expect(first.result.report.records).toMatchObject({ carriedIn: 0, carriedInCells: 0 });
+
+    const second = await run({
+      depth: 1, branches: 2, proposeWidth: null, rt, key: 'candOps',
+      answers: [OPTIMAL, THOROUGH], config: ARCHIVE,
+    });
+    expect('reason' in second.result).toBe(false);
+    if ('reason' in second.result) return;
+    expect(second.result.report.records).toMatchObject({
+      carriedIn: 2, carriedInCells: 2, carriedInBest: N - 1,
+    });
+    // AND THE SEARCH WAS TOLD, over what the model was actually sent — otherwise the read
+    // is a number on a report and the archive is still something no run starts FROM.
+    expect(second.prompts.every((sent) => sent.includes('An earlier run of this same objective')))
+      .toBe(true);
+    expect(first.prompts.some((sent) => sent.includes('An earlier run of this same objective')))
+      .toBe(false);
+  }, 180_000);
+
+  test('A NEAR-COPY OF AN OCCUPANT IS REFUSED, and the refusal NAMES the occupant', async () => {
+    // The admission test through the real engine, across two runs — which is where it
+    // matters, because the cell it collides with was filled by a run that has already
+    // ended. Both answers spend the same oracle calls, so the instrument witnesses the same
+    // cell for both, and the second is the first said again.
+    const { rt } = createTestRuntime();
+    const first = await run({
+      depth: 1, branches: 1, proposeWidth: null, rt, key: 'candOps',
+      answers: [OPTIMAL], config: ARCHIVE,
+    });
+    expect('reason' in first.result).toBe(false);
+    const occupant = bestInCell(rt.storage.sql, {
+      identity: identityOf(), floor: SUITE_FLOOR, descriptor: OPTIMAL_CELL,
+    });
+    // As PLACED, which is the answer read back out of the fence rather than the string the
+    // model was scripted with: the engine records the artifact it measured.
+    expect(occupant?.artifact).toBe(OPTIMAL.trimEnd());
+
+    const second = await run({
+      depth: 1, branches: 1, proposeWidth: null, rt, key: 'candOps',
+      answers: [RESTATED], config: ARCHIVE,
+    });
+    expect('reason' in second.result).toBe(false);
+    if ('reason' in second.result) return;
+    expect(second.result.report.records).toMatchObject({ written: 0, tooClose: 1, notBetter: 0 });
+
+    const [refused] = second.logger.emitted.filter((line) => line.event === 'swarm.record_refused');
+    expect(refused?.fields).toMatchObject({
+      cause: 'too-close', occupant: occupant?.artifactDigest ?? '',
+    });
+    // The comparison, not just its outcome: a rejection whose distance nobody can see is
+    // indistinguishable from a threshold set wrong.
+    expect(Number(refused?.fields.distance)).toBeLessThan(0.4);
+    expect(Number(refused?.fields.distance)).toBeGreaterThan(0);
+    // The cell still holds ONE answer, and it is the one that got there first.
+    expect(recordsFor(rt.storage.sql, { identity: identityOf(), floor: SUITE_FLOOR }))
+      .toHaveLength(1);
+  }, 180_000);
+
+  test('THE MONOTONE RULE HOLDS ACROSS RUNS, inside the cell', async () => {
+    // A cell's best never falls, through the archive's own writer: the second run
+    // re-measures the same artifact into the same cell at the same number — a tie, which
+    // does not displace — and the store says so instead of silently rewriting the row. The
+    // archive is a policy over that rule and not a way around it.
+    const { rt } = createTestRuntime();
+    const first = await run({
+      depth: 1, branches: 1, proposeWidth: null, rt, key: 'candOps',
+      answers: [OPTIMAL], config: ARCHIVE,
+    });
+    expect('reason' in first.result).toBe(false);
+
+    const second = await run({
+      depth: 1, branches: 1, proposeWidth: null, rt, key: 'candOps',
+      answers: [OPTIMAL], config: ARCHIVE,
+    });
+    expect('reason' in second.result).toBe(false);
+    if ('reason' in second.result) return;
+    // NOT `too-close`: an identical artifact is the row that already exists, so it is the
+    // monotone rule that answers and never the admission test.
+    expect(second.result.report.records).toMatchObject({ written: 0, notBetter: 1, tooClose: 0 });
+
+    const cell = bestInCell(rt.storage.sql, {
+      identity: identityOf(), floor: SUITE_FLOOR, descriptor: OPTIMAL_CELL,
+    });
+    expect(cell?.value).toBe(N - 1);
+    expect(cell?.displacements).toBe(0);
+  }, 180_000);
+
+  test('A BREACHED RUN WRITES NOTHING TO THE ARCHIVE, and says how many cells that cost', async () => {
+    // §4.4 at this surface. The seal is checked at the barrier AND inside the archive's own
+    // writer, and this is the barrier half through the real engine: the run measures a
+    // candidate past a bound that candidate itself refutes, and the grid stays empty.
+    //
+    // The cell COUNT is the archive-shaped half of the disclosure. It was pinned at one
+    // because a flat run has exactly one partition; here two candidates were witnessed into
+    // two cells, and reporting one would understate what the seal cost the next run by
+    // exactly the coverage it lost.
+    const { rt } = createTestRuntime();
+    const breached = await run({
+      depth: 1, branches: 2, proposeWidth: null, rt, key: 'candOps',
+      answers: [OPTIMAL, THOROUGH], config: ARCHIVE, floor: REFUTED_FLOOR,
+    });
+    expect('reason' in breached.result).toBe(false);
+    if ('reason' in breached.result) return;
+
+    expect(breached.result.publication.state.kind).toBe('sealed');
+    expect(breached.result.report.records).toMatchObject({ written: 0, tooClose: 0 });
+    expect(recordsFor(rt.storage.sql, { identity: identityOf(), floor: REFUTED_FLOOR }))
+      .toHaveLength(0);
+    expect(breached.result.report.carrySuppressed).toMatchObject({
+      carry: 'elites', suppressedCells: 2,
+    });
+    const refused = breached.logger.emitted.filter((line) => line.event === 'swarm.carry_refused');
+    expect(refused.length).toBeGreaterThan(0);
+    expect(refused.every((line) => line.fields.cause === 'sealed')).toBe(true);
+  }, 120_000);
+});
+
+describe("the archive's own region, and the refusal `pareto` now carries alone", () => {
+  /** A composition expected to be illegal, through the real resolver and the real
+   *  predicate. Returns the refusal's text, or '' when it was legal — which fails an
+   *  assertion rather than passing on a string that happens to contain nothing. */
+  function archiveRefusal(input: {
+    readonly depth: number;
+    readonly config?: Partial<SwarmConfig>;
+    readonly key?: string;
+  }): string {
+    const call = resolveSwarm({
+      preset: 'custom',
+      label: 'archive-suite',
+      task: 'cover the ways this can be answered',
+      objective: objective(),
+      config: treeConfig({ ...ARCHIVE, ...input.config }),
+      depth: input.depth,
+      branches: 2,
+      key: input.key,
+    });
+    if ('reason' in call) return call.error;
+    return swarmValidity(call)?.error ?? '';
+  }
+
+  test('the archive at depth 1 is LEGAL, so the refusals below are about their own arms', () => {
+    expect(archiveRefusal({ depth: 1, key: 'candOps' })).toBe('');
+  });
+
+  test('past depth 1 it is refused, naming where an archive would have selected from', () => {
+    // The honest boundary. An archive selects by cell and its cells are written at the
+    // settle barrier, so within one run there is nothing to select a second level from —
+    // refused rather than silently flattened, exactly as advance:"none" past depth 1 is.
+    const error = archiveRefusal({ depth: 3, key: 'candOps' });
+    expect(error).toContain('depth 3 cannot be run');
+    expect(error).toContain('settle barrier');
+    expect(error).toContain('carry:"elites"');
+  });
+
+  test('an archive with no measured objective cannot key a cell, and says so', () => {
+    // A cell is keyed by the objective's identity and ordered by its direction. A judged
+    // run measures neither, so its coverage would be over a store it never wrote.
+    const error = archiveRefusal({
+      depth: 1, key: 'candOps', config: { score: { kind: 'judge', samples: 20 } },
+    });
+    expect(error).toContain('keys every cell by the objective\'s identity');
+    expect(error).toContain('score:"verify"');
+  });
+
+  test('a novelty threshold no distance can satisfy is refused, with the unit STATED', () => {
+    // The hazard is invisible otherwise: this parameter is a distance FLOOR while every
+    // published filter the axis was argued from is a similarity CEILING, so an
+    // unconverted transcription is a stricter archive than the evidence describes and a
+    // transcribed similarity above 1 is an archive no candidate can enter.
+    const error = archiveRefusal({
+      depth: 1, key: 'candOps', config: { advance: { kind: 'archive', novelty: 1.4 } },
+    });
+    expect(error).toContain('[0,1]');
+    expect(error).toContain('one MINUS that number');
+  });
+
+  test('a key the instrument does not witness is refused BEFORE a candidate is expanded', async () => {
+    // The descriptor is measured, never asserted — so a key naming something this
+    // instrument cannot report is refused as soon as the baseline says what it reports,
+    // rather than one candidate at a time at the barrier, where every write would be
+    // refused for want of a cell and the run would report coverage over an archive it could
+    // never have written.
+    const { result } = await run({
+      depth: 1, branches: 1, proposeWidth: null, key: 'tactic', config: ARCHIVE,
+    });
+    expect('reason' in result).toBe(true);
+    if (!('reason' in result)) return;
+    expect(result.reason).toBe('bad_input');
+    expect(result.error).toContain('"tactic" is not among the quantities');
+    // Naming what it DOES report, because the caller's next move is to pick one.
+    expect(result.error).toContain('candOps');
+    expect(result.error).toContain('refOps');
+  }, 120_000);
+
+  test("advance:'pareto' refuses for its OWN cause, and it is not the archive's", async () => {
+    // One refusal per cause. The shared text — "reports a front or an archive, and both
+    // need a store this run has no writer for" — was true of neither by the end: the store
+    // landed, and `pareto` was never waiting on one. What it waits on is a MEASUREMENT with
+    // more than one axis, which this runner does not have.
+    const scalar = objective();
+    if (scalar.kind !== 'scalar') throw new Error("the suite's objective is a scalar");
+    const front: Objective = {
+      kind: 'instanced',
+      metric: scalar.metric,
+      unit: scalar.unit,
+      direction: scalar.direction,
+      scale: scalar.scale,
+      target: scalar.target,
+      verify: scalar.verify,
+      instances: ['seed-7', 'seed-11'],
+    };
+    const call = resolveSwarm({
+      preset: 'custom',
+      label: 'pareto-suite',
+      task: 'reach the front',
+      objective: front,
+      config: treeConfig({ advance: { kind: 'pareto' }, carry: { kind: 'elites' } }),
+      depth: 1,
+      branches: 2,
+    });
+    if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
+    // LEGAL, and that is the point: the front's own axes are declared, so what refuses
+    // below is the runner and not the composition.
+    expect(swarmValidity(call)).toBeNull();
+
+    const { rt } = createTestRuntime();
+    const refusal = await runSwarm(
+      { rt, model: answering(null), mode: 'build', logger: createRecordingLogger() },
+      call,
+    );
+    expect('reason' in refusal).toBe(true);
+    if (!('reason' in refusal)) return;
+    expect(refusal.reason).toBe('unsupported');
+    expect(refusal.error).toContain('NON-DOMINATED');
+    expect(refusal.error).toContain('per-instance measurement path');
+    // The cause it no longer shares with the archive, and the archive it no longer names.
+    expect(refusal.error).not.toContain('front or an archive');
+    expect(refusal.error).not.toContain('no writer for');
+  }, 60_000);
 });

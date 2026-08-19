@@ -4,9 +4,14 @@
  * One scheduler. Every `advance` value a run can reach resolves through this one
  * function, so there is no route by which a node expands without selection having
  * chosen it (§8.2: "a proposal is an input to selection, never a bypass of it").
- * The four values here are the four that reach a run; `archive` and `pareto` need
- * a store the objective-scored runner has no writer for and are refused before
- * anything is selected (`strategy/swarm-run.ts`).
+ * The three policies here are what a run selects BY. `advance:'archive'` runs and
+ * takes `none`'s single expansion off the root, because an archive is pinned to
+ * depth 1 — it selects by CELL and its cells are written at the settle barrier, so
+ * there is nothing inside one run to select from, and what makes it a distinct axis
+ * value is the descriptor it bins by and the novelty test it admits against rather
+ * than a frontier order. `pareto` reaches no run at all: it is refused for wanting
+ * a per-instance or per-metric measurement this runner does not take
+ * (`strategy/swarm-run.ts`).
  *
  * THE DEPTH CAP IS A WHERE-CLAUSE EXCLUSION IN EVERY ARM, never a search abort —
  * the WP-A4 discipline `uct.ts` states and the reason §10.1 files S3 as "true by
@@ -30,7 +35,9 @@ import { selectNode } from './uct';
 
 /**
  * The `advance` values that select inside a running tree. `archive` and `pareto`
- * are absent because they report a store rather than descend a tree.
+ * are absent for different reasons: an archive resolves to `none`'s one expansion
+ * because it never selects a second level, and `pareto` is refused before anything
+ * is selected.
  *
  * `beam` was here and is gone. It selected exactly what `best-first` selects and
  * differed only in ORDER — `depth ASC` made a whole level's beam expand before the

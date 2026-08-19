@@ -130,13 +130,15 @@ import type {
   PublishingCarry, VerifierSource,
 } from './objective';
 import {
-  configDigestOf, isTreeAdvance, judgeMarginalisationRefusal,
+  archiveRegionRefusal, configDigestOf, isTreeAdvance, judgeMarginalisationRefusal,
   BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS, SWARM_TREE_ADVANCES,
 } from './swarm';
 import {
   initExplorationRecordsTable, recordExploration, recordsFor, verifierDigestOf,
 } from './records';
 import type { ExplorationRecordsReport, ExplorationWrite } from './records';
+import { admitToArchive, archiveCellOf } from './archive';
+import type { ArchiveVerdict } from './archive';
 import {
   baseDigestOf, memberDigestOf, mergeBack, mergePolicyOf, originReader, settleCarry,
   type MemberApply, type MemberDiff, type MergeBackDeps, type MergeMember,
@@ -242,7 +244,13 @@ function measuredHalf(objective: Objective): MeasuredObjective | null {
     const proxy = measuredHalf(objective.proxy);
     return proxy && { ...proxy, witness: objective.check };
   }
-  if (objective.kind === 'vector') return null;
+  // BOTH multi-axis kinds return null, and `instanced` was the one that did not. It
+  // carries every field a scalar does, so it fell through this function and was measured
+  // as though its `instances` were not there — the refusal below already said "measured
+  // per component or per instance" while only the component half was reachable. A run
+  // that reduces a declared front to one aggregate number is §2.5's accepted-and-ignored
+  // axis, so the objective's own kind is what refuses.
+  if (objective.kind === 'vector' || objective.kind === 'instanced') return null;
   return {
     metric: objective.metric,
     unit: objective.unit,
@@ -314,10 +322,38 @@ function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
     // Kept because this function is also the in-process entry point.
     return badInput(`advance:"${config.advance.kind}" cannot select without a score.`);
   }
-  if (config.advance.kind !== 'none' && !isTreeAdvance(config.advance.kind)) {
-    return unsupported(`advance:"${config.advance.kind}" reports a front or an archive, and both need a `
-      + 'store this run has no writer for. Use advance:"none" for a flat expansion, or one of '
-      + `${SWARM_TREE_ADVANCES.join('/')} to select down a tree.`);
+  // `advance:'archive'` RUNS — see `admitToArchive` at the settle barrier. The refusal it
+  // used to share with `pareto` said both "need a store this run has no writer for", and
+  // that sentence was one refusal covering two different causes: the store landed, and
+  // `exploration_records` IS the archive's grid — a row keyed by a descriptor, one elite
+  // per cell, monotone, sealed. What refuses below is the archive's own region, checked
+  // through the predicate `swarmValidity` shares so an in-process caller cannot run a
+  // shape the tool surface refuses.
+  const archive = archiveRegionRefusal(config, caps);
+  if (archive) return archive;
+  if (!resolved.key && config.advance.kind === 'archive') {
+    // Unreachable through `swarmValidity`, which refuses an archive with no descriptor
+    // outright. Kept because this function is also the in-process entry point, and
+    // because everything below binds the cell to this field.
+    return badInput('advance:"archive" bins its elites by a descriptor and this call named none. '
+      + 'Supply `key`, naming a quantity the objective\'s own instrument reports.');
+  }
+  if (config.advance.kind === 'pareto') {
+    // AND THIS IS THE OTHER CAUSE, now stated as itself. `pareto` is not waiting on a
+    // store: `swarmValidity` already requires its objective to be `instanced` or
+    // `vector`, and this runner measures NEITHER — `measuredHalf` refuses both above,
+    // one `MeasuredObjective` carries a single metric and direction, the tree's reward is
+    // `normalisedScore` over that one value, and `MeasuredValue.perInstance` is read
+    // nowhere. A front here would be an argmax over an aggregate reported as a frontier,
+    // which is the shape §6.6 property 5 exists to catch.
+    return unsupported('advance:"pareto" selects the NON-DOMINATED set, and being non-dominated is a '
+      + 'statement about several axes: `objective` must be kind:"instanced" or kind:"vector" for the '
+      + 'front to exist at all. This runner measures one number per candidate — one metric, one '
+      + 'direction, one normalised reward — and reads neither a per-instance vector nor a per-metric '
+      + 'one, so it would report an argmax over an aggregate as a frontier. What is missing is a '
+      + 'per-instance measurement path and a dominance comparison, not a store. Use advance:'
+      + `"${SWARM_TREE_ADVANCES.join('"/"')}" over kind:"scalar", which is the aggregate that argmax `
+      + 'was over.');
   }
   // `expand:'aggregate'` RUNS — see `fanInAtLevel`. What refuses here is a composition
   // in which a fan-in could never HAPPEN, and each arm names the one thing that makes it
@@ -929,11 +965,19 @@ interface Expansion {
 /**
  * The `advance` axis as the scheduler's policy.
  *
- * Total over the values that reach a run, and null for the two that cannot:
- * `regionRefusal` refuses `archive` and `pareto` before anything is selected, because
- * both report a store this runner has no writer for. Null rather than a substituted
- * policy — a run given a scheduler its caller did not ask for is the
- * accepted-and-ignored defect in its worst form.
+ * `archive` IS `none`'s one expansion step, and that is not a substituted scheduler —
+ * which would be the accepted-and-ignored defect in its worst form. `archiveRegionRefusal`
+ * pins an archive run to depth 1, so there is exactly ONE expansion, off the root, and
+ * every policy in this table agrees about it: there is no second level for a frontier
+ * order to disagree over. What makes `archive` a different axis value from `none` is not
+ * a selection rule but the two things it does that `none` cannot — it BINS its candidates
+ * by a witnessed descriptor and it REFUSES the ones that duplicate a cell's occupants —
+ * and both happen at the settle barrier, where `advance:'none'` has neither a key nor a
+ * rejection test to apply.
+ *
+ * `pareto` stays null: `regionRefusal` refuses it for a cause that is about the
+ * measurement rather than the schedule, and returning `'none'` for it would run a flat
+ * wave and call the winner a front.
  */
 function frontierPolicyOf(advance: SwarmAdvance): FrontierPolicy | null {
   switch (advance) {
@@ -942,6 +986,7 @@ function frontierPolicyOf(advance: SwarmAdvance): FrontierPolicy | null {
     case 'none':
       return advance;
     case 'archive':
+      return 'none';
     case 'pareto':
       return null;
   }
@@ -1241,6 +1286,14 @@ export async function runSwarm(
   const publishing = PUBLISHING_CARRIES.find(
     (carry): carry is PublishingCarry => carry === resolved.config.carry.kind,
   ) ?? null;
+  // THE ARCHIVE IN FORCE, or null. Derived once and passed, never re-read from the axis:
+  // the descriptor a candidate is binned into, the admission test that gates its write and
+  // the cell count the seal's disclosure reports are three facts about one archive, and
+  // three derivations of it are three things that can disagree. `key` is non-null under
+  // this arm by `regionRefusal`, so the pair is complete or absent together.
+  const archive = resolved.config.advance.kind === 'archive' && resolved.key !== null
+    ? { key: resolved.key, novelty: resolved.config.advance.novelty }
+    : null;
   const log = deps.logger ?? diagnostics;
 
   let measured: MeasuredObjective | null = null;
@@ -1327,6 +1380,24 @@ export async function runSwarm(
         + `the workspace as found, which measures ${String(baseline)}. Every candidate would `
         + 'saturate at 1.0 and the search would have no gradient — the baseline is measured rather '
         + `than declared, so raise the target past ${String(baseline)}.`);
+    }
+    // THE ARCHIVE'S KEY, CHECKED AGAINST THE INSTRUMENT THAT HAS TO WITNESS IT — here,
+    // because this is the first and cheapest moment it can be: the baseline measurement
+    // has just reported the quantities this instrument reports, and a key naming none of
+    // them would otherwise be discovered one candidate at a time at the settle barrier,
+    // where every write is refused for want of a cell and the run reports coverage over an
+    // archive it could never have written. Refused before a single candidate is expanded,
+    // naming the keys this instrument does report.
+    if (archive) {
+      const cell = archiveCellOf(archive.key, asFound.measured);
+      if (cell.kind === 'unwitnessed') {
+        return badInput(`advance:"archive" bins every candidate by \`key\`, and the descriptor has to be `
+          + `WITNESSED by the instrument rather than claimed by a node — but "${archive.key}" is not among `
+          + `the quantities kind:"${verifier.kind}" reports${cell.reported.length > 0
+            ? `, which are: ${cell.reported.join(', ')}`
+            : ' (it reports none at all)'}. Name one of those as \`key\`, or drop advance:"archive" for a `
+          + 'run with no coverage claim.');
+      }
     }
     log.event('swarm.baseline_measured', {
       preset: resolved.preset,
@@ -2332,6 +2403,13 @@ export async function runSwarm(
   // store is where that axis lands — and the seal is checked a second time inside the
   // writer, over the `records` surface, rather than assumed from the barrier's verdict.
   //
+  // UNDER `advance:'archive'` THE WRITER IS THE ARCHIVE'S. Same store and same rows — the
+  // grid IS this table, one descriptor partition per cell — with two things the bare write
+  // does not do: the candidate is binned into the cell its INSTRUMENT witnessed, and it is
+  // refused when it duplicates an occupant of that cell. `carry:'elites'` is what makes
+  // those occupants the next run's starting population, which is the whole reason the
+  // admission the barrier computes is worth computing.
+  //
   // A run with no OBJECTIVE IDENTITY records nothing and says so: a record is keyed by
   // the metric and the instrument, and a judged or unscored run measured neither. That
   // is `records: null` on the report, which is a different claim from zero rows written.
@@ -2340,6 +2418,7 @@ export async function runSwarm(
     const configDigest = configDigestOf(resolved);
     let written = 0;
     let notBetter = 0;
+    let tooClose = 0;
     // KEYED OFF THE AXIS AND NOT OFF THE VERDICT. `admitCarry` returns `admitted` for
     // `none` and `reflections` because the gate is not those values' business — neither
     // reaches a publication surface — so a loop that read the verdict alone would make
@@ -2354,13 +2433,8 @@ export async function runSwarm(
       // the RAW value, so the measurement is what it is read from and its absence skips
       // the row rather than fabricating one.
       if (!candidate || candidate.measured === null) continue;
-      const write: ExplorationWrite = {
+      const write: Omit<ExplorationWrite, 'descriptor'> = {
         identity,
-        // Always null today: `regionRefusal` refuses `advance:'archive'`, which is the
-        // one value that bins by a descriptor, so no composition that reaches this
-        // barrier has a partition. Null is the honest value — this objective has NO
-        // descriptor partition, which is not "the unnamed cell".
-        descriptor: null,
         artifact: candidate.artifact,
         value: candidate.measured.value,
         detail: candidate.measured.detail,
@@ -2379,7 +2453,52 @@ export async function runSwarm(
         costTokens: spentBy.get(candidate.id) ?? null,
         at: Date.now(),
       };
-      const verdict = recordExploration(sql, { publication, write });
+      // One refusal event with one field set, three causes filling it. The fields are
+      // CONSTANT across the causes for `settleCarry`'s reason — a name assembled per branch
+      // produces one name per outcome and none a query can be written against — and the two
+      // that only the novelty test has are empty and -1 elsewhere, the same way that
+      // function spells an inapplicable threshold.
+      const raw = candidate.measured.value;
+      const refused = (fields: {
+        readonly cause: string; readonly occupant: string; readonly distance: number;
+      }): void => {
+        log.event('swarm.record_refused', {
+          preset: resolved.preset,
+          carry: resolved.config.carry.kind,
+          node: candidate.id,
+          metric: identity.metric,
+          value: raw,
+          ...fields,
+        });
+      };
+      let verdict: ArchiveVerdict;
+      // The cell this row landed in, empty for a run with no partition. Read back from
+      // what the write USED rather than recomputed for the event, so the coverage a reader
+      // greps and the descriptor in the row cannot disagree.
+      let cellName = '';
+      if (archive === null) {
+        // NO PARTITION, which is not "the unnamed cell": this objective has no descriptor
+        // and its comparable set is one cell, exactly as `ExplorationRecord.descriptor`'s
+        // nullability states.
+        verdict = recordExploration(sql, { publication, write: { ...write, descriptor: null } });
+      } else {
+        const cell = archiveCellOf(archive.key, candidate.measured.measured);
+        if (cell.kind === 'unwitnessed') {
+          // The run-level check refuses a key this instrument never reports, so reaching
+          // here means the instrument reported it for the baseline and not for this
+          // candidate. There is no cell to place it in and none to invent: an elite binned
+          // into a fabricated coordinate is §6.5's mis-binning, and it is silently
+          // unrecoverable in a way a refusal is not.
+          refused({ cause: 'unwitnessed', occupant: '', distance: -1 });
+          continue;
+        }
+        cellName = cell.descriptor;
+        verdict = admitToArchive(sql, {
+          publication,
+          write: { ...write, descriptor: cell.descriptor },
+          novelty: archive.novelty,
+        });
+      }
       if (verdict.kind === 'recorded') {
         written += 1;
         log.event('swarm.record_written', {
@@ -2390,26 +2509,47 @@ export async function runSwarm(
           value: candidate.measured.value,
           record: verdict.recordKey,
           displaced: verdict.displaced ? 1 : 0,
+          cell: cellName,
         });
+      } else if (verdict.cause === 'too-close') {
+        tooClose += 1;
+        // THE OCCUPANT IS NAMED. A novelty rejection nobody can trace back to what it
+        // duplicated is indistinguishable from a threshold set wrong, and the two want
+        // opposite corrections.
+        refused({ cause: verdict.cause, occupant: verdict.occupant, distance: verdict.distance });
       } else {
         if (verdict.cause === 'not-better') notBetter += 1;
-        log.event('swarm.record_refused', {
-          preset: resolved.preset,
-          carry: resolved.config.carry.kind,
-          node: candidate.id,
-          metric: identity.metric,
-          value: candidate.measured.value,
-          cause: verdict.cause,
-        });
+        refused({ cause: verdict.cause, occupant: '', distance: -1 });
       }
     }
     return {
       carriedIn: carriedIn.length,
       carriedInBest: carriedBest?.value ?? null,
+      // The COVERAGE carried in, over the cells those rows span. `new Set` over a list
+      // already in hand rather than a second query: the rows were read at the top of the
+      // run and counting their partitions is arithmetic on them.
+      carriedInCells: new Set(carriedIn.map((record) => record.descriptor)).size,
       written,
       notBetter,
+      tooClose,
     };
   })();
+
+  // WHAT THE SEAL COST, IN CELLS. §4.4's disclosure is stated over cells rather than over
+  // refused writes, and the field was pinned at one because a flat run has exactly one
+  // partition — true then, and an archive is the value that makes it false. Counted over
+  // the candidates this run MEASURED, because those are the cells it would have published
+  // into, and only under a seal: with the run open there is no suppression to report and
+  // the number would be a set built for nobody.
+  const suppressedCells = publication.kind === 'open'
+    ? 0
+    : archive === null
+      ? (best === null ? 0 : 1)
+      : new Set(candidates.flatMap((candidate) => {
+        if (candidate.measured === null) return [];
+        const cell = archiveCellOf(archive.key, candidate.measured.measured);
+        return cell.kind === 'cell' ? [cell.descriptor] : [];
+      })).size;
 
   // The BINDING realisation: the smallest ensemble any candidate actually sampled. Null
   // where none reached the ensemble, which for a judged run means every candidate
@@ -2420,7 +2560,7 @@ export async function runSwarm(
 
   const report = settleReport({
     resolved, measured, baseline, publication, candidates, best, carry: publishing,
-    records, judgeEnsemble,
+    records, judgeEnsemble, suppressedCells,
     // Every child this run actually created and measured — the candidate list IS the
     // count, rather than a second tally beside it that could disagree.
     expansions: candidates.length, usage, durationMs: Date.now() - started,
@@ -2557,6 +2697,13 @@ function settleReport(input: {
   readonly carry: PublishingCarry | null;
   readonly records: ExplorationRecordsReport | null;
   readonly judgeEnsemble: JudgeEnsembleReport | null;
+  /**
+   * §4.4's cell count for a suppressed carry, computed by the caller because only it
+   * knows the archive in force: one for a flat run's single partition, and for
+   * `advance:'archive'` the number of cells the run measured into and could not keep.
+   * Zero on an open run, where there is no suppression to report.
+   */
+  readonly suppressedCells: number;
   readonly expansions: number;
   /** Why the run ended, as the LOOP observed it. Derived there rather than inferred
    *  from the candidate count, because a tree's count carries no information about
@@ -2575,11 +2722,11 @@ function settleReport(input: {
     // A witness verdict about THIS RUN. `false` is "this search did not find one",
     // and there is no field on this report that could say none exists.
     witnessFound: measured?.witness ? best !== null && best.score === 1 : null,
-    // The count is one per CELL rather than per refused publication: a flat run with
-    // no descriptor has exactly one cell, and it costs the next run one thing — a
-    // worse starting elite — or nothing at all.
+    // The count is one per CELL rather than per refused publication, and the cells are
+    // the caller's to count: a flat run has exactly one partition, while an archive run
+    // has as many as its candidates witnessed.
     carrySuppressed: carry
-      ? carrySuppression(input.publication, carry, best ? 1 : 0)
+      ? carrySuppression(input.publication, carry, input.suppressedCells)
       : null,
     records: input.records,
     judgeEnsemble: input.judgeEnsemble,

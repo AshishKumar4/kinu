@@ -484,12 +484,19 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // `judgeMarginalisationRefusal` is §6.5's marginalisation floor extracted out of
     // `swarmValidity` so that `runSwarm` — which the tool surface does not route
     // through — enforces the same bound rather than a second copy of it.
+    //
+    // GROWN BY ONE for `advance:'archive'` running, and for `judgeMarginalisationRefusal`'s
+    // exact reason: `archiveRegionRefusal` is the archive's own region — what keys a cell,
+    // what the novelty floor's unit is, and where a second level would have been selected
+    // from — shared by `swarmValidity` and by `runSwarm`'s in-process check so the two
+    // cannot drift apart in the direction that lets an unrunnable shape through.
     expect(Object.keys(swarmModule).sort()).toEqual([
       'BRANCH_PROPOSAL_WIDTH', 'BRANCH_REFUSAL_POLICIES',
       'JUDGE_MARGINALISATION_MIN', 'NAMED_SWARM_PRESETS', 'SWARM_ADVANCES', 'SWARM_CARRIES',
       'SWARM_CONTEXTS', 'SWARM_EXPANDS',
       'SWARM_PRESETS', 'SWARM_PRESET_POINTS', 'SWARM_SCORES', 'SWARM_TREE_ADVANCES',
-      'SWARM_UNITS', 'arbitrateBranch', 'configDigestOf', 'isPresetPoint', 'isTreeAdvance',
+      'SWARM_UNITS', 'arbitrateBranch', 'archiveRegionRefusal', 'configDigestOf',
+      'isPresetPoint', 'isTreeAdvance',
       'judgeMarginalisationRefusal', 'resolveSwarm', 'settleOf', 'swarmValidity',
     ]);
   });

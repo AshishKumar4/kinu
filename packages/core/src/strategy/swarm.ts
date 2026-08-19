@@ -384,11 +384,21 @@ export interface SwarmInput {
    */
   readonly objective?: Objective;
   /**
-   * The coverage key for the archive presets (`research`, `audit`, `redteam`).
+   * The coverage key `advance:'archive'` bins its elites by, required under that value
+   * and refused under every other.
    *
-   * Must name something a ToolCallRecord can witness. A key that can only say
-   * "distinct idea" is a task with no coverage objective, and that task wants
-   * `ideate`.
+   * WHAT IT MUST NAME, now that an archive runs: a quantity the objective's own
+   * INSTRUMENT reports — a member of `MeasuredValue.measured` — because the cell a
+   * candidate lands in is witnessed by the same measurement that produced its value.
+   * §2.3 forbids a candidate supplying its own number and §6.5 refuses a judged
+   * descriptor, which leaves the instrument as the only thing entitled to say where an
+   * answer belongs. A key naming nothing the instrument reports is refused as soon as the
+   * baseline measurement says what it does report.
+   *
+   * That bounds it to a quantity an instrument COUNTS. §6.3's categorical keys — an
+   * ATT&CK tactic, a finding class — need a registered verifier kind that reports one,
+   * and until one does, a key that can only say "distinct idea" is a task with no
+   * coverage objective and that task wants `ideate`.
    */
   readonly key?: string;
   /**
@@ -947,6 +957,61 @@ export function judgeMarginalisationRefusal(config: SwarmConfig): SwarmRefusal |
 }
 
 /**
+ * The `advance:'archive'` region rules, as ONE refusal both entry points share.
+ *
+ * Extracted for {@link judgeMarginalisationRefusal}'s reason and not by analogy with it:
+ * `swarm-run.ts`'s own region check is *"also the in-process entry point"*, so a rule
+ * stated only here would let an in-process caller run a shape the tool surface refuses,
+ * and a rule written twice is a rule that gets raised in one place and relaxed in the
+ * other.
+ *
+ * Each arm names the one thing the composition lacks and the one move that supplies it.
+ */
+export function archiveRegionRefusal(
+  config: SwarmConfig, caps: ResolvedSwarmCaps,
+): SwarmRefusal | null {
+  if (config.advance.kind !== 'archive') return null;
+  if (config.score.kind !== 'verify') {
+    // A cell is keyed by the objective's IDENTITY — the metric and the instrument — and
+    // a cell's population is ordered by the objective's own direction. A judged or
+    // unscored run measures neither, so its candidates have nothing to be binned under
+    // and nothing to be ranked by: the archive would have no store at all rather than
+    // an empty one.
+    return badInput(`an archive keys every cell by the objective's identity and orders each cell by the `
+      + `objective's own direction, and score:"${config.score.kind}" measures neither — so nothing this `
+      + 'run produced could be binned or ranked, and the coverage it reported would be over a store it '
+      + 'never wrote. Use score:"verify" with an `objective`, or advance:"none" for a flat run.');
+  }
+  const { novelty } = config.advance;
+  if (!(novelty >= 0 && novelty <= 1)) {
+    // The unit, made unambiguous where getting it wrong is invisible. This parameter is a
+    // DISTANCE floor a candidate must clear, and every published filter this axis was
+    // argued from is stated as a SIMILARITY ceiling — so a threshold transcribed from one
+    // of those, unconverted, is a stricter archive than the evidence describes, and a
+    // similarity above 1 is an archive no candidate can ever enter.
+    return badInput(`\`novelty\` is the DISTANCE a candidate must put between itself and every occupant of `
+      + `its cell, in [0,1] where 0 admits everything and 1 admits only an answer sharing no vocabulary `
+      + `at all — and this composition states ${String(novelty)}, which no distance can satisfy or fail. `
+      + 'Note the direction before transcribing one: a filter quoted as a similarity ceiling is one MINUS '
+      + 'that number here. State a threshold inside [0,1].');
+  }
+  if (caps.depth && caps.depth.value > 1) {
+    // An archive selects by CELL, and its cells are written at the settle barrier — so
+    // within one run there is nothing to select from, and a second level would be
+    // expanded by whatever frontier order happened to be substituted for the one the
+    // caller asked for. Refused rather than silently flattened, exactly as
+    // advance:"none" is: the illumination loop runs ACROSS runs, where `carry:'elites'`
+    // seeds the next run from this one's occupants.
+    return badInput(`advance:"archive" bins its candidates into cells at the settle barrier, so during the `
+      + `run there is no archive to select a second level FROM and depth ${String(caps.depth.value)} `
+      + 'cannot be run — it is refused rather than silently flattened, because a cap accepted and ignored '
+      + 'is a lie about what the run did. Pass depth:1 and carry:"elites", which is what makes the next '
+      + "run start from this one's occupants.");
+  }
+  return null;
+}
+
+/**
  * §6.5's table, executable. Returns the FIRST refusal in table order, or null.
  *
  * One refusal rather than a list, and one imperative per refusal, which is §7.2's
@@ -996,9 +1061,15 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
       + 'run with no value signal.');
   }
   if (advance === 'archive' && !resolved.key) {
-    return badInput('an archive needs a descriptor to bin elites into, and it must name something a '
-      + '`ToolCallRecord` can witness. Supply `key`. A key that can only say "distinct idea" is a task '
-      + 'with no coverage objective — that task wants preset:"ideate".');
+    // WHAT THE KEY HAS TO NAME MOVED when the archive started running: the cell is
+    // witnessed by the instrument that measured the candidate, so the key names one of the
+    // quantities that instrument reports. The old text asked for something a
+    // `ToolCallRecord` could witness, which was a constraint on the caller with no
+    // mechanism behind it — §11.3's *"descriptor extraction is unspecified"*.
+    return badInput('an archive needs a descriptor to bin elites into, and the descriptor is WITNESSED '
+      + 'by the objective\'s own instrument rather than claimed by a node: supply `key`, naming one of '
+      + 'the quantities that verifier reports beside its value. A key that can only say "distinct idea" '
+      + 'is a task with no coverage objective — that task wants preset:"ideate".');
   }
   if (resolved.key && advance !== 'archive') {
     return badInput(`\`key\` is the descriptor an archive bins elites into, and advance:"${advance}" `
@@ -1006,6 +1077,8 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
       + 'silent lie about what it did rather than a harmless extra. Drop `key`, or use '
       + 'advance:"archive" if coverage is what you want.');
   }
+  const archive = archiveRegionRefusal(config, caps);
+  if (archive) return archive;
   for (const { floor, direction } of objective ? floorsOf(objective) : []) {
     const margin = floorMargin(floor, direction);
     if (margin < 0) {
