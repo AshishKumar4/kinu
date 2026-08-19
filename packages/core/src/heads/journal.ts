@@ -423,6 +423,31 @@ export class HeadJournal {
     return row ? headViewOf(row, this.readSteps(row.id)) : null;
   }
 
+  /**
+   * WHEN THIS HEAD LAST DID ANYTHING — its newest step, or its spawn where it has
+   * taken none — and null for a head this journal never opened.
+   *
+   * THE LIVENESS READ, for a watchdog that has to tell a head which is between steps
+   * from one which is wedged on a call that never answers. It is the same aggregate
+   * {@link readHeadView} folds and deliberately not that projection: this is asked once
+   * per envelope per head, and `readHeadView` loads every step's prose to answer a
+   * question about one timestamp. Both read `MAX(created_at)` over the same two tables,
+   * so there is one definition of progress and this is its cheap scoping.
+   *
+   * NULL IS ABSENT AND NOT ZERO: a head with no row has not been spawned, which a caller
+   * distinguishes from a head spawned and idle since. Falling back to `spawned_at` inside
+   * the row is not the same fabrication — a head that has taken no step has been idle
+   * since it was spawned, which is a fact the row states.
+   */
+  lastActivityAt(headId: HeadId): number | null {
+    const row = this.sql<{ spawned_at: number; last_step_at: number | null }>`
+      SELECT j.spawned_at, MAX(s.created_at) AS last_step_at
+      FROM head_journal j LEFT JOIN head_steps s ON s.head_id = j.id
+      WHERE j.id = ${headId}
+      GROUP BY j.id`[0];
+    return row ? row.last_step_at ?? row.spawned_at : null;
+  }
+
   private assembleRun(rootId: HeadId, spawnedAt: number): HeadRunView {
     // last_step_at comes from the trace itself rather than a column on the head
     // row: the steps ARE the progress record, so a second field could only ever

@@ -111,7 +111,7 @@
 import { generateText } from 'ai';
 import type { LanguageModel, ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { DEFAULT_CONFIG, DEFAULT_MAX_STEPS } from '../config';
+import { DEFAULT_CONFIG, DEFAULT_MAX_STEPS, TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import { diversityAngle, siblingAngles } from '../mcts/diversity';
 import { explorePrompt, type ExplorePrompt } from '../mcts/explore-prompt';
 import { initSearchTables } from '../mcts/schemas';
@@ -125,7 +125,9 @@ import type { BranchEvaluation } from '../mcts/evaluation';
 import { readProposalCode } from '../execution/code-fence';
 import { extractJsonObject } from '../prompts/structured';
 import { diagnostics, type Logger } from '../obs/index';
-import { ProteusError, refusalOf, type Refusal } from '../obs/error';
+import {
+  ProteusError, refusalOf, renderCauseChain, toProteusError, type Refusal,
+} from '../obs/error';
 import { renderIssues } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { normalizeUsage, usageTotal, type Usage, addUsage } from '../usage';
@@ -223,6 +225,17 @@ export interface SwarmRunDeps {
    * stall in under a second.
    */
   readonly maxWallClockMs?: number;
+  /**
+   * How long a LEVEL BARRIER waits on a node that is recording nothing. Defaults to
+   * {@link LEVEL_PROGRESS_ENVELOPE_MS}, which is where the derivation lives.
+   *
+   * Declared for the reason `EvaluateBranchOptions.judgeCallTimeoutMs` is: a bound whose
+   * only value is one measured turn envelope cannot be exercised by a test that has to
+   * finish, so the arm proving the barrier fires would either not exist or would take ten
+   * minutes. What a caller overrides is the MAGNITUDE; the relationship — the barrier ends
+   * the wait at the envelope it was given — is the same one the default runs.
+   */
+  readonly levelProgressMs?: number;
   /** The mission ledger an agent node's steps charge, when the run has one. */
   readonly mission?: MissionScope;
   /**
@@ -1049,6 +1062,133 @@ interface Expansion {
 }
 
 /**
+ * HOW LONG A LEVEL BARRIER MAY WAIT ON A NODE THAT IS RECORDING NOTHING, and the
+ * derivation rather than a number someone liked.
+ *
+ * IT IS A PROGRESS BOUND AND NOT A RUNTIME BOUND, because only one of the two is
+ * measured and only one of the two can fire. One live run of `tests/evals/swarm.eval.ts`
+ * on `@cf/deepseek-ai/deepseek-v4-pro-0813` measured three healthy nodes at
+ * 1,216,358 / 1,310,061 / 1,336,833 ms over 22 / 25 / 26 steps — so a node's TOTAL
+ * legitimately runs past two turn envelopes, and any barrier bound on the total has to
+ * clear 1,336,833 ms to avoid killing the nodes that worked. Scaled by the step cap it
+ * clears it so far that it stops being a bound: at the shipped {@link DEFAULT_MAX_STEPS}
+ * of 500 a total of `maxSteps × TURN_WALL_CLOCK_ENVELOPE_MS` is 83 HOURS, which would not
+ * have ended the sixty-three-minute hang this exists to end.
+ *
+ * The same measurement bounds PROGRESS tightly, in both directions. Those nodes recorded
+ * a step every 55,289 / 52,402 / 51,417 ms on average — an order of magnitude inside
+ * {@link TURN_WALL_CLOCK_ENVELOPE_MS}, whose 509 s longest measured turn is the floor for
+ * exactly this quantity, one model call's worth of work. The nodes that hung recorded ZERO
+ * steps in 3,780,000 ms. So one turn envelope of silence separates the two measured
+ * populations by 10.9× on one side and 6.3× on the other, and it is the envelope's own
+ * unit: a node that has not finished a step in longer than one turn takes is not between
+ * steps, it is not working.
+ *
+ * PROGRESS IS READ FROM THE JOURNAL and not from a counter here, because
+ * {@link HeadJournal.lastActivityAt} reads the rows the node itself writes — so a node
+ * hosted in a facet, whose steps arrive by RPC, is watched by the same clause as one
+ * running in this isolate. A second progress record kept beside those rows could only
+ * ever disagree with them.
+ */
+export const LEVEL_PROGRESS_ENVELOPE_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
+
+/**
+ * ONE NODE'S ANSWER AT A LEVEL BARRIER.
+ *
+ * `silent` is a THIRD outcome and deliberately not a variety of `failed`: a node that
+ * raised told the search why, and a node that went silent is one the search gave up on
+ * without ever learning anything. The engine treats both as one fewer candidate and
+ * reports them separately, which is the distinction the whole surface is built on.
+ *
+ * A rejection is CLASSIFIED where it is caught rather than carried out as `unknown`: a
+ * thrown non-`Error` is a link in the chain rather than something every reader has to
+ * re-narrow, and the barrier is the boundary where a promise's reason stops being a
+ * language value and becomes this run's failure.
+ */
+type NodeAnswer =
+  | { readonly kind: 'expanded'; readonly expansion: Expansion }
+  | { readonly kind: 'failed'; readonly error: ProteusError }
+  | { readonly kind: 'silent'; readonly idleMs: number };
+
+/** One member of a level as the barrier waits on it: the node's own run, its id, and
+ *  where its liveness is read from. */
+interface LevelMember {
+  readonly id: string;
+  readonly node: Promise<Expansion>;
+  /** When this member last did anything, epoch ms. */
+  readonly lastActivityAt: () => number;
+}
+
+/** What one member of a level came to, named against its id so the caller can settle
+ *  and report the member it belongs to. */
+interface LevelAnswer {
+  readonly id: string;
+  readonly answer: NodeAnswer;
+}
+
+/**
+ * THE LEVEL BARRIER, BOUNDED — every member answers, fails, or is given up on, and the
+ * barrier returns either way.
+ *
+ * `Promise.allSettled` was the barrier, and `allSettled` over a promise nothing can
+ * settle waits for the life of the process: three nodes whose provider never answered
+ * held one measured run at this line for sixty-three minutes with no store write and no
+ * exit. That is the defect, and it is not fixable by the members — a node inside a call
+ * that never returns reaches no step boundary, so there is no instant at which it could
+ * observe any deadline of its own. Something outside it has to stop waiting.
+ *
+ * SO THIS IS A CLOCK, and it has to be: the barrier cannot react to a member's terminal
+ * STATUS, because the member that fails this way writes none — the absent write IS the
+ * failure. What the caller does with a `silent` member is settle its row terminal, so the
+ * store stops claiming a node is mid-flight after the search stopped waiting for it.
+ *
+ * The watchdog RE-ARMS off the member's own progress rather than firing at a fixed
+ * deadline, which is what makes the bound a progress bound: a member that recorded a step
+ * 10 s ago is given a fresh envelope from that step, so a long node is only ever cut off
+ * for being silent and never for being long.
+ */
+async function awaitLevel(
+  members: readonly LevelMember[],
+  progressMs: number,
+): Promise<readonly LevelAnswer[]> {
+  return Promise.all(members.map(async (member) => {
+    const { promise: silent, resolve: giveUp } = Promise.withResolvers<NodeAnswer>();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let done = false;
+    const check = (): void => {
+      if (done) return;
+      const idleMs = Date.now() - member.lastActivityAt();
+      if (idleMs >= progressMs) {
+        giveUp({ kind: 'silent', idleMs });
+        return;
+      }
+      timer = setTimeout(check, progressMs - idleMs);
+    };
+    timer = setTimeout(check, progressMs);
+    const expanded = (async (): Promise<NodeAnswer> => {
+      try {
+        return { kind: 'expanded', expansion: await member.node };
+      } catch (cause) {
+        return {
+          kind: 'failed',
+          error: toProteusError({
+            doing: `expand node ${member.id} of this level`, cause, otherwise: 'unavailable',
+          }),
+        };
+      }
+    })();
+    const answer = await Promise.race([expanded, silent]).finally(() => {
+      // Cleared on BOTH arms, and the flag as well as the handle: a re-armed watchdog
+      // whose member has answered would otherwise keep a timer alive per node for a whole
+      // envelope, which is a process that will not exit.
+      done = true;
+      clearTimeout(timer);
+    });
+    return { id: member.id, answer };
+  }));
+}
+
+/**
  * The `advance` axis as the scheduler's policy.
  *
  * `archive` IS `none`'s one expansion step, and that is not a substituted scheduler —
@@ -1707,6 +1847,10 @@ export async function runSwarm(
   if (deps.executeTool !== undefined) nodeDeps.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
 
+  /** Resolved ONCE, above the loop: a bound recomputed per level is a bound that can be
+   *  recomputed differently, and this one decides when the run gives up. */
+  const levelProgressMs = deps.levelProgressMs ?? LEVEL_PROGRESS_ENVELOPE_MS;
+
   let lost = 0;
   let aborted = false;
 
@@ -2231,29 +2375,48 @@ export async function runSwarm(
     // The executor's declared languages travel into the prompt for the reason
     // explore-prompt.ts states: a candidate fenced in a language nothing here can run
     // is unverifiable, so the question has to name what the measurement can execute.
-    const generated = await Promise.allSettled(
-      Array.from({ length: width }, (_unused, index): Promise<Expansion> => {
+    //
+    // BOUNDED, because `Promise.allSettled` here was not: a node whose provider never
+    // answers settles nothing, and this line held one measured run for sixty-three
+    // minutes with three rows reading `running`, no store write and no exit. See
+    // {@link awaitLevel} for why the bound has to live outside the members and
+    // {@link LEVEL_PROGRESS_ENVELOPE_MS} for where the number comes from.
+    const levelStartedAt = Date.now();
+    const answers = await awaitLevel(
+      Array.from({ length: width }, (_unused, index): LevelMember => {
         const branch = grant?.proposal.branches[index];
-        return expandChild({
-          parent,
-          id: grant?.nodeIds[index] ?? nanoid(),
-          index, width, atDepth: childDepth,
-          task: branch?.task ?? resolved.task,
-          rationale: branch?.rationale ?? `expansion ${String(index + 1)} of ${String(width)}`,
-          context: branch?.context ?? resolved.config.context,
-          inherited: inheritedArtifact,
-          // A WAVE FANS IN NOTHING. Its siblings are independent candidates, which is
-          // what `expand:'sample'` is and what `expand:'aggregate'` still starts from:
-          // a fan-in consumes a level, so a level has to exist first.
-          aggregated: [],
-          ancestors, prefix,
-        });
+        const id = grant?.nodeIds[index] ?? nanoid();
+        return {
+          id,
+          node: expandChild({
+            parent, id,
+            index, width, atDepth: childDepth,
+            task: branch?.task ?? resolved.task,
+            rationale: branch?.rationale ?? `expansion ${String(index + 1)} of ${String(width)}`,
+            context: branch?.context ?? resolved.config.context,
+            inherited: inheritedArtifact,
+            // A WAVE FANS IN NOTHING. Its siblings are independent candidates, which is
+            // what `expand:'sample'` is and what `expand:'aggregate'` still starts from:
+            // a fan-in consumes a level, so a level has to exist first.
+            aggregated: [],
+            ancestors, prefix,
+          }),
+          // The journal is the progress record for an AGENT node. A thought node writes
+          // none — it is one generation with no steps to record — so its liveness floor is
+          // when this level began, which is the honest reading of "nothing has happened
+          // since" for a node that has no row to have happened in.
+          lastActivityAt: () => journal.lastActivityAt(id) ?? levelStartedAt,
+        };
       }),
+      levelProgressMs,
     );
 
     const expansions: Expansion[] = [];
-    for (const settled of generated) {
-      if (settled.status === 'rejected') {
+    /** Members this barrier gave up on. Counted separately from `lost` because giving up
+     *  on a level is the one loss that ends the run rather than narrowing it. */
+    let silent = 0;
+    for (const { id, answer } of answers) {
+      if (answer.kind === 'failed') {
         // Named, never counted: a branch lost to a provider error is one fewer
         // candidate and the report's `stop` has to be able to say the search ran
         // narrower than it was configured to.
@@ -2261,22 +2424,67 @@ export async function runSwarm(
         log.event('swarm.branch_failed', {
           preset: resolved.preset,
           depth: childDepth,
-          error: settled.reason instanceof Error ? settled.reason.message : String(settled.reason),
+          node: id,
+          error: renderCauseChain(answer.error),
         });
         continue;
       }
-      usage = addUsage(usage, settled.value.usage);
+      if (answer.kind === 'silent') {
+        lost += 1;
+        silent += 1;
+        log.event('swarm.node_silent', {
+          preset: resolved.preset,
+          depth: childDepth,
+          node: id,
+          idle_ms: answer.idleMs,
+          envelope_ms: levelProgressMs,
+        });
+        continue;
+      }
+      const expansion = answer.expansion;
+      usage = addUsage(usage, expansion.usage);
       // THIS CANDIDATE's spend, retained for its own record. The run's total would
       // attribute every node's tokens to every row, which is a number a leaderboard
       // would quote and be wrong about; null where the provider reported nothing,
       // because an unmeasured spend is not a free one.
-      spentBy.set(settled.value.id, usageTotal(settled.value.usage) ?? null);
-      if (settled.value.modelId !== null) {
+      spentBy.set(expansion.id, usageTotal(expansion.usage) ?? null);
+      if (expansion.modelId !== null) {
         deps.reportModelCall?.({
-          source: 'swarm', usage: settled.value.usage, modelId: settled.value.modelId,
+          source: 'swarm', usage: expansion.usage, modelId: expansion.modelId,
         });
       }
-      expansions.push(settled.value);
+      expansions.push(expansion);
+    }
+    // THE STORE STOPS LYING HERE, and it is the same transition and the same column
+    // `abandonRunning` already owns — a THIRD terminal writer of `head_journal.status` is
+    // exactly what its docstring warns against. Scoped to this root, so it settles the
+    // rows this barrier gave up on and nothing else; the waves before it settled through
+    // `recordReport` and are already terminal.
+    if (silent > 0) {
+      const idle = journal.abandonRunning(
+        `the search stopped waiting for this node: it recorded nothing for ${String(levelProgressMs)}ms, `
+        + 'which is longer than one measured turn of model work',
+        { rootId },
+      );
+      log.event('swarm.level_silent', {
+        preset: resolved.preset,
+        depth: childDepth,
+        silent,
+        width,
+        usable: expansions.length,
+        settled: idle.reduce((total, run) => total + run.abandoned, 0),
+      });
+    }
+    // A LEVEL THAT ANSWERED NOTHING ENDS THE RUN, by name. Continuing would select the
+    // same parent again and pay another whole envelope per wave to learn the same silence,
+    // and the budget it would burn doing that is what turned a dead provider into a
+    // twenty-minute run reporting `best: null` with no cause anywhere in it.
+    if (silent > 0 && expansions.length === 0) {
+      return unavailable(`the level at depth ${String(childDepth)} produced no candidate: all `
+        + `${String(width)} of its nodes recorded nothing for ${String(levelProgressMs)}ms, which is `
+        + 'longer than one measured turn of model work, so the search stopped waiting for them. '
+        + 'Their journal rows are settled `aborted` with that reason, and this is a provider or '
+        + 'transport that is not answering rather than a search that ran out of room.');
     }
     if (grant) {
       reportVerdict(log, {
