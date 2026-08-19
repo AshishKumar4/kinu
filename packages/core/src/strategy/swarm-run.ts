@@ -115,6 +115,7 @@ import type {
 import {
   isTreeAdvance, BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS, SWARM_TREE_ADVANCES,
 } from './swarm';
+import { settleCarry } from './merge-back';
 import type {
   BranchContext, BranchProposal, BranchRefusalPolicy, BranchVerdict,
   ResolvedSwarm, SwarmAdvance, SwarmCandidate, SwarmPreset, SwarmResult, SwarmSettleReport,
@@ -1451,6 +1452,40 @@ export async function runSwarm(
   // The answer stays in the workspace. Without this the path holds whichever
   // candidate was measured last, which is a different artifact from the one reported.
   if (best && verifier && ctx) await ctx.vfs.writeFile(verifier.artifact, best.artifact);
+
+  // CARRY ADMISSION, at the barrier and after the sweep, because a candidate answered
+  // by the sweep is a candidate that could be carried and deciding before it would
+  // silently exclude the whole swept set.
+  //
+  // This is the threshold's ONLY reader. `carry:'artifacts'` declares an admission
+  // `threshold` on its own arm (§6.4) and nothing consulted it, which made a tagged
+  // parameter that a preset cannot even construct into config that changed nothing —
+  // exactly the accepted-and-ignored shape §2.5 refuses. `carry:'elites'` declares no
+  // threshold and still requires a MEASUREMENT: an unmeasurable candidate is not a
+  // zero-scoring elite, and seeding the next run from one is how an unscored artifact
+  // becomes an incumbent.
+  //
+  // COMPLEMENTARY TO `carrySuppressed`, not a second copy of it. That is the SEAL, per
+  // cell, about the run; this is ADMISSION, per candidate, about the candidate. A run
+  // can be unsealed and still carry nothing because everything scored under the bar.
+  const carried = settleCarry({
+    carry: resolved.config.carry,
+    publication,
+    members: candidates.map((candidate) => ({ nodeId: candidate.id, score: candidate.score })),
+  }, { log, preset: resolved.preset });
+
+  // The aggregate beside the per-candidate events, because "how many survived this
+  // run" is a question a reader should not have to answer by counting N lines. Nothing
+  // downstream can act on the verdicts yet: `records` has no writer and
+  // `experience_library`'s is not called from here, so admission is DECIDED and
+  // RECORDED at the one place that knows both the score and the seal, and the write it
+  // will gate is wired when that writer arrives.
+  log.event('swarm.carry_settled', {
+    preset: resolved.preset,
+    carry: resolved.config.carry.kind,
+    admitted: carried.filter((entry) => entry.verdict.kind === 'admitted').length,
+    refused: carried.filter((entry) => entry.verdict.kind === 'refused').length,
+  });
 
   const report = settleReport({
     resolved, measured, baseline, publication, candidates, best,

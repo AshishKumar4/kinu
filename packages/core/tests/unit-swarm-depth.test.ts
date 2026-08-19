@@ -678,3 +678,56 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
     }
   }, 120_000);
 });
+
+/* ── `carry` admission is consulted at the settle barrier ─────────────────── */
+
+// LIVES HERE BECAUSE THE REAL RUN LIVES HERE. `unit-merge-back.test.ts` covers what
+// `admitCarry` decides; this covers whether the decision is REACHED — and the only
+// harness in the suite that drives a genuine settle, with real candidates carrying real
+// normalised scores, is the one above. A second copy of this objective, model and
+// resolver would be eighty duplicated lines defending a one-line call site.
+//
+// The defect being closed: `carry:'artifacts'` declares an admission `threshold` on its
+// own arm and NOTHING read it, so a tagged parameter changed nothing.
+describe('carry admission at the settle barrier', () => {
+  test('the artifacts threshold is read, and a candidate under it is not carried', async () => {
+    // Above any normalised score, so every candidate must fall under it. A wiring that
+    // ignored the threshold would admit them instead, which is the failure this asserts
+    // against rather than around.
+    const { logger, result } = await run({
+      depth: 1, branches: 2, proposeWidth: null,
+      config: { carry: { kind: 'artifacts', threshold: 2 } },
+    });
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    const refused = logger.emitted.filter((line) => line.event === 'swarm.carry_refused');
+    // NOT VACUOUS: a run that produced no candidates would emit no per-candidate events
+    // and every assertion below would hold trivially.
+    expect(refused.length).toBeGreaterThan(0);
+    expect(refused[0]?.fields).toMatchObject({
+      carry: 'artifacts', threshold: 2, cause: 'below-threshold',
+    });
+    expect(logger.emitted.filter((line) => line.event === 'swarm.carry_admitted')).toHaveLength(0);
+
+    // And the aggregate, so "how many survived this run" is one line rather than a count
+    // over N of them.
+    const [settled] = logger.emitted.filter((line) => line.event === 'swarm.carry_settled');
+    expect(settled?.fields).toMatchObject({ carry: 'artifacts', admitted: 0 });
+    expect(settled?.fields.refused).toBe(refused.length);
+  }, 120_000);
+
+  test('a reachable threshold carries the candidates that clear it', async () => {
+    const { logger, result } = await run({
+      depth: 1, branches: 2, proposeWidth: null,
+      config: { carry: { kind: 'artifacts', threshold: 0 } },
+    });
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    const admitted = logger.emitted.filter((line) => line.event === 'swarm.carry_admitted');
+    expect(admitted.length).toBeGreaterThan(0);
+    const [settled] = logger.emitted.filter((line) => line.event === 'swarm.carry_settled');
+    expect(settled?.fields.admitted).toBe(admitted.length);
+  }, 120_000);
+});
