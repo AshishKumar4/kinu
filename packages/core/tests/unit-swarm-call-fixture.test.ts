@@ -178,7 +178,7 @@ const OPTIMISE = SWARM_PRESET_POINTS.optimise;
 const VERIFIER_TREE: SwarmConfig = OPTIMISE.config;
 
 /** The tree selectors §6.6 property 6 is exercised over. */
-const TREE_ADVANCES: readonly SwarmAdvance[] = ['uct', 'beam', 'best-first'];
+const TREE_ADVANCES = ['uct', 'best-first'] as const satisfies readonly SwarmAdvance[];
 
 describe('§2.4(a) crosses a JSON tool boundary, or it is not a call', () => {
   test('every field of the call is JSON', () => {
@@ -450,7 +450,7 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     expect(Object.keys(swarmModule).sort()).toEqual([
       'BRANCH_PROPOSAL_WIDTH', 'BRANCH_REFUSAL_POLICIES',
       'JUDGE_MARGINALISATION_MIN', 'NAMED_SWARM_PRESETS', 'SWARM_ADVANCES', 'SWARM_CARRIES',
-      'SWARM_CONTEXTS', 'SWARM_DECORRELATES', 'SWARM_EXPANDS', 'SWARM_OBSERVES',
+      'SWARM_CONTEXTS', 'SWARM_EXPANDS',
       'SWARM_PRESETS', 'SWARM_PRESET_POINTS', 'SWARM_SCORES', 'SWARM_TREE_ADVANCES',
       'SWARM_UNITS', 'arbitrateBranch', 'isPresetPoint', 'isTreeAdvance', 'resolveSwarm',
       'settleOf', 'swarmValidity',
@@ -462,14 +462,14 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // `config` must come back naming every axis, so an axis added to `SwarmConfig` and
     // forgotten in the resolver's list fails HERE instead of letting an incomplete tuple
     // through as if it were resolved. `context` is in the list because agent nodes gave
-    // inheritance one spelling (§8.4); `observe` and `decorrelate` are still in it
-    // because §6.7's cut of them has not landed and an axis nothing has removed is an
-    // axis a composition must still state.
+    // inheritance one spelling (§8.4); `observe` and `decorrelate` are NOT, because
+    // they were cut, and a composition is no longer asked to state an axis that no
+    // longer decides anything.
     const refusal = resolveSwarm({ preset: 'custom', task: 'x', label: 'l', config: {} });
     expect(refusal).toMatchObject({ reason: 'bad_input' });
     const error = 'error' in refusal ? refusal.error : '';
     for (const axis of [
-      'unit', 'context', 'observe', 'expand', 'decorrelate', 'score', 'advance', 'carry',
+      'unit', 'context', 'expand', 'score', 'advance', 'carry',
     ]) {
       expect(error).toContain(axis);
     }
@@ -477,7 +477,7 @@ describe('the implementation, asserted where absences used to be pinned', () => 
 
   test('§6.6 property 6: settleOf answers for entry zero under every tree advance', () => {
     for (const advance of TREE_ADVANCES) {
-      expect(settleOf({ ...VERIFIER_TREE, advance })).toBe('best');
+      expect(settleOf({ ...VERIFIER_TREE, advance: { kind: advance } })).toBe('best');
     }
   });
 
@@ -495,9 +495,17 @@ describe('the implementation, asserted where absences used to be pinned', () => 
       expect(refusal).toMatchObject({ reason: 'bad_input' });
       expect('error' in refusal ? refusal.error : '').toContain('carry:\'artifacts\'');
     }
-    // And the three rows §6.3 does state resolve, so the refusal above is about the
+    // `redteam` JOINED them, and this is the assertion that records the cost. It
+    // resolved until `novelty` re-homed onto `advance:'archive'` as a required
+    // parameter; §6.3 states no threshold for it, so the row stopped being
+    // constructible. The same rule, newly reaching a third row.
+    expect(isPresetPoint(SWARM_PRESET_POINTS.redteam)).toBe(false);
+    const redteam = resolveSwarm({ preset: 'redteam', task: 'x', key: 'k' });
+    expect(redteam).toMatchObject({ reason: 'bad_input' });
+    expect('error' in redteam ? redteam.error : '').toContain("advance:'archive'");
+    // And the rows §6.3 does state resolve, so the refusals above are about the
     // document rather than about the resolver.
-    for (const preset of ['ideate', 'redteam', 'optimise'] as const) {
+    for (const preset of ['ideate', 'optimise', 'prove'] as const) {
       expect(isPresetPoint(SWARM_PRESET_POINTS[preset])).toBe(true);
     }
   });

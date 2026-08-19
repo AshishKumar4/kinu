@@ -117,11 +117,11 @@ function agentConfig(over?: Partial<SwarmConfig>): SwarmConfig {
   return {
     // The whole point: an AGENT node, not §8.9's degenerate point.
     unit: { kind: 'answer' },
-    // The first level forks the origin's framing and the second level asks for what it
-    // wants; a `fresh` search could not accept a forking child at all.
+    // The first level continues the origin's framing and the second level asks for
+    // what it wants; a `fresh` search could not accept an inheriting child at all.
     context: 'fork',
-    observe: 'ancestors', expand: 'mutate', decorrelate: 'angles',
-    score: { kind: 'verify' }, advance: 'uct', carry: { kind: 'none' },
+    expand: 'sample',
+    score: { kind: 'verify' }, advance: { kind: 'uct' }, carry: { kind: 'none' },
     ...over,
   };
 }

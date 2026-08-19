@@ -11,15 +11,14 @@
  *     axis: `answer` and `generator` run a real agent per node — a tool loop with
  *     its own turns and its own journalled transcript (`node-agent.ts`, §8.1) —
  *     while `thought` is §8.9's degenerate point, one toolless generation, kept as
- *     the cheap tier. `expand:'sample'` starts a child from the workspace as found
- *     and `expand:'mutate'` from its parent's own answer;
+ *     the cheap tier. `expand:'sample'` starts a child from the workspace as
+ *     found and `expand:'aggregate'` merges several parents;
  *   - `advance` through `mcts/frontier.ts` — the ONE scheduler, so `uct` re-widens,
- *     `beam` sweeps a level at a time, `best-first` takes the best unexpanded node
- *     and `none` expands the root once and stops;
- *   - `decorrelate` by what a sibling is SHOWN: `angles` hands each child its own
- *     angle and names its siblings', `blind` hands an angle and hides the siblings,
- *     `none` hands neither;
- *   - `observe:'ancestors'` by putting the MEASURED BASELINE and the measurements
+ *     `best-first` takes the best unexpanded node and `none` expands the root once
+ *     and stops;
+ *   - sibling angles UNCONDITIONALLY: every child is handed its own angle and told
+ *     its siblings', because the axis that claimed to gate this never did;
+ *   - `context:'fork'` by putting the MEASURED BASELINE and the measurements
  *     along this node's own path into the expansion prompt — at depth 1 the only
  *     ancestor is the workspace as found, which is why that arm is unchanged;
  *   - `score:'verify'` through the registry's instrument, one candidate at a time,
@@ -267,32 +266,23 @@ function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
   // REPORTS (`node-agent.ts`), the value that named the shape is gone because the
   // shape is what `answer` and `generator` now are, and `thought` is §8.9's
   // degenerate point kept as the cheap tier. All three execute below.
-  if (config.observe === 'own') {
-    return unsupported('observe:"own" gives a node feedback about its OWN attempt, and a node here is '
-      + 'one complete answer measured as a whole — it is never re-attempted, so there is no second '
-      + 'attempt of the same node for that feedback to be about. This is true at every depth: a '
-      + 'deeper search adds new nodes, not further tries at an existing one. Use '
-      + 'observe:"ancestors", which is how a child is told what the answers on its own path '
-      + 'measured, or observe:"none" for a blind expansion.');
-  }
   if (config.expand === 'aggregate') {
     return unsupported('expand:"aggregate" builds a DAG whose merges are ordered by dependency, and '
-      + 'nothing here orders merges. Use expand:"sample" for independent candidates or '
-      + 'expand:"mutate" to improve what the workspace already holds.');
+      + 'nothing here orders merges. Use expand:"sample" for independent candidates, and `context` to '
+      + "say whether a child starts from its parent's conversation or from its results alone.");
   }
   if (config.score.kind !== 'verify' && config.score.kind !== 'none') {
-    return unsupported(`score:"${config.score.kind}" needs a scorer this run has no engine for: `
-      + 'novelty needs an archive with a rejection test, and judge needs the marginalised ensemble '
-      + 'the shipped tree owns. Use score:"verify" with an `objective` to measure candidates, or '
-      + 'score:"none" for a flat run that returns them unranked.');
+    return unsupported(`score:"${config.score.kind}" needs a scorer this run has no engine for: judge `
+      + 'needs the marginalised ensemble the shipped tree owns. Use score:"verify" with an `objective` '
+      + 'to measure candidates, or score:"none" for a flat run that returns them unranked.');
   }
-  if (isTreeAdvance(config.advance) && config.score.kind === 'none') {
+  if (isTreeAdvance(config.advance.kind) && config.score.kind === 'none') {
     // Unreachable through `swarmValidity`, which refuses this composition outright.
     // Kept because this function is also the in-process entry point.
-    return badInput(`advance:"${config.advance}" cannot select without a score.`);
+    return badInput(`advance:"${config.advance.kind}" cannot select without a score.`);
   }
-  if (config.advance !== 'none' && !isTreeAdvance(config.advance)) {
-    return unsupported(`advance:"${config.advance}" reports a front or an archive, and both need a `
+  if (config.advance.kind !== 'none' && !isTreeAdvance(config.advance.kind)) {
+    return unsupported(`advance:"${config.advance.kind}" reports a front or an archive, and both need a `
       + 'store this run has no writer for. Use advance:"none" for a flat expansion, or one of '
       + `${SWARM_TREE_ADVANCES.join('/')} to select down a tree.`);
   }
@@ -475,7 +465,7 @@ function proposalInvitation(input: {
   readonly atDepth: number;
   readonly maxDepth: number;
 }): string {
-  if (!isTreeAdvance(input.advance) || input.atDepth + 1 >= input.maxDepth) return '';
+  if (!isTreeAdvance(input.advance.kind) || input.atDepth + 1 >= input.maxDepth) return '';
   return `\n\nIf one thread of this task deserves its own branch of the search, end your answer with `
     + `a line reading ${PROPOSAL_MARKER} followed by a JSON object: `
     + `{"rationale": why this thread deserves the budget, "branches": [{"task", "rationale", `
@@ -487,15 +477,22 @@ function proposalInvitation(input: {
     + 'thread needs one.';
 }
 
-/** What a node is told about the measurements on its own path, under `observe`. */
+/**
+ * What a node is told about the measurements on its own path.
+ *
+ * Gated on `context:'fork'` rather than on the cut `observe:'ancestors'`, which is
+ * the same gate: a forked child continues the parent's conversation and so has the
+ * ancestor chain's measurements transitively. The axis went; the behaviour did not,
+ * and it now hangs off the one axis that was already deciding it.
+ */
 function pathFeedback(input: {
-  readonly observe: ResolvedSwarm['config']['observe'];
+  readonly context: ResolvedSwarm['config']['context'];
   readonly measured: MeasuredObjective | null;
   readonly baseline: number | null;
   readonly ancestors: readonly TreeNode[];
 }): string {
   const { measured, baseline } = input;
-  if (input.observe !== 'ancestors' || !measured || baseline === null) return '';
+  if (input.context !== 'fork' || !measured || baseline === null) return '';
   const direction = measured.direction === 'minimise' ? 'lower' : 'higher';
   const path = input.ancestors
     .filter((node) => node.measurement?.kind === 'measured')
@@ -510,13 +507,15 @@ function pathFeedback(input: {
 }
 
 /**
- * The expansion prompt for one child: what it is asked, the angle its siblings do not
- * have, what this path has measured, and the branch it may propose.
+ * The expansion prompt for one child: what it is asked, the angle its siblings do
+ * not have, what this path has measured, and the branch it may propose.
  *
- * `decorrelate` decides what a sibling is SHOWN, and each of its three values lands
- * somewhere different rather than all three reducing to the angle set: `angles` hands
- * an angle and names the siblings', `blind` hands an angle and hides them — a child
- * expanded without sight of what its siblings proposed — and `none` hands neither.
+ * THE ANGLE IS UNCONDITIONAL. It used to be gated on `decorrelate`, an axis whose
+ * three values all handed out angles anyway — including `blind`, which names the
+ * opposite — so the gate never selected anything and the axis is gone. What is
+ * genuinely lost is the ability to turn angles OFF; what is genuinely missing, and
+ * is a separate instrument rather than a fourth value, is a detector that notices
+ * siblings converged despite them.
  */
 function branchPrompt(input: {
   readonly resolved: ResolvedSwarm;
@@ -532,7 +531,7 @@ function branchPrompt(input: {
   /** The parent's answer, when this child inherits it. Null at the root, and null
    *  wherever the search or the proposal said not to inherit. */
   readonly inherited: string | null;
-  /** Root-first, parent-last. Used only by `observe:'ancestors'`. */
+  /** Root-first, parent-last. Read only where `context` is `'fork'`. */
   readonly ancestors: readonly TreeNode[];
   readonly atDepth: number;
   readonly maxDepth: number;
@@ -542,16 +541,19 @@ function branchPrompt(input: {
   readonly invite: boolean;
 }): ExplorePrompt {
   const { resolved, index, branches } = input;
-  const { decorrelate, expand, observe, advance } = resolved.config;
-  const angle = decorrelate === 'none' ? '' : `\n\nYour angle: ${diversityAngle(index, branches)}.`;
-  const instruction = expand === 'mutate'
+  const { context, advance } = resolved.config;
+  const angle = `\n\nYour angle: ${diversityAngle(index, branches)}.`;
+  // Keyed off what this child ACTUALLY received rather than off an axis, because a
+  // proposal may override inheritance per branch and the instruction has to match
+  // the text above it.
+  const instruction = input.inherited
     ? ' Improve what you have been given rather than starting over.'
     : ' Write your approach from scratch; do not assume what is already there is a good start.';
   const inherited = input.inherited
     ? `\n\nThe answer this branch continues from:\n${input.inherited}`
     : '';
   const feedback = pathFeedback({
-    observe, measured: input.measured, baseline: input.baseline, ancestors: input.ancestors,
+    context, measured: input.measured, baseline: input.baseline, ancestors: input.ancestors,
   });
   return explorePrompt({
     mode: input.mode,
@@ -560,8 +562,9 @@ function branchPrompt(input: {
         ? proposalInvitation({ advance, atDepth: input.atDepth, maxDepth: input.maxDepth })
         : ''),
     craftedTools: [],
-    // `blind` is exactly this: the child is not shown what its siblings were sent.
-    siblings: decorrelate === 'angles' ? siblingAngles(index, branches) : [],
+    // Unconditional, like the angle itself: every child is told what its siblings
+    // were sent, because the axis that claimed to hide them never did.
+    siblings: siblingAngles(index, branches),
     languages: input.languages,
   });
 }
@@ -757,7 +760,6 @@ interface Expansion {
 function frontierPolicyOf(advance: SwarmAdvance): FrontierPolicy | null {
   switch (advance) {
     case 'uct':
-    case 'beam':
     case 'best-first':
     case 'none':
       return advance;
@@ -1060,9 +1062,9 @@ export async function runSwarm(
   const languages = deps.rt.executor.languages;
   // The narrowing, not a second policy: `regionRefusal` has already refused the two
   // values with no scheduler here.
-  const policy = frontierPolicyOf(resolved.config.advance);
+  const policy = frontierPolicyOf(resolved.config.advance.kind);
   if (!policy) {
-    return unsupported(`advance:"${resolved.config.advance}" has no scheduler in this runner.`);
+    return unsupported(`advance:"${resolved.config.advance.kind}" has no scheduler in this runner.`);
   }
 
   // The ROOT is the workspace as found at depth 0 — the one node no model wrote.
@@ -1164,7 +1166,7 @@ export async function runSwarm(
     // elsewhere first would make it unpayable.
     const owed = [...nodes.values()].find((node) => node.granted !== null);
     const selected = owed ?? selectFrontierNode(sql, {
-      rootId, policy, maxDepth, beamWidth: branches,
+      rootId, policy, maxDepth,
       explorationWeight: resolved.config.explorationWeight
         ?? DEFAULT_CONFIG.mcts.explorationWeight,
     });
@@ -1210,9 +1212,12 @@ export async function runSwarm(
     // of this parent starts, so nothing a level is ranked on can be a fact about which
     // sibling's compaction kept the useful paragraph.
     const prefix = agentNodes ? await sharedPrefix({ parent, deps, log, preset: resolved.preset }) : [];
+    // What a child starts from: the proposal's per-branch answer where one was
+    // granted, otherwise the run's `context`. `expand:'mutate'` used to ask this and
+    // was cut for exactly that reason — it was a second spelling of `context`.
     const inheritedArtifact = (grant
       ? grant.proposal.branches.some((branch) => branch.context === 'fork')
-      : resolved.config.expand === 'mutate')
+      : resolved.config.context === 'fork')
       ? parent.artifact
       : null;
 
@@ -1277,7 +1282,7 @@ export async function runSwarm(
           // Depth is what cannot change mid-run, so it gates the BUILD; the budget can
           // empty between the invitation and the answer, so it stays a runtime refusal
           // inside the arbiter.
-          arbitrate: isTreeAdvance(resolved.config.advance) && childDepth + 1 <= maxDepth
+          arbitrate: isTreeAdvance(resolved.config.advance.kind) && childDepth + 1 <= maxDepth
             ? (proposal) => budget.arbitrate({
               config: resolved.config, caps: resolved.caps, atDepth: childDepth, proposal,
             })
@@ -1425,7 +1430,7 @@ export async function runSwarm(
     // Retire what the tree has learned is not worth selecting. Its own visit gate
     // protects single-visit leaves, so on a flat run — where nothing is ever
     // re-visited — this cannot fire, which is why a depth-1 search is unchanged.
-    if (isTreeAdvance(resolved.config.advance)) {
+    if (isTreeAdvance(resolved.config.advance.kind)) {
       await pruneLowValueBranches(
         deps.rt, rootId, resolved.config.pruneThreshold, resolved.config.minVisitsForPrune,
       );
@@ -1459,7 +1464,7 @@ export async function runSwarm(
     stop: aborted
       ? 'aborted'
       : lost > 0 || (budget.remaining <= 0 && selectFrontierNode(sql, {
-        rootId, policy, maxDepth, beamWidth: branches,
+        rootId, policy, maxDepth,
         explorationWeight: resolved.config.explorationWeight
           ?? DEFAULT_CONFIG.mcts.explorationWeight,
       }) !== null)

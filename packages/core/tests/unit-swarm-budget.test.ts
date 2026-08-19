@@ -31,8 +31,8 @@ import type { BranchProposal, ResolvedSwarmCaps, SwarmConfig } from '../src/stra
 function config(over?: Partial<SwarmConfig>): SwarmConfig {
   return {
     unit: { kind: 'answer' }, context: 'fork',
-    observe: 'none', expand: 'sample', decorrelate: 'angles',
-    score: { kind: 'verify' }, advance: 'uct', carry: { kind: 'none' },
+    expand: 'sample',
+    score: { kind: 'verify' }, advance: { kind: 'uct' }, carry: { kind: 'none' },
     ...over,
   };
 }
@@ -109,7 +109,7 @@ describe('the budget is the only thing that moves the budget', () => {
     // pass, the Lean port would no longer read against the shipped arbiter.
     const decisions = [
       new SwarmBudget(10).arbitrate({
-        config: config({ advance: 'none' }), caps: caps(1, 3), atDepth: 0, proposal: proposal(2),
+        config: config({ advance: { kind: 'none' } }), caps: caps(1, 3), atDepth: 0, proposal: proposal(2),
       }),
       new SwarmBudget(10).arbitrate({
         config: config(), caps: caps(5, 3), atDepth: 1, proposal: proposal(9),

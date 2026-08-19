@@ -28,9 +28,19 @@ import type { SqlExecutor } from '../types/primitives';
 import type { SearchNode } from '../types/mcts';
 import { selectNode } from './uct';
 
-/** The `advance` values that select inside a running tree. `archive` and `pareto`
- *  are absent because they report a store rather than descend a tree. */
-export type FrontierPolicy = 'uct' | 'beam' | 'best-first' | 'none';
+/**
+ * The `advance` values that select inside a running tree. `archive` and `pareto`
+ * are absent because they report a store rather than descend a tree.
+ *
+ * `beam` was here and is gone. It selected exactly what `best-first` selects and
+ * differed only in ORDER — `depth ASC` made a whole level's beam expand before the
+ * next level was entered — so it was a schedule wearing a selector's name. What
+ * left with it is real and has no replacement here: the level-synchronised order
+ * and the `beamWidth` that ranked each level. A level BARRIER survives as a
+ * concept because shared compaction and comparative sibling judging both need one,
+ * but it belongs to a level rather than to this switch.
+ */
+export type FrontierPolicy = 'uct' | 'best-first' | 'none';
 
 export interface FrontierInput {
   /** This search's own tree. Scoped for the reason `uct.ts` states: an unscoped
@@ -42,9 +52,6 @@ export interface FrontierInput {
   readonly maxDepth: number;
   /** UCT's exploration constant. Read only by the `uct` arm — the axis says so. */
   readonly explorationWeight: number;
-  /** The beam's width: how many nodes of one level stay in the beam. Read only by
-   *  the `beam` arm. */
-  readonly beamWidth: number;
 }
 
 /**
@@ -61,8 +68,6 @@ export function selectFrontierNode(sql: SqlExecutor, input: FrontierInput): Sear
       return selectNode(sql, rootId, input.explorationWeight, maxDepth);
     case 'best-first':
       return bestUnexpanded(sql, rootId, maxDepth);
-    case 'beam':
-      return bestInBeam(sql, rootId, maxDepth, input.beamWidth);
     case 'none':
       return unexpandedRoot(sql, rootId, maxDepth);
   }
@@ -84,48 +89,6 @@ function bestUnexpanded(sql: SqlExecutor, rootId: string, maxDepth: number): Sea
     WHERE s.root_id = ${rootId} AND s.status = 'open' AND s.depth < ${maxDepth}
       AND NOT EXISTS (SELECT 1 FROM search_nodes c WHERE c.parent_id = s.id)
     ORDER BY s.value DESC, s.created_at ASC, s.id ASC
-    LIMIT 1
-  `[0] ?? null;
-}
-
-/**
- * Beam search: the best unexpanded node of the SHALLOWEST level that still has one,
- * provided it is inside the beam.
- *
- * `depth ASC` is what makes the search level-synchronous — a whole level's beam is
- * expanded before the next level is entered — and the rank subquery IS the beam: a
- * node is in it when fewer than `width` nodes of its own level precede it in the
- * total order (value, then age, then id). Stated as a rank rather than by retiring
- * the losers, because `status` already means four things and "outside the beam" is
- * none of them: a node dropped from a beam was not pruned for low value and did not
- * fail.
- *
- * THE RANK IS OVER THE WHOLE LEVEL AND THE `NOT EXISTS` APPLIES ONLY TO THE
- * CANDIDATE, which is the difference between a beam and a queue. Counting only the
- * level's *unexpanded* nodes looked equivalent and was not: as the beam's own members
- * got expanded they left the count, the nodes below them rose into the width, and a
- * node the beam had rejected was silently promoted — so a beam of 2 eventually
- * expanded all four members of a level and never descended. Measured as exactly that:
- * a depth-1 node selected where the beam should already have moved to depth 2.
- *
- * The order is TOTAL — ties fall through to `created_at` and then `id` — so a beam is
- * reproducible rather than dependent on row order.
- */
-function bestInBeam(
-  sql: SqlExecutor, rootId: string, maxDepth: number, width: number,
-): SearchNode | null {
-  return sql<SearchNode>`
-    SELECT s.* FROM search_nodes s
-    WHERE s.root_id = ${rootId} AND s.status = 'open' AND s.depth < ${maxDepth}
-      AND NOT EXISTS (SELECT 1 FROM search_nodes c WHERE c.parent_id = s.id)
-      AND (
-        SELECT COUNT(*) FROM search_nodes o
-        WHERE o.root_id = ${rootId} AND o.status = 'open' AND o.depth = s.depth
-          AND (o.value > s.value
-            OR (o.value = s.value AND o.created_at < s.created_at)
-            OR (o.value = s.value AND o.created_at = s.created_at AND o.id < s.id))
-      ) < ${width}
-    ORDER BY s.depth ASC, s.value DESC, s.created_at ASC, s.id ASC
     LIMIT 1
   `[0] ?? null;
 }

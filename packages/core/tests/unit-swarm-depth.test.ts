@@ -35,7 +35,7 @@ import { runSwarm } from '../src/strategy/swarm-run';
 import type { Refusal } from '../src/obs/error';
 import {
   arbitrateBranch, resolveSwarm, swarmValidity,
-  BRANCH_PROPOSAL_WIDTH, BRANCH_REFUSAL_POLICIES,
+  BRANCH_PROPOSAL_WIDTH, BRANCH_REFUSAL_POLICIES, SWARM_ADVANCES,
   type BranchProposal, type BranchRefusalPolicy, type ResolvedSwarm,
   type ResolvedSwarmCaps, type SwarmConfig, type SwarmResult,
 } from '../src/strategy/swarm';
@@ -48,8 +48,8 @@ import type { SqlExecutor } from '../src/types/primitives';
 function treeConfig(over?: Partial<SwarmConfig>): SwarmConfig {
   return {
     unit: { kind: 'thought' }, context: 'fork',
-    observe: 'ancestors', expand: 'mutate', decorrelate: 'angles',
-    score: { kind: 'verify' }, advance: 'uct', carry: { kind: 'none' },
+    expand: 'sample',
+    score: { kind: 'verify' }, advance: { kind: 'uct' }, carry: { kind: 'none' },
     ...over,
   };
 }
@@ -115,7 +115,7 @@ describe('§8.2 the arbiter: a node proposes, the engine decides', () => {
       // `advance:'none'` has no selection step, so there is no second level for a
       // branch to land on. This is the flat run's honest answer to a proposal.
       arbitrateBranch({
-        config: treeConfig({ advance: 'none' }), caps: caps(1, 3), atDepth: 0,
+        config: treeConfig({ advance: { kind: 'none' } }), caps: caps(1, 3), atDepth: 0,
         remainingChildren: 10, proposal: proposal(),
       }),
       arbitrateBranch({
@@ -210,12 +210,16 @@ describe('§8.2 the arbiter: a node proposes, the engine decides', () => {
     // `every_proposal_gets_a_verdict`, over a grid that crosses every arm. Silence is
     // the failure mode §8.2 is written against: a node that cannot tell refusal from
     // being ignored will simply propose again.
-    for (const advance of ['uct', 'beam', 'best-first', 'none', 'archive', 'pareto'] as const) {
+    for (const advance of SWARM_ADVANCES) {
       for (const context of ['fork', 'fresh'] as const) {
         for (const width of [0, 1, 2, 4, 5]) {
           for (const asked of ['fork', 'fresh'] as const) {
             const verdict = arbitrateBranch({
-              config: treeConfig({ advance, context }), caps: caps(3, 2), atDepth: 1,
+              config: treeConfig({
+                advance: advance === 'archive' ? { kind: advance, novelty: 0.6 } : { kind: advance },
+                context,
+              }),
+              caps: caps(3, 2), atDepth: 1,
               remainingChildren: 4,
               proposal: asked === 'fork' ? forking(width) : widthOf(width),
             });
@@ -237,7 +241,7 @@ interface Tree {
    *  own reward. Returns the child's id. */
   child(parentId: string, reward: number | null): string;
   depthOf(nodeId: string): number;
-  select(policy: FrontierPolicy, maxDepth: number, beamWidth?: number): SearchNode | null;
+  select(policy: FrontierPolicy, maxDepth: number): SearchNode | null;
 }
 
 /** A tree over an in-memory database, built the way the runner builds one: the depth
@@ -269,10 +273,8 @@ function tree(): Tree {
       if (reward !== null) backpropagate(sql, id, reward);
       return id;
     },
-    select(policy, maxDepth, beamWidth = 2) {
-      return selectFrontierNode(sql, {
-        rootId, policy, maxDepth, beamWidth, explorationWeight: 1.4,
-      });
+    select(policy, maxDepth) {
+      return selectFrontierNode(sql, { rootId, policy, maxDepth, explorationWeight: 1.4 });
     },
   };
 }
@@ -285,7 +287,7 @@ describe('the scheduler: one policy per `advance`, and the cap is a WHERE clause
     const t = tree();
     const good = t.child(t.rootId, 0.9);
     t.child(t.rootId, 0.1);
-    for (const policy of ['uct', 'beam', 'best-first'] as const) {
+    for (const policy of ['uct', 'best-first'] as const) {
       const next = t.select(policy, 3);
       expect(next).not.toBeNull();
       expect(next?.depth).toBe(1);
@@ -305,15 +307,15 @@ describe('the scheduler: one policy per `advance`, and the cap is a WHERE clause
     const t = tree();
     t.child(t.rootId, 0.9);
     t.child(t.rootId, 0.4);
-    for (const policy of ['uct', 'beam', 'best-first', 'none'] as const) {
+    for (const policy of ['uct', 'best-first', 'none'] as const) {
       for (const maxDepth of [1, 2, 3]) {
         const selected = t.select(policy, maxDepth);
         if (selected) expect(selected.depth).toBeLessThan(maxDepth);
       }
     }
-    // The three frontier policies have nothing left at depth 1 that they may expand,
+    // The two frontier policies have nothing left at depth 1 that they may expand,
     // and say so rather than returning a capped node.
-    for (const policy of ['beam', 'best-first', 'none'] as const) {
+    for (const policy of ['best-first', 'none'] as const) {
       expect(t.select(policy, 1)).toBeNull();
     }
     // Raising the cap makes the same depth-1 rows selectable, so the nulls above are
@@ -355,25 +357,26 @@ describe('the scheduler: one policy per `advance`, and the cap is a WHERE clause
     expect(t.select('best-first', 3)?.id).toBe(under);
   });
 
-  test('beam sweeps a LEVEL at a time and keeps only its width', () => {
+  test('the level-synchronised schedule went with `beam`, and best-first does not replace it', () => {
+    // The honest record of what the cut cost. `beam` selected exactly what
+    // best-first selects — highest value, unexpanded — and differed only in ORDER:
+    // `depth ASC` finished a whole level before entering the next. Nothing left in
+    // the scheduler reproduces that, and this asserts the difference rather than
+    // claiming an equivalence.
     const t = tree();
-    // Four nodes at depth 1, a beam of 2: the two best are in, the two worst are out.
     const best = t.child(t.rootId, 0.9);
     const second = t.child(t.rootId, 0.8);
     t.child(t.rootId, 0.2);
-    t.child(t.rootId, 0.1);
-    expect(t.select('beam', 4, 2)?.id).toBe(best);
-    // Expanding the best moves the beam to the next member of the SAME level before
-    // descending — that is what level-synchronous means.
+
+    expect(t.select('best-first', 4)?.id).toBe(best);
+    // A deeper child of the best node now outranks every remaining depth-1 sibling,
+    // and best-first DESCENDS to it immediately. A beam would have expanded
+    // `second` first, because it was still on the level being swept.
     const deeper = t.child(best, 0.95);
-    expect(t.select('beam', 4, 2)?.id).toBe(second);
-    // Once the level's beam is expanded, the next level is entered, and the nodes that
-    // fell outside the beam are never selected even though they are still open.
-    const third = t.child(second, 0.5);
-    const selected = t.select('beam', 4, 2);
-    expect(selected).not.toBeNull();
-    expect(selected?.depth).toBe(2);
-    expect([deeper, third]).toContain(selected?.id ?? '');
+    const next = t.select('best-first', 4);
+    expect(next?.id).toBe(deeper);
+    expect(next?.depth).toBe(2);
+    expect(next?.id).not.toBe(second);
   });
 });
 
@@ -572,7 +575,7 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
     // already ran, and `advance:'none'` is the axis value that fixes depth at 1.
     const { nodes, result } = await run({
       depth: 1, branches: 3, proposeWidth: null,
-      config: { advance: 'none', score: { kind: 'verify' } },
+      config: { advance: { kind: 'none' }, score: { kind: 'verify' } },
     });
     expect('reason' in result).toBe(false);
     if ('reason' in result) return;
@@ -673,22 +676,5 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
         throw new Error(`node ${node.parent_id} was refused at the cap and still got a child`);
       }
     }
-  }, 120_000);
-
-  test('observe:\'own\' stays refused, and the reason no longer blames depth 1', async () => {
-    // The old text said the axis needed "a second round to exist at all, and depth:1
-    // has one". Depth is no longer the reason, and a refusal whose stated cause has
-    // become false is worse than no refusal: a node here is one complete answer,
-    // measured as a whole, and is never re-attempted at ANY depth.
-    const { rt } = createTestRuntime();
-    const result = await runSwarm(
-      { rt, model: answering(null), mode: 'build' },
-      resolved(3, 2, { observe: 'own' }),
-    );
-    expect(result).toMatchObject({ reason: 'unsupported' });
-    const error = 'error' in result ? result.error : '';
-    expect(error).toContain('never re-attempted');
-    expect(error).toContain('every depth');
-    expect(error).toContain('observe:"ancestors"');
   }, 120_000);
 });

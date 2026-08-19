@@ -19,10 +19,10 @@ import type {
 } from '@ai-sdk/provider';
 import type { LLMProviderConfig } from '@proteus/core';
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, FORK_STRATEGY_ID, createAgentsCodemodeProvider, createStrategyRegistry,
+  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider, createStrategyRegistry,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
   JsonObjectSchema, WORKSPACE_RUN_ID,
-  type AgentsToolDeps, type StrategyContext, type ModelInfo, type JsonObject, type JsonValue,
+  type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
   type ModelCallSink,
   createAgentSelfProvider,
 } from '@proteus/core';
@@ -245,9 +245,9 @@ function toolSequenceModel(calls: ReadonlyArray<{ name: string; input: JsonObjec
   });
 }
 
-/** A model that forks into two heads once, then answers. The heads and the merge
- *  synthesis run against the SAME stub via doGenerate. */
-function forkingModel(): LanguageModel {
+/** A model that runs one two-branch search, then answers. The search's nodes run
+ *  against the SAME stub via doGenerate. */
+function searchingModel(): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   const base = fakeModel('head finding');
   let step = 0;
@@ -265,11 +265,8 @@ function forkingModel(): LanguageModel {
               controller.enqueue({
                 type: 'tool-call', toolCallId: 'call-1', toolName: 'agents',
                 input: JSON.stringify({
-                  action: 'fork', task: 'explore two angles',
-                  forks: [
-                    { task: 'angle A', rationale: 'first angle' },
-                    { task: 'angle B', rationale: 'second angle' },
-                  ],
+                  action: 'swarm', task: 'explore two angles',
+                  preset: 'ideate', branches: 2, depth: 1,
                 }),
               });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
@@ -1252,8 +1249,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('recoverBackgroundJobs re-drives an orphaned agents fork job (the post-unification kind)', async () => {
     const { db, session } = setup('resumed fork answer');
-    // The briefs are part of the row because they are what a fork re-drives:
-    // a stored fork with none has nothing to run and is refused, not resumed.
+    // A row written by a surface that no longer exists. It is HISTORY rather
+    // than a prompt: `action:'fork'` names a rung this tool dropped, so the row
+    // is TRANSLATED onto the action that runs ephemeral nodes today instead of
+    // being refused — a refusal here would strand exactly the work resume
+    // exists for. The briefs are on the row because that is what the era stored.
     const input = JSON.stringify({
       action: 'fork', task: 'finish the interrupted exploration',
       forks: [
@@ -1264,10 +1264,32 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     db.exec(`INSERT INTO background_jobs (id, kind, work_mode, status, input_json, created_at) VALUES ('bgjob-a', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f4', 'bg:agents', '{"phase":"running","jobId":"bgjob-a","kind":"agents"}', 1)`);
 
-    await session.recoverBackgroundJobs();
+    const stderrLines: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => { stderrLines.push(args.map(String).join(' ')); };
+    try {
+      await session.recoverBackgroundJobs();
+      await waitFor(() => jobStatus(db, 'bgjob-a') === 'completed');
+    } finally {
+      console.error = originalError;
+    }
 
-    await waitFor(() => jobStatus(db, 'bgjob-a') === 'completed');
+    // WHAT IT RE-DROVE AS, not merely that it re-drove: a search under
+    // `preset:'ideate'` — the one shape that writes its own competing approaches
+    // from `task` alone, which is all a row carrying no objective can become.
+    const settled = v.parse(
+      v.object({ preset: v.literal('ideate'), report: v.object({ expansions: v.number() }) }),
+      JSON.parse(jobResult(db, 'bgjob-a')),
+    );
+    expect(settled.report.expansions).toBeGreaterThan(0);
     expect(jobResult(db, 'bgjob-a')).toContain('resumed fork answer');
+
+    // And what the translation could NOT carry is named once rather than
+    // counted: the briefs have no equivalent on a search, and a re-drive that
+    // quietly lost them is worse than one that refused.
+    const dropped = stderrLines.filter((line) => line.includes('agents.resume.fields_dropped'));
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toContain('forks');
   });
 
   test('end() waits for a detached job to settle instead of closing the database under it', async () => {
@@ -2572,36 +2594,55 @@ describe('LocalAgentSession — the durable run-event log', () => {
     await session.end();
   });
 
-  test('a fork lands in the ledger with what it produced and what it cost', async () => {
+  test('a search lands in the ledger with what it produced and what it cost', async () => {
     // Head phases were broadcast-only here while the DO recorded them, so every
     // local run — and therefore every benchmark trial — left no durable trace of
-    // a fork at all: that a run's forks came back empty could only be found by
+    // a delegated search at all: that one came back empty could only be found by
     // reading trajectories by hand.
     //
-    // A fork on the interactive surface now detaches the instant it spawns
-    // (defect A), so 'head_merge' — which only fires once the WHOLE
-    // exploration finishes — always arrives after the calling ('go') turn's
-    // own run has already closed and a second (wake) run may already be open.
-    // settleBackgroundWork() drains both; the fork's phase events are looked
-    // up by which run actually carries them (head_split, captured at
-    // dispatch — see emitHeadPhase), not by run recency, since a wake turn's
+    // A search on the interactive surface detaches the instant it spawns
+    // (defect A), so the durable trace has two halves and this walks both. The
+    // run ledger records the DISPATCH — the call exactly as sent, and the job it
+    // handed off to — while the settled job row records what the run came back
+    // with. settleBackgroundWork() drains the job; the dispatch row is found by
+    // the tool that wrote it rather than by run recency, since the wake turn's
     // run can easily be the newer one.
-    const { session } = setup('unused', forkingModel());
+    const { db, session } = setup('unused', searchingModel());
     await session.send('go');
     await session.settleBackgroundWork();
 
-    const forkRun = session.listRuns().items
-      .map((r) => session.getRunEvents(r.runId))
-      .find((evs) => evs.some((e) => e.type === 'head_split'));
-    expect(forkRun).toBeDefined();
-    const events = forkRun!;
+    const events = session.listRuns().items.flatMap((r) => session.getRunEvents(r.runId));
+    const dispatch = events.find((e): e is Extract<typeof events[number], { type: 'tool_call_end' }> =>
+      e.type === 'tool_call_end' && e.name === 'agents');
+    expect(dispatch).toBeDefined();
+    // The call as SENT, so a reader of the ledger knows which search this was
+    // rather than only that one happened.
+    expect(dispatch!.args).toMatchObject({
+      action: 'swarm', task: 'explore two angles', preset: 'ideate', branches: 2, depth: 1,
+    });
 
-    const merge = events.find((e): e is Extract<typeof events[number], { type: 'head_merge' }> =>
-      e.type === 'head_merge');
-    expect(merge).toBeDefined();
-    expect(merge!.headCount).toBe(2);
-    expect(merge!.headsWithFindings).toBe(2);
-    expect(merge!.totalTokens).toBeGreaterThan(0);
+    const job = v.parse(
+      v.object({ id: v.string(), status: v.string() }),
+      db.query(`SELECT id, status FROM background_jobs WHERE kind = 'agents'`).get(),
+    );
+    expect(job.status).toBe('completed');
+    // The halves are LINKED: the dispatch row names the job that carries the
+    // outcome, so the ledger never leaves a spawn with no reachable result.
+    expect(String(dispatch!.result)).toContain(job.id);
+
+    // What it PRODUCED and what it COST, off the settled row: two branches
+    // expanded, two candidates back, and the tokens they burned.
+    const settled = v.parse(
+      v.object({
+        report: v.object({ stop: v.string(), expansions: v.number(), tokens: v.number() }),
+        candidates: v.array(v.object({ artifact: v.string() })),
+      }),
+      JSON.parse(jobResult(db, job.id)),
+    );
+    expect(settled.report.stop).toBe('settled');
+    expect(settled.report.expansions).toBe(2);
+    expect(settled.candidates).toHaveLength(2);
+    expect(settled.report.tokens).toBeGreaterThan(0);
 
     await session.end();
   });
@@ -2804,8 +2845,10 @@ describe('LocalAgentSession — the durable run-event log', () => {
 // ── agents.* in the node codemode sandbox ───────────────────────────────────
 // The bridge that makes a crafted tool able to BE a workflow: LLM-authored JS
 // delegating with plain control flow. Exercised through the REAL node sandbox
-// (`new Function` over the real provider bindings), with the exploration
-// strategy scripted so no model is called.
+// (`new Function` over the real provider bindings). A search runs its branches
+// in THIS process off the deps' runtime and model, so the MODEL is the seam
+// every search below is scripted and observed through — there is no strategy
+// in between to script instead.
 
 describe('agents.* codemode namespace — node sandbox', () => {
   /** The node factory with only the agents provider bound, so the code under
@@ -2818,129 +2861,127 @@ describe('agents.* codemode namespace — node sandbox', () => {
       toolExecute<{ code: string }, JsonValue>(tool)({ code }, options);
   }
 
-  interface ScriptedFork {
+  interface SearchSandbox {
     deps: AgentsToolDeps;
-    seen: StrategyContext[];
+    /** Every model call the search's expansions made, in call order. */
+    calls: Array<{ prompt: string; signal?: AbortSignal }>;
   }
 
-  /** A scripted exploration strategy: records what the fork asked for and
-   *  answers without an LLM. */
-  function scriptedFork(seen: StrategyContext[] = []): ScriptedFork {
-    const registry = createStrategyRegistry();
-    registry.register({
-      id: FORK_STRATEGY_ID,
-      async explore(ctx: StrategyContext) {
-        seen.push(ctx);
-        return {
-          strategy: FORK_STRATEGY_ID,
-          best: { text: `${FORK_STRATEGY_ID} settled: ${ctx.task}`, score: 0.9, source: FORK_STRATEGY_ID },
-          all: [],
-          cost: { durationMs: 1 },
-        };
-      },
+  /** The exploration substrate a local session wires, with the node model
+   *  scripted to answer without a network and to record what it was asked. */
+  function searchSandbox(answer = 'one approach'): SearchSandbox {
+    const calls: SearchSandbox['calls'] = [];
+    const base = fakeModel(answer);
+    const record = (options: LanguageModelV2CallOptions) => {
+      calls.push({ prompt: JSON.stringify(options.prompt), signal: options.abortSignal });
+    };
+    const model = new TestLanguageModelV2({
+      provider: base.provider,
+      modelId: base.modelId,
+      doGenerate: async (options) => { record(options); return base.doGenerate(options); },
+      doStream: async (options) => { record(options); return base.doStream(options); },
     });
     const db = new Database(':memory:');
     const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
-    return { deps: { mode: 'build', fork: { registry, rt, model: fakeModel('unused') } }, seen };
+    // The registry is empty deliberately: a search dispatches through no
+    // strategy, so a registration here would script a path it does not take.
+    // `AgentsForkDeps` still declares the field, so it is still passed.
+    return { deps: { mode: 'build', fork: { registry: createStrategyRegistry(), rt, model } }, calls };
   }
 
-  test('a script forks, branches on the result, and returns its own synthesis', async () => {
-    const { deps, seen } = scriptedFork();
+  test('a script searches, branches on the result, and returns its own synthesis', async () => {
+    const { deps, calls } = searchSandbox();
     const run = sandboxWith(deps);
     // The shape a workflow actually has: fan out, inspect, decide, aggregate.
     const result = await run(`
       const angles = ['auth', 'billing'];
-      const settled = await Promise.all(angles.map((a) => agents.fork({
-        task: 'review ' + a,
-        forks: [
-          { task: 'read ' + a, rationale: 'ground it' },
-          { task: 'test ' + a, rationale: 'check it' },
-        ],
+      const searched = await Promise.all(angles.map((a) => agents.swarm({
+        task: 'review ' + a, preset: 'ideate', branches: 2, depth: 1,
       })));
-      const good = settled.filter((s) => !s.error && s.score > 0.5);
-      return { count: good.length, texts: good.map((g) => g.text) };
+      const ran = searched.filter((s) => !s.reason && s.report.expansions === 2);
+      return { count: ran.length, branches: ran.map((s) => s.caps.branches.value) };
     `);
-    expect(result).toEqual({
-      result: {
-        count: 2,
-        texts: [`${FORK_STRATEGY_ID} settled: review auth`, `${FORK_STRATEGY_ID} settled: review billing`],
-      },
-    });
-    expect(seen.map((c) => c.task)).toEqual(['review auth', 'review billing']);
-    // The typed fork specs reached the strategy the same way the tool sends them.
-    const first = seen[0];
-    if (!first) throw new Error('fork strategy was not called');
-    const headsOption = first.options && 'get' in first.options
-      ? first.options.get('heads')
-      : first.options?.heads;
-    const heads = v.parse(v.object({ heads: v.array(v.unknown()) }), headsOption).heads;
-    expect(heads).toHaveLength(2);
+    expect(result).toEqual({ result: { count: 2, branches: [2, 2] } });
+    // Each search reached the model carrying its OWN task, so the typed call
+    // fields arrive at the run rather than only surviving the parse.
+    const asked = calls.map((call) => call.prompt).join('\n');
+    expect(asked).toContain('review auth');
+    expect(asked).toContain('review billing');
   });
 
-  test('a sandbox fork dispatches the heads strategy, and one with no forks is refused toward swarm', async () => {
-    const { deps, seen } = scriptedFork();
+  test('a sandbox search runs in-process, and one with no preset is refused', async () => {
+    const { deps, calls } = searchSandbox();
     const run = sandboxWith(deps);
-    const dispatched = v.parse(v.object({ result: v.object({ strategy: v.string() }) }), await run(`
-      const settled = await agents.fork({ task: 'pick an approach', forks: [
-        { task: 'read it', rationale: 'ground it' },
-        { task: 'test it', rationale: 'check it' },
-      ] });
-      return settled;
-    `));
-    expect(dispatched.result.strategy).toBe(FORK_STRATEGY_ID);
-    // A fork runs the briefs it is given, so a call with none has nothing to
-    // run: it must be refused before anything spawns, and the refusal has to
-    // name the action that writes its own candidates.
+    const dispatched = v.parse(
+      v.object({ result: v.object({ preset: v.string(), report: v.object({ expansions: v.number() }) }) }),
+      await run(`return await agents.swarm({ task: 'pick an approach', preset: 'ideate', branches: 2, depth: 1 });`),
+    );
+    expect(dispatched.result.preset).toBe('ideate');
+    // The branches ran here, on this plane, and came back as a report — there
+    // is no strategy and no facet between the sandbox call and the run.
+    expect(dispatched.result.report.expansions).toBe(2);
+    const expanded = calls.length;
+    expect(expanded).toBeGreaterThan(0);
+    // `preset` is the SHAPE of the search and none can be invented for a call
+    // that named none, so it is refused before anything expands — and the
+    // refusal names the missing field rather than only the action.
     const refused = v.parse(
       v.object({ result: v.object({ reason: v.literal('bad_input'), error: v.string() }) }),
-      await run(`return await agents.fork({ task: 'pick an approach' });`),
+      await run(`return await agents.swarm({ task: 'pick an approach' });`),
     );
-    expect(refused.result.error).toContain("action:'swarm'");
-    expect(seen).toHaveLength(1);
+    expect(refused.result.error).toContain('swarm needs `preset`');
+    expect(calls).toHaveLength(expanded);
   });
 
-  test('a fork error is a value the script can branch on, not a sandbox failure', async () => {
-    const registry = createStrategyRegistry();
-    registry.register({
-      id: FORK_STRATEGY_ID,
-      async explore() { throw new Error('heads unavailable'); },
-    });
-    const db = new Database(':memory:');
-    const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
-    const result = await sandboxWith({ mode: 'build', fork: { registry, rt, model: fakeModel('unused') } })(`
-      const settled = await agents.fork({ task: 't', forks: [
-        { task: 'read it', rationale: 'ground it' },
-        { task: 'test it', rationale: 'check it' },
-      ] });
-      return settled.error ? 'recovered: ' + settled.error.includes('heads unavailable') : 'no error';
+  test('a search refusal is a value the script can branch on, not a sandbox failure', async () => {
+    const { deps, calls } = searchSandbox();
+    // An illegal COMPOSITION rather than a missing field: `ideate` is flat by
+    // design, so an objective riding it is refused on the axis. The script
+    // reads that refusal as an ordinary return value and recovers from it.
+    const result = await sandboxWith(deps)(`
+      const searched = await agents.swarm({
+        task: 't', preset: 'ideate',
+        objective: {
+          kind: 'scalar', metric: 'ms', unit: 'ms', direction: 'minimise',
+          scale: 'linear', target: 1, verify: { kind: 'exec-ratio', spec: {} },
+        },
+      });
+      return searched.error ? 'recovered: ' + searched.error.includes('no value signal') : 'no error';
     `);
     expect(result).toEqual({ result: 'recovered: true' });
+    // Refused on the shape, so nothing was spent discovering it.
+    expect(calls).toEqual([]);
   });
 
-  test('the turn abort signal reaches a fork started inside the sandbox', async () => {
-    const { deps, seen } = scriptedFork();
+  test('the turn abort signal reaches a search started inside the sandbox', async () => {
+    // An agent node is not cancelled by an `abortSignal` on its model call — it
+    // is polled — so the signal's arrival is observable where it has an EFFECT:
+    // the run's own stop reason. A turn already cancelled when the script calls
+    // out has to stop the search before it expands anything, not after.
+    const { deps, calls } = searchSandbox();
     const controller = new AbortController();
-    const brief = '{ task: "read it", rationale: "ground it" }';
-    await sandboxWith(deps)(`return await agents.fork({ task: "t", forks: [${brief}, ${brief}] });`, {
-      abortSignal: controller.signal,
-      toolCallId: 'fork-abort-test',
-      messages: [],
-    });
-    expect(seen[0].signal).toBeDefined();
-    expect(seen[0].signal?.aborted).toBe(false);
     controller.abort();
-    expect(seen[0].signal?.aborted).toBe(true);
+    const result = v.parse(
+      v.object({ result: v.object({ report: v.object({ stop: v.string(), expansions: v.number() }) }) }),
+      await sandboxWith(deps)(
+        `return await agents.swarm({ task: 't', preset: 'ideate', branches: 2, depth: 1 });`,
+        { abortSignal: controller.signal, toolCallId: 'swarm-abort-test', messages: [] },
+      ),
+    );
+    expect(result.result.report.stop).toBe('aborted');
+    expect(result.result.report.expansions).toBe(0);
+    expect(calls).toEqual([]);
   });
 
   test('ungated actions are structurally absent from the local sandbox', async () => {
-    const { deps } = scriptedFork();
+    const { deps } = searchSandbox();
     const result = await sandboxWith(deps)(
-      'return { members: Object.keys(agents), hire: typeof agents.hire, fork: typeof agents.fork };',
+      'return { members: Object.keys(agents), hire: typeof agents.hire, swarm: typeof agents.swarm };',
     );
-    // Local sessions wire the fork SUBSTRATE only — no daemon routes hiring or peer
-    // mail — and that substrate carries both search rungs: `swarm` needs a model to
-    // expand with and a workspace to measure in, which is what fork deps already are.
-    expect(result).toEqual({ result: { members: ['fork', 'swarm'], hire: 'undefined', fork: 'function' } });
+    // Local sessions wire the exploration SUBSTRATE only — no daemon routes
+    // hiring or peer mail — and the single rung that substrate carries is the
+    // search: a model to expand with and a workspace to measure in.
+    expect(result).toEqual({ result: { members: ['swarm'], hire: 'undefined', swarm: 'function' } });
   });
 
   test('a live session turn gets the namespace, gated to what it actually wired', async () => {
@@ -2949,16 +2990,17 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // workspace, which is how sandbox code returns anything durable anyway.
     const { rt, session, events } = setup('done', executeToolsModel(`
       await workspace.writeFile('/workspace/probe/agents.json', JSON.stringify({
-        members: Object.keys(agents), fork: typeof agents.fork, hire: typeof agents.hire,
+        members: Object.keys(agents), swarm: typeof agents.swarm, hire: typeof agents.hire,
       }));
       return 'probed';
     `));
     await session.send('what can you delegate to?');
     expect(events.some((e) => e.type === 'tool-result' && e.toolName === 'execute_tools' && e.success)).toBe(true);
-    // Local sessions wire the fork substrate only, and both search rungs ride it.
+    // Local sessions wire the exploration substrate only, and the search is the
+    // one rung that rides it.
     const probe = await rt.storage.vfs.readFile('/workspace/probe/agents.json', { encoding: 'utf8' });
     expect(JSON.parse(String(probe))).toEqual({
-      members: ['fork', 'swarm'], fork: 'function', hire: 'undefined',
+      members: ['swarm'], swarm: 'function', hire: 'undefined',
     });
     await session.end();
   });
