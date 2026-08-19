@@ -46,27 +46,6 @@ export interface ForkNode {
 	createdAt?: number;
 }
 
-export interface MCTSNodeSummary {
-	id: string;
-	parentId: string | null;
-	depth: number;
-	value: number;
-	visits: number;
-	status: ForkNode["status"];
-	action: string;
-	createdAt?: number;
-}
-
-export interface MCTSNodeDetail extends MCTSNodeSummary {
-	task: string;
-	observation: string;
-	codeUsed: string | null;
-	branchAgentKey: string | null;
-	msgId: string | null;
-	path: MCTSNodeSummary[];
-	children: MCTSNodeSummary[];
-}
-
 export interface ToolInfo {
 	name: string;
 	/** The one-line headline — what a list row shows. For a builtin this is the

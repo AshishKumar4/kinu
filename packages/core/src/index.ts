@@ -1387,7 +1387,10 @@ export type {
   DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorWriteResult,
   EnvironmentInfo, MountInfo,
 } from './read-models/files';
-export { readLatestSearchTree, readSearchTree } from './read-models/search-tree';
+export {
+  readLatestSearchTree, readSearchTree, readSearchNodeDetail,
+  type SearchNodeSummary, type SearchNodeDetail,
+} from './read-models/search-tree';
 export { readForkRunParams } from './read-models/fork-params';
 export { readExplorationCanvas } from './read-models/exploration-canvas';
 export type { ExplorationCanvasRun } from './read-models/exploration-canvas';

@@ -59,7 +59,9 @@ import {
   type ReleaseBoard,
   type RunEvent,
   type ScaffoldVersionView,
+  readSearchNodeDetail,
   type SearchNode,
+  type SearchNodeDetail,
   type TriggerRow,
   type MctsSearchRunSummary,
   type ReasoningEffort,
@@ -92,24 +94,6 @@ const EventVariantSchema = v.picklist([
   'mcp_chat',
   'mcp_third_party',
 ] satisfies EventVariant[]);
-
-export interface LocalMctsNodeDetail {
-  id: string;
-  parentId: string | null;
-  depth: number;
-  visits: number;
-  value: number;
-  status: string;
-  action: string;
-  task: string;
-  observation: string;
-  codeUsed: string | null;
-  branchAgentKey: string | null;
-  msgId: string | null;
-  createdAt: number;
-  path: Array<Pick<LocalMctsNodeDetail, 'id' | 'parentId' | 'depth' | 'visits' | 'value' | 'status' | 'action' | 'createdAt'>>;
-  children: Array<Pick<LocalMctsNodeDetail, 'id' | 'parentId' | 'depth' | 'visits' | 'value' | 'status' | 'action' | 'createdAt'>>;
-}
 
 export interface LocalExecutorInfo {
   name: string;
@@ -164,7 +148,7 @@ export interface LocalAgentState {
   status: LocalStatus;
   tools: LocalToolSummary;
   memoryContent: string;
-  mcts: LocalSearchNode[];
+  mcts: SearchNode[];
   timeline: JsonObject[];
   executors: LocalExecutorInfo[];
   release: ReleaseBoard;
@@ -360,15 +344,13 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
   });
 }
 
-/** A search_nodes row plus root_id — the column `SearchNode` omits because
- *  the MCTS engine itself never needs it (a running search already knows
- *  which store/root it owns); a debugging read across every search this
- *  workspace has ever run does. */
-export type LocalSearchNode = SearchNode & { root_id: string | null };
-
-export function listLocalMcts(name: string): LocalSearchNode[] {
+/** Every search_nodes row this workspace ever wrote, across every search — the
+ *  debugging read `proteus inspect mcts` serves with no node id. Core's scoped
+ *  projections (readSearchTree, readLatestSearchTree) answer one search; this
+ *  deliberately answers all of them. */
+export function listLocalMcts(name: string): SearchNode[] {
   return withLocalDb(name, (db) => tableExists(db, 'search_nodes')
-    ? all<LocalSearchNode>(
+    ? all<SearchNode>(
       db,
       `SELECT id, parent_id, root_id, task, action, observation, code_used, visits, value, depth,
               status, msg_id, branch_agent_key, created_at
@@ -386,46 +368,13 @@ export function listLocalMctsSearchRuns(name: string, limit = 20): MctsSearchRun
   ));
 }
 
-export function getLocalMctsNode(name: string, nodeId: string): LocalMctsNodeDetail | null {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'search_nodes')) return null;
-    const node = readMctsNode(db, nodeId);
-    if (!node) return null;
-    const path: LocalMctsNodeDetail['path'] = [];
-    const seen = new Set<string>();
-    let cursor: SearchNode | null = node;
-    while (cursor && !seen.has(cursor.id)) {
-      seen.add(cursor.id);
-      path.unshift(summarizeMcts(cursor));
-      cursor = cursor.parent_id ? readMctsNode(db, cursor.parent_id) : null;
-    }
-    const children = all<SearchNode>(
-      db,
-      `SELECT id, parent_id, task, action, observation, code_used, visits, value, depth,
-              status, msg_id, branch_agent_key, created_at
-       FROM search_nodes
-       WHERE parent_id = ?
-       ORDER BY value DESC, visits DESC, created_at`,
-      nodeId,
-    ).map(summarizeMcts);
-    return {
-      id: node.id,
-      parentId: node.parent_id,
-      depth: node.depth,
-      visits: node.visits,
-      value: node.value,
-      status: node.status,
-      action: node.action,
-      task: node.task,
-      observation: node.observation,
-      codeUsed: node.code_used,
-      branchAgentKey: node.branch_agent_key,
-      msgId: node.msg_id,
-      createdAt: node.created_at,
-      path,
-      children,
-    };
-  });
+/** Local peer of the cloud `getMctsNodeDetail` RPC. The projection itself is
+ *  core's (read-models/search-tree.ts), so `proteus inspect mcts <id>` formats
+ *  one shape whichever target answered. */
+export function getLocalMctsNode(name: string, nodeId: string): SearchNodeDetail | null {
+  return withLocalDb(name, (db) => (
+    tableExists(db, 'search_nodes') ? readSearchNodeDetail(makeSql(db), nodeId) : null
+  ));
 }
 
 export function listLocalHeads(name: string, limit = 20): HeadRunView[] {
@@ -832,31 +781,6 @@ function columnSet(db: SqliteDb, table: string): Set<string> {
 function safeIdentifier(value: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) throw new Error(`Unsafe SQL identifier: ${value}`);
   return value;
-}
-
-function readMctsNode(db: SqliteDb, id: string): SearchNode | null {
-  return get<SearchNode>(
-    db,
-    `SELECT id, parent_id, task, action, observation, code_used, visits, value, depth,
-            status, msg_id, branch_agent_key, created_at
-     FROM search_nodes
-     WHERE id = ?
-     LIMIT 1`,
-    id,
-  );
-}
-
-function summarizeMcts(node: SearchNode): LocalMctsNodeDetail['path'][number] {
-  return {
-    id: node.id,
-    parentId: node.parent_id,
-    depth: node.depth,
-    visits: node.visits,
-    value: node.value,
-    status: node.status,
-    action: node.action,
-    createdAt: node.created_at,
-  };
 }
 
 function getLocalStatus(db: SqliteDb): LocalStatus {

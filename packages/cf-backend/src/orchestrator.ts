@@ -135,6 +135,7 @@ import {
   PeerHub, type PeerMessage, type ReceiveResult,
   // ── Read models: the folds a surface asks for, one implementation each ──
   getAgentStatus, getChatHistoryPage, getToolList, readLatestSearchTree, readSearchTree,
+  readSearchNodeDetail, type SearchNodeDetail,
   listForkRuns, readForkRun, type ForkRunSummary,
   readNodeTranscript, type NodeTranscriptView,
   readExplorationCanvas, type ExplorationCanvasRun,
@@ -1823,62 +1824,11 @@ export class OrchestratorAgent extends ActorAgent {
     return this.mctsSearchStore.list(limit);
   }
 
-  @callable() async getMctsNodeDetail(nodeId: string) {
-    type Row = {
-      id: string; parent_id: string | null; depth: number; visits: number; value: number; status: string;
-      action: string; task: string; observation: string; code_used: string | null;
-      branch_agent_key: string | null; msg_id: string | null; created_at: number;
-    };
-    const readNode = (id: string): Row | null => this.sql<Row>`
-      SELECT id, parent_id, depth, visits, value, status, action, task, observation,
-             code_used, branch_agent_key, msg_id, created_at
-      FROM search_nodes WHERE id = ${id} LIMIT 1`[0] ?? null;
-    const row = readNode(nodeId);
-    if (!row) return null;
-
-    const summarize = (r: Row) => ({
-      id: r.id,
-      parentId: r.parent_id,
-      depth: r.depth,
-      visits: r.visits,
-      value: r.value,
-      status: r.status,
-      action: r.action,
-      createdAt: r.created_at,
-    });
-
-    const path = [];
-    const seen = new Set<string>();
-    let cursor: Row | null = row;
-    while (cursor && !seen.has(cursor.id)) {
-      seen.add(cursor.id);
-      path.unshift(summarize(cursor));
-      cursor = cursor.parent_id ? readNode(cursor.parent_id) : null;
-    }
-
-    const children = this.sql<Row>`
-      SELECT id, parent_id, depth, visits, value, status, action, task, observation,
-             code_used, branch_agent_key, msg_id, created_at
-      FROM search_nodes WHERE parent_id = ${nodeId}
-      ORDER BY value DESC, visits DESC, created_at`;
-
-    return {
-      id: row.id,
-      parentId: row.parent_id,
-      depth: row.depth,
-      visits: row.visits,
-      value: row.value,
-      status: row.status,
-      action: row.action,
-      task: row.task,
-      observation: row.observation,
-      codeUsed: row.code_used,
-      branchAgentKey: row.branch_agent_key,
-      msgId: row.msg_id,
-      createdAt: row.created_at,
-      path,
-      children: children.map(summarize),
-    };
+  /** One node, its ancestry and its children (core read-models/search-tree.ts).
+   *  The CLI serves the same projection over bun:sqlite, so `proteus inspect
+   *  mcts <id>` formats one shape however it reached it. */
+  @callable() async getMctsNodeDetail(nodeId: string): Promise<SearchNodeDetail | null> {
+    return readSearchNodeDetail(this.boundSql, nodeId);
   }
 
   // ── Evolution Changelog — the self-change digest + revert (core builder) ──
