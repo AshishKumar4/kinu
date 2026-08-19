@@ -410,10 +410,16 @@ export const CLAIMS: readonly Claim[] = [
     value: '25.4%',
     says: 'the same leader\'s gain',
     where: NO_LOCATOR,
-    unit: 'gain over the stateless arm',
+    unit: 'gain over the stateless arm — a DELTA, not a reward level',
+    unitWords: ['gain'],
     hand: 'artifact',
     via: 'agent://BenchAnchors',
     verifiedBy: 'transcribed from the public leaderboard; no snapshot date is recorded',
-    note: 'see the 22.3% entry — no snapshot date.',
+    note: 'see the 22.3% entry — no snapshot date. Its unit is CONFUSABLE with the entry'
+      + ' above: the same board reports the same leader as 22.3% normalised reward and'
+      + ' 25.4% gain, so both are percentages about one subject, three points apart, and'
+      + ' a bare 25.4% reads as the reward level — which asserts the leader scores above'
+      + ' the 22.3% this register records for it and leaves the gain unstated. `gain` is'
+      + ' the word that separates them, so prose citing this number must carry it.',
   },
 ];
