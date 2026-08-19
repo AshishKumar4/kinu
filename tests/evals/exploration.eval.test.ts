@@ -41,12 +41,9 @@ import {
   DEFAULT_CONFIG,
   initWorkspaceSchema,
   readSoul,
-  RunEventRecorder,
-  WORKSPACE_RUN_ID,
   type AgentRuntime,
   type LLMProviderConfig,
   type MCTSProgressEvent,
-  type ModelCallSink,
   type SessionMessage,
   type SessionWriter,
   type StrategyRegistry,
@@ -56,7 +53,7 @@ import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql } from '../../packages/cli-backend/src/runtime';
 import { requireSandboxedExecutors } from './harness';
 import {
-  liveChatModel, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
+  liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
   reportLiveModelSpend, scoreExploration, scoreSettleVisibility, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
 
@@ -119,31 +116,6 @@ function makeSessionWriter(): SessionWriter {
       }
       return trail;
     },
-  };
-}
-
-/**
- * Where this suite's driven search reports what each call cost.
- *
- * A search's rollouts and judge calls never surface here as an SDK result — the
- * strategy makes them through the runtime and reports them to whatever sink its
- * caller supplies. Production's caller is `LocalAgentSession`, whose sink writes
- * one `model_call` run event per completed call (local-session.ts:336-353); with
- * no sink at all the calls still happen and simply go unattributed, which is how
- * a suite spends real tokens and then reports none.
- *
- * So the same row, written to the same log, filed under {@link WORKSPACE_RUN_ID}
- * because a driven strategy belongs to no turn. Unpriced deliberately: this suite
- * holds no catalog session, and an absent `usd` reads as "not priced here" rather
- * than as free. `recordLiveModelEpisode` then reads these through the
- * workspace-spend seam — no second meter.
- */
-function makeModelCallSink(rt: AgentRuntime): ModelCallSink {
-  const events = new RunEventRecorder(rt.storage.sql);
-  return (report) => {
-    events.emit(WORKSPACE_RUN_ID, {
-      type: 'model_call', source: report.source, usage: report.usage,
-    });
   };
 }
 
@@ -274,7 +246,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
           },
         },
       },
-      reportModelCall: makeModelCallSink(rt),
+      reportModelCall: liveModelCallSink(rt.storage.sql),
     });
     for (const line of progress) console.log(`    ${line}`);
 

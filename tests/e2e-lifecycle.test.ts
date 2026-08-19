@@ -33,7 +33,8 @@ import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
 import { requireSandboxedExecutors } from './evals/harness';
 import {
-  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
+  liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode,
+  recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
@@ -212,7 +213,16 @@ describe('E2E Lifecycle', () => {
 
   liveTest('MCTS evolution', async () => {
     const session = makeSessionWriter();
-    const result = await runMCTS(rt, session, 'How can I improve as a TypeScript assistant?', { budget: 1, branches: 2, maxCostUSD: 5 });
+    const result = await runMCTS(rt, session, 'How can I improve as a TypeScript assistant?', {
+      budget: 1, branches: 2, maxCostUSD: 5,
+      // Every other test here holds an SDK result and reports it directly. A search
+      // does not: its rollouts and judge samples are made deeper down, so with no
+      // sink they happen and go unattributed — this step ran for 456s and reported
+      // `0 model call(s)`, which is the floor-as-a-total shape the tier's own
+      // liveness verdict refuses.
+      reportModelCall: liveModelCallSink(rt.storage.sql),
+    });
+    recordLiveModelEpisode(rt.storage.sql);
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
     console.log(`  Nodes: ${nodes.length}`);
     expect(nodes.length).toBe(3);

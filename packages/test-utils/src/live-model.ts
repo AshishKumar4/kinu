@@ -36,8 +36,8 @@
  */
 import {
   addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
-  RunEventRecorder, usageReported, workspaceSpend,
-  type LLMProviderConfig, type SqlExecutor, type Usage,
+  RunEventRecorder, usageReported, workspaceSpend, WORKSPACE_RUN_ID,
+  type LLMProviderConfig, type ModelCallSink, type SqlExecutor, type Usage,
 } from '@proteus/core';
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import { appendFileSync } from 'node:fs';
@@ -391,6 +391,34 @@ export function recordLiveModelSpend(usage?: LanguageModelUsage): void {
     return;
   }
   spendUsage = addUsage(spendUsage, reported);
+}
+
+/**
+ * The sink a DRIVEN STRATEGY reports its model calls to, so
+ * {@link recordLiveModelEpisode} can read them.
+ *
+ * `recordLiveModelSpend` above serves a suite holding an SDK result. A suite that
+ * drives a strategy holds none: the rollouts and judge samples are made deeper
+ * down and reported to whatever `ModelCallSink` the caller supplied. With no sink
+ * they still happen — they are simply never attributed, which is a suite spending
+ * real tokens and reporting none.
+ *
+ * This writes the row PRODUCTION writes, to the log production writes it to
+ * (cli-backend/src/local-session.ts:336-353), filed under {@link WORKSPACE_RUN_ID}
+ * because a driven strategy belongs to no turn. Unpriced on purpose: a test
+ * harness holds no model-catalog session, and an absent `usd` reads as "not priced
+ * here" rather than as free.
+ *
+ * It lives beside the reader instead of in each suite, so the writer and the
+ * `workspaceSpend` query that unions it cannot drift apart.
+ */
+export function liveModelCallSink(sql: SqlExecutor): ModelCallSink {
+  const events = new RunEventRecorder(sql);
+  return (report) => {
+    events.emit(WORKSPACE_RUN_ID, {
+      type: 'model_call', source: report.source, usage: report.usage,
+    });
+  };
 }
 
 /**
