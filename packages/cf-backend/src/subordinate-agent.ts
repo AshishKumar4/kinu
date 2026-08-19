@@ -11,8 +11,6 @@ import {
   type SubordinateHandoff,
   type WorkMode,
   type SubordinateReportStatus,
-  // Read models — the same control-plane implementations the orchestrator uses.
-  cancelCurrentWork, getStoredModelSpec, setModel, type CancelWorkOutcome, type UserSteerOutcome,
   // report.* — codemode projection of the native `report` tool.
   createReportCodemodeProvider, type CodemodeProvider,
   type DelegationBudget,
@@ -326,42 +324,6 @@ export class SubordinateAgent extends ActorAgent {
       mission: identity.mission,
       model: this.getStoredModelId(),
     };
-  }
-
-  @callable()
-  async getStoredModelSpec(): Promise<{ spec: string | null }> {
-    this.ensureSchema();
-    return getStoredModelSpec(this.config);
-  }
-
-  @callable()
-  async setModel(spec: string) {
-    this.ensureSchema();
-    return setModel({
-      config: this.config,
-      normalize: (s) => this.providerRegistry().normalizeSpecSync(s),
-      onChanged: () => this.invalidateModelCaches(),
-    }, spec);
-  }
-
-  /** Steer the subordinate's running turn — the same shared drain the
-   *  orchestrator exposes, because the composer is one component and a
-   *  subordinate chat is a chat. */
-  @callable()
-  async steerTurn(text: string): Promise<{ landed: UserSteerOutcome }> {
-    this.ensureSchema();
-    return { landed: this.acceptUserSteer(text) };
-  }
-
-  @callable()
-  async cancelCurrentWork(): Promise<CancelWorkOutcome> {
-    this.ensureSchema();
-    return cancelCurrentWork({
-      jobRunner: this.jobRunner,
-      activeToolControllers: this._activeToolControllers,
-      broadcast: (payload) => this.broadcast(payload),
-      interruptSteers: () => this.interruptUserSteers(),
-    });
   }
 
   private async sendReport(

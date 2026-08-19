@@ -59,6 +59,7 @@ import {
 } from "./device-transport";
 import {
   createAgentProviderRegistry,
+  type AgentProviderRegistry,
   type UserCredentialClient,
   type UserCredentialSource,
 } from "./providers/agent-registry";
@@ -813,6 +814,36 @@ function readStoredModelSpec(sql: SqlExecutor): string | null {
 }
 
 /**
+ * The actor's provider registry — one builder for every non-turn model seam.
+ *
+ * Each seam carried its own copy of this call and all of them resolved it from the
+ * same three inputs: this Worker's env, the owner's UserDO under this actor's
+ * capability, and this agent's Workers-AI affinity key. `title` is the only real
+ * difference and it is one request header (OpenRouter's `X-Title`), so it is an
+ * argument rather than a reason for four literals.
+ *
+ * Resolved at CALL time by every caller, which is what the copies were
+ * inconsistent about: a registry captured when the runtime was built cannot see a
+ * provider the owner connected since, and each seam promises a provider switch
+ * takes effect without a redeploy. Deliberately NOT routed through
+ * `OwnedModelServices`, which memoizes under one fixed title — right for the turn's
+ * model, wrong here.
+ */
+function actorProviderRegistry(
+  agent: AgentHost,
+  env: Env,
+  actor: ActorRuntimeIdentity,
+  title: string,
+): AgentProviderRegistry {
+  return createAgentProviderRegistry({
+    env,
+    userDO: userCredentialSourceFor(env, actor),
+    appTitle: title,
+    workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
+  });
+}
+
+/**
  * Only a COMPLETED call reports. A seam that threw produced no usage and, as far
  * as anything here can see, was not billed — counting it as an unmeasured call
  * would depress the workspace's coverage fraction with requests that genuinely
@@ -829,12 +860,7 @@ function createDualPathLLM(
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       try {
-        const reg = createAgentProviderRegistry({
-          env,
-          userDO: userCredentialSourceFor(env, actor),
-          appTitle: 'Proteus',
-          workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
-        });
+        const reg = actorProviderRegistry(agent, env, actor, 'Proteus');
         const spec = reg.normalizeSpecSync(readStoredModelSpec(sql));
         const result = await generateText({
           model: reg.resolveModel(spec), prompt,
@@ -884,23 +910,26 @@ function createFastLLM(
   report?: ModelCallSink,
 ): LLM | undefined {
   const config = createAgentConfigStore(sql);
-  const registry = createAgentProviderRegistry({
-    env,
-    userDO: userCredentialSourceFor(env, actor),
-    appTitle: 'Proteus (fast)',
-    workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
-  });
-  const selected = () => selectFastModel({
-    fastSpec: config.getFastModel(),
-    chatSpec: registry.normalizeSpecSync(readStoredModelSpec(sql)),
-    providers: registry.registry.list(),
-  });
+  // Per call, like the other two seams: the availability decision below needs one
+  // now, and a captured registry could not see a provider connected since — which
+  // is the liveness this factory's own docstring promises.
+  const selected = () => {
+    const registry = actorProviderRegistry(agent, env, actor, 'Proteus (fast)');
+    return {
+      registry,
+      ...selectFastModel({
+        fastSpec: config.getFastModel(),
+        chatSpec: registry.normalizeSpecSync(readStoredModelSpec(sql)),
+        providers: registry.registry.list(),
+      }),
+    };
+  };
   if (selected().source === 'chat-model') return undefined;
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       try {
-        const spec = selected().spec;
+        const { registry, spec } = selected();
         const result = await generateText({
           model: registry.resolveModel(spec), prompt,
           ...effortFor('reflection'),
@@ -934,12 +963,7 @@ function createJudgeLLM(
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       const config = createAgentConfigStore(sql);
-      const registry = createAgentProviderRegistry({
-        env,
-        userDO: userCredentialSourceFor(env, actor),
-        appTitle: 'Proteus (judge)',
-        workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
-      });
+      const registry = actorProviderRegistry(agent, env, actor, 'Proteus (judge)');
       const { spec } = await resolveJudgeModelSelection({
         registry,
         reviewSpec: config.getReviewModel(),

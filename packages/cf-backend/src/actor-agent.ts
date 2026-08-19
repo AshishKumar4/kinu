@@ -16,7 +16,7 @@
  * no hiring actions on its `agents` tool. No flags.
  */
 
-import { type AgentContext, type Connection, type ConnectionContext, type SubAgentClass } from "agents";
+import { callable, type AgentContext, type Connection, type ConnectionContext, type SubAgentClass } from "agents";
 // Type-only, so it is erased and the base class carries no runtime import of
 // its own subclass. The VALUE comes from `subordinateFacet()`, which each
 // concrete root supplies.
@@ -117,6 +117,9 @@ import {
   BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
   type BackgroundJobStore, type TaskListStore,
   wrapToolsForBackground, resumeBackgroundJob,
+  // The control plane both roots expose over the same core implementations.
+  cancelCurrentWork, getStoredModelSpec, setModel,
+  type CancelWorkOutcome,
   type MctsSearchStore, readSearchTree, type MCTSProgressEvent,
   // EventsHub primitives (spec §1)
   EventLog,
@@ -2222,6 +2225,69 @@ export abstract class ActorAgent extends Think<Env> {
   protected getStoredModelId(): string | null {
     return this.config.getModel();
   }
+
+  // ── The control plane every root exposes ────────────────────────
+  //
+  // Declared twice, once per root, over the same core implementations: a chat is a
+  // chat, so what stops a turn and what changes the model are the same question
+  // wherever the chat is. `ensureSchema()` first on each, because a native DO RPC
+  // does not route through partyserver and can land before `onStart` — the race
+  // `installWorkspaceCapability` documents. It is flag-gated and idempotent.
+
+  /** The agent's stored model spec. The UI preselects a menu entry with it; the
+   *  available-models list comes from /api/user/models so it stays user-scoped. */
+  @callable()
+  async getStoredModelSpec(): Promise<{ spec: string | null }> {
+    this.ensureSchema();
+    return getStoredModelSpec(this.config);
+  }
+
+  @callable()
+  async setModel(spec: string) {
+    this.ensureSchema();
+    return setModel({
+      config: this.config,
+      normalize: (s) => this.providerRegistry().normalizeSpecSync(s),
+      onChanged: () => this.invalidateModelCaches(),
+    }, spec);
+  }
+
+  /**
+   * Steer the running turn with something the user just typed — the third
+   * composer action beside Stop and Branch, and the only one that neither
+   * abandons the turn nor forks it.
+   *
+   * `'idle'` means the turn ended before this arrived and NOTHING was buffered, so
+   * the caller must send the text as an ordinary message: "it went into the
+   * running turn" and "it started a new one" are different events for the person
+   * who typed it.
+   */
+  @callable()
+  async steerTurn(text: string): Promise<{ landed: UserSteerOutcome }> {
+    this.ensureSchema();
+    return { landed: this.acceptUserSteer(text) };
+  }
+
+  /** Stop everything this actor is doing — the composer's Stop button. */
+  @callable()
+  async cancelCurrentWork(): Promise<CancelWorkOutcome> {
+    this.ensureSchema();
+    return cancelCurrentWork({
+      jobRunner: this.jobRunner,
+      activeToolControllers: this._activeToolControllers,
+      broadcast: (payload) => this.broadcast(payload),
+      interruptSteers: () => this.interruptUserSteers(),
+      onCancelled: (outcome) => this.onWorkCancelled(outcome),
+    });
+  }
+
+  /**
+   * What this root does once its work is actually cancelled — the ONE thing that
+   * differed between the two copies above, kept as a difference: the orchestrator
+   * clears its in-flight flag and files an activity line, and whether a root's
+   * Stop settles its own turn state is that root's business, not the substrate's.
+   */
+  protected onWorkCancelled(_outcome: Omit<CancelWorkOutcome, 'ok'>): void {}
 
   // ── Think lifecycle overrides ──────────────────────────────────
 

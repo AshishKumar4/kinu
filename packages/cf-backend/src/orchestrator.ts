@@ -149,13 +149,13 @@ import {
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, writeExecutorFileOp, listEnvironments,
   type DirEntry, type ExecutorWriteResult,
-  cancelBackgroundJob, cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
+  cancelBackgroundJob, clearBackgroundJobs, dismissBackgroundJob,
   jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
-  type CancelWorkOutcome, type RetryOutcome, type UserSteerOutcome,
+  type CancelWorkOutcome, type RetryOutcome,
   getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
-  getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
-  setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
+  setAlwaysActiveSkills, setEvolutionConfig,
+  setMctsConfig, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView, type MctsConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   PlanReviewStore, formatPlanWithLineNumbers,
@@ -1147,18 +1147,11 @@ export class OrchestratorAgent extends ActorAgent {
     return this.taskList.list();
   }
 
-  @callable()
-  async cancelCurrentWork(): Promise<CancelWorkOutcome> {
-    return cancelCurrentWork({
-      jobRunner: this.jobRunner,
-      activeToolControllers: this._activeToolControllers,
-      broadcast: (payload) => this.broadcast(payload),
-      interruptSteers: () => this.interruptUserSteers(),
-      onCancelled: ({ cancelledJobs, abortedTools }) => {
-        this._inFlight = false;
-        this.logActivity('work_cancelled', `${abortedTools} foreground, ${cancelledJobs.length} background`);
-      },
-    });
+  /** The orchestrator's half of the shared Stop: settle the turn that was
+   *  cancelled. The call itself is ActorAgent's. */
+  protected override onWorkCancelled({ cancelledJobs, abortedTools }: Omit<CancelWorkOutcome, 'ok'>): void {
+    this._inFlight = false;
+    this.logActivity('work_cancelled', `${abortedTools} foreground, ${cancelledJobs.length} background`);
   }
 
   // ── Device consent — ask-once-then-remember ──────────────────────────
@@ -1883,21 +1876,6 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async latestAlternateTakes(): Promise<AlternateTakeSet | null> {
     return latestAlternateTakeSet(this.boundSql);
-  }
-
-  /**
-   * Steer the running turn with something the user just typed — the third
-   * composer action beside Stop and Branch, and the only one that neither
-   * abandons the turn nor forks it.
-   *
-   * `'idle'` means the turn ended before this arrived and NOTHING was buffered:
-   * the caller must send the text as an ordinary message. That distinction is
-   * the whole return value, because "it went into the running turn" and "it
-   * started a new one" are different events for the person who typed it.
-   */
-  @callable()
-  async steerTurn(text: string): Promise<{ landed: UserSteerOutcome }> {
-    return { landed: this.acceptUserSteer(text) };
   }
 
   /**
@@ -3051,21 +3029,6 @@ export class OrchestratorAgent extends ActorAgent {
           : `Couldn't list ${executorId} preview ports`,
       };
     }
-  }
-
-  /** The agent's current stored model spec. UI tells which menu entry to
-   *  preselect; the full available-models list comes from /api/user/models
-   *  (UserDO) so connections are user-scoped. */
-  @callable() async getStoredModelSpec(): Promise<{ spec: string | null }> {
-    return getStoredModelSpec(this.config);
-  }
-
-  @callable() async setModel(spec: string) {
-    return setModel({
-      config: this.config,
-      normalize: (s) => this.providerRegistry().normalizeSpecSync(s),
-      onChanged: () => this.invalidateModelCaches(),
-    }, spec);
   }
 
   @callable() async getReasoningEffort(): Promise<{ effort: ReasoningEffort | null }> {

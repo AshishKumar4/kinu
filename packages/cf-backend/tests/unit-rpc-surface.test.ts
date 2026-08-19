@@ -313,6 +313,31 @@ describe('the agent surfaces cannot drift from their classes', () => {
       .map((m) => m.name);
     expect(internal.filter((name) => surface.includes(name)).sort()).toEqual([]);
   });
+
+  /**
+   * The control plane lives on the substrate, once.
+   *
+   * All four were declared on BOTH roots over the same core implementation, and
+   * nothing was red while they drifted: the orchestrator's setModel and
+   * getStoredModelSpec skipped the `ensureSchema()` its twin ran, so the two roots
+   * disagreed about whether their own tables had to exist before a config write.
+   * A copy reappearing on a root is exactly how that returns, so it is red here
+   * rather than left to review.
+   *
+   * Behaviour is pinned separately, through both classes, in
+   * unit-actor-control-plane.test.ts.
+   */
+  test('the shared control plane is declared on ActorAgent and on neither root', () => {
+    const shared = ['getStoredModelSpec', 'setModel', 'steerTurn', 'cancelCurrentWork'];
+    const onActor = actorMembers.map((m) => m.name).filter((name) => shared.includes(name));
+    expect(onActor.sort()).toEqual([...shared].sort());
+    for (const file of ['orchestrator.ts', 'subordinate-agent.ts']) {
+      const redeclared = declaredClassMembers(source(file))
+        .map((m) => m.name)
+        .filter((name) => shared.includes(name));
+      expect(redeclared).toEqual([]);
+    }
+  });
 });
 
 /**
