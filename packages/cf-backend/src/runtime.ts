@@ -38,7 +38,7 @@ import {
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   decodeJsonValue,
   effortFor,
-  createAgentConfigStore, initAgentConfigTable, selectFastModel,
+  createAgentConfigStore, initAgentConfigTable, initActorTables, selectFastModel,
   type VectorStore,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
@@ -347,6 +347,19 @@ export function createCFRuntime(
   // facet's own settings, as a subordinate facet's are its own; a head's MODEL
   // is not read here — it arrives with the HeadInput the spawner built.
   initAgentConfigTable(execRaw);
+  // The rest of what a runtime's own storage carries, for the same reason and
+  // by the same measurement: `agent_config` was the first table an exploration
+  // facet was found to be missing, not the only one. The workspace executor
+  // registered below is handed this same `sql`, and its `listTools` quotes the
+  // crafted-tool EMA from `craft_scores`, its `createTool` seeds that row and
+  // files a refused one in `evolution_events`, and its view tools write
+  // `agent_views` — so a head raised `no such table: craft_scores` on its first
+  // `workspace.listTools()`, and a tool it crafted was written and then
+  // reported to the model as a failure. `initActorTables` is the declared set
+  // for storage that belongs to one full-loop actor and carries no workspace
+  // identity or fork lineage of its own, which is exactly a facet's; on a root
+  // it is the idempotent prefix of the `initWorkspaceSchema` its attach runs.
+  initActorTables(execRaw, sql);
   const memoryConfig = createAgentConfigStore(sql);
   // One-time backfill of chunks indexed before the vector store existed.
   // Fire-and-forget (same pattern as deviceTransport.refreshStatus): bounded

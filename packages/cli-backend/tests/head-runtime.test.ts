@@ -13,7 +13,7 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture,
-  MissionGovernor,
+  MissionGovernor, CRAFT_NEUTRAL_PRIOR,
   type HeadInput, type WebSearchProvider, type AgentRuntime, type JsonObject,
   type ModelCallReport,
 } from '@proteus/core';
@@ -358,6 +358,34 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     const run = toolExecute<{ command: string; runtime: string }, string>(tools.run);
     const out = await run({ command: `cat ${join(dir, 'note.txt')}`, runtime: 'laptop' });
     expect(String(out)).toContain('real file content');
+  });
+
+  /**
+   * A head's `workspace.*` plane reads AND writes the crafted-tool EMA
+   * (`craft_scores`) through the same inline executor the parent registers —
+   * `listTools` quotes the score, `createTool` seeds the neutral prior — but over
+   * the head's OWN scratch database, which `buildCLIHeadRuntime` provisions
+   * itself. The parent's copy comes from `initWorkspaceSchema`; the scratch got
+   * the VFS, the memory store and the craft store and nothing else, so every one
+   * of those calls raised `no such table: craft_scores` inside a head. A live
+   * delegation run died there after the turn had already been paid for, and
+   * `createTool` was worse than the raised read: the tool WAS written, then the
+   * seed threw and the model was told its tool had failed.
+   */
+  test('its own workspace plane scores the tools it crafts', async () => {
+    const rt = buildCLIHeadRuntime(new Database(':memory:'), {
+      parentRuntime: makeParent(), cwd: scratchDir('head-runtime-cwd'),
+      agentId: 'h3', agentName: 'head-h3',
+    });
+    const workspace = rt.executionRouter!.getProvider('workspace')!;
+
+    expect(await workspace.tools.listTools!.execute()).toEqual([]);
+    expect(await workspace.tools.createTool!.execute(
+      'echo_back', 'Return its argument.', 'async (args) => args',
+    )).toEqual({ ok: true, name: 'echo_back', action: 'created' });
+    expect(await workspace.tools.listTools!.execute()).toEqual([
+      { name: 'echo_back', description: 'Return its argument.', qualityScore: CRAFT_NEUTRAL_PRIOR },
+    ]);
   });
 });
 
