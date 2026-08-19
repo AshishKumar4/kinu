@@ -44,10 +44,12 @@ import type {
   LanguageModelV3FinishReason, LanguageModelV3StreamPart,
 } from '@ai-sdk/provider';
 
+import { jsonSchema, tool } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import type {
-  PrepareStepContext, StepConfig, TurnConfig, TurnContext,
+  ChatResponseResult, PrepareStepContext, StepConfig, ToolCallResultContext,
+  TurnConfig, TurnContext,
 } from '@cloudflare/think';
 import * as v from 'valibot';
 import {
@@ -56,15 +58,21 @@ import {
   initHeadsTables,
   nodeWallClockEnvelopeMs,
   runNodeAgent,
+  runNodeLoop,
+  NODE_BUILTIN_TOOLS,
   type HeadRunHeadView,
   type NodeAgentDeps,
   type NodeAgentInput,
   type NodeRun,
   type Usage,
 } from '@proteus/core';
-import { createRecordingLogger } from '@proteus/core/obs';
+import { createRecordingLogger, renderCauseChain } from '@proteus/core/obs';
 import { createTestRuntime } from '@proteus/test-utils';
+import type { Database } from 'bun:sqlite';
 import { createAgentProviderRegistry } from '../../src/providers/agent-registry';
+import {
+  orchestratorHarness, subordinateHarness, type ActorHarness,
+} from './actor-harness';
 import { userCredentialSource } from './user-credentials';
 
 /** The three kinds, named the way the conformance manifest names its roots. */
@@ -393,6 +401,10 @@ export interface NodeFixtureOptions {
   readonly messages?: readonly ModelMessage[];
   readonly maxSteps?: number;
   readonly host?: NodeAgentDeps['host'];
+  /** A ready-made `execute_tools` entry, through the same dep the CF backend uses
+   *  (`BuiltinToolDeps.preBuiltExecuteTool`). Supplied where an assertion needs a
+   *  tool whose output it knows, rather than whatever a shell-less runtime returns. */
+  readonly executeTool?: NodeAgentDeps['executeTool'];
 }
 
 /** One swarm node's engine-authored input. */
@@ -440,6 +452,7 @@ export function nodeDeps(model: LanguageModel, opts?: NodeDepsOptions): NodeSeam
   if (opts?.mission) deps.mission = missionScope(opts.mission);
   if (opts?.signal) deps.signal = opts.signal;
   if (opts?.host) deps.host = opts.host;
+  if (opts?.executeTool !== undefined) deps.executeTool = opts.executeTool;
   return { deps, journal };
 }
 
@@ -452,6 +465,26 @@ export interface NodeDrive {
   readonly thrown: unknown;
   readonly view: HeadRunHeadView | null;
   readonly journal: HeadJournal;
+}
+
+/**
+ * A host that is a TRANSPORT and nothing else: it rebuilds the live seams the way a
+ * facet does across an RPC and calls the real `runNodeLoop`.
+ *
+ * `arbitrate` is deliberately non-null whatever the search decided, because that is
+ * the fact the build-time exclusion exists for: a facet's arbiter is an RPC stub and
+ * is therefore always present, so presence alone cannot answer whether the proposal
+ * tool should be offered. Only `spec.canPropose` can.
+ */
+export function forwardingHost(model: LanguageModel): NonNullable<NodeAgentDeps['host']> {
+  return async (spec) => runNodeLoop(spec, {
+    rt: createTestRuntime().rt,
+    model,
+    logger: createRecordingLogger(),
+    arbitrate: async (proposal) => ({
+      kind: 'granted', width: 2, nodeIds: ['child-a', 'child-b'], proposal,
+    }),
+  });
 }
 
 /** Drive one node turn end to end through its production entry point. */
@@ -585,6 +618,12 @@ function chatCompletionResponse(): Response {
 
 // ── The two actor fixtures ────────────────────────────────────────────────────
 
+/** What core's `setModel` answers: whether it took, and the normalised spec. */
+export interface ModelSetResult {
+  readonly ok: boolean;
+  readonly spec: string;
+}
+
 /**
  * The slice of the real actor surface a turn observation needs, in Think's own
  * types — so a Think release that changes a hook signature fails here rather than
@@ -593,7 +632,13 @@ function chatCompletionResponse(): Response {
 export interface ActorTurnSurface {
   beforeTurn(ctx: TurnContext): Promise<TurnConfig | void>;
   beforeStep(ctx: PrepareStepContext): StepConfig | void;
+  afterToolCall(ctx: ToolCallResultContext): Promise<void>;
+  onChatResponse(result: ChatResponseResult): void | Promise<void>;
   observeRawTools(): ToolSet;
+  /** The production model setter. The fixture wants its side effect — the actor now
+   *  resolving that family — but the answer is declared so a Think/core signature
+   *  change fails here rather than being absorbed. */
+  setModel(spec: string): Promise<ModelSetResult>;
 }
 
 /**
@@ -675,4 +720,337 @@ function modelMessage(message: ModelMessage): RequestMessage {
     partTypes: parts.success ? parts.output.map((part) => part.type) : [],
     text: text.success ? text.output : JSON.stringify(message.content),
   };
+}
+
+/**
+ * A ready-made `execute_tools` entry that answers with `output`.
+ *
+ * Not a stub standing in for the tool surface: `preBuiltExecuteTool` is the dep the
+ * CF backend itself supplies, because its codemode tool needs a construction shape
+ * the core factory does not express. So a fixture handing one in is doing exactly
+ * what a backend does, and the loop below it is unchanged.
+ */
+export function fixedExecuteTool(output: string): ToolSet[string] {
+  return tool({
+    description: 'Run a shell command in the workspace.',
+    inputSchema: jsonSchema<{ command: string }>({
+      type: 'object', required: ['command'], properties: { command: { type: 'string' } },
+    }),
+    execute: async () => output,
+  });
+}
+
+// ── One fixture per kind ──────────────────────────────────────────────────────
+
+/**
+ * ONE AGENT KIND, DRIVABLE.
+ *
+ * Every member is exercised through the entry point that kind's own production code
+ * owns for that capability — never through a re-implementation of its loop. So the
+ * three fixtures differ in WHERE they reach production, and in nothing else; the
+ * assertions above them are one set.
+ */
+export interface KindFixture {
+  readonly kind: AgentKind;
+  readonly differences: readonly Difference[];
+  /** The request this kind's turn issues, over `history`. */
+  request(history: readonly ModelMessage[]): Promise<TurnRequest>;
+  /** The request this kind issues on the step AFTER a tool call settled — where a
+   *  tool result has to appear, or the model never learns what its call returned. */
+  requestAfterToolResult(result: ToolResultFixture): Promise<SettledToolObservation>;
+  /** The tool names this kind's real composition put in front of the model. */
+  toolSurface(): readonly string[];
+  /**
+   * Point this kind at a model family, and answer how it got there.
+   *
+   * `resolves-its-own` is an actor: it holds a stored spec and a registry, so a
+   * family is a setting. `is-handed-one` is a node: the search resolves the model and
+   * hands the object down, so a node cannot choose a family at all. A real difference,
+   * reported rather than smoothed over, because it is why a per-family measurement
+   * has to be taken differently for the two.
+   */
+  useModel(spec: string): Promise<'resolves-its-own' | 'is-handed-one'>;
+  /** Whether this kind's composition wires a background job runner. */
+  background(): 'wired' | 'absent';
+  /**
+   * What this kind's DURABLE transcript records for one settled tool call — the row a
+   * human auditing the finished run reads, as distinct from what the model saw.
+   */
+  transcriptOfToolCall(result: ToolResultFixture): Promise<string>;
+  /** The terminal record this kind writes for a turn that failed with `error`. */
+  terminalOnFailure(error: Error): Promise<TerminalRecord>;
+  /** The terminal record this kind writes for a turn its owner aborted. */
+  terminalOnAbort(): Promise<TerminalRecord>;
+}
+
+/** A tool call that already settled, as the next request must carry it. */
+export interface ToolResultFixture {
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly output: string;
+}
+
+/**
+ * The request that followed a settled tool call, and the output that call really
+ * produced.
+ *
+ * `producedOutput` is reported rather than assumed because the two kinds obtain it
+ * differently and honestly: an actor's next-step request is assembled over a history
+ * this fixture INJECTED the result into, so the output is the injected one; a node
+ * really executes the tool and its own transcript records whatever came back — which
+ * for a tool with no shell behind it is a failure text, and a failure text reaching
+ * the model is the same capability as a success text reaching it. Asserting the
+ * injected string for both would have made the node case measure the fixture.
+ */
+export interface SettledToolObservation {
+  readonly request: TurnRequest;
+  readonly producedOutput: string;
+}
+
+/** A terminal record, as a reader of whichever store this kind writes sees it. */
+export interface TerminalRecord {
+  readonly status: string;
+  readonly errorMessage: string | null;
+  /** Whether the kind's terminal-record entry point can receive an `Error` at all.
+   *  A `string` boundary has already discarded the cause chain before our writer
+   *  runs, so the two answers are different findings. */
+  readonly acceptsError: boolean;
+}
+
+/** History carrying an already-settled tool call, in the SDK's own shape. */
+export function historyWithToolResult(result: ToolResultFixture): readonly ModelMessage[] {
+  return [
+    { role: 'user', content: 'Name the cheapest change.' },
+    {
+      role: 'assistant',
+      content: [{
+        type: 'tool-call', toolCallId: result.toolCallId, toolName: result.toolName,
+        input: { command: 'wc -l reference.ts' },
+      }],
+    },
+    {
+      role: 'tool',
+      content: [{
+        type: 'tool-result', toolCallId: result.toolCallId, toolName: result.toolName,
+        output: { type: 'text', value: result.output },
+      }],
+    },
+  ];
+}
+
+/** The two actor kinds, whose only difference is which class the harness built. */
+function actorFixture(
+  kind: 'cf-orchestrator' | 'cf-subordinate',
+  harness: ActorHarness<ActorTurnSurface>,
+  differences: readonly Difference[],
+): KindFixture {
+  const { agent, db } = harness;
+  return {
+    kind, differences,
+    request: (history) => assembleActorTurn(agent, history),
+    requestAfterToolResult: async (result) => ({
+      request: await assembleActorTurn(agent, historyWithToolResult(result)),
+      producedOutput: result.output,
+    }),
+    toolSurface: () => Object.keys(agent.observeRawTools()),
+    useModel: async (spec) => { await agent.setModel(spec); return 'resolves-its-own'; },
+    transcriptOfToolCall: async (result) => {
+      await openActorTurn(agent);
+      // Think's own hook, with Think's own success shape. The accumulator behind it
+      // is `TurnAccumulator.recordToolCall`, shared with the CLI, and its durable
+      // row is the `tool_call_end` event read below.
+      await agent.afterToolCall({
+        type: 'tool-call',
+        toolName: result.toolName, toolCallId: result.toolCallId,
+        input: { command: 'wc -l reference.ts' },
+        toolOutput: { type: 'tool-result', output: result.output },
+        output: result.output, success: true,
+        stepNumber: 0, messages: [], toolExecutionMs: 12, durationMs: 12,
+      });
+      return readToolCallEnd(db);
+    },
+    // Observed on the real instance rather than declared: the runner is a lazy
+    // getter, so reading it is the same act production performs.
+    background: () => hasJobRunner(agent) ? 'wired' : 'absent',
+    terminalOnFailure: async (error) => {
+      await openActorTurn(agent);
+      // Think's own field. `ChatResponseResult.error` is declared `string`, so the
+      // best a caller could possibly hand this writer is the rendered chain — which
+      // is what is handed here, so the measurement is of OUR writer and not of a
+      // caller that under-supplies it.
+      await agent.onChatResponse({
+        status: 'error', error: renderCauseChain(error),
+        requestId: 'req-fail', continuation: false,
+        message: { id: 'assistant-fail', role: 'assistant', parts: [] },
+      });
+      return readRunEnd(db, false);
+    },
+    terminalOnAbort: async () => {
+      await openActorTurn(agent);
+      await agent.onChatResponse({
+        status: 'aborted',
+        requestId: 'req-abort', continuation: false,
+        message: { id: 'assistant-abort', role: 'assistant', parts: [] },
+      });
+      return readRunEnd(db, false);
+    },
+  };
+}
+
+/** Open a run the way a turn does — `beforeTurn` mints the run id every later
+ *  record is written under, so a settle with no turn in front of it writes nothing. */
+async function openActorTurn(agent: ActorTurnSurface): Promise<void> {
+  await agent.beforeTurn({
+    system: 'base', messages: [{ role: 'user', content: 'do the thing' }],
+    tools: agent.observeRawTools(), model: 'harness-model', continuation: false, body: {},
+  });
+}
+
+/** Whether this actor really constructed a background job runner. Reached through
+ *  the protected getter the tool wrapper reads, which is the only honest question:
+ *  a runner nothing can reach is a runner that does not exist. */
+function hasJobRunner(agent: ActorTurnSurface): boolean {
+  const probe = v.safeParse(v.looseObject({ jobRunner: v.unknown() }), agent);
+  return probe.success && probe.output.jobRunner !== undefined;
+}
+
+const RunEventRowSchema = v.object({ type: v.string(), payload: v.string() });
+const RunEndPayloadSchema = v.looseObject({
+  reason: v.optional(v.string()),
+  error: v.optional(v.string()),
+});
+
+/** The `run_end` event the settle spine wrote — the actor kinds' terminal record. */
+function readRunEnd(db: Database, acceptsError: boolean): TerminalRecord {
+  const rows = v.parse(
+    v.array(RunEventRowSchema),
+    db.prepare('SELECT type, payload FROM run_events WHERE type = ? ORDER BY event_index DESC')
+      .all('run_end'),
+  );
+  const latest = rows[0];
+  if (!latest) return { status: 'no-record', errorMessage: null, acceptsError };
+  const payload = v.parse(RunEndPayloadSchema, JSON.parse(latest.payload));
+  return {
+    status: payload.reason ?? 'no-reason',
+    errorMessage: payload.error ?? null,
+    acceptsError,
+  };
+}
+
+const ToolCallEndPayloadSchema = v.looseObject({
+  name: v.string(),
+  result: v.optional(v.unknown()),
+  error: v.optional(v.string()),
+});
+
+/** What the `tool_call_end` event recorded for the newest settled call. */
+function readToolCallEnd(db: Database): string {
+  const rows = v.parse(
+    v.array(RunEventRowSchema),
+    db.prepare('SELECT type, payload FROM run_events WHERE type = ? ORDER BY event_index DESC')
+      .all('tool_call_end'),
+  );
+  const latest = rows[0];
+  if (!latest) return '';
+  const payload = v.parse(ToolCallEndPayloadSchema, JSON.parse(latest.payload));
+  return JSON.stringify(payload.result ?? payload.error ?? null);
+}
+
+/** The swarm node, driven end to end through `runNodeAgent`. */
+function nodeKindFixture(differences: readonly Difference[]): KindFixture {
+  const firstRequestOf = async (script: ScriptedTurn, opts?: NodeFixtureOptions) => {
+    const drive = await driveNode(script, opts);
+    const first = drive.requests[0];
+    if (!first) throw new Error('the node issued no provider request');
+    return first;
+  };
+  return {
+    kind: 'swarm-node', differences,
+    request: (history) => firstRequestOf(
+      { steps: [{ text: 'Sort once.' }] },
+      { messages: history },
+    ),
+    requestAfterToolResult: async (result) => {
+      // A node's own second request is the one that carries the result, and it carries
+      // it because the loop appended it — so the observation is of the SECOND call, not
+      // of a history handed in. That is the real question for every kind: does the model
+      // see what its own call returned.
+      const drive = await driveNode(
+        {
+          steps: [
+            { toolCall: { name: 'execute_tools', input: { command: 'wc -l reference.ts' } } },
+            { text: 'Sort once.' },
+          ],
+        },
+        { executeTool: fixedExecuteTool(result.output) },
+      );
+      const second = drive.requests[1];
+      if (!second) {
+        throw new Error(
+          `the node took ${String(drive.requests.length)} provider calls, so no request followed its tool call`,
+        );
+      }
+      return { request: second, producedOutput: result.output };
+    },
+    toolSurface: () => [...NODE_BUILTIN_TOOLS],
+    // Nothing to set: `NodeAgentDeps.model` is a resolved object the search built,
+    // and the node has no registry of its own to normalise a spec against.
+    useModel: async () => 'is-handed-one',
+    transcriptOfToolCall: async (result) => {
+      const drive = await driveNode(
+        {
+          steps: [
+            { toolCall: { name: 'execute_tools', input: { command: 'wc -l reference.ts' } } },
+            { text: 'Sort once.' },
+          ],
+        },
+        { executeTool: fixedExecuteTool(result.output) },
+      );
+      const recorded = drive.run?.report.toolCalls.find((call) => call.name === 'execute_tools');
+      if (!recorded) throw new Error('the node transcript recorded no execute_tools call');
+      return JSON.stringify(recorded.result);
+    },
+    background: () => 'absent',
+    terminalOnFailure: async (error) => {
+      const drive = await driveNode({
+        steps: [{ text: 'unreachable' }],
+        throwAt: { call: 0, error },
+      });
+      return nodeTerminal(drive, true);
+    },
+    terminalOnAbort: async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const drive = await driveNode({ signal: controller.signal, steps: [{ text: 'Sort once.' }] });
+      return nodeTerminal(drive, true);
+    },
+  };
+}
+
+function nodeTerminal(drive: NodeDrive, acceptsError: boolean): TerminalRecord {
+  const terminal = drive.outcome.terminal;
+  if (!terminal) return { status: 'no-record', errorMessage: null, acceptsError };
+  return { status: terminal.status, errorMessage: terminal.errorMessage, acceptsError };
+}
+
+/**
+ * The three fixtures, built fresh per call so no assertion inherits another's state.
+ *
+ * `differences` is supplied by the suite rather than baked in here, because the
+ * declarations are the suite's own claims about what it found and belong next to the
+ * assertions that observe them.
+ */
+export function kindFixtures(
+  differences: Readonly<Record<AgentKind, readonly Difference[]>>,
+): readonly KindFixture[] {
+  const orchestrator = orchestratorHarness();
+  orchestrator.agent.setObservedSoul('# SOUL\nA workspace root under test.');
+  orchestrator.agent.declareScaffoldPresent();
+  const subordinate = subordinateHarness();
+  subordinate.agent.declareScaffoldPresent();
+  return [
+    actorFixture('cf-orchestrator', orchestrator, differences['cf-orchestrator']),
+    actorFixture('cf-subordinate', subordinate, differences['cf-subordinate']),
+    nodeKindFixture(differences['swarm-node']),
+  ];
 }
