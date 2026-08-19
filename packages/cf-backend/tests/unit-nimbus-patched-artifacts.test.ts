@@ -94,55 +94,52 @@ describe('installed Nimbus dependency integrity', () => {
     db.close();
   });
 
-  test('the checked Nimbus patches preserve the owner-only file boundary', () => {
+  // These two used to read the patch file beside the installed copy, because the
+  // property lived in a patch this repository carried. It does not any more: the
+  // whole Nimbus patch set was upstreamed and the packages are consumed from the
+  // registry. So the assertion follows the property rather than the mechanism —
+  // what matters is that the INSTALLED dependency has it, whoever put it there.
+  test('the installed core and worker preserve the owner-only file boundary', () => {
     const coreInstalled = readFileSync(join(
       repositoryRoot,
       'node_modules/@nimbus-sh/core/src/vfs/sqlite-vfs.ts',
-    ), 'utf8');
-    const corePatch = readFileSync(join(
-      repositoryRoot,
-      'patches/@nimbus-sh%2Fcore@0.4.0.patch',
     ), 'utf8');
     const workerInstalled = readFileSync(join(
       repositoryRoot,
       'node_modules/@nimbus-sh/worker/dist/session/rpc.js',
     ), 'utf8');
-    const workerPatch = readFileSync(join(
-      repositoryRoot,
-      'patches/@nimbus-sh%2Fworker@0.2.3.patch',
-    ), 'utf8');
 
-    for (const artifact of [coreInstalled, corePatch]) {
-      expect(artifact).toContain('checkStickyParentMutation');
-      expect(artifact).toContain('(parentInode.mode & 0o1000)');
-    }
-    for (const artifact of [workerInstalled, workerPatch]) {
-      expect(artifact).toContain('_rpcWriteProtectedRootFile');
-      expect(artifact).toContain('fs.chmod(root, 0o1777)');
-      expect(artifact).toContain('fs.chmod(protectedPath, 0o444)');
-    }
-    expect(corePatch).not.toContain('.bun-tag-');
-    expect(workerPatch).not.toContain('.bun-tag-');
+    expect(coreInstalled).toContain('checkStickyParentMutation');
+    expect(coreInstalled).toContain('(parentInode.mode & 0o1000)');
+    expect(workerInstalled).toContain('_rpcWriteProtectedRootFile');
+    expect(workerInstalled).toContain('fs.chmod(root, 0o1777)');
+    expect(workerInstalled).toContain('fs.chmod(protectedPath, 0o444)');
   });
 
-  test('the installed worker and checked patch both carry capability WebSocket routing', () => {
+  test('the installed packages carry capability WebSocket routing', () => {
+    // The routing is spread across three packages by dependency direction, and
+    // each file below is the one that measurably carries its share: fabric holds
+    // `process-host` and mints the capability, because fabric depends on core
+    // while worker depends on fabric, so the header constant belongs on the lower
+    // layer; the worker's session router reads the request header; and its rpc and
+    // routes compare and dispatch. Reading the worker's own `loaders/process-host`
+    // would pass over a file that no longer carries any of this and assert nothing.
     const installed = [
-      'node_modules/@nimbus-sh/worker/dist/loaders/process-host.js',
+      'node_modules/@nimbus-sh/fabric/dist/process-host.js',
+      'node_modules/@nimbus-sh/worker/dist/_shared/session-router.js',
       'node_modules/@nimbus-sh/worker/dist/session/routes.js',
       'node_modules/@nimbus-sh/worker/dist/session/rpc.js',
     ].map((path) => readFileSync(join(repositoryRoot, path), 'utf8')).join('\n');
-    const patch = readFileSync(join(
-      repositoryRoot,
-      'patches/@nimbus-sh%2Fworker@0.2.3.patch',
-    ), 'utf8');
 
-    for (const artifact of [installed, patch]) {
-      expect(artifact).toContain("request.headers.get('x-nimbus-preview-capability')");
-      expect(artifact).toContain('routeHostedWebSocket');
-      expect(artifact).toContain('HOSTED_WEBSOCKET_CAPABILITY_HEADER');
-      expect(artifact).toContain('webSocketCapability = crypto.randomUUID()');
-      expect(artifact).toContain('record.webSocketCapability !== capability');
-      expect(artifact).not.toContain('Generic guest WebSocket previews are not supported');
-    }
+    // Upstream named the header instead of inlining it, which is a better shape
+    // than the patch had. Both halves are asserted so neither can drift alone: the
+    // constant must still hold the wire name, and the route must still read it.
+    expect(installed).toContain("PREVIEW_CAPABILITY_HEADER = 'x-nimbus-preview-capability'");
+    expect(installed).toContain('request.headers.get(PREVIEW_CAPABILITY_HEADER)');
+    expect(installed).toContain('routeHostedWebSocket');
+    expect(installed).toContain('HOSTED_WEBSOCKET_CAPABILITY_HEADER');
+    expect(installed).toContain('webSocketCapability = crypto.randomUUID()');
+    expect(installed).toContain('record.webSocketCapability !== capability');
+    expect(installed).not.toContain('Generic guest WebSocket previews are not supported');
   });
 });

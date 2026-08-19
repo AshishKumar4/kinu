@@ -113,9 +113,6 @@
     "wrangler": "^4.95.0"
   },
   "patchedDependencies": {
-    "@nimbus-sh/core@0.4.0": "patches/@nimbus-sh%2Fcore@0.4.0.patch",
-    "@nimbus-sh/sdk@0.2.0": "patches/@nimbus-sh%2Fsdk@0.2.0.patch",
-    "@nimbus-sh/worker@0.2.3": "patches/@nimbus-sh%2Fworker@0.2.3.patch",
     "@plannotator/ui@0.30.0": "patches/@plannotator%2Fui@0.30.0.patch"
   }
 }
