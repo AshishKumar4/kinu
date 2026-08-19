@@ -155,7 +155,12 @@ const BACKFILL_MARKER = 'workspace_capability_backfill';
 const MCP_OAUTH_CALLBACK_PATH = '/api/user/mcp/callback';
 /** Warmup budget for restoring MCP connections at turn start. A single slow
  *  server must not block a turn — but a server that misses it is REPORTED to
- *  the turn rather than silently dropped from the tool surface. */
+ *  the turn rather than silently dropped from the tool surface.
+ *
+ *  PENDING MEASUREMENT, with `cli-backend/src/mcp.ts`'s MCP_STARTUP_TIMEOUT_MS,
+ *  which mirrors this one: what both bound is a third-party server's connect
+ *  time, and neither backend records it. The report is what makes the miss safe;
+ *  the number is not yet earned. */
 const MCP_WARMUP_TIMEOUT_MS = 5_000;
 
 /** One configured MCP server that produced no tools for this turn. */

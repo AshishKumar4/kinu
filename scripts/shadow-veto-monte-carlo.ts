@@ -369,3 +369,61 @@ console.log(`  double-win, rescaled   (maxTrials=${DEFAULT_SHADOW_CONFIG.maxTria
   `(${rescaledBest?.maxRegressions},${rescaledBest?.minDecisiveTrials})`);
 console.log(`  shipping DEFAULT_SHADOW_CONFIG: maxRegressions=${DEFAULT_SHADOW_CONFIG.maxRegressions}, ` +
   `minDecisiveTrials=${DEFAULT_SHADOW_CONFIG.minDecisiveTrials}, maxTrials=${DEFAULT_SHADOW_CONFIG.maxTrials}`);
+
+// ── 6. The promote/rollback BAND, which nothing above ever swept ────
+// Sections 2, 4 and 5 sweep maxRegressions, minDecisiveTrials and maxTrials.
+// `promoteThreshold` and `rollbackThreshold` came from DEFAULT_SHADOW_CONFIG in
+// every one of those cells and were printed as "Fixed" — so the docblock over
+// DEFAULT_SHADOW_CONFIG read as though all four numbers had been calibrated
+// together when two of them were assumptions the sweep was conditioned on. They
+// gate promotion of a self-modified scaffold into the live path, so they get the
+// same treatment under the same bar and at the shipping operating point.
+//
+// Bands are symmetric around the 0.5 coin flip. An asymmetric band would encode
+// a preference for the incumbent, which is a policy choice this simulator has no
+// way to price, so it is not swept here — stating the omission rather than
+// inventing a rationale for one.
+const PROMOTE_BANDS: ReadonlyArray<readonly [number, number]> =
+  [[0.55, 0.45], [0.60, 0.40], [0.65, 0.35], [0.70, 0.30]];
+
+console.log('\n6. PROMOTE/ROLLBACK BAND at the shipping operating point ' +
+  `(doubleWin, bias=${HEADLINE_BIAS}, maxRegressions=${DEFAULT_SHADOW_CONFIG.maxRegressions}, ` +
+  `minDecisiveTrials=${DEFAULT_SHADOW_CONFIG.minDecisiveTrials}, maxTrials=${DEFAULT_SHADOW_CONFIG.maxTrials})`);
+console.log('promote≥ rollback≤  mean P(better)  worst P(worse) ALL  worst P(worse≤0.3,tie≤0.5)  worst unresolved');
+console.log('─'.repeat(104));
+const bandRows: Array<{ promote: number; rollback: number; meanBetter: number; worstClear: number; worstAll: number }> = [];
+for (const [promoteThreshold, rollbackThreshold] of PROMOTE_BANDS) {
+  const config: ShadowConfig = { ...DEFAULT_SHADOW_CONFIG, promoteThreshold, rollbackThreshold };
+  const better: number[] = [], worseAll: number[] = [], worseClear: number[] = [];
+  let worstUnresolved = 0;
+  for (const winRate of WIN_RATES) {
+    for (const tieRate of TIE_RATES) {
+      const w = (x: number) => world(x, tieRate, HEADLINE_BIAS, HEADLINE_AGREEMENT);
+      const good = rollout('doubleWin', w(winRate), config, SIMS, seed++);
+      const bad = rollout('doubleWin', w(1 - winRate), config, SIMS, seed++);
+      better.push(good.promote);
+      worseAll.push(bad.promote);
+      if (winRate >= 0.7 && tieRate <= 0.5) worseClear.push(bad.promote);
+      worstUnresolved = Math.max(worstUnresolved, good.unresolved, bad.unresolved);
+    }
+  }
+  const row = {
+    promote: promoteThreshold, rollback: rollbackThreshold,
+    meanBetter: better.reduce((s, x) => s + x, 0) / better.length,
+    worstClear: Math.max(...worseClear), worstAll: Math.max(...worseAll),
+  };
+  bandRows.push(row);
+  console.log(
+    `${promoteThreshold.toFixed(2).padStart(7)} ${rollbackThreshold.toFixed(2).padStart(9)}   ` +
+    `${pct(row.meanBetter)}%         ${pct(row.worstAll)}%              ${pct(row.worstClear)}%` +
+    `                      ${pct(worstUnresolved)}%`,
+  );
+}
+const bandBest = [...bandRows].filter(r => r.worstClear < 0.05).sort((a, b) => b.meanBetter - a.meanBetter)[0];
+console.log('OPERATIONAL FRONTIER over the band (<5% vs clearly-worse at tie≤0.5, max true-promotion):');
+console.log(bandBest
+  ? `  promote≥${bandBest.promote.toFixed(2)}, rollback≤${bandBest.rollback.toFixed(2)}  ` +
+    `mean P(better)=${pct(bandBest.meanBetter)}%  worst P(clearly-worse)=${pct(bandBest.worstClear)}%`
+  : '  none met the bar over the swept bands');
+console.log(`  shipping band: promote≥${DEFAULT_SHADOW_CONFIG.promoteThreshold}, ` +
+  `rollback≤${DEFAULT_SHADOW_CONFIG.rollbackThreshold}`);

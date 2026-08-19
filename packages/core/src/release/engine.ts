@@ -160,6 +160,17 @@ const CLONE_TIMEOUT_MS = 300_000;
  * those, and a check killed by this bound is recorded `failed` with no exit code
  * — indistinguishable from a check that ran and found a real defect, which is a
  * release gate reporting a fault it never observed.
+ *
+ * What those checks actually cost, measured here on a warm tree: `bun run check`
+ * 11.1 s, `bun run test` 46 s, `bash scripts/verify-lean.sh` 5.5 s. So the
+ * declaration this derives from is loose by orders of magnitude on a warm run,
+ * and the case it covers is a COLD one — `lake build` from an empty
+ * `.lake`, and a container clone that has none of it. That figure is PENDING
+ * MEASUREMENT: nothing in the tree records a cold Lean build, and it is the only
+ * thing that would turn this bound from generous into exact. Until then the bound
+ * is deliberately on the generous side of a declaration rather than the tight side
+ * of a warm measurement, because the two failure modes are not symmetric — too
+ * generous costs a stuck check its wall clock, too tight fabricates a defect.
  */
 const CHECK_TIMEOUT_MS = 900_000;
 const DEPLOY_TIMEOUT_MS = 600_000;
