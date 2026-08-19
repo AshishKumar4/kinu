@@ -617,15 +617,18 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test ./tests/',
     tier: 'ci',
-    seconds: 0.3,
+    seconds: 1.3,
     catches: 'the root end-to-end and eval suites parsing, constructing their workspaces '
-      + 'and reaching their skip decision, credential-free — 27 tests, 23 of which skip '
-      + 'without a live-model target. Kept beside `test:eval` deliberately: this is the '
-      + 'run that needs no secret, so it is the one that reproduces anywhere, and '
-      + '`gate:skip-ratchet` is what turns its 23 skips from an invisible exit 0 into a '
-      + 'locked, reasoned list. Note the path form: `bun test tests` silently matches '
-      + 'NOTHING, and `bun test tests/` also matches nothing — only `./tests/` selects '
-      + 'them, which is exactly the kind of silent zero this ladder asserts against.',
+      + 'and reaching their skip decision, credential-free. Kept beside `test:eval` '
+      + 'deliberately: this is the run that needs no secret, so it is the one that '
+      + 'reproduces anywhere, and `gate:skip-ratchet` is what turns its skips from an '
+      + 'invisible exit 0 into a locked, reasoned list. The skip COUNT is not quoted '
+      + 'here on purpose — `scripts/skip-ratchet.lock.json` governs it, and a second '
+      + 'copy in prose is a number that rots while the lock stays right, which is how '
+      + 'this entry came to advertise 27 tests and 23 skips against a measured 28 and '
+      + '25. Note the path form: `bun test tests` silently matches NOTHING, and '
+      + '`bun test tests/` also matches nothing — only `./tests/` selects them, which '
+      + 'is exactly the kind of silent zero this ladder asserts against.',
     blind: 'everything it skips, which is most of it — declared, not hidden. It also '
       + 'cannot see a suite whose code no longer compiles, because bun strips types; '
       + 'that is `gate:typecheck-coverage` plus `tsc -p tests`, and the absence of both '
