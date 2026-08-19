@@ -688,12 +688,36 @@ requirements:
     statement: The shipped records store keeps a cell's best from ever falling, as a consequence of never deleting a row and refusing a lowering write rather than as a rule of its own.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.RecordsStore.outcome_admitted_ne_refused
+      - Proteus.Exploration.RecordsStore.runOf_nil
+      - Proteus.Exploration.RecordsStore.runOf_cons
+      - Proteus.Exploration.RecordsStore.overwrite_monotone_of_admissible
+      - Proteus.Exploration.RecordsStore.recorded_is_admissible
+      - Proteus.Exploration.RecordsStore.refused_write_changes_nothing
+      - Proteus.Exploration.RecordsStore.step_monotone
+      - Proteus.Exploration.RecordsStore.best_never_falls
+      - Proteus.Exploration.RecordsStore.best_never_falls_below_a_recorded_value
+      - Proteus.Exploration.RecordsStore.step_deletes_no_digest
+      - Proteus.Exploration.RecordsStore.trace_deletes_no_digest
+      - Proteus.Exploration.RecordsStore.write_keeps_one_row_per_digest
+      - Proteus.Exploration.RecordsStore.an_unguarded_write_lowers_the_best
+      - Proteus.Exploration.RecordsStore.removing_a_row_can_lower_the_best
+      - Proteus.Exploration.RecordsStore.stepLenient_monotone
+      - Proteus.Exploration.RecordsStore.lenient_best_never_falls
+      - Proteus.Exploration.RecordsStore.the_tie_rule_is_not_what_makes_it_monotone
+      - Proteus.Exploration.RecordsStore.a_better_write_is_recorded
+      - Proteus.Exploration.RecordsStore.a_worse_new_artifact_joins
+      - Proteus.Exploration.RecordsStore.the_direction_decides
+      - Proteus.Exploration.RecordsStore.a_sealed_store_refuses_by_name
+      - Proteus.Exploration.RecordsStore.a_cleared_seal_records_again
+      - Proteus.Exploration.RecordsStore.a_breach_seals_the_store
     tsRefs:
       - packages/core/src/strategy/records.ts:423
+      - packages/core/src/strategy/records.ts:437
+      - packages/core/src/strategy/records.ts:460
       - packages/core/src/strategy/objective.ts:711
     remainingEvidence:
-      - The store is a read-modify-write surface and this model is a single sequential fold, so two runs racing on one cell are unmodelled
+      - The store is a read-modify-write surface and this model is a single sequential fold, so two runs racing on one cell are unmodelled and no strengthening of these theorems reaches it
+      - The strictness of the comparison is proved NOT to be what makes the store monotone, so relaxing it needs a mutation test rather than a theorem here
   PR-ARCHIVE-002:
     statement: Archive admission bounds a cell's population without an eviction rule, because a candidate too close to an occupant never lands.
     status: proved-in-abstract-model

@@ -318,7 +318,28 @@ import Proteus
 
 /-! ### Proteus/Exploration/RecordsStore.lean -/
 
-#print axioms Proteus.Exploration.RecordsStore.outcome_admitted_ne_refused
+#print axioms Proteus.Exploration.RecordsStore.runOf_nil
+#print axioms Proteus.Exploration.RecordsStore.runOf_cons
+#print axioms Proteus.Exploration.RecordsStore.overwrite_monotone_of_admissible
+#print axioms Proteus.Exploration.RecordsStore.recorded_is_admissible
+#print axioms Proteus.Exploration.RecordsStore.refused_write_changes_nothing
+#print axioms Proteus.Exploration.RecordsStore.step_monotone
+#print axioms Proteus.Exploration.RecordsStore.best_never_falls
+#print axioms Proteus.Exploration.RecordsStore.best_never_falls_below_a_recorded_value
+#print axioms Proteus.Exploration.RecordsStore.step_deletes_no_digest
+#print axioms Proteus.Exploration.RecordsStore.trace_deletes_no_digest
+#print axioms Proteus.Exploration.RecordsStore.write_keeps_one_row_per_digest
+#print axioms Proteus.Exploration.RecordsStore.an_unguarded_write_lowers_the_best
+#print axioms Proteus.Exploration.RecordsStore.removing_a_row_can_lower_the_best
+#print axioms Proteus.Exploration.RecordsStore.stepLenient_monotone
+#print axioms Proteus.Exploration.RecordsStore.lenient_best_never_falls
+#print axioms Proteus.Exploration.RecordsStore.the_tie_rule_is_not_what_makes_it_monotone
+#print axioms Proteus.Exploration.RecordsStore.a_better_write_is_recorded
+#print axioms Proteus.Exploration.RecordsStore.a_worse_new_artifact_joins
+#print axioms Proteus.Exploration.RecordsStore.the_direction_decides
+#print axioms Proteus.Exploration.RecordsStore.a_sealed_store_refuses_by_name
+#print axioms Proteus.Exploration.RecordsStore.a_cleared_seal_records_again
+#print axioms Proteus.Exploration.RecordsStore.a_breach_seals_the_store
 
 /-! ### Proteus/Exploration/ArchiveAdmission.lean -/
 
