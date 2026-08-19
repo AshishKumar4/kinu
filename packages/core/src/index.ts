@@ -602,7 +602,7 @@ export {
   agentDynamicContext,
   executorAvailabilityLabel,
   fnv1a64,
-  forkDelegates,
+  searchDelegates,
   observeSystemPromptHash,
   fnv1a64Bytes,
   renderDynamicContextBlock,

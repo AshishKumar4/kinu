@@ -8,7 +8,7 @@
 // running-head predicate stayed true forever, and every model step carried
 //
 //   ## Delegates working for you
-//   - <root> (fork) — 4 of 4 heads running: <rationale>
+//   - <root> (search) — 4 of 4 nodes running: <rationale>
 //
 // while `background_jobs` said `cancelled by operator`. The agent was not
 // reasoning from a stale transcript; the runtime was asserting the falsehood.
@@ -49,7 +49,7 @@ function workspace() {
   const now = Date.now();
   jobs.create({
     id: 'bgjob-fork', kind: 'agents', workMode: 'build', now,
-    label: 'fork: survey the prior art',
+    label: 'search: survey the prior art',
   });
   journal.recordSplit(ROOT, RATIONALE, now);
   for (let i = 1; i <= HEADS; i++) {
@@ -105,7 +105,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     expect(w.journal.listLive()).toEqual([
       { rootId: ROOT, rationale: RATIONALE, running: HEADS, total: HEADS },
     ]);
-    expect(nextStepBlock(w)).toContain(`${HEADS} of ${HEADS} heads running`);
+    expect(nextStepBlock(w)).toContain(`${HEADS} of ${HEADS} nodes running`);
   });
 
   test('reconciliation settles the journal, so the next step no longer claims it is running', async () => {
@@ -228,7 +228,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
       factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
       runningJobs: [], openTasks: [], liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
     }));
-    expect(String(before.at(-1)?.content)).toContain(`${HEADS} of ${HEADS} heads running`);
+    expect(String(before.at(-1)?.content)).toContain(`${HEADS} of ${HEADS} nodes running`);
 
     await reconcileInterruptedForks({ journal: w.journal, signals: idleAgent().signals });
 
