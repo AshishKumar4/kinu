@@ -116,6 +116,7 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 | [Architecture](docs/ARCHITECTURE.md) | System design, message flow, package structure, Think lifecycle |
 | [Evolution](docs/EVOLUTION.md) | 3-timescale self-evolution, CraftStore lifecycle, scaffold mutation |
 | [MCTS](docs/MCTS.md) | Monte Carlo Tree Search, UCT formula, branch isolation, convergence |
+| [Exploration](docs/EXPLORATION.md) | The six search axes, the node contract, the publication seal, settle and merge-back |
 | [Tools](docs/TOOLS.md) | The builtin agent tools, shell emulator, code execution, crafted tools |
 | [Context budget](docs/CONTEXT-BUDGET.md) | The reference-plus-digest invariant: where bulk spills, the turn-cumulative clamp, and the trip counters |
 | [Observability](docs/OBSERVABILITY.md) | The failure classification, the typed logger and its reserved-field ban, what is wired and what is not |
