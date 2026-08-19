@@ -78,7 +78,7 @@ export async function clampToolResult(
   // trip, and it costs nothing on the turns that never get here.
   const tightened = maxChars < configured;
   const reason = tightened
-    ? ' This turn has already admitted enough tool output that the cap tightened for the rest of it — hand the bulk to a fork rather than pulling more of it in here.'
+    ? ' This turn has already admitted enough tool output that the cap tightened for the rest of it — hand the bulk to a search or a subordinate rather than pulling more of it in here.'
     : '';
   // The marker promises workspace.readFile, which reads the same filesystem
   // the run tool's `workspace` shell runs over on every backend — so the

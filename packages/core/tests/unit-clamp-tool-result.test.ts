@@ -221,7 +221,7 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
     const tightened = await run({ command: 'big-last' });
     expect(tightened).toContain('This turn has already admitted enough tool output that the cap tightened');
     // And it names the lever, at the moment the signal is real.
-    expect(tightened).toContain('hand the bulk to a fork');
+    expect(tightened).toContain('hand the bulk to a search or a subordinate');
   });
 
   test('a fresh turn starts at full fidelity again', async () => {
