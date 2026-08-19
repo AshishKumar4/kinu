@@ -85,13 +85,15 @@ export const CATALOGUE: readonly Mutation[] = [
     symbol: 'dispatchAgentsAction',
     control: 'unit-agents-tool.test.ts',
   },
+  // The tokens left this line on 2026-08-19: the mission port now charges every call as
+  // it happens, so the seam records the SPAWN and a literal zero rather than a lump that
+  // would double-bill what the nodes already debited. The spawn count is still this
+  // line's decision, and it is still the one worth inverting.
   {
     id: 'swarm-lump-debit-spawn-count',
     file: 'packages/core/src/tools/agents-tool.ts',
-    find: 'mission?.governor.debit(result.report.tokens ?? 0, '
-      + '{ labels: mission.labels, spawns: 1 });',
-    replace: 'mission?.governor.debit(result.report.tokens ?? 0, '
-      + '{ labels: mission.labels, spawns: 0 });',
+    find: 'mission?.governor.debit(0, { labels: mission.scope.labels, spawns: 1 });',
+    replace: 'mission?.governor.debit(0, { labels: mission.scope.labels, spawns: 0 });',
     decision: "a completed swarm call increments the mission ledger's spawns by one",
     symbol: 'dispatchAgentsAction',
     control: 'unit-mission-budget-seams.test.ts',
@@ -143,14 +145,32 @@ export const CATALOGUE: readonly Mutation[] = [
   },
 
   /* ── The second search implementation nothing dispatches to ───────────────── */
-  {
-    id: 'fork-strategy-registry-key',
-    file: 'packages/core/src/strategy/heads.ts',
-    find: "export const FORK_STRATEGY_ID = 'heads';",
-    replace: "export const FORK_STRATEGY_ID = 'branching-heads';",
-    decision: 'the key the branching-heads strategy registers itself under',
-    symbol: 'FORK_STRATEGY_ID',
-  },
+  // THE FIX FOR THESE FOUR IS DELETION, NOT WIRING, and the distinction is worth
+  // stating because the report's own UNREACHED wording ("wire it or delete it") is
+  // neutral between them and the wrong branch is expensive.
+  //
+  // `selfMetered` is not a signal whose consumer was never written. It is a signal
+  // whose CALLER was removed. Its docstring names the consumer — "the fork seam then
+  // records only the spawn" — and that seam dispatched `ExplorationStrategy.explore()`
+  // through `AgentsForkDeps.registry`, which has no production reader. Established
+  // 2026-08-19 against source, after this catalogue first proposed the opposite:
+  // `selfMetered` sits on `StrategyResult.cost`, `SwarmResult` has no `cost` field at
+  // all, and `StrategyResult` appears in no file outside `strategy/{heads,mcts,
+  // single-shot,types}.ts` in any backend. So `agents-tool.ts`'s lump could never have
+  // read it, and making that lump conditional on a new flag would be the worse
+  // instrument anyway: a boolean that has to be right double-bills silently in its
+  // false branch, which looks exactly like the cap working. A deleted lump cannot be
+  // wrong. Per-call charging through the mission port, asserted as
+  // `total == provider-reported usage`, is what replaced it.
+  //
+  // `FORK_STRATEGY_ID` HAD AN ENTRY HERE AND NO LONGER NEEDS ONE. It was reported
+  // UNREACHED by the 2026-08-19 run and then deleted, together with
+  // `AgentsForkDeps.registry` and the three `registry.register(...)` calls — the fix
+  // this classification prescribes. The entry is retired rather than re-pointed at the
+  // `id: 'heads'` literal that replaced it, because a catalogue that keeps mutating a
+  // decision after the decision is gone reports on nothing. `createHeadsStrategy` and
+  // `createMCTSStrategy` now have no production reader at all, so the two `selfMetered`
+  // entries below carry the UNREACHED demonstration on their own.
   {
     id: 'heads-self-metered-write',
     file: 'packages/core/src/strategy/heads.ts',
