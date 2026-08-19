@@ -80,9 +80,11 @@ export const PATTERNS: readonly SecretPattern[] = [
     //
     // `pta_` access token, `ptc_` CLI token, `pdt_` device token. The full shape
     // is `pta_<32 hex>_<43 base36>`, but FRAGMENTS MATCH TOO, deliberately: 8+
-    // hex after the prefix is a finding. A truncated paste like `pta_e3abe8dc…`
+    // hex after the prefix is a finding. A truncated paste like `pta_0123456789abcdef…`
     // is still evidence a live token reached a durable file — the 2026-08-18
-    // transcript leak carried exactly that fragment beside two full tokens, and
+    // transcript leak carried a fragment of exactly that shape beside two full
+    // tokens (the example above is synthetic: a real fragment in this file would
+    // be the very thing the rule exists to catch), and
     // the old `{16,}` floor plus a benign that exempted any LINE containing `…`
     // let the fragment through twice over. `…`/`...` are benign only when they
     // elide the whole body directly after the prefix, i.e. prose NAMING the

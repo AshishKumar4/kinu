@@ -62,11 +62,13 @@ describe('the patterns catch what they are for', () => {
   // The fragment decision, recorded in the rule comment: 8+ hex after the
   // prefix is a finding even without the full `pta_<32 hex>_<43>` shape — a
   // truncated paste is still evidence a live token reached a durable file. The
-  // 2026-08-18 transcript leak carried exactly this fragment, and the old rule
-  // missed it twice over: a `{16,}` floor, and a benign that exempted any LINE
-  // containing `…`.
+  // 2026-08-18 transcript leak carried a fragment of exactly this shape, and the
+  // old rule missed it twice over: a `{16,}` floor, and a benign that exempted
+  // any LINE containing `…`. The fragment below is synthetic — the real one is a
+  // live credential, and it does not belong in a tracked file, least of all in
+  // the suite proving the scanner that catches it.
   test('a truncated token fragment is a finding, ellipsis and all', () => {
-    const fragment = ['pta', 'e3abe8dc'].join('_');
+    const fragment = ['pta', '0123456789abcdef'].join('_');
     expect(scanText('f.md', `PROTEUS_TOKEN=${fragment}\u2026 proteus exec`).map((f) => f.pattern))
       .toEqual(['proteus-token']);
   });
