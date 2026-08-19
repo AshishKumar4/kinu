@@ -119,7 +119,11 @@ async function memberOf(
   files: readonly MemberFileChange[],
   module: MergeBackModule = pristine,
 ): Promise<MergeMember> {
-  const diff = { nodeId, files: [...files].sort((a, b) => a.path.localeCompare(b.path)) };
+  const diff = {
+    nodeId,
+    files: [...files].sort((a, b) => a.path.localeCompare(b.path)),
+    provenance: 'private-home' as const,
+  };
   return {
     nodeId,
     diff,
@@ -128,7 +132,6 @@ async function memberOf(
       baseDigest: await module.baseDigestOf(diff, origin.readOrigin),
       clean: true,
     },
-    isolation: 'private-home',
     scope: null,
     deps: [],
     score: 1,

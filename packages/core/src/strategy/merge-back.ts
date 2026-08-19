@@ -55,8 +55,7 @@ import { ProteusError, refusalOf, type Refusal } from '../obs/error';
 import type { Logger } from '../obs/log';
 import type { SwarmCarrySetting, SwarmSettle } from './swarm';
 import { admitsPublication, type PublicationState } from './objective';
-import type { NodeIsolation } from './node-workspace';
-import { textPayload, type WriteEvent, type WriteObserver } from '../vfs/observe';
+import { textPayload } from '../vfs/observe';
 import type { VFS } from '../types/primitives';
 import { isVfsError } from '../vfs/errno';
 
@@ -96,13 +95,6 @@ export function mergePolicyOf(settle: SwarmSettle): MergePolicy {
   }
 }
 
-/** Whether a policy applies MORE than one member, and therefore rebases: the base
- *  changes for every diff after the first, which is what makes §9.3 rule 4 the whole
- *  of this policy's correctness rather than a nicety. */
-export function rebases(policy: MergePolicy): boolean {
-  return policy === 'sequential-rebase';
-}
-
 /* ── §8.5's diff artifact ─────────────────────────────────────────────────── */
 
 /**
@@ -127,6 +119,27 @@ export interface MemberFileChange {
   readonly after: string | null;
 }
 
+/**
+ * WHERE A MEMBER'S DIFF CAME FROM, which is what decides whether it can be merged at
+ * all.
+ *
+ * This is the fact the `no-boundary` precondition is actually about, and naming it on
+ * the DIFF rather than on the node is the difference between a precondition that can be
+ * checked and one that has to be guessed. A node's storage isolation answers a related
+ * but different question — a node with no home of its own can still have produced a
+ * perfectly attributable answer, because it REPORTED it.
+ *
+ * `reported` — the node's own reported answer, which the engine places at the verifier's
+ * path. Attribution is certain whatever file plane the node ran on: a report is the
+ * node's by construction, so this is mergeable today and is what a scored settle uses.
+ * `private-home` — observed inside the node's OWN home (§8.6). Mergeable: the writes are
+ * the node's and the origin has not seen them yet.
+ * `shared-plane` — observed on the shared origin plane. NOT mergeable, and refused:
+ * siblings run concurrently over one tree, so a captured write is neither certainly this
+ * node's nor still what the origin holds, and the work already landed there anyway.
+ */
+export type DiffProvenance = 'reported' | 'private-home' | 'shared-plane';
+
 /** §8.5's diff artifact: what one node changed, against the base it started from.
  *  Self-contained, which is the property that makes it portable where a candidate
  *  reference into a home released at settle is not (§8.6 obligation 6). */
@@ -134,58 +147,7 @@ export interface MemberDiff {
   readonly nodeId: string;
   /** Sorted by path, so the digest over a diff is stable across capture order. */
   readonly files: readonly MemberFileChange[];
-}
-
-/**
- * A node's diff, accumulated where its writes land.
- *
- * Wraps the node's own file view through `observeWrites`, which is the diff-capture
- * seam this repository already has — attribution has to happen AT the write because
- * siblings run concurrently over one plane and an end-of-run diff smears every node's
- * work into one pile. This retains CONTENT where `HeadFileChanges` retains counts,
- * because a merge-back applies its result and a head report renders its result.
- */
-export class NodeDiffCapture implements WriteObserver {
-  private readonly touched = new Map<string, { base: string | null; after: string | null }>();
-
-  constructor(private readonly nodeId: string) {}
-
-  needsBaseline(path: string): boolean {
-    return !this.touched.has(path);
-  }
-
-  record(event: WriteEvent): void {
-    // A non-text payload is never decoded into a patch side: applying a lossy decode of
-    // an image would corrupt it, so it enters as null and the member is refused for
-    // drift rather than written as a guess.
-    const written = textPayload(event.after);
-    const after = written.kind === 'text' ? written.text : null;
-    const existing = this.touched.get(event.path);
-    if (existing) {
-      existing.after = after;
-      return;
-    }
-    const baseline = textPayload(event.before);
-    this.touched.set(event.path, {
-      base: baseline.kind === 'text' ? baseline.text : null,
-      after,
-    });
-  }
-
-  /** The diff, sorted by path. A path whose content came back to where it started is
-   *  omitted: nothing changed there, and carrying it would make two runs that did
-   *  the same work produce different digests. */
-  diff(): MemberDiff {
-    const files: MemberFileChange[] = [];
-    for (const [path, t] of this.touched) {
-      if (t.base === t.after) continue;
-      files.push({ path, base: t.base, after: t.after });
-    }
-    return {
-      nodeId: this.nodeId,
-      files: files.sort((a, b) => a.path.localeCompare(b.path)),
-    };
-  }
+  readonly provenance: DiffProvenance;
 }
 
 /* ── The (memberDigest, baseDigest) binding (§9.3 rule 4) ──────────────────── */
@@ -359,10 +321,6 @@ export interface MergeMember {
   readonly diff: MemberDiff;
   /** §9.3 rule 2 — null is "nobody checked this", which refuses. */
   readonly verdict: MemberVerdict | null;
-  /** Whether this node actually had a boundary. `shared-origin-plane` has no home to
-   *  copy out of and its writes are unattributed, so there is nothing to merge that
-   *  could be said to be THIS node's. */
-  readonly isolation: NodeIsolation;
   /** §9.3 rule 5: the paths this member declared it would touch, checked against
    *  what it ACTUALLY wrote. Null is an undeclared scope, which cannot escape one. */
   readonly scope: readonly string[] | null;
@@ -550,15 +508,18 @@ async function gate(
     deps: MergeBackDeps;
   },
 ): Promise<MergeRefusal | null> {
-  // A precondition of the mechanism, checked before the spec's gate: §8.5 applies a
-  // member by copying out of its HOME, and a node that never had one wrote straight
-  // into the origin where a sibling may have overwritten it. Merging that would
-  // attribute a sibling's bytes to this node.
-  if (member.isolation === 'shared-origin-plane') {
+  // A precondition of the mechanism, checked before the spec's gate, and it is a fact
+  // about the DIFF rather than about the node: a diff OBSERVED on the shared origin
+  // plane is neither certainly this node's — siblings write the same tree concurrently —
+  // nor still what the origin holds, and the work already landed there anyway, so there
+  // is nothing to merge back. A node with no home of its own that REPORTED an answer is
+  // a different case and merges fine: a report is the node's by construction.
+  if (member.diff.provenance === 'shared-plane') {
     return refuse('no-boundary', 'unsupported',
-      `node ${member.nodeId} ran on the shared origin plane, so it has no home to copy out of and `
-      + 'its writes are not attributable to it. Merge-back needs the §8.6 substrate: wire a '
-      + 'NodeWorkspaceProvisioner so the node gets a private home, and its diff becomes its own.');
+      `node ${member.nodeId}'s diff was observed on the shared origin plane, so it is not `
+      + 'attributable to that node and its writes are already in the origin. Merge-back needs '
+      + 'either the reported answer or the §8.6 substrate: wire a NodeWorkspaceProvisioner so the '
+      + "node gets a private home, and its diff becomes its own.");
   }
 
   // Rule 1 — a dependency has not settled yet. §9.1 orders SETTLE, so this is the

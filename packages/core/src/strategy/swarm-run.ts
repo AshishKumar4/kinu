@@ -115,7 +115,11 @@ import type {
 import {
   isTreeAdvance, BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS, SWARM_TREE_ADVANCES,
 } from './swarm';
-import { settleCarry } from './merge-back';
+import {
+  baseDigestOf, memberDigestOf, mergeBack, mergePolicyOf, originReader, settleCarry,
+  type MemberApply, type MemberDiff, type MergeMember,
+} from './merge-back';
+import type { VFS } from '../types/primitives';
 import type {
   BranchContext, BranchProposal, BranchRefusalPolicy, BranchVerdict,
   ResolvedSwarm, SwarmAdvance, SwarmCandidate, SwarmPreset, SwarmResult, SwarmSettleReport,
@@ -1449,9 +1453,46 @@ export async function runSwarm(
     node.proposal = null;
   }
 
-  // The answer stays in the workspace. Without this the path holds whichever
-  // candidate was measured last, which is a different artifact from the one reported.
-  if (best && verifier && ctx) await ctx.vfs.writeFile(verifier.artifact, best.artifact);
+  // MERGE-BACK: how a settled swarm's work reaches the origin (§8.5), and the reason the
+  // answer does not simply stay in a workspace nobody reads again. Without this the path
+  // holds whichever candidate was measured last, which is a different artifact from the
+  // one reported.
+  //
+  // THE POLICY IS DERIVED FROM `settle`, never chosen here — the same move as `settleOf`
+  // deriving `settle` from the axes. A scored run settles on one incumbent and applies
+  // it; `settle:'merge'` scores nothing, so it has no verifier and no `best`, and
+  // `synthesis` correctly applies nothing.
+  //
+  // THE MEMBER'S DIFF IS `reported`, and that provenance is what makes this reachable
+  // today. §8.6's per-node homes are not built, so no node has a workspace diff that
+  // could be said to be its own — but the engine places the node's REPORTED answer, and
+  // a report is that node's by construction whatever plane it ran on.
+  //
+  // WHAT THIS ADDS OVER THE BARE WRITE IT REPLACES, stated narrowly so nobody reads more
+  // into it. The settle placement is now a POLICY with a named event trail, and the
+  // transaction bound is checked before it, so an oversized winner is refused with the
+  // bound named instead of handed to the substrate to split.
+  //
+  // WHAT IT DOES NOT ADD: `base` is read from the origin at settle, so the drift and
+  // stale-verdict rules are structurally satisfied here rather than enforced. That is
+  // deliberate and it preserves behaviour exactly — a reported answer is a whole-file
+  // replacement, not a patch against an earlier base, and `measureChild` has already
+  // overwritten this path once per candidate. Taking the base from measurement time
+  // instead would refuse the winner on every multi-candidate run. Those rules bite when a
+  // member's diff comes from a private home, which is §8.6's to deliver.
+  if (ctx) {
+    const policy = mergePolicyOf(resolved.settle);
+    const readOrigin = originReader(ctx.vfs);
+    const members = best && verifier
+      ? [await reportedMember(best, verifier.artifact, readOrigin)]
+      : [];
+    await mergeBack({ policy, members }, {
+      log,
+      preset: resolved.preset,
+      readOrigin,
+      applyMember: singlePathApply(ctx.vfs),
+    });
+  }
 
   // CARRY ADMISSION, at the barrier and after the sweep, because a candidate answered
   // by the sweep is a candidate that could be carried and deciding before it would
@@ -1523,6 +1564,70 @@ export async function runSwarm(
     },
     best,
     candidates,
+  };
+}
+
+/**
+ * The winner as a merge-back member, with its diff taken from what it REPORTED.
+ *
+ * One path — the verifier's artifact — because that is what a scored settle places, and
+ * `base` is read from the origin now so the diff is a patch against the state it is about
+ * to be applied onto rather than against a state nobody checked.
+ *
+ * THE VERDICT IS REAL, not a placeholder. A candidate reaches `best` only by having been
+ * measured through the verifier registry, so it HAS been checked; the pair it binds is
+ * this diff against this base, which is exactly the base the apply will see. That is why
+ * rule 4 does not fire here and why it still would if anything moved the path in between.
+ */
+async function reportedMember(
+  best: SwarmCandidate,
+  artifact: string,
+  readOrigin: (path: string) => Promise<string | null>,
+): Promise<MergeMember> {
+  const diff: MemberDiff = {
+    nodeId: best.id,
+    files: [{ path: artifact, base: await readOrigin(artifact), after: best.artifact }],
+    provenance: 'reported',
+  };
+  return {
+    nodeId: best.id,
+    diff,
+    verdict: {
+      memberDigest: memberDigestOf(diff),
+      baseDigest: await baseDigestOf(diff, readOrigin),
+      clean: true,
+    },
+    // The engine chose the path, so there is no declared scope to escape, no dependency
+    // ordering across one member, and the score is what the search measured.
+    scope: null,
+    deps: [],
+    score: best.score,
+  };
+}
+
+/**
+ * The atomic write a reported member's apply rides.
+ *
+ * ONE PATH, and it REFUSES more, which is the honest shape of what this workspace can
+ * promise. `vfs.writeFile` is path-atomic, so a single-file member is genuinely
+ * all-or-nothing; a multi-file member would need the substrate's one-transaction batch
+ * write, and looping here instead would be exactly the torn apply the size bound exists
+ * to prevent. A reported member is always one path, so the refusal is unreachable today
+ * and stays fail-closed for whoever offers a multi-file member first.
+ */
+function singlePathApply(vfs: VFS): MemberApply {
+  return async (files) => {
+    if (files.length > 1) {
+      throw new ProteusError('unsupported',
+        `this workspace can apply one path atomically and this member has ${
+          String(files.length)
+        }. A per-file loop would publish a committed prefix if a later file failed, so it is `
+        + "refused instead: wire the substrate's one-transaction batch write.");
+    }
+    for (const file of files) {
+      if (file.after === null) await vfs.unlink(file.path);
+      else await vfs.writeFile(file.path, file.after);
+    }
   };
 }
 

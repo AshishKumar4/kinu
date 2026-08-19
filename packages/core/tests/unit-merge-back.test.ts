@@ -31,10 +31,11 @@ import { MAX_TX_BLOB_BYTES, MAX_TX_LOGICAL_ROWS } from '@nimbus-sh/core/constant
 import { createRecordingLogger, type RecordingLogger } from '../src/obs/index';
 import {
   MERGE_POLICIES, SETTLE_RULES, APPLY_PRECONDITIONS, TRANSACTION_BOUNDS,
-  mergePolicyOf, rebases, memberDigestOf, baseDigestOf, planMemberApply,
+  mergePolicyOf, memberDigestOf, baseDigestOf, planMemberApply,
   memberApplyBound, mergeBack, admitCarry, settleCarry,
-  type MemberApply, type MemberDiff, type MemberFileChange, type MergeBackReport,
-  type MergeMember, type MergeNodeRequest, type MergePolicy, type Reverifier,
+  type DiffProvenance, type MemberApply, type MemberDiff, type MemberFileChange,
+  type MergeBackReport, type MergeMember, type MergeNodeRequest, type MergePolicy,
+  type Reverifier,
 } from '../src/strategy/merge-back';
 import type { PublicationState } from '../src/strategy/objective';
 import type { SwarmCarrySetting } from '../src/strategy/swarm';
@@ -71,8 +72,12 @@ function fakeOrigin(initial: Record<string, string> = {}): FakeOrigin {
   };
 }
 
-function diffOf(nodeId: string, files: readonly MemberFileChange[]): MemberDiff {
-  return { nodeId, files: [...files].sort((a, b) => a.path.localeCompare(b.path)) };
+function diffOf(
+  nodeId: string,
+  files: readonly MemberFileChange[],
+  provenance: DiffProvenance = 'private-home',
+): MemberDiff {
+  return { nodeId, files: [...files].sort((a, b) => a.path.localeCompare(b.path)), provenance };
 }
 
 /** A member whose verdict is bound to the origin AS IT STANDS NOW — the honest case.
@@ -82,9 +87,10 @@ async function memberOf(
   origin: FakeOrigin,
   nodeId: string,
   files: readonly MemberFileChange[],
-  over: Partial<MergeMember> = {},
+  over: Partial<MergeMember> & { readonly provenance?: DiffProvenance } = {},
 ): Promise<MergeMember> {
-  const diff = diffOf(nodeId, files);
+  const { provenance, ...rest } = over;
+  const diff = diffOf(nodeId, files, provenance);
   return {
     nodeId,
     diff,
@@ -93,11 +99,10 @@ async function memberOf(
       baseDigest: await baseDigestOf(diff, origin.readOrigin),
       clean: true,
     },
-    isolation: 'private-home',
     scope: null,
     deps: [],
     score: 1,
-    ...over,
+    ...rest,
   };
 }
 
@@ -154,12 +159,6 @@ describe('the policy is derived from settle, never chosen', () => {
     expect(mergePolicyOf('merge')).toBe('synthesis');
   });
 
-  test('only sequential-rebase rebases, so only it can carry a stale verdict', () => {
-    expect(rebases('sequential-rebase')).toBe(true);
-    expect(rebases('apply-winner')).toBe(false);
-    expect(rebases('synthesis')).toBe(false);
-    expect(rebases('conflict-spawns-a-merge-node')).toBe(false);
-  });
 
   test("§9.3's six rules and the substrate's preconditions stay distinct lists", () => {
     expect(SETTLE_RULES).toHaveLength(6);
@@ -786,10 +785,13 @@ describe('an absent atomic write refuses rather than tearing', () => {
 /* ── §9.3's gate ──────────────────────────────────────────────────────────── */
 
 describe('the settle gate', () => {
-  test('a node with no boundary has nothing attributable to merge', async () => {
+  // Provenance and not the node's storage: a diff OBSERVED on the shared plane is
+  // unattributable and its writes already landed in the origin, so there is nothing to
+  // merge back.
+  test('a diff observed on the shared plane has nothing attributable to merge', async () => {
     const h = harness({});
     const member = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: null, after: 'A\n' }], {
-      isolation: 'shared-origin-plane',
+      provenance: 'shared-plane',
     });
 
     const report = await h.run('apply-winner', [member]);
@@ -797,6 +799,25 @@ describe('the settle gate', () => {
     const [outcome] = report.outcomes;
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('no-boundary');
+    expect(outcome.refusal.error).toContain('already in the origin');
+    expect(h.origin.at.has('a.ts')).toBe(false);
+  });
+
+  // THE CASE THAT MAKES MERGE-BACK REACHABLE TODAY. A node with no home of its own can
+  // still have produced a perfectly attributable answer, because it REPORTED it — and a
+  // report is the node's by construction, whatever plane it ran on. Gating on the node's
+  // storage instead of the diff's provenance would refuse this and leave the module with
+  // no production caller at all.
+  test('a reported diff merges even though the node had no private home', async () => {
+    const h = harness({ 'candidate/answer.js': 'old\n' });
+    const member = await memberOf(h.origin, 'n1', [
+      { path: 'candidate/answer.js', base: 'old\n', after: 'reported\n' },
+    ], { provenance: 'reported' });
+
+    const report = await h.run('apply-winner', [member]);
+
+    expect(report.outcomes[0]?.kind).toBe('applied');
+    expect(h.origin.at.get('candidate/answer.js')).toBe('reported\n');
   });
 
   test('a member whose dependency has not merged is refused', async () => {
