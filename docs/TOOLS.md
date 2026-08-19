@@ -22,7 +22,7 @@ action of `agents`.
 | `file` | The one file plane — `read` a file, `edit` exact text inside it, `write` it whole — over the same workspace filesystem every other surface addresses |
 | `agents` | The whole delegation surface — `swarm \| hire \| ask \| send \| reply \| list \| dismiss` |
 | `memory` | The one durable-state tool — `save \| search` prose memory, `remember \| recall \| forget` typed keyed facts, `sessions` to recall past session transcripts |
-| `tasks` | The agent's own task list — `add` titles (with a `parent` for subtasks), `update` one item's status, `list` it back. One row per item in `agent_tasks`; the open half renders into the live context block every step, and into the Tasks tab |
+| `tasks` | The agent's own task list and working stance — `add` titles (with a `parent` for subtasks), `update` one item's status, `list` it back, `mode` to set or read the stance. One row per item in `agent_tasks`; the open half renders into the live context block every step, and into the Tasks tab |
 | `web` | Live web access — `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
 | `report` | A subordinate's progress spine back to its orchestrator — `progress \| completed \| blocked` |
 
@@ -118,13 +118,20 @@ devices keep their own files and are reached through `sandbox.*` and
 ### Why it exists
 
 Before it, the agent had no read/write/edit primitive at all: file work went
-through `run`. Over the preserved Terminal-Bench trajectories
-(`bench-artifacts/`) the split was **789 `run` calls against 6 `execute_tools`
-calls**, and of the 374 `run` commands in the 2.1 set, 65 were inline
-`python3 -c`, 55 were heredocs, 23 were shell redirects and 14 were `sed -i` —
-roughly two in five shell calls were the model hand-rolling a file mutation
-through the three most failure-prone mechanisms available. None of them can
-report that the text they aimed at was not there: `sed -i` exits 0 either way.
+through `run`. Over the preserved Terminal-Bench trajectories the split was
+**789 `run` calls against 6 `execute_tools` calls**, and of the 374 `run` commands
+in the 2.1 set, 65 were inline `python3 -c`, 55 were heredocs, 23 were shell
+redirects and 14 were `sed -i`. Roughly two in five shell calls were the model
+hand-rolling a file mutation through the three most failure-prone mechanisms
+available. None of them can report that the text they aimed at was not there:
+`sed -i` exits 0 either way.
+
+**Those seven counts came from one local bench run and no reader can reproduce
+them here.** The trajectories live in `bench-artifacts/`, which
+`scripts/bench-retention.ts` treats as gitignored run output, so a fresh checkout
+has none of it. No date is recorded for the run either. The counts are kept
+because they are the reason this tool exists, and they are labelled because a
+number nobody can re-derive is evidence about one machine.
 
 ### The properties that make it worth a tool
 
@@ -234,17 +241,17 @@ and `list` address agents by name, and the name decides the transport:
   archived unless `keep_history: false` is passed.
 - **A peer** is one of the owner's *other* workspaces, reached over the
   EventsHub peer transport. Its axis is neither lifetime nor measurement, which
-  is why it sits outside the ladder. `ask` waits for the reply
-  (default 120 s, max 600 — a late reply still arrives as an event), `send`
-  does not wait, `reply` answers an agent message event by its `event_id`, and
-  `hire` with `scope: workspace` creates or reuses a whole specialist
+  is why it sits outside the ladder. `ask` waits for the reply, with
+  `timeout_seconds` defaulting to and capped at 600 s, which is one measured agent
+  turn (`TURN_WALL_CLOCK_ENVELOPE_MS`); a late reply still arrives as an event.
+  `send` does not wait, `reply` answers an agent message event by its `event_id`,
+  and `hire` with `scope: workspace` creates or reuses a whole specialist
   workspace.
 - **`report`** is a separate tool, registered only on subordinates (also
   reachable as `report.*` in `execute_tools` — same `ReportToolDeps.report`
-  either way). It is how a
-  subordinate's findings reach the orchestrator between turns; the answer of an
-  assigned turn is relayed automatically at turn end, so `report` is for
-  milestones, not per-step noise.
+  either way). It is how a subordinate's findings reach the orchestrator between
+  turns; the answer of an assigned turn is relayed automatically at turn end, so
+  `report` is for milestones, not per-step noise.
 
 ### The field contract
 
@@ -375,7 +382,7 @@ callers, the same pattern `agents.*`/`web.*` established:
 | Namespace | Members | Shared with |
 |---|---|---|
 | `memory.*` | `save`, `search`, `sessions`, and (when a FactsStore is wired) `remember`/`recall`/`forget` | `createMemoryDispatcher` (`tools/memory-tool.ts`) |
-| `tasks.*` | `add`, `update`, `list` | `createTasksDispatcher` over the same `TaskListStore` instance (`tools/tasks-tool.ts`) |
+| `tasks.*` | `add`, `update`, `list`, `mode` | `createTasksDispatcher` over the same `TaskListStore` instance (`tools/tasks-tool.ts`) |
 | `report.*` | `send(status, content)` | the native `report` tool's `ReportToolDeps.report` |
 | `release.*` | `board`/`bindSource`/`create`/`update`/`transition`/`requestApproval`, plus `apply`/`runChecks`/`preview`/`deploy`/`rollback` (engine backends) or `recordCheck`/`recordDeployment` (ledger-only backends) | `runReleaseAction` (`tools/release-tool.ts`) — release has no native tool at all; this is its only reach |
 
@@ -672,29 +679,49 @@ could technically substitute — several of them (`agents` most of all)
 genuinely cannot be done any other way (spawning is not something a shell can
 do), and `file`'s exact-match edit is enforcement no shell command performs.
 
-The schema surface the model sees natively is the 8 names plus their
-docstrings — 9,034 characters of description text (`BUILTIN_TOOL_DESCRIPTIONS`),
-~2.26k tokens at the chars/4 estimate, down from 10,201 chars / ~2.55k tokens
-across the 10 names this replaced. That is a **side effect** of shrinking the
-surface, not the goal: the codemode namespaces that replaced `release`
-(`release.*`, 13 members with per-member JSDoc) render into `execute_tools`'s
-own description at ~2,000 chars / ~500 tokens — MORE than the 704-char flat
-schema it replaced, because per-member TypeScript JSDoc is a more verbose
-format than one action-enum plus prose. The `memory.*`/`tasks.*`/`report.*`
-projections (all of which kept their native tool too — these are pure
-additions, reachable a second way) cost roughly 1,118 / 565 / 382 chars
-respectively. None of this is hidden from the measurement; it is the honest
-price of "reachable from code" over "one schema," paid because the owner
-values the smaller decision surface over the byte count.
+The schema surface the model sees natively is the 8 names plus their docstrings:
+**11,823 characters of description text (`BUILTIN_TOOL_DESCRIPTIONS`), about
+2,956 tokens at the chars/4 estimate, measured 2026-08-19.** `agents` is 4,805 of
+those characters on its own, `tasks` 1,704 and `file` 1,331.
+
+**That is larger than the surface it replaced, and the earlier claim that it
+shrank is withdrawn.** On 2026-08-12 the eight names measured 9,034 chars and the
+ten names before them measured 10,201, so the count fell and this document said
+so. A week of docstring work put it above both. Byte count was never the
+argument. The argument is the decision surface: eight standing choices instead of
+ten, whatever the docstrings cost.
+
+The codemode namespaces are measured the same way, on 2026-08-19, off each
+provider's own declared `types`:
+
+| namespace | members | chars | tokens at chars/4 |
+|---|---:|---:|---:|
+| `release.*` (engine backend) | 11 | 2,000 | 500 |
+| `release.*` (ledger-only backend) | 8 | 1,728 | 432 |
+| `memory.*` (with a FactsStore) | 6 | 1,118 | 280 |
+| `memory.*` (notes only) | 3 | 628 | 157 |
+| `tasks.*` | 4 | 988 | 247 |
+| `report.*` | 1 | 382 | 96 |
+
+`release.*` costs MORE than the 704-char flat schema the native `release` tool
+carried, because per-member TypeScript JSDoc is a more verbose format than one
+action-enum plus prose. That 704 is history: the tool is gone, so nothing can
+re-measure it. The `memory.*`, `tasks.*` and `report.*` projections each kept
+their native tool too, so their characters sit on top of the native total rather
+than instead of it.
+
+None of this is hidden from the measurement. It is the honest price of "reachable
+from code" over "one schema", paid because the owner values the smaller decision
+surface over the byte count.
 
 That stays flat as the CraftStore grows, because crafted tools live inside the
 sandbox namespace instead of the top-level schema.
 
 `tasks` is the one place that argument was re-opened and answered the other way.
-It could have been three more actions on `memory`, and it is not, because
+It could have been four more actions on `memory`, and it is not, because
 `memory` answers "what will I want to look up later" — its own docstring rules
 out temporary task progress — while a task list answers "what is still in front
 of me": live plan state, re-read every step out of the dynamic-context block and
 closed out as the work lands. Folding it in would have made `memory`'s summary
-untrue and put four more properties on the schema the model reads for every
-durable-state decision.
+untrue and put five more properties — `titles`, `parent`, `id`, `status`,
+`stance` — on the schema the model reads for every durable-state decision.
