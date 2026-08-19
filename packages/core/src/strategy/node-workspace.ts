@@ -21,8 +21,11 @@
  *
  * `shared-origin-plane` SURVIVES, and it is no longer a confession that the
  * substrate is missing. It is what a host without a credentialled filesystem
- * honestly is: an inline or test runner that has no uid-0 view to provision
- * with. It is still REPORTED rather than hidden, because the grading
+ * honestly is, and the hosted backend is one: its workspace is a REMOTE Nimbus
+ * session, where every pid-less filesystem RPC is pinned to the session user and
+ * `confinePrincipal` has no RPC at all, so there is no uid-0 view in that isolate
+ * to provision with. The local CLI's workspace is in-isolate and does provision.
+ * The value is still REPORTED rather than hidden, because the grading
  * consequence is real — you cannot grade a node on what it changed when every
  * node changed the same tree, so a shared-plane run is graded on the candidate
  * the node REPORTS, never on a diff of the workspace.
@@ -118,13 +121,23 @@ export interface NodeHomeHost {
  * Synchronous underneath and `async` only to satisfy the seam — every substrate
  * call here returns `void`, which is the same fact that makes `/pc` and
  * `/sandbox` executors rather than mounts.
+ *
+ * The host may arrive as a promise, because a filesystem that lives in this
+ * isolate BOOTS: a caller that had to resolve the three members up front would
+ * either serialise its own startup on that boot or wire nothing. Awaited per
+ * node and therefore resolved once, exactly as `createWorkspace`'s own `booting`
+ * is — and `await` on a plain host is a no-op, so a host that already has all
+ * three passes one.
  */
-export function agentHomeNodeProvisioner(host: NodeHomeHost): NodeWorkspaceProvisioner {
+export function agentHomeNodeProvisioner(
+  host: NodeHomeHost | Promise<NodeHomeHost>,
+): NodeWorkspaceProvisioner {
   return async (node) => {
+    const { root, confiner, sql } = await host;
     const name = nodeAgentName(node.nodeId);
-    const identity = agentIdentity(host.sql, name);
-    const home = provisionAgentHome(host.root, name, identity);
-    confineAgentTmp(host.root, host.confiner, name, identity);
+    const identity = agentIdentity(sql, name);
+    const home = provisionAgentHome(root, name, identity);
+    confineAgentTmp(root, confiner, name, identity);
     return { home, cred: agentCred(identity), isolation: 'private-home' };
   };
 }

@@ -766,6 +766,15 @@ export async function runNodeAgent(
     // and `ResolvedSwarm.settle` is the fact.
     mergeStrategy: input.settle === 'best' ? 'best_of' : 'synthesize',
   };
+  // THE LEDGER A HOSTED NODE CANNOT BE HANDED. `NodeLoopDeps.mission` is a live port
+  // and a {@link NodeRunSpec} is data, so a node crossing to a facet takes the LABELS
+  // and the host rebuilds the port over whatever reaches the ledger there — the same
+  // field, read the same way, that a head running out of process already travels by
+  // (`HeadInput.missionLabels`). Without it a hosted node charges nothing while an
+  // in-isolate one charges every step, and the same search would cost two different
+  // amounts depending on which backend ran it. Assigned rather than declared above so
+  // an unbudgeted run carries no key at all.
+  if (deps.mission) Object.assign(headInput, { missionLabels: deps.mission.labels });
 
   deps.journal.insertSpawn(headInput);
 

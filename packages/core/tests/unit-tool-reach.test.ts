@@ -30,7 +30,6 @@ import {
   createRLMProvider,
   createTasksCodemodeProvider,
   createWebCodemodeProvider,
-  createStrategyRegistry,
   createAgentConfigStore,
   MissionGovernor,
   TaskListStore,
@@ -109,7 +108,7 @@ describe('the reach declaration', () => {
     const factories = {
       agents: () => createAgentsCodemodeProvider(() => ({
         mode: 'build',
-        fork: { registry: createStrategyRegistry(), rt, model: new MockLanguageModelV3() },
+        fork: { rt, model: new MockLanguageModelV3() },
       })),
       memory: () => createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql })),
       tasks: () => createTasksCodemodeProvider(

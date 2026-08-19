@@ -72,6 +72,11 @@ const PARSEABLE = /\.[cm]?[jt]sx?$/;
  *  committed for being in a `.md` than in a `.ts`. */
 const TEXT_SOURCE = /\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc|md|ya?ml|toml|sh|env|pem|key)$/;
 
+/** A document: prose a person wrote for a reader. The narrowest set in this
+ *  module, and the only one whose members make claims in ENGLISH rather than in
+ *  code — which is why `doc-claims` needs it separately from `isTextSource`. */
+const DOCUMENT = /\.md$/;
+
 let enumerated: readonly string[] | undefined;
 
 export interface Enumeration {
@@ -163,6 +168,12 @@ export const isRawNodeModule = (file: string): boolean => RAW_NODE_MODULE.test(f
  *  `isParseable` on purpose: a credential in a `.md` or a `.pem` is no less
  *  committed than one in a `.ts`. */
 export const isTextSource = (file: string): boolean => TEXT_SOURCE.test(file);
+
+/** Prose a person wrote for a reader — what `doc-claims` holds to the code.
+ *  Narrower than `isTextSource` because the claim shapes differ: a `.md` states
+ *  a count in words and names a symbol in a code span, and a `.json` states
+ *  neither. */
+export const isDocument = (file: string): boolean => DOCUMENT.test(file);
 
 /**
  * A seeded bench defect patch. The corpus `gate:bench-corpus` governs, narrowed

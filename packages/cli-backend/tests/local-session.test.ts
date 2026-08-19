@@ -19,7 +19,7 @@ import type {
 } from '@ai-sdk/provider';
 import type { LLMProviderConfig } from '@proteus/core';
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider, createStrategyRegistry,
+  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
   JsonObjectSchema, WORKSPACE_RUN_ID,
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
@@ -2966,10 +2966,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     });
     const db = new Database(':memory:');
     const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
-    // The registry is empty deliberately: a search dispatches through no
-    // strategy, so a registration here would script a path it does not take.
-    // `AgentsForkDeps` still declares the field, so it is still passed.
-    return { deps: { mode: 'build', fork: { registry: createStrategyRegistry(), rt, model } }, calls };
+    return { deps: { mode: 'build', fork: { rt, model } }, calls };
   }
 
   test('a script searches, branches on the result, and returns its own synthesis', async () => {

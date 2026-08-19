@@ -44,8 +44,12 @@ import type { NodeLoopHost } from '../strategy/node-agent';
 import type { NamedSwarmPreset, SwarmConfig, SwarmPreset } from '../strategy/swarm';
 import type { Objective } from '../strategy/objective';
 import { readSpawnStarted } from '../jobs/threshold';
-import { readMissionLimits, type MissionGovernor } from '../mission-budget';
-import type { BuiltinStrategyOptions, StrategyRegistry } from '../strategy/types';
+import {
+  localMissionScope, readMissionLimits,
+  type MissionGovernor, type MissionScope,
+} from '../mission-budget';
+import type { BuiltinStrategyOptions } from '../strategy/types';
+import { agentHomeNodeProvisioner, type NodeHomeHost } from '../strategy/node-workspace';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
@@ -257,13 +261,12 @@ const ASSIGN_NOTES = {
  * and the exploration substrate it names — the heads runtime, the durable MCTS
  * session — is the same substrate a search's nodes run on.
  *
- * `runSwarmAction` reads `rt` and `model`. The other three carry the strategy
- * plumbing the backends assemble around that substrate; they are declared here
- * because the backends' one builder produces the whole bag, not because this
- * module dispatches a strategy.
+ * `runSwarmAction` reads `rt`, `model`, `nodeHost` and `nodeHome`. The remaining
+ * two carry the strategy plumbing the backends assemble around that substrate;
+ * they are declared here because the backends' one builder produces the whole
+ * bag, not because this module dispatches a strategy.
  */
 export interface AgentsForkDeps {
-  registry: StrategyRegistry;
   rt: AgentRuntime;
   model: LanguageModel;
   /** What the resolved model charges, for gates on projected spend before
@@ -280,6 +283,22 @@ export interface AgentsForkDeps {
    * loop runs in this isolate — the same body, without a storage boundary.
    */
   nodeHost?: () => NodeLoopHost;
+  /**
+   * The three host-owned things a node's PRIVATE HOME needs — a uid-0 view of
+   * the workspace filesystem, the principal registry that scopes `/tmp`, and
+   * durable SQL for the uid allocation. *Isolation*.
+   *
+   * A FACTORY returning a promise, for `nodeHost`'s reason plus one of its own:
+   * an in-isolate filesystem boots, so a backend that resolved this at wiring
+   * time would serialise every turn on a boot only a search needs.
+   *
+   * Absent is a host with no credentialled filesystem — the hosted backend,
+   * whose workspace is a remote Nimbus session with no uid-0 view in the isolate
+   * and no `confinePrincipal` RPC. Then every node reports
+   * `shared-origin-plane`, which is REPORTED rather than disguised as a home: an
+   * invented directory would be a boundary a node believes in and does not have.
+   */
+  nodeHome?: () => Promise<NodeHomeHost>;
   /** Per-strategy infrastructure options the LLM must not set — e.g.
    *  `{ mcts: { session }, heads: { controller, inheritedContext, onPhase } }`. */
   defaultOptions?: () => BuiltinStrategyOptions;
@@ -309,10 +328,11 @@ export interface AgentsToolDeps {
    *  parent owns, and a subordinate reaching across it acts on an ownership
    *  relation it is not party to. */
   peers?: PeersToolDeps;
-  /** The actor's mission budget governor. Wired, it makes this the SPAWN seam:
-   *  no helper is launched under an exhausted label, and a fork's own declared
-   *  cap nests under the mission that spawned it. Unwired (or unscoped, the
-   *  default) changes nothing. */
+  /** The actor's mission budget governor. Wired, it makes this the SPAWN seam — no
+   *  helper is launched under an exhausted label, and a fork's own declared cap nests
+   *  under the mission that spawned it — and it hands a search the PORT its model calls
+   *  charge through as it makes them, so a cap stops the run rather than being reported
+   *  after it. Unwired (or unscoped, the default) changes nothing. */
   budget?: MissionGovernor;
 }
 
@@ -827,19 +847,27 @@ function badInput(error: string): BadInputRefusal {
  * label when the call declared its own cap. Returns null when there is no governor
  * or no scope at all — the uncapped default, where nothing below this point does
  * any budget work.
+ *
+ * The PORT comes back with the governor rather than being assembled at each use,
+ * because that is what the search charges through: an in-process port is the
+ * governor, and building one per call site is how two call sites come to charge
+ * different labels.
  */
 function missionScope(
   budget: MissionGovernor | undefined,
   input: AgentsToolInput,
-): { governor: MissionGovernor; labels: string[] } | null {
+): { governor: MissionGovernor; scope: MissionScope } | null {
   if (!budget) return null;
   const limits = readMissionLimits(input);
+  /** The caller's own scope, or the fresh child label this call declared a cap on. */
+  let labels: readonly string[] = budget.scope;
   if (limits) {
     const label = input.budget_label?.trim() || `swarm-${nanoid()}`;
     budget.declare(label, limits);
-    return { governor: budget, labels: [label] };
+    labels = [label];
   }
-  return budget.scope.length > 0 ? { governor: budget, labels: [...budget.scope] } : null;
+  const scope = localMissionScope(budget, labels);
+  return scope ? { governor: budget, scope } : null;
 }
 
 // ── Swarm dispatch (the configured-search rung) ──────────────────────────────
@@ -858,8 +886,15 @@ function missionScope(
  * WHY THIS READS THE CAPS. Under *Presets* the mission caps live on this input
  * rather than being duplicated onto `SwarmInput`, so a search nests under the
  * caller's mission scope through the seam every spawn uses — `missionScope` reads
- * `budget_usd` / `budget_tokens` / `budget_label`, and the governed model is what the
- * expansion runs on.
+ * `budget_usd` / `budget_tokens` / `budget_label`.
+ *
+ * WHAT CHARGES WHAT, because two paths reach one ledger and the pair has to be read
+ * together. The governed `LLM` charges what THIS process sends through the `LLM`
+ * primitive: a judged run's ensemble, estimated from characters. The PORT charges the
+ * run's own model calls, per call, from the provider's own report — every swarm node's
+ * every step, and a toolless node's one generation. The two sets are disjoint by
+ * construction, and `report.tokens` is the second of them, which is why this seam
+ * records the spawn and charges no tokens of its own.
  */
 async function runSwarmAction(
   deps: AgentsForkDeps,
@@ -893,14 +928,19 @@ async function runSwarmAction(
   const illegal = swarmValidity(resolved);
   if (illegal) return illegal;
 
-  // The mission scope, and with it the model-call seam, so an exhausted label stops
-  // a search mid-flight rather than after it.
+  // The mission scope, and with it both enforcement seams: the governed `LLM` for the
+  // measurement calls this process makes, and the PORT the run charges its own model
+  // calls through as it makes them.
   const mission = missionScope(budget, input);
   let rt: AgentRuntime = deps.rt;
   if (mission) {
-    rt = { ...deps.rt, llm: mission.governor.govern(deps.rt.llm, mission.labels) };
+    rt = { ...deps.rt, llm: mission.governor.govern(deps.rt.llm, mission.scope.labels) };
   }
   const runDeps: SwarmRunDeps = { rt, model: deps.model, mode };
+  // THE SEARCH CHARGES ITS OWN CALLS. Wired here, an exhausted label stops the next
+  // level from opening and stops an agent swarm node between its steps, so a cap the
+  // caller set is enforced while the money is still there to save.
+  if (mission) Object.assign(runDeps, { mission: mission.scope });
   const signal = readAbortSignal(toolOptions);
   if (signal) Object.assign(runDeps, { signal });
   // Resolved here rather than at wiring time, so a backend that cannot build a
@@ -908,18 +948,29 @@ async function runSwarmAction(
   // one: an absent key is what runs the loop in this isolate.
   const host = deps.nodeHost?.();
   if (host) Object.assign(runDeps, { host });
+  // The per-node private home, from the ONE construction site: a backend hands
+  // over the three things only a host has, never a provisioner of its own, so
+  // there is exactly one place a node's boundary is built. Resolved once per
+  // swarm call and awaited per node, so a turn that never searches never boots a
+  // filesystem, and an absent factory leaves the key absent — which is what makes
+  // every node report the shared plane instead of a home it does not have.
+  const nodeHome = deps.nodeHome;
+  if (nodeHome) Object.assign(runDeps, { provisionHome: agentHomeNodeProvisioner(nodeHome()) });
   readSpawnStarted(toolOptions)?.();
   const result = await runSwarm(runDeps, resolved);
   if ('reason' in result) return result;
-  // The spawn always records. TOKENS are charged as a lump here because a search's
-  // expansions and measurements are made from THIS process through the governed
-  // `rt.llm`, so nothing has debited them yet. A run that reported no total is
-  // charged nothing rather than billed a fabricated zero.
-  mission?.governor.debit(result.report.tokens ?? 0, { labels: mission.labels, spawns: 1 });
+  // THE SPAWN, AND ONLY THE SPAWN. The tokens are already on the ledger: every model
+  // call the run made debited as it happened, through `SwarmRunDeps.mission` above, and
+  // `report.tokens` is the sum of exactly those calls. Charging it again here would
+  // bill the caller twice for one search — and a silent double bill looks exactly like
+  // the cap working, which is why it has to be structurally impossible rather than
+  // merely fixed. `debit` writes the row for a spawn with no tokens, so this records
+  // the search happened without claiming it was free.
+  mission?.governor.debit(0, { labels: mission.scope.labels, spawns: 1 });
   const output: JsonObject = parseJsonObject(JSON.stringify(result));
   if (mission) {
-    const label = mission.labels[0];
-    const snapshot = label ? mission.governor.snapshot(label)[0] : undefined;
+    const label = mission.scope.labels[0];
+    const snapshot = label !== undefined ? mission.governor.snapshot(label)[0] : undefined;
     if (snapshot) {
       Object.assign(output, { mission_budget: parseJsonObject(JSON.stringify(snapshot)) });
     }

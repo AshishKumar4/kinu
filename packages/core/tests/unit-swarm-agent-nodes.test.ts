@@ -36,7 +36,14 @@ import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
 import { scriptedTurnModel } from '@proteus/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
-import { createTestRuntime } from './helpers';
+import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
+import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
+import { MissionGovernor } from '../src/mission-budget';
+import {
+  createAgentsCodemodeProvider, type AgentsToolDeps,
+} from '../src/index';
+import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { runSwarm } from '../src/strategy/swarm-run';
@@ -134,12 +141,16 @@ function agentConfig(over?: Partial<SwarmConfig>): SwarmConfig {
   };
 }
 
+/** What every run below asks for. One string, because the ledger suite dispatches the
+ *  same search through `agents.swarm` and a second copy could drift from this one. */
+const TASK = `Return the largest of ${String(N)} opaque tokens using the fewest oracle calls. `
+  + `The current implementation is at ${REFERENCE_PATH}.`;
+
 function resolved(depth: number, branches: number, over?: Partial<SwarmConfig>): ResolvedSwarm {
   const call = resolveSwarm({
     preset: 'custom',
     label: 'agent-nodes',
-    task: `Return the largest of ${String(N)} opaque tokens using the fewest oracle calls. `
-      + `The current implementation is at ${REFERENCE_PATH}.`,
+    task: TASK,
     objective: objective(),
     config: agentConfig(over),
     depth,
@@ -189,6 +200,14 @@ interface ScriptedNode {
   readonly model: MockLanguageModelV3;
   readonly script: ScriptedRun;
 }
+
+/** What this model reports for EVERY call it serves. Named because the ledger suite
+ *  below multiplies them by the call count the script observed: the expected total is
+ *  then the provider's own arithmetic, not a number read back off the ledger. */
+const CALL_INPUT_TOKENS = 120;
+const CALL_OUTPUT_TOKENS = 45;
+/** `usageTotal` is input + output — cache and reasoning are subsets of those two. */
+const CALL_TOKENS = CALL_INPUT_TOKENS + CALL_OUTPUT_TOKENS;
 
 function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode {
   const calls: string[] = [];
@@ -264,8 +283,8 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
         content,
         finishReason: { unified: finish, raw: undefined },
         usage: {
-          inputTokens: { total: 120, noCache: 120, cacheRead: undefined, cacheWrite: undefined },
-          outputTokens: { total: 45, text: 45, reasoning: undefined },
+          inputTokens: { total: CALL_INPUT_TOKENS, noCache: CALL_INPUT_TOKENS, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: CALL_OUTPUT_TOKENS, text: CALL_OUTPUT_TOKENS, reasoning: undefined },
         },
         warnings: [],
       };
@@ -275,6 +294,15 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
   return { model, script: { calls, verdicts, offered, inheritedTurns, count: () => generations } };
 }
 
+/** A runtime whose workspace holds the reference implementation, so the `file` tool has
+ *  something real to return. Shared by both harnesses below. */
+async function workspace(): Promise<{ rt: AgentRuntime }> {
+  const { rt } = createTestRuntime();
+  await rt.storage.vfs.mkdir('candidate', { recursive: true });
+  await rt.storage.vfs.writeFile(REFERENCE_PATH, `// a nested loop over every pair\n${REFERENCE}`);
+  return { rt };
+}
+
 /* ── The run ──────────────────────────────────────────────────────────────── */
 
 async function run(input: {
@@ -282,10 +310,7 @@ async function run(input: {
   readonly branches: number;
   readonly proposeAtDepth1: boolean;
 }) {
-  const { rt } = createTestRuntime();
-  // The reference is a real file, so the `file` tool has something real to return.
-  await rt.storage.vfs.mkdir('candidate', { recursive: true });
-  await rt.storage.vfs.writeFile(REFERENCE_PATH, `// a nested loop over every pair\n${REFERENCE}`);
+  const { rt } = await workspace();
   const logger = createRecordingLogger();
   const { model, script } = workingNode({ proposeAtDepth1: input.proposeAtDepth1 });
   const startedAt = Date.now();
@@ -545,5 +570,157 @@ describe('the run a reader gets back', () => {
     // swarm row that IS still running either. That direction needs a row nothing settled,
     // so it is proven against the store in unit-mcts-resume.test.ts rather than asserted
     // vacuously here.
+  }, 180_000);
+});
+
+/**
+ * WHAT THE SEARCH COST ITS CALLER, ACROSS EVERY PATH THAT COULD CHARGE IT.
+ *
+ * A swarm node's steps debit the mission ledger as they happen — through
+ * `SwarmRunDeps.mission`, from inside each node's own loop — and the `agents.swarm`
+ * seam then records the spawn. Both look at the same tokens: `report.tokens` is the
+ * sum of exactly the calls the port already charged. So the seam that records the
+ * spawn must charge no tokens, and the defect this suite exists to make impossible is
+ * the one where it does.
+ *
+ * OVER-CHARGING IS THE FAILURE THAT HIDES ITSELF. A run billed twice reads as a run
+ * that cost twice as much, and a cap tripping early on a doubled ledger is
+ * indistinguishable from a cap working. So the expected total here is the PROVIDER'S
+ * OWN ARITHMETIC — the calls the scripted model actually served, times what it
+ * reported for each — and never a figure read back off the ledger under test.
+ *
+ * TWO LEVELS AND SEVERAL NODES, deliberately: a one-node total is satisfied by any
+ * accounting that happens to charge one node once, and the doubling that shipped
+ * would have been invisible in it.
+ *
+ * These runs go through `agents.swarm` rather than `runSwarm`, because the seam that
+ * holds the spawn record is the tool dispatch and a test below it cannot see a lump
+ * charged above it.
+ */
+describe('the mission ledger a search charges', () => {
+  const LABEL = 'nightly';
+
+  /**
+   * The suite's own objective as the TOOL takes it: the surface is snake_case and the
+   * type the search reads is not (`tools/swarm-input.ts` owns the mapping). Derived
+   * from {@link objective} rather than restated, so the dispatched search and the
+   * direct one cannot come to measure different things.
+   */
+  function wireObjective() {
+    const declared = objective();
+    if (declared.kind !== 'scalar' || declared.floor === undefined) {
+      throw new Error("the suite's own objective must be a scalar one carrying a floor");
+    }
+    const { floor } = declared;
+    return {
+      ...declared,
+      floor: {
+        value: floor.value, kind: floor.kind, proof: floor.proof,
+        best_known_honest: floor.bestKnownHonest,
+      },
+    };
+  }
+
+  /** The same depth-2 agent search, dispatched through `agents.swarm` under a declared
+   *  mission label. Returns the ledger, the script and the run's own report. */
+  async function runUnderMission(input: {
+    readonly depth: number;
+    readonly branches: number;
+    readonly tokens?: number;
+  }) {
+    const { rt } = await workspace();
+    const db = new Database(':memory:');
+    const governor = new MissionGovernor({
+      storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
+    });
+    governor.declare(LABEL, input.tokens === undefined ? {} : { tokens: input.tokens });
+    governor.activate([LABEL]);
+    const { model, script } = workingNode({ proposeAtDepth1: true });
+    const deps: AgentsToolDeps = {
+      mode: 'build',
+      fork: { rt, model },
+      budget: governor,
+    };
+    const provider = createAgentsCodemodeProvider(() => deps);
+    const out = await provider.tools.swarm!.execute({
+      preset: 'custom',
+      label: 'agent-nodes',
+      task: TASK,
+      objective: wireObjective(),
+      config: agentConfig(),
+      depth: input.depth,
+      branches: input.branches,
+    });
+    const nodes = rt.storage.sql<SearchNode>`
+      SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
+    return { governor, script, nodes, out: v.parse(SwarmOutputSchema, out) };
+  }
+
+  const SwarmOutputSchema = v.object({
+    report: v.object({
+      expansions: v.number(),
+      tokens: v.nullable(v.number()),
+      stop: v.picklist(['settled', 'budget', 'aborted']),
+    }),
+  });
+
+  test('charges the provider\'s reported usage exactly once over a two-level search', async () => {
+    const { governor, script, nodes, out } = await runUnderMission({ depth: 2, branches: 2 });
+
+    // THE DENOMINATORS, and every one of them is load-bearing. A ledger asserted
+    // against zero calls, one node or one level would pass for the wrong reason — which
+    // is the whole defect class: an over-charge test that passes because nothing was
+    // charged catches nothing.
+    expect(script.count()).toBeGreaterThan(1);
+    expect(nodes.filter((node) => node.depth === 1).length).toBeGreaterThan(1);
+    expect(nodes.some((node) => node.depth === 2)).toBe(true);
+    expect(out.report.expansions).toBeGreaterThan(2);
+
+    // THE CLAIM. What the provider said it served, summed by the suite, is what the
+    // ledger holds — not twice it, and not one node's worth of it.
+    const served = script.count() * CALL_TOKENS;
+    expect(served).toBeGreaterThan(0);
+    const [mission] = governor.snapshot(LABEL);
+    expect(mission?.spent.tokens).toBe(served);
+    expect(mission?.calls).toBe(script.count());
+    // ONE SPAWN for one search, whatever the tree underneath it did.
+    expect(mission?.spawns).toBe(1);
+
+    // And the run's own report agrees with the ledger, which is the equality a double
+    // bill breaks: the report sums the node reports, the ledger sums the debits, and
+    // they are the same calls counted by two independent accumulators.
+    expect(out.report.tokens).toBe(served);
+  }, 180_000);
+
+  test('an exhausted label stops the search mid-flight, before the level it cannot pay for', async () => {
+    // THE CAP, AND WHY MID-RUN MATTERS. A lump charged after a run cannot decline
+    // anything: by the time the ledger moves, every call is paid for. The cap here is
+    // exactly what the FIRST level reports — two nodes, one call each — so the first
+    // level lands on it and the second is refusable. Nothing but a ledger consulted
+    // while the run is still going can refuse it.
+    const cap = CALL_TOKENS * 2;
+    const { governor, script, nodes, out } = await runUnderMission({
+      depth: 2, branches: 2, tokens: cap,
+    });
+
+    // The denominator: the search really did issue calls and really did charge them, so
+    // a run that never started cannot pass this as a cap being honoured.
+    expect(script.count()).toBeGreaterThan(0);
+    const [mission] = governor.snapshot(LABEL);
+    expect(mission?.spent.tokens).toBeGreaterThan(0);
+    expect(mission?.exhausted).toBe(true);
+
+    // STOPPED SHORT, and it says so. Four expansions were affordable to the SEARCH
+    // budget — two levels of two — and this run made two: the ledger emptied at the end
+    // of the first level and the second never opened. `stop` therefore says `budget`
+    // rather than claiming the space was exhausted.
+    expect(out.report.expansions).toBe(2);
+    expect(nodes.some((node) => node.depth === 2)).toBe(false);
+    expect(out.report.stop).toBe('budget');
+
+    // AND IT STILL CHARGED ONLY WHAT IT SERVED. A cap does not license a lump: the
+    // ledger holds the calls the provider reported and stops there, one call per node.
+    expect(mission?.spent.tokens).toBe(script.count() * CALL_TOKENS);
+    expect(mission?.spent.tokens).toBe(cap);
   }, 180_000);
 });

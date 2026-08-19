@@ -218,6 +218,47 @@ export const LADDER: readonly Gate[] = [
       + 'spot visible only in red output is invisible exactly when the tree is clean.',
   },
   {
+    run: 'bun run gate:doc-claims',
+    // `push`, not `commit`, and the reason is the index rather than the check: the
+    // symbol arm needs an AST pass over every parseable file (1,372 at 0fff343e,
+    // 1.2 s of the 2.1 s), and the commit tier has 2.5 s left inside a budget that
+    // is a contract rather than an aspiration. Raising that budget to fit a new
+    // gate is how a hook becomes slow enough to tempt `--no-verify`.
+    tier: 'push',
+    seconds: 2.1,
+    catches: 'a DOCUMENT contradicting the code. Every other gate here compares code to code, '
+      + 'which is how four features were designed, built, tested and never wired with nothing '
+      + 'red — and the documents drifted the same way with nothing measuring them at all. '
+      + '`FORMAL-SPEC.md` claimed 84 theorems against a measured 330; `TOOLS.md` claimed a '
+      + '9,034-character tool schema against a measured 11,823, and called it a reduction from '
+      + '10,201 when the surface had GROWN past both; `tasks` has four actions and two tables '
+      + 'said three; a brief saying "seven named presets" reached three documents before anyone '
+      + 'counted `NAMED_SWARM_PRESETS`, which is six. Three shapes are mechanically decidable '
+      + 'and it governs exactly those: a named SYMBOL resolves against an identifier index '
+      + 'built from the AST of every parseable file, a named PATH resolves against the one '
+      + 'enumeration in the tree\'s own shorthands, and a stated COUNT matches an enumeration '
+      + 'IMPORTED from the module that declares it — so this gate holds no number of its own '
+      + 'and cannot be the thing that goes stale. Measured 2026-08-19 at 0fff343e over 31 '
+      + 'documents: 378 path claims, 1,125 symbol claims and 15 count claims, with 36 false '
+      + 'claims locked as recorded debt.',
+    blind: 'every figure source does not enumerate, which is the boundary it is built around. A '
+      + 'wall clock, a token count and a byte budget are the same token to a scanner as a '
+      + 'configured limit, so the house rule that a figure carries its date is NOT enforced: '
+      + 'measured 2026-08-19, the cheapest sound form of that rule produced 22 findings whose '
+      + 'majority name no measurement at all — a heading\'s `5.1`, the `3` in `--3way`, a '
+      + 'citation year — and it cannot tell WHICH number in a sentence was measured without '
+      + 'guessing. Line numbers are ignored: 79 `path:line` locators landed in three documents '
+      + 'on one day, and a line rots on the next insertion above it, so checking one fires on '
+      + 'refactors that changed nothing. It checks EXISTENCE, never truth — `strategy/swarm.ts` '
+      + 'lists six tested paths of which three refuse to resolve, and this gate passes that '
+      + 'list. Model-facing strings in source are out of corpus, which is where '
+      + '`tools/clamp.ts` told the model to hand work to a fork on a surface with no fork '
+      + 'action. No vocabulary list: every verdict here is derived from code, so a banned '
+      + 'phrase has no home in it. A string literal is deliberately not a resolution set — '
+      + 'admitting one laundered five claims, four of them kept alive by a test asserting they '
+      + 'are ABSENT. All of it prints on the GREEN path.',
+  },
+  {
     run: 'bun run gate:commit-message',
     tier: 'commit',
     seconds: 0.1,
@@ -355,6 +396,45 @@ export const LADDER: readonly Gate[] = [
     blind: 'a symbol referenced from live code that does nothing.',
   },
   {
+    run: 'bun run gate:wired',
+    // PUSH, beside `gate:dead-code` and for its reason: at 3.6s it is three times
+    // the priciest commit-tier static gate, and nothing can become unwired
+    // between a commit and the push that follows it.
+    tier: 'push',
+    seconds: 3.6,
+    catches: 'a capability that was designed, built, TESTED, and connected to nothing — the '
+      + 'class `gate:dead-code` is structurally unable to see, because knip\'s unit of "used" '
+      + 'for a re-exported symbol is the TERMINUS of the re-export chain, and every export in '
+      + '`packages/core` terminates at `src/index.ts`, which is the package `main` and '
+      + 'therefore an entry. Measured 2026-08-19 on a four-file probe carrying this repository '
+      + "own `knip` block: two leaf symbols called by nothing, published through `export *` "
+      + "from the entry, were clean in knip's default run AND in `--production`, and importing "
+      + 'one THROUGH the barrel from a test changed neither run. `ignoreExportsUsedInFile: '
+      + 'true` closes the other half, which is `FORK_STRATEGY_ID` exactly: declared at '
+      + '`strategy/heads.ts:36`, read at `:40`, never reported. This gate measures PRODUCTION '
+      + 'REACHABILITY instead — a path from an entrypoint that passes through no test and does '
+      + 'not consist solely of re-exports — over entrypoints DISCOVERED from the declarations '
+      + 'that create them: a handler bound under a `BUILTIN_TOOLS` name, a `@callable()`, a '
+      + '`.command()`, a method on a framework-rooted class that nothing here invokes, a module '
+      + '`export default` property, a `createRoot` mount, a shebang. It also reports the shape '
+      + 'reachability over exports cannot see: an OPTIONAL FIELD production reads that no '
+      + 'visible construction site of its interface supplies — `SwarmRunDeps.mission` was one, '
+      + 'and wiring it at f5c8dbd5 turned this gate red on a lock entry that no longer '
+      + 'reproduced. 570 findings measured at 0fff343e, 569 locked at f5c8dbd5, against a '
+      + '`dead-code` lock of 12 symbols over the same 646 governed files.',
+    blind: 'dynamic dispatch through a registry or a string key — `strategy/heads.ts` reads as '
+      + 'reached because `fork-deps.ts` names its factory, and whether anything SELECTS that '
+      + 'strategy is a fact about the registry. A symbol named only in a config file, which '
+      + 'fails as a FALSE POSITIVE rather than quietly. A field ASSIGNED and never read: '
+      + '`StrategyResult.cost.selfMetered` is written at `heads.ts:119` and `mcts.ts:118` and '
+      + 'read nowhere, and this gate is silent on it. A symbol wired for one arm of a union and '
+      + 'unwired for another, which is how a toolless search came within one commit of running '
+      + 'free. Per-backend reach, the same residual `gate:dead-code` states. And whether a '
+      + 'reached symbol does anything at all. It prints every one of these on the GREEN path, '
+      + 'with the count of locked findings still outstanding, because debt visible only in red '
+      + 'output is invisible exactly when somebody is deciding how far to trust the tree.',
+  },
+  {
     run: 'bun run gate:silent-drop',
     tier: 'push',
     seconds: 1.4,
@@ -386,7 +466,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts',
     tier: 'push',
     seconds: 1.7,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
@@ -475,6 +555,28 @@ export const LADDER: readonly Gate[] = [
       + 'whose first run is mostly noise trains people to ignore it.',
     blind: 'whether the predicates in sources.ts describe the right sets. It proves nothing '
       + 'else re-spells them.',
+  },
+  {
+    run: 'bun test scripts/wired.test.ts',
+    tier: 'push',
+    seconds: 3.8,
+    catches: 'the wired gate firing on the shape that would get it switched off, and — the '
+      + 'half nobody writes — not firing at all. 24 cases over a fixture repository shaped '
+      + 'like this one: a barrel over a barrel over the declaring file, one entrypoint, one '
+      + 'suite. RED on an export with no production consumer, GREEN on the same export once '
+      + 'ONE production line calls it through the same barrel, and SILENT on a symbol a '
+      + 'production module genuinely imports through that barrel — the last is the false '
+      + 'positive that matters, because every export in `packages/core` is published this '
+      + 'way. It also pins the four resolver rules whose absence produced phantom findings: '
+      + 'the `@/*` alias (33 specifiers in one page, 3 resolved, 95 phantom components), a '
+      + 'default export resolved to the name its declaration carries, `Object.assign` as a '
+      + 'field supply, and a local import that resolves to nothing being FATAL rather than a '
+      + 'dropped edge. Over the live tree it asserts every one of the seven entrypoint kinds '
+      + 'still has an instance, so a detector that stops matching is red rather than '
+      + 'permissive.',
+    blind: 'whether the census is COMPLETE. Every case proves the gate does not lie about '
+      + 'what it reports; none of them can prove it reports everything, and the blind-spot '
+      + 'list the gate prints on its green path is the honest answer to that.',
   },
   {
     run: 'bun run test',

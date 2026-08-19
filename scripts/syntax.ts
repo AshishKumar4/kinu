@@ -41,7 +41,7 @@ export interface SyntaxNode {
   readonly children: readonly SyntaxNode[];
 }
 
-interface Parsed {
+export interface Parsed {
   readonly root: SyntaxNode;
   /** 1-based line of a byte offset. */
   lineAt(offset: number): number;
@@ -396,6 +396,129 @@ export function importedNames(statement: SyntaxNode): readonly string[] {
   return statement.raw.specifiers
     .map((specifier) => identifierName(specifier.local))
     .filter((name): name is string => name !== undefined);
+}
+
+/** The name a namespace import binds, and the name an `export * from`
+ *  republishes: every export the source module has, rather than one of them. */
+export const NAMESPACE = '*';
+
+/** One name crossing a module boundary: what it is called HERE, and what it is
+ *  called in the module it came from. The two differ under `as`, and a caller
+ *  asking "who consumes this export" needs the far side. */
+export interface ModuleBinding {
+  /** The name in the module the binding reads FROM, or {@link NAMESPACE}. */
+  readonly imported: string;
+  /** The name this statement binds or publishes here. */
+  readonly local: string;
+}
+
+/** What an `import` statement binds, paired with the far-side name.
+ *  {@link importedNames} answers the local half alone; this answers both, which
+ *  is what resolving an export back through a barrel needs. */
+export function importBindings(statement: SyntaxNode): readonly ModuleBinding[] {
+  const { raw } = statement;
+  if (raw.type !== 'ImportDeclaration') return [];
+  const bound: ModuleBinding[] = [];
+  for (const specifier of raw.specifiers) {
+    const local = identifierName(specifier.local);
+    if (local === undefined) continue;
+    if (specifier.type === 'ImportDefaultSpecifier') bound.push({ imported: 'default', local });
+    else if (specifier.type === 'ImportNamespaceSpecifier') bound.push({ imported: NAMESPACE, local });
+    else {
+      const imported = identifierName(specifier.imported) ?? literalString(specifier.imported);
+      if (imported !== undefined) bound.push({ imported, local });
+    }
+  }
+  return bound;
+}
+
+/** What an `export … from '…'` statement republishes. `export * from` yields one
+ *  {@link NAMESPACE} entry, because it forwards every export the source has
+ *  under the source's own name. A statement with no `from` yields nothing: that
+ *  one declares, and {@link exportedLocalNames} is its accessor. */
+export function reExportBindings(statement: SyntaxNode): readonly ModuleBinding[] {
+  const { raw } = statement;
+  if (raw.type === 'ExportAllDeclaration') {
+    const named = raw.exported === null || raw.exported === undefined
+      ? undefined
+      : identifierName(raw.exported) ?? literalString(raw.exported);
+    return [{ imported: NAMESPACE, local: named ?? NAMESPACE }];
+  }
+  if (raw.type !== 'ExportNamedDeclaration' || raw.source === null || raw.source === undefined) {
+    return [];
+  }
+  const bound: ModuleBinding[] = [];
+  for (const specifier of raw.specifiers) {
+    const imported = identifierName(specifier.local) ?? literalString(specifier.local);
+    const local = identifierName(specifier.exported) ?? literalString(specifier.exported);
+    if (imported !== undefined && local !== undefined) bound.push({ imported, local });
+  }
+  return bound;
+}
+
+/**
+ * Names this file REFERENCES, as against the names it declares, imports or
+ * republishes. The question is "does anything here USE that binding", so three
+ * kinds of identifier are not references and drop out:
+ *
+ *   - every identifier inside an `import` or an `export … from` statement. That
+ *     is the binding itself, and it is exactly how a barrel holds a symbol
+ *     without using it;
+ *   - the non-computed `property` of a member access, and the non-computed `key`
+ *     of a property or member declaration. Those name a field, not a module
+ *     binding. A shorthand `{ foo }` is exempt, because there the key IS the
+ *     reference;
+ *   - the name a declaration gives itself. Declaring is not using.
+ *
+ * Everything else counts, including a parameter or a local whose name happens to
+ * match an import. That over-collects, and the direction is deliberate: a spare
+ * name can only make a consumption test MORE permissive, so the error can hide a
+ * finding and can never invent one.
+ */
+export function referencedNames(tree: SyntaxNode): Set<string> {
+  const bindings = tree.children
+    .filter((statement) => statement.raw.type === 'ImportDeclaration' || isReExport(statement))
+    .map((statement) => [statement.start, statement.end] as const);
+  const used = new Set<string>();
+  walk(tree, (node) => {
+    const name = identifierName(node.raw);
+    if (name === undefined || namesAField(node) || declaresItself(node)) return;
+    if (bindings.some(([from, to]) => node.start >= from && node.end <= to)) return;
+    used.add(name);
+  });
+  return used;
+}
+
+/** True when this identifier is the field name in a member access or a property
+ *  declaration, rather than a reference to a binding. */
+function namesAField(node: SyntaxNode): boolean {
+  const parent = node.parent?.raw;
+  if (parent === undefined) return false;
+  if (parent.type === 'MemberExpression') return !parent.computed && parent.property === node.raw;
+  if (parent.type === 'Property') {
+    return !parent.computed && !parent.shorthand && parent.key === node.raw;
+  }
+  if (parent.type === 'TSEnumMember') return parent.id === node.raw;
+  if (parent.type === 'PropertyDefinition' || parent.type === 'MethodDefinition'
+    || parent.type === 'TSPropertySignature' || parent.type === 'TSMethodSignature'
+    || parent.type === 'AccessorProperty') {
+    return !parent.computed && parent.key === node.raw;
+  }
+  return false;
+}
+
+/** Declarations whose `id` is the name being introduced. */
+const SELF_NAMING: ReadonlySet<string> = new Set([
+  'FunctionDeclaration', 'ClassDeclaration', 'TSInterfaceDeclaration',
+  'TSTypeAliasDeclaration', 'TSEnumDeclaration', 'TSModuleDeclaration',
+  'VariableDeclarator',
+]);
+
+/** True when this identifier is the name a declaration gives itself. */
+function declaresItself(node: SyntaxNode): boolean {
+  const parent = node.parent?.raw;
+  if (parent === undefined || !SELF_NAMING.has(parent.type)) return false;
+  return 'id' in parent && parent.id === node.raw;
 }
 
 /**

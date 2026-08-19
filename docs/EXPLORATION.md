@@ -589,13 +589,35 @@ own uid and moded so the boundary is uid/gid/mode on real inodes rather than
 convention. The node's commands run as that uid, with its own credential and its
 own `/tmp`. `agentHomeNodeProvisioner` is the implementation, and
 `packages/cf-backend/tests/unit-node-home-wiring.test.ts` proves it against the
-real substrate: 7 tests, 0 fail, measured 2026-08-19.
+real substrate rather than a stub, because everything it claims — the uid floor,
+the uid-0-only `chown`, the mode, the `EACCES` a sibling gets — is a substrate
+rule: 15 tests, 0 fail, measured 2026-08-19.
 
-**No backend hands that provisioner to a swarm today, so every node in a shipped
-`agents.swarm` run reports `shared-origin-plane`.** `AgentsForkDeps` carries no
-home host, and `runSwarmAction` builds its run deps without `provisionHome`, so
-the seam is built and unwired. This document says so rather than describing the
-private home as shipped behaviour.
+**A shipped `agents.swarm` run on the local backend reports `private-home`.**
+`AgentsForkDeps.nodeHome` carries the three things only a host has — the uid-0
+view, the principal registry that scopes `/tmp`, and the SQL the uid allocation
+is a row in — and `runSwarmAction` builds the provisioner from it, once per call,
+at the ONE construction site. A backend hands over the host, never a provisioner
+of its own, so a node's boundary has exactly one builder.
+`packages/cli-backend/tests/swarm-node-home.test.ts` observes it on a real
+dispatch through the tool the model calls, and runs the same call with the host
+withheld beside it so the reported value is known to follow the wiring: 3 tests,
+0 fail, measured 2026-08-19.
+
+**The hosted backend cannot supply that host, and its nodes therefore report
+`shared-origin-plane`.** Not an omission: its workspace filesystem lives in a
+different isolate, reached by RPC to a Nimbus Durable Object. Every filesystem
+call that arrives without a pid acts as the unprivileged session user, so there
+is no uid-0 view to `chown` with; and `confinePrincipal`, which is what scopes a
+`/tmp`, is a method on `SqliteVFS` with no RPC at all. Two of the three members
+do not exist on that side of the boundary. The honest consequence is the value a
+node reports, and it is reported rather than papered over with an invented
+directory — a boundary a node believes in and does not have is worse than none.
+
+**Two consumers read a node's home that are not the node**, which is why the mode
+is `0o755` and not `0o700`: the grader, because a node is scored on what is in its
+home and the engine does not run as the node, and merge-back, which copies the
+winner's diff out. Owner writes, everyone reads.
 
 **Permissions inside one view, not a filesystem each.** Isolation without a read
 window is a regression: a subagent handed a freshly created empty filesystem

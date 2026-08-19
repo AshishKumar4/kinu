@@ -1,20 +1,21 @@
 /**
- * The `agents` tool's fork substrate, fully wired — single-shot + MCTS +
- * branching heads over one strategy registry, with the host-injected
- * infrastructure the LLM must not set. Both backends previously built this
- * identically: the same three registrations and the same defaultOptions
- * closure shape (MCTS gets a fresh SessionWriter + the operator's stored
- * overrides — an explicit LLM budget still wins; heads get the controller,
- * the live conversation as inheritedContext, and the phase/complete sinks).
- * The team/peer halves of AgentsToolDeps stay on each backend's profile.
+ * The `agents` tool's fork substrate, fully wired: the host-injected
+ * infrastructure the LLM must not set, assembled identically by both backends
+ * so neither can drift from the other. MCTS gets a fresh SessionWriter + the
+ * operator's stored overrides — an explicit LLM budget still wins; heads get the
+ * controller, the live conversation as inheritedContext, and the phase/complete
+ * sinks. The team/peer halves of AgentsToolDeps stay on each backend's profile.
+ *
+ * It registered three strategies into a registry until that registry lost its
+ * last reader: removing the `fork` action removed the only dispatcher, so
+ * nothing looked a strategy up by id any more. Registrations nobody resolves are
+ * not a smaller version of a working dispatch, so they are gone rather than kept
+ * warm — `createHeadsStrategy` and the heads RUNTIME are untouched, and the
+ * runtime is what a split actually runs through.
  */
 
 import type { LanguageModel } from 'ai';
 import type { AgentRuntime } from '../types/agent-runtime';
-import { createStrategyRegistry } from '../strategy/types';
-import { createSingleShotStrategy } from '../strategy/single-shot';
-import { createMCTSStrategy } from '../strategy/mcts';
-import { createHeadsStrategy } from '../strategy/heads';
 import type { AgentsForkDeps } from '../tools/agents-tool';
 import type { SessionWriter } from '../mcts/record-node';
 import type { MctsSearchStore } from '../mcts/search-store';
@@ -24,6 +25,7 @@ import type { HeadController, SplitPhaseEvent } from '../heads/controller';
 import type { MergeResult, SerializedMessage } from '../heads/types';
 import type { MctsOverrides } from '../config/store';
 import type { NodeLoopHost } from '../strategy/node-agent';
+import type { NodeHomeHost } from '../strategy/node-workspace';
 
 export interface ForkDepsWiring {
   rt: AgentRuntime;
@@ -54,6 +56,28 @@ export interface ForkDepsWiring {
    * running searches in exchange for nothing.
    */
   nodeHost?: () => NodeLoopHost;
+  /**
+   * The three host-owned things a node's private home needs, as a factory
+   * returning a promise — see `AgentsForkDeps.nodeHome`. *Isolation*.
+   *
+   * LOCAL-ONLY, and declared as such in `scripts/capability-parity.lock.json`
+   * rather than left as an accident. It is the exact mirror of `nodeHost` above:
+   * that one is a Durable Object facet and the CLI has no facet API to reach,
+   * this one is a uid-0 view of an in-isolate filesystem and the hosted backend
+   * reaches its workspace by RPC — a filesystem call with no pid acts as the
+   * session user, and `confinePrincipal` is a method on `SqliteVFS` with no RPC
+   * form. Two of the three members do not exist on that side of the boundary.
+   *
+   * Wired by the CLI from `WorkspaceBundle.privileged()`, which holds the uid-0
+   * view and the principal registry, plus the workspace's own `SqlDatabase` for
+   * the uid allocation.
+   *
+   * Absent is not a degrade so much as a different graded run: a node with no
+   * home keeps its tools, its transcript and its credential, reports
+   * `shared-origin-plane`, and is graded on what it REPORTS — which is what
+   * every node did before this seam had a caller.
+   */
+  nodeHome?: () => Promise<NodeHomeHost>;
   mcts: {
     /** Fresh per fork call — a search must not share another's tree. */
     session: () => SessionWriter;
@@ -104,16 +128,12 @@ export interface ForkDepsWiring {
 }
 
 export function buildStrategyForkDeps(wiring: ForkDepsWiring): AgentsForkDeps {
-  const registry = createStrategyRegistry();
-  registry.register(createSingleShotStrategy());
-  registry.register(createMCTSStrategy());
-  registry.register(createHeadsStrategy());
   return {
-    registry,
     rt: wiring.rt,
     model: wiring.model,
     costModel: wiring.costModel,
     nodeHost: wiring.nodeHost,
+    nodeHome: wiring.nodeHome,
     defaultOptions: () => {
       const mcts = {
         session: wiring.mcts.session(),

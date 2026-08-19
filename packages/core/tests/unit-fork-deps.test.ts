@@ -28,6 +28,7 @@ import { HeadController, type SplitPhaseEvent } from '../src/heads/controller';
 import { HeadJournal } from '../src/heads/journal';
 import { MctsSearchStore } from '../src/mcts/search-store';
 import type { AgentsForkDeps } from '../src/tools/agents-tool';
+import type { NodeHomeHost } from '../src/strategy/node-workspace';
 import { createTestRuntime } from './helpers';
 
 function wiring(overrides: Partial<ForkDepsWiring['heads']> = {}) {
@@ -146,5 +147,48 @@ describe('buildStrategyForkDeps — the onPhase factory is resolved once per for
       { call: 1, runId: 'run-A' },
       { call: 2, runId: 'run-B' },
     ]);
+  });
+});
+
+/** A host whose members exist but are never reached: what this suite asserts is
+ *  that the object TRAVELS, and a member that provisioned anything here would be
+ *  a second, weaker copy of the substrate proof in cf-backend. */
+function unreachedHost(sql: NodeHomeHost['sql']): NodeHomeHost {
+  const refuse = (call: string) => (): never => {
+    throw new Error(`fork-deps must not provision: ${call} was called`);
+  };
+  return {
+    root: { mkdir: refuse('mkdir'), chown: refuse('chown'), chmod: refuse('chmod') },
+    confiner: { confinePrincipal: refuse('confinePrincipal'), releasePrincipal: refuse('releasePrincipal') },
+    sql,
+  };
+}
+
+describe('buildStrategyForkDeps — the node home host travels through the one builder', () => {
+  test('a wired host reaches AgentsForkDeps, unresolved', async () => {
+    // Unresolved is the claim, not an implementation detail: both backends build
+    // their deps once per turn, and resolving a home host there would boot a
+    // filesystem for every turn instead of for the searches that need one.
+    const { wiring: w } = wiring();
+    let resolutions = 0;
+    const host = unreachedHost({ exec: () => [] });
+
+    const deps = buildStrategyForkDeps({
+      ...w,
+      nodeHome: async () => { resolutions += 1; return host; },
+    });
+
+    expect(resolutions).toBe(0);
+    if (!deps.nodeHome) throw new Error('the builder dropped the node home host');
+    expect(await deps.nodeHome()).toBe(host);
+    expect(resolutions).toBe(1);
+  });
+
+  test('a backend that wires none leaves the member absent', () => {
+    // The CLI wires one and the hosted backend cannot, so "absent" is a shipped
+    // state rather than a test-only one — and `runSwarmAction` reads its presence
+    // to decide whether a node gets a home at all.
+    const { wiring: w } = wiring();
+    expect(buildStrategyForkDeps(w).nodeHome).toBeUndefined();
   });
 });

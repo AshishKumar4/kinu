@@ -15,16 +15,14 @@
 // Real sandbox execution (node `new Function`, cf `createCodeTool`) is covered
 // in the two backend suites; here the surface itself is the subject.
 import { describe, expect, test } from 'bun:test';
-import { createTestRuntime, createTestStrategy } from '@proteus/test-utils';
+import { createTestRuntime } from '@proteus/test-utils';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 import {
   AGENTS_TOOL_ACTIONS,
-  FORK_STRATEGY_ID,
   agentsActionsFor,
   createAgentsCodemodeProvider,
   createAgentsTool,
-  createStrategyRegistry,
   decodeJsonValue,
   type CodemodeProvider,
   type JsonValue,
@@ -74,13 +72,8 @@ function withBuildMode(deps: TestAgentsToolDeps): AgentsToolDeps {
 }
 
 function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
-  const registry = createStrategyRegistry();
-  registry.register(createTestStrategy({ id: FORK_STRATEGY_ID, answer: 'forked' }));
-  // Registered and unreachable from this projection, exactly as at the tool: the
-  // durable search store and the eval harness still reach mcts programmatically.
-  registry.register(createTestStrategy({ id: 'mcts', answer: 'searched' }));
   const { rt } = createTestRuntime();
-  return { registry, rt, model: new MockLanguageModelV3(), ...overrides };
+  return { rt, model: new MockLanguageModelV3(), ...overrides };
 }
 
 const rosterEntry: SubordinateRosterEntry = {
@@ -290,10 +283,8 @@ describe('agents.* codemode namespace — dispatch', () => {
     let generation = 0;
     const ns = namespaceOf(() => {
       generation += 1;
-      const registry = createStrategyRegistry();
-      registry.register(createTestStrategy({ id: FORK_STRATEGY_ID, answer: `generation ${generation}` }));
       const { rt } = createTestRuntime();
-      return { fork: { registry, rt, model: new MockLanguageModelV3() } };
+      return { fork: { rt, model: new MockLanguageModelV3() } };
     });
     // Each call rebuilds the deps, which is what the generation counter proves:
     // two calls, two reads, and the second sees the later binding.
@@ -458,7 +449,7 @@ describe('agents.* codemode namespace — declared types', () => {
     // literal per action rather than text derived from whatever is wired.
     const a = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types;
     const b = createAgentsCodemodeProvider(() => withBuildMode({
-      fork: { registry: createStrategyRegistry(), rt: createTestRuntime().rt, model: new MockLanguageModelV3() },
+      fork: { rt: createTestRuntime().rt, model: new MockLanguageModelV3() },
     })).types;
     expect(a).toBe(b);
   });

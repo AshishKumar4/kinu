@@ -26,8 +26,10 @@
  */
 
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
+import type { HomeRootVfs, TmpConfiner } from './agent-home';
 import { provisionWorkspaceRuntimes } from './workspace-runtimes';
 import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
@@ -150,6 +152,23 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
   };
 }
 
+/**
+ * The privileged half of this filesystem: a uid-0 view of the same bytes, and
+ * the principal registry that scopes `/tmp` per uid.
+ *
+ * It exists only where the filesystem is IN THIS ISOLATE. A host whose
+ * workspace is a remote Nimbus session has neither — every pid-less filesystem
+ * RPC there is pinned to the session user, and `confinePrincipal` has no RPC at
+ * all — so that host provisions nothing and says so.
+ */
+export interface WorkspacePrivileged {
+  /** `SqliteVFS.as(CRED_KERNEL)`. Only uid 0 can `chown` a directory to a uid
+   *  that is not its own, which is the whole reason provisioning is host-side. */
+  readonly root: HomeRootVfs;
+  /** The `SqliteVFS` itself, narrowed to the two principal calls. */
+  readonly confiner: TmpConfiner;
+}
+
 export interface WorkspaceBundle {
   /** `Storage.vfs` — the workspace filesystem. */
   vfs: WorkspaceVFS;
@@ -157,6 +176,15 @@ export interface WorkspaceBundle {
   shell: Shell;
   /** Files, directories and bytes this workspace occupies. */
   stats(): Promise<{ files: number; dirs: number; usedBytes: number }>;
+  /**
+   * The uid-0 view and the principal registry, for provisioning a per-agent
+   * home.
+   *
+   * A promise for the same reason every other member of this bundle returns
+   * one: the workspace boots late. Resolving it eagerly at construction would
+   * serialise a host's whole startup on a boot nothing has asked for yet.
+   */
+  privileged(): Promise<WorkspacePrivileged>;
 }
 
 export interface WorkspaceOptions {
@@ -223,6 +251,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     vfs: workspaceVfs(open),
     shell: workspaceShell(open),
     async stats() { return (await open()).stats(); },
+    async privileged() {
+      const workspace = await open();
+      return { root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs };
+    },
   };
 }
 

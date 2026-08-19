@@ -82,14 +82,21 @@ agents are the actors that work inside it.
     never acquire that runtime at all.
 
     A private `/home/node-<id>` per node, with its own credential and its own
-    `/tmp`, is a seam and is not wired. `agentHomeNodeProvisioner` and
-    `nodeAgentName` build it (`core/src/strategy/node-workspace.ts:101,122`)
-    and `NodeAgentDeps.provisionHome` accepts it, but no backend supplies one:
-    measured 2026-08-19, `provisionHome` appears nowhere in
-    `packages/cf-backend/src` or `packages/cli-backend/src`. Until a backend
-    passes it, a node works in the parent's home. `docs/EXPLORATION.md` is the
-    spec for the six axes, the presets, the report seam and the isolation
-    states.
+    `/tmp`, is wired on the LOCAL backend and cannot be on the hosted one.
+    `agentHomeNodeProvisioner` and `nodeAgentName` build it
+    (`core/src/strategy/node-workspace.ts`), `AgentsForkDeps.nodeHome` carries
+    the three host-owned members it needs, and `runSwarmAction` builds the
+    provisioner from them. `createCLIRuntime` supplies those members from
+    `WorkspaceBundle.privileged()`, because that workspace is an in-isolate
+    `NimbusWorkspace`: measured 2026-08-19, a shipped `agents.swarm` run there
+    reports `private-home`. The hosted backend supplies none and has nothing to
+    supply — it reaches its workspace by RPC to a Nimbus Durable Object, where a
+    filesystem call arriving without a pid acts as the session user and
+    `confinePrincipal` has no RPC form at all, so two of the three members do
+    not exist on that side. A hosted node therefore works in the parent's home
+    and reports `shared-origin-plane`, which is a permanent asymmetry rather
+    than an unfinished one. `docs/EXPLORATION.md` is the spec for the six axes,
+    the presets, the report seam and the isolation states.
   - **Subordinates** (`agents`, `action: 'hire'`) are durable. Each is a
     `SubordinateAgent` facet with its own SQL history and full turn loop, using
     the canonical workspace files and the parent's sandbox/laptop planes.

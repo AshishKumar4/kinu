@@ -738,6 +738,29 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
       }
     }
   }, 120_000);
+
+  test('the deepest level a branch could still be granted from is invited to propose', async () => {
+    // THE BOUNDARY BELONGS TO `arbitrateBranch` ALONE, which refuses
+    // `caps.depth.value <= atDepth`. So in a depth-2 search a proposal from depth 1 is
+    // granted and one from depth 2 is refused, and the prompt must invite depth 1 and
+    // not depth 2. The agent-node tool gate and the fan-in skip already spell that
+    // boundary; the thought node's invitation read one level tighter and suppressed
+    // itself on the only level that could have been granted, so no node in a depth-2
+    // thought search was ever asked.
+    //
+    // ASSERTED THROUGH WHAT THE MODEL WAS SENT, because the invitation is prompt text
+    // and nothing else observes it. `proposeWidth: null` matters: this suite's model
+    // appends a proposal block whether or not it was invited, which is exactly how the
+    // suite stayed green while the invitation was missing — the tree still expanded, so
+    // every count and every event looked right.
+    const { nodes, prompts } = await run({ depth: 2, branches: 2, proposeWidth: null });
+    const invited = prompts.filter((sent) => sent.includes('You are proposing, not spawning'));
+    const oneBelowTheCap = nodes.filter((node) => node.depth === 1).length;
+    expect(oneBelowTheCap).toBeGreaterThan(0);
+    expect(invited).toHaveLength(oneBelowTheCap);
+    // And the level AT the cap is not asked, so the count above is not "all of them".
+    expect(invited.length).toBeLessThan(prompts.length);
+  }, 120_000);
 });
 
 /* ── `carry` admission is consulted at the settle barrier ─────────────────── */
