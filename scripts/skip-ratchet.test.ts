@@ -39,7 +39,7 @@ describe('parseJUnit', () => {
     const report = parseJUnit(REPORT);
     expect(report.total).toBe(3);
     expect(report.skipped).toHaveLength(2);
-    expect(report.failures).toBe(0);
+    expect(report.failed).toEqual([]);
     expect([...report.files]).toEqual(['tests/a.test.ts']);
   });
 
@@ -56,8 +56,34 @@ describe('parseJUnit', () => {
   test('a failure is counted so the skip set is only judged over a passing run', () => {
     const failing = REPORT.replace('<skipped />', '<failure message="boom" />');
     const report = parseJUnit(failing);
-    expect(report.failures).toBe(1);
+    expect(report.failed).toHaveLength(1);
     expect(report.skipped).toHaveLength(1);
+  });
+
+  // A live tier fails two ways that need opposite repairs: the model answered
+  // wrongly, or the deployment never answered. `failures: number` said the same
+  // thing for both, so an outage read as a behavioural regression.
+  test('an environment failure is marked infrastructure, a wrong answer is not', () => {
+    const outage = REPORT.replace(
+      '<skipped />',
+      '<failure message="INFRA FAILURE — the deployed worker did not answer: 503" />',
+    );
+    const [failure] = parseJUnit(outage).failed;
+    expect(failure?.infra).toBe(true);
+
+    const wrong = REPORT.replace('<skipped />', '<failure message="expected 4 got 5" />');
+    expect(parseJUnit(wrong).failed[0]?.infra).toBe(false);
+  });
+
+  // The marker survives the reporter's escaping. Bun writes the message into an
+  // XML attribute, so a classifier reading the raw body would miss a marker that
+  // arrived beside an escaped character and silently call an outage behavioural.
+  test('the marker is read after unescaping, not before', () => {
+    const escaped = REPORT.replace(
+      '<skipped />',
+      '<failure message="INFRA FAILURE &amp;mdash; the worker did not answer" />',
+    );
+    expect(parseJUnit(escaped).failed[0]?.infra).toBe(true);
   });
 
   test('an empty report measures nothing, and says so as zero rather than clean', () => {

@@ -50,7 +50,7 @@ import { createCloudAgent, deleteCloudAgent } from '../packages/cli/src/cloud-ap
 import { CloudAgentClient } from '../packages/cli/src/cloud-agent-client';
 import { requireSandboxedExecutors } from './evals/harness';
 import {
-  liveChatModel, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
+  infraBoundary, liveChatModel, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
   reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM, type LiveModelSession,
 } from '@proteus/test-utils';
 
@@ -110,21 +110,34 @@ describe('Live Smoke — one real turn per backend', () => {
     const { origin, token } = workerCredentials(HOSTED.llm);
 
     const name = `smoke${Math.random().toString(36).slice(2, 10)}`;
-    const created = await createCloudAgent(origin, token, {
-      name,
-      displayName: 'Live Smoke',
-      purpose: 'A smoke-test agent that proves one real hosted turn runs.',
-      model: HOSTED.llm.model,
-    });
+    // Every step below that depends on the DEPLOYMENT rather than on the model's
+    // choices is wrapped, so a cold start, a 5xx or a dropped socket is labelled
+    // INFRA and never read as "the agent stopped calling tools". The assertions
+    // further down stay bare on purpose: those ARE statements about the agent.
+    const created = await infraBoundary(
+      `creating cloud agent ${name} on ${origin}`,
+      () => createCloudAgent(origin, token, {
+        name,
+        displayName: 'Live Smoke',
+        purpose: 'A smoke-test agent that proves one real hosted turn runs.',
+        model: HOSTED.llm.model,
+      }),
+    );
     createdCloudAgents.push(created.name);
 
     const client = new CloudAgentClient({
       origin, token, agentName: created.name, cloudName: created.name, oneShot: true,
     });
     try {
-      await client.connect();
+      await infraBoundary(`connecting to ${origin}`, () => client.connect());
       const startedAt = Date.now();
-      const turn = await client.send(SMOKE_PROMPT);
+      // The turn itself is a boundary: reaching the Durable Object at all is the
+      // deployment's job. What the model DID with the turn is asserted below,
+      // unwrapped, so a wrong answer stays a wrong answer.
+      const turn = await infraBoundary(
+        'driving one turn through the OrchestratorAgent Durable Object',
+        () => client.send(SMOKE_PROMPT),
+      );
       const elapsedMs = Date.now() - startedAt;
 
       // One call per model step, usage unreported — see the header. Recorded
@@ -146,11 +159,11 @@ describe('Live Smoke — one real turn per backend', () => {
       // THE DURABLE WRITE, read back from the DO rather than from this process:
       // `history()` is the Durable Object's own chat projection, so a turn that
       // streamed convincingly and persisted nothing fails here.
-      const history = await client.history();
+      const history = await infraBoundary("reading the Durable Object's chat history", () => client.history());
       expect(history.length).toBeGreaterThanOrEqual(2);
       expect(history.some((m) => m.role === 'assistant')).toBe(true);
 
-      const status = await client.status();
+      const status = await infraBoundary('reading the Durable Object status', () => client.status());
       console.log(`    hosted durable: ${String(status.messageCount)} message(s) in the DO, `
         + `model ${status.model}`);
       expect(status.messageCount).toBeGreaterThanOrEqual(2);

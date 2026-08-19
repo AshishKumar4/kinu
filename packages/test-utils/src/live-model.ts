@@ -242,6 +242,50 @@ export function liveModelTarget(suite: string): LiveModelTarget | null {
 }
 
 /**
+ * The marker a live failure carries when the ENVIRONMENT failed, not the agent.
+ *
+ * Exported so `scripts/skip-ratchet.ts` can classify a JUnit report without a
+ * second copy of the string, and so a reader who greps a log finds the same word
+ * the tier's summary counted.
+ */
+export const INFRA_FAILURE_MARKER = 'INFRA FAILURE';
+
+/**
+ * Run one step that depends on the DEPLOYMENT rather than on the model's
+ * choices, and label its failure as such.
+ *
+ * WHY. A live suite has two ways to go red and they need different readers. "The
+ * model did not call a tool" is a finding about the agent: someone should look at
+ * the prompt, the tool surface, or the model. "The worker cold-started past the
+ * timeout" is a finding about the environment: nobody should look at the agent at
+ * all. Bun renders both as `(fail)`, so without a label a deploy blocked by a
+ * 503 sends a reader hunting a behavioural regression that does not exist — and,
+ * worse, an outage during a live run looks exactly like the thing the run was
+ * built to detect.
+ *
+ * The label is placed by the code that KNOWS, at the boundary it wraps, rather
+ * than sniffed out of a message afterwards. A classifier over error text would
+ * have to guess, and a guess in this position turns an infrastructure excuse into
+ * something a real behavioural failure can hide behind.
+ *
+ * The cause is preserved, always: the status code or socket error is the whole
+ * evidence for calling it infrastructure, and a boundary that swallowed it would
+ * be asking to be trusted instead.
+ */
+export async function infraBoundary<T>(boundary: string, op: () => Promise<T>): Promise<T> {
+  try {
+    return await op();
+  } catch (err) {
+    throw new Error(
+      `${INFRA_FAILURE_MARKER} — ${boundary} did not answer: ${String(err)}. `
+      + "The environment failed here, so nothing about the agent's behaviour was measured; "
+      + 'check the deployment before reading this as a regression.',
+      { cause: err },
+    );
+  }
+}
+
+/**
  * The workspace config a suite builds when there is no live target.
  *
  * `bun test` still runs `beforeAll` for a describe whose every test is skipped,

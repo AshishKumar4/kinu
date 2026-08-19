@@ -39,6 +39,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
+import { INFRA_FAILURE_MARKER } from '../packages/test-utils/src/live-model';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -58,9 +59,26 @@ export interface SkippedTest {
   readonly file: string;
 }
 
+/**
+ * One failed test and enough of its message to tell WHICH KIND of failure it is.
+ *
+ * `failures: number` used to be all this carried, so the gate's refusal read
+ * `N test failure(s) in the report` for every N — identical whether the model
+ * answered wrongly or the deployment never answered at all. In a tier that runs
+ * against a live account those are opposite repairs, and a reader who cannot
+ * tell them apart goes hunting a behavioural regression during an outage.
+ */
+export interface FailedTest {
+  readonly key: string;
+  readonly file: string;
+  /** True when the failure was raised at a declared environment boundary —
+   *  `infraBoundary` in packages/test-utils/src/live-model.ts marked it. */
+  readonly infra: boolean;
+}
+
 export interface TestReport {
   readonly total: number;
-  readonly failures: number;
+  readonly failed: readonly FailedTest[];
   readonly skipped: readonly SkippedTest[];
   /** Every file that contributed at least one testcase. */
   readonly files: ReadonlySet<string>;
@@ -93,9 +111,9 @@ function attribute(attrs: string, name: string): string {
  */
 export function parseJUnit(xml: string): TestReport {
   const skipped: SkippedTest[] = [];
+  const failed: FailedTest[] = [];
   const files = new Set<string>();
   let total = 0;
-  let failures = 0;
 
   const testcase = /<testcase\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g;
   for (const match of xml.matchAll(testcase)) {
@@ -104,14 +122,26 @@ export function parseJUnit(xml: string): TestReport {
     total += 1;
     const file = attribute(attrs, 'file');
     if (file) files.add(file);
-    if (body.includes('<failure')) failures += 1;
+    const suite = attribute(attrs, 'classname');
+    const name = attribute(attrs, 'name');
+    if (body.includes('<failure')) {
+      // The MARKER decides, never a guess at the message. A classifier that
+      // sniffed for "timeout" or "503" would let a real behavioural failure hide
+      // behind an infrastructure excuse the moment a model wrote one of those
+      // words into its answer. Unmarked therefore means behavioural HERE, which
+      // under-claims infrastructure rather than over-claiming it — and the
+      // refusal below states that so the count is read for what it is.
+      failed.push({
+        key: `${file} › ${suite} › ${name}`,
+        file,
+        infra: unescapeXML(body).includes(INFRA_FAILURE_MARKER),
+      });
+    }
     if (body.includes('<skipped')) {
-      const suite = attribute(attrs, 'classname');
-      const name = attribute(attrs, 'name');
       skipped.push({ key: `${file} › ${suite} › ${name}`, file });
     }
   }
-  return { total, failures, skipped, files };
+  return { total, failed, skipped, files };
 }
 
 /** A locked skip and why it is acceptable. A skip whose reason nobody wrote
@@ -229,9 +259,23 @@ function main(argv: readonly string[]): number {
   const lock = readSkipLock();
   const verdict = reconcileSkips(report, lock);
 
-  if (report.failures > 0) {
-    console.error(`skip-ratchet: ${String(report.failures)} test failure(s) in the report — `
-      + 'fix those first; the skip set is only meaningful over a run that otherwise passed');
+  if (report.failed.length > 0) {
+    const infra = report.failed.filter((test) => test.infra);
+    const behavioural = report.failed.filter((test) => !test.infra);
+    console.error(`skip-ratchet: ${String(report.failed.length)} test failure(s) in the report — `
+      + `${String(infra.length)} infrastructure, ${String(behavioural.length)} behavioural. `
+      + 'Fix those first; the skip set is only meaningful over a run that otherwise passed.');
+    if (infra.length > 0) {
+      console.error('\n  INFRASTRUCTURE — the environment did not answer. Nothing here is a '
+        + 'statement about the agent:');
+      for (const test of infra) console.error(`    ${test.key}`);
+    }
+    if (behavioural.length > 0) {
+      console.error('\n  BEHAVIOURAL — or unmarked. A failure counts as infrastructure only '
+        + 'where the code raising it said so through `infraBoundary`, so an environment '
+        + 'error thrown outside one of those boundaries lands in this list:');
+      for (const test of behavioural) console.error(`    ${test.key}`);
+    }
     return 1;
   }
 
