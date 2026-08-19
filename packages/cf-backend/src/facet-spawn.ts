@@ -49,13 +49,17 @@
  * plumbing stays behind the SubordinateRuntime seam on the orchestrator.
  */
 
-import type { Agent } from "agents";
+import type { Agent, SubAgentStub } from "agents";
 import type { BranchHandle, HeadId, HeadInput, NodeLoopResult, NodeRunSpec, SpawnedHead } from "@proteus/core";
 import { ExplorationAgent } from "./exploration";
 
 /** The facet substrate a spawner rides. Both the workspace DO and a head
  *  splitting further expose it, so both can spawn — and both must reclaim. */
 export type FacetHost = Pick<Agent<Env>, "subAgent" | "abortSubAgent" | "deleteSubAgent">;
+
+/** The stub `subAgent` hands back, named once so the bootstrap seam can take a
+ *  mode's own init RPC as an argument. */
+type ExplorationStub = SubAgentStub<ExplorationAgent>;
 
 /** What an exploration facet must know before it runs. Both values are
  *  persisted by the facet itself, so a cold activation recovers them. */
@@ -72,14 +76,6 @@ export interface ExplorationFacetIdentity {
    *  becomes the tree's workspace. Absent for MCTS branches, which fork nothing:
    *  a branch has no runtime at all. */
   readonly sharedParent?: string | null;
-}
-
-async function seedExplorationIdentity(
-  stub: Pick<ExplorationAgent, "setOwner" | "setSharedParent">,
-  identity: ExplorationFacetIdentity,
-): Promise<void> {
-  if (identity.ownerUserId) await stub.setOwner(identity.ownerUserId, identity.capabilityToken);
-  if (identity.sharedParent) await stub.setSharedParent(identity.sharedParent);
 }
 
 function errorText<Thrown>(thrown: Thrown): string {
@@ -141,6 +137,72 @@ async function discardHalfSeededFacet<Cause>(host: FacetHost, id: string, cause:
   throw cause;
 }
 
+/** What a mode's init RPC acknowledges. The VALUE is discarded; the round trip is
+ *  the point — a handle returned before the facet persisted what it is about to
+ *  run is a handle to an unseeded worker. */
+interface FacetInitAck {
+  readonly ok: true;
+  readonly id: string;
+}
+
+/**
+ * Seed a fresh facet for whatever it is about to be, or discard it and report why.
+ *
+ * Every mode's spawn starts here, and the ORDER is the contract: identity, then
+ * that mode's own init. A facet told what to run before it is told whose
+ * credentials to run it with is one RPC away from resolving the wrong model.
+ */
+async function bootstrapFacet(
+  host: FacetHost,
+  id: string,
+  identity: ExplorationFacetIdentity,
+  init?: (stub: ExplorationStub) => Promise<FacetInitAck>,
+): Promise<ExplorationStub> {
+  const stub = await host.subAgent(ExplorationAgent, id);
+  try {
+    if (identity.ownerUserId) await stub.setOwner(identity.ownerUserId, identity.capabilityToken);
+    if (identity.sharedParent) await stub.setSharedParent(identity.sharedParent);
+    if (init) await init(stub);
+  } catch (err) {
+    await discardHalfSeededFacet(host, id, err);
+  }
+  return stub;
+}
+
+/**
+ * Run a single-shot worker to completion, then reclaim its storage — the whole of
+ * a head's and a node's `run()` around the one RPC that differs between them.
+ *
+ * The split is what earns one home: the run is awaited to a VALUE first, so a
+ * reclamation failure and a run failure can never mask one another, and the wipe
+ * is attempted either way because a settled worker nothing will read again is a
+ * pure leak. A failed wipe is not swallowed even at the cost of a settled report,
+ * for the reason this module's header gives. `kind` only names the worker in that
+ * message.
+ */
+async function runOnceAndReclaim<Result>(
+  host: FacetHost,
+  id: string,
+  kind: 'Head' | 'Node',
+  run: () => Promise<Result>,
+): Promise<Result> {
+  const settled = await run().then(
+    (value) => ({ ok: true as const, value }),
+    <Thrown,>(thrown: Thrown) => ({ ok: false as const, thrown }),
+  );
+  try {
+    await deleteExplorationFacet(host, id);
+  } catch (cleanupError) {
+    throw new Error(
+      `${kind} facet ${id} settled but its storage was not reclaimed `
+      + `(leaked into the root's quota): ${errorText(cleanupError)}`,
+      { cause: cleanupError },
+    );
+  }
+  if (!settled.ok) throw settled.thrown;
+  return settled.value;
+}
+
 /** MCTS branch: a one-shot rollout facet.
  *
  *  Released by the caller, not here. The search engine owns a branch for
@@ -155,12 +217,7 @@ export async function spawnBranchFacet(
   branchId: string,
   identity: ExplorationFacetIdentity,
 ): Promise<BranchHandle> {
-  const stub = await host.subAgent(ExplorationAgent, branchId);
-  try {
-    await seedExplorationIdentity(stub, identity);
-  } catch (err) {
-    await discardHalfSeededFacet(host, branchId, err);
-  }
+  const stub = await bootstrapFacet(host, branchId, identity);
   return {
     explore: (history, tools, languages, mode, siblings) =>
       stub.explore(history, tools, languages, mode, siblings ?? []),
@@ -184,38 +241,10 @@ export async function spawnHeadFacet(
   input: HeadInput,
   identity: ExplorationFacetIdentity,
 ): Promise<SpawnedHead> {
-  const stub = await host.subAgent(ExplorationAgent, input.id);
-  try {
-    await seedExplorationIdentity(stub, identity);
-    await stub.initHead(input);
-  } catch (err) {
-    await discardHalfSeededFacet(host, input.id, err);
-  }
+  const stub = await bootstrapFacet(host, input.id, identity, (facet) => facet.initHead(input));
   return {
     id: input.id,
-    run: async () => {
-      // Settle the run BEFORE reclaiming, so a reclamation failure and a run
-      // failure can never mask one another.
-      const settled = await stub.runAsHead().then(
-        (report) => ({ ok: true as const, report }),
-        <Thrown,>(thrown: Thrown) => ({ ok: false as const, thrown }),
-      );
-      try {
-        await deleteExplorationFacet(host, input.id);
-      } catch (cleanupError) {
-        // Deliberately NOT swallowed. A delete that fails is the leak
-        // persisting, against a quota whose overflow is an uncatchable reset
-        // that destroys the whole workspace — the one failure in this module
-        // that must never pass quietly, even at the cost of a settled report.
-        throw new Error(
-          `Head facet ${input.id} settled but its storage was not reclaimed `
-          + `(leaked into the root's quota): ${errorText(cleanupError)}`,
-          { cause: cleanupError },
-        );
-      }
-      if (!settled.ok) throw settled.thrown;
-      return settled.report;
-    },
+    run: () => runOnceAndReclaim(host, input.id, 'Head', () => stub.runAsHead()),
     /** Cut a head short — a caller-requested deadline blew. Deliberately an
      *  ABORT and not a release: `run()` is still in flight and owns the
      *  terminal release, and evicting the instance is what makes its pending
@@ -262,36 +291,10 @@ export async function spawnNodeFacet(
   identity: ExplorationFacetIdentity,
 ): Promise<SpawnedNode> {
   const id = spec.headInput.id;
-  const stub = await host.subAgent(ExplorationAgent, id);
-  try {
-    await seedExplorationIdentity(stub, identity);
-    await stub.initNode(spec);
-  } catch (err) {
-    await discardHalfSeededFacet(host, id, err);
-  }
+  const stub = await bootstrapFacet(host, id, identity, (facet) => facet.initNode(spec));
   return {
     id,
-    run: async () => {
-      // Settle the run BEFORE reclaiming, so a reclamation failure and a run
-      // failure can never mask one another.
-      const settled = await stub.runAsNode().then(
-        (result) => ({ ok: true as const, result }),
-        <Thrown,>(thrown: Thrown) => ({ ok: false as const, thrown }),
-      );
-      try {
-        await deleteExplorationFacet(host, id);
-      } catch (cleanupError) {
-        // Deliberately NOT swallowed, for the reason spawnHeadFacet states: the
-        // quota this leaks into overflows as an uncatchable reset.
-        throw new Error(
-          `Node facet ${id} settled but its storage was not reclaimed `
-          + `(leaked into the root's quota): ${errorText(cleanupError)}`,
-          { cause: cleanupError },
-        );
-      }
-      if (!settled.ok) throw settled.thrown;
-      return settled.result;
-    },
+    run: () => runOnceAndReclaim(host, id, 'Node', () => stub.runAsNode()),
     /** Cut a node short. An ABORT and not a release, for the reason a head's is:
      *  `run()` is still in flight and owns the terminal release, and evicting the
      *  instance is what makes its pending `runAsNode` RPC reject so that release

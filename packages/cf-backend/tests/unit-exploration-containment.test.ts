@@ -11,7 +11,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createTestRuntime, createTestSql, toolExecute } from '@proteus/test-utils';
+import { createTestRuntime, createTestSql, memberBody, toolExecute } from '@proteus/test-utils';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import {
   HeadCapture,
@@ -242,24 +242,33 @@ describe('MCTS branch mode stays isolated', () => {
    * A head's step trace must actually leave the facet.
    *
    * The journal lives on the orchestrator and a facet cannot write it, so the
-   * trace only exists if `runAsHead` provides the `reportStep` sink. That seam is
+   * trace only exists if the run provides the `reportStep` sink. That seam is
    * optional in core, which is how it came to have no provider at all: nothing
    * failed, `head_steps` was simply always empty, and every branch in the
    * Exploration surface read `STEPS 0` with "no step trace" for its whole life.
    * The read is source-level for the same reason as the assertions above — the DO
-   * class cannot be instantiated in this runner — but it pins the two halves that
-   * were missing: the option is set, and it reaches the parent stub.
+   * class cannot be instantiated in this runner — but it pins the three halves
+   * that can go missing: the option is set on BOTH run modes, and the one sink
+   * they share writes the parent stub under the id it was handed.
    */
   test('a head reports every step back to the parent journal', () => {
-    const runAsHead = source.slice(
-      source.indexOf('  async runAsHead('),
-      source.indexOf('  private missionScope('),
-    );
-    expect(runAsHead).toContain('options.reportStep = reportStep');
-    expect(runAsHead).toContain('parent.recordHeadStep(input.id, seq, step)');
+    const runAsHead = memberBody(source, '  async runAsHead(');
     // Reached through the shared-parent stub, like the mission ledger's port —
     // never through this facet's own storage, which is not where the journal is.
     expect(runAsHead).toContain('this.getSharedParentStub()');
+    expect(runAsHead).toContain('options.reportStep = this.stepSink(parent, input.id)');
+  });
+
+  /** A hosted node's rows ARE head-journal rows, so the same sink carries them —
+   *  and a node that wired none would be exactly as unreadable mid-run as a head
+   *  with no trace was. */
+  test('a hosted node reports its steps to the same journal', () => {
+    expect(memberBody(source, '  async runAsNode(')).toContain('reportStep: this.stepSink(parent, nodeId)');
+  });
+
+  test('the parent journal is written in exactly one place', () => {
+    expect(memberBody(source, '  private stepSink(')).toContain('parent.recordHeadStep(headId, seq, step)');
+    expect(source.match(/recordHeadStep\(/g)).toHaveLength(1);
   });
 });
 

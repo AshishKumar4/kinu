@@ -335,12 +335,34 @@ describe('a facet reaches its root only through the sealed surface', () => {
     .filter((name, i, all) => all.indexOf(name) === i)
     .sort();
 
+  /**
+   * The scan keys on the local's NAME, so the naming convention is part of the
+   * instrument and is pinned here rather than assumed.
+   *
+   * It had already been broken once: `runAsNode` bound the same stub to `port`,
+   * so `parent.x(` never saw it and `nodeArbitrate` — a call that fails closed at
+   * runtime inside a background node — was outside the scan for its whole life.
+   * A second spelling shrinks the scan silently, which is the one failure mode a
+   * derived list has that a hand-written one does not.
+   */
+  test('every acquisition of the root stub binds it to the name the scan reads', () => {
+    const bindings = [...source('exploration.ts').matchAll(/this\.getSharedParentStub\(\)/g)];
+    const named = [...source('exploration.ts').matchAll(/const (\w+) = this\.getSharedParentStub\(\)/g)]
+      .map(([, name]) => name!);
+    expect(named).toHaveLength(bindings.length);
+    expect(named.filter((name, i, all) => all.indexOf(name) === i)).toEqual(['parent']);
+    // And the one seam that takes the stub as an argument instead of acquiring
+    // it, for the same reason: a renamed parameter hides its calls too.
+    expect(source('exploration.ts')).toContain('private stepSink(parent: DurableObjectStub<OrchestratorAgent>');
+  });
+
   test('the scan found the calls it exists to check (denominator)', () => {
     // Without this the filter below is green on an empty list, which is exactly
     // what a renamed accessor or a refactored stub would produce.
     expect(parentCalls.length).toBeGreaterThan(0);
     expect(parentCalls).toContain('recordHeadStep');
     expect(parentCalls).toContain('headJournalRecordSplit');
+    expect(parentCalls).toContain('nodeArbitrate');
   });
 
   test('every one of them is reachable on an OrchestratorAgent stub', () => {

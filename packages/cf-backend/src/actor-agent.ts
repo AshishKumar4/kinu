@@ -87,7 +87,7 @@ import {
   // Branching heads
   HeadController, type HeadJournal,
   type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
-  type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type MergeResult,
+  type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type HeadGrounding, type MergeResult,
   type NodeLoopHost, type NodeArbiter, type BranchProposal, type BranchDecision,
   // Canonical memory-note read (the dynamic-context MEMORY.md tail)
   readMemoryTail,
@@ -161,7 +161,7 @@ import {
 } from "@proteus/core";
 import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
-import { createCFHeadRuntime } from "./heads/head-runtime";
+import { createHeadRuntime } from "./head-runtime";
 import { spawnNodeFacet } from "./facet-spawn";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
@@ -2446,18 +2446,24 @@ export abstract class ActorAgent extends Think<Env> {
     if (this._cfHeadRuntime) return this._cfHeadRuntime;
     const ownerUserId = this.getOwnerUserId();
     if (!ownerUserId) return undefined;
-    const models = this.rt.judgeModel
+    const grounding: HeadGrounding = this.rt.judgeModel
       ? { executor: this.rt.executor, explorer: this.rt.llm, judge: this.rt.judgeModel }
       : { executor: this.rt.executor, explorer: this.rt.llm };
-    this._cfHeadRuntime = createCFHeadRuntime(
-      this,
-      this.env,
-      this.boundSql,
-      ownerUserId,
-      () => this.workspaceCapabilityToken(),
-      this.workspaceName(),
-      models,
-    );
+    this._cfHeadRuntime = createHeadRuntime({
+      host: this,
+      identity: async () => ({
+        ownerUserId,
+        capabilityToken: await this.workspaceCapabilityToken(),
+        // The REGISTERED workspace, never this actor's own DO name — the file
+        // plane is keyed by it, so a self-named head derives a second, empty
+        // filesystem (unit-head-fork.test.ts).
+        sharedParent: this.workspaceName(),
+      }),
+      models: this.ownedModelServices,
+      mergeModelSpec: () => this.getStoredModelId(),
+      reportModelCall: (report) => this.reportModelCall(report),
+      grounding,
+    });
     return this._cfHeadRuntime;
   }
 
