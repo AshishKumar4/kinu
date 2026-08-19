@@ -14,6 +14,7 @@
  * a control group for a rule, not a second copy of the rule's subject.
  */
 import { DurableObject } from 'cloudflare:workers';
+import * as v from 'valibot';
 
 /** The storage key `armTimer` commits. Named after the real one so a reader of
  *  orchestrator.ts:542 recognises what is being lost. */
@@ -221,6 +222,127 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
       rosterStatus: this.ctx.storage.sql.exec<{ status: string }>(
         "SELECT status FROM workspace_subordinates WHERE name = 'relay'",
       ).one().status,
+    };
+  }
+}
+
+/**
+ * The read-back contract, identical in shape to production's
+ * `DeviceAttachmentSchema` (`device-hub.ts:54-72`). It is a schema and not a type
+ * because that is the point: an attachment survives a code deploy, so what a
+ * previous version wrote is untrusted input, and whether the parse SUCCEEDS is
+ * what decides if a device is recorded as having answered.
+ */
+const DeviceAttachmentSchema = v.object({
+  device: v.string(),
+  probe: v.optional(v.object({
+    present: v.array(v.string()),
+    probedAt: v.number(),
+  })),
+});
+
+type DeviceAttachment = v.InferOutput<typeof DeviceAttachmentSchema>;
+
+/**
+ * Defect surface 4 — what a hibernatable socket keeps, and what an isolate reset
+ * takes away.
+ *
+ * WHAT PRODUCTION STAKES ON IT. Every Agent-class Durable Object here hibernates:
+ * `Agent.options = { hibernate: true }` in the installed SDK is never overridden
+ * in `packages/cf-backend/src`, so partyserver picks its
+ * `HibernatingConnectionManager` for every chat and CLI socket. `UserDO` then
+ * hand-rolls a SECOND hibernatable socket type for device daemons
+ * (`user-do.ts:849-857` -> `device-hub.ts:106-113`), and that one keeps its
+ * entire per-connection record in the socket ATTACHMENT rather than in a field:
+ * `accept` writes `{ device }` (`device-hub.ts:112`), `recordProbe` rewrites it
+ * with the toolchain answer (`device-hub.ts:191-201`), and `probeRecord`,
+ * `liveSocket`, `isConnected` and `connectedDeviceId` all read it back through
+ * `ctx.getWebSockets(tag)` (`device-hub.ts:116-121, 184-189, 203-213`).
+ *
+ * WHY `bun test` CANNOT HOST IT. The fake socket the gallery and the bun suites
+ * use makes `serializeAttachment` a no-op and answers `deserializeAttachment()`
+ * with `null` unconditionally (`gallery.tsx:315-317`). So under bun EVERY socket
+ * reads as "not a device socket": `deviceIdFromSocket` is always null and
+ * `probeRecord` is always null. There is no fake that could fix this and still
+ * be a fake — the attachment is held by the runtime outside the isolate's heap,
+ * which is the entire property being relied on.
+ */
+export class SocketDO extends DurableObject<Cloudflare.Env> {
+  /** In-memory per-instance state, the shape production still keeps in fields:
+   *  `DeviceConsentRegistry.waiting` (`safety/device-consent.ts:135`) holds
+   *  `settle` closures that no attachment could carry. */
+  private readonly waiting = new Map<string, string>();
+
+  /** The upgrade path, reduced to `DeviceSocketHub.accept`
+   *  (`device-hub.ts:106-113`): tag the socket with the device it belongs to and
+   *  write the device id into the attachment. */
+  override async fetch(request: Request): Promise<Response> {
+    const deviceId = new URL(request.url).searchParams.get('device') ?? 'unknown';
+    const pair = new WebSocketPair();
+    this.ctx.acceptWebSocket(pair[1], [`device:${deviceId}`]);
+    pair[1].serializeAttachment({ device: deviceId });
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  /**
+   * `recordProbe` (`device-hub.ts:191-201`), both polarities.
+   *
+   * `asSet` is the trap the shipped line guards against: production spells the
+   * answer out as `{ present: [...probe.present], asked: [...probe.asked] }`
+   * because `DeviceAttachmentSchema` reads it back as `v.array(v.string())`.
+   * An attachment is structured-cloned, not JSON-encoded, so a `Set` handed
+   * here survives AS a `Set` and the schema then rejects the record it wrote.
+   */
+  recordProbe(deviceId: string, asSet: boolean): void {
+    const socket = this.liveSocket(deviceId);
+    if (!socket) throw new Error(`no live socket for ${deviceId}`);
+    const present = ['node', 'python3'];
+    socket.serializeAttachment({
+      device: deviceId,
+      probe: { present: asSet ? new Set(present) : present, probedAt: 1 },
+    });
+  }
+
+  /** `DeviceSocketHub.probeRecord` (`device-hub.ts:184-189`): find the socket by
+   *  tag, parse its attachment, and answer null when the parse fails. The parse
+   *  is the whole decision — an attachment is untrusted input on the way back,
+   *  because it outlives the code that wrote it. */
+  probeRecord(deviceId: string): DeviceAttachment | null {
+    const socket = this.liveSocket(deviceId);
+    if (!socket) return null;
+    const parsed = v.safeParse(DeviceAttachmentSchema, socket.deserializeAttachment());
+    return parsed.success ? parsed.output : null;
+  }
+
+  /** `DeviceSocketHub.isConnected` (`device-hub.ts:203-205`) — a live socket for
+   *  this device, whatever its record parses to. */
+  isConnected(deviceId: string): boolean {
+    return this.liveSocket(deviceId) !== null;
+  }
+
+  /** `DeviceSocketHub.liveSocket` (`device-hub.ts:116-121`) — the tag lookup the
+   *  hub has instead of a connection registry. */
+  private liveSocket(deviceId: string): WebSocket | null {
+    for (const ws of this.ctx.getWebSockets(`device:${deviceId}`)) {
+      if (ws.readyState === WebSocket.READY_STATE_OPEN) return ws;
+    }
+    return null;
+  }
+
+  /** One prompt raised in a field and the same fact committed to storage, so a
+   *  reset can be observed to take exactly one of them. */
+  async raise(consentId: string): Promise<void> {
+    this.waiting.set(consentId, 'pending');
+    await this.ctx.storage.put(`consent:${consentId}`, 'pending');
+  }
+
+  /** `DeviceConsentRegistry.resolve` answers false for an id it cannot find —
+   *  "already settled, or from a previous instance of this host"
+   *  (`safety/device-consent.ts:162-163`). */
+  async settled(consentId: string): Promise<{ inMemory: boolean; inStorage: boolean }> {
+    return {
+      inMemory: this.waiting.has(consentId),
+      inStorage: (await this.ctx.storage.get<string>(`consent:${consentId}`)) !== undefined,
     };
   }
 }

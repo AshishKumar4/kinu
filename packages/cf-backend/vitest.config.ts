@@ -53,6 +53,7 @@ export default defineConfig({
           NEIGHBOUR: { className: 'NeighbourDO', useSQLite: true },
           GATED: { className: 'GatedDO', useSQLite: true },
           TRANSACTION: { className: 'TransactionDO', useSQLite: true },
+          SOCKET: { className: 'SocketDO', useSQLite: true },
         },
       },
     }),
