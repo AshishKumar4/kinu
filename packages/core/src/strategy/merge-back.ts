@@ -311,7 +311,19 @@ export const APPLY_PRECONDITIONS = [
 ] as const;
 export type ApplyPrecondition = (typeof APPLY_PRECONDITIONS)[number];
 
-export type MergeRefusalCause = SettleRule | ApplyPrecondition;
+/**
+ * The refusal that is a fact about the member SET rather than about one member.
+ *
+ * Its own list, for the reason {@link APPLY_PRECONDITIONS} is its own. §9.3's six are
+ * the specification's gate and a cycle is not among them, because §9.1 states an
+ * ORDER: a set of edges that cannot be ordered has no member to blame inside the gate
+ * and no remedy there either. Filing it under either list would misreport which
+ * document asked for it.
+ */
+export const ORDER_RULES = ['dependency-cycle'] as const;
+export type OrderRule = (typeof ORDER_RULES)[number];
+
+export type MergeRefusalCause = SettleRule | ApplyPrecondition | OrderRule;
 
 /* ── A member, and what becomes of it ─────────────────────────────────────── */
 
@@ -372,6 +384,11 @@ export type MergeOutcome =
 export interface MergeBackReport {
   readonly policy: MergePolicy;
   readonly outcomes: readonly MergeOutcome[];
+  /** The order the members were offered to the gate in: the dependency order for a
+   *  `sequential-rebase`, the caller's own for the policies that apply one member or
+   *  none. Data because a merge that stopped early cannot otherwise say what order it
+   *  was applying — and under `expand:'aggregate'` the order is the whole claim. */
+  readonly order: readonly string[];
   /** The node id merge-back stopped at, or null when every member was reached. The
    *  cross-member ordering guarantee §8.5 leaves open, stated as data: members
    *  before this one are applied and stay applied, because atomicity is per member
@@ -402,9 +419,116 @@ export interface MergeBackDeps {
 
 export interface MergeBackInput {
   readonly policy: MergePolicy;
-  /** In apply order. For `sequential-rebase` that is §9.1's settle order; for
-   *  `apply-winner` it is the one winner. */
+  /** The members of this merge, in any order: a `sequential-rebase` is applied in the
+   *  dependency order they DECLARE (see {@link dependencyOrder}), and the other
+   *  policies apply the first member or none, so for those the array's order is read
+   *  as which member that is. */
   readonly members: readonly MergeMember[];
+  /** Node ids whose merges ALREADY LANDED before this call — the run's own ledger.
+   *  §9.3 rule 1 asks whether a dependency has settled, and a dependency that settled
+   *  at an earlier barrier of the same run has: a DAG merged one fan-in at a time is
+   *  still one merge order. Empty is the single-barrier case. */
+  readonly settled?: readonly string[];
+}
+
+/* ── §9.1's order, derived from the edges ─────────────────────────────────── */
+
+/** An ordering, or the cycle that has none. Tagged rather than a bare refusal because
+ *  the node the cycle closes on is what the report and the event name. */
+export type MergeOrder =
+  | { readonly kind: 'ordered'; readonly members: readonly MergeMember[] }
+  | { readonly kind: 'cycle'; readonly nodeId: string; readonly refusal: MergeRefusal };
+
+/**
+ * The members of one merge in the order §9.1 requires: every member after the
+ * dependencies it declares.
+ *
+ * DERIVED FROM THE EDGES, NEVER FROM TREE POSITION. `sequential-rebase` used to be
+ * offered members in settle order and trusted to have been handed a good one, which is
+ * a dependency order only where the tree's shape happens to BE the dependency graph's.
+ * Under `expand:'aggregate'` it is not: a fan-in's members are consumed by one child,
+ * so the order is a fact about the fan-in's edges and tree position says nothing about
+ * it. Rule 1 stays the check that the order was right; this is the order.
+ *
+ * STABLE. A set with no edges comes back exactly as offered, because the caller's order
+ * is data too — a scored settle offers its incumbent first — and reshuffling an
+ * unordered set would change which member the other policies apply.
+ *
+ * A DEPENDENCY THAT IS NOT A MEMBER IS NOT AN EDGE HERE, because no order satisfies it.
+ * It is left to rule 1, which refuses that member and names the dependency that has not
+ * merged. `settled` is the complement of that: a dependency this run already landed is
+ * met, so it is not an edge either.
+ *
+ * A CYCLE REFUSES AND NAMES ITSELF. Two members that each require the other cannot both
+ * be applied second: there is no order to pick, an arbitrary tie-break would apply a
+ * diff onto a base its own verdict never saw, and a walk that just followed the edges
+ * would not terminate.
+ */
+export function dependencyOrder(
+  members: readonly MergeMember[],
+  settled: ReadonlySet<string> = new Set(),
+): MergeOrder {
+  const offered = new Set(members.map((member) => member.nodeId));
+  const edges = new Map(members.map((member) => [
+    member.nodeId,
+    member.deps.filter((dep) => offered.has(dep) && !settled.has(dep)),
+  ]));
+  const ordered: MergeMember[] = [];
+  const placed = new Set<string>();
+  // A sweep in OFFERED order, repeated while it places anything: that is what makes the
+  // result stable, and the member count bounds the sweeps.
+  for (let progressed = true; progressed;) {
+    progressed = false;
+    for (const member of members) {
+      if (placed.has(member.nodeId)) continue;
+      if ((edges.get(member.nodeId) ?? []).some((dep) => !placed.has(dep))) continue;
+      ordered.push(member);
+      placed.add(member.nodeId);
+      progressed = true;
+    }
+  }
+  // Whatever the sweeps could not place is waiting on something they could not place
+  // either, which is a cycle. Named from the FIRST such member in offered order, so the
+  // refusal is the same one every time for the same input.
+  for (const member of members) {
+    if (placed.has(member.nodeId)) continue;
+    const stuck = new Map(
+      [...edges]
+        .filter(([nodeId]) => !placed.has(nodeId))
+        .map(([nodeId, deps]) => [nodeId, deps.filter((dep) => !placed.has(dep))] as const),
+    );
+    return {
+      kind: 'cycle',
+      nodeId: member.nodeId,
+      refusal: refuse('dependency-cycle', 'bad_input',
+        `node ${member.nodeId} cannot be ordered after the members it depends on: ${
+          cycleFrom(member.nodeId, stuck).join(' -> ')
+        }. §9.1 orders settle by dependency and a member that must land after itself has no `
+        + "such order. Break the cycle: a fan-in's parents settle before the child that "
+        + 'consumes them, so a parent that depends on its own dependent is not a fan-in.'),
+    };
+  }
+  return { kind: 'ordered', members: ordered };
+}
+
+/**
+ * The cycle `start`'s dependencies close, as the path that returns to a node it has
+ * already visited: `a -> b -> a`.
+ *
+ * `stuck` holds only members the sweeps could not place, and every one of those has at
+ * least one unplaced dependency — that is WHY it could not be placed — so following the
+ * first of them cannot dead-end and must revisit a node within `stuck.size` steps.
+ */
+function cycleFrom(
+  start: string, stuck: ReadonlyMap<string, readonly string[]>,
+): readonly string[] {
+  const path: string[] = [];
+  let at: string | undefined = start;
+  while (at !== undefined && !path.includes(at)) {
+    path.push(at);
+    at = (stuck.get(at) ?? [])[0];
+  }
+  return at === undefined ? path : [...path.slice(path.indexOf(at)), at];
 }
 
 /**
@@ -414,33 +538,72 @@ export interface MergeBackInput {
  * Never throws: a merge that could not proceed is a reported refusal, because the
  * caller's next move is to disclose it and a thrown gate is indistinguishable from a
  * filesystem that broke.
+ *
+ * THE ORDER IS DERIVED, not taken on trust. Rule 1 refuses a member whose dependency
+ * has not landed, so a caller handed a bad order would be told to reorder something
+ * this module can order itself from the edges the members declare.
  */
 export async function mergeBack(
   input: MergeBackInput, deps: MergeBackDeps,
 ): Promise<MergeBackReport> {
   const { policy, members } = input;
   const outcomes: MergeOutcome[] = [];
-  const applied = new Set<string>();
+  /** What already landed BEFORE this call — the run's own ledger. A dependency that
+   *  settled at an earlier barrier of this run IS settled, so rule 1 reads it as
+   *  applied; seeding the set is the whole of that. */
+  const settled = new Set(input.settled ?? []);
+  const applied = new Set<string>(settled);
   /** What an earlier member in THIS settle left at a path, and which member left it —
    *  the conflict detector's whole state. The content is held because a conflict is a
    *  DISAGREEMENT and not an overlap; see {@link conflictWith}. */
   const writtenBy = new Map<string, { nodeId: string; after: string | null }>();
   let stoppedAt: string | null = null;
+  /**
+   * The report, with the one aggregate event every path owes a reader.
+   *
+   * ONE SITE for `swarm.merge_settled` and not three, because three sites emitting one
+   * name is three outcomes wearing one identity — the `synthesis` row, an unorderable set
+   * and a finished loop would all be indistinguishable in a query, and the counts would
+   * be assembled three times from three hand-written zeroes.
+   */
+  const settle = (stopped: string | null, ordered: readonly string[]): MergeBackReport => {
+    deps.log.event('swarm.merge_settled', {
+      preset: deps.preset, policy, members: members.length,
+      applied: outcomes.filter((outcome) => outcome.kind === 'applied').length,
+      refused: outcomes.filter((outcome) => outcome.kind === 'refused').length,
+      merge_nodes: outcomes.filter((outcome) => outcome.kind === 'merge-node').length,
+      stopped_at: stopped ?? '',
+      order: ordered.join(','),
+    });
+    return { policy, outcomes, stoppedAt: stopped, order: ordered };
+  };
 
   // `synthesis` ranks nothing and applies nothing: §8.5's row is *"N reports are
   // combined and the combination is kept"*. The combination is the settle report the
   // caller already receives, so there is no diff to land and no winner to pick — and
   // saying that with a named policy is what keeps the list complete rather than
   // quietly covering only the judged settlement.
-  if (policy === 'synthesis') {
-    deps.log.event('swarm.merge_settled', {
-      preset: deps.preset, policy, members: members.length,
-      applied: 0, refused: 0, merge_nodes: 0, stopped_at: '',
-    });
-    return { policy, outcomes, stoppedAt: null };
-  }
+  if (policy === 'synthesis') return settle(null, []);
 
-  for (const member of members) {
+  // §9.1's ORDER. Only `sequential-rebase` applies more than one member, so it is the
+  // only policy with an order to get wrong; the other two apply the first member or
+  // none, and reordering those would change WHICH member that is.
+  const order = policy === 'sequential-rebase'
+    ? dependencyOrder(members, settled)
+    : ({ kind: 'ordered', members } as const);
+  if (order.kind === 'cycle') {
+    outcomes.push({ kind: 'refused', nodeId: order.nodeId, refusal: order.refusal });
+    deps.log.event('swarm.merge_refused', {
+      preset: deps.preset, policy, node: order.nodeId,
+      cause: order.refusal.cause, reason: order.refusal.reason, error: order.refusal.error,
+    });
+    // NO ORDER MEANS NO APPLY, not "apply the part that is orderable". A prefix landed out
+    // of a set whose remainder can never land is half a merge published.
+    return settle(order.nodeId, []);
+  }
+  const ordered = order.members.map((member) => member.nodeId);
+
+  for (const member of order.members) {
     // CONFLICT IS CHECKED BEFORE THE GATE, and the order is load-bearing. Two members
     // that changed the same path DISAGREE, and §8.5 is explicit that a conflict *"does
     // not fail"*. Gating first would report the disagreement as a stale verdict and the
@@ -481,14 +644,7 @@ export async function mergeBack(
     if (policy === 'apply-winner') break;
   }
 
-  deps.log.event('swarm.merge_settled', {
-    preset: deps.preset, policy, members: members.length,
-    applied: outcomes.filter((o) => o.kind === 'applied').length,
-    refused: outcomes.filter((o) => o.kind === 'refused').length,
-    merge_nodes: outcomes.filter((o) => o.kind === 'merge-node').length,
-    stopped_at: stoppedAt ?? '',
-  });
-  return { policy, outcomes, stoppedAt };
+  return settle(stoppedAt, ordered);
 }
 
 /**

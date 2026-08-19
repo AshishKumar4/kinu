@@ -1304,6 +1304,55 @@ export interface JudgeEnsembleReport {
 }
 
 /**
+ * What `expand:'aggregate'` DID — the fan-in disclosure, as data.
+ *
+ * Here rather than in an event stream because every one of these fields answers a
+ * question the axis makes it possible to get wrong quietly. A fan-in that consumed
+ * three of four parents, or one whose merge landed a dependent before its dependency,
+ * or one that dropped a level because a parent produced nothing, all still return an
+ * answer — and a reader with only that answer cannot tell which of them happened.
+ *
+ * Null on an `expand:'sample'` run, which fans in nothing. Null is "this run has no
+ * fan-in", not "a fan-in that did nothing".
+ */
+export interface SwarmFanInReport {
+  /** How many level barriers fanned in. A level with fewer than two consumable
+   *  parents is not one of them: a fan-in over one parent is `sample` under another
+   *  name and the engine will not relabel it. */
+  readonly levels: number;
+  /** The merge order the DAG's edges produced, across every fan-in, in the order the
+   *  merges were attempted. A dependency-respecting order is exactly the claim this
+   *  field makes checkable. */
+  readonly order: readonly string[];
+  /** How many of those merges landed. */
+  readonly merged: number;
+  /** The aggregate vertices the fan-ins produced: one per disagreement between two
+   *  parents, spawned through §8.5's merge-node policy and graded like any other
+   *  candidate. Empty where every fan-in's parents agreed — there is nothing to
+   *  aggregate about two identical answers, and burning a graded node on one would
+   *  decide nothing. */
+  readonly vertices: readonly string[];
+  /** Level members a fan-in could not consume because they produced no usable answer.
+   *  Counted rather than silently skipped: an aggregate vertex's claim is that it
+   *  consumed its parents, and a missing one makes that claim false. */
+  readonly unusableParents: number;
+  /** Parents a fan-in consumed AFTER the tree had retired them from selection.
+   *
+   *  The other half of the pruned-parent decision, and the half that would otherwise be
+   *  invisible: pruning says where the next unit of budget goes, not whether measured
+   *  work reaches the origin, so a retired parent keeps its edge and its dependent
+   *  proceeds from that parent's last good state. Stating the count is what makes that a
+   *  decision rather than an omission. */
+  readonly prunedParents: number;
+  // NO "DEPENDENTS REFUSED" COUNT, and the absence is the design rather than a gap.
+  // §9.3 rule 1 refuses a member whose dependency has not merged, and a fan-in offers a
+  // member set closed over exactly those, against a ledger of the ones that already
+  // landed — so a dependent is held behind its dependency by the ORDER instead of being
+  // refused for want of one. A field that can never be non-zero would report a mechanism
+  // this engine does not use. `order.length` against `merged` is what a reader compares.
+}
+
+/**
  * §2.4(c)'s mandated settle report: what the run REACHED, what it spent, and what it
  * did not find — with the last one stated as a fact about the search rather than
  * about the world.
@@ -1371,6 +1420,8 @@ export interface SwarmSettleReport {
   readonly expansions: number;
   readonly tokens: number | null;
   readonly durationMs: number;
+  /** What `expand:'aggregate'` fanned in, or null on a run that fans in nothing. */
+  readonly fanIn: SwarmFanInReport | null;
 }
 
 /**

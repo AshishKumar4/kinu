@@ -12,7 +12,7 @@
  *     its own turns and its own journalled transcript (`node-agent.ts`, §8.1) —
  *     while `thought` is §8.9's degenerate point, one toolless generation, kept as
  *     the cheap tier. `expand:'sample'` starts a child from the workspace as
- *     found and `expand:'aggregate'` merges several parents;
+ *     found and `expand:'aggregate'` fans a level IN — see below;
  *   - `advance` through `mcts/frontier.ts` — the ONE scheduler, so `uct` re-widens,
  *     `best-first` takes the best unexpanded node and `none` expands the root once
  *     and stops;
@@ -25,6 +25,20 @@
  *     because candidates share one workspace and a parallel measurement would measure
  *     whichever wrote last (§10.3's isolation gap, respected rather than assumed away);
  *   - `settle` derived by `settleOf` and never chosen here.
+ *
+ * `expand:'aggregate'` MAKES THIS A DAG RATHER THAN A TREE, and it is the one axis value
+ * whose claim is an ORDER. At each level barrier — where a wave has been measured and its
+ * siblings compared — the level's parents are offered to merge-back as members in a
+ * topological order of the dependency edges they declare, and §8.5's own machinery does
+ * the rest: members that agree accumulate, the first disagreement spawns the merge node
+ * that IS the fan-in's vertex, a member whose base the member before it moved is
+ * re-verified through the registry, and the transaction bound is checked per member. So
+ * the DAG's structure and the DAG's merges are one mechanism rather than two, a conflict
+ * has exactly one policy, and the vertex is graded on the way back through the same
+ * scoring body a sampled sibling takes (`fanInAtLevel`). The dependency edges live beside
+ * the selection edge on the node, never instead of it: `search_nodes.parent_id` is what
+ * selection descends and backpropagation walks, and one measurement reaching two ancestor
+ * means would make the selector's comparison a fact about how many parents a node had.
  *
  * THE OBJECTIVE IS WHAT THE TREE CLIMBS, which is the whole reason this runner has a
  * tree of its own rather than dispatching onto `mcts/engine.ts`. That engine scores by
@@ -125,12 +139,14 @@ import {
 import type { ExplorationRecordsReport, ExplorationWrite } from './records';
 import {
   baseDigestOf, memberDigestOf, mergeBack, mergePolicyOf, originReader, settleCarry,
-  type MemberApply, type MemberDiff, type MergeMember,
+  type MemberApply, type MemberDiff, type MergeBackDeps, type MergeMember,
+  type MergeNodeRequest, type Reverifier,
 } from './merge-back';
 import type { VFS } from '../types/primitives';
 import type {
   BranchContext, BranchProposal, BranchRefusalPolicy, BranchVerdict, JudgeEnsembleReport,
-  ResolvedSwarm, SwarmAdvance, SwarmCandidate, SwarmPreset, SwarmResult, SwarmSettleReport,
+  ResolvedSwarm, SwarmAdvance, SwarmCandidate, SwarmFanInReport, SwarmPreset, SwarmResult,
+  SwarmSettleReport,
 } from './swarm';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ModelCallSink } from '../events/model-call';
@@ -279,11 +295,6 @@ function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
   // REPORTS (`node-agent.ts`), the value that named the shape is gone because the
   // shape is what `answer` and `generator` now are, and `thought` is §8.9's
   // degenerate point kept as the cheap tier. All three execute below.
-  if (config.expand === 'aggregate') {
-    return unsupported('expand:"aggregate" builds a DAG whose merges are ordered by dependency, and '
-      + 'nothing here orders merges. Use expand:"sample" for independent candidates, and `context` to '
-      + "say whether a child starts from its parent's conversation or from its results alone.");
-  }
   // NO `score` ARM REFUSES `judge` ANY MORE, and this is the second time the absence is
   // the ticket. It was refused because "judge needs the marginalised ensemble the
   // shipped tree owns" — and the tree DOES own one: `mcts/evaluation.ts` marginalises a
@@ -307,6 +318,36 @@ function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
     return unsupported(`advance:"${config.advance.kind}" reports a front or an archive, and both need a `
       + 'store this run has no writer for. Use advance:"none" for a flat expansion, or one of '
       + `${SWARM_TREE_ADVANCES.join('/')} to select down a tree.`);
+  }
+  // `expand:'aggregate'` RUNS — see `fanInAtLevel`. What refuses here is a composition
+  // in which a fan-in could never HAPPEN, and each arm names the one thing that makes it
+  // impossible. A composition that resolved and then quietly aggregated nothing would be
+  // §2.5's accepted-and-ignored axis, which is the defect the refusal it replaces was
+  // written against — the refusal was true about the engine and is not any more.
+  if (config.expand === 'aggregate') {
+    if (depth.value < 2) {
+      return badInput('expand:"aggregate" is fan-in — k parents consumed by one child — and a '
+        + `fan-in needs a level to consume. depth:${String(depth.value)} runs one wave off the `
+        + 'root, whose level is the root alone, so nothing would ever be aggregated. Raise `depth` '
+        + 'past 1, or use expand:"sample" for one flat wave of independent candidates.');
+    }
+    if (!isTreeAdvance(config.advance.kind)) {
+      return badInput(`expand:"aggregate" needs a second level and advance:"${config.advance.kind}" `
+        + 'has no selection step, so this search stops after the root\'s one wave and no level is '
+        + `ever consumed. Use one of ${SWARM_TREE_ADVANCES.join('/')}.`);
+    }
+    if (config.score.kind !== 'verify') {
+      // NOT "judge cannot score". It scores, and the ensemble is reached above — what it
+      // does not do is PLACE a candidate. A fan-in merges its parents' work, and a
+      // member's diff is the answer this engine wrote to the verifier's own artifact
+      // path; a judged run has no such path, so there is nothing for a fan-in to take a
+      // diff against and no measured verdict for §9.3 rule 2 to read.
+      return badInput('expand:"aggregate" merges what its parents produced, and a member\'s diff is '
+        + `the candidate this engine PLACED at the objective's own path. score:"${config.score.kind}" `
+        + 'names no path and issues no measured verdict, so every fan-in could only refuse for want '
+        + 'of one. Use score:"verify" with an `objective` to fan in, or expand:"sample" to keep the '
+        + 'scorer and lose the DAG.');
+    }
   }
   return null;
 }
@@ -401,6 +442,20 @@ interface TreeNode {
    * compaction kept the useful paragraph.
    */
   compacted: readonly ModelMessage[] | null;
+  /**
+   * The parents this node FANNED IN, under `expand:'aggregate'` — the DAG's dependency
+   * edges, and the reason this is a graph rather than a tree. Empty for every node of a
+   * sampling run and for the root.
+   *
+   * BESIDE {@link parentId} RATHER THAN INSTEAD OF IT, and the two are different edges.
+   * `parentId` is the SELECTION edge: the row `search_nodes` holds, the lineage
+   * `backpropagate` walks and the depth every child derives from. These are DEPENDENCY
+   * edges: whose work this node's answer was written against, which is what orders a
+   * merge (§9.1). Recording a second selection edge would hand one measurement to two
+   * ancestor means and make the selector's comparison a fact about how many parents a
+   * node happened to have.
+   */
+  readonly aggregated: readonly string[];
 }
 
 /** The marker a node ends its answer with to request a branch. A line rather than a
@@ -552,6 +607,40 @@ function carriedFeedback(
 }
 
 /**
+ * One parent of a fan-in, as both the merge and the child that consumes it need it:
+ * the id that earns the dependency edge, the text that IS the work, the score the
+ * search measured, and the edges this parent itself declared.
+ *
+ * A TYPE RATHER THAN A NARROWED {@link TreeNode}, because "consumable" is a real
+ * predicate and this is its output: a node with no answer or no score cannot be a
+ * parent of a fan-in, and carrying it as a `TreeNode | null` would push that check
+ * into every reader.
+ */
+interface FanInParent {
+  readonly id: string;
+  readonly answer: string;
+  readonly score: number | null;
+  readonly aggregated: readonly string[];
+}
+
+/**
+ * What a fan-in's child is handed: every parent it consumes, named and quoted.
+ *
+ * QUOTED RATHER THAN POINTED AT, and only here. A sampling child is told WHERE its
+ * parent's candidate is and asked to read it (see {@link branchSeed}), because one file
+ * holds it. A fan-in has k answers and the workspace holds the accumulation of the ones
+ * that AGREED — the answer that disagreed is precisely what is not on disk, and it is
+ * the half this child exists to reconcile.
+ */
+function aggregatedAnswers(parents: readonly FanInParent[]): string {
+  if (parents.length === 0) return '';
+  return `\n\nThe ${String(parents.length)} answers this fan-in combines, each under the node that `
+    + `produced it:\n${
+      parents.map((parent) => `--- ${parent.id} ---\n${parent.answer}`).join('\n')
+    }`;
+}
+
+/**
  * The expansion prompt for one child: what it is asked, the angle its siblings do
  * not have, what this path has measured, and the branch it may propose.
  *
@@ -576,6 +665,9 @@ function branchPrompt(input: {
   /** The parent's answer, when this child inherits it. Null at the root, and null
    *  wherever the search or the proposal said not to inherit. */
   readonly inherited: string | null;
+  /** The parents this child FANS IN, under `expand:'aggregate'`. Empty for a sampling
+   *  child, which continues from one parent. */
+  readonly aggregated: readonly FanInParent[];
   /** Root-first, parent-last. Read only where `context` is `'fork'`. */
   readonly ancestors: readonly TreeNode[];
   readonly atDepth: number;
@@ -600,13 +692,14 @@ function branchPrompt(input: {
   const inherited = input.inherited
     ? `\n\nThe answer this branch continues from:\n${input.inherited}`
     : '';
+  const combining = aggregatedAnswers(input.aggregated);
   const feedback = pathFeedback({
     context, measured: input.measured, baseline: input.baseline, ancestors: input.ancestors,
   });
   const carried = carriedFeedback(input.measured, input.carried);
   return explorePrompt({
     mode: input.mode,
-    context: `${input.task}${feedback}${carried}${inherited}${angle}${instruction}`
+    context: `${input.task}${feedback}${carried}${inherited}${combining}${angle}${instruction}`
       + (input.invite
         ? proposalInvitation({ advance, atDepth: input.atDepth, maxDepth: input.maxDepth })
         : ''),
@@ -718,6 +811,8 @@ function branchSeed(input: {
   readonly maxDepth: number;
   readonly focus: string;
   readonly context: BranchContext;
+  /** The parents this child FANS IN. Empty for a sampling child. */
+  readonly aggregated: readonly FanInParent[];
 }): ModelMessage {
   const { parent, measured } = input;
   const parts: string[] = [];
@@ -734,6 +829,18 @@ function branchSeed(input: {
     parts.push(`That candidate measured ${String(parent.measurement.value)} ${measured.unit} on `
       + `${measured.metric}, against a target of ${String(measured.target)}. That is what you have `
       + 'to beat.');
+  }
+  if (input.aggregated.length > 0) {
+    // WHAT EACH PARENT MEASURED, beside the answers themselves, because a fan-in is
+    // asked to keep what each member earned and cannot tell what that was from the text
+    // alone. Absent for a parent the search could not score, which is a parent a fan-in
+    // does not consume at all.
+    parts.push(`This node is a fan-in over ${String(input.aggregated.length)} parents: ${
+      input.aggregated
+        .map((parent) => `${parent.id} scored ${parent.score === null ? 'nothing' : parent.score.toFixed(3)}`)
+        .join('; ')
+    }.`);
+    parts.push(aggregatedAnswers(input.aggregated).trim());
   }
   parts.push(`You are at depth ${String(input.atDepth)} of ${String(input.maxDepth)}, so scope your `
     + 'work to what can finish here.');
@@ -776,6 +883,18 @@ function inheritedAsSerialized(prefix: readonly ModelMessage[]): SerializedMessa
  */
 interface Expansion {
   readonly id: string;
+  /**
+   * The row this child hangs off, and the depth that row derives.
+   *
+   * CARRIED BY THE EXPANSION rather than read from the wave that produced it, because a
+   * fan-in's vertex hangs off a different parent at a different depth from the level it
+   * consumed — and the scoring loop that records both is one loop for both kinds.
+   */
+  readonly parentId: string;
+  readonly depth: number;
+  /** The parents this child FANNED IN: the DAG's dependency edges, empty for a wave's
+   *  sibling. */
+  readonly aggregated: readonly string[];
   /** What the instrument will measure: the reported candidate for an agent node, the
    *  answer text for a thought node. */
   readonly artifact: string;
@@ -1295,6 +1414,9 @@ export async function runSwarm(
     // started blank would throw away precisely the context that made the caller
     // decide to search"*) and the task block alone when it did not.
     conclusion: null, transcript: deps.originContext ?? [], compacted: null,
+    // The root aggregates nothing: it IS the workspace as found, and a fan-in consumes
+    // a level the search produced.
+    aggregated: [],
   }]]);
   // One run header, so every node of this search groups under one root in the journal
   // instead of each appearing as its own empty run — the defect `recordSplit` exists
@@ -1364,6 +1486,418 @@ export async function runSwarm(
 
   let lost = 0;
   let aborted = false;
+
+  /**
+   * Expand ONE child: the generation half of an expansion, for a wave's sibling and for
+   * a fan-in's aggregate vertex alike.
+   *
+   * ONE FUNCTION, because §8.5's merge node is *"graded like any other candidate"* and a
+   * second generation path for it would be exactly the second mechanism that policy
+   * exists to prevent. It is also where a merge node would quietly lose everything a
+   * child gets for free here: a journalled transcript, arbitration at its own depth,
+   * usage accounting, and the one event that says a node settled.
+   */
+  const expandChild = async (input: {
+    readonly parent: TreeNode;
+    readonly id: string;
+    /** Which sibling of the wave this is, and how wide the wave is — the diversity
+     *  angle and the sibling disclosure are both derived from the pair. A fan-in's
+     *  vertex is one child of one, which is what it is. */
+    readonly index: number;
+    readonly width: number;
+    readonly atDepth: number;
+    readonly task: string;
+    readonly rationale: string;
+    readonly context: BranchContext;
+    /** The parent's own answer, where this child continues from it. */
+    readonly inherited: string | null;
+    readonly aggregated: readonly FanInParent[];
+    readonly ancestors: readonly TreeNode[];
+    readonly prefix: readonly ModelMessage[];
+  }): Promise<Expansion> => {
+    const { parent, id, atDepth } = input;
+    /** The DAG's edges as the row-writing loop needs them: ids, not nodes. */
+    const edges = input.aggregated.map((fanned) => fanned.id);
+    const prompt = branchPrompt({
+      resolved, mode: deps.mode, languages, measured, baseline,
+      index: input.index, branches: input.width,
+      task: input.task,
+      inherited: input.inherited, aggregated: input.aggregated,
+      ancestors: input.ancestors, atDepth, maxDepth,
+      // The records store's best for this objective, read once before the loop: a fan-in's
+      // vertex is asked to beat the same number every sampled child is.
+      carried: carriedBest,
+      // A thought node's whole request is one prompt, so its invitation is part of
+      // it. An agent node is invited by the tool being present instead.
+      invite: !agentNodes,
+    });
+    if (!agentNodes) {
+      const result = await generateText({
+        model: deps.model,
+        system: prompt.system,
+        prompt: prompt.user,
+        abortSignal: deps.signal,
+      });
+      const answer = readAnswer(result.text);
+      const code = readProposalCode(answer.text, languages);
+      return {
+        id, parentId: parent.id, depth: atDepth, aggregated: edges,
+        artifact: code?.kind === 'runnable' ? code.code : answer.text,
+        answer: answer.text,
+        proposal: answer.proposal,
+        proposalError: answer.proposalError,
+        granted: null,
+        conclusion: null,
+        transcript: [],
+        usage: normalizeUsage(result.usage),
+        modelId: result.response.modelId,
+      };
+    }
+    const seed = branchSeed({
+      parent, measured, baseline, verifier, atDepth, maxDepth,
+      focus: prompt.user, context: input.context, aggregated: input.aggregated,
+    });
+    const run = await runNodeAgent({
+      nodeId: id, rootId, parentId: parent.id, depth: atDepth,
+      task: resolved.task,
+      rationale: input.rationale,
+      base: prompt.system,
+      messages: input.context === 'fork' ? [...input.prefix, seed] : [seed],
+      inherited: input.context === 'fork' ? inheritedAsSerialized(input.prefix) : [],
+      context: input.context,
+      mode: deps.mode,
+      settle: resolved.settle,
+      // §8.2's build-time rule: the tool exists only where a branch could be granted.
+      // Depth is what cannot change mid-run, so it gates the BUILD; the budget can
+      // empty between the invitation and the answer, so it stays a runtime refusal
+      // inside the arbiter.
+      arbitrate: isTreeAdvance(resolved.config.advance.kind) && atDepth + 1 <= maxDepth
+        ? (proposal) => budget.arbitrate({
+          config: resolved.config, caps: resolved.caps, atDepth, proposal,
+        })
+        : null,
+    }, nodeDeps);
+    log.event('swarm.node_settled', {
+      preset: resolved.preset, node: id, depth: atDepth,
+      status: run.report.status, steps: run.report.stepCount,
+      tool_calls: run.report.toolCalls.length,
+      wall_clock_ms: run.report.wallClockMs,
+      isolation: run.isolation,
+      reported: run.reportedItself ? 'self' : 'final-text',
+    });
+    return {
+      id, parentId: parent.id, depth: atDepth, aggregated: edges,
+      artifact: run.candidate,
+      // An agent node REPORTS its candidate, so what it wrote and what the
+      // instrument measures are the same string and there is nothing to strip.
+      answer: run.candidate,
+      proposal: null,
+      proposalError: null,
+      granted: run.granted?.kind === 'granted' ? run.granted : null,
+      conclusion: run.candidate,
+      transcript: [...input.prefix, seed, ...run.produced],
+      usage: run.usage,
+      // The node's own report already reached `reportModelCall` per node, so the
+      // run does not report it twice — it only sums it for the settle report.
+      modelId: null,
+    };
+  };
+
+  /** THE RUN'S MERGE LEDGER: what a fan-in has already landed in the origin. §9.3 rule 1
+   *  asks whether a dependency has SETTLED, and one that settled at an earlier barrier of
+   *  this run has — a DAG merged one fan-in at a time is still one merge order. */
+  const landed = new Set<string>();
+  /** Level members no fan-in could consume, and members a fan-in consumed after the tree
+   *  had retired them. Sets, so two fan-ins over one level cannot count a node twice. */
+  const unusableParents = new Set<string>();
+  const prunedParents = new Set<string>();
+  const mergeOrder: string[] = [];
+  const aggregateVertices: string[] = [];
+  let fanInLevels = 0;
+  let fanInMerged = 0;
+
+  /**
+   * THE FAN-IN, at the level barrier — `expand:'aggregate'`, and the DAG this engine
+   * runs rather than the tree every other axis value produces.
+   *
+   * WHAT A FAN-IN IS HERE. A level is complete and its siblings have been compared, so
+   * their WORK meets: the level's parents are offered to merge-back as members, in a
+   * topological order of the dependency edges they declare, and everything after that is
+   * §8.5's machinery rather than a second copy of it —
+   *
+   *   - members that AGREE accumulate. Their diffs land in order, each rebased onto the
+   *     result of the last, and the level's answer is that accumulation. Two members that
+   *     wrote the same bytes have not conflicted, so no node is spawned to decide nothing;
+   *   - the first DISAGREEMENT spawns §8.5's merge node, and that node IS the aggregate
+   *     vertex — k parents consumed by one child, its task the merge, graded like any
+   *     other candidate. There is no second conflict mechanism because there is no second
+   *     conflict: a fan-in is exactly where two candidates' work meets;
+   *   - a member whose BASE MOVED under the member before it is re-verified through the
+   *     registry, so a stale verdict never applies (`reverify` below);
+   *   - the transaction bound is checked per member before its own apply, unchanged.
+   *
+   * WHAT ORDERS IT. {@link dependencyOrder}, over each member's own edges, against the
+   * ledger of what this run already landed. A cycle is refused naming the cycle, and that
+   * refusal is merge-back's rather than this loop's precisely so it holds for whoever
+   * offers one: this engine cannot construct a cycle, because an edge only ever points at
+   * a node that already produced an answer, and a guarantee that rests on that is worth
+   * nothing to the next caller.
+   *
+   * WHAT BECOMES OF A PARENT THE SEARCH DID NOT KEEP — decided here, in one place, and
+   * disclosed rather than left to be inferred:
+   *
+   *   - NO USABLE ANSWER means NO EDGE. Unmeasurable, sealed past the floor, or lost to a
+   *     provider error: the fan-in does not consume it. A vertex's whole claim is that it
+   *     consumed its parents, and one silently missing makes that claim false while the
+   *     answer still reads as if it aggregated k. Counted in the report as
+   *     `unusableParents`, never dropped in silence;
+   *   - RETIRED BY PRUNING KEEPS ITS EDGE, and its dependent proceeds from that parent's
+   *     last good state. `pruneLowValueBranches` says where the next unit of budget goes,
+   *     not whether measured work reaches the origin, and a level a vertex already
+   *     consumed cannot be un-consumed by a later selection decision. The status is read
+   *     ONLY to disclose it (`prunedParents`), because a decision nobody can see is the
+   *     one this field exists to prevent;
+   *   - A MEMBER WHOSE MERGE DID NOT LAND KEEPS ITS DEPENDENT BEHIND IT. The fan-in stops
+   *     where merge-back stopped, so a vertex whose parent has not reached the origin is
+   *     not applied over it; the next barrier re-offers both, with the parent ordered
+   *     ahead of the vertex again. That is why §9.3 rule 1 never fires from here: the
+   *     member set is CLOSED over unlanded edges and the ledger accounts for the landed
+   *     ones, which is what satisfying a rule looks like as opposed to dodging it. Drop
+   *     either half and the DAG's own merges refuse by name.
+   *
+   * Returns the vertex it produced, for the barrier loop to score exactly as it scores a
+   * sampled child — never a second grading path.
+   */
+  const fanInAtLevel = async (input: {
+    readonly ctx: MeasurementContext;
+    readonly verifier: ResolvedVerifier;
+    readonly measured: MeasuredObjective;
+    readonly baseline: number;
+    readonly atDepth: number;
+  }): Promise<readonly Expansion[]> => {
+    const { ctx: measureIn, verifier: instrument, atDepth } = input;
+    // THE LEVEL, and what of it a fan-in can consume. A node this run already merged has
+    // been consumed: offering it again would re-apply bytes the origin holds and could
+    // only disagree with a sibling an earlier fan-in already reconciled.
+    const parents: FanInParent[] = [];
+    for (const node of nodes.values()) {
+      if (node.depth !== atDepth || landed.has(node.id)) continue;
+      if (node.artifact === null || node.score === null) {
+        unusableParents.add(node.id);
+        continue;
+      }
+      parents.push({
+        id: node.id, answer: node.artifact, score: node.score, aggregated: node.aggregated,
+      });
+    }
+    if (parents.length < 2 || atDepth + 1 > maxDepth) {
+      // NEITHER A REFUSAL NOR SILENCE. A fan-in over one parent is `sample` under another
+      // name and the engine will not relabel it; a vertex past the cap is the one thing
+      // §8.3's depth bound forbids. Both say which.
+      log.event('swarm.aggregate_skipped', {
+        preset: resolved.preset, depth: atDepth, parents: parents.length,
+        reason: parents.length < 2 ? 'no-level' : 'depth-cap',
+      });
+      return [];
+    }
+
+    // THE MEMBERS: this level's parents, closed over the edges they declare through
+    // anything the run has not landed. A vertex's answer was written against its own
+    // parents' combined state, so a parent whose work is not in the origin has to land
+    // before it — that edge is what `dependencyOrder` orders, and dropping it would apply
+    // a diff onto a base its verdict never saw.
+    const consumed: FanInParent[] = [];
+    const known = new Set<string>();
+    const queue = [...parents];
+    for (let member = queue.shift(); member !== undefined; member = queue.shift()) {
+      if (known.has(member.id)) continue;
+      known.add(member.id);
+      consumed.push(member);
+      for (const dep of member.aggregated) {
+        const node = nodes.get(dep);
+        if (node === undefined || landed.has(dep) || known.has(dep)) continue;
+        // An edge is only ever given to a node that produced a usable answer, so this
+        // narrows the row rather than filtering it.
+        if (node.artifact === null || node.score === null) continue;
+        queue.push({
+          id: dep, answer: node.artifact, score: node.score, aggregated: node.aggregated,
+        });
+      }
+    }
+    for (const row of sql<{ id: string }>`
+      SELECT id FROM search_nodes WHERE root_id = ${rootId} AND status = 'pruned'`) {
+      if (known.has(row.id)) prunedParents.add(row.id);
+    }
+
+    const readOrigin = originReader(measureIn.vfs);
+    const members = await Promise.all(consumed.map((member) => reportedMember({
+      nodeId: member.id, answer: member.answer, score: member.score,
+      path: instrument.artifact, deps: member.aggregated, readOrigin,
+    })));
+    const answers = new Map(consumed.map((member) => [member.id, member.answer]));
+
+    /**
+     * §9.3 rule 4's re-verification, through the SAME instrument the search scored with.
+     *
+     * A fan-in applies members onto one another, so every member after the first has a
+     * base its verdict never saw — that is the rebase, and rule 4 is what keeps it from
+     * being a licence. The check is the measurement itself rather than a cheaper proxy: a
+     * re-verified verdict is then the same KIND of fact as the original one.
+     *
+     * IT PUTS THE WORKSPACE BACK. The instrument measures a candidate in place, so
+     * re-measuring moves the very path the merge is about; a member that then REFUSED
+     * would have left its bytes behind as an apply nothing gated. The restore is the
+     * atomic writer the applies themselves ride, not a second write path.
+     */
+    const reverify: Reverifier = async ({ member, baseDigest }) => {
+      const answer = answers.get(member.nodeId);
+      if (answer === undefined) {
+        return refusalOf(new ProteusError('unavailable',
+          `this fan-in holds no answer for node ${member.nodeId}, so nothing here can re-measure it `
+          + 'against the base the members before it moved. A verdict that cannot be revalidated '
+          + 'never applies.'));
+      }
+      const before = await readOrigin(instrument.artifact);
+      const outcome = await measureChild({
+        ctx: measureIn, verifier: instrument, measured: input.measured,
+        baseline: input.baseline, artifact: answer,
+      });
+      await singlePathApply(measureIn.vfs)([
+        { path: instrument.artifact, base: answer, after: before },
+      ]);
+      if (outcome.kind === 'instrument-faulted') {
+        return refusalOf(new ProteusError('unavailable',
+          `the instrument faulted while re-checking ${member.nodeId} against the base this fan-in `
+          + `moved: ${outcome.error}. That is the instrument breaking rather than the member `
+          + 'failing, and it refuses the apply instead of guessing.'));
+      }
+      log.event('swarm.merge_reverified', {
+        preset: resolved.preset, node: member.nodeId, depth: atDepth, outcome: outcome.kind,
+      });
+      // CLEAN IS `scored` AND NOTHING ELSE. Rule 4 asks whether the verdict still holds on
+      // the base this member would land on: unmeasurable is "not measurable there any
+      // more", and sealed is the instrument disagreeing with itself about content it has
+      // already scored. Neither is a verdict that lands.
+      return {
+        memberDigest: memberDigestOf(member.diff),
+        baseDigest,
+        clean: outcome.kind === 'scored',
+      };
+    };
+
+    /** The vertex, in an array because it is assigned from inside the spawner and read
+     *  after it: one element where a conflict was graded, none where there was none. */
+    const vertices: Expansion[] = [];
+    const spawnMergeNode = async (request: MergeNodeRequest): Promise<string> => {
+      // THE ROW HANGS OFF THE MEMBER ALREADY APPLIED — the state this vertex starts from —
+      // and every other parent is a dependency edge, because one measurement must not
+      // reach two ancestor means. Looked up BEFORE the budget is charged: a debit taken
+      // for a vertex that is then not created is a child the run paid for and never ran.
+      const primary = nodes.get(request.parents[0]);
+      const paid = primary === undefined ? 0 : budget.take(1);
+      if (primary === undefined || paid === 0) {
+        // ONE OUTCOME, TWO REASONS, and the reason is a field. Merge-back has already named
+        // the conflict; what is missing is the child that would resolve it — either because
+        // a child off an empty budget is the overspend conservation refuses, or because the
+        // spawner was handed a member this fan-in never offered. An empty id reads exactly
+        // as an absent spawner does: named, and nothing there to grade it.
+        log.event('swarm.aggregate_skipped', {
+          preset: resolved.preset, depth: atDepth, parents: parents.length,
+          reason: primary === undefined ? 'no-parent' : 'budget',
+        });
+        return '';
+      }
+      const id = nanoid();
+      try {
+        vertices.push(await expandChild({
+          parent: primary,
+          id,
+          // One child of one: the diversity angle and the sibling disclosure are both
+          // derived from the pair, and a fan-in has no sibling to be decorrelated from.
+          index: 0,
+          width: 1,
+          atDepth: atDepth + 1,
+          task: request.task,
+          rationale: `fan-in over ${String(consumed.length)} parents of depth ${String(atDepth)}`,
+          // What `context` decides for a vertex is only whether it also inherits the
+          // applied member's conversation: its parents' ANSWERS reach it either way, as
+          // the seed's fan-in block, because they are what it was created to reconcile.
+          context: resolved.config.context,
+          inherited: primary.artifact,
+          aggregated: consumed,
+          ancestors: pathTo(nodes, primary),
+          prefix: agentNodes
+            ? await sharedPrefix({ parent: primary, deps, log, preset: resolved.preset })
+            : [],
+        }));
+      } catch (error) {
+        // Named and counted exactly as a lost wave sibling is, so the report's `stop` can
+        // still say the search ran narrower than it was configured to.
+        lost += 1;
+        log.event('swarm.branch_failed', {
+          preset: resolved.preset, depth: atDepth + 1,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return '';
+      }
+      // THE DAG'S EDGES, IN THE RECORD. `search_nodes` holds the selection edge and only
+      // that (see the fan-in's note above), so this event is where the other k−1 are
+      // written down. Without it the run would merge a graph nothing afterwards could
+      // reconstruct, and "the edges are disclosed" would be a claim with no evidence.
+      log.event('swarm.aggregate_vertex', {
+        preset: resolved.preset,
+        node: id,
+        depth: atDepth + 1,
+        selection_parent: primary.id,
+        aggregated: consumed.map((member) => member.id).join(','),
+        conflict: `${request.parents[0]},${request.parents[1]}`,
+        paths: request.paths.length,
+      });
+      return id;
+    };
+
+    // A FAN-IN IS A SEQUENTIAL REBASE BY SHAPE, not by axis, and that is why
+    // `mergePolicyOf` is not consulted here. It derives the SETTLE policy from `settle`
+    // because there the axes decide how many members are wanted; a fan-in's arity is
+    // stated by the DAG's edges, so there is nothing to derive — and a fan-in that applied
+    // one member and discarded the rest would not be a fan-in.
+    const merging: MergeBackDeps = {
+      log,
+      preset: resolved.preset,
+      readOrigin,
+      applyMember: singlePathApply(measureIn.vfs),
+      reverify,
+    };
+    const report = await mergeBack(
+      { policy: 'sequential-rebase', members, settled: [...landed] },
+      // THE SPAWNER IS ABSENT WHERE THE BUDGET CANNOT PAY, and absent is what merge-back
+      // reads as "the conflict was named and nothing was there to grade it" — the honest
+      // record, where a vertex created off an empty budget would be a child nothing paid
+      // for.
+      budget.remaining > 0 ? { ...merging, spawnMergeNode } : merging,
+    );
+
+    fanInLevels += 1;
+    mergeOrder.push(...report.order);
+    for (const outcome of report.outcomes) {
+      if (outcome.kind !== 'applied') continue;
+      landed.add(outcome.nodeId);
+      fanInMerged += 1;
+    }
+    for (const vertex of vertices) aggregateVertices.push(vertex.id);
+    log.event('swarm.aggregate_fan_in', {
+      preset: resolved.preset,
+      depth: atDepth,
+      parents: parents.length,
+      members: members.length,
+      order: report.order.join(','),
+      merged: report.outcomes.filter((outcome) => outcome.kind === 'applied').length,
+      pruned: [...prunedParents].filter((id) => known.has(id)).length,
+      vertex: vertices[0]?.id ?? '',
+      stopped_at: report.stoppedAt ?? '',
+    });
+    return vertices;
+  };
 
   /**
    * A grant that has been PAID FOR and not yet expanded.
@@ -1456,90 +1990,22 @@ export async function runSwarm(
     // explore-prompt.ts states: a candidate fenced in a language nothing here can run
     // is unverifiable, so the question has to name what the measurement can execute.
     const generated = await Promise.allSettled(
-      Array.from({ length: width }, async (_unused, index): Promise<Expansion> => {
+      Array.from({ length: width }, (_unused, index): Promise<Expansion> => {
         const branch = grant?.proposal.branches[index];
-        const childContext = branch?.context ?? resolved.config.context;
-        const prompt = branchPrompt({
-          resolved, mode: deps.mode, languages, measured, baseline,
-          index, branches: width,
+        return expandChild({
+          parent,
+          id: grant?.nodeIds[index] ?? nanoid(),
+          index, width, atDepth: childDepth,
           task: branch?.task ?? resolved.task,
-          inherited: inheritedArtifact, ancestors, atDepth: childDepth, maxDepth,
-          carried: carriedBest,
-          // A thought node's whole request is one prompt, so its invitation is part of
-          // it. An agent node is invited by the tool being present instead.
-          invite: !agentNodes,
-        });
-        const id = grant?.nodeIds[index] ?? nanoid();
-        if (!agentNodes) {
-          const result = await generateText({
-            model: deps.model,
-            system: prompt.system,
-            prompt: prompt.user,
-            abortSignal: deps.signal,
-          });
-          const answer = readAnswer(result.text);
-          const code = readProposalCode(answer.text, languages);
-          return {
-            id,
-            artifact: code?.kind === 'runnable' ? code.code : answer.text,
-            answer: answer.text,
-            proposal: answer.proposal,
-            proposalError: answer.proposalError,
-            granted: null,
-            conclusion: null,
-            transcript: [],
-            usage: normalizeUsage(result.usage),
-            modelId: result.response.modelId,
-          };
-        }
-        const seed = branchSeed({
-          parent, measured, baseline, verifier, atDepth: childDepth, maxDepth,
-          focus: prompt.user, context: childContext,
-        });
-        const run = await runNodeAgent({
-          nodeId: id, rootId, parentId: parent.id, depth: childDepth,
-          task: resolved.task,
           rationale: branch?.rationale ?? `expansion ${String(index + 1)} of ${String(width)}`,
-          base: prompt.system,
-          messages: childContext === 'fork' ? [...prefix, seed] : [seed],
-          inherited: childContext === 'fork' ? inheritedAsSerialized(prefix) : [],
-          context: childContext,
-          mode: deps.mode,
-          settle: resolved.settle,
-          // §8.2's build-time rule: the tool exists only where a branch could be granted.
-          // Depth is what cannot change mid-run, so it gates the BUILD; the budget can
-          // empty between the invitation and the answer, so it stays a runtime refusal
-          // inside the arbiter.
-          arbitrate: isTreeAdvance(resolved.config.advance.kind) && childDepth + 1 <= maxDepth
-            ? (proposal) => budget.arbitrate({
-              config: resolved.config, caps: resolved.caps, atDepth: childDepth, proposal,
-            })
-            : null,
-        }, nodeDeps);
-        log.event('swarm.node_settled', {
-          preset: resolved.preset, node: id, depth: childDepth,
-          status: run.report.status, steps: run.report.stepCount,
-          tool_calls: run.report.toolCalls.length,
-          wall_clock_ms: run.report.wallClockMs,
-          isolation: run.isolation,
-          reported: run.reportedItself ? 'self' : 'final-text',
+          context: branch?.context ?? resolved.config.context,
+          inherited: inheritedArtifact,
+          // A WAVE FANS IN NOTHING. Its siblings are independent candidates, which is
+          // what `expand:'sample'` is and what `expand:'aggregate'` still starts from:
+          // a fan-in consumes a level, so a level has to exist first.
+          aggregated: [],
+          ancestors, prefix,
         });
-        return {
-          id,
-          artifact: run.candidate,
-          // An agent node REPORTS its candidate, so what it wrote and what the
-          // instrument measures are the same string and there is nothing to strip.
-          answer: run.candidate,
-          proposal: null,
-          proposalError: null,
-          granted: run.granted?.kind === 'granted' ? run.granted : null,
-          conclusion: run.candidate,
-          transcript: [...prefix, seed, ...run.produced],
-          usage: run.usage,
-          // The node's own report already reached `reportModelCall` per node, so the
-          // run does not report it twice — it only sums it for the settle report.
-          modelId: null,
-        };
       }),
     );
 
@@ -1579,12 +2045,43 @@ export async function runSwarm(
 
     // SCORE, then RECORD, then BACKPROPAGATE. One candidate at a time, into the one
     // path the instrument reads.
-    for (const expansion of expansions) {
+    /**
+     * THE LEVEL this iteration scores: the wave, and then — under `expand:'aggregate'` —
+     * the vertex its fan-in produced.
+     *
+     * A GENERATOR RATHER THAN A SECOND LOOP, because a vertex must reach the same scoring
+     * body a sampled sibling reaches: one measurement, one row, one backpropagation, one
+     * ranking. §8.5 says a merge node is graded like any other candidate, and the cheapest
+     * way to make that true is for there to be nowhere else it could be graded.
+     *
+     * THE BARRIER IS WHERE THIS YIELDS. The fan-in runs after the body has finished with
+     * every sibling of the wave — the point at which the level is complete and its
+     * siblings have been compared — and it runs ONCE, because the vertex it produces is a
+     * level of one and folding that into itself would consume the same work twice.
+     */
+    const level = async function* level(): AsyncGenerator<Expansion> {
+      yield* expansions;
+      if (resolved.config.expand !== 'aggregate') return;
+      // The narrowing repeats the measurement guard rather than asserting it:
+      // `regionRefusal` refuses `aggregate` on a run that measures nothing, so the other
+      // arm is unreachable for any run that fans in at all.
+      if (!ctx || !verifier || !measured || baseline === null) return;
+      yield* await fanInAtLevel({ ctx, verifier, measured, baseline, atDepth: childDepth });
+    };
+    for await (const expansion of level()) {
       // ONE SCORER PER RUN, chosen by the axis. `verify` runs the registry's instrument
       // against the objective; `judge` runs the marginalised ensemble. Neither is a
       // fallback for the other — a judged run has no objective to measure and a verified
       // run must never report a judge's number under the objective's name.
-      const siblings = expansions.filter((other) => other.id !== expansion.id);
+      //
+      // A FAN-IN'S VERTEX HAS NO SIBLING: it is one child of one, and the wave it
+      // consumed is its PARENTS rather than its peers. `expand:'aggregate'` and
+      // `score:'judge'` do not compose today — `regionRefusal` refuses the pair, because a
+      // judged run places no candidate for a member's diff to be taken from — so this is
+      // the shape the comparison would need rather than a path a run reaches.
+      const siblings = expansion.aggregated.length > 0
+        ? []
+        : expansions.filter((other) => other.id !== expansion.id);
       const outcome = measures && verifier && ctx && measured && baseline !== null
         ? await measureChild({ ctx, verifier, measured, baseline, artifact: expansion.artifact })
         : judgeSamples !== null
@@ -1632,12 +2129,12 @@ export async function runSwarm(
       // DEPTH IS DERIVED: the parent's row plus one, computed here and written by the
       // engine. A node supplies no depth, so there is no number for it to lie about.
       insertSearchNode(sql, {
-        nodeId: expansion.id, parentNodeId: parent.id, parentMsgId: null, rootId,
+        nodeId: expansion.id, parentNodeId: expansion.parentId, parentMsgId: null, rootId,
         task: resolved.task, action: '', observation: expansion.artifact,
-        codeUsed: null, depth: childDepth, msgId: null,
+        codeUsed: null, depth: expansion.depth, msgId: null,
       });
       nodes.set(expansion.id, {
-        id: expansion.id, parentId: parent.id, depth: childDepth,
+        id: expansion.id, parentId: expansion.parentId, depth: expansion.depth,
         artifact: expansion.artifact,
         measurement,
         score,
@@ -1649,13 +2146,14 @@ export async function runSwarm(
         // Not yet crossed the threshold: compaction is decided when this node becomes a
         // branch point, not when it is created.
         compacted: null,
+        aggregated: expansion.aggregated,
       });
       if (expansion.proposalError) {
         // The node asked for a branch and the engine could not read the request. Not
         // one of arbitration's five policies — it never reached the arbiter — and
         // never silent, because a node told nothing simply asks again.
         log.event('swarm.proposal_unreadable', {
-          preset: resolved.preset, node: expansion.id, depth: childDepth,
+          preset: resolved.preset, node: expansion.id, depth: expansion.depth,
           error: expansion.proposalError,
         });
       }
@@ -1775,9 +2273,22 @@ export async function runSwarm(
     const policy = mergePolicyOf(resolved.settle);
     const readOrigin = originReader(ctx.vfs);
     const members = best && verifier
-      ? [await reportedMember(best, verifier.artifact, readOrigin)]
+      ? [await reportedMember({
+        nodeId: best.id, answer: best.artifact, score: best.score,
+        path: verifier.artifact,
+        // NO EDGES AT THE SETTLE, even where the winner is a fan-in's own vertex, and the
+        // asymmetry with the fan-in is the point. There the order is load-bearing —
+        // whichever member lands LAST is what the path holds, so an aggregation applied
+        // before a parent it reconciled would be overwritten by that parent. Here exactly
+        // one member is applied: its reported answer replaces the path whole, and it
+        // already CONTAINS what it consumed. A dependency edge would refuse the winner
+        // for the state of members this policy applies none of, and the refusal's own
+        // remedy — reorder the members — cannot be followed with one.
+        deps: [],
+        readOrigin,
+      })]
       : [];
-    await mergeBack({ policy, members }, {
+    await mergeBack({ policy, members, settled: [...landed] }, {
       log,
       preset: resolved.preset,
       readOrigin,
@@ -1913,6 +2424,18 @@ export async function runSwarm(
     // Every child this run actually created and measured — the candidate list IS the
     // count, rather than a second tally beside it that could disagree.
     expansions: candidates.length, usage, durationMs: Date.now() - started,
+    // WHAT THE FAN-INS DID, or null on a run that fans in nothing — which is every
+    // `expand:'sample'` run, and is a different claim from a fan-in that did nothing.
+    fanIn: resolved.config.expand === 'aggregate'
+      ? {
+        levels: fanInLevels,
+        order: mergeOrder,
+        merged: fanInMerged,
+        vertices: aggregateVertices,
+        unusableParents: unusableParents.size,
+        prunedParents: prunedParents.size,
+      }
+      : null,
     // Why the run ended, from what the loop observed rather than from the count. A
     // budget spent with nothing left to select is a SETTLED search; a budget spent
     // with a frontier still open is a truncated one, and a search narrower than its
@@ -1948,40 +2471,48 @@ export async function runSwarm(
 }
 
 /**
- * The winner as a merge-back member, with its diff taken from what it REPORTED.
+ * One node's answer as a merge-back member, with its diff taken from what it REPORTED.
  *
- * One path — the verifier's artifact — because that is what a scored settle places, and
- * `base` is read from the origin now so the diff is a patch against the state it is about
- * to be applied onto rather than against a state nobody checked.
+ * One path — the verifier's artifact — because that is what this engine places, and `base`
+ * is read from the origin NOW so the diff is a patch against the state it is about to be
+ * applied onto rather than against a state nobody checked.
  *
- * THE VERDICT IS REAL, not a placeholder. A candidate reaches `best` only by having been
- * measured through the verifier registry, so it HAS been checked; the pair it binds is
- * this diff against this base, which is exactly the base the apply will see. That is why
- * rule 4 does not fire here and why it still would if anything moved the path in between.
+ * THE VERDICT IS REAL, not a placeholder. A node reaches this having been measured through
+ * the verifier registry, so it HAS been checked; the pair it binds is this diff against
+ * this base, which is the base its own apply will see. That is why rule 4 does not fire at
+ * a settle of one member — and why it does fire, and re-verifies, for every member after
+ * the first of a fan-in, whose base the member before it moved.
+ *
+ * `deps` ARE THE DAG'S EDGES and empty is not "unordered": a sampled node depends on
+ * nothing this settle applies, and a vertex depends on the parents it consumed.
  */
-async function reportedMember(
-  best: SwarmCandidate,
-  artifact: string,
-  readOrigin: (path: string) => Promise<string | null>,
-): Promise<MergeMember> {
+async function reportedMember(input: {
+  readonly nodeId: string;
+  readonly answer: string;
+  readonly score: number | null;
+  readonly path: string;
+  readonly deps: readonly string[];
+  readonly readOrigin: (path: string) => Promise<string | null>;
+}): Promise<MergeMember> {
+  const { readOrigin } = input;
   const diff: MemberDiff = {
-    nodeId: best.id,
-    files: [{ path: artifact, base: await readOrigin(artifact), after: best.artifact }],
+    nodeId: input.nodeId,
+    files: [{ path: input.path, base: await readOrigin(input.path), after: input.answer }],
     provenance: 'reported',
   };
   return {
-    nodeId: best.id,
+    nodeId: input.nodeId,
     diff,
     verdict: {
       memberDigest: memberDigestOf(diff),
       baseDigest: await baseDigestOf(diff, readOrigin),
       clean: true,
     },
-    // The engine chose the path, so there is no declared scope to escape, no dependency
-    // ordering across one member, and the score is what the search measured.
+    // The engine chose the path, so there is no declared scope to escape, and the score
+    // is what the search measured.
     scope: null,
-    deps: [],
-    score: best.score,
+    deps: input.deps,
+    score: input.score,
   };
 }
 
@@ -2033,6 +2564,8 @@ function settleReport(input: {
   readonly stop: SwarmSettleReport['stop'];
   readonly usage: Usage;
   readonly durationMs: number;
+  /** What the fan-ins did, or null on a run that fans in nothing. */
+  readonly fanIn: SwarmFanInReport | null;
 }): SwarmSettleReport {
   const { resolved, measured, best, carry } = input;
   return {
@@ -2054,5 +2587,6 @@ function settleReport(input: {
     expansions: input.expansions,
     tokens: usageTotal(input.usage) ?? null,
     durationMs: input.durationMs,
+    fanIn: input.fanIn,
   };
 }
