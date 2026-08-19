@@ -723,11 +723,11 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run test:workerd',
     tier: 'ci',
-    seconds: 8.7,
+    seconds: 12.7,
     catches: 'Durable Object semantics no bun test can express, executed inside real '
       + 'workerd (1.20260811.1 — the pool\'s own nested copy, not the 1.20260601.1 the '
       + 'top-level miniflare serves `bun scripts/tracing-gate.ts` from) via '
-      + '@cloudflare/vitest-pool-workers. Four surfaces, 15 tests. Two are defects we '
+      + '@cloudflare/vitest-pool-workers. Five surfaces, 18 tests. Two are defects we '
       + 'shipped and found only from production: `ctx.waitUntil` retains nothing in an '
       + 'actor and its write is cancelled on reset with the exception swallowed, and '
       + 'anything Durable Object init awaits stalls every later request on that object. '
@@ -741,16 +741,21 @@ export const LADDER: readonly Gate[] = [
       + 'back, commits partially, or is absent. And the device plane keeps its whole '
       + 'per-connection record in a socket ATTACHMENT, which the shared fake answers as '
       + '`null` unconditionally, so every bun test over it observes the failure state as '
-      + 'green. Each polarity carries its own control, so a green cannot come from a '
-      + 'write that never happened.',
+      + 'green. And nothing had ever seen an ALARM fire: a second `setAlarm` replaces the '
+      + 'first rather than queueing, which is what makes `armTimer`\'s soonest-wins dedup a '
+      + 'collapse instead of a lost wake-up, and an uncaught throw out of `alarm()` is '
+      + 'redelivered until it succeeds, which is the backstop the SDK rethrows platform '
+      + 'errors to reach. Each polarity carries its own control, so a green cannot come '
+      + 'from a write that never happened.',
     blind: 'everything above the platform. This tier is deliberately NOT a second home '
       + 'for unit tests: `include` is exactly packages/*/tests/workerd and bunfig excludes '
       + 'the same path, so the two runners cannot overlap. It cannot type '
       + '`ctx.facets.clone`, which needs @cloudflare/workers-types >= 5.20260804.1 against '
       + 'the installed 4.20260604.1 — the RUNTIME does carry it, so this is a types '
       + 'ceiling and not a platform one. Nor tailStream dispatch, absent platform-wide and '
-      + 'refuted as a local pin. It does not fire an ALARM: nothing here reaches the SDK '
-      + 'dispatch chain a shadowed `alarm()` breaks, which stays a regex. And '
+      + 'refuted as a local pin. It fires an alarm but does NOT reach the SDK\'s own '
+      + 'dispatch chain (`_cf_runAlarmBody`), so the shadowed-`alarm()` defect that once '
+      + 'ran for two months is still only a regex\'s problem. And '
       + '`abortAllDurableObjects` is a hard reset, NOT a hibernation wake — it drops the '
       + 'sockets with the isolate, so what survives a real eviction is still unmeasured.',
   },
