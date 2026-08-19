@@ -4,7 +4,7 @@
        between the two with <picture>. Everything below the palette block must
        stay byte-identical in both, so edit them together. -->
   <title id="t">Proteus delegation model</title>
-  <desc id="d">A running turn calls one agents tool with eight actions. Two of them spawn: fork creates ephemeral copies of the agent that settle back into the same turn, merging the briefs it was given, and hire creates a persistent subordinate agent that outlives the turn and reports back as an event. Swarm sits beside fork on the measurement axis: a configured tree search of any depth whose candidates are scored by a verifier the caller declared rather than judged by a model. The remaining actions talk to agents that already exist — subordinates in this workspace, or the owner’s other workspaces as peers.</desc>
+  <desc id="d">A running turn calls one agents tool with seven actions. Two of them spawn: swarm runs a configured tree search that settles back into this turn, and hire creates a persistent subordinate agent that outlives the turn and reports back as an event. A swarm’s candidates are scored by the verifier the caller declared in its own objective rather than judged by a model, and each of its nodes is a full agent running the same turn loop the caller runs. The remaining actions talk to agents that already exist: subordinates in this workspace, or the owner’s other workspaces as peers.</desc>
   <style>
     :root {
       --fg: #e6edf3;
@@ -63,40 +63,40 @@
       <path d="M0 0 L10 4 L0 8 z" fill="var(--orangeLine)"/>
     </marker>
   </defs>
-  <text class="h" x="24" y="30">Delegation — one tool, one ladder, keyed on lifetime</text>
+  <text class="h" x="24" y="30">Delegation — one tool, one ladder, keyed on lifetime and on who decides</text>
   <text class="s" x="24" y="49">the doctrine has a single source: packages/core/src/tools/registry.ts</text>
   <text class="band" x="24" y="76">THE CALLER</text>
   <rect x="24" y="88" width="852" height="62" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="36" y="109" text-anchor="start">a turn, running</text>
-  <text class="s" x="36" y="124" text-anchor="start">One agents tool. Eight actions — fork · swarm · hire · ask · send · reply · list · dismiss.</text>
+  <text class="s" x="36" y="124" text-anchor="start">One agents tool. Seven actions — swarm · hire · ask · send · reply · list · dismiss.</text>
   <text class="xs" x="36" y="139" text-anchor="start">Which ones exist here is structural: an actor gets the actions its backend wired deps for.</text>
   <path d="M255 150 L255 172" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-purple)"/>
   <path d="M691 150 L691 172" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-orange)"/>
   <rect x="215" y="172" width="80" height="22" rx="11" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
-  <text class="xs mono" x="255" y="186.6" text-anchor="middle" fill="var(--purple)">fork</text>
+  <text class="xs mono" x="255" y="186.6" text-anchor="middle" fill="var(--purple)">swarm</text>
   <rect x="647" y="172" width="88" height="22" rx="11" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="xs mono" x="691" y="186.6" text-anchor="middle" fill="var(--orange)">hire</text>
   <rect x="24" y="204" width="462" height="94" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
-  <text class="b" x="36" y="225" text-anchor="start" fill="var(--purple)">ephemeral — settles back into this turn</text>
-  <text class="xs" x="36" y="240" text-anchor="start">Fork on breadth (2+ independent angles you would</text>
-  <text class="xs" x="36" y="255" text-anchor="start">otherwise grind through one at a time) or on doubt (a</text>
-  <text class="xs" x="36" y="270" text-anchor="start">failed attempt, two plausible approaches, a step that is</text>
-  <text class="xs" x="36" y="285" text-anchor="start">expensive to undo, output you cannot check yourself).</text>
+  <text class="b" x="36" y="225" text-anchor="start" fill="var(--purple)">ephemeral — a tree search that settles into this turn</text>
+  <text class="xs" x="36" y="240" text-anchor="start">Search on breadth (2+ independent angles you would otherwise</text>
+  <text class="xs" x="36" y="255" text-anchor="start">grind through one at a time) or on doubt (a failed attempt, two</text>
+  <text class="xs" x="36" y="270" text-anchor="start">plausible approaches, a step that is expensive to undo, output</text>
+  <text class="xs" x="36" y="285" text-anchor="start">you cannot check yourself).</text>
   <rect x="38" y="308" width="434" height="105" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
-  <text class="b" x="50" y="327" text-anchor="start">one settlement — a merge (heads)</text>
-  <text class="xs" x="50" y="342" text-anchor="start">The briefs are yours to name and they are REQUIRED: 2–6 of them,</text>
-  <text class="xs" x="50" y="357" text-anchor="start">each a fork of you on the same workspace, files and sandbox,</text>
-  <text class="xs" x="50" y="372" text-anchor="start">running its own tool loop; their findings merge back into this</text>
-  <text class="xs" x="50" y="387" text-anchor="start">turn. A call that supplies no briefs is refused, and the refusal</text>
-  <text class="xs" x="50" y="402" text-anchor="start">names action:swarm as the place a search writes its own.</text>
+  <text class="b" x="50" y="327" text-anchor="start">what you declare — a preset and an objective</text>
+  <text class="xs" x="50" y="342" text-anchor="start">preset fixes the shape: seven values, six of them named searches</text>
+  <text class="xs" x="50" y="357" text-anchor="start">(prove among them) and custom. objective states the metric, the</text>
+  <text class="xs" x="50" y="372" text-anchor="start">unit, the direction, the target, and verify as {kind, spec} naming</text>
+  <text class="xs" x="50" y="387" text-anchor="start">a registered instrument. A verifier is CODE that runs, so a metric</text>
+  <text class="xs" x="50" y="402" text-anchor="start">nothing can execute is not an objective.</text>
   <rect x="24" y="423" width="462" height="75" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
-  <text class="b" x="36" y="442" text-anchor="start" fill="var(--purple)">runs as</text>
+  <text class="b" x="36" y="442" text-anchor="start" fill="var(--purple)">a node runs as</text>
   <text class="xs" x="36" y="457" fill="var(--fg)">cf</text>
   <text class="xs" x="70" y="457">ExplorationAgent facets — co-located Durable Objects</text>
   <text class="xs" x="36" y="472" fill="var(--fg)">cli</text>
-  <text class="xs" x="70" y="472">in-process runtime forks; a search branch gets its</text>
+  <text class="xs" x="70" y="472">the search’s own process. A host is a transport: the</text>
   <text class="xs" x="36" y="487" fill="var(--fg)"></text>
-  <text class="xs" x="70" y="487">own child process and SQLite file</text>
+  <text class="xs" x="70" y="487">loop body is runNodeLoop either way</text>
   <rect x="24" y="508" width="462" height="45" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="36" y="527" text-anchor="start">still running at 30 s?</text>
   <text class="xs" x="36" y="542" text-anchor="start">it detaches into a background job whose completion wakes you</text>
@@ -111,7 +111,7 @@
   <text class="xs" x="532" y="342" text-anchor="start">its own context, carried across turns</text>
   <text class="xs" x="532" y="357" text-anchor="start">its own full turn loop and evolution</text>
   <text class="xs" x="532" y="372" text-anchor="start">shares the workspace’s files</text>
-  <text class="xs" x="532" y="387" text-anchor="start">may fork and swarm; may not hire or peer</text>
+  <text class="xs" x="532" y="387" text-anchor="start">may swarm, and may hire to the depth cap; may not peer</text>
   <text class="xs" x="532" y="402" text-anchor="start">reports back as an event that wakes you</text>
   <rect x="506" y="423" width="370" height="75" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="b" x="518" y="442" text-anchor="start" fill="var(--orange)">runs as</text>
@@ -120,7 +120,7 @@
   <text class="xs" x="518" y="472" fill="var(--fg)">cli</text>
   <text class="xs" x="552" y="472">not wired — a local session gets the</text>
   <text class="xs" x="518" y="487" fill="var(--fg)"></text>
-  <text class="xs" x="552" y="487">fork and swarm rungs, nothing else</text>
+  <text class="xs" x="552" y="487">swarm rung and nothing else</text>
   <rect x="506" y="508" width="370" height="45" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="518" y="527" text-anchor="start">scope</text>
   <text class="xs" x="518" y="542" text-anchor="start">subordinate hires into this workspace; workspace makes a new one</text>
@@ -139,6 +139,6 @@
   <text class="xs" x="469" y="686" text-anchor="start">message by its event id</text>
   <text class="xs" x="38" y="735">A busy agent is never blocked on — the message queues immediately for its own mode-homogeneous turn, so follow-ups go out as soon as you have them.</text>
   <rect x="24" y="747" width="852" height="48" rx="7" fill="var(--surface)" stroke="var(--rule)" stroke-dasharray="4 3"/>
-  <text class="xs" x="38" y="766"><tspan font-weight="700" fill="var(--fg)">Tree search is action:swarm, never a settlement of fork</tspan> — a fork merges the briefs it requires; a swarm measures its candidates against your own objective.</text>
-  <text class="xs" x="38" y="782">The MCTS engine is unchanged and still registered — reached by the durable search store and the eval harness, not from the tool surface.</text>
+  <text class="xs" x="38" y="766"><tspan font-weight="700" fill="var(--fg)">Tree search is action:swarm, and it has one spelling</tspan> — every configured search of any depth is this one call, measured against your objective.</text>
+  <text class="xs" x="38" y="782">The MCTS engine is unchanged — lifetime evolution and proteus evolve still call runMCTS; the agents tool never reaches it.</text>
 </svg>
