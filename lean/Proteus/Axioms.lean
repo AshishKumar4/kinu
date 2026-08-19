@@ -401,4 +401,24 @@ import Proteus
 
 /-! ### Proteus/Exploration/Rebase.lean -/
 
-#print axioms Proteus.Exploration.Rebase.key_is_the_pair
+#print axioms Proteus.Exploration.Rebase.readAt_writeAt
+#print axioms Proteus.Exploration.Rebase.applied_is_bound_to_the_base_it_lands_on
+#print axioms Proteus.Exploration.Rebase.rebase_applies_only_bound_verdicts
+#print axioms Proteus.Exploration.Rebase.member_only_binding_cannot_see_the_origin
+#print axioms Proteus.Exploration.Rebase.map_eq_pointwise
+#print axioms Proteus.Exploration.Rebase.the_base_key_moves_when_a_touched_path_moves
+#print axioms Proteus.Exploration.Rebase.both_members_are_bound_to_the_initial_base
+#print axioms Proteus.Exploration.Rebase.the_rebase_moves_the_second_members_base
+#print axioms Proteus.Exploration.Rebase.no_reverifier_refuses_the_stale_member
+#print axioms Proteus.Exploration.Rebase.the_member_digest_does_not_move_when_the_origin_does
+#print axioms Proteus.Exploration.Rebase.member_only_binding_applies_the_stale_member
+#print axioms Proteus.Exploration.Rebase.re_verification_against_the_new_base_applies
+#print axioms Proteus.Exploration.Rebase.a_reverification_bound_elsewhere_does_not_revalidate
+#print axioms Proteus.Exploration.Rebase.a_failed_recheck_refuses
+#print axioms Proteus.Exploration.Rebase.an_unresolved_verifier_refuses
+#print axioms Proteus.Exploration.Rebase.an_unclean_verdict_is_refused_by_its_own_cause
+#print axioms Proteus.Exploration.Rebase.removing_the_comparison_applies_the_stale_verdict
+#print axioms Proteus.Exploration.Rebase.an_absent_path_is_not_an_empty_one
+#print axioms Proteus.Exploration.Rebase.the_base_key_ignores_untouched_paths
+#print axioms Proteus.Exploration.Rebase.the_rebase_stops_at_the_stale_member
+#print axioms Proteus.Exploration.Rebase.re_verification_lets_the_whole_rebase_land

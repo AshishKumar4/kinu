@@ -801,8 +801,33 @@ requirements:
     statement: A verdict bound to a member digest and a base digest never applies after either moves, which is the whole of sequential rebase's correctness.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Rebase.key_is_the_pair
+      - Proteus.Exploration.Rebase.readAt_writeAt
+      - Proteus.Exploration.Rebase.applied_is_bound_to_the_base_it_lands_on
+      - Proteus.Exploration.Rebase.rebase_applies_only_bound_verdicts
+      - Proteus.Exploration.Rebase.member_only_binding_cannot_see_the_origin
+      - Proteus.Exploration.Rebase.map_eq_pointwise
+      - Proteus.Exploration.Rebase.the_base_key_moves_when_a_touched_path_moves
+      - Proteus.Exploration.Rebase.both_members_are_bound_to_the_initial_base
+      - Proteus.Exploration.Rebase.the_rebase_moves_the_second_members_base
+      - Proteus.Exploration.Rebase.no_reverifier_refuses_the_stale_member
+      - Proteus.Exploration.Rebase.the_member_digest_does_not_move_when_the_origin_does
+      - Proteus.Exploration.Rebase.member_only_binding_applies_the_stale_member
+      - Proteus.Exploration.Rebase.re_verification_against_the_new_base_applies
+      - Proteus.Exploration.Rebase.a_reverification_bound_elsewhere_does_not_revalidate
+      - Proteus.Exploration.Rebase.a_failed_recheck_refuses
+      - Proteus.Exploration.Rebase.an_unresolved_verifier_refuses
+      - Proteus.Exploration.Rebase.an_unclean_verdict_is_refused_by_its_own_cause
+      - Proteus.Exploration.Rebase.removing_the_comparison_applies_the_stale_verdict
+      - Proteus.Exploration.Rebase.an_absent_path_is_not_an_empty_one
+      - Proteus.Exploration.Rebase.the_base_key_ignores_untouched_paths
+      - Proteus.Exploration.Rebase.the_rebase_stops_at_the_stale_member
+      - Proteus.Exploration.Rebase.re_verification_lets_the_whole_rebase_land
     tsRefs:
-      - packages/core/src/strategy/merge-back.ts:971
+      - packages/core/src/strategy/merge-back.ts:180
+      - packages/core/src/strategy/merge-back.ts:196
+      - packages/core/src/strategy/merge-back.ts:732
+      - packages/core/src/strategy/merge-back.ts:779
     remainingEvidence:
-      - Digest injectivity is a hypothesis on the theorems that need it rather than an axiom, so a collision is outside what this model rules out
+      - The digests are modelled as the argument tuples argumentDigest hashes, so every result reads up to a SHA-256 collision rather than ruling one out
+      - Rule 4 is proved to have teeth but its precedence over rule 6 is not modelled, and the source records that the opposite order would leave this comparison as dead code
+      - The re-verifier is a parameter, so a verifier that lies satisfies every theorem here and no gate ordering reaches it
