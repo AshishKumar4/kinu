@@ -45,6 +45,7 @@ import {
   WORKSPACE_RUN_ID,
   type AgentRuntime,
   type LLMProviderConfig,
+  type MCTSProgressEvent,
   type ModelCallSink,
   type SessionMessage,
   type SessionWriter,
@@ -241,16 +242,41 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // — see EVAL_SEARCH_BUDGET for the measurements that set it. Nothing below is
     // weakened by that: every assertion is the same assertion over a search that
     // finishes, and a deploy gate that does not terminate is not a gate.
+    //
+    // `onProgress` WIRED, because without it a search that produces nothing says
+    // nothing about why. The engine reports every `branch-failed` through this
+    // sink and nowhere else (mcts/engine.ts:246, :347, :433), so an unwired eval
+    // discards the only account of a rollout that threw or a judge that broke, and
+    // is left printing `ranked: 0` over causes it never saw. `fork-deps.ts` says
+    // the same thing about production: without this a search is invisible while it
+    // runs.
+    const progress: string[] = [];
     const result = await mcts.explore({
       task: EXPLORATION_TASK,
       mode: 'build',
       rt,
       model,
       options: {
-        mcts: { session: makeSessionWriter(), budget: EVAL_SEARCH_BUDGET, branches: EVAL_SEARCH_BRANCHES },
+        mcts: {
+          session: makeSessionWriter(),
+          budget: EVAL_SEARCH_BUDGET,
+          branches: EVAL_SEARCH_BRANCHES,
+          onProgress: (event: MCTSProgressEvent) => {
+            if (event.type === 'branch-failed') {
+              progress.push(`${event.stage} branch failed: ${event.error}`);
+            } else if (event.type === 'iteration-complete') {
+              progress.push(`iteration ${String(event.iteration)} scores: `
+                + `${event.scores.map((s) => s.toFixed(3)).join(', ') || '(none)'}`);
+            } else if (event.type === 'grounding-unavailable') {
+              progress.push(`grounding unavailable for ${event.language}; `
+                + `executor runs ${event.canRun.join(', ') || '(nothing)'}`);
+            }
+          },
+        },
       },
       reportModelCall: makeModelCallSink(rt),
     });
+    for (const line of progress) console.log(`    ${line}`);
 
     // The search's calls never reach this process as an SDK result, so the ledger
     // the sink above wrote is the only place their usage exists. Reading it here
