@@ -6,17 +6,17 @@
 
 Proteus is a general-purpose AI agent that improves itself over time. It:
 
+- **Searches a tree of agents** against an objective the caller declares, and scores every candidate by running that objective's verifier
 - **Learns reusable tools** from successful conversations and applies them in future ones
-- **Explores multiple strategies** in parallel via Monte Carlo Tree Search
 - **Rewrites its own execution logic** (scaffold) based on observed performance patterns
 - **Remembers everything** in a persistent, FTS5-searchable memory
-- **Includes CI-gated Lean 4 models** — 84 theorems check selected abstract invariants, with assumptions and implementation-evidence gaps tracked explicitly
+- **Includes CI-gated Lean 4 models** — 330 theorems over 43 requirements check selected abstract invariants, with assumptions and implementation-evidence gaps tracked explicitly
 
 ```mermaid
 graph LR
     subgraph "Proteus"
         B1[Learned Tools<br/>CraftStore + EMA scoring] --> B2[Persistent Memory<br/>FTS5 search + reflections]
-        B2 --> B3[MCTS Exploration<br/>Parallel strategies]
+        B2 --> B3[Tree swarm<br/>candidates measured by a verifier]
         B3 --> B4[Self-Modifying Scaffold<br/>4-gate validated]
         B4 --> B5[Lean 4 Models<br/>CI-gated traceability]
     end
@@ -43,7 +43,7 @@ graph TB
     subgraph "Researcher Workflow"
         R1[Create agent with<br/>specific purpose] --> R2[Chat to establish<br/>baseline behavior]
         R2 --> R3[Observe evolution<br/>events in real-time]
-        R3 --> R4[Inspect MCTS tree<br/>via D3 visualization]
+        R3 --> R4[Inspect the search tree<br/>via D3 visualization]
         R4 --> R5[Review crafted tools<br/>and scaffold changes]
         R5 --> R6[Switch models to<br/>compare evolution rates]
     end
@@ -125,9 +125,10 @@ Agent state is a single SQLite file. Export, backup, version control, and share 
 
 The CLI provides fast iteration on evolution parameters without network latency:
 
-Search parameters are durable per-workspace state, not a config object passed at
+MCTS parameters are durable per-workspace state, not a config object passed at
 construction: `DEFAULT_CONFIG` is frozen and read at import time, and the
-workspace's `agent_config` table carries the overrides on top of it.
+workspace's `agent_config` table carries the overrides on top of it. A swarm
+takes its shape from the call instead, through `preset` and the six axes.
 
 ```typescript
 import { createAgentConfigStore } from '@proteus/core';
@@ -189,7 +190,7 @@ graph TB
 | **Self-Refine** (Madaan 2023) | No | No | Iterative refinement | No | No |
 | **OMNI** (Zhang 2024) | Tool creation | No | Yes | No | No |
 | **Tree of Thoughts** (Yao 2023) | No | BFS/DFS | No | No | No |
-| **Proteus** | CraftStore + EMA | MCTS + Facets | Scaffold mutation | 84 theorems over abstract models; 1 documented SQLite assumption | DO SQLite |
+| **Proteus** | CraftStore + EMA | Tree swarm + MCTS | Scaffold mutation | 330 theorems over 43 abstract-model requirements; 1 documented SQLite assumption | DO SQLite |
 
 ### Design choices
 
@@ -199,29 +200,27 @@ graph TB
 
 3. **CraftStore with automatic lifecycle management.** Learned tools are scored via exponential moving average, time-decayed for relevance, and automatically retired when they stop being useful.
 
-4. **MCTS branches as isolated Durable Objects.** Each exploration branch has its own Durable Object and SQLite storage. Lean proves a `StorageIsolated` invariant over an abstract transition model; implementation correspondence is tracked but still needs a covering branch-storage integration assertion.
+4. **Search nodes as isolated Durable Objects.** On Cloudflare a swarm node and an MCTS branch each run inside their own facet with their own SQLite storage. Lean proves a `StorageIsolated` invariant over an abstract transition model; implementation correspondence is tracked but still needs a covering branch-storage integration assertion.
 
 5. **Traceable Lean and TypeScript models.** Each formal requirement records theorem names, modeled TypeScript source locations, classification, and remaining evidence. CI rejects missing theorems, undocumented axioms, and traceability mismatches. The models are hand-maintained rather than generated from TypeScript.
 
 ## 5. Current Limitations
 
-### Collaboration exists, but the coordination quality is unproven
+### Hiring is not measured
 
-This limitation used to read "no multi-agent collaboration at all," and that is
-no longer true. A workspace can hire durable `SubordinateAgent` facets through
-the unified `agents` tool — each with its own turn loop, sharing the workspace's
-files — and reach the owner's other workspaces through the same surface. What is
-not yet shown
-is that delegating produces better results than working linearly: there is no
-measurement of whether decomposition beats a single long turn, how often
-subordinates duplicate each other's work, or how much coordination overhead the
-orchestrator pays.
+A workspace hires durable `SubordinateAgent` facets through the `agents` tool.
+Each has its own turn loop and shares the workspace's files, and the same
+surface reaches the owner's other workspaces. A swarm's candidates are measured,
+because that is what `objective` and the verifier registry are for. A hire's
+output is not. Nothing measures whether decomposition beats a single long turn,
+how often subordinates duplicate each other's work, or what coordination costs
+the orchestrator.
 
 ### Evolution is Slow in Practice
 
 - **Turn-level** works well — pattern extraction fires reliably after an accepted turn that used tools
 - **Session-level** needs 5 turns *and* a turn that errored or drew negative feedback; scaffold mutation additionally needs 3+ conversations
-- **Lifetime** fires automatically every 5 conversations, or on the `triggerEvolution` RPC
+- **Lifetime** fires every 5 closed session windows (`lifetimeEvolutionInterval: 5`), which is 25 turns; `proteus evolve` runs a search on demand
 - The LLM's ability to generalize tool patterns into reusable code is inconsistent
 
 ### Evaluation exists; coverage is thin
@@ -245,7 +244,7 @@ The scaffold mutation pipeline exists and is fully implemented (4-gate validatio
 - The LLM often produces scaffolds that fail structural validation (forbidden patterns like `import`)
 - Successful mutations are rare — most conversations don't generate enough data for meaningful scaffold improvements
 
-### MCTS Exploration
+### The search explorer
 
 The engine broadcasts the latest node-bearing search tree on every changed
 iteration. Embedded and full-page explorers share the same live run resource,
@@ -267,7 +266,7 @@ Delegation to specialist agents shipped through one `agents` surface:
 in-workspace subordinates and cross-workspace handoff. What's left of the
 original idea:
 - Share crafted tools via a global CraftStore (using R2 for cross-DO storage)
-- Coordinate MCTS exploration across agents for larger search spaces
+- Coordinate search across agents, so one archive covers what several of them explored
 - Measure whether hiring actually beats working linearly
 
 ### Evaluation Benchmarks
