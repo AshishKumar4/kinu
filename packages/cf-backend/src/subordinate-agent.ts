@@ -1,4 +1,4 @@
-import { callable, type AgentContext, type SubAgentClass } from 'agents';
+import { callable, getAgentByName, type AgentContext, type SubAgentClass } from 'agents';
 import { SUBORDINATE_RPC_SURFACE, sealRpcSurface } from './rpc-surface';
 import { convertToModelMessages } from 'ai';
 import type { ChatResponseResult } from '@cloudflare/think';
@@ -19,7 +19,7 @@ import {
   ActorAgent,
   type ActorToolDeps,
 } from './actor-agent';
-import { OrchestratorAgent } from './orchestrator';
+import type { OrchestratorAgent } from './orchestrator';
 import {
   SubordinateIdentityStore,
   admitSubordinateTask,
@@ -30,6 +30,11 @@ import {
   type SubordinateReportOrigin,
 } from '@proteus/core';
 import { diagnostics, toProteusError } from '@proteus/core/obs';
+
+/** The workspace root's class name, which is also its Durable Object binding
+ *  name — the equality the SDK itself relies on when it resolves a top-level
+ *  parent as `env[cls.name]`. `satisfies keyof Env` keeps it tied to the binding. */
+const WORKSPACE_ACTOR_CLASS = 'OrchestratorAgent' satisfies keyof Env;
 
 export interface SetSubordinateIdentityInput {
   name: string;
@@ -96,20 +101,31 @@ export class SubordinateAgent extends ActorAgent {
    *
    * The branch reads `parentPath`, which the framework records at facet
    * creation, so it cannot disagree with where this facet actually hangs —
-   * `parentAgent` verifies the class against that same path and throws
-   * otherwise. Nothing here reads `identity.parentWorkspace`: that names the
-   * WORKSPACE, which past depth 1 is not the parent, and using it as one is what
-   * would send a nested subordinate's reports to the orchestrator instead of to
-   * whoever asked for the work.
+   * the subordinate branch lets `parentAgent` verify the class against that
+   * same path, and the workspace-root branch — which resolves the binding
+   * itself — repeats that check by hand. Nothing here reads
+   * `identity.parentWorkspace`: that names the WORKSPACE, which past depth 1 is
+   * not the parent, and using it as one is what would send a nested
+   * subordinate's reports to the orchestrator instead of to whoever asked for
+   * the work.
    */
   private async parentActor() {
-    const parentClass = this.parentPath.at(-1)?.className;
-    if (parentClass === undefined) {
+    const parent = this.parentPath.at(-1);
+    if (parent === undefined) {
       throw new Error('A subordinate must be a facet of the agent that hired it.');
     }
-    return parentClass === SubordinateAgent.name
-      ? await this.parentAgent(SubordinateAgent)
-      : await this.parentAgent(OrchestratorAgent);
+    if (parent.className === SubordinateAgent.name) return await this.parentAgent(SubordinateAgent);
+    // The workspace root is a top-level DO, so its stub comes from its own
+    // binding rather than an import of the class — `parentAgent` resolves
+    // `env[cls.name]` to this same namespace, and importing the class here
+    // closed a cycle (the orchestrator imports SubordinateAgent to spawn it).
+    // The className check replaces the one `parentAgent` performs.
+    if (parent.className !== WORKSPACE_ACTOR_CLASS) {
+      throw new Error(
+        `A subordinate's parent must be ${WORKSPACE_ACTOR_CLASS} or ${SubordinateAgent.name}, not ${parent.className}.`,
+      );
+    }
+    return await getAgentByName<Env, OrchestratorAgent>(this.env[WORKSPACE_ACTOR_CLASS], parent.name);
   }
 
   protected getOwnerUserId(): string | null {
