@@ -8,6 +8,7 @@ export * from './network';
 export * from './runtime';
 export * from './provider';
 export * from './credentials';
+export * from './ambient-env';
 export * from './live-model';
 export * from './agent-evals';
 export * from './facts';
