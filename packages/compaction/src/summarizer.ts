@@ -13,9 +13,19 @@
  */
 
 import { generateText, type LanguageModel } from 'ai';
-import { normalizeUsage, type ModelCallSpend } from '@proteus/core';
+import { normalizeUsage, TURN_WALL_CLOCK_ENVELOPE_MS, type ModelCallSpend } from '@proteus/core';
 
-export const SUMMARIZER_TIMEOUT_MS = 60_000;
+/**
+ * It was 60_000 — half what the judge seam gives one completion, for a prompt
+ * that is by construction the largest in the system (the range of turns
+ * compaction exists to shrink), on whatever model the session has active. Under
+ * the 509 s longest turn {@link TURN_WALL_CLOCK_ENVELOPE_MS} records, a working
+ * summarize call loses the race and the extension falls open to a deterministic
+ * preview — a quieter failure than a wedged queue and a worse one, because the
+ * turn proceeds with a weaker context and nothing says so. So the bound stays,
+ * because the wedge it prevents is real, and takes the measured envelope.
+ */
+export const SUMMARIZER_TIMEOUT_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
 
 /**
  * `spend` carries both the sink and the label — `compaction` for the fold this

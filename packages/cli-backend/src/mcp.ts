@@ -9,9 +9,21 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import * as v from 'valibot';
 
-/** Startup budget — spawning the child and listing its tools happens inside a
- *  turn, so a server that never comes up must not stall one. Mirrors the cap cf
- *  puts on its own connection warmup (`waitForConnections({ timeout: 5_000 })`). */
+/**
+ * Startup budget — spawning the child and listing its tools happens inside a
+ * turn, so a server that never comes up must not stall one. Mirrors the cap cf
+ * puts on its own connection warmup (`waitForConnections({ timeout: 5_000 })`).
+ *
+ * PENDING MEASUREMENT, and named as such rather than defended: 5_000 is a round
+ * number on both sides of that mirror, and what it bounds is a THIRD-PARTY
+ * process starting up. A vendored binary is milliseconds; an `npx`-launched
+ * server resolving a package on a cold cache is not, and nothing here or in
+ * cf-backend records either. Missing it costs that server's tools for the turn
+ * with a diagnostic, so the failure is reported rather than silent — which is why
+ * this is a pending number and not a live defect. The measurement that settles
+ * it: connect-to-listTools wall clock for one vendored and one `npx` server, cold
+ * and warm.
+ */
 const MCP_STARTUP_TIMEOUT_MS = 5_000;
 
 /** A tool CALL is the server doing real work — a fetch, a query, a build — and

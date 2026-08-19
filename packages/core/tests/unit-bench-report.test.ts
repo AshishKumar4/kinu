@@ -239,7 +239,10 @@ describe('renderBenchSummary', () => {
       sealAccessOrdinal: 3,
     });
     const text = renderBenchSummary(report);
-    expect(text).toContain('Budget: 300000ms wall-clock');
+    // The rendered figure has to be the budget the run actually used, not a copy of
+    // it — a second literal here is how the summary came to advertise a wall clock
+    // the harness had stopped enforcing. The VALUE is pinned in unit-turn-envelope.
+    expect(text).toContain(`Budget: ${DEFAULT_ATTEMPT_BUDGET.wallClockMs}ms wall-clock`);
     expect(text).toContain('opened 3 time(s)');
     expect(text).toContain('DECISION: KEEP');
     expect(text).toContain('caveat:');

@@ -35,6 +35,136 @@ bun test packages/cf-backend/tests
 bun test packages/cli-backend/tests
 ```
 
+## The eval tier — the suites that call a real model
+
+```bash
+bun run test:eval                        # both arms, and it RESOLVES A CREDENTIAL BY ITSELF
+```
+
+Read the next paragraph before running that.
+
+**It spends your money without being asked to.** If the environment names no
+model target, `scripts/eval-tier.sh` borrows the signed-in CLI session — the same
+`~/.proteus/config.json` credential `proteus chat` uses — via
+`scripts/eval-credentials.ts`. So on any machine that has run `proteus auth`,
+`bun run test:eval` bills the token owner's Cloudflare account. That is
+deliberate: the tier previously asked for two environment variables nothing on
+the owner's own machine ever exported, so it ran to completion reporting
+`TOTAL: 0 model call(s)` with every live test skipped, and passed a deploy gate.
+It is also why the script prints the target and the cost basis **before** spending
+anything — a run that goes somewhere unexpected is visible at the top of the log
+rather than in a bill.
+
+`bun run test:eval` is a **ci-tier and deploy-tier gate**: `bun scripts/ladder.ts
+--tier=ci` runs it, which the CI workflow runs on every push and PR, and
+`scripts/deploy.sh` runs it as "Behavioural evals". On a GitHub runner there is no
+session to borrow, so it is free there and everything live skips. On your machine
+it is not.
+
+### The two arms
+
+Two runners, because neither can see the other's files — `bun test` matches only
+`*.test.ts` / `*_test.*` / `*.spec.*`, never `*.eval.ts`.
+
+| Arm | What runs | What it measures |
+|---|---|---|
+| bun suites | `bun test ./tests/` | end-to-end lifecycle, evolution across sessions, MCTS reached and durably ranked, delegation conversion, one real turn per backend |
+| behaviour evals | `vitest --config vitest.evals.config.ts` over `tests/evals/**/*.eval.ts` | 17 corpus tasks × 2 repetitions = 34 full agent episodes, graded by eight scorers over the `run_events` ledger |
+
+The behaviour arm's own knobs, none of which are documented anywhere else:
+`PROTEUS_EVAL_TIER=flash|pro` picks the model (`flash` is the volume arm and the
+default), `PROTEUS_EVAL_REPEATS` the repetitions per task (default 2 for flash, 1
+for pro), `PROTEUS_EVAL_SEED` the run seed, `PROTEUS_EVAL_EVOLUTION=0` turns
+evolution off, and `PROTEUS_EVAL_RECORD` names where the run record is written
+(default: beside the retained transcripts under `bench-artifacts/`).
+
+### What it costs and how long it takes
+
+Measured, not estimated. Every figure below came from a run whose log said so; a
+cell that has not been measured says so instead of carrying a guess.
+
+| | wall clock | model calls | input tokens |
+|---|---|---|---|
+| whole tier, credential-free | 3 s | 0 | — |
+| bun suites, credentialed | 2,745 s | 48 | 601.6k |
+| bun suites, credentialed (second run) | 3,843 s | 49 | 600.8k |
+| behaviour evals, credentialed | not yet measured — see below | | |
+| `tests/live-smoke.test.ts` alone | 74 s | 3 | 55.6k |
+
+The two bun-half rows are the two runs whose spend files still exist. `ladder.ts`
+declares this gate at 3,228 s / 64 calls / 967k from a third run whose artifact does
+not survive; both surviving runs show ~48 calls and ~601k, so treat the declared
+figure as a budgeted ceiling rather than a typical cost. The 3,843 s run also
+contains 1,200 s of tests being killed rather than working (a 900 s exploration
+timeout and a 300 s MCTS one, both since fixed — those same steps now complete in
+437 s and 456 s), so do not derive a post-fix cost from it.
+
+The behaviour arm is 34 full agent episodes and dominates the tier. Its wall clock
+is the number this row is waiting on; the tier now reports it per arm, and the run
+record it writes carries per-episode `ms`, so the figure is read off an artifact
+rather than estimated. It had never been measured because the arm produced no
+report at all until this change.
+
+Cost here is **time, not rate**: the account's limit is 300 requests/minute and a
+full tier run averages under one. Nothing you can do to this tier makes it hit a
+rate limit; what it costs you is an afternoon. The tier prints a `── per arm ──`
+block with each arm's own seconds and tokens, so you never have to infer which
+half the time was in.
+
+**Do not run two live tiers against one account.** Two concurrent runs produce
+`orchestrator.detached_work_failed / Request Timeout` and turns that come back with
+zero steps — the same signature as a deployment outage, and neither run's wall clock
+is then the tier's cost.
+
+If you only need to prove one thing, run one suite rather than the tier:
+`PROTEUS_EVAL_LIVE=1 bun test ./tests/live-smoke.test.ts` is 74 s and proves the
+deployed worker and the local session spine each take a real turn.
+
+### What a failure means
+
+Four different things, and the tier keeps them apart because they need opposite
+repairs.
+
+- **A suite failed.** Either the model answered wrongly (a finding) or the
+  environment never answered (an outage). The tier does not guess: a failure
+  counts as infrastructure only where the code raising it said so through
+  `infraBoundary`, and the skip ratchet prints the two lists separately. An
+  unmarked failure lands in the behavioural list, which under-claims outages
+  rather than over-claiming them.
+- **An undeclared skip.** A test skipped that `scripts/skip-ratchet.lock.json`
+  does not declare. Make it run, or add it to the lock with the reason it cannot
+  — which is a sentence you will have to defend.
+- **The run proved no liveness.** A target was resolved and the run cannot show
+  it reached a model. That is the tier reporting on itself; `eval-spend.ts` names
+  which of the four shapes it is.
+- **Nothing at all, loudly.** With no credential anywhere the tier still runs and
+  still passes: every live test skips, the ratchet proves the skips are the
+  declared ones, and the liveness assertion says it has nothing to prove. That is
+  the path that reproduces anywhere.
+
+### Credentials, if you want to point it somewhere else
+
+Either pair, and an explicit one is never overridden:
+
+```bash
+PROTEUS_ORIGIN=… PROTEUS_TOKEN=…            # deployed/preview worker proxy; mint with
+                                            #   proteus tokens create --scope ai.proxy
+AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the proxy does not front
+```
+
+`PROTEUS_BASE_URL` + `PROTEUS_AUTH` are accepted as aliases of the second pair.
+
+`PROTEUS_EVAL_LIVE=1` is the consent switch, and `scripts/eval-tier.sh` is the
+only thing that sets it — so a credential sitting in your shell cannot make a
+commit hook bill anyone. Running a live suite by hand means setting it yourself.
+
+### The bench harness is a different thing
+
+`bun scripts/bench.ts` scores whether self-evolution helps, against 159 seeded
+defects in this repo. It shares no credentials with the eval tier (it reads
+`BENCH_BASE_URL` / `BENCH_AUTH` / `BENCH_MODEL` and borrows nothing), and its
+deterministic variants need no model at all. See [Bench](BENCH.md).
+
 ## Test categories
 
 Each test file lives in `packages/<pkg>/tests/` and is named to indicate the

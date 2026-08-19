@@ -10,8 +10,8 @@
  */
 import { describe, test, expect } from 'bun:test';
 import {
-  parseJUnit, readSkipLock, reconcileSkips, unmatchedTargets,
-  SKIP_RATCHET_TARGETS, SKIP_LOCK_PATH,
+  mergeReports, parseJUnit, readSkipLock, reconcileSkips, skipDebt, unmatchedTargets,
+  ALL_SKIP_RATCHET_TARGETS, SKIP_RATCHET_TARGETS, SKIP_RATCHET_VITEST_TARGETS, SKIP_LOCK_PATH,
 } from './skip-ratchet';
 
 /** The exact shape Bun's junit reporter emits: a passing testcase is
@@ -29,6 +29,26 @@ const REPORT = `<?xml version="1.0" encoding="UTF-8"?>
       </testcase>
     </testsuite>
   </testsuite>
+</testsuites>`;
+
+/**
+ * The exact shape VITEST's junit reporter emits, verbatim from a credential-free
+ * run of `vitest.evals.config.ts`. Two differences carry the whole defect: there
+ * is NO `file` attribute, and `classname` holds the path rather than the suite —
+ * with the describe path already folded into `name`.
+ */
+const VITEST_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="3" failures="0" errors="0" time="0.012">
+    <testsuite name="tests/evals/behaviour.eval.ts" tests="3" failures="0" errors="0" skipped="2" time="0.012">
+        <testcase classname="tests/evals/behaviour.eval.ts" name="Agent behaviour over the run-event ledger &gt; &apos;ws-inventory&apos; rep+0" time="0">
+            <skipped/>
+        </testcase>
+        <testcase classname="tests/evals/behaviour.eval.ts" name="Agent behaviour over the run-event ledger &gt; &apos;ws-inventory&apos; rep1" time="0">
+            <skipped/>
+        </testcase>
+        <testcase classname="tests/evals/behaviour.eval.ts" name="corpus quality — can this corpus rank anything at all &gt; the corpus is large enough for significance to be reachable" time="0.001">
+        </testcase>
+    </testsuite>
 </testsuites>`;
 
 describe('parseJUnit', () => {
@@ -92,6 +112,43 @@ describe('parseJUnit', () => {
     expect(report.files.size).toBe(0);
     expect(report.skipped).toEqual([]);
   });
+
+  // RED BEFORE: `file` came back '' for every vitest testcase, so `files` was
+  // empty, `unmatchedTargets` called the vitest target missing, and the arm's 35
+  // skips could not be reconciled against anything.
+  test('a vitest testcase is attributed to the path in classname, not to nothing', () => {
+    const report = parseJUnit(VITEST_REPORT);
+    expect(report.total).toBe(3);
+    expect([...report.files]).toEqual(['tests/evals/behaviour.eval.ts']);
+    expect(report.skipped.map((s) => s.file)).toEqual([
+      'tests/evals/behaviour.eval.ts', 'tests/evals/behaviour.eval.ts',
+    ]);
+  });
+
+  test('a vitest key names the file once — the describe path is already in name', () => {
+    const [first] = parseJUnit(VITEST_REPORT).skipped;
+    expect(first?.key).toBe(
+      "tests/evals/behaviour.eval.ts › Agent behaviour over the run-event ledger > 'ws-inventory' rep+0",
+    );
+  });
+
+  test('bun keys still carry file, suite and name — the fallback did not displace them', () => {
+    expect(parseJUnit(REPORT).skipped.map((s) => s.key)).toEqual([
+      'tests/a.test.ts › Suite A › skips one',
+      'tests/a.test.ts › Suite A › skips two & more',
+    ]);
+  });
+});
+
+describe('mergeReports', () => {
+  test('one verdict over both arms, since neither runner can see the other\'s files', () => {
+    const merged = mergeReports([parseJUnit(REPORT), parseJUnit(VITEST_REPORT)]);
+    expect(merged.total).toBe(6);
+    expect(merged.skipped.length).toBe(4);
+    expect([...merged.files].sort()).toEqual([
+      'tests/a.test.ts', 'tests/evals/behaviour.eval.ts',
+    ]);
+  });
 });
 
 describe('reconcileSkips', () => {
@@ -122,6 +179,43 @@ describe('reconcileSkips', () => {
     ]);
     expect(verdict).toEqual({ added: [], stale: [] });
   });
+
+  // A parametrised family is declared once, so the gate does not become a
+  // transcript of `corpus × repeats` that any corpus edit or a stray
+  // PROTEUS_EVAL_REPEATS turns red for no defect.
+  test('a family entry declares every generated case under its prefix', () => {
+    const vitest = parseJUnit(VITEST_REPORT);
+    const verdict = reconcileSkips(vitest, [{
+      key: 'tests/evals/behaviour.eval.ts › Agent behaviour over the run-event ledger',
+      reason: 'needs a live model', family: true,
+    }]);
+    expect(verdict).toEqual({ added: [], stale: [] });
+  });
+
+  // The other direction, so a family entry cannot become a check that runs and
+  // cannot fail: if the whole arm stopped skipping, the entry is stale.
+  test('a family entry nothing matched is stale, not silently satisfied', () => {
+    const verdict = reconcileSkips(parseJUnit(REPORT), [
+      { key: 'tests/a.test.ts › Suite A › skips one', reason: 'declared' },
+      { key: 'tests/a.test.ts › Suite A › skips two & more', reason: 'declared' },
+      { key: 'tests/evals/behaviour.eval.ts › Agent behaviour', reason: 'gone', family: true },
+    ]);
+    expect(verdict.stale).toEqual(['tests/evals/behaviour.eval.ts › Agent behaviour']);
+  });
+
+  test('a family prefix declares nothing outside itself', () => {
+    const vitest = parseJUnit(VITEST_REPORT.replace(
+      'corpus quality — can this corpus rank anything at all &gt; the corpus is large enough for significance to be reachable" time="0.001">',
+      'corpus quality — can this corpus rank anything at all &gt; the corpus is not saturated" time="0"><skipped/>',
+    ));
+    const verdict = reconcileSkips(vitest, [{
+      key: 'tests/evals/behaviour.eval.ts › Agent behaviour over the run-event ledger',
+      reason: 'needs a live model', family: true,
+    }]);
+    expect(verdict.added).toEqual([
+      'tests/evals/behaviour.eval.ts › corpus quality — can this corpus rank anything at all > the corpus is not saturated',
+    ]);
+  });
 });
 
 describe('unmatchedTargets', () => {
@@ -141,6 +235,21 @@ describe('unmatchedTargets', () => {
   test('an empty report leaves every target unmatched', () => {
     const empty = parseJUnit('<testsuites tests="0" />');
     expect(unmatchedTargets(empty, ['./tests/'])).toEqual(['./tests/']);
+  });
+
+  // RED BEFORE: `./tests/` is satisfied by the bun arm alone, so a run that
+  // reported only bun looked complete while the whole vitest arm went unmeasured.
+  test('a bun-only report leaves the vitest target unmatched', () => {
+    expect(unmatchedTargets(parseJUnit(REPORT))).toEqual([...SKIP_RATCHET_VITEST_TARGETS]);
+  });
+
+  test('both arms reporting satisfies every target', () => {
+    const merged = mergeReports([parseJUnit(REPORT), parseJUnit(VITEST_REPORT)]);
+    expect(unmatchedTargets(merged)).toEqual([]);
+  });
+
+  test('a vitest-only report leaves the bun target unmatched', () => {
+    expect(unmatchedTargets(parseJUnit(VITEST_REPORT))).toEqual([...SKIP_RATCHET_TARGETS]);
   });
 });
 
@@ -162,10 +271,50 @@ describe('the committed lock', () => {
     expect(new Set(lock.map((e) => e.key)).size).toBe(lock.length);
   });
 
-  test('the gate declares its targets and its lock path', () => {
+  // A family entry that named only a file would declare every test in it,
+  // including ones nobody looked at — this gate's own defect class. Requiring the
+  // suite separator is what keeps the prefix narrower than the file.
+  test('every family entry names a suite, never a bare file', () => {
+    const families = readSkipLock().filter((e) => e.family === true);
+    expect(families.length).toBeGreaterThan(0);
+    for (const entry of families) {
+      expect(entry.key).toContain('.ts › ');
+      expect(entry.key.split(' › ')[1]?.length ?? 0).toBeGreaterThan(0);
+    }
+  });
+
+  test('the gate declares both runners\' targets and its lock path', () => {
     expect(SKIP_RATCHET_TARGETS.length).toBeGreaterThan(0);
+    expect(SKIP_RATCHET_VITEST_TARGETS.length).toBeGreaterThan(0);
     // The leading `./` is load bearing — see unmatchedTargets above.
-    for (const target of SKIP_RATCHET_TARGETS) expect(target.startsWith('./')).toBe(true);
+    for (const target of ALL_SKIP_RATCHET_TARGETS) expect(target.startsWith('./')).toBe(true);
+    // The vitest arm is named as a FILE on purpose: a directory would be
+    // satisfied by the bun suites that sit in the same one.
+    for (const target of SKIP_RATCHET_VITEST_TARGETS) expect(target.endsWith('.eval.ts')).toBe(true);
     expect(SKIP_LOCK_PATH).toContain('skip-ratchet.lock.json');
+  });
+});
+
+/**
+ * With a target resolved every locked entry RUNS — all 25 are `skipIf(!TARGET)`,
+ * measured: `bun test ./tests/live-smoke.test.ts` under PROTEUS_EVAL_LIVE=1 ran
+ * both of its locked entries, 3 model calls, 74.3s. Read as `stale` that made the
+ * eval tier's own ratchet return 1 on every credentialed run.
+ */
+describe('skipDebt', () => {
+  const verdict = { added: ['undeclared skip'], stale: ['locked, ran'] };
+
+  test('credential-free, a locked entry that ran is debt — the ratchet tightens', () => {
+    expect(skipDebt(verdict, { expectLive: false })).toEqual(['undeclared skip', 'locked, ran']);
+  });
+
+  test('with a target, a locked entry that ran is the tier working, not debt', () => {
+    expect(skipDebt(verdict, { expectLive: true })).toEqual(['undeclared skip']);
+  });
+
+  test('an undeclared skip is debt in BOTH modes — that is the invariant this gate owns', () => {
+    for (const expectLive of [true, false]) {
+      expect(skipDebt({ added: ['x'], stale: [] }, { expectLive })).toEqual(['x']);
+    }
   });
 });

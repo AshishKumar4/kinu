@@ -164,6 +164,15 @@ export const isRawNodeModule = (file: string): boolean => RAW_NODE_MODULE.test(f
  *  committed than one in a `.ts`. */
 export const isTextSource = (file: string): boolean => TEXT_SOURCE.test(file);
 
+/**
+ * A seeded bench defect patch. The corpus `gate:bench-corpus` governs, narrowed
+ * here rather than by a `readdirSync` inside the gate: an untracked `.patch`
+ * dropped into that directory is not part of the corpus, and a second walk could
+ * silently pick one up while `tasks.jsonl` and every scored run ignore it.
+ */
+export const isBenchDefectPatch = (file: string): boolean =>
+  file.startsWith('tests/bench/patches/') && file.endsWith('.patch');
+
 /** One file's text, from `repoRoot`. The working tree when a copy exists; the
  *  INDEX blob when it does not — a tracked file deleted (or never checked out)
  *  locally still ships on push, so a content gate must still read those exact

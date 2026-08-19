@@ -1,12 +1,17 @@
 /**
- * ONE NODE OF A SWARM, AS AN AGENT — EXPLORATION-SPEC §8.1.
+ * ONE NODE OF A SWARM, AS AN AGENT.
  *
- * A node used to be one `generateText` call whose whole output was text. §8.1 says
- * normatively that a node is an agent, and lists the six things that makes it: a
- * tool loop with a stop condition, a tool surface, no delegation authority, its own
- * model, its own transcript, and its own workspace. This module is five of those
- * six; the sixth is {@link nodeWorkspace}, which reports honestly that it is not
- * built yet.
+ * Specified by docs/EXPLORATION.md — "A node is an agent", "Node identity",
+ * "Inherited context", "The report seam", "Arbitration", "Isolation" and "The
+ * journal read model".
+ *
+ * A node used to be one `generateText` call whose whole output was text. It is an
+ * AGENT now, normatively so, and *A node is an agent* lists the six things that
+ * makes it one: a tool loop with a stop condition, a tool surface, no delegation
+ * authority, its own model, its own transcript, and its own workspace. This module
+ * is five of those six. The sixth is built: {@link nodeWorkspace} hands a node a
+ * real home directory in the one global view, owned by the node's own uid,
+ * provisioned by `agentHomeNodeProvisioner` in `strategy/node-workspace.ts`.
  *
  * WHAT IS NOT HERE, AND WHY THAT MATTERS MORE THAN WHAT IS. There is no loop in
  * this file. The loop is {@link runHeadInference}, which already ends on abort, on
@@ -20,17 +25,19 @@
  * defect this repository deletes, and it would be the version without the
  * mid-flight guard.
  *
- * WHAT A NODE IS GRADED ON IS WHAT IT REPORTS, never what it changed. Nodes share
- * one file plane until §8.6's substrate lands ({@link NodeWorkspace.isolation}), so
- * a diff of the workspace attributes nothing: every node changed the same tree.
- * The engine writes the REPORTED candidate to the verifier's path and measures
- * that, one node at a time. This is the constraint the delegation doctrine used to
- * state as the reason a graded node could not hold tools at all; it is a constraint
- * on the GRADING SIGNAL, not on the tool surface, and separating the two is what
- * made this commit possible.
+ * WHAT A NODE IS GRADED ON IS WHAT IT REPORTS, never what it changed. There are
+ * exactly two isolation states and no third ({@link NodeWorkspace.isolation} says
+ * which): a node has its own home, or it runs on a host with no credentialled
+ * filesystem, where there is no boundary at all and every node changes the same
+ * tree. In that second state a diff of the workspace attributes nothing, which is
+ * why the grading signal is the report in both. The engine writes the REPORTED
+ * candidate to the verifier's path and measures that, one node at a time. This is
+ * the constraint the delegation doctrine used to state as the reason a graded node
+ * could not hold tools at all; it is a constraint on the GRADING SIGNAL, not on the
+ * tool surface, and separating the two is what made this commit possible.
  *
- * THE REPORT IS CONSUMED THROUGH ONE FUNCTION. §8.7's grading report — its retry
- * bound, its terminal set, its verifier immutability — is still being specified, so
+ * THE REPORT IS CONSUMED THROUGH ONE FUNCTION. *The grading report's retry bound,
+ * its terminal set and its verifier immutability are not settled here*, so
  * {@link readNodeReport} is the whole boundary: it takes what a node's loop
  * produced and returns the candidate and the conclusion the engine needs. Today
  * that is the existing `report` tool's status-and-content shape plus the loop's own
@@ -49,9 +56,15 @@ import { nodeWorkspace, isolationDisclosure } from './node-workspace';
 import { BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS } from './swarm';
 import type { Logger } from '../obs/index';
 import type { Usage } from '../usage';
-import type { BranchContext, BranchProposal, SwarmSettle } from './swarm';
+import type { BranchContext, SwarmSettle } from './swarm';
 import type { BranchDecision } from './swarm-budget';
 import type { NodeIdentity, NodeIsolation, NodeWorkspaceProvisioner } from './node-workspace';
+import type {
+  CapturedReport, NodeArbiter, NodeLoopHost, NodeLoopResult, NodeRunSpec,
+} from './node-host';
+export type {
+  CapturedReport, NodeArbiter, NodeLoopHost, NodeLoopResult, NodeRunSpec,
+} from './node-host';
 import type { HeadBudget, HeadInput, HeadReport, HeadStep, SerializedMessage } from '../heads/types';
 import type { HeadJournal } from '../heads/journal';
 import type { MissionScope } from '../mission-budget';
@@ -65,14 +78,14 @@ import type { ModelCallSink } from '../events/model-call';
  * finishes.
  *
  * Derived from {@link HEAD_BUILTIN_TOOLS} rather than re-listed, so the two
- * confined surfaces cannot drift — §8.1 rule 2 defines a node's set as a head's
- * plus the report and the proposal, and the proposal is not a builtin.
+ * confined surfaces cannot drift — under *A node is an agent* a node's set is a
+ * head's plus the report and the proposal, and the proposal is not a builtin.
  *
  * `agents` IS ABSENT AND ITS ABSENCE IS STRUCTURAL. It is not in this list, and it
  * is also not buildable: a node's toolset is assembled with no `agents` dep at all,
- * which is the same mechanism that confines subordinates. §8.1 rule 3 — a node's
- * only route to more actors is the proposal, which the engine arbitrates, so a node
- * cannot fund work outside the search's budget.
+ * which is the same mechanism that confines subordinates. *A node is an agent*
+ * again: a node's only route to more actors is the proposal, which the engine
+ * arbitrates, so a node cannot fund work outside the search's budget.
  */
 export const NODE_BUILTIN_TOOLS = [...HEAD_BUILTIN_TOOLS, 'report'] as const;
 
@@ -80,25 +93,15 @@ export const NODE_BUILTIN_TOOLS = [...HEAD_BUILTIN_TOOLS, 'report'] as const;
  *  which tool asked for budget. */
 export const PROPOSE_BRANCH_TOOL = 'propose_branch';
 
-/**
- * Arbitrates one node's branch request.
- *
- * May answer asynchronously, and that is not decoration: when a node runs in a
- * facet rather than in the search's own isolate, the arbiter is on the other
- * side of an RPC and the search's budget is not a value the node's host holds.
- * A synchronous-only arbiter would make hosting a node unrepresentable, so the
- * seam is async and the in-process caller simply returns a value.
- */
-export type NodeArbiter = (proposal: BranchProposal) => BranchDecision | Promise<BranchDecision>;
 
 /** What the engine hands one node before it runs. Identity and depth come from the
- *  engine's own row — a node states neither (§8.3) — and the seed is assembled by
- *  the engine because §8.4 makes the seed the engine's to author, never the
- *  parent's. */
+ *  engine's own row — a node states neither, per *Node identity* — and the seed is
+ *  assembled by the engine because *Inherited context* makes the seed the engine's
+ *  to author, never the parent's. */
 export interface NodeAgentInput extends NodeIdentity {
   readonly parentId: string | null;
-  /** The pinned task block, verbatim at every depth (§8.4). Also the journal's own
-   *  record of what this node was asked. */
+  /** The pinned task block, verbatim at every depth (*Inherited context*). Also the
+   *  journal's own record of what this node was asked. */
   readonly task: string;
   /** Why this node exists: the search's own task at the root, the accepted
    *  branch's rationale below it. */
@@ -122,8 +125,8 @@ export interface NodeAgentInput extends NodeIdentity {
    * Arbitrate this node's branch request, or null when a branch could not be
    * granted at this node whatever it asked.
    *
-   * NULL MEANS THE TOOL IS ABSENT, not present-and-refusing. §8.2's build-time
-   * rule, which `head-tools.ts` already applies to `split_subheads`: a request
+   * NULL MEANS THE TOOL IS ABSENT, not present-and-refusing. That is *Build-time
+   * exclusion*, which `head-tools.ts` already applies to `split_subheads`: a request
    * that can only ever be refused MUST NOT be offered, because offering it spends
    * a step to learn a limit the surface already knew. The runtime refusal stays
    * for what can still change mid-run — the budget can empty between the
@@ -152,9 +155,9 @@ export interface NodeRun {
    * The conversation this node produced, in order.
    *
    * What a `context:'fork'` child inherits, appended to what this node itself
-   * inherited — §8.4's append-only rule, which is a decision about caching: the
-   * prefix every sibling shares is byte-identical, so a provider can cache it once
-   * for the whole level.
+   * inherited — the append-only rule of *Inherited context*, which is a decision
+   * about caching: the prefix every sibling shares is byte-identical, so a provider
+   * can cache it once for the whole level.
    */
   readonly produced: readonly ModelMessage[];
 }
@@ -171,8 +174,8 @@ export interface NodeRun {
 export interface NodeAgentDeps {
   rt: AgentRuntime;
   model: LanguageModel;
-  /** Where the node's transcript lands. §8.8: a read model over the node's
-   *  journal, never a second store. */
+  /** Where the node's transcript lands. Under *The journal read model* a transcript
+   *  is a read model over the node's journal, never a second store. */
   journal: HeadJournal;
   /** The step envelope this node runs to — the search's, not a private pool. */
   maxSteps: number;
@@ -210,56 +213,9 @@ export interface NodeAgentDeps {
   maxWallClockMs?: number;
 }
 
-/** What the node's `report` call left behind, before the engine reads it. */
-export interface CapturedReport {
-  readonly status: string;
-  readonly content: string;
-}
 
-/**
- * Everything a host needs to run one node's loop.
- *
- * Every field is DATA, deliberately: a host may be a Durable Object facet on the
- * far side of an RPC, so anything that cannot be serialised cannot be in here.
- * That constraint is what keeps the in-process and hosted paths honest — if the
- * spec were allowed a closure, the two paths would quietly diverge into two
- * runtimes again, because only one of them could carry it.
- */
-export interface NodeRunSpec {
-  readonly headInput: HeadInput;
-  /** The base system prompt this node's framing is built on. */
-  readonly base: string;
-  /** The conversation the engine assembled for this node, task last. */
-  readonly messages: readonly ModelMessage[];
-  readonly isolation: NodeIsolation;
-  readonly home: string;
-  readonly maxSteps: number;
-  /**
-   * Whether a proposal could be granted at all — the BUILD-TIME half of the
-   * arbitration rule. A request that can only ever be refused must not be
-   * offered, because offering it spends a step to learn a limit the surface
-   * already knew. Carried as data rather than inferred from the arbiter, because
-   * a host's arbiter is an RPC stub and always present.
-   */
-  readonly canPropose: boolean;
-}
 
-/** What one node's loop produced. Serialisable, for the spec's reason. */
-export interface NodeLoopResult {
-  readonly report: HeadReport;
-  readonly reported: CapturedReport | null;
-  readonly granted: BranchDecision | null;
-  readonly produced: readonly ModelMessage[];
-}
 
-/**
- * A host that runs a node's loop somewhere else.
- *
- * The implementation is a backend's, because only a backend can reach both the
- * facet API and the parent stub the loop's live seams have to call back through
- * — which is exactly how a head's mission ledger already works.
- */
-export type NodeLoopHost = (spec: NodeRunSpec) => Promise<NodeLoopResult>;
 
 /**
  * The live seams {@link runNodeLoop} needs and a {@link NodeRunSpec} cannot
@@ -294,7 +250,8 @@ interface NodeScratch {
 }
 
 /**
- * The proposal tool: §8.2's contract as a tool, so the verdict is a RETURN VALUE.
+ * The proposal tool — *Arbitration* expressed as a tool, so the verdict is a RETURN
+ * VALUE.
  *
  * *"An agent node proposes by calling a tool, so the verdict is that tool's return
  * value. The node reads it, and the refusal's text is its next instruction."* That
@@ -415,12 +372,13 @@ function buildNodeToolSet(input: {
  * THE REPORT SEAM. Everything the engine takes out of a finished node passes
  * through here.
  *
- * §8.7's grading mechanism is not settled — the retry bound, the exact terminal set,
- * and whether merge-back refuses a transaction are all still being decided — so this
- * consumes the report at the shape that exists today and nothing further: the node's
- * own `report` call when it made one, and the loop's final text otherwise. It
- * computes NO score. §3.3 is why: a node does not grade itself, so the quantity a
- * node would have to lie about is one it never supplies.
+ * The grading mechanism is still being decided — *The grading report's retry bound,
+ * its terminal set and its verifier immutability are not settled here*, and neither
+ * is whether merge-back refuses a transaction — so this consumes the report at the
+ * shape that exists today and nothing further: the node's own `report` call when it
+ * made one, and the loop's final text otherwise. It computes NO score. *No
+ * self-grading* is why: a node does not grade itself, so the quantity a node would
+ * have to lie about is one it never supplies.
  *
  * The fence is read for the same reason the toolless path reads it: a candidate that
  * arrives inside a code fence is code, and the instrument runs code. A fence in a
@@ -429,8 +387,9 @@ function buildNodeToolSet(input: {
  * reason.
  */
 /** What the engine takes out of a finished node: the candidate the instrument measures,
- *  and the conclusion a child's seed carries. No score — §3.3, a node does not grade
- *  itself, so the quantity it would have to lie about is one it never supplies. */
+ *  and the conclusion a child's seed carries. No score — *No self-grading*: a node
+ *  does not grade itself, so the quantity it would have to lie about is one it
+ *  never supplies. */
 export interface NodeReport {
   readonly candidate: string;
   readonly conclusion: string;
@@ -617,7 +576,7 @@ export async function runNodeAgent(
 
   const run = deps.host === undefined
     ? await runNodeLoop(spec, nodeLoopDeps(input, deps))
-    : await deps.host(spec);
+    : await deps.host(spec, input.arbitrate);
 
   deps.journal.recordReport(run.report);
   deps.reportModelCall?.({ source: 'swarm', usage: run.report.usage });

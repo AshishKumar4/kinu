@@ -1,28 +1,32 @@
 /**
- * Merge-back — how a settled swarm's work reaches the origin (EXPLORATION-SPEC §8.5).
+ * Merge-back — how a settled swarm's work reaches the origin.
  *
- * WITHOUT THIS, ISOLATION STRANDS RESULTS RATHER THAN PROTECTING THEM. §8.6 gives a
- * node its own home so it can be graded on what it changed; a node that is graded and
- * wins and whose work then sits in a home nobody reads again has been confined, not
- * used. §8.5 is specified BEFORE the substrate for exactly that reason: *"a boundary
- * you cannot cross is not a boundary, it is a leak of work."*
+ * Specified by docs/EXPLORATION.md — "Merge-back", "Isolation", "Settle is derived"
+ * and "The publication seal".
+ *
+ * WITHOUT THIS, ISOLATION STRANDS RESULTS RATHER THAN PROTECTING THEM. *Isolation*
+ * gives a node its own home so it can be graded on what it changed; a node that is
+ * graded and wins and whose work then sits in a home nobody reads again has been
+ * confined, not used. The merge-back contract is specified BEFORE the substrate for
+ * exactly that reason: *"a boundary you cannot cross is not a boundary, it is a leak
+ * of work."*
  *
  * THE POLICY IS DERIVED FROM `settle`, NEVER CHOSEN — the same move, for the same
- * reason, as {@link settleOf} deriving `settle` from the axes. §8.5's table already
+ * reason, as {@link settleOf} deriving `settle` from the axes. *Merge-back* already
  * maps each policy onto a `settleOf` value, so a caller who could name the policy
  * independently could ask for one settled winner out of a run that ranks nothing.
  * {@link mergePolicyOf} is that table, written as a total function so a new
  * {@link SwarmSettle} value cannot silently fall through to `apply-winner`.
  *
- * THE FOURTH POLICY IS NOT SETTLE-DERIVED, AND THAT ASYMMETRY IS THE SOURCE'S. §8.5
- * gives three rows a `settleOf` mapping and gives `conflict-spawns-a-merge-node` a
- * situational condition instead — *"where both parents earned their keep and neither
+ * THE FOURTH POLICY IS NOT SETTLE-DERIVED, AND THAT ASYMMETRY IS THE SOURCE'S. The
+ * source gives three rows a `settleOf` mapping and gives `conflict-spawns-a-merge-node`
+ * a situational condition instead — *"where both parents earned their keep and neither
  * can be dropped"*. A conflict is a run-time fact about two diffs, not an axis, so it
  * is reached through {@link MergeOutcome} rather than through the derivation. It is
- * still a named policy and not an error path: §8.5 calls it *"the one that matters"*,
- * because a merge node is how a model is used on a conflict WITHOUT violating §9.3's
- * finding — the model does not edit in place and get trusted, it produces a candidate
- * that is graded like every other candidate.
+ * still a named policy and not an error path: the source calls it *"the one that
+ * matters"*, because a merge node is how a model is used on a conflict WITHOUT the
+ * model editing in place and being trusted — it produces a candidate that is graded
+ * like every other candidate.
  *
  * WHAT MAKES ALL-OR-NOTHING PER MEMBER AVAILABLE, AND WHY ITS ABSENCE REFUSES.
  * Applying a member is a copy out of its home inside ONE filesystem, so a member's
@@ -36,10 +40,10 @@
  * being absent REFUSES instead of falling back to one. Absent is reported, never
  * assumed, exactly as `nodeWorkspace`'s provisioner is.
  *
- * WHAT THIS DOES NOT DECIDE, because §8.5 does not. *"Across members — whether a
- * sequential rebase that fails at member three leaves members one and two applied —
- * remains a policy this document does not set."* The transaction shape §8.5 DID
- * specify answers it mechanically: atomicity is per member by construction, so there
+ * WHAT THIS DOES NOT DECIDE, because *Merge-back* does not. *"Across members — whether
+ * a sequential rebase that fails at member three leaves members one and two applied —
+ * remains a policy this document does not set."* The transaction shape it DID specify
+ * answers it mechanically: atomicity is per member by construction, so there
  * is no cross-member transaction to roll back into and members already applied stay
  * applied. This module therefore stops at the first refusal and reports the boundary
  * as DATA ({@link MergeBackReport.stoppedAt}, `swarm.merge_settled`) rather than
@@ -59,10 +63,10 @@ import { textPayload } from '../vfs/observe';
 import type { VFS } from '../types/primitives';
 import { isVfsError } from '../vfs/errno';
 
-/* ── The policies (§8.5's table) ──────────────────────────────────────────── */
+/* ── The policies ─────────────────────────────────────────────────────────── */
 
 /**
- * §8.5's four named merge policies.
+ * The four named merge policies.
  *
  * Named so a caller reads which one ran rather than discovering which one was
  * implemented — the same reason the axes are named.
@@ -73,7 +77,7 @@ export const MERGE_POLICIES = [
 export type MergePolicy = (typeof MERGE_POLICIES)[number];
 
 /**
- * §8.5's table, as a total function over {@link SwarmSettle}.
+ * The policy table, as a total function over {@link SwarmSettle}.
  *
  * Total by construction so exhaustiveness is a compile-time fact: a fifth `settle`
  * value cannot fall through to `apply-winner`, which would silently apply one
@@ -85,17 +89,19 @@ export type MergePolicy = (typeof MERGE_POLICIES)[number];
  */
 export function mergePolicyOf(settle: SwarmSettle): MergePolicy {
   switch (settle) {
-    // A scalar objective with one incumbent (§6.2).
+    // A scalar objective with one incumbent, per *Settle is derived*.
     case 'best': return 'apply-winner';
-    // Several members are wanted and the tree order is a dependency order (§9.1).
+    // Several members are wanted and the tree order is a dependency order — see
+    // *Dependency order*.
     case 'archive': case 'front': return 'sequential-rebase';
     // N reports combined, nothing ranked. The shape that had to survive `fork`'s
-    // removal (§0.1) — which is why it is asserted to exist rather than assumed.
+    // removal — which is why `mergePolicyOf` asserts it exists rather than assuming
+    // it.
     case 'merge': return 'synthesis';
   }
 }
 
-/* ── §8.5's diff artifact ─────────────────────────────────────────────────── */
+/* ── The diff artifact ────────────────────────────────────────────────────── */
 
 /**
  * One path's NET change, with content.
@@ -132,17 +138,17 @@ export interface MemberFileChange {
  * `reported` — the node's own reported answer, which the engine places at the verifier's
  * path. Attribution is certain whatever file plane the node ran on: a report is the
  * node's by construction, so this is mergeable today and is what a scored settle uses.
- * `private-home` — observed inside the node's OWN home (§8.6). Mergeable: the writes are
- * the node's and the origin has not seen them yet.
+ * `private-home` — observed inside the node's OWN home, the one *Isolation* gives it.
+ * Mergeable: the writes are the node's and the origin has not seen them yet.
  * `shared-plane` — observed on the shared origin plane. NOT mergeable, and refused:
  * siblings run concurrently over one tree, so a captured write is neither certainly this
  * node's nor still what the origin holds, and the work already landed there anyway.
  */
 export type DiffProvenance = 'reported' | 'private-home' | 'shared-plane';
 
-/** §8.5's diff artifact: what one node changed, against the base it started from.
- *  Self-contained, which is the property that makes it portable where a candidate
- *  reference into a home released at settle is not (§8.6 obligation 6). */
+/** The diff artifact: what one node changed, against the base it started from.
+ *  *The diff artifact is self-contained*, which is the property that makes it portable
+ *  where a candidate reference into a home *Isolation* releases at settle is not. */
 export interface MemberDiff {
   readonly nodeId: string;
   /** Sorted by path, so the digest over a diff is stable across capture order. */
@@ -150,24 +156,25 @@ export interface MemberDiff {
   readonly provenance: DiffProvenance;
 }
 
-/* ── The (memberDigest, baseDigest) binding (§9.3 rule 4) ──────────────────── */
+/* ── The (memberDigest, baseDigest) binding ───────────────────────────────── */
 
 /**
  * A verdict, bound to the PAIR it was issued over.
  *
  * The member digest alone is near-vacuous: a diff is immutable, so its digest never
- * changes and a check against it can never fail. What moves is the BASE — §8.5: *"a
- * diff is bound to the base it was taken against, and a sequential rebase changes
- * that base for every diff after the first."* So the binding is the pair, and rule 4
- * compares the half that can actually differ.
+ * changes and a check against it can never fail. What moves is the BASE: *"a diff is
+ * bound to the base it was taken against, and a sequential rebase changes that base
+ * for every diff after the first."* So the binding is the pair — *A verdict is bound
+ * to the exact pair it was issued over* — and rule 4 compares the half that can
+ * actually differ.
  */
 export interface MemberVerdict {
   /** Digest of the member's own diff — WHAT was checked. */
   readonly memberDigest: string;
   /** Digest of the origin state it was checked AGAINST — the half that moves. */
   readonly baseDigest: string;
-  /** §9.3 rule 3. False is a verdict, not a missing one: a member checked and found
-   *  wanting is a different fact from a member nobody checked. */
+  /** The gate's rule 3. False is a verdict, not a missing one: a member checked and
+   *  found wanting is a different fact from a member nobody checked. */
   readonly clean: boolean;
 }
 
@@ -197,10 +204,10 @@ export async function baseDigestOf(
   return argumentDigest(at);
 }
 
-/** Re-verification through the verifier registry, for a member whose base moved.
- *  §8.5: *"a base change forces re-verification before apply; a stale verdict NEVER
- *  applies."* ABSENT means a stale verdict can only refuse, which is the fail-closed
- *  direction and the one this module takes by default. */
+/** Re-verification through the verifier registry, for a member whose base moved. A
+ *  base change forces re-verification before apply and a stale verdict NEVER applies.
+ *  ABSENT means a stale verdict can only refuse, which is the fail-closed direction
+ *  and the one this module takes by default. */
 export type Reverifier = (input: {
   readonly member: MergeMember;
   /** The base the member would now be applied onto, already recomputed. */
@@ -285,12 +292,13 @@ export function memberApplyBound(
 /* ── What a merge refuses on ──────────────────────────────────────────────── */
 
 /**
- * §9.3's six ordered settle refusals, as reason codes.
+ * The six ordered settle refusals, as reason codes.
  *
- * The spec's list, in the spec's order, and no more: this array is §9.3 and nothing
- * else, so a reader comparing the two is comparing two things that are meant to be
- * equal. The substrate's own preconditions live in {@link APPLY_PRECONDITIONS}
- * precisely so they cannot be mistaken for members of this one.
+ * The specification's list, in the specification's order, and no more: this array is
+ * that list and nothing else, so a reader comparing the two is comparing two things
+ * that are meant to be equal. The substrate's own preconditions live in
+ * {@link APPLY_PRECONDITIONS} precisely so they cannot be mistaken for members of
+ * this one.
  */
 export const SETTLE_RULES = [
   'dependency-unsettled', 'no-verdict', 'verdict-unclean',
@@ -300,11 +308,11 @@ export type SettleRule = (typeof SETTLE_RULES)[number];
 
 /**
  * The mechanical preconditions of an APPLY, and the substrate's own failure, as
- * distinct from §9.3's gate.
+ * distinct from the settle gate.
  *
- * Separate because §9.3's list is the specification's and this one is the substrate's.
- * Folding a missing atomic primitive into the spec's six would misrepresent the spec
- * as having asked for it.
+ * Separate because {@link SETTLE_RULES} is the specification's list and this one is
+ * the substrate's. Folding a missing atomic primitive into the spec's six would
+ * misrepresent the spec as having asked for it.
  */
 export const APPLY_PRECONDITIONS = [
   'no-boundary', 'oversized', 'apply-unwired', 'apply-failed',
@@ -314,11 +322,11 @@ export type ApplyPrecondition = (typeof APPLY_PRECONDITIONS)[number];
 /**
  * The refusal that is a fact about the member SET rather than about one member.
  *
- * Its own list, for the reason {@link APPLY_PRECONDITIONS} is its own. §9.3's six are
- * the specification's gate and a cycle is not among them, because §9.1 states an
- * ORDER: a set of edges that cannot be ordered has no member to blame inside the gate
- * and no remedy there either. Filing it under either list would misreport which
- * document asked for it.
+ * Its own list, for the reason {@link APPLY_PRECONDITIONS} is its own. The six in
+ * {@link SETTLE_RULES} are the specification's gate and a cycle is not among them,
+ * because *Dependency order* states an ORDER: a set of edges that cannot be ordered
+ * has no member to blame inside the gate and no remedy there either. Filing it under
+ * either list would misreport which document asked for it.
  */
 export const ORDER_RULES = ['dependency-cycle'] as const;
 export type OrderRule = (typeof ORDER_RULES)[number];
@@ -331,13 +339,14 @@ export type MergeRefusalCause = SettleRule | ApplyPrecondition | OrderRule;
 export interface MergeMember {
   readonly nodeId: string;
   readonly diff: MemberDiff;
-  /** §9.3 rule 2 — null is "nobody checked this", which refuses. */
+  /** The gate's rule 2 — null is "nobody checked this", which refuses. */
   readonly verdict: MemberVerdict | null;
-  /** §9.3 rule 5: the paths this member declared it would touch, checked against
+  /** The gate's rule 5: the paths this member declared it would touch, checked against
    *  what it ACTUALLY wrote. Null is an undeclared scope, which cannot escape one. */
   readonly scope: readonly string[] | null;
-  /** §9.3 rule 1: node ids whose merges must land before this one's (§9.1 orders
-   *  SETTLE). Empty is the ordinary case and is not the same as unordered. */
+  /** The gate's rule 1: node ids whose merges must land before this one's
+   *  (*Dependency order* orders SETTLE). Empty is the ordinary case and is not the
+   *  same as unordered. */
   readonly deps: readonly string[];
   /** What the search measured, for {@link admitCarry}. Null when unmeasurable. */
   readonly score: number | null;
@@ -350,9 +359,9 @@ export interface MergeRefusal extends Refusal {
   readonly cause: MergeRefusalCause;
 }
 
-/** §8.5's conflict policy: what a conflict BECOMES. Not resolved in place by a model
- *  — §9.3 is explicit that the evidence is one-sided — but handed back as a node
- *  whose task is the merge, graded like any other. */
+/** The conflict policy: what a conflict BECOMES. Not resolved in place by a model —
+ *  the specification is explicit that the evidence is one-sided — but handed back as
+ *  a node whose task is the merge, graded like any other. */
 export interface MergeNodeRequest {
   /** The two members whose diffs disagree, in apply order. */
   readonly parents: readonly [string, string];
@@ -390,7 +399,7 @@ export interface MergeBackReport {
    *  was applying — and under `expand:'aggregate'` the order is the whole claim. */
   readonly order: readonly string[];
   /** The node id merge-back stopped at, or null when every member was reached. The
-   *  cross-member ordering guarantee §8.5 leaves open, stated as data: members
+   *  cross-member ordering guarantee *Merge-back* leaves open, stated as data: members
    *  before this one are applied and stay applied, because atomicity is per member
    *  and there is no cross-member transaction to roll back into. */
   readonly stoppedAt: string | null;
@@ -425,13 +434,13 @@ export interface MergeBackInput {
    *  as which member that is. */
   readonly members: readonly MergeMember[];
   /** Node ids whose merges ALREADY LANDED before this call — the run's own ledger.
-   *  §9.3 rule 1 asks whether a dependency has settled, and a dependency that settled
-   *  at an earlier barrier of the same run has: a DAG merged one fan-in at a time is
-   *  still one merge order. Empty is the single-barrier case. */
+   *  The gate's rule 1 asks whether a dependency has settled, and a dependency that
+   *  settled at an earlier barrier of the same run has: a DAG merged one fan-in at a
+   *  time is still one merge order. Empty is the single-barrier case. */
   readonly settled?: readonly string[];
 }
 
-/* ── §9.1's order, derived from the edges ─────────────────────────────────── */
+/* ── The dependency order, derived from the edges ─────────────────────────── */
 
 /** An ordering, or the cycle that has none. Tagged rather than a bare refusal because
  *  the node the cycle closes on is what the report and the event name. */
@@ -440,8 +449,8 @@ export type MergeOrder =
   | { readonly kind: 'cycle'; readonly nodeId: string; readonly refusal: MergeRefusal };
 
 /**
- * The members of one merge in the order §9.1 requires: every member after the
- * dependencies it declares.
+ * The members of one merge in the order *Dependency order* requires: every member
+ * after the dependencies it declares.
  *
  * DERIVED FROM THE EDGES, NEVER FROM TREE POSITION. `sequential-rebase` used to be
  * offered members in settle order and trusted to have been handed a good one, which is
@@ -503,7 +512,7 @@ export function dependencyOrder(
       refusal: refuse('dependency-cycle', 'bad_input',
         `node ${member.nodeId} cannot be ordered after the members it depends on: ${
           cycleFrom(member.nodeId, stuck).join(' -> ')
-        }. §9.1 orders settle by dependency and a member that must land after itself has no `
+        }. Settle is ordered by dependency and a member that must land after itself has no `
         + "such order. Break the cycle: a fan-in's parents settle before the child that "
         + 'consumes them, so a parent that depends on its own dependent is not a fan-in.'),
     };
@@ -578,16 +587,16 @@ export async function mergeBack(
     return { policy, outcomes, stoppedAt: stopped, order: ordered };
   };
 
-  // `synthesis` ranks nothing and applies nothing: §8.5's row is *"N reports are
+  // `synthesis` ranks nothing and applies nothing: its row is *"N reports are
   // combined and the combination is kept"*. The combination is the settle report the
   // caller already receives, so there is no diff to land and no winner to pick — and
   // saying that with a named policy is what keeps the list complete rather than
   // quietly covering only the judged settlement.
   if (policy === 'synthesis') return settle(null, []);
 
-  // §9.1's ORDER. Only `sequential-rebase` applies more than one member, so it is the
-  // only policy with an order to get wrong; the other two apply the first member or
-  // none, and reordering those would change WHICH member that is.
+  // THE DEPENDENCY ORDER. Only `sequential-rebase` applies more than one member, so
+  // it is the only policy with an order to get wrong; the other two apply the first
+  // member or none, and reordering those would change WHICH member that is.
   const order = policy === 'sequential-rebase'
     ? dependencyOrder(members, settled)
     : ({ kind: 'ordered', members } as const);
@@ -605,9 +614,9 @@ export async function mergeBack(
 
   for (const member of order.members) {
     // CONFLICT IS CHECKED BEFORE THE GATE, and the order is load-bearing. Two members
-    // that changed the same path DISAGREE, and §8.5 is explicit that a conflict *"does
-    // not fail"*. Gating first would report the disagreement as a stale verdict and the
-    // merge-node policy would be unreachable.
+    // that changed the same path DISAGREE, and the specification is explicit that a
+    // conflict *"does not fail"*. Gating first would report the disagreement as a
+    // stale verdict and the merge-node policy would be unreachable.
     const conflict = conflictWith(member, writtenBy);
     if (conflict) {
       const outcome = await spawnMerge(member, conflict, deps, policy);
@@ -638,7 +647,7 @@ export async function mergeBack(
       writtenBy.set(file.path, { nodeId: member.nodeId, after: file.after });
     }
 
-    // `apply-winner` applies ONE member and discards every other node's diff (§8.5).
+    // `apply-winner` applies ONE member and discards every other node's diff.
     // Enforced here rather than trusted to the caller's array: a policy that silently
     // applied a second member would be `sequential-rebase` under another name.
     if (policy === 'apply-winner') break;
@@ -648,7 +657,7 @@ export async function mergeBack(
 }
 
 /**
- * §9.3's gate, in §9.3's order, plus the substrate's own preconditions.
+ * The settle gate, in the specification's order, plus the substrate's own preconditions.
  *
  * Ordered because the order is the specification's and because an earlier rule
  * produces the more actionable message: a member with no verdict should be told that,
@@ -674,13 +683,13 @@ async function gate(
     return refuse('no-boundary', 'unsupported',
       `node ${member.nodeId}'s diff was observed on the shared origin plane, so it is not `
       + 'attributable to that node and its writes are already in the origin. Merge-back needs '
-      + 'either the reported answer or the §8.6 substrate: wire a NodeWorkspaceProvisioner so the '
-      + "node gets a private home, and its diff becomes its own.");
+      + 'either the reported answer or a private-home diff: wire a NodeWorkspaceProvisioner so '
+      + "the node gets a private home, and its diff becomes its own.");
   }
 
-  // Rule 1 — a dependency has not settled yet. §9.1 orders SETTLE, so this is the
-  // only place a dependency edge is enforced, and a dropped edge refuses rather than
-  // degrading toward runnable (§9.2).
+  // Rule 1 — a dependency has not settled yet. *Dependency order* orders SETTLE, so
+  // this is the only place a dependency edge is enforced, and a dropped edge refuses
+  // rather than degrading toward runnable.
   const waiting = member.deps.filter((dep) => !ctx.applied.has(dep));
   if (waiting.length > 0) {
     return refuse('dependency-unsettled', 'bad_input',
@@ -701,11 +710,11 @@ async function gate(
     return refuse('verdict-unclean', 'denied',
       `node ${member.nodeId} was checked and did not pass, so its work is a graded failure rather `
       + 'than a candidate to land. An accepted-with-failure report is a legitimate worst-direction '
-      + 'score (§8.7) and is not a merge.');
+      + 'score and is not a merge.');
   }
 
-  // Rule 5 before rule 4, and NOT because §9.3 orders it that way — it does not. A
-  // scope escape is a property of the diff alone and cannot be cured by
+  // Rule 5 before rule 4, and NOT because the specification orders it that way — it
+  // does not. A scope escape is a property of the diff alone and cannot be cured by
   // re-verification, so checking it first spends no model call to learn something
   // already knowable. Rule 4 is the expensive one.
   const escaped = scopeEscapes(member);
@@ -713,16 +722,16 @@ async function gate(
     return refuse('scope-escape', 'denied',
       `node ${member.nodeId} wrote ${escaped.join(', ')}, outside the scope it declared (${
         (member.scope ?? []).join(', ')
-      }). §9.3 rule 5 reads what was ACTUALLY written, so widen the declared scope or keep the `
+      }). The scope check reads what was ACTUALLY written, so widen the declared scope or keep the `
       + 'writes inside it.');
   }
 
-  // Rule 4 — THE VERDICT IS STALE, and it is checked BEFORE rule 6 because §9.3 orders
-  // it that way and because the alternative makes it dead code. A rebased member's
-  // origin no longer holds the base its diff recorded, so rule 6 fires at exactly the
-  // paths a rebase moved; checking rule 6 first would refuse every rebased member as
-  // drift and this comparison — the whole of `sequential-rebase`'s correctness — would
-  // never run.
+  // Rule 4 — THE VERDICT IS STALE, and it is checked BEFORE rule 6 because the
+  // specification orders it that way and because the alternative makes it dead code.
+  // A rebased member's origin no longer holds the base its diff recorded, so rule 6
+  // fires at exactly the paths a rebase moved; checking rule 6 first would refuse
+  // every rebased member as drift and this comparison — the whole of
+  // `sequential-rebase`'s correctness — would never run.
   //
   // The pair is the binding: the member digest never changes for an immutable diff, so
   // the base digest is the half that can differ, and under a rebase it differs for
@@ -899,7 +908,7 @@ function conflictWith(
   return other === null ? null : { with: other, paths };
 }
 
-/** §8.5's conflict policy. The model is never put next to the conflict: this produces
+/** The conflict policy. The model is never put next to the conflict: this produces
  *  a NODE whose task is the merge, and that node is graded like any other. */
 async function spawnMerge(
   member: MergeMember,
@@ -935,7 +944,7 @@ function refuse(
   return { ...refusalOf(new ProteusError(reason, message)), cause };
 }
 
-/* ── `carry` admission at settle (§4.4, §5.3) ─────────────────────────────── */
+/* ── `carry` admission at settle ──────────────────────────────────────────── */
 
 /** Whether a member's result is carried out of this run, and why not when it is not. */
 export type CarryVerdict =
@@ -953,9 +962,10 @@ export type CarryVerdict =
  * unmeasurable candidate is not a zero-scoring elite, and carrying one would seed the
  * next run from a candidate nobody scored.
  *
- * The SEAL is §4.4's, through `admitsPublication` over the one enumerated surface each
- * carry writes. Checked here rather than trusted to the writer, because §4.4's hole
- * was exactly a publication path that called itself separate and unchanged.
+ * The SEAL is the one *The publication seal* states, through `admitsPublication` over
+ * the one enumerated surface each carry writes. Checked here rather than trusted to
+ * the writer, because the hole that rule names was exactly a publication path that
+ * called itself separate and unchanged.
  */
 export function admitCarry(input: {
   readonly carry: SwarmCarrySetting;

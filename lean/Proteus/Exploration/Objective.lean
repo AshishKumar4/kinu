@@ -2,8 +2,9 @@
   Proteus.Exploration.Objective — the objective's direction, what a verifier may
   return, and the floor's two declaration-time checks. 0 sorry.
 
-  Models `packages/core/src/strategy/objective.ts` against
-  `docs/EXPLORATION-SPEC.md` at 127a62c1, sections 2-4.
+  Models `packages/core/src/strategy/objective.ts`. Specified by
+  docs/EXPLORATION.md — "The objective", "The closed verifier registry" and
+  "The floor".
 
   -- Model assumption, stated because it is the one that matters:
   A measured value is an `Int`, never a `Float`. Lean's `Float` is opaque and
@@ -16,7 +17,7 @@
 
   WHAT THAT DISCARDS, and whether the danger lives there: two measurements
   differing below the scale factor compare EQUAL here and may compare unequal in
-  production. Section 5.2's tie rule makes that the safe direction — a spurious
+  production. *The records store*'s tie rule makes that the safe direction — a spurious
   tie loses a displacement, it never manufactures one — so the danger does NOT
   live in the discarded part for the monotonicity results. It DOES live there for
   any future claim about `floorMargin`'s division, which is why the floor results
@@ -100,12 +101,12 @@ inductive FloorKind where
   | physical
   deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- Section 4.2: only `certificate` and `physical` are admissible AS floors. An
-    `adversary` bound is a worst case, and using one as a floor scores a lucky
-    honest run as a cheat (`hard-tasks/tasks.ts:29-39`). The spec keeps
-    `adversary` as a DECLARABLE value that is refused, so an author is told why
-    instead of quietly relabelling it — which is why this is a predicate over a
-    three-valued type rather than a two-valued type. -/
+/-- Only `certificate` and `physical` are admissible AS floors. An `adversary`
+    bound is a worst case, and using one as a floor scores a lucky honest run as a
+    cheat (`hard-tasks/tasks.ts:29-39`). The type keeps `adversary` as a DECLARABLE
+    value that is refused, so an author is told why instead of quietly relabelling
+    it — which is why this is a predicate over a three-valued type rather than a
+    two-valued type. -/
 def FloorKind.admissible : FloorKind → Bool
   | .certificate => true
   | .adversary => false
@@ -138,18 +139,18 @@ def breaches (v : Int) (f : Floor) : Direction → Bool
     Division-free on purpose. `floorMargin` divides by `|bestKnownHonest|`, and a
     division by a positive quantity cannot change a sign, so the sign convention
     — the one thing about that function that can be wrong, and the exact class of
-    mistake section 4.3's floor was — is decided entirely here. What is discarded
-    is the magnitude, i.e. the reported percentage; section 4.5 C3 requires the
-    magnitude to be SURFACED and explicitly forbids thresholding it, so no
-    decision depends on the discarded part. -/
+    mistake the majority-vote floor was — is decided entirely here. What is
+    discarded is the magnitude, i.e. the reported percentage; C3 requires the
+    magnitude to be SURFACED and explicitly forbids thresholding it
+    (*Floor margin*), so no decision depends on the discarded part. -/
 def floorRoom (f : Floor) : Direction → Int
   | .minimise => f.bestKnownHonest - f.value
   | .maximise => f.value - f.bestKnownHonest
 
 /-- **C1 and C2 are the same check on two different numbers.** The margin is
     negative exactly when the best known honest solution would itself breach the
-    floor (section 4.5 C1), which is section 4.5 C2's condition applied to the
-    DECLARED best-known cost instead of to the measured baseline.
+    floor (C1), which is C2's condition applied to the DECLARED best-known cost
+    instead of to the measured baseline.
 
     This is the sign-convention theorem. Getting the convention backwards
     inverts the check the function exists to perform, and `objective.ts:185-188`
@@ -160,8 +161,8 @@ theorem floorRoom_neg_iff_bestKnown_breaches (f : Floor) (d : Direction) :
 
 /-- A run refuses at declaration time when the floor is refuted by its own
     best-known cost, and refuses at first measurement when the measured baseline
-    breaches it (section 4.5 C1, C2). Total, so there is no third outcome in
-    which a refuted floor is carried into the run. -/
+    breaches it (C1, C2). Total, so there is no third outcome in which a refuted
+    floor is carried into the run. -/
 def floorAdmissible (f : Floor) (baseline : Int) (d : Direction) : Bool :=
   f.kind.admissible && !breaches f.bestKnownHonest f d && !breaches baseline f d
 
@@ -184,13 +185,13 @@ theorem floorAdmissible_rejects_adversary (f : Floor) (baseline : Int)
 /-! ### The majority-vote floor, as a witness that C1 is not the check that
      caught it
 
-  Section 4.3's numbers (`hard-tasks/tasks.ts:192-206`), with `MAJORITY.n = 1200`
-  and a `minimise` objective in oracle calls. The spec states in prose that C1
-  and C2 would NOT have caught this floor and that C3 — the reported margin — is
-  what would. These two theorems are that prose, mechanised: the defective floor
-  passes the admissibility check, and its room is a thin but POSITIVE 594 out of
-  2992. A model that could not exhibit the escape would be claiming more for the
-  mechanical checks than the spec does. -/
+  The majority-vote numbers (`hard-tasks/tasks.ts:192-206`), with `MAJORITY.n = 1200`
+  and a `minimise` objective in oracle calls. C1 and C2 would NOT have caught this
+  floor and C3 — the reported margin, which *Floor margin* requires the caller be
+  SHOWN — is what would. These two theorems are that claim, mechanised: the
+  defective floor passes the admissibility check, and its room is a thin but
+  POSITIVE 594 out of 2992. A model that could not exhibit the escape would be
+  claiming more for the mechanical checks than they deliver. -/
 
 /-- The defective floor: `2*(n-1) = 2398` against a best known honest cost of
     2992 (`tasks.ts:198`, `tasks.ts:192`). -/

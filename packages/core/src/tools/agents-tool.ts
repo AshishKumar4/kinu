@@ -20,6 +20,9 @@
  * ride TeamToolDeps' facet substrate, and peer messaging rides PeersToolDeps'
  * EventsHub transport. Which actions exist is decided structurally by which
  * deps the backend wires — see agentsActionsFor.
+ *
+ * The swarm action's call contract is specified by docs/EXPLORATION.md — "Presets",
+ * "Validity over the resolved configuration" and "Accepted and ignored".
  */
 import { tool, jsonSchema } from 'ai';
 import type { LanguageModel, ToolSet } from 'ai';
@@ -36,6 +39,7 @@ import {
 import { SwarmConfigSchema, SwarmObjectiveSchema } from './swarm-input';
 import { resolveSwarm, swarmValidity, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../strategy/swarm';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
+import type { NodeLoopHost } from '../strategy/node-agent';
 import type { NamedSwarmPreset, SwarmConfig, SwarmPreset } from '../strategy/swarm';
 import type { Objective } from '../strategy/objective';
 import { readSpawnStarted } from '../jobs/threshold';
@@ -46,6 +50,7 @@ import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics } from '../obs/index';
+import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -203,13 +208,29 @@ export interface PeersToolDeps {
 /** Reserved topic for transport-generated reply envelopes; user sends must not claim it. */
 export const PEER_REPLY_TOPIC = 'peer_reply';
 
-const ASK_TIMEOUT_DEFAULT_MS = 120_000;
-const ASK_TIMEOUT_MIN_MS = 5_000;
-const ASK_TIMEOUT_MAX_MS = 600_000;
+/**
+ * How long an `ask` (or a `hire scope=workspace`) waits for the addressed agent
+ * to answer — its whole turn, not a completion.
+ *
+ * This was 120_000 default / 600_000 ceiling. 120_000 is the same number, on the
+ * same workload, that `branch-process.ts` measured wrong: on the default model
+ * every peer whose turn took 151-509 s answered a caller that had already been
+ * told `no_reply`. Softer than the branch case — the real reply is not lost, it
+ * lands later as an event — but the calling turn concludes on a false premise and
+ * may route around a peer that was working. So the default IS the measured
+ * envelope, and so is the ceiling: a caller asking for more than one turn's worth
+ * of waiting is asking to hold its own turn open indefinitely.
+ *
+ * There is no floor. It was 5_000, which silently overrode a caller that asked
+ * for one second, and nothing depends on it: a tiny timeout returns `no_reply`
+ * with the note saying the answer arrives later as an event, which is honest.
+ * Zero is the floor a duration has anyway.
+ */
+const ASK_TIMEOUT_CEILING_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
 
 function askTimeoutMs(timeoutSeconds: number | undefined): number {
-  if (timeoutSeconds === undefined || !Number.isFinite(timeoutSeconds)) return ASK_TIMEOUT_DEFAULT_MS;
-  return Math.min(ASK_TIMEOUT_MAX_MS, Math.max(ASK_TIMEOUT_MIN_MS, Math.round(timeoutSeconds * 1000)));
+  if (timeoutSeconds === undefined || !Number.isFinite(timeoutSeconds)) return ASK_TIMEOUT_CEILING_MS;
+  return Math.min(ASK_TIMEOUT_CEILING_MS, Math.max(0, Math.round(timeoutSeconds * 1000)));
 }
 
 /** What the sender is told about a handoff, in the tool's snake_case shape. */
@@ -248,6 +269,16 @@ export interface AgentsForkDeps {
    *  starting. Backends wire the ModelCatalogSession they already hold;
    *  absence makes the gate blend and say so. */
   costModel?: () => CostModel;
+  /**
+   * Where a tool-using swarm node's loop runs, resolved per call.
+   *
+   * A FACTORY for the same reason `costModel` and `heads.controller` are: a
+   * backend may not be able to build one until the actor has an owner, so
+   * resolving it at dispatch keeps the refusal where it can be reported rather
+   * than at wiring time. Absent is a backend with no facets, and then a node's
+   * loop runs in this isolate — the same body, without a storage boundary.
+   */
+  nodeHost?: () => NodeLoopHost;
   /** Per-strategy infrastructure options the LLM must not set — e.g.
    *  `{ mcts: { session }, heads: { controller, inheritedContext, onPhase } }`. */
   defaultOptions?: () => BuiltinStrategyOptions;
@@ -341,7 +372,8 @@ export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
 export interface AgentsToolInput {
   action: AgentsToolAction;
   // swarm — the configured-search rung. `preset` and `objective` are the two halves
-  // of §6.4's rule: a preset fixes the search, the caller supplies the objective.
+  // of the *Presets* rule: a preset fixes the search, the caller supplies the
+  // objective.
   /** What the search is for, in prose — never the measured quantity. */
   task?: string;
   /** Cumulative spend cap for everything this helper transitively spawns.
@@ -400,15 +432,16 @@ export type AgentsToolInputField = Exclude<keyof AgentsToolInput, 'action'>;
  * accepted and ignored.
  */
 export const AGENTS_ACTION_FIELDS = {
-  // The mission caps sit beside the swarm's own fields because §6.4 puts them there
-  // deliberately: `budget_usd`, `budget_tokens` and `budget_label` are PRE-EXISTING
-  // caps on this input, read through `missionScope` and enforced by the governor.
+  // The mission caps sit beside the swarm's own fields because *Presets* puts them
+  // there deliberately: `budget_usd`, `budget_tokens` and `budget_label` are
+  // PRE-EXISTING caps on this input, read through `missionScope` and enforced by the
+  // governor.
   //
   // An ITERATION cap and a WALL-CLOCK cap are DELIBERATELY ABSENT, and that is a
-  // disagreement with §2.5 recorded rather than papered over. The table calls both
-  // optional on every preset — but nothing here cuts a search off on either, so
-  // declaring them would make this surface accept a cap nothing applies, which is
-  // the precise defect the specification is written against. A caller who sends one
+  // disagreement recorded rather than papered over: the removed specification called
+  // both optional on every preset — but nothing here cuts a search off on either, so
+  // declaring them would make this surface accept a cap nothing applies, which is the
+  // precise defect *Accepted and ignored* is written against. A caller who sends one
   // is TOLD (the field refusal names the actions that read it) instead of quietly
   // ignored. They join this list when something enforces them.
   swarm: [
@@ -823,11 +856,11 @@ function missionScope(
  * and "we cannot do that yet" in one bucket, which is the distinction a caller needs
  * most: only one of the three is worth correcting.
  *
- * WHY THIS READS THE CAPS. §6.4 keeps the mission caps on this input rather than
- * duplicating them onto `SwarmInput`, so a search nests under the caller's mission
- * scope through the seam every spawn uses — `missionScope` reads `budget_usd` /
- * `budget_tokens` / `budget_label`, and the governed model is what the expansion
- * runs on.
+ * WHY THIS READS THE CAPS. Under *Presets* the mission caps live on this input
+ * rather than being duplicated onto `SwarmInput`, so a search nests under the
+ * caller's mission scope through the seam every spawn uses — `missionScope` reads
+ * `budget_usd` / `budget_tokens` / `budget_label`, and the governed model is what the
+ * expansion runs on.
  */
 async function runSwarmAction(
   deps: AgentsForkDeps,
@@ -856,11 +889,12 @@ async function runSwarmAction(
   if (input.depth !== undefined) Object.assign(call, { depth: input.depth });
   if (input.models) Object.assign(call, { models: input.models });
 
-  // §6.3 — resolution first, because §6.5 is stated over the resolved configuration
-  // and has no input without it.
+  // Resolution first, per *Presets* — *Validity over the resolved configuration* is
+  // stated over the resolved tuple and has no input without it.
   const resolved = resolveSwarm(call);
   if ('reason' in resolved) return resolved;
-  // §6.5 — legality, over the resolved tuple and never over the preset name.
+  // Legality, per *Validity over the resolved configuration*: over the resolved
+  // tuple and never over the preset name.
   const illegal = swarmValidity(resolved);
   if (illegal) return illegal;
 
@@ -874,6 +908,11 @@ async function runSwarmAction(
   const runDeps: SwarmRunDeps = { rt, model: deps.model, mode };
   const signal = readAbortSignal(toolOptions);
   if (signal) Object.assign(runDeps, { signal });
+  // Resolved here rather than at wiring time, so a backend that cannot build a
+  // host yet refuses where the refusal is reportable. Assigned only when there is
+  // one: an absent key is what runs the loop in this isolate.
+  const host = deps.nodeHost?.();
+  if (host) Object.assign(runDeps, { host });
   readSpawnStarted(toolOptions)?.();
   const result = await runSwarm(runDeps, resolved);
   if ('reason' in result) return result;
@@ -937,7 +976,7 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
       type: 'object',
       description: 'For action=swarm: what is measured. {kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}} and an optional floor:{value, kind:"certificate", proof, best_known_honest}. verify names a REGISTERED instrument and hands it its whole spec — a metric nothing can execute is not an objective, and a script path invented here is refused rather than run. kind:"witness" is a checkable certificate and needs a scalar `proxy` to be searchable; kind:"instanced" (one metric, 2+ instances) and kind:"vector" (2+ metrics) are the two front shapes. Field names are snake_case, like every field on this tool.',
     },
-    key: { type: 'string', description: 'For action=swarm with research/audit/redteam: the coverage descriptor elites are binned into. It must name something a tool call can witness — a key that can only say "distinct idea" means the task wants preset:"ideate".' },
+    key: { type: 'string', description: 'For action=swarm with advance:"archive": the coverage descriptor elites are binned into, required there and refused under every other advance. It must name a quantity the objective\'s own verifier REPORTS beside its value, because the cell a candidate lands in is witnessed by the measurement rather than claimed by the candidate — a key naming nothing that instrument reports is refused before any candidate is expanded, and a key that can only say "distinct idea" means the task wants preset:"ideate".' },
     config: { type: 'object', description: 'For action=swarm with preset:"custom" only: the axes — unit, context, expand, score, advance, carry — as the OVERRIDE on `from`\'s shape, or all six when there is no `from`. Prohibited on a named preset, which is a tested path and cannot be refused.' },
     from: {
       type: 'string',
@@ -987,7 +1026,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
         description: 'For action=hire: subordinate (default) hires into THIS workspace; workspace creates (or reuses by name) a specialist workspace of its own, sends `message` to it, and awaits the result.',
       },
       topic: { type: 'string', maxLength: 80, description: 'Optional short label for a peer ask/send (default "message").' },
-      timeout_seconds: { type: 'number', description: 'For a peer ask / hire scope=workspace: seconds to wait for the reply (default 120, max 600). On timeout the reply still arrives later as an event.' },
+      timeout_seconds: { type: 'number', description: `For a peer ask / hire scope=workspace: seconds to wait for the reply (default and max ${TURN_WALL_CLOCK_ENVELOPE_MS / 1000}, which is one measured agent turn). On timeout the reply still arrives later as an event.` },
       event_id: { type: 'string', description: 'For action=reply: the agent message event id you were given.' },
     });
   }

@@ -258,10 +258,22 @@ const ArchiveRecordSchema: v.GenericSchema<ArchiveRecord> = v.variant('t', [
 ]);
 
 const DEFAULT_MAX_BYTES = 512 * 1024;
-/** Rows fetched before anything is known about how big this table's rows are.
- *  Small on purpose: one `SELECT` of a VFS chunk table pulls whole file bodies
- *  into memory, and a worker isolate has far less headroom than a page has
- *  budget. */
+/**
+ * Rows fetched before anything is known about how big this table's rows are.
+ * Small on purpose: one `SELECT` of a VFS chunk table pulls whole file bodies
+ * into memory, and a worker isolate has far less headroom than a page has budget.
+ *
+ * PENDING MEASUREMENT. That concern is the right one and it is named against
+ * nothing: the isolate walls it is worried about are measured and sit one import
+ * away — `PLATFORM_CATALOG['do.isolate.reset_silent']` (a retained working set
+ * past ~200 MiB resetting the object with nothing thrown) and
+ * `worker.isolate.memory` — and neither bound below is derived from either. What
+ * would settle it: resident bytes for one page of the widest VFS chunk table,
+ * which then divides into the catalogued wall the way `vfs/diff.ts` divides its
+ * LCS table. Until that exists these are two round numbers guarding a real
+ * hazard by being small, which is a guess in the safe direction rather than a
+ * derivation.
+ */
 const FIRST_BATCH = 8;
 const MAX_BATCH = 200;
 /** Column the row query adds to carry the keyset position; stripped before a

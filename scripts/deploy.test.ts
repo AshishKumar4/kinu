@@ -55,6 +55,7 @@ const REQUIRED_GATES = [
   "bun run gate:install-scripts",
   "bun run gate:dependency-advisories",
   "bun run gate:patch-parity",
+  "bun run gate:bench-corpus",
   "bun test packages/pc-agent/",
   "bun test ./tests/",
   "bun run test:eval",

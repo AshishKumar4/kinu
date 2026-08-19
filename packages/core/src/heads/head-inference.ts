@@ -10,6 +10,9 @@
 // record_decision accumulator tools, the head system prompt + inherited-context
 // messages, the generateText loop (with the abort/step/budget stop condition),
 // and the HeadReport assembly (via the shared head-summary helpers).
+//
+// What a forking child inherits is specified by docs/EXPLORATION.md — "Inherited
+// context".
 
 import {
   generateText, tool, jsonSchema,
@@ -471,8 +474,8 @@ export interface HeadInferenceDeps {
    * The conversation this loop PRODUCED — every step's assistant and tool
    * messages, in order — handed over once, when the loop finishes normally.
    *
-   * This is what a forking child inherits: EXPLORATION-SPEC §8.4 makes a child's
-   * context its parent's *"unchanged, with the new material appended"*, and an
+   * This is what a forking child inherits: under *Inherited context* a child's
+   * context is its parent's *"unchanged, with the new material appended"*, and an
    * unmodified prefix is a prefix a provider can cache, so every sibling of one
    * parent shares one cacheable prefix. Absent for a head, which merges FINDINGS
    * (`record_evidence`, `record_decision`) rather than forking a conversation, and
@@ -513,7 +516,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   let recorded = 0;
   // The conversation this loop PRODUCED, accumulated per step rather than read off
   // the result: `result.response.messages` is the last step's, and what a forking
-  // child inherits is every step's (EXPLORATION-SPEC §8.4's append-only rule).
+  // child inherits is every step's (the append-only rule of *Inherited context*).
   // Collected only when someone asked for it — a head merges findings and has no
   // use for the transcript as messages.
   const produced: ModelMessage[] = [];

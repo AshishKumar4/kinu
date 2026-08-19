@@ -28,12 +28,14 @@ import { isFailingResultText } from '../execution/exec-result';
  * review surface, not a backup.
  *
  * Both numbers bound the RESPONSE, not peak resident bytes: their product is
- * 102.4 MiB, which sits under `worker.isolate.memory`'s published 128 MB with no
- * margin worth the name, and `do.isolate.reset_silent` — a retained working set
- * past roughly 200 MiB resetting the object with nothing thrown or logged —
- * would present as an unexplained disappearance rather than as a truncated
- * diff. What bounds residency is `walkWorkspaceTextFiles`, which holds one body
- * at a time; these two only bound what a caller is answered with.
+ * 104,857,600 bytes — 100.0 MiB, or 104.9 MB, which the comment here used to give
+ * as 102.4 MiB by dividing a KiB count by 1000. That leaves 23 MB under
+ * `worker.isolate.memory`'s published 128 MB, not a margin worth relying on, and
+ * `do.isolate.reset_silent` — a retained working set past roughly 200 MiB
+ * resetting the object with nothing thrown or logged — would present as an
+ * unexplained disappearance rather than as a truncated diff. What bounds residency
+ * is `walkWorkspaceTextFiles`, which holds one body at a time; these two only
+ * bound what a caller is answered with.
  */
 const MAX_SNAPSHOT_FILE_BYTES = 256 * 1024;
 const MAX_SNAPSHOT_FILES = 400;

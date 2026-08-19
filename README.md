@@ -116,6 +116,7 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 | [Architecture](docs/ARCHITECTURE.md) | System design, message flow, package structure, Think lifecycle |
 | [Evolution](docs/EVOLUTION.md) | 3-timescale self-evolution, CraftStore lifecycle, scaffold mutation |
 | [MCTS](docs/MCTS.md) | Monte Carlo Tree Search, UCT formula, branch isolation, convergence |
+| [Exploration](docs/EXPLORATION.md) | The six search axes, the node contract, the publication seal, settle and merge-back |
 | [Tools](docs/TOOLS.md) | The builtin agent tools, shell emulator, code execution, crafted tools |
 | [Context budget](docs/CONTEXT-BUDGET.md) | The reference-plus-digest invariant: where bulk spills, the turn-cumulative clamp, and the trip counters |
 | [Observability](docs/OBSERVABILITY.md) | The failure classification, the typed logger and its reserved-field ban, what is wired and what is not |
@@ -123,6 +124,7 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 | [Deployment](docs/DEPLOYMENT.md) | Local dev, Cloudflare deploy, AI Gateway setup, secrets |
 | [Formal Spec](docs/FORMAL-SPEC.md) | Lean 4 abstract models, assumptions, traceability, and CI gates |
 | [Bench](docs/BENCH.md) | Machine-scored harness for whether self-evolution helps: sealed split, paired stats, rejection by default |
+| [Testing](docs/TESTING.md) | Conventions, what "all tests" actually runs, and the eval tier — the arm that calls a real model and bills the signed-in session |
 | [Changelog](CHANGELOG.md) | What changed in each version, and the release checklist every user-visible change runs |
 
 ## Packages

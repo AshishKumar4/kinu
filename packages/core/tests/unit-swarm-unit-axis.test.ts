@@ -3,8 +3,8 @@
  *
  * THIS FILE USED TO ASSERT A REFUSAL. `unit:'trajectory'` named a tool-using agent
  * node and `regionRefusal` refused it, because nodes share one workspace and a node
- * cannot be graded on what it changed when every node changed the same tree. §8.6
- * measured that region at 18% — models compose the shape CORRECTLY, the design blocked
+ * cannot be graded on what it changed when every node changed the same tree. That
+ * region was a measured gap — models compose the shape CORRECTLY, the design blocked
  * it, and nothing on the surface said so — so the refusal's own wording was the
  * contract under test.
  *
@@ -17,7 +17,10 @@
  *
  * The inheritance question `unit:'trajectory'` carried did not vanish; it moved to the
  * `context` axis, which asks it once for the caller-to-root edge and every branch edge
- * (§8.4). That is the second half of what is asserted here.
+ * (*Inherited context*). That is the second half of what is asserted here.
+ *
+ * Specified by docs/EXPLORATION.md — "The six axes", "One spelling per axis", "Presets",
+ * "Validity over the resolved configuration", "Inherited context" and "Isolation".
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -58,7 +61,7 @@ describe('the unit axis names what a node produces, and nothing else', () => {
   test('the removed spellings are UNREPRESENTABLE, not merely refused', () => {
     // The migration guard. `trajectory` named the shape two of the three values now
     // have, and `step` never executed — accepting either beside the current set would
-    // be the second spelling §6.4's first reason exists to prevent.
+    // be the second spelling *One spelling per axis* exists to prevent.
     expect(() => v.parse(SwarmConfigSchema, { unit: { kind: 'trajectory', inherit: true } })).toThrow();
     expect(() => v.parse(SwarmConfigSchema, { unit: { kind: 'step' } })).toThrow();
     // And no unit carries a parameter any more: the one it had is the `context` axis.
@@ -159,7 +162,7 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
 
   test('the three archive presets stopped resolving, and say why rather than guessing', () => {
     // The cost stated plainly: `redteam` USED to resolve and now does not, because
-    // §6.3 never declared the threshold its archive arm now requires.
+    // no preset row declares the threshold its archive arm now requires (*Presets*).
     for (const preset of ['research', 'audit', 'redteam'] as const) {
       const resolved = resolveSwarm({ preset, task: 'probe it', key: 'behaviour' });
       if (!('reason' in resolved)) throw new Error(`${preset} must be refused as undeclared`);
@@ -186,7 +189,8 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
   });
 
   test('`prove` without a checker is refused — the objective IS the checker', () => {
-    // Two steps, as shipped: §6.3 resolves the row, §6.5 checks the resolved tuple.
+    // Two steps, as shipped: the preset row resolves (*Presets*), then the resolved
+    // tuple is checked (*Validity over the resolved configuration*).
     // `prove` scores by `verify`, and `verify` with nothing to measure is the refusal.
     const resolved = resolveSwarm({ preset: 'prove', task: 'show it' });
     if ('reason' in resolved) throw new Error(`prove must RESOLVE: ${resolved.error}`);
@@ -217,7 +221,7 @@ describe('the context axis carries the inheritance question, at one spelling', (
     expect(resolved.error).toContain('context');
   });
 
-  test('a named preset supplies it from §6.3s row, the verifier presets inheriting', () => {
+  test('a named preset supplies it from the row *Presets* fixes, the verifier presets inheriting', () => {
     // The verifier presets take `fork` because that is what the cut
     // `observe:'ancestors'` WAS: a continued conversation carries the ancestor
     // chain's measurements transitively. `ideate` takes `fresh` — it has no branch

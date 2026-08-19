@@ -1,8 +1,8 @@
 // The publication seal, over every surface rather than over one table.
 //
-// This is the test that would have caught the audit's top finding. §4.4 stated
-// the seal as reachability over RECORDS-STORE writes; §5.3 routed
-// carry:'artifacts' through `experience_library` and called that publication
+// This is the test that would have caught the audit's top finding. The seal was
+// once stated as reachability over RECORDS-STORE writes alone, while a
+// carry:'artifacts' route through `experience_library` was called publication
 // "separate and unchanged". The Lean statement then VERIFIED and the laundering
 // channel remained, because the theorem quantified over records-store actions
 // and the laundering channel was not one of them: a true theorem about a false
@@ -21,19 +21,23 @@
 //      `maybeStoreCraftedTool` is in that file today and nobody had classified
 //      it, which is exactly how four live channels went unnoticed.
 //
-// THERE WAS A THIRD LEG and it is worth knowing what it did. It read §4.4's own
-// table out of the specification and asserted set-equality with
+// THERE WAS A THIRD LEG and it is worth knowing what it did. It read the seal's
+// own table out of the numbered specification and asserted set-equality with
 // PUBLICATION_SURFACES in both directions, so a surface added to one and not the
-// other failed a test instead of decaying back into prose. That document is
-// deliberately out of this repository, so the leg has no counterparty and was
-// removed rather than weakened: a comparison against a file that cannot be read
-// is not a check. PUBLICATION_SURFACES is now the sole source of truth for the
-// set, and the two legs above are what hold it. Restoring the cross-check needs
-// an in-repository document carrying the normative contract, not this file.
+// other failed a test instead of decaying back into prose. That document is gone
+// from this repository, so the leg has no counterparty and was removed rather
+// than weakened: a comparison against a file that cannot be read is not a check.
+// *The publication seal* names PUBLICATION_SURFACES as the governed set instead
+// of restating its members, so there is no second table left to compare against
+// — PUBLICATION_SURFACES is the sole source of truth for the set, and the two
+// legs above are what hold it.
 //
 // What is deliberately NOT asserted: that each live writer calls the gate. The
 // spec does not make that wiring decision and five of the six surfaces have
 // writers with no objective in scope. Leg 2 is what keeps that gap countable.
+//
+// Specified by docs/EXPLORATION.md — "The publication seal" and "The records
+// store".
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -123,7 +127,7 @@ describe('the seal is total over the enumerated publication surfaces', () => {
     expect([...admitted].sort()).toEqual([...PUBLICATION_SURFACES].sort());
   });
 
-  test('a RECORDED re-derivation reopens every surface — §4.4 retroactive publication', () => {
+  test('a RECORDED re-derivation reopens every surface — retroactive publication, in *The publication seal*', () => {
     const admitted = PUBLICATION_SURFACES.filter(
       (surface) => admitsPublication(cleared, surface).kind === 'admitted',
     );
@@ -142,8 +146,8 @@ describe("the settle path's egress is classified, not discovered", () => {
   // Every value import and every durable write in the settle path, each declared
   // as an enumerated publication surface or as DISCLOSURE with its reason. The
   // seal covers what carries the claim and never what carries the caveat:
-  // suppressing a diagnostic is how a breach goes silent, which is the failure
-  // §4.4 exists to prevent.
+  // suppressing a diagnostic is how a breach goes silent, which is exactly what
+  // *The publication seal*'s disclosure rule is written against.
   const EGRESS = {
     // Publication. The winner's approach and its score, vector-indexed, so it is
     // an input to future inference rather than an artifact a human looks up.
@@ -269,9 +273,10 @@ describe('a seal that voids the carry axis says so, with a count', () => {
   });
 
   test('zero suppressed cells is still a suppression — absent is not zero', () => {
-    // §5.2's monotone best is why the count matters at all: a suppressed elite
-    // means the NEXT run's carry starts from a worse one. A run that reached no
-    // new best still had its axis voided, and null would hide that.
+    // Monotone displacement over a cell's best — *The records store* — is why the
+    // count matters at all: a suppressed elite means the NEXT run's carry starts
+    // from a worse one. A run that reached no new best still had its axis voided,
+    // and null would hide that.
     const disclosed = carrySuppression(sealed, 'artifacts', 0);
     expect(disclosed).not.toBeNull();
     expect(disclosed?.suppressedCells).toBe(0);

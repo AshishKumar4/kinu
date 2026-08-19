@@ -98,5 +98,14 @@
   {
     "key": "tests/live-smoke.test.ts › Live Smoke — one real turn per backend › cli backend: one real turn through the local session spine",
     "reason": "needs a live model: drives ONE turn through the same LocalAgentSession spine as `proteus exec` and asserts a real tool call plus a durable messages row. A mock model chooses no tools, so both assertions would be vacuous against one — 'does the agent reach for a tool' IS the measurement. Measured at 15.3s. Runs in the eval tier."
+  },
+  {
+    "key": "tests/evals/behaviour.eval.ts › Agent behaviour over the run-event ledger",
+    "reason": "needs a live model: 34 full agent episodes — the eval corpus (17 tasks: 6 environment-handover cases, 4 tool-using seed cases, 7 hard tasks with machine-checkable ground truth) times 2 repetitions, each a real multi-turn session whose run_events ledger the eight behaviour scorers grade. Declared as one FAMILY rather than 34 keys because every case comes from one `it.for(CASES)` behind one `skipIf(TARGET === null)`, so no case can begin skipping alone, and the corpus's own size floor is asserted credential-free by `the corpus is large enough for significance to be reachable` in the same file. Runs in the eval tier: `bun run test:eval`.",
+    "family": true
+  },
+  {
+    "key": "tests/evals/behaviour.eval.ts › corpus quality — can this corpus rank anything at all > the corpus is not saturated — arms could disagree on it",
+    "reason": "needs a live model: reads the task_outcome rows the 34 episodes above produced and refuses a corpus that every attempt swept or every attempt failed. Skipped rather than passed without a model on purpose — an empty observation list must never read as a satisfied property. Its sibling in the same describe (`the corpus is large enough for significance to be reachable`) is static and runs at every tier."
   }
 ]

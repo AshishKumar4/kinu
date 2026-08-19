@@ -8,7 +8,10 @@ import * as v from 'valibot';
 import type { SqlExec } from '../../types/primitives';
 
 const WINDOW_MS = 60_000;
-const DEFAULT_RATE_LIMIT_PER_MIN = 60;
+/** Exported so `hub/triggers.ts` stores the same default this gate enforces
+ *  against. It does NOT share the range: 0 means "block" to a trigger and is
+ *  illegal to this gate, so the two surfaces normalise differently on purpose. */
+export const DEFAULT_RATE_LIMIT_PER_MIN = 60;
 const MAX_RATE_LIMIT_PER_MIN = 10_000;
 const RateLimitInputSchema = v.union([v.number(), v.string(), v.null(), v.undefined()]);
 

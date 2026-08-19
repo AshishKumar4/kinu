@@ -19,9 +19,10 @@
 // Depth budget: the SUB-call has no llm.query in scope (it's a plain
 // generateText call, no sandbox). So recursion depth is bounded at 1 by
 // construction — matching the paper's reference implementation. For slices
-// that themselves need decomposition, the recipe is a fork (`agents`
-// action=fork): forks run full tool loops with llm.query in scope, which is
-// agent-level recursion with budgets and typed merges already attached.
+// that themselves need decomposition, the recipe is a search
+// (`agents` action=swarm): its nodes run full tool loops with llm.query in
+// scope, which is agent-level recursion with budgets and a settle already
+// attached.
 
 import { generateText } from 'ai';
 import type { LanguageModel } from 'ai';

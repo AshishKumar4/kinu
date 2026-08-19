@@ -118,6 +118,10 @@ export interface RunValidationOptions {
   diagnosticsDir: string;
   devTasks: readonly BenchTask[];
   sealed: SealedSplit;
+  /** Validate only these ids, across both splits. Absent means the whole corpus.
+   *  What makes re-proving one re-anchored patch a 2-second act rather than a
+   *  ~160-suite-run one, which is the difference between doing it and hoping. */
+  only?: readonly string[];
   runAttempt: (task: BenchTask, repeat: number) => Promise<WellFormedAttempt>;
   log?: (line: string) => void;
 }
@@ -152,14 +156,24 @@ export async function runValidation(options: RunValidationOptions): Promise<Vali
       return attemptResult(pair);
     });
 
+  const dev = options.only === undefined
+    ? options.devTasks
+    : options.devTasks.filter((task) => options.only?.includes(task.id) === true);
+
   log(`Validating ${options.corpusPath}`);
+  if (options.only !== undefined) {
+    // Named, so a reader of the summary cannot mistake it for a verdict on the
+    // corpus. `--id` exists to re-prove a re-anchored patch, and a narrowed run
+    // quoted as "the corpus validates" is the same defect one level up.
+    log(`NARROWED to ${String(options.only.length)} named id(s): ${options.only.join(', ')}`);
+  }
   log('Each task must FAIL with nothing done and PASS under the oracle.');
   log(`A failing task is re-checked up to ${options.validateRetries} more time(s) before it is called BAD.\n`);
 
   const badIds: string[] = [];
   const flakyDev: string[] = [];
-  log(`dev split (${options.devTasks.length} tasks):`);
-  for (const task of options.devTasks) {
+  log(`dev split (${dev.length} tasks):`);
+  for (const task of dev) {
     const result = await validate(task, 'dev');
     const onlyOnRetry = result.ok && (result.passedOnAttempt ?? 1) > 1;
     if (!result.ok) badIds.push(task.id);
@@ -167,13 +181,15 @@ export async function runValidation(options: RunValidationOptions): Promise<Vali
     log(`  ${!result.ok ? 'BAD ' : onlyOnRetry ? 'FLKY' : 'ok  '} ${task.id.padEnd(28)} ${result.detail}`);
   }
 
-  const sealedResult = await options.sealed.validate((task) => validate(task, 'sealed'));
+  const sealedResult = await options.sealed.validate((task) => validate(task, 'sealed'), options.only);
   badIds.push(...sealedResult.invalid);
   log(`\nsealed split (${sealedResult.checked} tasks): ${sealedResult.checked - sealedResult.invalid.length} valid`);
   for (const id of sealedResult.invalid) log(`  BAD  ${id}`);
   for (const id of sealedResult.flaky) log(`  FLKY ${id}`);
 
-  const total = options.devTasks.length + sealedResult.checked;
+  // `dev.length`, not `options.devTasks.length`: a narrowed run that reported the
+  // full denominator would print "1/159 tasks valid" and read as catastrophe.
+  const total = dev.length + sealedResult.checked;
   const flakyIds = [...flakyDev, ...sealedResult.flaky];
   log(`\n${total - badIds.length}/${total} tasks valid.`);
   if (flakyIds.length > 0) {

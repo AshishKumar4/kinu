@@ -27,6 +27,9 @@
  * parent fork request naming `run` / `execute_tools` / `web` maps onto the
  * head's actual tools instead of silently emptying the set (the old bug: the
  * parent's vocabulary was filtered against a disjoint `sandbox_*` head surface).
+ *
+ * The node variant of this surface is specified by docs/EXPLORATION.md — "A node is
+ * an agent".
  */
 
 import { jsonSchema, tool, type ToolSet } from 'ai';
@@ -50,10 +53,10 @@ export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'file', 'web'] as con
  * The mechanism, not a convenience: what makes containment structural is that a
  * builtin added upstream tomorrow does not silently appear, and that holds only
  * if every confined surface is built by ONE filter over a NAMED set. Heads pass
- * {@link HEAD_BUILTIN_TOOLS}; a swarm node passes that set plus its report tool
- * (EXPLORATION-SPEC §8.1 rule 2). A tool whose deps the caller did not wire is
- * absent from `builtin` already, so the "absent deps, absent tool" half needs no
- * check here.
+ * {@link HEAD_BUILTIN_TOOLS}; a swarm node passes that set plus its report tool,
+ * exactly the surface *A node is an agent* gives a node. A tool whose deps the
+ * caller did not wire is absent from `builtin` already, so the "absent deps, absent
+ * tool" half needs no check here.
  */
 export function keepBuiltins(builtin: ToolSet, names: readonly string[]): ToolSet {
   const kept: ToolSet = {};

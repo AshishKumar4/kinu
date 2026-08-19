@@ -8,6 +8,7 @@
   "asymmetry BuiltinToolDeps.createExecuteTool#absent-in-cf",
   "asymmetry BuiltinToolDeps.vectorStore#absent-in-cli",
   "asymmetry ExecutorProvider.files#absent-in-cf",
+  "asymmetry ForkDepsWiring.nodeHost#absent-in-cli",
   "asymmetry HeadInferenceDeps.reportStep#absent-in-cf",
   "asymmetry InlineExecutorDeps.budget#absent-in-cli",
   "asymmetry InlineExecutorDeps.onToolRegistered#absent-in-cli",

@@ -57,7 +57,7 @@ import {
   MIN_PILOT_REPEATS, MIN_PILOT_TASKS, benchProviderHash, buildPilotReport,
   loadAndValidatePilotReport, type PilotReport,
 } from './bench-pilot';
-import { runValidation, type WellFormedAttempt } from './bench-validation';
+import { runValidation, type RunValidationOptions, type WellFormedAttempt } from './bench-validation';
 import {
   ARTIFACT_DIRNAME, openRunRetention, resolveArtifactRoot, type RunRetention,
 } from './bench-retention';
@@ -594,10 +594,25 @@ async function runWellFormedAttempt(
   return { broken, oracle: fixed };
 }
 
-async function cmdValidate(common: CommonOptions): Promise<number> {
+async function cmdValidate(args: Map<string, string>, common: CommonOptions): Promise<number> {
   const family = loadFamily(common.family);
   const corpus = family.corpus;
   const devTasks = selectTasks(corpus.dev, common.limit, common.seed);
+  // A typo that validated NOTHING and reported ok is the same defect as a gate
+  // over an empty set, so an id naming no task refuses before any sandbox is
+  // built. Checked against the WHOLE corpus rather than the dev split, because a
+  // re-anchored sealed patch needs re-proving exactly as much as a dev one and
+  // well-formedness carries no performance signal either way.
+  const only = args.get('id')?.split(',').map((id) => id.trim()).filter((id) => id.length > 0);
+  if (only !== undefined) {
+    if (only.length === 0) throw new Error('--id needs at least one task id');
+    const unknown = only.filter((id) =>
+      !corpus.dev.some((task) => task.id === id) && !corpus.sealed.has(id));
+    if (unknown.length > 0) {
+      throw new Error(`--id names ${String(unknown.length)} task(s) this corpus does not have: `
+        + `${unknown.join(', ')} — a narrowed run over nothing would report ok`);
+    }
+  }
   const oracle = family.resolveSolver('oracle', {});
   const retention = openRetention({
     command: 'validate',
@@ -606,7 +621,7 @@ async function cmdValidate(common: CommonOptions): Promise<number> {
     model: null, providerHash: null,
   });
 
-  const summary = await runValidation({
+  const options: RunValidationOptions = {
     family: common.family,
     corpusPath: family.path,
     manifestHash: corpus.manifestHash,
@@ -615,7 +630,9 @@ async function cmdValidate(common: CommonOptions): Promise<number> {
     devTasks,
     sealed: corpus.sealed,
     runAttempt: (task, repeat) => runWellFormedAttempt(task, repeat, family, common, oracle, retention),
-  });
+  };
+  if (only !== undefined) options.only = only;
+  const summary = await runValidation(options);
   retention.finish(decodeJsonValue({ value: summary }));
   return summary.ok ? 0 : 1;
 }
@@ -887,7 +904,7 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
 const USAGE = `Proteus bench harness — machine-scored, sealed-split, rejection by default
 
 Usage:
-  bun scripts/bench.ts validate  --run-root <dir> [--limit n] [--validate-retries n]
+  bun scripts/bench.ts validate  --run-root <dir> [--id a,b] [--limit n] [--validate-retries n]
   bun scripts/bench.ts pilot     --run-root <dir> --variant <variant> --out <report.json> [--limit n] [--repeats n]
   bun scripts/bench.ts compare   --run-root <dir> --a <variant> --b <variant> [--pilot-report <path>] [--repeats n] [--sealed] [--require-accept]
   bun scripts/bench.ts gain      --run-root <dir> [--stateful <variant>] [--stateless <variant>] --pilot-report <path> [--repeats n]
@@ -923,6 +940,14 @@ Options:
   --validate-retries <n>  validate: extra well-formedness checks a failing task
                        gets before it is called BAD (default ${DEFAULT_VALIDATE_RETRIES}). A task that
                        only passes on a retry is reported as FLKY, not ok.
+  --id <a,b>           validate: re-prove exactly these task ids, either split.
+                       What a re-anchored defect patch needs — a patch that
+                       APPLIES again is not yet a patch that still BREAKS the
+                       checks. One task is two attempts, measured at 93s for a
+                       core-suite task; the whole corpus is ~160 of the same. An
+                       id naming no task refuses rather than reporting ok over an
+                       empty set. The summary says NARROWED so it cannot be
+                       quoted as a verdict on the corpus.
   --limit <n>          Use a RANDOM n-task sample drawn from --seed, not the
                        alphabetical head. Recorded in the report and in the
                        retained provenance as "random n of N, seed s".
@@ -971,7 +996,7 @@ async function main(): Promise<void> {
     if (!args.has('repeats')) args.set('repeats', String(MIN_PILOT_REPEATS));
   }
   const common = parseCommon(args);
-  const code = command === 'validate' ? await cmdValidate(common)
+  const code = command === 'validate' ? await cmdValidate(args, common)
     : command === 'pilot' ? await cmdPilot(args, common)
     : command === 'compare' ? await cmdCompare(args, common)
     : command === 'gain' ? await cmdGain(args, common)

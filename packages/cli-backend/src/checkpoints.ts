@@ -32,6 +32,18 @@ import { classify, tolerateAsync } from '@proteus/core/obs';
 
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
+/**
+ * Wall clock on ONE git subprocess in the shadow-checkpoint store.
+ *
+ * The two subcommands that scale with the user's project rather than with the
+ * change are `add -A --ignore-errors` (stage the whole work tree before a
+ * mutation) and `checkout-index -a -f` (write it all back on restore). Measured
+ * against this repository — 1,689 tracked files, 22 MB, node_modules excluded by
+ * .gitignore — on a warm page cache: staging 0.24 s, restoring 0.07 s. So 30_000
+ * carries roughly 125x that tree, which is the number to re-measure against
+ * rather than re-reason about when someone reports a checkpoint timing out on a
+ * project two orders of magnitude larger.
+ */
 const GIT_TIMEOUT_MS = 30_000;
 /**
  * Directories that are not a work tree, so a whole-tree snapshot of one is

@@ -608,8 +608,9 @@ export const BUILTIN_TOOL_SPECS = {
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id. '
       // The result half is stated because a swarm's answer is not the only thing it
       // carries, and the two extra fields are the ones a caller must not skip: the
-      // margin is the check §4.5 requires be LOOKED at, and the caveat is the one
-      // sentence that stops a suspect number being quoted as a result.
+      // margin is the check docs/EXPLORATION.md — "Floor margin" requires be LOOKED
+      // at, and the caveat is the one sentence that stops a suspect number being
+      // quoted as a result.
       + 'swarm returns the axes actually in force, the caps and where each came from, `best` with its RAW measured value in your unit beside the normalised score, every candidate including the ones that produced no usable answer and why, and a settle report carrying the measured baseline and the floor margin — and on a live session the call hands back a background job at spawn, with that report arriving as the wake when it settles. '
       + 'A run that measured past its floor comes back with a publication caveat and no score on that candidate: the answer is still yours to read and is NOT publishable until the bound is re-derived.',
     // The cheapest COMPLETE call, which is what an example is for: `preset` and
@@ -702,7 +703,7 @@ export const BUILTIN_TOOL_DESCRIPTIONS = {
  * and with a worked example calling `codemode.searchWeb(...)`, a shape
  * cf-backend/execute-tools.ts is coded to throw on. The CLI passed the
  * doctrine and discarded every provider's `types`, so its model was never told
- * that `agents.fork`, `memory.save`, `tasks.add` or `llm.query` are callable.
+ * that `agents.swarm`, `memory.save`, `tasks.add` or `llm.query` are callable.
  *
  * `typeBlock` is the namespace declarations, assembled per backend: CF hands
  * codemode its own `{{types}}` placeholder and lets it substitute (it can

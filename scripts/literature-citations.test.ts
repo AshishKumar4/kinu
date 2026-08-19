@@ -2,8 +2,8 @@
  * The literature gate's own decision logic, proven RED in every direction it claims
  * to govern and green on the corrected text.
  *
- * Every red case below is a defect that was ACTUALLY in this tree, taken from the
- * seven-number audit of `docs/EXPLORATION-SPEC.md` — `+12.5 at matched compute` over
+ * Every red case below is a defect that was ACTUALLY in this tree, taken from a
+ * removed internal audit of seven numbers — `+12.5 at matched compute` over
  * a subtraction spanning a no-search row, a source's own `up to` deleted, and a
  * locator naming the wrong table. A gate whose rules are only ever exercised by a
  * clean tree cannot tell you whether it still works.
@@ -38,7 +38,7 @@ describe('the register governs itself before it judges prose', () => {
   test('the shipped register is coherent', () => {
     // Not a tautology: this is the check that made `where: "the similarity-filter
     // ablation"` a finding rather than a locator, and that caught a `8.4` entry
-    // registered from what turned out to be our own `§8.4`.
+    // registered from what turned out to be one of our own section numbers.
     expect(auditRegister()).toEqual([]);
   });
 });
@@ -318,7 +318,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
   });
 
   test('a claim three paragraphs from its citation is still governed', () => {
-    // §6.5's shape and the case that set the bound: a citation opens the passage and
+    // The shape that set the bound: a citation opens the passage and
     // the argument runs on for paragraphs without naming an author again. Sentence
     // scope left every number of those paragraphs ungoverned.
     const found = audit([

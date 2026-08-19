@@ -137,9 +137,12 @@ export function classifyTransientDO(input: { cause: unknown }): DOTransientClass
  *  needs; beyond that the object is not coming back inside this request. */
 const MAX_ATTEMPTS = 3;
 /** Full-jitter exponential backoff, in the shape the SDK itself uses. Kept short
- *  because every caller is on a request's critical path. */
+ *  because every caller is on a request's critical path: at MAX_ATTEMPTS the only
+ *  delays ever computed are 2¹·60 = 120 ms and 2²·60 = 240 ms, because attempt 3's
+ *  failure throws before a third delay exists. There is no ceiling constant — the
+ *  400 ms one that used to sit here could not bind at any attempt count this
+ *  module allows, so it was a bound that could not fail. */
 const BASE_DELAY_MS = 60;
-const MAX_DELAY_MS = 400;
 
 /**
  * Run an idempotent cross-DO call, retrying only the platform transients above.
@@ -169,7 +172,7 @@ export async function retryTransientDO<T>(operation: string, call: () => Promise
         otherwise: 'io',
       }), { operation, transient, attempt, attempts: MAX_ATTEMPTS });
       const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, Math.floor(Math.random() * Math.min(2 ** attempt * BASE_DELAY_MS, MAX_DELAY_MS)));
+      setTimeout(resolve, Math.floor(Math.random() * 2 ** attempt * BASE_DELAY_MS));
       await promise;
     }
   }

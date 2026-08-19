@@ -2,7 +2,7 @@
   Proteus.Exploration.Isolation — why the existing storage-isolation proof does NOT
   reach an agent node, proved rather than asserted. 0 sorry.
 
-  Models `docs/EXPLORATION-SPEC.md` §10.3 at `spec/exploration` HEAD ee8402e6.
+  Specified by docs/EXPLORATION.md — "Isolation".
 
   **THIS FILE PROVES NOTHING ABOUT AGENT-NODE ISOLATION, AND THAT IS ITS POINT.**
 
@@ -14,9 +14,11 @@
   **Acquiring storage — that is, having tools — is exactly what that conjunct
   forbids.**
 
-  So `unit:'trajectory'` invalidates the existing proof's HYPOTHESIS, not merely
-  its conclusion, and the two theorems below are that distinction made
-  machine-checked rather than left as prose:
+  So a TOOLED unit — `answer` or `generator`, as against `thought`, the toolless
+  degenerate point the old hypothesis still fits — invalidates the existing proof's
+  HYPOTHESIS, not merely its conclusion. What invalidates it is ACQUIRING STORAGE
+  and not the spelling of the axis value, so the two theorems below are that
+  distinction made machine-checked rather than left as prose:
 
   * `agent_node_is_not_a_branch_explore` — a transition in which a node acquires
     its own storage does not satisfy `mctsTransition … .BranchExplore`. The
@@ -30,19 +32,25 @@
     concrete. So the old proof cannot be extended to agent nodes by weakening the
     conjunct: that is the conjunct the proof consumes.
 
-  -- WHAT AN AGENT-NODE REGION WOULD NEED, and why it is not here:
+  -- WHAT AN AGENT-NODE REGION WOULD NEED, and why it is STILL not here:
   a NEW action with a NEW postcondition — a fresh, provably-disjoint storage id
-  per node — and its own preservation proof. Until per-node workspace isolation
-  exists in the code there is nothing for that postcondition to refine, and a
-  postcondition refining nothing is exactly the weakness `PR-MCTS-003`'s
-  `remainingEvidence` already records for the branch case ("hand-asserted rather
-  than refined from branch spawning and storage code"). Writing it now would add a
-  theorem whose hypothesis no code satisfies, which reads as coverage and is not.
-  §8.6 is unambiguous that the blocker is one thing only: heads share one
-  workspace and are merely ASKED to isolate themselves
-  (`head-inference.ts:256`), and `HEAD_FILE_CHANGE_PROVENANCE` already states
-  shell-command changes are unattributed. **Unblocked by per-node workspace
-  isolation, and by nothing else.**
+  per node — and its own preservation proof. That region is now UNBLOCKED and
+  UNWRITTEN, and those are two different states. Per-node isolation exists in the
+  code: `agentHomeNodeProvisioner` (`strategy/node-workspace.ts`) gives a node a
+  real home in the one global view, owned by the node's own uid, so there is now
+  something for that postcondition to be REFINED FROM where before there was
+  nothing to refine. Writing it ahead of that provisioner would have been the
+  weakness `PR-MCTS-003`'s `remainingEvidence` already records for the branch case
+  ("hand-asserted rather than refined from branch spawning and storage code"): a
+  postcondition refining nothing reads as coverage and is not. Nothing below claims
+  that region — the theorems here delimit the OLD proof and go no further.
+
+  What the residue is, and *Isolation* names it: there are exactly two isolation
+  states, and under `shared-origin-plane` there is no boundary, said out loud. In
+  the shared-workspace layout heads are still merely ASKED to isolate themselves
+  (`head-inference.ts`, the `shared-workspace` branch), and
+  `HEAD_FILE_CHANGE_PROVENANCE` states that shell-command changes a head ran are
+  not attributed to it.
 -/
 
 import Proteus.MCTS.StorageIsolation
@@ -54,7 +62,7 @@ open Proteus.MCTS.StorageIsolation
 
 /-- What an agent node does that a toolless branch cannot: acquire a storage
     identity held by no existing branch. This is the modelling of "has tools" —
-    §10.3's reading of the frame condition, stated positively. -/
+    *Isolation*'s reading of the frame condition, stated positively. -/
 def AcquiresOwnStorage (s s' : MCTSSystemState) : Prop :=
   ∃ b ∈ s'.branches, ∀ b' ∈ s.branches, b.storageId ≠ b'.storageId
 

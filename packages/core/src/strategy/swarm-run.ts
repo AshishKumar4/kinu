@@ -3,16 +3,26 @@
  * refusing, by name, the resolved shapes no engine in this tree can execute
  * faithfully.
  *
+ * Specified by docs/EXPLORATION.md — "The six axes", "One spelling per axis",
+ * "Presets", "Validity over the resolved configuration", "Accepted and ignored",
+ * "Refusals", "What the engine refuses outright", "The objective", "Witness
+ * objectives", "The closed verifier registry", "Comparability", "The floor", "The
+ * publication seal", "The records store", "The archive", "A node is an agent",
+ * "Node identity", "Inherited context", "Arbitration", "Budget conservation", "The
+ * journal read model", "Isolation", "Settle is derived" and "Merge-back". Handles
+ * named alone below are that document's.
+ *
  * WHAT RUNS HERE, AND WHY IT IS EXACTLY THIS. A resolved configuration is a search
  * TREE bounded by `depth` and widened by `branches`, and every axis it names is
  * realised rather than approximated:
  *
  *   - `branches` candidates per expansion. What ONE candidate costs is the `unit`
  *     axis: `answer` and `generator` run a real agent per node — a tool loop with
- *     its own turns and its own journalled transcript (`node-agent.ts`, §8.1) —
- *     while `thought` is §8.9's degenerate point, one toolless generation, kept as
- *     the cheap tier. `expand:'sample'` starts a child from the workspace as
- *     found and `expand:'aggregate'` fans a level IN — see below;
+ *     its own turns and its own journalled transcript (`node-agent.ts`; *A node is
+ *     an agent*) — while `thought` is the degenerate point *The six axes* names,
+ *     one toolless generation, kept as the cheap tier. `expand:'sample'` starts a
+ *     child from the workspace as found and `expand:'aggregate'` fans a level IN —
+ *     see below;
  *   - `advance` through `mcts/frontier.ts` — the ONE scheduler, so `uct` re-widens,
  *     `best-first` takes the best unexpanded node and `none` expands the root once
  *     and stops;
@@ -23,18 +33,20 @@
  *     ancestor is the workspace as found, which is why that arm is unchanged;
  *   - `score:'verify'` through the registry's instrument, one candidate at a time,
  *     because candidates share one workspace and a parallel measurement would measure
- *     whichever wrote last (§10.3's isolation gap, respected rather than assumed away);
+ *     whichever wrote last (the isolation gap *Isolation* names, respected rather
+ *     than assumed away);
  *   - `settle` derived by `settleOf` and never chosen here.
  *
  * `expand:'aggregate'` MAKES THIS A DAG RATHER THAN A TREE, and it is the one axis value
  * whose claim is an ORDER. At each level barrier — where a wave has been measured and its
  * siblings compared — the level's parents are offered to merge-back as members in a
- * topological order of the dependency edges they declare, and §8.5's own machinery does
- * the rest: members that agree accumulate, the first disagreement spawns the merge node
- * that IS the fan-in's vertex, a member whose base the member before it moved is
- * re-verified through the registry, and the transaction bound is checked per member. So
- * the DAG's structure and the DAG's merges are one mechanism rather than two, a conflict
- * has exactly one policy, and the vertex is graded on the way back through the same
+ * topological order of the dependency edges they declare, and the machinery specified
+ * under *Merge-back* does the rest: members that agree accumulate, the first
+ * disagreement spawns the merge node that IS the fan-in's vertex, a member whose base
+ * the member before it moved is re-verified through the registry, and the transaction
+ * bound is checked per member. So the DAG's structure and the DAG's merges are one
+ * mechanism rather than two, a conflict has exactly one policy, and the vertex is
+ * graded on the way back through the same
  * scoring body a sampled sibling takes (`fanInAtLevel`). The dependency edges live beside
  * the selection edge on the node, never instead of it: `search_nodes.parent_id` is what
  * selection descends and backpropagation walks, and one measurement reaching two ancestor
@@ -44,17 +56,18 @@
  * tree of its own rather than dispatching onto `mcts/engine.ts`. That engine scores by
  * judge ensemble and execution verdict with no seam for a verifier, so a verify-scored
  * call sent to it would report a judge's number under the objective's name — the
- * accepted-and-ignored lie §2.5 exists to refuse. What IS reused is its tree
+ * exact lie *Accepted and ignored* exists to refuse. What IS reused is its tree
  * machinery, which is objective-agnostic and proven: `uct.ts` for selection (and its
  * WHERE-clause depth cap), `backpropagation.ts` for the ancestor mean,
  * `record-node.ts` for the one INSERT, `pruning.ts` for retirement. The reward those
  * receive is `normalisedScore` over the caller's own metric.
  *
- * A NODE DOES NOT SPAWN CHILDREN — it PROPOSES, and `advance` arbitrates (§8.2). An
- * AGENT node proposes by calling `propose_branch` and the verdict is that tool's
- * return value, so a refusal's text is the node's next instruction. A THOUGHT node
- * has no tool to be answered through, so its proposal is a marker line the engine
- * reads out of its text and its verdict is a typed diagnostic event; that path is
+ * A NODE DOES NOT SPAWN CHILDREN — it PROPOSES, and `advance` arbitrates
+ * (*Arbitration*). An AGENT node proposes by calling `propose_branch` and the verdict
+ * is that tool's return value, so a refusal's text is the node's next instruction. A
+ * THOUGHT node has no tool to be answered through, so its proposal is a marker line
+ * the engine reads out of its text and its verdict is a typed diagnostic event; that
+ * path is
  * answered when selection REACHES the node, which is what makes it an input to
  * selection rather than a bypass of it, and any proposal selection never reached is
  * answered in the sweep after the loop. Both forms carry the same data and neither
@@ -66,9 +79,9 @@
  * at a time, so reading the remaining budget and spending it could not interleave.
  * An agent node asks from inside its own tool loop and N of those run concurrently,
  * so `SwarmBudget` owns the number and decides-and-debits in one synchronous step
- * (§8.11: the allocations granted to a node's children must SUM to no more than the
- * parent's remaining budget). Depth and width bound the shape; conservation bounds
- * the spend.
+ * (*Budget conservation*: the allocations granted to a node's children must SUM to no
+ * more than the parent's remaining budget). Depth and width bound the shape;
+ * conservation bounds the spend.
  *
  * WHAT THE ISOLATION PROOF COVERS, AND WHAT IT NO LONGER COVERS.
  * `MCTS/StorageIsolation.lean` holds of TOOLLESS branches: its two branch-side
@@ -85,8 +98,8 @@
  * no branch storage — the workspace is the ORIGIN's, one plane, exactly as before.
  * What that costs is attribution, and the engine pays it the only honest way: a node
  * is graded on the candidate it REPORTS, never on a diff of a tree every node wrote.
- * A per-node home (§8.6) is what would need the preservation theorem extended, and
- * it is deliberately not built here.
+ * A per-node home (*Isolation*) is what would need the preservation theorem
+ * extended, and it is deliberately not built here.
  */
 import { generateText } from 'ai';
 import type { LanguageModel, ModelMessage } from 'ai';
@@ -113,7 +126,7 @@ import { contextWindowForModel } from '../context-window';
 import { HeadJournal } from '../heads/journal';
 import { initHeadsTables } from '../heads/schema';
 import { runNodeAgent } from './node-agent';
-import type { NodeAgentDeps } from './node-agent';
+import type { NodeAgentDeps, NodeLoopHost } from './node-agent';
 import { SwarmBudget, type BranchDecision, type BranchGrant } from './swarm-budget';
 import { sha256Hex } from '../safety/argument-digest';
 import type { NodeWorkspaceProvisioner } from './node-workspace';
@@ -130,13 +143,15 @@ import type {
   PublishingCarry, VerifierSource,
 } from './objective';
 import {
-  configDigestOf, isTreeAdvance, judgeMarginalisationRefusal,
+  archiveRegionRefusal, configDigestOf, isTreeAdvance, judgeMarginalisationRefusal,
   BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS, SWARM_TREE_ADVANCES,
 } from './swarm';
 import {
   initExplorationRecordsTable, recordExploration, recordsFor, verifierDigestOf,
 } from './records';
 import type { ExplorationRecordsReport, ExplorationWrite } from './records';
+import { admitToArchive, archiveCellOf } from './archive';
+import type { ArchiveVerdict } from './archive';
 import {
   baseDigestOf, memberDigestOf, mergeBack, mergePolicyOf, originReader, settleCarry,
   type MemberApply, type MemberDiff, type MergeBackDeps, type MergeMember,
@@ -184,33 +199,51 @@ export interface SwarmRunDeps {
   /**
    * The origin agent's own conversation, which is what a swarm's ROOT starts from.
    *
-   * §8.4: *"a root that started blank would throw away precisely the context that made
-   * the caller decide to search"*. This is the caller-to-root edge, and it is the same
-   * axis as every branch edge — `context:'fork'` gives the first level this prefix
-   * verbatim, `'fresh'` gives it the task block and the seed alone.
+   * *Inherited context*: a root that started blank would throw away precisely the
+   * context that made the caller decide to search. This is the caller-to-root edge, and
+   * it is the same axis as every branch edge — `context:'fork'` gives the first level
+   * this prefix verbatim, `'fresh'` gives it the task block and the seed alone.
    *
    * Absent means the caller wired none, and then the first level starts from the task
    * block. Absent rather than empty-and-claimed: a run whose root inherited nothing is
    * a different run from one whose caller had nothing to inherit.
    */
   readonly originContext?: readonly ModelMessage[];
-  /** §8.6's per-node home provisioner. Absent until the substrate lands, and then
-   *  every node reports `shared-origin-plane` rather than pretending otherwise. */
+  /** The per-node home provisioner *Isolation* requires. Absent on a host with no
+   *  uid-0 view, and then every node reports `shared-origin-plane` rather than
+   *  pretending otherwise. */
   readonly provisionHome?: NodeWorkspaceProvisioner;
+  /**
+   * Where a TOOL-USING node's loop runs.
+   *
+   * Present hands each answer or generator node to a host that gives it its own
+   * storage and its own shell state — on the Cloudflare backend an
+   * `ExplorationAgent` facet, the same host a fork's head already runs in. Absent
+   * runs the loop in this isolate, which is the honest answer for a backend with
+   * no facets rather than a refusal: the body is the same function either way, so
+   * an absent host costs a node nothing but its storage boundary.
+   *
+   * `unit:'thought'` NEVER reaches this, and that is the rule rather than an
+   * omission: a thought node is one toolless `generateText` call that acquires no
+   * tools, no journal row and no shell, so there is nothing for a facet to
+   * isolate and the storage-isolation proof already covers it for exactly that
+   * reason. The dispatch that enforces it is `agentNodes` below.
+   */
+  readonly host?: NodeLoopHost;
   /** Backend-built `execute_tools` and live research, handed to every agent node.
    *  Absent means the node's surface is narrower, not broken. */
   readonly executeTool?: unknown;
   readonly webSearch?: WebSearchProvider;
   /**
-   * §8.4's compaction barrier: rewrite one parent's context ONCE, for every child
-   * of that parent to share.
+   * The compaction barrier over *Inherited context*: rewrite one parent's context
+   * ONCE, for every child of that parent to share.
    *
-   * A SEAM and not an implementation, for §6.4's first reason. `packages/compaction`
-   * is *"the @better-compact ladder that actually rewrites history"* and core does
-   * not depend on it, so a summariser written here would be a second ladder that
-   * drifts from the real one. What the engine owns is the POLICY — the ~85%
-   * threshold, and firing once per branch point so the shared view cannot become
-   * part of what siblings are ranked on — and that policy is testable without a
+   * A SEAM and not an implementation, for the reason *One spelling per axis* gives.
+   * `packages/compaction` is the @better-compact ladder that actually rewrites
+   * history, and core does not depend on it, so a summariser written here would be a
+   * second ladder that drifts from the real one. What the engine owns is the POLICY —
+   * the ~85% threshold, and firing once per branch point so the shared view cannot
+   * become part of what siblings are ranked on — and that policy is testable without a
    * summariser. Absent means no compaction: a parent past its window inherits
    * verbatim and the provider refuses, which is a loud failure rather than a silent
    * paraphrase of the objective.
@@ -222,7 +255,7 @@ export interface SwarmRunDeps {
 
 /** The scalar half of an objective — the metric, direction, scale, target, floor and
  *  instrument a measured run needs. A `witness` hunt supplies its `proxy`'s, which is
- *  §2.4(c)'s rule that the proxy is what the search optimises. */
+ *  the rule in *Witness objectives* that the proxy is what the search optimises. */
 interface MeasuredObjective {
   readonly metric: string;
   readonly unit: string;
@@ -242,7 +275,13 @@ function measuredHalf(objective: Objective): MeasuredObjective | null {
     const proxy = measuredHalf(objective.proxy);
     return proxy && { ...proxy, witness: objective.check };
   }
-  if (objective.kind === 'vector') return null;
+  // BOTH multi-axis kinds return null, and `instanced` was the one that did not. It
+  // carries every field a scalar does, so it fell through this function and was measured
+  // as though its `instances` were not there — the refusal below already said "measured
+  // per component or per instance" while only the component half was reachable. A run
+  // that reduces a declared front to one aggregate number is the accepted-and-ignored
+  // axis *Accepted and ignored* refuses, so the objective's own kind is what refuses.
+  if (objective.kind === 'vector' || objective.kind === 'instanced') return null;
   return {
     metric: objective.metric,
     unit: objective.unit,
@@ -271,8 +310,9 @@ function badInput(error: string): Refusal {
  * Whether this tree can execute the resolved shape, or the refusal naming what it
  * would have needed.
  *
- * Every arm names the one thing that is missing and the one move that fixes it, per
- * §7.2: a refusal offering two remedies was measured being corrected to the wrong one.
+ * Every arm names the one thing that is missing and the one move that fixes it, because
+ * *Refusals* holds that a refusal offering two remedies was measured being corrected to
+ * the wrong one.
  */
 function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
   const { config, caps } = resolved;
@@ -293,8 +333,8 @@ function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
   // surface said so. The blocker was real and it was mis-sited: it bounds the GRADING
   // SIGNAL, not the tool surface. A node now holds tools and is graded on what it
   // REPORTS (`node-agent.ts`), the value that named the shape is gone because the
-  // shape is what `answer` and `generator` now are, and `thought` is §8.9's
-  // degenerate point kept as the cheap tier. All three execute below.
+  // shape is what `answer` and `generator` now are, and `thought` is the degenerate
+  // point *The six axes* names, kept as the cheap tier. All three execute below.
   // NO `score` ARM REFUSES `judge` ANY MORE, and this is the second time the absence is
   // the ticket. It was refused because "judge needs the marginalised ensemble the
   // shipped tree owns" — and the tree DOES own one: `mcts/evaluation.ts` marginalises a
@@ -314,16 +354,45 @@ function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
     // Kept because this function is also the in-process entry point.
     return badInput(`advance:"${config.advance.kind}" cannot select without a score.`);
   }
-  if (config.advance.kind !== 'none' && !isTreeAdvance(config.advance.kind)) {
-    return unsupported(`advance:"${config.advance.kind}" reports a front or an archive, and both need a `
-      + 'store this run has no writer for. Use advance:"none" for a flat expansion, or one of '
-      + `${SWARM_TREE_ADVANCES.join('/')} to select down a tree.`);
+  // `advance:'archive'` RUNS — see `admitToArchive` at the settle barrier. The refusal it
+  // used to share with `pareto` said both "need a store this run has no writer for", and
+  // that sentence was one refusal covering two different causes: the store landed, and
+  // `exploration_records` IS the archive's grid — a row keyed by a descriptor, one elite
+  // per cell, monotone, sealed. What refuses below is the archive's own region, checked
+  // through the predicate `swarmValidity` shares so an in-process caller cannot run a
+  // shape the tool surface refuses.
+  const archive = archiveRegionRefusal(config, caps);
+  if (archive) return archive;
+  if (!resolved.key && config.advance.kind === 'archive') {
+    // Unreachable through `swarmValidity`, which refuses an archive with no descriptor
+    // outright. Kept because this function is also the in-process entry point, and
+    // because everything below binds the cell to this field.
+    return badInput('advance:"archive" bins its elites by a descriptor and this call named none. '
+      + 'Supply `key`, naming a quantity the objective\'s own instrument reports.');
+  }
+  if (config.advance.kind === 'pareto') {
+    // AND THIS IS THE OTHER CAUSE, now stated as itself. `pareto` is not waiting on a
+    // store: `swarmValidity` already requires its objective to be `instanced` or
+    // `vector`, and this runner measures NEITHER — `measuredHalf` refuses both above,
+    // one `MeasuredObjective` carries a single metric and direction, the tree's reward is
+    // `normalisedScore` over that one value, and `MeasuredValue.perInstance` is read
+    // nowhere. A front here would be an argmax over an aggregate reported as a frontier,
+    // which is the shape *Settle is derived* forbids.
+    return unsupported('advance:"pareto" selects the NON-DOMINATED set, and being non-dominated is a '
+      + 'statement about several axes: `objective` must be kind:"instanced" or kind:"vector" for the '
+      + 'front to exist at all. This runner measures one number per candidate — one metric, one '
+      + 'direction, one normalised reward — and reads neither a per-instance vector nor a per-metric '
+      + 'one, so it would report an argmax over an aggregate as a frontier. What is missing is a '
+      + 'per-instance measurement path and a dominance comparison, not a store. Use advance:'
+      + `"${SWARM_TREE_ADVANCES.join('"/"')}" over kind:"scalar", which is the aggregate that argmax `
+      + 'was over.');
   }
   // `expand:'aggregate'` RUNS — see `fanInAtLevel`. What refuses here is a composition
   // in which a fan-in could never HAPPEN, and each arm names the one thing that makes it
-  // impossible. A composition that resolved and then quietly aggregated nothing would be
-  // §2.5's accepted-and-ignored axis, which is the defect the refusal it replaces was
-  // written against — the refusal was true about the engine and is not any more.
+  // impossible. A composition that resolved and then quietly aggregated nothing would
+  // be the accepted-and-ignored axis *Accepted and ignored* refuses, which is the
+  // defect the refusal it replaces was written against — the refusal was true about
+  // the engine and is not any more.
   if (config.expand === 'aggregate') {
     if (depth.value < 2) {
       return badInput('expand:"aggregate" is fan-in — k parents consumed by one child — and a '
@@ -341,7 +410,8 @@ function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
       // does not do is PLACE a candidate. A fan-in merges its parents' work, and a
       // member's diff is the answer this engine wrote to the verifier's own artifact
       // path; a judged run has no such path, so there is nothing for a fan-in to take a
-      // diff against and no measured verdict for §9.3 rule 2 to read.
+      // diff against and no measured verdict for merge-back's binding rule — *A verdict
+      // is bound to the exact pair it was issued over* — to read.
       return badInput('expand:"aggregate" merges what its parents produced, and a member\'s diff is '
         + `the candidate this engine PLACED at the objective's own path. score:"${config.score.kind}" `
         + 'names no path and issues no measured verdict, so every fan-in could only refuse for want '
@@ -352,8 +422,8 @@ function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
   return null;
 }
 
-/** The workspace, as an instrument sees it. §3.2's two members and no others: no
- *  model, no network, no trajectory. */
+/** The workspace, as an instrument sees it. The two members *Measurement context* names
+ *  and no others: no model, no network, no trajectory. */
 function measurementContext(rt: AgentRuntime): MeasurementContext | null {
   const shell = rt.shell;
   if (!shell) return null;
@@ -361,7 +431,7 @@ function measurementContext(rt: AgentRuntime): MeasurementContext | null {
 }
 
 /** The measured baseline this instrument reported alongside a candidate, or null when
- *  the kind measures none. §2.3: measured, never asserted. */
+ *  the kind measures none. *Measured baseline*: measured, never asserted. */
 function baselineOf(measurement: Measurement, key: string | null): number | null {
   if (!key) return null;
   const reported = measurement.measured?.[key];
@@ -418,15 +488,16 @@ interface TreeNode {
    */
   granted: BranchGrant | null;
   /**
-   * What this node CONCLUDED, in its own words — the report a `fresh` child is
-   * seeded with (§8.4). Null for the root, which reported nothing because no model
-   * wrote it, and for a `thought` node, whose whole output IS its artifact.
+   * What this node CONCLUDED, in its own words — the report a `fresh` child is seeded
+   * with, per *Inherited context*. Null for the root, which reported nothing because no
+   * model wrote it, and for a `thought` node, whose whole output IS its artifact.
    */
   readonly conclusion: string | null;
   /**
    * The conversation a `fork` child of this node inherits: what this node itself
    * inherited, plus what it produced. Append-only, so every sibling of one parent
-   * shares one byte-identical cacheable prefix (§8.4).
+   * shares one byte-identical cacheable prefix — the caching decision *Inherited
+   * context* makes.
    *
    * Empty for a thought node, which has no conversation to hand down, and for the
    * root, whose children start from the origin's own framing.
@@ -436,10 +507,10 @@ interface TreeNode {
    * The compacted view of {@link transcript}, once this node has crossed the window
    * threshold and the barrier has run.
    *
-   * Held on the PARENT and not on each child, which is the whole point of §8.4's
-   * once-per-branch-point rule: a shared view cannot vary across the siblings it is
-   * compared over, so no part of the ranking is a fact about which sibling's
-   * compaction kept the useful paragraph.
+   * Held on the PARENT and not on each child, which is the whole point of the
+   * once-per-branch-point rule *Inherited context* states: a shared view cannot vary
+   * across the siblings it is compared over, so no part of the ranking is a fact about
+   * which sibling's compaction kept the useful paragraph.
    */
   compacted: readonly ModelMessage[] | null;
   /**
@@ -451,9 +522,9 @@ interface TreeNode {
    * `parentId` is the SELECTION edge: the row `search_nodes` holds, the lineage
    * `backpropagate` walks and the depth every child derives from. These are DEPENDENCY
    * edges: whose work this node's answer was written against, which is what orders a
-   * merge (§9.1). Recording a second selection edge would hand one measurement to two
-   * ancestor means and make the selector's comparison a fact about how many parents a
-   * node happened to have.
+   * merge, per *Dependency order*. Recording a second selection edge would hand one
+   * measurement to two ancestor means and make the selector's comparison a fact about
+   * how many parents a node happened to have.
    */
   readonly aggregated: readonly string[];
 }
@@ -463,12 +534,12 @@ interface TreeNode {
 const PROPOSAL_MARKER = 'PROPOSE-BRANCH';
 
 /**
- * §8.2's proposal, at the one boundary it crosses.
+ * The proposal *Arbitration* governs, at the one boundary it crosses.
  *
  * `strictObject`, so a node that invents a field is told rather than silently having
  * it dropped — the same discipline the verifier registry applies to `spec`. Notably
- * ABSENT: any depth field. A node never states its own depth (§8.3), so the request
- * carries no number the engine would have to distrust.
+ * ABSENT: any depth field. A node never states its own depth (*Node identity*), so the
+ * request carries no number the engine would have to distrust.
  */
 const BranchProposalSchema = v.strictObject({
   rationale: v.string(),
@@ -526,7 +597,7 @@ function readAnswer(text: string): ReadAnswer {
  * The invitation to propose, appended to a THOUGHT node's prompt only where a branch
  * could actually be granted.
  *
- * §8.2's build-time rule, which `head-tools.ts` already applies to `split_subheads`
+ * *Build-time exclusion*, which `head-tools.ts` already applies to `split_subheads`
  * and `node-agent.ts` applies to `propose_branch`: a request that can only ever be
  * refused MUST NOT be offered, because offering it spends a step to learn a limit the
  * surface already knew. So a flat run and a node at the depth cap are never asked.
@@ -535,7 +606,8 @@ function readAnswer(text: string): ReadAnswer {
  *
  * A MARKER RATHER THAN A TOOL, because this is the degenerate point: a thought node
  * has no tool call to be answered through, so its request is text the engine reads
- * and its verdict is a typed diagnostic event (§8.2). An agent node gets the tool.
+ * and its verdict is a typed diagnostic event (*Arbitration*). An agent node gets the
+ * tool.
  */
 function proposalInvitation(input: {
   readonly advance: ResolvedSwarm['config']['advance'];
@@ -591,8 +663,8 @@ function pathFeedback(input: {
  * and MAP-Elites' grid", and a database is read by putting its members in front of the
  * model. It is deliberately NOT placed at the verifier's path: a run whose baseline was
  * measured on a file this engine had just overwritten would have a baseline that is not
- * "the workspace as found" (§2.3), and a better one at that, so the target-already-met
- * refusal would kill exactly the runs that had the most to inherit.
+ * "the workspace as found" (*Measured baseline*), and a better one at that, so the
+ * target-already-met refusal would kill exactly the runs that had the most to inherit.
  *
  * The VALUE and the ARTIFACT together. The number alone is a bar with no way to clear
  * it, and the artifact alone is a program with no reason to believe it is good.
@@ -712,7 +784,8 @@ function branchPrompt(input: {
 }
 
 /**
- * The share of a model's window at which §8.4's compaction ladder is allowed to run.
+ * The share of a model's window at which the compaction ladder under *Inherited
+ * context* is allowed to run.
  *
  * *"When a node's context reaches roughly 85% of its window, the ladder runs; below
  * that it does not run at all."* Named because it is a CACHING judgement and not a
@@ -722,7 +795,7 @@ function branchPrompt(input: {
 const CONTEXT_COMPACTION_THRESHOLD = 0.85;
 
 /**
- * §8.4's BARRIER: the one prefix every child of this parent inherits.
+ * The *Inherited context* BARRIER: the one prefix every child of this parent inherits.
  *
  * Verbatim below the threshold, which is the whole of what `context:'fork'` means and
  * a decision about caching: an unmodified prefix is a prefix a provider can cache, so
@@ -737,7 +810,7 @@ const CONTEXT_COMPACTION_THRESHOLD = 0.85;
  *
  * With no ladder wired the prefix is handed over whole and the absence is REPORTED. A
  * provider refusing an over-long context is a loud failure; a silently paraphrased
- * objective is the §2.4(c) fabrication reached by attrition.
+ * objective is the fabrication *Witness objectives* forbids, reached by attrition.
  */
 
 /**
@@ -756,8 +829,9 @@ function modelSpecOf(model: LanguageModel): string {
   return asModel.success ? asModel.output.modelId : '';
 }
 
-/** §8.4's BARRIER: the one prefix every child of this parent inherits, verbatim below
- *  the threshold and compacted ONCE above it. See the note above `modelSpecOf`. */
+/** The *Inherited context* BARRIER: the one prefix every child of this parent inherits,
+ *  verbatim below the threshold and compacted ONCE above it. See the note above
+ *  `modelSpecOf`. */
 async function sharedPrefix(input: {
   readonly parent: TreeNode;
   readonly deps: SwarmRunDeps;
@@ -789,7 +863,8 @@ async function sharedPrefix(input: {
 }
 
 /**
- * §8.4's SEED, assembled by the engine and never authored by the parent.
+ * The *Inherited context* SEED, assembled by the engine and never authored by the
+ * parent.
  *
  * *"A parent that writes its own child's seed can launder a claim about its own value:
  * it would be supplying, one hop removed, the number its child is told to beat."* So
@@ -915,8 +990,8 @@ interface Expansion {
   /** The branch an AGENT node was granted while it ran, carried onto its tree node so
    *  selection can expand it when it reaches it. */
   readonly granted: BranchGrant | null;
-  /** What an agent node concluded, for a `fresh` child's seed (§8.4). Null for a
-   *  thought node, whose conclusion IS its artifact. */
+  /** What an agent node concluded, for a `fresh` child's seed — see *Inherited context*.
+   *  Null for a thought node, whose conclusion IS its artifact. */
   readonly conclusion: string | null;
   /** The conversation a `fork` child of this node inherits. Empty for a thought node. */
   readonly transcript: readonly ModelMessage[];
@@ -929,11 +1004,19 @@ interface Expansion {
 /**
  * The `advance` axis as the scheduler's policy.
  *
- * Total over the values that reach a run, and null for the two that cannot:
- * `regionRefusal` refuses `archive` and `pareto` before anything is selected, because
- * both report a store this runner has no writer for. Null rather than a substituted
- * policy — a run given a scheduler its caller did not ask for is the
- * accepted-and-ignored defect in its worst form.
+ * `archive` IS `none`'s one expansion step, and that is not a substituted scheduler —
+ * which would be the accepted-and-ignored defect in its worst form. `archiveRegionRefusal`
+ * pins an archive run to depth 1, so there is exactly ONE expansion, off the root, and
+ * every policy in this table agrees about it: there is no second level for a frontier
+ * order to disagree over. What makes `archive` a different axis value from `none` is not
+ * a selection rule but the two things it does that `none` cannot — it BINS its candidates
+ * by a witnessed descriptor and it REFUSES the ones that duplicate a cell's occupants —
+ * and both happen at the settle barrier, where `advance:'none'` has neither a key nor a
+ * rejection test to apply.
+ *
+ * `pareto` stays null: `regionRefusal` refuses it for a cause that is about the
+ * measurement rather than the schedule, and returning `'none'` for it would run a flat
+ * wave and call the winner a front.
  */
 function frontierPolicyOf(advance: SwarmAdvance): FrontierPolicy | null {
   switch (advance) {
@@ -942,6 +1025,7 @@ function frontierPolicyOf(advance: SwarmAdvance): FrontierPolicy | null {
     case 'none':
       return advance;
     case 'archive':
+      return 'none';
     case 'pareto':
       return null;
   }
@@ -983,9 +1067,9 @@ function pathTo(nodes: ReadonlyMap<string, TreeNode>, node: TreeNode): TreeNode[
  *
  * It goes to the diagnostics stream and nowhere else, and for a toolless node that is
  * forced rather than chosen: by the time the engine can answer, the node has already
- * finished its one call and there is no channel back to it. §8.2 requires the answer
- * to exist and states where it lands when the asker cannot receive it; this is that
- * place, with a stable dotted name so the refusals are queryable rather than merely
+ * finished its one call and there is no channel back to it. *Arbitration* requires the
+ * answer to exist and states where it lands when the asker cannot receive it; this is
+ * that place, with a stable dotted name so the refusals are queryable rather than merely
  * printed. An AGENT node is answered by `propose_branch`'s return value instead, and
  * the engine still logs the accepted verdict so both kinds of node leave the same
  * trail in the stream.
@@ -1024,7 +1108,7 @@ function reportVerdict(log: Logger, input: {
  *
  * The budget is asked rather than passed, because conservation is the budget's own
  * invariant and a caller that read the number first and handed it in could not hold
- * it (§8.11, and `swarm-budget.ts`'s header).
+ * it (*Budget conservation*, and `swarm-budget.ts`'s header).
  */
 function answerProposal(input: {
   readonly log: Logger;
@@ -1091,9 +1175,9 @@ type ChildOutcome =
  * and classify what came back.
  *
  * Sequential by construction — every candidate is written to the SAME path, so a
- * parallel measurement would measure whichever wrote last. That is §10.3's isolation
- * gap respected rather than assumed away, and it is also why a node needs no storage
- * of its own: the engine places the answer, the engine measures it.
+ * parallel measurement would measure whichever wrote last. That is the isolation gap
+ * *Isolation* names, respected rather than assumed away, and it is also why a node needs
+ * no storage of its own: the engine places the answer, the engine measures it.
  */
 async function measureChild(input: {
   readonly ctx: MeasurementContext;
@@ -1160,9 +1244,9 @@ async function measureChild(input: {
  * reported rather than assumed.
  *
  * A THROWN judge is the instrument breaking and takes the run down through the same arm
- * a thrown verifier does (§3.4). It is NOT converted into a badly-scored candidate: a
- * judge that failed produced no opinion, and scoring the candidate on the absence of
- * one is the accepted-and-ignored lie in its purest form.
+ * a thrown verifier does (*The closed verifier registry*). It is NOT converted into a
+ * badly-scored candidate: a judge that failed produced no opinion, and scoring the
+ * candidate on the absence of one is the accepted-and-ignored lie in its purest form.
  */
 async function judgeChild(input: {
   readonly rt: AgentRuntime;
@@ -1216,8 +1300,9 @@ async function judgeChild(input: {
  * Run a resolved swarm, or refuse.
  *
  * The refusals are ordered by what they cost: shape first (free), then the caps, then
- * the instrument, then the BASELINE — because §2.3's measurement is the first thing
- * that spends anything, and a run that will not start must not spend it.
+ * the instrument, then the BASELINE — because the measurement *Measured baseline*
+ * requires is the first thing that spends anything, and a run that will not start must
+ * not spend it.
  */
 export async function runSwarm(
   deps: SwarmRunDeps,
@@ -1241,6 +1326,14 @@ export async function runSwarm(
   const publishing = PUBLISHING_CARRIES.find(
     (carry): carry is PublishingCarry => carry === resolved.config.carry.kind,
   ) ?? null;
+  // THE ARCHIVE IN FORCE, or null. Derived once and passed, never re-read from the axis:
+  // the descriptor a candidate is binned into, the admission test that gates its write and
+  // the cell count the seal's disclosure reports are three facts about one archive, and
+  // three derivations of it are three things that can disagree. `key` is non-null under
+  // this arm by `regionRefusal`, so the pair is complete or absent together.
+  const archive = resolved.config.advance.kind === 'archive' && resolved.key !== null
+    ? { key: resolved.key, novelty: resolved.config.advance.novelty }
+    : null;
   const log = deps.logger ?? diagnostics;
 
   let measured: MeasuredObjective | null = null;
@@ -1267,8 +1360,8 @@ export async function runSwarm(
       // reason that is not about publishability: a closure declares no path a
       // candidate belongs at, so a runner holding one could only measure the
       // workspace as found and report it as a candidate's score. Registering the kind
-      // is what supplies that path — and it is also what gives §3.4 a name that can
-      // fail to resolve.
+      // is what supplies that path — and it is also what gives the closed registry
+      // (*The closed verifier registry*) a name that can fail to resolve.
       return unsupported('this objective supplies `verify` as a closure, which names no path a '
         + 'candidate is written to, so this run cannot place one for it to measure. Register a '
         + 'verifier kind and pass verify as {kind, spec}.');
@@ -1276,11 +1369,11 @@ export async function runSwarm(
     const resolvedVerifier = resolveVerifier(measured.verify);
     if ('reason' in resolvedVerifier) return resolvedVerifier;
     verifier = resolvedVerifier;
-    // §5.1's identity, COMPLETE: the spec the caller named and the code that name
-    // resolved to. `argumentDigest({kind, spec})` alone cannot tell two runs whose kind
-    // resolved to different implementations apart, and pooling those as comparable is
-    // what `ResolvedVerifier.implementation` exists to prevent. Built here because this
-    // is the one place both halves are in hand.
+    // The identity *Comparability* requires, COMPLETE: the spec the caller named and
+    // the code that name resolved to. `argumentDigest({kind, spec})` alone cannot tell
+    // two runs whose kind resolved to different implementations apart, and pooling those
+    // as comparable is what `ResolvedVerifier.implementation` exists to prevent. Built
+    // here because this is the one place both halves are in hand.
     identity = {
       metric: measured.metric,
       unit: measured.unit,
@@ -1294,9 +1387,9 @@ export async function runSwarm(
         + 'verifier is given a filesystem and a shell and this actor was wired neither. The call is '
         + 'well-formed; the instrument is absent.');
     }
-    // §2.3: the baseline is measured on the workspace AS FOUND, before any candidate
-    // exists. A fault here MUST NOT start the run — there is nothing to normalise
-    // against and nothing to compare to.
+    // *Measured baseline*: the baseline is measured on the workspace AS FOUND, before
+    // any candidate exists. A fault here MUST NOT start the run — there is nothing to
+    // normalise against and nothing to compare to.
     let asFound: Measurement;
     try {
       asFound = await verifier.verify(ctx);
@@ -1311,14 +1404,15 @@ export async function runSwarm(
       return unavailable('the baseline measurement produced no number, so there is nothing to '
         + `normalise against: ${asFound.detail}`);
     }
-    // §4.5 C2 — the run's own first measurement refutes the floor.
+    // *Floor margin*: the run's own first measurement refutes the floor.
     if (measured.floor && breaches(measured.floor, measured.direction, baseline)) {
       return badInput(`the workspace as found already measures ${String(baseline)} `
         + `${measured.unit}, past a floor of ${String(measured.floor.value)} that no correct `
         + 'solution may cross. The floor is refuted by the run\'s own baseline before any candidate '
         + `exists. Re-derive the bound: ${measured.floor.proof}`);
     }
-    // §2.3 — a target at or beyond the measured baseline leaves no range to score on.
+    // *Measured baseline* — a target at or beyond the measured baseline leaves no range
+    // to score on.
     if (normalisedScore({
       value: baseline, baseline, target: measured.target,
       direction: measured.direction, scale: measured.scale,
@@ -1327,6 +1421,24 @@ export async function runSwarm(
         + `the workspace as found, which measures ${String(baseline)}. Every candidate would `
         + 'saturate at 1.0 and the search would have no gradient — the baseline is measured rather '
         + `than declared, so raise the target past ${String(baseline)}.`);
+    }
+    // THE ARCHIVE'S KEY, CHECKED AGAINST THE INSTRUMENT THAT HAS TO WITNESS IT — here,
+    // because this is the first and cheapest moment it can be: the baseline measurement
+    // has just reported the quantities this instrument reports, and a key naming none of
+    // them would otherwise be discovered one candidate at a time at the settle barrier,
+    // where every write is refused for want of a cell and the run reports coverage over an
+    // archive it could never have written. Refused before a single candidate is expanded,
+    // naming the keys this instrument does report.
+    if (archive) {
+      const cell = archiveCellOf(archive.key, asFound.measured);
+      if (cell.kind === 'unwitnessed') {
+        return badInput(`advance:"archive" bins every candidate by \`key\`, and the descriptor has to be `
+          + `WITNESSED by the instrument rather than claimed by a node — but "${archive.key}" is not among `
+          + `the quantities kind:"${verifier.kind}" reports${cell.reported.length > 0
+            ? `, which are: ${cell.reported.join(', ')}`
+            : ' (it reports none at all)'}. Name one of those as \`key\`, or drop advance:"archive" for a `
+          + 'run with no coverage claim.');
+      }
     }
     log.event('swarm.baseline_measured', {
       preset: resolved.preset,
@@ -1344,16 +1456,18 @@ export async function runSwarm(
   // here is `normalisedScore` over the caller's own metric.
   const sql = deps.rt.storage.sql;
   initSearchTables(deps.rt.storage.execRaw, sql);
-  // §8.8's transcript store, and it is the SAME ledger a fork's turns land in: *"the
-  // transcript is a read model over the node's journal, never a second store"*.
-  // `search_nodes` stays the TREE — structure and one normalised value per node — and
-  // the journal stays the turns. Initialised rather than assumed, for the reason
-  // `initSearchTables` is: a workspace that has never run a fork has no `head_journal`.
+  // The transcript store *The journal read model* governs, and it is the SAME ledger a
+  // fork's turns land in: the transcript is a read model over the node's journal, never
+  // a second store. `search_nodes` stays the TREE — structure and one normalised value
+  // per node — and the journal stays the turns. Initialised rather than assumed, for the
+  // reason `initSearchTables` is: a workspace that has never run a fork has no
+  // `head_journal`.
   initHeadsTables(deps.rt.storage.execRaw, sql);
   const journal = new HeadJournal(sql);
-  // §5.2's leaderboard, initialised for the same reason the two above are: a workspace
-  // that has never run a search has no `exploration_records`, and the carry-in read
-  // immediately below would be a query against a table that does not exist.
+  // The leaderboard *The records store* governs, initialised for the same reason the two
+  // above are: a workspace that has never run a search has no `exploration_records`, and
+  // the carry-in read immediately below would be a query against a table that does not
+  // exist.
   initExplorationRecordsTable(deps.rt.storage.execRaw);
 
   // CARRY-IN. What earlier runs of THIS objective, under THIS floor, already reached —
@@ -1382,8 +1496,9 @@ export async function runSwarm(
       displacements: carriedBest.displacements,
     });
   }
-  // Whether a node is an agent at all. `thought` is §8.9's degenerate point and takes
-  // the toolless path below unchanged; the other two run `node-agent.ts`.
+  // Whether a node is an agent at all. `thought` is the degenerate point *The six axes*
+  // names, and it takes the toolless path below unchanged; the other two run
+  // `node-agent.ts`.
   const agentNodes = resolved.config.unit.kind !== 'thought';
   const languages = deps.rt.executor.languages;
   // The narrowing, not a second policy: `regionRefusal` has already refused the two
@@ -1410,9 +1525,9 @@ export async function runSwarm(
     measurement: null, score: measures ? 0 : null,
     proposal: null, proposalError: null, granted: null,
     // The root reported nothing because no model wrote it. Its children's prefix is
-    // the ORIGIN's conversation when the caller supplied one (§8.4: *"a root that
-    // started blank would throw away precisely the context that made the caller
-    // decide to search"*) and the task block alone when it did not.
+    // the ORIGIN's conversation when the caller supplied one (*Inherited context*: a
+    // root that started blank would throw away precisely the context that made the
+    // caller decide to search) and the task block alone when it did not.
     conclusion: null, transcript: deps.originContext ?? [], compacted: null,
     // The root aggregates nothing: it IS the workspace as found, and a fan-in consumes
     // a level the search produced.
@@ -1449,15 +1564,16 @@ export async function runSwarm(
    *  per distinct size rather than one per candidate. */
   const clampsReported = new Set<number>();
   // THE EXPANSION BUDGET, in units of one child: `depth` waves of `branches`, DERIVED
-  // from the two caps the call resolved because there is no third cap to read. §6.1's
-  // table files `budget` (iterations) as a cap on `SwarmInput`, but `SwarmInput`
-  // declares none and the tool surface deliberately omits it — `agents-tool.ts` records
-  // that an iteration cap was meaningless at the one depth that ran, and that declaring
-  // a cap nothing applies is the §2.5 lie. So the two DECLARED caps are the budget. At
-  // depth 1 this is exactly `branches`, i.e. the one wave a flat run has always been,
-  // so enabling the tree changes nothing about the depth that already ran. An invented
-  // third number would be worse than a derivation: a default nothing declared is a
-  // shape the record cannot report honestly, and this one `expansions` reports.
+  // from the two caps the call resolved because there is no third cap to read. `budget`
+  // (iterations) was filed as a cap on `SwarmInput`, but `SwarmInput` declares none and
+  // the tool surface deliberately omits it — `agents-tool.ts` records that an iteration
+  // cap was meaningless at the one depth that ran, and that declaring a cap nothing
+  // applies is the lie *Accepted and ignored* refuses. So the two DECLARED caps are the
+  // budget. At depth 1 this is exactly `branches`, i.e. the one wave a flat run has
+  // always been, so enabling the tree changes nothing about the depth that already ran.
+  // An invented third number would be worse than a derivation: a default nothing
+  // declared is a shape the record cannot report honestly, and this one `expansions`
+  // reports.
   //
   // OWNED BY A TYPE rather than by a `let`, because arbitration no longer happens only
   // in this loop: an agent node asks from inside its own concurrent tool loop, so the
@@ -1481,6 +1597,10 @@ export async function runSwarm(
   if (deps.reportModelCall !== undefined) nodeDeps.reportModelCall = deps.reportModelCall;
   if (deps.mission !== undefined) nodeDeps.mission = deps.mission;
   if (deps.provisionHome !== undefined) nodeDeps.provisionHome = deps.provisionHome;
+  // Only reached by an agent node: the toolless `thought` branch below never
+  // builds `nodeDeps` at all, which is what makes the split structural rather
+  // than a condition someone has to remember.
+  if (deps.host !== undefined) nodeDeps.host = deps.host;
   if (deps.executeTool !== undefined) nodeDeps.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
 
@@ -1491,11 +1611,11 @@ export async function runSwarm(
    * Expand ONE child: the generation half of an expansion, for a wave's sibling and for
    * a fan-in's aggregate vertex alike.
    *
-   * ONE FUNCTION, because §8.5's merge node is *"graded like any other candidate"* and a
-   * second generation path for it would be exactly the second mechanism that policy
-   * exists to prevent. It is also where a merge node would quietly lose everything a
-   * child gets for free here: a journalled transcript, arbitration at its own depth,
-   * usage accounting, and the one event that says a node settled.
+   * ONE FUNCTION, because the merge node *Merge-back* describes is graded like any other
+   * candidate, and a second generation path for it would be exactly the second mechanism
+   * that policy exists to prevent. It is also where a merge node would quietly lose
+   * everything a child gets for free here: a journalled transcript, arbitration at its
+   * own depth, usage accounting, and the one event that says a node settled.
    */
   const expandChild = async (input: {
     readonly parent: TreeNode;
@@ -1567,7 +1687,7 @@ export async function runSwarm(
       context: input.context,
       mode: deps.mode,
       settle: resolved.settle,
-      // §8.2's build-time rule: the tool exists only where a branch could be granted.
+      // *Build-time exclusion*: the tool exists only where a branch could be granted.
       // Depth is what cannot change mid-run, so it gates the BUILD; the budget can
       // empty between the invitation and the answer, so it stays a runtime refusal
       // inside the arbiter.
@@ -1603,9 +1723,10 @@ export async function runSwarm(
     };
   };
 
-  /** THE RUN'S MERGE LEDGER: what a fan-in has already landed in the origin. §9.3 rule 1
-   *  asks whether a dependency has SETTLED, and one that settled at an earlier barrier of
-   *  this run has — a DAG merged one fan-in at a time is still one merge order. */
+  /** THE RUN'S MERGE LEDGER: what a fan-in has already landed in the origin.
+   *  *Dependency order* asks whether a dependency has SETTLED, and one that settled at
+   *  an earlier barrier of this run has — a DAG merged one fan-in at a time is still one
+   *  merge order. */
   const landed = new Set<string>();
   /** Level members no fan-in could consume, and members a fan-in consumed after the tree
    *  had retired them. Sets, so two fan-ins over one level cannot count a node twice. */
@@ -1623,15 +1744,16 @@ export async function runSwarm(
    * WHAT A FAN-IN IS HERE. A level is complete and its siblings have been compared, so
    * their WORK meets: the level's parents are offered to merge-back as members, in a
    * topological order of the dependency edges they declare, and everything after that is
-   * §8.5's machinery rather than a second copy of it —
+   * the machinery *Merge-back* states rather than a second copy of it —
    *
    *   - members that AGREE accumulate. Their diffs land in order, each rebased onto the
    *     result of the last, and the level's answer is that accumulation. Two members that
    *     wrote the same bytes have not conflicted, so no node is spawned to decide nothing;
-   *   - the first DISAGREEMENT spawns §8.5's merge node, and that node IS the aggregate
-   *     vertex — k parents consumed by one child, its task the merge, graded like any
-   *     other candidate. There is no second conflict mechanism because there is no second
-   *     conflict: a fan-in is exactly where two candidates' work meets;
+   *   - the first DISAGREEMENT spawns the merge node *Merge-back* names, and that node
+   *     IS the aggregate vertex — k parents consumed by one child, its task the merge,
+   *     graded like any other candidate. There is no second conflict mechanism because
+   *     there is no second conflict: a fan-in is exactly where two candidates' work
+   *     meets;
    *   - a member whose BASE MOVED under the member before it is re-verified through the
    *     registry, so a stale verdict never applies (`reverify` below);
    *   - the transaction bound is checked per member before its own apply, unchanged.
@@ -1660,10 +1782,10 @@ export async function runSwarm(
    *   - A MEMBER WHOSE MERGE DID NOT LAND KEEPS ITS DEPENDENT BEHIND IT. The fan-in stops
    *     where merge-back stopped, so a vertex whose parent has not reached the origin is
    *     not applied over it; the next barrier re-offers both, with the parent ordered
-   *     ahead of the vertex again. That is why §9.3 rule 1 never fires from here: the
-   *     member set is CLOSED over unlanded edges and the ledger accounts for the landed
-   *     ones, which is what satisfying a rule looks like as opposed to dodging it. Drop
-   *     either half and the DAG's own merges refuse by name.
+   *     ahead of the vertex again. That is why *Dependency order* never refuses from
+   *     here: the member set is CLOSED over unlanded edges and the ledger accounts for
+   *     the landed ones, which is what satisfying a rule looks like as opposed to dodging
+   *     it. Drop either half and the DAG's own merges refuse by name.
    *
    * Returns the vertex it produced, for the barrier loop to score exactly as it scores a
    * sampled child — never a second grading path.
@@ -1693,7 +1815,7 @@ export async function runSwarm(
     if (parents.length < 2 || atDepth + 1 > maxDepth) {
       // NEITHER A REFUSAL NOR SILENCE. A fan-in over one parent is `sample` under another
       // name and the engine will not relabel it; a vertex past the cap is the one thing
-      // §8.3's depth bound forbids. Both say which.
+      // the depth cap in *Arbitration* forbids. Both say which.
       log.event('swarm.aggregate_skipped', {
         preset: resolved.preset, depth: atDepth, parents: parents.length,
         reason: parents.length < 2 ? 'no-level' : 'depth-cap',
@@ -1737,12 +1859,13 @@ export async function runSwarm(
     const answers = new Map(consumed.map((member) => [member.id, member.answer]));
 
     /**
-     * §9.3 rule 4's re-verification, through the SAME instrument the search scored with.
+     * Re-verification under *A verdict is bound to the exact pair it was issued over*,
+     * through the SAME instrument the search scored with.
      *
      * A fan-in applies members onto one another, so every member after the first has a
-     * base its verdict never saw — that is the rebase, and rule 4 is what keeps it from
-     * being a licence. The check is the measurement itself rather than a cheaper proxy: a
-     * re-verified verdict is then the same KIND of fact as the original one.
+     * base its verdict never saw — that is the rebase, and the binding rule is what keeps
+     * it from being a licence. The check is the measurement itself rather than a cheaper
+     * proxy: a re-verified verdict is then the same KIND of fact as the original one.
      *
      * IT PUTS THE WORKSPACE BACK. The instrument measures a candidate in place, so
      * re-measuring moves the very path the merge is about; a member that then REFUSED
@@ -1947,7 +2070,7 @@ export async function runSwarm(
     // earned. An AGENT node was answered by `propose_branch` while it ran, and the
     // budget was debited there; a THOUGHT node is answered HERE, where selection
     // reached it, which is what makes a proposal an input to selection rather than a
-    // bypass of it (§8.2). Both go through one arbiter and one budget.
+    // bypass of it (*Arbitration*). Both go through one arbiter and one budget.
     const grant = parent.granted ?? (() => {
       const decision = answerProposal({ log, node: parent, resolved, budget });
       return decision?.kind === 'granted' ? decision : null;
@@ -1968,9 +2091,9 @@ export async function runSwarm(
 
     const ancestors = pathTo(nodes, parent);
     const childDepth = parent.depth + 1;
-    // §8.4's barrier: ONE compacted view per branch point, computed before any child
-    // of this parent starts, so nothing a level is ranked on can be a fact about which
-    // sibling's compaction kept the useful paragraph.
+    // The *Inherited context* barrier: ONE compacted view per branch point, computed
+    // before any child of this parent starts, so nothing a level is ranked on can be a
+    // fact about which sibling's compaction kept the useful paragraph.
     const prefix = agentNodes ? await sharedPrefix({ parent, deps, log, preset: resolved.preset }) : [];
     // What a child starts from: the proposal's per-branch answer where one was
     // granted, otherwise the run's `context`. `expand:'mutate'` used to ask this and
@@ -2051,8 +2174,8 @@ export async function runSwarm(
      *
      * A GENERATOR RATHER THAN A SECOND LOOP, because a vertex must reach the same scoring
      * body a sampled sibling reaches: one measurement, one row, one backpropagation, one
-     * ranking. §8.5 says a merge node is graded like any other candidate, and the cheapest
-     * way to make that true is for there to be nowhere else it could be graded.
+     * ranking. *Merge-back* says a merge node is graded like any other candidate, and the
+     * cheapest way to make that true is for there to be nowhere else it could be graded.
      *
      * THE BARRIER IS WHERE THIS YIELDS. The fan-in runs after the body has finished with
      * every sibling of the wave — the point at which the level is complete and its
@@ -2098,9 +2221,9 @@ export async function runSwarm(
           })
           : null;
       if (outcome?.kind === 'instrument-faulted') {
-        // §3.4: a throw is the INSTRUMENT breaking and is never converted into an
-        // unmeasurable candidate. It fails the run: no node is scored, nothing is
-        // published, and the reason reaches the caller intact.
+        // *The closed verifier registry*: a throw is the INSTRUMENT breaking and is never
+        // converted into an unmeasurable candidate. It fails the run: no node is scored,
+        // nothing is published, and the reason reaches the caller intact.
         // NAMED, because there are two scorers now and "the verifier faulted" on a judged
         // run sends a reader to an instrument the run never ran.
         return unavailable(`the ${measures ? 'verifier' : 'judge'} faulted while scoring `
@@ -2158,9 +2281,9 @@ export async function runSwarm(
         });
       }
       if (outcome?.kind === 'sealed') {
-        // §4.4: NOT scored zero, NOT written, and the run CONTINUES under a seal. The
-        // measurement is retained in full because a discarded one cannot adjudicate
-        // "the floor is wrong" against "the verifier is gameable".
+        // *The publication seal*: NOT scored zero, NOT written, and the run CONTINUES
+        // under a seal. The measurement is retained in full because a discarded one cannot
+        // adjudicate "the floor is wrong" against "the verifier is gameable".
         publication = { kind: 'sealed', breach: outcome.breach, clearedBy: null };
         log.event('exploration.floor_breach', {
           preset: resolved.preset,
@@ -2232,9 +2355,10 @@ export async function runSwarm(
   }
 
   // THE SWEEP. Every THOUGHT node's proposal that selection never reached is answered
-  // now, against the state that kept it waiting — §8.2's rule that a proposal is never
-  // dropped silently, and the only place `depth-exhausted` and `budget-exhausted` can
-  // be reached, since selection excludes a capped node and the loop guards the budget.
+  // now, against the state that kept it waiting — the rule in *Arbitration* that a
+  // proposal is never dropped silently, and the only place `depth-exhausted` and
+  // `budget-exhausted` can be reached, since selection excludes a capped node and the
+  // loop guards the budget.
   // An agent node needs no sweep: its request was answered inside its own tool call.
   for (const node of nodes.values()) {
     if (!node.proposal) continue;
@@ -2242,10 +2366,10 @@ export async function runSwarm(
     node.proposal = null;
   }
 
-  // MERGE-BACK: how a settled swarm's work reaches the origin (§8.5), and the reason the
-  // answer does not simply stay in a workspace nobody reads again. Without this the path
-  // holds whichever candidate was measured last, which is a different artifact from the
-  // one reported.
+  // MERGE-BACK: how a settled swarm's work reaches the origin (*Merge-back*), and the
+  // reason the answer does not simply stay in a workspace nobody reads again. Without this
+  // the path holds whichever candidate was measured last, which is a different artifact
+  // from the one reported.
   //
   // THE POLICY IS DERIVED FROM `settle`, never chosen here — the same move as `settleOf`
   // deriving `settle` from the axes. A scored run settles on one incumbent and applies
@@ -2253,9 +2377,9 @@ export async function runSwarm(
   // `synthesis` correctly applies nothing.
   //
   // THE MEMBER'S DIFF IS `reported`, and that provenance is what makes this reachable
-  // today. §8.6's per-node homes are not built, so no node has a workspace diff that
-  // could be said to be its own — but the engine places the node's REPORTED answer, and
-  // a report is that node's by construction whatever plane it ran on.
+  // today. The per-node homes *Isolation* describes are not built, so no node has a
+  // workspace diff that could be said to be its own — but the engine places the node's
+  // REPORTED answer, and a report is that node's by construction whatever plane it ran on.
   //
   // WHAT THIS ADDS OVER THE BARE WRITE IT REPLACES, stated narrowly so nobody reads more
   // into it. The settle placement is now a POLICY with a named event trail, and the
@@ -2268,7 +2392,7 @@ export async function runSwarm(
   // replacement, not a patch against an earlier base, and `measureChild` has already
   // overwritten this path once per candidate. Taking the base from measurement time
   // instead would refuse the winner on every multi-candidate run. Those rules bite when a
-  // member's diff comes from a private home, which is §8.6's to deliver.
+  // member's diff comes from a private home, which is *Isolation*'s to deliver.
   if (ctx) {
     const policy = mergePolicyOf(resolved.settle);
     const readOrigin = originReader(ctx.vfs);
@@ -2301,12 +2425,12 @@ export async function runSwarm(
   // silently exclude the whole swept set.
   //
   // This is the threshold's ONLY reader. `carry:'artifacts'` declares an admission
-  // `threshold` on its own arm (§6.4) and nothing consulted it, which made a tagged
+  // `threshold` on its own arm (*Presets*) and nothing consulted it, which made a tagged
   // parameter that a preset cannot even construct into config that changed nothing —
-  // exactly the accepted-and-ignored shape §2.5 refuses. `carry:'elites'` declares no
-  // threshold and still requires a MEASUREMENT: an unmeasurable candidate is not a
-  // zero-scoring elite, and seeding the next run from one is how an unscored artifact
-  // becomes an incumbent.
+  // exactly the accepted-and-ignored shape *Accepted and ignored* refuses.
+  // `carry:'elites'` declares no threshold and still requires a MEASUREMENT: an
+  // unmeasurable candidate is not a zero-scoring elite, and seeding the next run from one
+  // is how an unscored artifact becomes an incumbent.
   //
   // COMPLEMENTARY TO `carrySuppressed`, not a second copy of it. That is the SEAL, per
   // cell, about the run; this is ADMISSION, per candidate, about the candidate. A run
@@ -2332,6 +2456,13 @@ export async function runSwarm(
   // store is where that axis lands — and the seal is checked a second time inside the
   // writer, over the `records` surface, rather than assumed from the barrier's verdict.
   //
+  // UNDER `advance:'archive'` THE WRITER IS THE ARCHIVE'S. Same store and same rows — the
+  // grid IS this table, one descriptor partition per cell — with two things the bare write
+  // does not do: the candidate is binned into the cell its INSTRUMENT witnessed, and it is
+  // refused when it duplicates an occupant of that cell. `carry:'elites'` is what makes
+  // those occupants the next run's starting population, which is the whole reason the
+  // admission the barrier computes is worth computing.
+  //
   // A run with no OBJECTIVE IDENTITY records nothing and says so: a record is keyed by
   // the metric and the instrument, and a judged or unscored run measured neither. That
   // is `records: null` on the report, which is a different claim from zero rows written.
@@ -2340,6 +2471,7 @@ export async function runSwarm(
     const configDigest = configDigestOf(resolved);
     let written = 0;
     let notBetter = 0;
+    let tooClose = 0;
     // KEYED OFF THE AXIS AND NOT OFF THE VERDICT. `admitCarry` returns `admitted` for
     // `none` and `reflections` because the gate is not those values' business — neither
     // reaches a publication surface — so a loop that read the verdict alone would make
@@ -2354,13 +2486,8 @@ export async function runSwarm(
       // the RAW value, so the measurement is what it is read from and its absence skips
       // the row rather than fabricating one.
       if (!candidate || candidate.measured === null) continue;
-      const write: ExplorationWrite = {
+      const write: Omit<ExplorationWrite, 'descriptor'> = {
         identity,
-        // Always null today: `regionRefusal` refuses `advance:'archive'`, which is the
-        // one value that bins by a descriptor, so no composition that reaches this
-        // barrier has a partition. Null is the honest value — this objective has NO
-        // descriptor partition, which is not "the unnamed cell".
-        descriptor: null,
         artifact: candidate.artifact,
         value: candidate.measured.value,
         detail: candidate.measured.detail,
@@ -2379,7 +2506,53 @@ export async function runSwarm(
         costTokens: spentBy.get(candidate.id) ?? null,
         at: Date.now(),
       };
-      const verdict = recordExploration(sql, { publication, write });
+      // One refusal event with one field set, three causes filling it. The fields are
+      // CONSTANT across the causes for `settleCarry`'s reason — a name assembled per branch
+      // produces one name per outcome and none a query can be written against — and the two
+      // that only the novelty test has are empty and -1 elsewhere, the same way that
+      // function spells an inapplicable threshold.
+      const raw = candidate.measured.value;
+      const refused = (fields: {
+        readonly cause: string; readonly occupant: string; readonly distance: number;
+      }): void => {
+        log.event('swarm.record_refused', {
+          preset: resolved.preset,
+          carry: resolved.config.carry.kind,
+          node: candidate.id,
+          metric: identity.metric,
+          value: raw,
+          ...fields,
+        });
+      };
+      let verdict: ArchiveVerdict;
+      // The cell this row landed in, empty for a run with no partition. Read back from
+      // what the write USED rather than recomputed for the event, so the coverage a reader
+      // greps and the descriptor in the row cannot disagree.
+      let cellName = '';
+      if (archive === null) {
+        // NO PARTITION, which is not "the unnamed cell": this objective has no descriptor
+        // and its comparable set is one cell, exactly as `ExplorationRecord.descriptor`'s
+        // nullability states.
+        verdict = recordExploration(sql, { publication, write: { ...write, descriptor: null } });
+      } else {
+        const cell = archiveCellOf(archive.key, candidate.measured.measured);
+        if (cell.kind === 'unwitnessed') {
+          // The run-level check refuses a key this instrument never reports, so reaching
+          // here means the instrument reported it for the baseline and not for this
+          // candidate. There is no cell to place it in and none to invent: an elite binned
+          // into a fabricated coordinate is the mis-binning *Validity over the resolved
+          // configuration* refuses, and it is silently unrecoverable in a way a refusal
+          // is not.
+          refused({ cause: 'unwitnessed', occupant: '', distance: -1 });
+          continue;
+        }
+        cellName = cell.descriptor;
+        verdict = admitToArchive(sql, {
+          publication,
+          write: { ...write, descriptor: cell.descriptor },
+          novelty: archive.novelty,
+        });
+      }
       if (verdict.kind === 'recorded') {
         written += 1;
         log.event('swarm.record_written', {
@@ -2390,26 +2563,47 @@ export async function runSwarm(
           value: candidate.measured.value,
           record: verdict.recordKey,
           displaced: verdict.displaced ? 1 : 0,
+          cell: cellName,
         });
+      } else if (verdict.cause === 'too-close') {
+        tooClose += 1;
+        // THE OCCUPANT IS NAMED. A novelty rejection nobody can trace back to what it
+        // duplicated is indistinguishable from a threshold set wrong, and the two want
+        // opposite corrections.
+        refused({ cause: verdict.cause, occupant: verdict.occupant, distance: verdict.distance });
       } else {
         if (verdict.cause === 'not-better') notBetter += 1;
-        log.event('swarm.record_refused', {
-          preset: resolved.preset,
-          carry: resolved.config.carry.kind,
-          node: candidate.id,
-          metric: identity.metric,
-          value: candidate.measured.value,
-          cause: verdict.cause,
-        });
+        refused({ cause: verdict.cause, occupant: '', distance: -1 });
       }
     }
     return {
       carriedIn: carriedIn.length,
       carriedInBest: carriedBest?.value ?? null,
+      // The COVERAGE carried in, over the cells those rows span. `new Set` over a list
+      // already in hand rather than a second query: the rows were read at the top of the
+      // run and counting their partitions is arithmetic on them.
+      carriedInCells: new Set(carriedIn.map((record) => record.descriptor)).size,
       written,
       notBetter,
+      tooClose,
     };
   })();
+
+  // WHAT THE SEAL COST, IN CELLS. The disclosure *The publication seal* requires is
+  // stated over cells rather than over refused writes, and the field was pinned at one
+  // because a flat run has exactly one partition — true then, and an archive is the value
+  // that makes it false. Counted over the candidates this run MEASURED, because those are
+  // the cells it would have published into, and only under a seal: with the run open there
+  // is no suppression to report and the number would be a set built for nobody.
+  const suppressedCells = publication.kind === 'open'
+    ? 0
+    : archive === null
+      ? (best === null ? 0 : 1)
+      : new Set(candidates.flatMap((candidate) => {
+        if (candidate.measured === null) return [];
+        const cell = archiveCellOf(archive.key, candidate.measured.measured);
+        return cell.kind === 'cell' ? [cell.descriptor] : [];
+      })).size;
 
   // The BINDING realisation: the smallest ensemble any candidate actually sampled. Null
   // where none reached the ensemble, which for a judged run means every candidate
@@ -2420,7 +2614,7 @@ export async function runSwarm(
 
   const report = settleReport({
     resolved, measured, baseline, publication, candidates, best, carry: publishing,
-    records, judgeEnsemble,
+    records, judgeEnsemble, suppressedCells,
     // Every child this run actually created and measured — the candidate list IS the
     // count, rather than a second tally beside it that could disagree.
     expansions: candidates.length, usage, durationMs: Date.now() - started,
@@ -2542,7 +2736,8 @@ function singlePathApply(vfs: VFS): MemberApply {
   };
 }
 
-/** §2.4(c)'s report, assembled from what the run actually observed. */
+/** The report *Witness objectives* requires, assembled from what the run actually
+ *  observed. */
 function settleReport(input: {
   readonly resolved: ResolvedSwarm;
   readonly measured: MeasuredObjective | null;
@@ -2557,6 +2752,13 @@ function settleReport(input: {
   readonly carry: PublishingCarry | null;
   readonly records: ExplorationRecordsReport | null;
   readonly judgeEnsemble: JudgeEnsembleReport | null;
+  /**
+   * The cell count *The publication seal* discloses for a suppressed carry, computed by
+   * the caller because only it knows the archive in force: one for a flat run's single
+   * partition, and for `advance:'archive'` the number of cells the run measured into and
+   * could not keep. Zero on an open run, where there is no suppression to report.
+   */
+  readonly suppressedCells: number;
   readonly expansions: number;
   /** Why the run ended, as the LOOP observed it. Derived there rather than inferred
    *  from the candidate count, because a tree's count carries no information about
@@ -2575,11 +2777,11 @@ function settleReport(input: {
     // A witness verdict about THIS RUN. `false` is "this search did not find one",
     // and there is no field on this report that could say none exists.
     witnessFound: measured?.witness ? best !== null && best.score === 1 : null,
-    // The count is one per CELL rather than per refused publication: a flat run with
-    // no descriptor has exactly one cell, and it costs the next run one thing — a
-    // worse starting elite — or nothing at all.
+    // The count is one per CELL rather than per refused publication, and the cells are
+    // the caller's to count: a flat run has exactly one partition, while an archive run
+    // has as many as its candidates witnessed.
     carrySuppressed: carry
-      ? carrySuppression(input.publication, carry, best ? 1 : 0)
+      ? carrySuppression(input.publication, carry, input.suppressedCells)
       : null,
     records: input.records,
     judgeEnsemble: input.judgeEnsemble,

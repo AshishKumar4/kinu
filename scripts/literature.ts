@@ -8,8 +8,8 @@
  * pattern generalises past Lean: this tree's citations are well kept exactly where
  * something mechanically checks them, and drifted everywhere a boundary was
  * crossed that nothing checks. `docs -> literature` was the last such boundary,
- * and a seven-number audit found six of seven digits correct and four qualifiers
- * wrong — *"at matched compute"* over a comparison that was not,
+ * and a removed internal audit of seven numbers found six of seven digits correct
+ * and four qualifiers wrong — *"at matched compute"* over a comparison that was not,
  * *"58.2 to 83.6"* with no unit over a quantity that has two, an *"up to"*
  * deleted from the paper's own sentence, and a model quotation that was a
  * reviewer's compression.
@@ -52,9 +52,10 @@
  *
  * `withdrawn` is the fourth hand and the one a register normally lacks: a number
  * this repository CITED and has since retracted. It exists because gating the CLAIM
- * must not gate the CAVEAT. §6.5 keeps *"+12.5 at matched compute"* inside the
- * paragraph that withdraws it, and a rule refusing every bare parity adjective
- * beside a cited number would force the correction to be deleted in order to pass —
+ * must not gate the CAVEAT. The retraction that set this rule keeps
+ * *"+12.5 at matched compute"* inside the paragraph that withdraws it, and a rule
+ * refusing every bare parity adjective beside a cited number would force the
+ * correction to be deleted in order to pass —
  * making the gate an instrument for silent retractions. So the retraction is
  * DECLARED here instead, which is stronger than tolerating it: a withdrawn number
  * may appear only where its paragraph marks it as withdrawn, so re-asserting it as
@@ -118,8 +119,8 @@ export interface Claim {
 }
 
 /** No locator is on record. Distinguishable from a locator, and from a locator
- *  that turns out to be wrong — which is the whole point of §3.4's crash-versus-
- *  zero rule applied to citations. */
+ *  that turns out to be wrong — which is the whole point of the crash-versus-zero
+ *  rule in `strategy/objective.ts`'s `VerifierFault`, applied to citations. */
 export const NO_LOCATOR = 'no locator on record';
 
 export const WORKS: readonly Work[] = [
@@ -240,9 +241,9 @@ export const CLAIMS: readonly Claim[] = [
     hand: 'withdrawn',
     verifiedBy: 'SpecAudit.SpecEvidence found the drift; LiteratureGate confirmed it against'
       + ' arXiv:2407.01476v2, 2026-08-18',
-    note: 'It may appear ONLY inside a retraction. §6.5 keeps it as history, because a'
-      + ' document that found this defect in its own citations owes the reader the'
-      + ' correction rather than a silent edit — and a withdrawn number that is merely'
+    note: 'It may appear ONLY inside a retraction. The retraction keeps it as history,'
+      + ' because a document that found this defect in its own citations owes the reader'
+      + ' the correction rather than a silent edit — and a withdrawn number that is merely'
       + ' deleted comes back.',
   },
 

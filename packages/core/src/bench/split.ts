@@ -151,16 +151,36 @@ export class SealedSplit {
    *  and reversing it restores them — a property of the TASK, not of any
    *  variant, so surfacing which ones are broken (or unstable) leaks no
    *  performance signal. A corpus that cannot be validated is worse than one
-   *  that can. */
-  async validate(check: (task: BenchTask) => Promise<TaskValidation>): Promise<SealedValidation> {
+   *  that can.
+   *
+   *  `only` narrows to named ids for the same reason the outcomes may be
+   *  surfaced: well-formedness carries no performance signal, and re-proving ONE
+   *  re-anchored patch has to be affordable or nobody does it — the whole corpus
+   *  is ~160 suite runs. `checked` reports what was actually looked at, so a
+   *  narrowed run cannot be quoted as a verdict on the seal. */
+  async validate(
+    check: (task: BenchTask) => Promise<TaskValidation>, only?: readonly string[],
+  ): Promise<SealedValidation> {
     const invalid: string[] = [];
     const flaky: string[] = [];
-    for (const task of this.#tasks) {
+    const selected = only === undefined
+      ? this.#tasks
+      : this.#tasks.filter((task) => only.includes(task.id));
+    for (const task of selected) {
       const result = await check(task);
       if (!result.ok) invalid.push(task.id);
       else if ((result.passedOnAttempt ?? 1) > 1) flaky.push(task.id);
     }
-    return { checked: this.#tasks.length, invalid, flaky };
+    return { checked: selected.length, invalid, flaky };
+  }
+
+  /** Whether the seal holds this id. Leaks nothing `splitOf` does not already
+   *  compute from SEAL_SALT for any id anyone can name; what the seal protects is
+   *  task CONTENT and per-task performance, neither of which this answers. It
+   *  exists so a `--id` that names nothing can refuse instead of validating an
+   *  empty set and reporting ok. */
+  has(taskId: string): boolean {
+    return this.#tasks.some((task) => task.id === taskId);
   }
 
   /** Held-out task ids exist only to be excluded elsewhere (e.g. asserting the

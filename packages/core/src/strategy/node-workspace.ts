@@ -3,6 +3,8 @@
  * to work as — the sixth of a node's six properties, and the one that used to
  * be a promise.
  *
+ * Specified by docs/EXPLORATION.md — "Isolation" and "Node identity".
+ *
  * IT EXISTS NOW. A node's home is a real directory in the ONE global view,
  * owned by the node's own uid and moded `0o755`, and its commands run as that
  * uid — so the boundary is uid/gid/mode on real inodes rather than convention.
@@ -69,8 +71,8 @@ export interface NodeWorkspace {
 }
 
 /** Which node is asking. Identity comes from the engine's own row — a node
- *  states neither its id nor its depth (§8.3), so neither is an argument a
- *  caller could get wrong. */
+ *  states neither its id nor its depth, per *Node identity*, so neither is an
+ *  argument a caller could get wrong. */
 export interface NodeIdentity {
   readonly nodeId: string;
   readonly rootId: string;

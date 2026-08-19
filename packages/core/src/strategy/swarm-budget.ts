@@ -1,19 +1,19 @@
 /**
  * The search's expansion budget, and the ONE thing allowed to move it.
  *
+ * Specified by docs/EXPLORATION.md — "Budget conservation" and "A node is an agent".
+ *
  * WHY THIS IS A TYPE AND NOT A `let`. It was a `let childBudget` in the run loop
  * for as long as a node was one toolless generation, and that was sound for a
  * reason that has now stopped being true: nothing ran between reading the number
  * and writing it back, because arbitration happened in the run loop itself, one
- * node at a time. A node is now an agent (§8.1), so it asks for its branches from
- * inside its own tool loop, and N node loops run concurrently. Two of them
- * reading the same `remaining` and both being granted is the hole
- * EXPLORATION-SPEC §8.11 names:
- *
- *   *"the allocations an arbiter grants to a node's children MUST sum to no more
- *   than the parent's remaining budget. Depth and width bound the SHAPE;
- *   conservation bounds the SPEND, and without it one branch that keeps proposing
- *   eats the run while every individual grant looks legal."*
+ * node at a time. A node is now an agent (*A node is an agent*), so it asks for its
+ * branches from inside its own tool loop, and N node loops run concurrently. Two of
+ * them reading the same `remaining` and both being granted is the hole *Budget
+ * conservation* names: the allocations an arbiter grants to a node's children MUST sum
+ * to no more than the parent's remaining budget. Depth and width bound the SHAPE;
+ * conservation bounds the SPEND, and without it one branch that keeps proposing eats
+ * the run while every individual grant looks legal.
  *
  * HOW IT IS CLOSED, and it is closed by construction rather than by a lock.
  * {@link SwarmBudget.arbitrate} decides and DEBITS in one synchronous function

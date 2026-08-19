@@ -28,6 +28,9 @@
  * scripted model that must issue three different tool calls in sequence and read one
  * verdict back still proves the loop, the surface and the journal — which is what the
  * requirement is about.
+ *
+ * Specified by docs/EXPLORATION.md — "A node is an agent", "Arbitration",
+ * "Inherited context", "Isolation" and "The six axes".
  */
 import { describe, expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -115,7 +118,7 @@ function objective(): Objective {
 
 function agentConfig(over?: Partial<SwarmConfig>): SwarmConfig {
   return {
-    // The whole point: an AGENT node, not §8.9's degenerate point.
+    // The whole point: an AGENT node, not the `unit` axis's degenerate point (*The six axes*).
     unit: { kind: 'answer' },
     // The first level continues the origin's framing and the second level asks for
     // what it wants; a `fresh` search could not accept an inheriting child at all.
@@ -149,17 +152,18 @@ function resolved(depth: number, branches: number, over?: Partial<SwarmConfig>):
 interface ScriptedRun {
   /** Every tool the model asked for, in order, across every node. */
   readonly calls: string[];
-  /** Verdict strings `propose_branch` handed back, which is §8.2's return-value contract. */
+  /** Verdict strings `propose_branch` handed back — *Arbitration*'s return-value
+   *  contract. */
   readonly verdicts: string[];
   /** The tool names the surface actually offered, read off the request. */
   readonly offered: Set<string>;
   /**
    * How many assistant turns each node ALREADY HAD in front of it on its first step.
    *
-   * The §8.4 discriminator, observed rather than inferred: a `fork` child's prompt opens
-   * with its parent's own turns, and a `fresh` child's opens with the seed alone. Zero
-   * therefore means "started from the seed", and non-zero means "inherited a
-   * conversation".
+   * The discriminator *Inherited context* turns on, observed rather than inferred: a
+   * `fork` child's prompt opens with its parent's own turns, and a `fresh` child's opens
+   * with the seed alone. Zero therefore means "started from the seed", and non-zero
+   * means "inherited a conversation".
    */
   readonly inheritedTurns: number[];
   /** How many `doGenerate` calls the run made, which is the model-call count. */
@@ -303,9 +307,10 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     expect(script.calls.filter((name) => name === 'report').length).toBeGreaterThanOrEqual(3);
     expect(script.calls).toContain(PROPOSE_BRANCH_TOOL);
 
-    // THE SURFACE. §8.1 rule 2 plus rule 3: the four confined builtins the runtime could
-    // build, the report, the proposal — and no `agents` tool, which is not withheld by a
-    // check but absent because the dep was never wired.
+    // THE SURFACE. *A node is an agent* on its tool surface and on its lack of delegation
+    // authority: the four confined builtins the runtime could build, the report, the
+    // proposal — and no `agents` tool, which is not withheld by a check but absent
+    // because the dep was never wired.
     expect(script.offered.has('file')).toBe(true);
     expect(script.offered.has('report')).toBe(true);
     expect(script.offered.has(PROPOSE_BRANCH_TOOL)).toBe(true);
@@ -323,8 +328,8 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
       expect(node.depth).toBe((byId.get(node.parent_id)?.depth ?? -99) + 1);
     }
 
-    // THE VERDICT CAME BACK THROUGH THE TOOL — §8.2's return-value contract, which is
-    // what a toolless node cannot have.
+    // THE VERDICT CAME BACK THROUGH THE TOOL — *Arbitration*'s return-value contract,
+    // which is what a toolless node cannot have.
     expect(script.verdicts.some((verdict) => verdict.startsWith('Granted:'))).toBe(true);
     expect(logger.emitted.map((line) => line.event)).toContain('swarm.branch_accepted');
 
@@ -393,8 +398,10 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     );
     expect(proposals.length).toBeGreaterThanOrEqual(1);
 
-    // THE ISOLATION STATE IS REPORTED RATHER THAN ASSUMED. §8.6's substrate is not built,
-    // and every node says so instead of the run implying a boundary it does not have.
+    // THE ISOLATION STATE IS REPORTED RATHER THAN ASSUMED. *Isolation* allows exactly two
+    // states and this test host has no credentialled filesystem to provision, so every
+    // node says `shared-origin-plane` instead of the run implying a boundary it does not
+    // have.
     const settled = logger.emitted.filter((line) => line.event === 'swarm.node_settled');
     expect(settled.length).toBe(modelWritten.length);
     for (const line of settled) {
@@ -404,11 +411,11 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
   }, 180_000);
 
   test('a fork child inherits its parents conversation and a fresh child does not', async () => {
-    // §8.4's two shapes, observed where they DIFFER. Every node's first step is recorded
-    // with the number of assistant turns already in front of it: a `fork` child opens on
-    // its parent's own turns, a `fresh` child opens on the seed alone. Both carry the
-    // parent's report and their own focus, which is what makes them two values of one
-    // axis rather than two mechanisms.
+    // The two shapes *Inherited context* names, observed where they DIFFER. Every node's
+    // first step is recorded with the number of assistant turns already in front of it: a
+    // `fork` child opens on its parent's own turns, a `fresh` child opens on the seed
+    // alone. Both carry the parent's report and their own focus, which is what makes them
+    // two values of one axis rather than two mechanisms.
     const { result, journal, nodes, script } = await run({
       depth: 2, branches: 2, proposeAtDepth1: true,
     });

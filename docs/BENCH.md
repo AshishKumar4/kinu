@@ -68,6 +68,53 @@ covered that boundary — so it was dropped rather than shipped as a task nobody
 could fail. `bench validate` re-proves the precondition for all 159: defect
 fails, oracle passes.
 
+### The corpus goes stale, and that is a routine repair
+
+A patch is a context diff against source that keeps moving, so a refactor
+somewhere else stops it applying. 16 patches have needed re-anchoring or
+re-authoring so far. **At the time of writing, 0 of 159 are stale** — that is
+measured, and `bun run gate:bench-corpus` re-measures it at every push in 0.31 s
+over both enumerations: the patches `tasks.jsonl` names, and the files in
+`tests/bench/patches/` (a file no task line names is an *orphan* — a half-finished
+retirement, reported as such).
+
+When it fires, the repair is three steps:
+
+```bash
+bun run gate:bench-corpus                                   # which patch, and git's own reason
+# re-anchor the hunk onto the code as it now stands
+bun scripts/bench.ts validate --run-root /tmp/b --id <task-id>   # 93 s, no model
+```
+
+The third step is the one that matters and the one that used to be missing: a
+patch that **applies** again is not yet a patch that still **breaks** the checks.
+`--id` re-proves exactly that task, in either split, in 93 s instead of ~160
+attempts. An id naming no task refuses rather than reporting ok over an empty set.
+
+**Why the apply is not loosened.** `git apply --3way` is the obvious fix and it
+was measured against each historical re-anchor commit's own parent tree: over the
+15 breakages where the target code still existed, 3-way merges *cleanly* on 4 and
+`-C2` fuzz applies on 5. (`--check --3way` reports success on 10, which is the
+trap — it proves the pre-image blob is recoverable, not that the merge is
+conflict-free; the real write then leaves conflict markers.) So loosening rescues
+at most a third, and it is wrong for two further reasons. Mechanically, the
+sandbox a patch actually lands in excludes `.git`, so 3-way has no object database
+to read a pre-image from, and 42 of the 159 patches carry no `index` line naming
+one. Substantively, a fuzzed or merged defect is not the defect the task's
+`prompt` describes, and the only thing that would notice is `bench validate`,
+which runs nightly — trading a loud same-run failure for a silent change in what
+the benchmark measures.
+
+Regenerating the corpus as a sweep is the other tempting answer and has the same
+flaw with more machinery: it would produce patches that apply, and nothing about
+"it applies" says the task still measures what its prompt claims.
+
+If the code a defect was data about is genuinely **gone**, retire it in
+`tests/bench/retired.jsonl` — but only after establishing that no live code still
+holds the property. A defect class living on in relocated code gets re-authored
+against it instead; retiring one that had somewhere to go has already cost this
+corpus a task once.
+
 ### Validation is itself noisy — `--validate-retries n`
 
 A full validation of an earlier 165-task corpus once flagged
@@ -558,6 +605,25 @@ The default model is native Workers AI
 auth`). A long-lived access token needs the `ai.proxy` scope. A direct
 Cloudflare endpoint uses `CLOUDFLARE_API_TOKEN`; explicit BYO runs can still set
 `PROTEUS_BASE_URL`, `PROTEUS_AUTH`, and `-m` together.
+
+### The launchers and the readers, none of which had a doc entry
+
+Four runnable things around the edges of this harness were reachable only by
+reading source — no `package.json` script, no shell wrapper naming them, no
+mention here. They are listed now because "an arm nobody can invoke without
+reading the source" is a documentation defect, not a property of the arm.
+
+| Command | What it is |
+|---|---|
+| `scripts/tbench-arm.sh <evolve> <seed> <size> <model-id> <concurrency>` | One Terminal-Bench 2.1 arm. The mechanism behind `seal-ledger.jsonl` ordinals 6–8. REFUSES to start if `PROTEUS_BASE_URL`, `PROTEUS_AUTH`, `PROTEUS_MODEL` or `PROTEUS_HOME` is set in the shell — unset them, do not blank them. Reads its token from `~/.config/proteus/bench-token`; a missing file surfaces as bash's own `cat` error, which is the weakest failure message of any arm here. |
+| `scripts/tbench-after-deploy.sh <sha-file> <evolve> <seed> <size> <model> <concurrency>` | The same arm, held until the deployed worker serves a declared commit sha, so the model transport is confirmed rather than mid-deploy. `TBENCH_WAIT_CAP` (default 5400 s) and `TBENCH_SETTLE` (default 120 s). |
+| `bun scripts/bench-external.ts compare --a <job-dir> --b <job-dir>` | Reads retained trials out of Harbor job directories and pairs them through **this** repo's one statistics path. Also `gain --stateful <dir> --stateless <dir>`. No model, no credential — it computes nothing new, it reuses the comparator so an external corpus cannot get a second, friendlier one. |
+| `bun scripts/eval-dispersion.ts <runA.json> <runB.json> [--target-pp N]` | The corpus's own noise (ψ), from two runs of the SAME arm. Refuses two different arms by name, because their difference is an effect and not dispersion. Consumes the run records the behaviour eval arm writes. |
+
+Four `bench.ts` environment variables are also load-bearing and were named
+nowhere: `BENCH_RUN_ROOT` (fallback for `--run-root`), `BENCH_ARTIFACTS`
+(fallback for `--artifacts`), `BENCH_PANEL_SIZE` (default 3, must be 2–6), and
+`BENCH_PANEL` (`<baseURL>|<auth>|<model>;…`, only for `panel:mixed`).
 
 ### Isolation, and where the key goes
 

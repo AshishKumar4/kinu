@@ -69,6 +69,7 @@ import { nanoid } from '../utils/nanoid';
 import { workModeForTurnMetadata, type WorkMode } from '../prompting/surface';
 import type { JsonObject } from '../utils/json';
 import { diagnostics, toProteusError } from '../obs/index';
+import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 
 /**
  * Whether an arriving user message is a genuine conversational follow-up —
@@ -94,9 +95,13 @@ export type TurnContinuity = 'conversation' | 'independent_task';
 export const DEFAULT_SESSION_REFLECTION_INTERVAL = 5;
 
 /** How long `settleEvolution` waits for the turn lane before it gives up and
- *  says what it dropped. Sized for the worst honest turn-level case: the
- *  outcome classifier plus the reflection/extraction calls it opens. */
-export const DEFAULT_SETTLE_TIMEOUT_MS = 120_000;
+ *  says what it dropped. The lane is the outcome classifier plus the
+ *  reflection/extraction calls it opens — several sequential completions — so it
+ *  gets the measured turn envelope rather than a number of its own. It was
+ *  120_000, which is under the shortest single turn
+ *  {@link TURN_WALL_CLOCK_ENVELOPE_MS} records, so a process exit abandoned
+ *  honest evolution work and logged it as dropped. */
+export const DEFAULT_SETTLE_TIMEOUT_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
 
 export interface AgentOrchestratorDeps {
   host: BackendHost;

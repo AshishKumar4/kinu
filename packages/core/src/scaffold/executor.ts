@@ -35,6 +35,7 @@
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { Executor } from '../types/primitives';
+import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import {
   assertJsonValue,
   isJsonObject,
@@ -148,8 +149,14 @@ export interface ScaffoldRunResult {
  * worse, so the gate systematically promotes scaffolds that finish fast and do
  * little. Both backends' live turns and the shadow evaluation read this
  * constant; nothing sets its own.
+ *
+ * That argument applies to the MAGNITUDE too, and it was 5 minutes — under the
+ * 509 s longest turn {@link TURN_WALL_CLOCK_ENVELOPE_MS} records, so BOTH arms
+ * were being cut and the gate was comparing two truncations. A scaffold turn is
+ * a whole agentic loop, so it gets the measured turn envelope and nothing of its
+ * own to drift from.
  */
-export const SCAFFOLD_TURN_TIMEOUT_MS = 5 * 60 * 1000;
+export const SCAFFOLD_TURN_TIMEOUT_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
 
 /** One host inference chunk before validation at the codemode JSON boundary. */
 export interface ScaffoldDefaultInferenceChunk {

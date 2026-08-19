@@ -154,6 +154,29 @@ export interface ShadowConfig {
  * 34.9% / 1.5% for the position-biased one production actually ran — the bias
  * was suppressing true and false promotion alike).
  *
+ * promoteThreshold / rollbackThreshold — 0.6 / 0.4, and this is the one entry
+ * here whose measurement postdates the rest. Every sweep above held the band
+ * FIXED and the script printed it that way, so this docblock read as though all
+ * four numbers had been calibrated together when two of them were assumptions the
+ * other two were conditioned on. Section 6 sweeps it at the shipping operating
+ * point, symmetric bands only (an asymmetric band prices a preference for the
+ * incumbent, which this simulator cannot):
+ *
+ *   promote≥ rollback≤ | mean P(promote better) | worst P(promote worse≤0.3,tie≤0.5)
+ *       0.55      0.45 |        62.3%           |   3.2%
+ *       0.60      0.40 |        62.4%           |   3.2%   ← CHOSEN, and shipped
+ *       0.65      0.35 |        62.3%           |   3.2%
+ *       0.70      0.30 |        62.3%           |   3.2%
+ *
+ * FLAT — the band is very nearly inert at this operating point, and the honest
+ * reading is that maxRegressions=1 and the ceiling's forced decision (a bare >0.5
+ * majority that does not consult the band at all) are what actually decide a
+ * rollout. The axis is wired, not dead: pushed to promote≥0.95/rollback≤0.05 the
+ * mean drops 62.4% → 54.6%, so a band CAN move the numbers, just not anywhere
+ * inside the plausible range. Which means 0.6/0.4 is measured-and-equivalent
+ * rather than measured-and-optimal, and raising maxRegressions would make the
+ * band load-bearing again and oblige a re-sweep.
+ *
  * A strict <5% bar against ALL worse worlds (incl. the 45% near-coin-flip
  * mirror) stays unattainable in principle at any budget this side of hundreds
  * of decisive trials — and near-coin-flip promotions are low-harm and

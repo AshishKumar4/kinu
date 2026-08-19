@@ -1,5 +1,5 @@
 /**
- * The records store — §5.2's leaderboard, and the writer it did not have.
+ * The records store — the leaderboard, and the writer it did not have.
  *
  * `PUBLICATION_SURFACES` has enumerated `records` since the seal was restated over a
  * SET of surfaces, and nothing wrote it. That is what made the whole surface
@@ -13,11 +13,12 @@
  *
  * 1. THE SEAL IS CHECKED HERE. {@link admitsPublication} gates every write, over the
  *    `records` member of the enumeration, and a breached run writes NOTHING. Checked
- *    in the writer rather than trusted to the caller for §4.4's own reason: the hole
- *    that made the seal a true theorem about a false property was a publication path
- *    that called itself separate and unchanged. `admitCarry` checks it too, and that
- *    is not a duplicate gate — it is the barrier deciding admission and this deciding
- *    a write, and either one alone would leave the other reachable.
+ *    in the writer rather than trusted to the caller, for the reason *The publication
+ *    seal* gives: the hole that made the seal a true theorem about a false property
+ *    was a publication path that called itself separate and unchanged. `admitCarry`
+ *    checks it too, and that is not a duplicate gate — it is the barrier deciding
+ *    admission and this deciding a write, and either one alone would leave the other
+ *    reachable.
  *
  * 2. THE KEY CARRIES THE FLOOR. A row is identified by the objective's identity
  *    TOGETHER WITH the floor digest, never by `objectiveId` alone. A floor-blind key
@@ -28,8 +29,8 @@
  * 3. A CELL'S BEST NEVER FALLS. A re-record that would lower the value stored for a
  *    row is REFUSED — `cause: 'not-better'` — and the stored measurement stands. A
  *    nondeterministic verifier re-measuring the same artifact worse is the exact
- *    defect that made §5.2's monotone invariant false, and the choice between
- *    refusing and silently ignoring is made here rather than left to a reader:
+ *    defect that made *The records store*'s monotone invariant false, and the choice
+ *    between refusing and silently ignoring is made here rather than left to a reader:
  *    ignoring it is the silent no-op this repository refuses everywhere else, so the
  *    writer returns a verdict the caller can disclose. Since rows are never deleted
  *    and no row's value ever falls, `best(cell)` — a maximum in the objective's
@@ -51,6 +52,9 @@
  * detail and not a reported field: every declared column of
  * {@link ExplorationRecord} is present, and none of them is a fabricated sentinel
  * standing in for absent.
+ *
+ * Specified by docs/EXPLORATION.md — "The records store", "The publication seal" and
+ * "Comparability".
  */
 import * as v from 'valibot';
 import { argumentDigest, sha256Hex } from '../safety/argument-digest';
@@ -198,8 +202,9 @@ export type RecordVerdict =
   | { readonly kind: 'refused'; readonly cause: 'sealed' | 'not-better' };
 
 /**
- * What one run did with the records store, as DATA — §3.5's rule that every consumer
- * reads fields and nothing downstream couples to how a disclosure is rendered.
+ * What one run did with the records store, as DATA — the rule behind *Raw units*:
+ * every consumer reads fields and nothing downstream couples to how a disclosure is
+ * rendered.
  *
  * The two halves answer the two questions the store exists to make answerable: did
  * this run START from what an earlier one reached, and did what it reached SURVIVE.
@@ -213,6 +218,16 @@ export interface ExplorationRecordsReport {
   /** The best RAW value those rows held, in the objective's unit, or null when there
    *  were none. Null rather than the direction's worst: no incumbent is not a bad one. */
   readonly carriedInBest: number | null;
+  /**
+   * Distinct CELLS those rows spanned — the coverage this run started from.
+   *
+   * `carriedIn` counts rows and cannot answer it: an archive that collapsed onto one
+   * cell carries in as many rows as one that filled twenty, and reporting only the row
+   * count is how a collapsed archive goes on "still reporting coverage" (Rainbow
+   * Teaming, self-BLEU 0.42 → 0.79). One for a run with no descriptor partition that
+   * read anything, zero when it read nothing.
+   */
+  readonly carriedInCells: number;
   /** Rows this run wrote or updated. */
   readonly written: number;
   /**
@@ -225,6 +240,17 @@ export interface ExplorationRecordsReport {
    * `written: 0` alone.
    */
   readonly notBetter: number;
+  /**
+   * Writes the archive's novelty test refused — a candidate too close to an occupant
+   * of the cell it was binned into.
+   *
+   * Beside {@link notBetter} for that field's own reason, one cause further out: a run
+   * that archived nothing because every candidate duplicated an occupant is a
+   * DIFFERENT run from one that archived nothing because nothing beat an incumbent,
+   * and the first is the one that says the search stopped covering new ground. Always
+   * zero for a run with no archive, which has no admission test to refuse with.
+   */
+  readonly tooClose: number;
 }
 
 interface Row {
@@ -338,6 +364,37 @@ export function bestInCell(sql: SqlExecutor, scope: CellScope): ExplorationRecor
         ORDER BY value DESC, first_recorded_at ASC LIMIT 1`;
   const row = rows[0];
   return row ? decode(row) : null;
+}
+
+/**
+ * This cell's whole POPULATION, best first — the occupancy read an archive admits
+ * against.
+ *
+ * {@link bestInCell} cannot serve it and the difference is the whole reason a cell holds
+ * a population rather than an incumbent (`ExplorationRecord`'s own docstring, and
+ * FunSearch's program database behind it): an archive's admission test compares a
+ * candidate against EVERY occupant, because a candidate that duplicates the third-best
+ * program in a cell adds no coverage however far it sits from the best one. A test
+ * written against the incumbent alone would let a cell fill with near-copies of its
+ * runners-up while reporting the filter as enforced.
+ *
+ * Same two-literal-query discipline as the reads above, and `LIMIT 1` is deliberately
+ * absent rather than raised to a number: the population's bound is the archive's
+ * admission test, not a row cap this store invents.
+ */
+export function cellOccupants(sql: SqlExecutor, scope: CellScope): readonly ExplorationRecord[] {
+  const objectiveId = objectiveIdOf(scope.identity);
+  const floorDigest = floorDigestOf(scope.floor);
+  const rows = scope.identity.direction === 'minimise'
+    ? sql<Row>`SELECT * FROM exploration_records
+        WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
+          AND descriptor IS ${scope.descriptor}
+        ORDER BY value ASC, first_recorded_at ASC`
+    : sql<Row>`SELECT * FROM exploration_records
+        WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
+          AND descriptor IS ${scope.descriptor}
+        ORDER BY value DESC, first_recorded_at ASC`;
+  return rows.map(decode);
 }
 
 /**

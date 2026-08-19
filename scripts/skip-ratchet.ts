@@ -15,7 +15,7 @@
  * record the win. That is strictly stronger than a count: a count of 19 cannot
  * tell you that a different 19 are skipping now.
  *
- * Two things make it more than a bookkeeping exercise.
+ * Three things make it more than a bookkeeping exercise.
  *
  *   1. IT PROVES IT EXECUTED. A gate over a test report is only as good as the
  *      report, and an empty report reads as a clean tree. Every target file
@@ -27,10 +27,21 @@
  *   2. IT NAMES THE COST OF EACH SKIP. The lock stores a reason per entry, so
  *      "19 skips" is a list someone can argue with rather than a number nobody
  *      reads.
+ *   3. IT COVERS BOTH RUNNERS. The eval tier has two, split by file extension:
+ *      `bun test ./tests/` and `vitest --config vitest.evals.config.ts` over
+ *      `tests/evals/**\/*.eval.ts`, which bun's matcher cannot see. This gate
+ *      read only the first, so the vitest arm reported 36 tests, 35 skipped and
+ *      exit 0 with nothing declaring any of them — the same false green, one
+ *      runner over, inside the tier built to prevent it. `./tests/` could not
+ *      catch it either: the bun arm satisfies that target by itself, which is
+ *      why the vitest arm is named as a FILE.
  *
- * Run it standalone (credential-free — everything skips, and the ratchet says
- * so), or hand it the JUnit file from a live run with `--junit` so the eval
- * tier does not pay for the suites twice.
+ * Run it standalone — credential-free, both arms, everything live skips and the
+ * ratchet says so — or hand it a live run's reports with one `--junit <path>` per
+ * arm so the eval tier does not pay for the suites twice. Add `--expect-live`
+ * there: with a target resolved, a locked skip that RAN is the tier working, not
+ * debt, and calling it debt made the tier unable to pass on a credentialed
+ * machine.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -44,10 +55,31 @@ import { INFRA_FAILURE_MARKER } from '../packages/test-utils/src/live-model';
 const root = new URL('..', import.meta.url).pathname;
 
 /**
- * The suites this gate covers. Note `./tests/` — the leading `./` is load
- * bearing, and `assertMeasured` below is what keeps it honest.
+ * The bun suites this gate covers, as `bun test` argv. Note `./tests/` — the
+ * leading `./` is load bearing, and `assertMeasured` below is what keeps it
+ * honest.
  */
 export const SKIP_RATCHET_TARGETS: readonly string[] = ['./tests/'];
+
+/**
+ * The vitest half of the eval tier, named as a FILE rather than a directory.
+ *
+ * `./tests/` is satisfied by the bun arm alone, so before this existed the gate
+ * could not tell a MISSING vitest report from a clean one — and the vitest arm
+ * reports 36 tests of which 35 skip, credential-free, exiting 0. That is the
+ * exact false green this file exists for, one runner over. `bun test` cannot see
+ * these files (it matches only `*.test.*` / `*_test.*` / `*.spec.*`), so they can
+ * never appear in the bun report and a directory target cannot distinguish them.
+ *
+ * A rename therefore fails this gate loudly with the path it looked for, which is
+ * the correct outcome: the arm moved and nobody re-pointed the gate at it.
+ */
+export const SKIP_RATCHET_VITEST_TARGETS: readonly string[] = ['./tests/evals/behaviour.eval.ts'];
+
+/** Every target, both runners. What `unmatchedTargets` proves by default. */
+export const ALL_SKIP_RATCHET_TARGETS: readonly string[] = [
+  ...SKIP_RATCHET_TARGETS, ...SKIP_RATCHET_VITEST_TARGETS,
+];
 
 export const SKIP_LOCK_PATH = resolve(root, 'scripts/skip-ratchet.lock.json');
 
@@ -102,12 +134,20 @@ function attribute(attrs: string, name: string): string {
 }
 
 /**
- * Parse Bun's JUnit report.
+ * Parse a JUnit report from either runner in the eval tier.
  *
  * A `<testcase>` is self-closing when it passed and carries a `<skipped />` or
  * `<failure>` child otherwise, so both forms have to be matched — treating only
  * the self-closing form as a testcase would silently count zero skips, which is
  * the failure mode this gate is about.
+ *
+ * THE TWO REPORTERS DISAGREE ABOUT WHERE THE FILE IS. Bun writes
+ * `file="tests/a.test.ts" classname="Suite A"`; vitest writes no `file` at all
+ * and puts the path in `classname`, with the describe path already folded into
+ * `name`. Reading only `file` therefore attributed every vitest testcase to the
+ * empty string, so `files` came back empty, `unmatchedTargets` called the target
+ * missing, and the vitest arm could not be ratcheted at all — measured
+ * credential-free at 36 tests, 35 skipped, exit 0, none of them visible here.
  */
 export function parseJUnit(xml: string): TestReport {
   const skipped: SkippedTest[] = [];
@@ -120,10 +160,15 @@ export function parseJUnit(xml: string): TestReport {
     const attrs = match[1] ?? '';
     const body = match[2] ?? '';
     total += 1;
-    const file = attribute(attrs, 'file');
-    if (file) files.add(file);
-    const suite = attribute(attrs, 'classname');
+    const classname = attribute(attrs, 'classname');
     const name = attribute(attrs, 'name');
+    const declared = attribute(attrs, 'file');
+    const file = declared || classname;
+    if (file) files.add(file);
+    // With the path in `classname` there is no separate suite to name — vitest
+    // already joined the describe path into `name` — so spelling one would put
+    // the file in the key twice.
+    const key = declared ? `${file} › ${classname} › ${name}` : `${file} › ${name}`;
     if (body.includes('<failure')) {
       // The MARKER decides, never a guess at the message. A classifier that
       // sniffed for "timeout" or "503" would let a real behavioural failure hide
@@ -132,14 +177,12 @@ export function parseJUnit(xml: string): TestReport {
       // under-claims infrastructure rather than over-claiming it — and the
       // refusal below states that so the count is read for what it is.
       failed.push({
-        key: `${file} › ${suite} › ${name}`,
+        key,
         file,
         infra: unescapeXML(body).includes(INFRA_FAILURE_MARKER),
       });
     }
-    if (body.includes('<skipped')) {
-      skipped.push({ key: `${file} › ${suite} › ${name}`, file });
-    }
+    if (body.includes('<skipped')) skipped.push({ key, file });
   }
   return { total, failed, skipped, files };
 }
@@ -149,6 +192,23 @@ export function parseJUnit(xml: string): TestReport {
 const LockEntrySchema = v.object({
   key: v.pipe(v.string(), v.minLength(1)),
   reason: v.pipe(v.string(), v.minLength(1)),
+  /**
+   * `key` names a PARAMETRISED FAMILY: every skip whose key begins with it is
+   * declared by this one entry, and the entry is satisfied only if at least one
+   * did.
+   *
+   * Legitimate exactly where the cases are GENERATED FROM DATA behind a single
+   * `skipIf`, so no individual case can begin skipping on its own, and where the
+   * data's own shape is asserted somewhere that runs. Both hold for the behaviour
+   * arm: its 34 cases are `corpus × repeats` from one `it.for`, and the corpus is
+   * gated credential-free by its own `the corpus is large enough for significance
+   * to be reachable`. Enumerating the 34 would restate that assertion worse and
+   * couple a commit-tier gate to `PROTEUS_EVAL_REPEATS`.
+   *
+   * Spell the whole `<file> › <suite>` prefix. A bare file would declare tests
+   * nobody looked at, which is this gate's own defect class.
+   */
+  family: v.optional(v.literal(true)),
 });
 const LockSchema = v.array(LockEntrySchema);
 export type SkipLockEntry = v.InferOutput<typeof LockEntrySchema>;
@@ -159,9 +219,10 @@ export function readSkipLock(path = SKIP_LOCK_PATH): SkipLockEntry[] {
 }
 
 export interface SkipVerdict {
-  /** Skipping now, absent from the lock — new debt. */
+  /** Skipping now, declared by no entry — new debt. */
   readonly added: readonly string[];
-  /** Locked, no longer skipping — the lock owes an update. */
+  /** An exact entry that no longer skips, or a family entry nothing matched —
+   *  either way the lock owes an update. */
   readonly stale: readonly string[];
 }
 
@@ -169,75 +230,164 @@ export function reconcileSkips(
   report: TestReport,
   lock: readonly SkipLockEntry[],
 ): SkipVerdict {
-  const locked = new Set(lock.map((entry) => entry.key));
-  const found = new Set(report.skipped.map((s) => s.key));
+  const exact = new Set(lock.filter((entry) => entry.family !== true).map((entry) => entry.key));
+  const families = lock.filter((entry) => entry.family === true).map((entry) => entry.key);
+  const found = report.skipped.map((s) => s.key);
   return {
-    added: [...found].filter((key) => !locked.has(key)).sort(),
-    stale: [...locked].filter((key) => !found.has(key)).sort(),
+    added: [...new Set(found.filter((key) =>
+      !exact.has(key) && !families.some((prefix) => key.startsWith(prefix))))].sort(),
+    stale: [
+      ...[...exact].filter((key) => !found.includes(key)),
+      ...families.filter((prefix) => !found.some((key) => key.startsWith(prefix))),
+    ].sort(),
   };
+}
+
+/**
+ * Which half of the verdict this run is answerable for.
+ *
+ * WHAT `stale` MEANS DEPENDS ON WHETHER A TARGET WAS RESOLVED, and nothing but
+ * the caller knows that. Credential-free, a locked entry that ran is the lock
+ * owing an update and the ratchet tightens. With a target it is the tier doing
+ * the one thing it exists for — every locked entry is gated on `skipIf(!TARGET)`
+ * — so reading it as debt made `bash scripts/eval-tier.sh` unable to exit 0 on
+ * the only kind of machine that pays for it: 25 locked entries run, 25 report
+ * stale, exit 1.
+ *
+ * `added` is debt in BOTH modes, which is the invariant this gate actually owns.
+ * There is deliberately no liveness assertion here — `eval-spend.ts
+ * --expect-live` already holds the run to a model call and a token count, and a
+ * gate restating another gate's policy is the drift this repo keeps paying for.
+ */
+export function skipDebt(
+  verdict: SkipVerdict, opts: { readonly expectLive: boolean },
+): readonly string[] {
+  return opts.expectLive ? verdict.added : [...verdict.added, ...verdict.stale];
 }
 
 /**
  * Every target must have produced at least one testcase.
  *
- * `SKIP_RATCHET_TARGETS` holds directory prefixes; a file the report names
- * satisfies the target it sits under. A target matching nothing means the gate
- * looked at an empty set and would have reported clean.
+ * Targets hold path prefixes; a file the report names satisfies the target it
+ * sits under. A target matching nothing means the gate looked at an empty set
+ * and would have reported clean.
+ *
+ * A FILE SATISFIES ONLY THE NARROWEST TARGET THAT CLAIMS IT, and that is what
+ * makes the two arms independently provable. `tests/evals/behaviour.eval.ts` sits
+ * under `./tests/`, so plain prefix matching let EITHER arm satisfy BOTH targets:
+ * a run that reported only the vitest arm looked complete, and so did a run that
+ * reported only bun. Narrowest-claim gives each arm a target nothing else can
+ * answer for.
  */
 export function unmatchedTargets(
   report: TestReport,
-  targets: readonly string[] = SKIP_RATCHET_TARGETS,
+  targets: readonly string[] = ALL_SKIP_RATCHET_TARGETS,
 ): readonly string[] {
+  const prefixes = targets.map((target) => target.replace(/^\.\//, ''));
   const seen = [...report.files];
-  return targets.filter((target) => {
-    const prefix = target.replace(/^\.\//, '');
-    return !seen.some((file) => file.startsWith(prefix));
+  return targets.filter((_target, index) => {
+    const prefix = prefixes[index] ?? '';
+    return !seen.some((file) => file.startsWith(prefix)
+      && !prefixes.some((other) => other.length > prefix.length && file.startsWith(other)));
   });
 }
 
-function runTargets(): string {
+/**
+ * Run both arms of the tier and hand back both reports.
+ *
+ * Both, not one: `bun test` cannot see `*.eval.ts` and vitest is not given the
+ * bun suites, so a single runner covers a strict subset of what this gate
+ * governs. Running only bun here is what let 35 vitest skips exist outside the
+ * lock. `bun --bun` is required for the vitest arm — the spine under test opens
+ * its store through `bun:sqlite`, and node-hosted vitest fails at import and
+ * collects ZERO tests, which would read as a clean arm.
+ */
+function runTargets(): readonly string[] {
   const dir = mkdtempSync(join(tmpdir(), 'proteus-skip-ratchet-'));
-  const out = join(dir, 'junit.xml');
+  const arms: readonly { readonly what: string; readonly argv: readonly string[] }[] = [
+    { what: 'bun test', argv: ['test', ...SKIP_RATCHET_TARGETS, '--reporter=junit'] },
+    {
+      what: 'vitest',
+      argv: ['--bun', './node_modules/.bin/vitest', 'run', '--config', 'vitest.evals.config.ts',
+        '--reporter=junit'],
+    },
+  ];
   try {
-    const result = spawnSync(
-      'bun',
-      ['test', ...SKIP_RATCHET_TARGETS, '--reporter=junit', `--reporter-outfile=${out}`],
-      { cwd: root, encoding: 'utf8', stdio: ['ignore', 'inherit', 'inherit'] },
-    );
-    if (!existsSync(out)) {
-      throw new Error(
-        `skip-ratchet: bun test produced no JUnit report (exit ${String(result.status)}) — `
-        + 'nothing to measure, so the gate cannot pass',
+    return arms.map(({ what, argv }, index) => {
+      const out = join(dir, `junit-${String(index)}.xml`);
+      const result = spawnSync(
+        'bun',
+        // Bun spells the destination `--reporter-outfile`, vitest `--outputFile`.
+        [...argv, what === 'vitest' ? `--outputFile=${out}` : `--reporter-outfile=${out}`],
+        { cwd: root, encoding: 'utf8', stdio: ['ignore', 'inherit', 'inherit'] },
       );
-    }
-    return readFileSync(out, 'utf8');
+      if (!existsSync(out)) {
+        throw new Error(
+          `skip-ratchet: ${what} produced no JUnit report (exit ${String(result.status)}) — `
+          + 'nothing to measure, so the gate cannot pass',
+        );
+      }
+      return readFileSync(out, 'utf8');
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
+/** One report over every arm's report. Unioned rather than concatenated as text
+ *  so a caller cannot accidentally depend on document order. */
+export function mergeReports(reports: readonly TestReport[]): TestReport {
+  return {
+    total: reports.reduce((sum, r) => sum + r.total, 0),
+    failed: reports.flatMap((r) => [...r.failed]),
+    skipped: reports.flatMap((r) => [...r.skipped]),
+    files: new Set(reports.flatMap((r) => [...r.files])),
+  };
+}
+
+/** Every `--junit <path>` on the command line, in order. Repeatable because the
+ *  tier has two runners and hands over one report each; a single-valued flag
+ *  silently measured whichever arm the caller happened to name. */
+function junitPaths(argv: readonly string[]): readonly string[] | null {
+  const paths: string[] = [];
+  for (const [index, arg] of argv.entries()) {
+    if (arg !== '--junit') continue;
+    const path = argv[index + 1];
+    if (path === undefined || path.startsWith('--')) return null;
+    paths.push(path);
+  }
+  return paths;
+}
+
 function main(argv: readonly string[]): number {
   const lockRequested = argv.includes('--lock');
-  const junitFlag = argv.indexOf('--junit');
-  const junitPath = junitFlag >= 0 ? argv[junitFlag + 1] : undefined;
-  if (junitFlag >= 0 && junitPath === undefined) {
+  // A resolved live target changes what the lock MEANS, not how strict this gate
+  // is. Every locked entry is `skipIf(!TARGET)`, so with a target they run — and
+  // reading that as `stale` made the eval tier's own ratchet unpassable on the
+  // one machine that pays for it. Set from `EXPECT_LIVE` in eval-tier.sh, beside
+  // the banner, so the line a reader sees and the mode this runs in agree.
+  const expectLive = argv.includes('--expect-live');
+  const paths = junitPaths(argv);
+  if (paths === null) {
     console.error('skip-ratchet: --junit needs a path');
     return 1;
   }
 
-  const xml = junitPath === undefined ? runTargets() : readFileSync(junitPath, 'utf8');
-  const report = parseJUnit(xml);
-
+  const xmls = paths.length === 0 ? runTargets() : paths.map((p) => readFileSync(p, 'utf8'));
+  const report = mergeReports(xmls.map(parseJUnit));
   const missing = unmatchedTargets(report);
   if (missing.length > 0) {
     console.error(finding({
       invariant: 'every skip-ratchet target contributes at least one test',
-      at: `scripts/skip-ratchet.ts SKIP_RATCHET_TARGETS: ${missing.join(', ')}`,
+      at: `scripts/skip-ratchet.ts targets: ${missing.join(', ')}`,
       found: `the report names ${String(report.files.size)} file(s), none under those targets`,
       silently: 'the ratchet reconciles an empty skip set against the lock, so every locked '
         + 'entry reads as stale and no new skip can ever be added — a gate over nothing',
-      fix: 'check the path form: `bun test tests` and `bun test tests/` both match NOTHING '
-        + 'in this repo, only `./tests/` selects the root suites',
+      fix: 'a bun target missing is a path-form defect — `bun test tests` and `bun test '
+        + 'tests/` both match NOTHING here, only `./tests/` selects the root suites. A '
+        + 'vitest target missing means the eval tier ran only its bun arm, or the '
+        + '`*.eval.ts` file moved: pass its report with a second --junit, or re-point '
+        + 'SKIP_RATCHET_VITEST_TARGETS at where the arm now lives',
     }));
     return 1;
   }
@@ -279,9 +429,13 @@ function main(argv: readonly string[]): number {
     return 1;
   }
 
-  if (verdict.added.length === 0 && verdict.stale.length === 0) {
+  const debt = skipDebt(verdict, { expectLive });
+  if (debt.length === 0) {
     console.log(
-      `skip-ratchet: ok — ${measured}, ${String(report.skipped.length)} skipped, all declared`,
+      `skip-ratchet: ok — ${measured}, ${String(report.skipped.length)} skipped, all declared`
+      + (expectLive
+        ? `; ${String(verdict.stale.length)} locked skip(s) RAN against the resolved target`
+        : ''),
     );
     return 0;
   }
@@ -294,12 +448,16 @@ function main(argv: readonly string[]): number {
         at: key,
         found: 'skipping, and absent from scripts/skip-ratchet.lock.json',
         silently: 'reports as part of a green run while asserting nothing',
-        fix: 'make it run — or add it to the lock with the reason it cannot, which is a '
-          + 'sentence someone will have to defend',
+        fix: expectLive
+          ? 'a target WAS resolved, so this is not a missing credential: either the test '
+            + 'skips on something else the target does not supply — name it in the lock — '
+            + 'or make it run'
+          : 'make it run — or add it to the lock with the reason it cannot, which is a '
+            + 'sentence someone will have to defend',
       }));
     }
   }
-  if (verdict.stale.length > 0) {
+  if (!expectLive && verdict.stale.length > 0) {
     console.error(
       `\nskip-ratchet: ${String(verdict.stale.length)} locked skip(s) now run. Ratchet down — `
       + `remove these from ${SKIP_LOCK_PATH}:`,

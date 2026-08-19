@@ -5,13 +5,14 @@
  * WHAT IS MEASURED. One number: how many METERED ORACLE CALLS a candidate spent to
  * produce a correct answer, against a reference implementation measured on the same
  * instance in the same process. The number is RAW, in the objective's own unit
- * (docs/EXPLORATION-SPEC.md §3.5 — the harness normalises, the instrument does not).
+ * (*Raw units* — the harness normalises, the instrument does not).
  *
  * WHY IT IS HERE rather than in the hard-task corpus that grew it. `VerifierSpec.kind`
- * is CLOSED over a registry's declared set (§5.1, strategy/objective.ts), and a kind
- * nobody can RESOLVE is the fabricated-instrument hole §3.4's one real guard exists to
- * close. The registry lives on the tool surface, so the implementation a kind resolves
- * to has to be reachable from here: a declared kind whose code sat in a test package
+ * is CLOSED over a registry's declared set (*The closed verifier registry*,
+ * `strategy/objective.ts`), and a kind nobody can RESOLVE is the
+ * fabricated-instrument hole that section's one real guard exists to close. The
+ * registry lives on the tool surface, so the implementation a kind resolves to has to
+ * be reachable from here: a declared kind whose code sat in a test package
  * would be a name with nothing behind it in production, which is strictly worse than
  * no kind at all. `packages/test-utils/src/hard-tasks/cost-model.ts` is now one caller
  * of this substrate rather than its owner — the corpus keeps its scoring (`scoreRatio`
@@ -31,12 +32,13 @@
  * WHY A LOWER BOUND IS CHECKED. Each problem carries an information-theoretic floor on
  * the calls any correct algorithm must make. A measured count BELOW the floor is
  * therefore not a fast algorithm but evidence the answer arrived off-channel — which is
- * a `FloorBreach` and NOT a zero (§4.4), adjudicated by the caller rather than here.
+ * a `FloorBreach` and NOT a zero — *The publication seal* — adjudicated by the caller
+ * rather than here.
  *
  * WHY THE REFERENCE IS MEASURED, NOT ASSERTED. `refOps` is the reference's count on the
  * same instance in the same process, immediately before the candidate — a ratio against
- * a constant recorded months ago is a ratio nobody can re-derive. This is §2.3's
- * measured baseline in its original form, and the reference source is embedded in the
+ * a constant recorded months ago is a ratio nobody can re-derive. This is *Measured
+ * baseline* in its original form, and the reference source is embedded in the
  * harness the verifier writes rather than read from the workspace, so a candidate
  * cannot inflate its own ratio by slowing the baseline down.
  *
@@ -50,6 +52,9 @@
  * oracle is the only channel to the data — but it also cannot be stopped. That residual
  * is stated rather than papered over: it is the one failure mode that stalls a run
  * instead of scoring zero.
+ *
+ * Specified by docs/EXPLORATION.md — "The objective", "The closed verifier registry",
+ * "Comparability" and "The floor".
  */
 import * as v from 'valibot';
 import { sha256Hex } from '../safety/argument-digest';
@@ -258,7 +263,7 @@ let implementationId: string | null = null;
 /**
  * This instrument's own identity: a content digest of the metering code above.
  *
- * §5.1's comparability key is a digest of the verifier, and closing `kind` over a
+ * *Comparability* makes the key a digest of the verifier, and closing `kind` over a
  * registry moved half of that question: two runs whose `kind` resolved to different
  * IMPLEMENTATIONS are not comparable, and a digest over `{kind, spec}` cannot see
  * it. A declared revision token would be a claim someone has to remember to bump —

@@ -81,6 +81,40 @@ export interface AgentConfig {
   scaffold: ScaffoldDefaults;
 }
 
+/**
+ * How long ONE agent turn's worth of model work is measured to take, and the
+ * single bound every turn-scoped and model-call-scoped timeout in this
+ * repository derives from.
+ *
+ * Measured against `@cf/deepseek-ai/deepseek-v4-pro-0813` in one eval-tier run
+ * (`20984b4e`): single turns of 151 s and 294 s, a five-turn conversation of
+ * 509 s, eight algorithmic challenges averaging 92 s each, and one converged
+ * MCTS terminal node of 437 s over five model calls. 509 s is the longest turn
+ * on record here, so it is the FLOOR any such bound has to clear.
+ *
+ * The CEILING is `PLATFORM_CATALOG['do.alarm.wall_ms']` — a turn resumed from a
+ * Durable Object alarm gets 15 minutes and no more — which is also the ceiling
+ * the live suites give one search. A bound sitting AT the ceiling is killed by
+ * the platform (or by the test runner) before it can report itself, so the
+ * envelope sits inside the window rather than on its edge.
+ *
+ * Six separate timeouts were 120_000 with no measurement behind any of them,
+ * which is under every turn measured above. On the CLI backend that made MCTS
+ * silently non-functional: every rollout hit its ceiling, the engine scored each
+ * failed branch 0, and `converge` then correctly refused to crown a winner over
+ * a zero-signal tree — so a search returned no winner and said only that nothing
+ * scored. Nothing was broken except the number.
+ *
+ * Re-measure rather than re-reason. A faster default model lowers the floor and
+ * a slower one raises it, and neither is visible from this file.
+ * `unit-turn-envelope.test.ts` holds the window — the 509 s floor and the 900 s
+ * ceiling — and holds every bound that claims to derive from this to the same
+ * value. Re-measuring means moving the figures above AND that test's floor; the
+ * floor is not exported, because an exported measurement with no production reader
+ * is a constant only its own test can reach.
+ */
+export const TURN_WALL_CLOCK_ENVELOPE_MS = 600_000;
+
 export const DEFAULT_MAX_STEPS = 500;
 
 /** Sensible defaults — all tunable, zero secrets */

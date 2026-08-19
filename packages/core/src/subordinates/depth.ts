@@ -84,8 +84,15 @@ export function delegationExhausted(budget: DelegationBudget): boolean {
  * counts — it is about the answer being true.
  *
  * States the depth reached, because the useful next move differs by level: a
- * caller at the cap has to do the work itself or fork, and it cannot tell which
- * from "denied" alone.
+ * caller at the cap has to reach for something that is not a subordinate, and it
+ * cannot tell that from "denied" alone.
+ *
+ * ONE REMEDY, not two. This offered "do it yourself, or fork (action=fork)" —
+ * two imperatives, and the second named an action the tool no longer has, so the
+ * only actionable half was the one a caller reads second. A search is what runs
+ * work without a subordinate now: `DELEGATION_MAX_DEPTH` bounds the subordinate
+ * tree and a search tree carries its own `depth` cap (`strategy/swarm.ts`), so a
+ * swarm at the delegation cap is not a tree deeper — it is a different tree.
  */
 export interface DelegationDepthRefusal {
   readonly reason: Extract<ErrorCode, 'denied'>;
@@ -98,6 +105,7 @@ export function delegationDepthRefusal(budget: DelegationBudget): DelegationDept
     error:
       `Cannot hire: this agent is at delegation depth ${budget.depth} of the global maximum `
       + `${DELEGATION_MAX_DEPTH}, so a subordinate below it would be depth ${budget.depth + 1}. `
-      + 'Do this work yourself, or fork (action=fork) — a fork is a copy of you and adds no depth to the tree.',
+      + 'Run the work as a search instead: agents({action:"swarm", context:"fork", task}) '
+      + 'inherits your conversation and adds no depth to the subordinate tree.',
   };
 }

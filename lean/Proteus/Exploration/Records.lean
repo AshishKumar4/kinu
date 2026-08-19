@@ -2,22 +2,23 @@
   Proteus.Exploration.Records — S2, monotone displacement over a cell's best,
   and the strictly weaker property the vector case admits instead. 0 sorry.
 
-  Models `ExplorationRecord` and `isBetter` (`objective.ts:369-442`) against
-  `docs/EXPLORATION-SPEC.md` at 127a62c1, sections 5.2, 6.5 and 10.1 S2.
+  Models `ExplorationRecord` and `isBetter` (`objective.ts:369-442`). Specified by
+  docs/EXPLORATION.md — "The records store", "Validity over the resolved
+  configuration" and "The Lean invariants".
 
   -- TWO FINDINGS THIS MODEL PRODUCED, both stated here because they are results
   -- rather than commentary:
 
-  1. **S2 is FALSE for the overwrite reading of section 5.2's "re-recording the
+  1. **S2 is FALSE for the overwrite reading of *The records store*'s "re-recording the
      same artifact updates it".** An update is a write. If the verifier is not
      deterministic — `unit:'ms'` is an explicit example at `objective.ts:286` —
      re-recording artifact A at 7ms over its recorded 3ms lowers `best(cell)` on a
      minimise objective. `overwrite_breaks_monotonicity` is that counterexample,
      machine-checked. S2 holds only if the update keeps the BETTER of the two
-     values, which is how `insertRow` is defined below and is the amendment the
-     spec needs.
+     values, which is how `insertRow` is defined below and is the amendment
+     *The records store* now carries.
 
-  2. **S2 does not type-check against the `Objective` union 127a62c1 introduced.**
+  2. **S2 does not type-check against the `Objective` union as it now stands.**
      S2 quantifies over `isBetter(candidate, incumbent, direction)` and one
      `direction`, but a `VectorObjective` carries one direction PER COMPONENT
      (`objective.ts:322-324`) and settles to a FRONT, so `best(cell)` is not
@@ -36,11 +37,11 @@
   2. `Int` FOR A SQLite REAL. See `Objective.lean`'s header. The tie rule makes
      the discard safe in the conservative direction: a spurious tie loses a
      displacement, it never manufactures one.
-  3. THE NON-BEST POPULATION. Section 10.1 asks for monotonicity of `best(cell)`
+  3. THE NON-BEST POPULATION. *The Lean invariants* asks for monotonicity of `best(cell)`
      and that is what is proved. It is a WEAK invariant and the model says so:
      `eviction_can_destroy_the_population` shows a policy that discards every
      non-best member while leaving `best` monotone. Since the population is the
-     entire reason section 5.2 rejects one-incumbent-per-objective — FunSearch's
+     entire reason the records store rejects one-incumbent-per-objective — FunSearch's
      own worst arm — the danger genuinely lives in what S2 does not constrain, and
      no strengthening of S2 reaches it.
 -/
@@ -61,7 +62,7 @@ structure Row where
   value : Int
   deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- A cell's best in the objective's direction (section 5.2). `none` for an empty
+/-- A cell's best in the objective's direction (*The records store*). `none` for an empty
     cell. -/
 def best (d : Direction) : List Row → Option Int
   | [] => none
@@ -181,11 +182,13 @@ theorem best_notWorse_of_witness (d : Direction) (rs : List Row) (x : Row) (b : 
 
 /-! ## The write, with the update that keeps the better value
 
-  Section 5.2, corrected by finding 1 in this file's header. -/
+  *The records store*, carrying the correction finding 1 in this file's header
+  produced. -/
 
 /-- Merge a re-recorded value with what the cell already had for that artifact:
     keep whichever is better in the objective's direction. A tie keeps the
-    incumbent, which is section 5.2's tie rule. -/
+    incumbent: *The records store* keeps the better of the two, and a tie has no
+    better. -/
 def mergeValue (d : Direction) (fresh incumbent : Int) : Int :=
   if isBetter fresh incumbent d then fresh else incumbent
 
@@ -197,7 +200,7 @@ theorem mergeValue_notWorse (d : Direction) (fresh incumbent : Int) :
   · simp only [Bool.not_eq_true] at hb
     simp [mergeValue, hb, notWorse, isBetter_irrefl]
 
-/-- A write to a cell (section 5.2). A new artifact is inserted; re-recording an
+/-- A write to a cell (*The records store*). A new artifact is inserted; re-recording an
     existing artifact keeps the better value under the one digest. Defined over
     the BEST of the same-digest rows rather than over "the" same-digest row, so
     the result does not depend on a uniqueness invariant holding — it holds
@@ -253,7 +256,7 @@ theorem insertRow_unique_digest (d : Direction) (rs : List Row) (r : Row) :
 
 /-! ### Finding 1, machine-checked: the overwrite reading breaks S2 -/
 
-/-- Section 5.2's "re-recording the same artifact updates it", read as an
+/-- *The records store*'s "re-recording the same artifact updates it", read as an
     overwrite rather than as a merge. -/
 def overwriteRow (rs : List Row) (r : Row) : List Row :=
   r :: rs.filter (fun x => x.digest != r.digest)
@@ -263,8 +266,9 @@ def overwriteRow (rs : List Row) (r : Row) : List Row :=
     Artifact `a` recorded at 3, re-measured at 7 on a minimise objective — which
     is not a hypothetical, it is what a wall-clock unit does on a second run
     (`objective.ts:286` names `'ms'`). The store's best moves from 3 to 7 and S2
-    fails. This is why `insertRow` merges rather than overwrites, and it is a
-    correction the spec needs at section 5.2 rather than a modelling choice. -/
+    fails. This is why `insertRow` merges rather than overwrites, and keeping the
+    better of the two measurements is *The records store*'s own rule rather than a
+    modelling choice. -/
 theorem overwrite_breaks_monotonicity :
     notWorse .minimise
         (best .minimise (overwriteRow [{ digest := "a", value := 3 }]
@@ -283,9 +287,9 @@ theorem merge_survives_the_same_input :
 
 /-! ## Eviction at capacity
 
-  Section 5.2: "the worst member by `value` in the objective's direction is
-  evicted". The load-bearing fact is that the evicted member is not the best —
-  reverse the direction sign in eviction and the store evicts its own leader,
+  Eviction removes the worst member by `value` in the objective's direction. The
+  load-bearing fact is that the evicted member is not the best — reverse the
+  direction sign in eviction and the store evicts its own leader,
   which is exactly the "three call sites must move in lockstep" hazard
   `objective.ts:376-380` names. -/
 
@@ -411,14 +415,14 @@ theorem removeWorst_monotone (d : Direction) (rs : List Row) (hlen : 2 ≤ rs.le
 /-! ## S2, assembled -/
 
 /-- One write to a cell: insert or update, then evict if over capacity
-    (section 5.2). -/
+    (*The records store*). -/
 def applyWrite (d : Direction) (cap : Nat) (rs : List Row) (r : Row) : List Row :=
   let rs' := insertRow d rs r
   if cap < rs'.length then removeWorst d rs' else rs'
 
 /-- **S2: the records store is monotone in the objective's direction.**
 
-    `best(cell)` never worsens across any write. Section 10.1's S2, restricted —
+    `best(cell)` never worsens across any write. *The Lean invariants*' S2, restricted —
     per finding 2 in this file's header — to a SCALAR objective, which is the only
     kind for which `best(cell)` and a single `direction` are defined.
 
@@ -461,7 +465,7 @@ theorem better_candidate_displaces :
       { digest := "b", value := 2 }) = some 2 := by
   decide
 
-/-- And a tie does not displace (section 5.2: "a tie carries no signal"). -/
+/-- And a tie does not displace: a tie carries no signal. -/
 theorem tie_does_not_displace :
     applyWrite .minimise 4 [{ digest := "a", value := 5 }]
       { digest := "a", value := 5 } = [{ digest := "a", value := 5 }] := by
@@ -470,16 +474,16 @@ theorem tie_does_not_displace :
 /-! ### What S2 does not constrain, stated as a theorem
 
   S2 is monotone over the cell's BEST. It says nothing about the population, and
-  the population is the entire reason section 5.2 refuses one-incumbent-per
+  the population is the entire reason the records store refuses one-incumbent-per
   objective: a single best per objective IS best-of-N-with-carry, FunSearch's own
   "W/O Evolution" arm and one of its two worst curves at matched program count.
   So a policy can satisfy S2 while destroying exactly what `carry:'elites'`
   needs. -/
 
 /-- A cell reduced to its single best member satisfies S2 and is nonetheless the
-    ablation arm section 5.2 exists to avoid. This is the honest limit of S2: the
-    invariant the spec asked Lean to prove cannot see the defect the spec's own
-    citation is about. -/
+    ablation arm the records store exists to avoid. This is the honest limit of S2:
+    the invariant *The Lean invariants* asks Lean to prove cannot see the defect
+    the citation behind it is about. -/
 theorem eviction_can_destroy_the_population :
     notWorse .minimise
         (best .minimise [{ digest := "a", value := 1 }])
@@ -544,10 +548,11 @@ theorem dominates_admits_incomparable :
       a ≠ b ∧ dominates a b ds = false ∧ dominates b a ds = false :=
   ⟨[1, 5], [5, 1], [.minimise, .minimise], by decide, by decide, by decide⟩
 
-/-- **A front over one dimension is an argmax.** Section 6.5 refuses
-    `advance:'pareto'` with a scalar objective for exactly this reason, and here
-    it is forced rather than asserted: with a single component, domination and
-    strict betterness coincide, so the "front" is a single winner and reporting a
+/-- **A front over one dimension is an argmax.** A scalar objective under
+    `advance:'pareto'` is refused for exactly this reason — see
+    *Validity over the resolved configuration* — and here it is forced rather than
+    asserted: with a single component, domination and strict betterness coincide, so
+    the "front" is a single winner and reporting a
     frontier of size 1 as a success is the degeneracy `VectorObjective` was added
     to prevent. -/
 theorem single_component_is_argmax (a b : Int) (d : Direction) :

@@ -104,12 +104,16 @@ async function executeWithInterpreter(
       stderr: 'pipe',
       env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp' },
     });
-    const timeout = setTimeout(() => proc.kill(), timeoutMs);
+    let killedByTimeout = false;
+    const timeout = setTimeout(() => { killedByTimeout = true; proc.kill(); }, timeoutMs);
     const exitCode = await proc.exited;
     clearTimeout(timeout);
 
     const stdout = (await new Response(proc.stdout).text()).trim();
     const stderr = (await new Response(proc.stderr).text()).trim();
+    if (killedByTimeout) {
+      return { result: undefined, error: `Execution timeout (${Math.round(timeoutMs / 1000)}s)` };
+    }
     return exitCode === 0
       ? { result: stdout || null }
       : { result: undefined, error: stderr || `Process exited with code ${exitCode}` };
@@ -148,13 +152,23 @@ async function executeInSubprocess(code: string, timeoutMs: number): Promise<Exe
       env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp' },
     });
 
-    const timeout = setTimeout(() => proc.kill(), timeoutMs);
+    // The kill has to be distinguishable from a crash. `proc.kill()` leaves an
+    // empty stderr and a null exit code, so a candidate that was CUT read as
+    // "Process exited with code null" — a bound whose firing looked like a defect
+    // in the code it bounded, which is the one way a timeout cannot be audited
+    // from its symptoms. The in-process path already names itself; this one now
+    // does too.
+    let killedByTimeout = false;
+    const timeout = setTimeout(() => { killedByTimeout = true; proc.kill(); }, timeoutMs);
     const exitCode = await proc.exited;
     clearTimeout(timeout);
 
     const stdout = await new Response(proc.stdout).text();
     const stderr = await new Response(proc.stderr).text();
 
+    if (killedByTimeout) {
+      return { result: undefined, error: `Execution timeout (${Math.round(timeoutMs / 1000)}s)` };
+    }
     if (exitCode !== 0) {
       return { result: undefined, error: stderr.trim() || `Process exited with code ${exitCode}` };
     }
@@ -229,6 +243,3 @@ async function executeInProcess(
     if (timer) clearTimeout(timer);
   }
 }
-
-// Re-export for backward compatibility
-export { createSandboxedExecutor as createNodeExecutor };

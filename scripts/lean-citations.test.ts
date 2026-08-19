@@ -12,17 +12,18 @@
  * resolves to nothing is exactly what the module scan reports.
  *
  * WHAT THE TWO HOLES WERE. The name pattern required the module path to appear BEFORE
- * the theorem name, and every citation in `docs/EXPLORATION-SPEC.md` and
- * `docs/NODE-ISOLATION.md` is written the other way round — name first, locator in
- * parentheses after — so nine of them were invisible and a rename of any one passed
- * clean. Separately, a line RANGE was checked at its start only, which made any
- * in-range number satisfy any range: eighteen range ends were ungoverned.
+ * the theorem name, and the specification prose citing this corpus was written the
+ * other way round — name first, locator in parentheses after — so nine of those
+ * citations were invisible and a rename of any one passed clean. Separately, a line
+ * RANGE was checked at its start only, which made any in-range number satisfy any
+ * range: eighteen range ends were ungoverned.
  *
  * The false-positive controls at the bottom are the load-bearing half of the
- * order-independence fix, and one of them is live in the tree: `NODE-ISOLATION.md`
- * PROPOSES a preservation theorem by name that no Lean source declares yet. A rule
- * loose enough to read that as a citation would fail the tree for naming its own
- * design proposal, and the gate's own header names three more of the same shape.
+ * order-independence fix, and the shape they defend is one this tree produced: a
+ * design document PROPOSES a preservation theorem by name that no Lean source
+ * declares yet. A rule loose enough to read that as a citation would fail the tree
+ * for naming a design proposal, and the gate's own header names three more of the
+ * same shape.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -143,8 +144,8 @@ describe('a correct citation passes in either order', () => {
  */
 describe('the false positives that shaped the adjacency rule', () => {
   test('a proposed theorem name, in a paragraph full of modules, is not a citation', () => {
-    // The live case: `docs/NODE-ISOLATION.md` proposes a preservation theorem by name
-    // for Lean that does not exist yet, in a paragraph citing two real modules.
+    // The shape: a design document proposes a preservation theorem by name for Lean
+    // that does not exist yet, in a paragraph citing two real modules.
     const proposal = 'Proposed names, so the spec can cite one spelling: preservation theorem'
       + ` \`agent_node_transition_preserves_${'isolation'}\`, discharged by the same two-case`
       + ` rcases the .Expand case uses in ${STORAGE} and checked against ${ARBITRATION}.`;

@@ -23,6 +23,7 @@ import type { MCTSProgressEvent } from '../types/mcts';
 import type { HeadController, SplitPhaseEvent } from '../heads/controller';
 import type { MergeResult, SerializedMessage } from '../heads/types';
 import type { MctsOverrides } from '../config/store';
+import type { NodeLoopHost } from '../strategy/node-agent';
 
 export interface ForkDepsWiring {
   rt: AgentRuntime;
@@ -37,6 +38,22 @@ export interface ForkDepsWiring {
    * and its refusal says it blended.
    */
   costModel?: () => CostModel;
+  /**
+   * Where a tool-using swarm node's loop runs. A factory, for `costModel`'s
+   * reason.
+   *
+   * PLATFORM-ONLY, and declared as such in `scripts/capability-parity.lock.json`
+   * rather than left as an accident: a host is a Durable Object facet, and the
+   * CLI backend runs one process with no facet API to reach. There is nothing for
+   * it to wire against, so it wires nothing.
+   *
+   * Absent is not a degrade. The loop body is the same function either way, so a
+   * node without a host loses its storage boundary and keeps its tools, its
+   * transcript, its home and its credential — which is exactly what every node
+   * had before this seam existed. A throw here would have made the CLI worse at
+   * running searches in exchange for nothing.
+   */
+  nodeHost?: () => NodeLoopHost;
   mcts: {
     /** Fresh per fork call — a search must not share another's tree. */
     session: () => SessionWriter;
@@ -96,6 +113,7 @@ export function buildStrategyForkDeps(wiring: ForkDepsWiring): AgentsForkDeps {
     rt: wiring.rt,
     model: wiring.model,
     costModel: wiring.costModel,
+    nodeHost: wiring.nodeHost,
     defaultOptions: () => {
       const mcts = {
         session: wiring.mcts.session(),

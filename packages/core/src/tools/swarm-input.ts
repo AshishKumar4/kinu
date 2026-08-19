@@ -2,6 +2,9 @@
  * The WIRE form of a swarm call's two structured fields, and the mapping onto the
  * types the search is written over.
  *
+ * Specified by docs/EXPLORATION.md — "Comparability" and "Validity over the
+ * resolved configuration".
+ *
  * WHY A MAPPING EXISTS AT ALL. `strategy/objective.ts` and `strategy/swarm.ts` are
  * camelCase because that is correct TypeScript. This surface is snake_case —
  * `merge_strategy`, `budget_usd`, `wall_clock_ms`, `keep_history`, `event_id` — so
@@ -21,9 +24,9 @@
  * opaque to this convention because the convention governs the fields this
  * specification declares, not the interior of a payload whose schema the registered
  * verifier kind owns — and if anything transformed it, `verifierDigest` would differ
- * depending on which side of the transform it was computed on, which is §5.1's own
- * failure mode reached through a naming convention. With no transform there are not
- * two sides, so "wire form" and "as received" are the same bytes.
+ * depending on which side of the transform it was computed on, which is the failure
+ * mode *Comparability* names, reached through a naming convention. With no transform
+ * there are not two sides, so "wire form" and "as received" are the same bytes.
  *
  * `strictObject` throughout, for the reason the input itself is strict: valibot's
  * `object` EXCLUDES an unrecognised entry rather than rejecting it, and a dropped
@@ -112,8 +115,8 @@ const ObjectiveSchema = v.variant('kind', [
  * The tagged axes keep their parameters ON the value that owns them: `samples` only
  * under `score:'judge'`, the novelty rejection test only under `advance:'archive'`,
  * and a threshold only under the two `carry` values that admit into a store. That is
- * what makes §6.5's marginalisation refusal always have its input instead of
- * reasoning over an absent field.
+ * what makes the marginalisation refusal in *A parameter belongs to its value*
+ * always have its input instead of reasoning over an absent field.
  *
  * WHY THE CUT SPELLINGS ARE STILL WRITTEN DOWN HERE. Deleting them outright would
  * leave a caller who writes one with `Invalid key: Expected never`, which names the
@@ -207,11 +210,11 @@ const SwarmConfigWireSchema = v.strictObject({
  * every ABSENT one left absent.
  *
  * Absent rather than present-and-undefined, which is not a nicety here: `resolveSwarm`
- * decides an axis is missing by reading `undefined`, and §6.5 refuses a pruning
- * parameter supplied under an `advance` that does not prune. A key written as
- * `undefined` would make "the caller did not say" and "the caller said nothing"
- * indistinguishable in the merge, which is the one distinction this specification
- * exists to keep.
+ * decides an axis is missing by reading `undefined`, and *A parameter belongs to its
+ * value* refuses a pruning parameter supplied under an `advance` that does not
+ * prune. A key written as `undefined` would make "the caller did not say" and "the
+ * caller said nothing" indistinguishable in the merge, which is the one distinction
+ * this specification exists to keep.
  */
 function configOf(wire: v.InferOutput<typeof SwarmConfigWireSchema>): Partial<SwarmConfig> {
   const config: Partial<SwarmConfig> = {};

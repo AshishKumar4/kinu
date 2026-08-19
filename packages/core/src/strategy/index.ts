@@ -15,6 +15,7 @@ export * from './swarm-run';
 // calls `runNodeLoop` directly: an `ExplorationAgent` facet is a transport for the
 // same body the search runs in-isolate, so the host needs the loop, its spec and
 // its result types by name.
+export * from './node-host';
 export * from './node-agent';
 export * from './node-workspace';
 // `BranchDecision` and the budget that issues it. On the surface because the
