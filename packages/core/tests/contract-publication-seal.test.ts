@@ -9,8 +9,8 @@
 // property. A run that breached its floor could publish cross-workspace while
 // the leaderboard was sealed.
 //
-// So the property is stated over an ENUMERATION and this file holds three legs
-// of it, each of which fails LOUDLY rather than passing by omission:
+// So the property is stated over an ENUMERATION and this file holds two legs of
+// it, each of which fails LOUDLY rather than passing by omission:
 //
 //   1. The gate is TOTAL over PUBLICATION_SURFACES. A per-surface exception —
 //      the realistic future defect, `if (surface === 'craft') return admitted` —
@@ -20,9 +20,16 @@
 //      or as disclosure, and the declaration is checked against the source.
 //      `maybeStoreCraftedTool` is in that file today and nobody had classified
 //      it, which is exactly how four live channels went unnoticed.
-//   3. The code and §4.4's own table are SET-EQUAL, both directions, so a
-//      surface added to one and not the other fails a test instead of decaying
-//      back into prose.
+//
+// THERE WAS A THIRD LEG and it is worth knowing what it did. It read §4.4's own
+// table out of the specification and asserted set-equality with
+// PUBLICATION_SURFACES in both directions, so a surface added to one and not the
+// other failed a test instead of decaying back into prose. That document is
+// deliberately out of this repository, so the leg has no counterparty and was
+// removed rather than weakened: a comparison against a file that cannot be read
+// is not a check. PUBLICATION_SURFACES is now the sole source of truth for the
+// set, and the two legs above are what hold it. Restoring the cross-check needs
+// an in-repository document carrying the normative contract, not this file.
 //
 // What is deliberately NOT asserted: that each live writer calls the gate. The
 // spec does not make that wiring decision and five of the six surfaces have
@@ -44,7 +51,6 @@ import { SWARM_CARRIES } from '../src/strategy/swarm';
 const REPO = resolve(import.meta.dir, '../../..');
 const read = (path: string): string => readFileSync(resolve(REPO, path), 'utf8');
 
-const SPEC = 'docs/EXPLORATION-SPEC.md';
 const SETTLE = 'packages/core/src/mcts/convergence.ts';
 
 const breach: FloorBreach = {
@@ -241,46 +247,6 @@ describe("the settle path's egress is classified, not discovered", () => {
       expect(verdict.slice(DISCLOSURE.length).length, `${egress} has an empty reason`)
         .toBeGreaterThan(8);
     }
-  });
-});
-
-describe('the code and §4.4 are set-equal', () => {
-  /** The backticked surface names in §4.4's enumeration table. */
-  function documentedSurfaces(): string[] {
-    const spec = read(SPEC);
-    const start = spec.indexOf('**The enumerated publication surfaces.**');
-    expect(start, `${SPEC} has no §4.4 publication-surface enumeration`).toBeGreaterThan(-1);
-    const table = spec.slice(start).split('\n\n').find((block) => block.startsWith('| surface |'));
-    expect(table, `${SPEC}'s enumeration has no "| surface |" table`).toBeDefined();
-    const names = new Set<string>();
-    for (const row of (table ?? '').split('\n').slice(2)) {
-      const first = /^\|\s*`([a-z_]+)`\s*\|/.exec(row);
-      if (first?.[1] !== undefined) names.add(first[1]);
-    }
-    return [...names].sort();
-  }
-
-  test('§4.4 documents exactly the surfaces the code enumerates', () => {
-    expect(documentedSurfaces()).toEqual([...PUBLICATION_SURFACES].sort());
-  });
-
-  test('§4.4 states the seal over publication, not over the records store alone', () => {
-    const spec = read(SPEC);
-    expect(spec).toContain('A publication write REQUIRES `PublicationState.kind');
-  });
-
-  test('the side door sentence survives only as a RETRACTION, never as a claim', () => {
-    // The same split the design makes, one level up: forbid the CLAIM, permit the
-    // CAVEAT. A flat ban on the string would stop the document quoting its own
-    // retracted sentence, so a future author correcting a different side door
-    // would have to paraphrase the words that were wrong — which is strictly less
-    // useful to a reader than seeing them. `ObjectiveSpec` raised this against the
-    // flat version and is right.
-    const SIDE_DOOR = 'publication is separate and unchanged';
-    const live = read(SPEC)
-      .split('\n')
-      .filter((line) => line.includes(SIDE_DOOR) && !line.includes('earlier revision'));
-    expect(live, `${SIDE_DOOR} appears as a live claim, not as a retraction`).toEqual([]);
   });
 });
 
