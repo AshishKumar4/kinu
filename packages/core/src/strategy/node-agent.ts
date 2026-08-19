@@ -46,7 +46,7 @@
  */
 
 import { jsonSchema, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
-import { HEAD_BUILTIN_TOOLS, keepBuiltins } from '../heads/head-tools';
+import { HEAD_BUILTIN_TOOLS, keepBuiltins } from '../heads/types';
 import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../heads/head-inference';
 import type { HeadInferenceDeps } from '../heads/head-inference';
 import { buildBuiltinTools } from '../tools/builtins';
