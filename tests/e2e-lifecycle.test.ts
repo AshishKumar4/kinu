@@ -14,9 +14,7 @@ import {
   collectStepText,
   EvolutionEngine,
   buildBuiltinTools,
-  initSearchTables,
-  initScaffoldTables,
-  initCraftScoreTables,
+  initWorkspaceSchema,
   type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
@@ -31,6 +29,9 @@ import {
   projectJsonValue,
 } from '../packages/core/src/index';
 import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index';
+import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
+import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
+import { requireSandboxedExecutors } from './evals/harness';
 import {
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
@@ -132,10 +133,23 @@ describe('E2E Lifecycle', () => {
     mkdirSync(TEST_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
-    rt = await createWorkspace(db, { name: 'e2e-test', purpose: 'A coding assistant that helps write TypeScript.', llm: LLM_CONFIG });
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftScoreTables(rt.storage.execRaw);
+    // BIRTH, then OPEN. `createWorkspace` returns the birth runtime, whose
+    // `spawnBranch` throws by design (identity/create.ts:80) because a stub
+    // result would be indistinguishable from a real exploration — so `MCTS
+    // evolution` below could never pass on it, and did not, for as long as this
+    // suite had a credential. `openWorkspaceCLI` builds `createCLIRuntime`,
+    // which registers the real branch spawner, and is the same spine
+    // `proteus exec` runs.
+    await createWorkspace(db, { name: 'e2e-test', purpose: 'A coding assistant that helps write TypeScript.', llm: LLM_CONFIG });
+    // The whole schema from the one function that declares it, replacing three
+    // hand-picked init calls. They omitted `initShadowTables`, so
+    // `scaffold_evaluations` was absent — which is what a sibling suite died on
+    // mid-run. A hand-maintained subset of a schema drifts from it by default.
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    // `hostRoot: null` keeps every registered executor off the repo this suite
+    // was launched from, and the next line asserts it rather than trusting it.
+    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
+    requireSandboxedExecutors('e2e-lifecycle', rt);
     events = [];
     engine = new EvolutionEngine(rt, { enabled: true });
     tools = buildBuiltinTools({ rt });

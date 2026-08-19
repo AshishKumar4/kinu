@@ -22,9 +22,7 @@ import {
   buildBuiltinTools,
   collectStepText,
   EvolutionEngine,
-  initSearchTables,
-  initScaffoldTables,
-  initCraftScoreTables,
+  initWorkspaceSchema,
   readSoul,
   JsonObjectSchema,
   projectJsonValue,
@@ -34,6 +32,9 @@ import {
   type ToolCallRecord,
 } from '../packages/core/src/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
+import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
+import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
+import { requireSandboxedExecutors } from './evals/harness';
 import {
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
@@ -191,14 +192,21 @@ describe('Evolution Proof', () => {
     mkdirSync(TEST_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
-    rt = await createWorkspace(db, {
+    // BIRTH, then OPEN, then the WHOLE schema — the three hand-picked init calls
+    // this replaced omitted `initShadowTables`, so `scaffold_evaluations` did not
+    // exist and `engine.onSessionComplete` below died on it 102s into a paid run.
+    // `initWorkspaceSchema` is the one function that declares a workspace's
+    // tables; a subset maintained by hand drifts from it by default.
+    await createWorkspace(db, {
       name: 'evolution-proof',
       purpose: 'A crypto and algorithm expert that solves CTF-style challenges using code execution.',
       llm: LLM_CONFIG,
     });
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftScoreTables(rt.storage.execRaw);
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    // The real runtime rather than the birth one, so evolution reaches a genuine
+    // branch spawner, and `hostRoot: null` keeps its executors off this repo.
+    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
+    requireSandboxedExecutors('evolution-proof', rt);
     model = liveChatModel(LLM_CONFIG);
     engine = new EvolutionEngine(rt, { enabled: true });
     engine.onEvent(e => console.log(`    [evolution] ${e.type}: ${e.message.slice(0, 80)}`));

@@ -16,9 +16,7 @@ import * as v from 'valibot';
 import {
   EvolutionEngine,
   buildBuiltinTools,
-  initSearchTables,
-  initScaffoldTables,
-  initCraftScoreTables,
+  initWorkspaceSchema,
   readSoul,
   JsonObjectSchema,
   projectJsonValue,
@@ -29,6 +27,9 @@ import {
   type ToolCallRecord,
 } from '../packages/core/src/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
+import { openWorkspaceCLI } from '../packages/cli-backend/src/open';
+import { makeWorkspaceSchemaSql } from '../packages/cli-backend/src/runtime';
+import { requireSandboxedExecutors } from './evals/harness';
 import {
   liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@proteus/test-utils';
@@ -146,14 +147,20 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
 
-    rt = await createWorkspace(db, {
+    // BIRTH, then the WHOLE schema, then OPEN. This suite's purpose tells the
+    // model "Always use execute_tools to compute answers", and on the birth
+    // runtime that tool is not configured — measured live, the model called it,
+    // got "not configured", fell back to `run`, and the scorecard still printed
+    // "used execute_tools" because it counts the NAME. `openWorkspaceCLI` builds
+    // the runtime that actually carries the tool.
+    await createWorkspace(db, {
       name: 'algo-solver',
       purpose: 'An algorithmic problem solver. Always use execute_tools to compute answers. Never guess.',
       llm: LLM_CONFIG,
     });
-    initSearchTables(rt.storage.execRaw, rt.storage.sql);
-    initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftScoreTables(rt.storage.execRaw);
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    ({ rt } = await openWorkspaceCLI(db, DB_PATH, { llm: LLM_CONFIG, hostRoot: null }));
+    requireSandboxedExecutors('deep-evolution', rt);
 
     events = [];
     engine = new EvolutionEngine(rt, { enabled: true });
