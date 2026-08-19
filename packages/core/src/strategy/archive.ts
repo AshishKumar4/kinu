@@ -30,14 +30,29 @@
  *
  * WHAT IS DELIBERATELY NOT HERE.
  *
- * NO EVICTION RULE. `isBetter`'s docstring names displacement, eviction and a cell's
- * best as its three call sites and the store implements two. The third is not missing
- * here, it is unreachable by construction: nothing is ever deleted from a cell,
- * because the thing that bounds a cell's population is the admission test rather than
- * a row cap — a candidate too close to an occupant never lands, so a cell cannot
- * accumulate the near-copies an eviction rule would exist to remove. *Cell capacity
- * and bin width are deliberately absent* — neither has been measured — so a capacity
- * is a number this file does not have to invent, which is the point.
+ * NO EVICTION RULE, AND THE REASON IS WEAKER THAN IT LOOKS. `isBetter`'s docstring
+ * names displacement, eviction and a cell's best as its three call sites and the store
+ * implements two. Nothing is ever deleted from a cell, and what the admission test
+ * genuinely buys is that no NEAR-COPY is ever in one: the occupants stay pairwise at
+ * least `novelty` apart over every finite admitted sequence, which is
+ * `ArchiveAdmission.lean — separation_is_invariant, no_near_copy_is_reachable`. So the
+ * population a de-duplicating rule would exist to remove is empty.
+ *
+ * What it does NOT buy is a bound on the population itself. That distinction is
+ * machine-checked rather than argued:
+ * `ArchiveAdmission.lean — separated_cells_are_unboundedly_large` builds, for every n,
+ * a separated cell of n occupants, every one admitted at `novelty = 1` — the strictest
+ * floor the unit interval admits — using the exact distance {@link noveltyDistance}
+ * returns for artifacts sharing no token. Separation bounds similarity, not
+ * cardinality. So a cell can grow without bound on mutually-novel members while
+ * nothing trims it, which is Pugh et al.'s filled-grid-of-junk at the scale of one
+ * cell; and since {@link cellOccupants} carries no `LIMIT`, admission is a linear read
+ * of that cell on every write.
+ *
+ * §11.4's *"cell capacity is a number nobody has measured"* is still a number this file
+ * declines to invent. A real bound needs a bounded vocabulary, because at `novelty = 1`
+ * the occupants have pairwise disjoint token sets, and nothing bounds one — so the gap
+ * is stated here rather than filled with a constant.
  *
  * NO BIN WIDTH. A coordinate is the value the instrument reported, at the resolution
  * the instrument reports it. Binning a continuous descriptor into a grid needs a width,

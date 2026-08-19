@@ -472,6 +472,15 @@ export type MergeOrder =
  * be applied second: there is no order to pick, an arbitrary tie-break would apply a
  * diff onto a base its own verdict never saw, and a walk that just followed the edges
  * would not terminate.
+ *
+ * PROVED, over the sweep below rather than over an asserted postcondition. The result
+ * satisfies rule 1 at every position — `FanIn.lean — derived_order_satisfies_rule_one`
+ * — and is a permutation of the offered ids: `FanIn.lean — every_member_is_ordered`.
+ * The all-or-nothing is `FanIn.lean — an_orderable_member_does_not_land_beside_a_cycle`,
+ * which places a dependency-free member and still applies the empty list. The sweep
+ * count below is measured rather than assumed:
+ * `FanIn.lean — the_sweep_bound_is_tight` shows a chain offered backwards needs one
+ * sweep per member and that one fewer stops short.
  */
 export function dependencyOrder(
   members: readonly MergeMember[],
@@ -736,7 +745,12 @@ async function gate(
   // The pair is the binding: the member digest never changes for an immutable diff, so
   // the base digest is the half that can differ, and under a rebase it differs for
   // every member after the first. A difference forces re-verification through the
-  // registry, and a stale verdict never applies.
+  // registry, and a stale verdict never applies. Both halves are proved:
+  // `Rebase.lean — member_only_binding_cannot_see_the_origin` says a member-keyed gate
+  // answers the same for every origin, and this half does not:
+  // `Rebase.lean — the_base_key_moves_when_a_touched_path_moves`. What lands
+  // is bound to what it lands on: `Rebase.lean — applied_is_bound_to_the_base_it_lands_on`,
+  // lifted over a whole settle by `Rebase.lean — rebase_applies_only_bound_verdicts`.
   const baseDigest = await baseDigestOf(member.diff, ctx.deps.readOrigin);
   if (member.verdict.baseDigest !== baseDigest) {
     const fresh = await reverified(member, baseDigest, ctx.deps);
