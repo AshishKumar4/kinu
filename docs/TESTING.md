@@ -107,7 +107,7 @@ cell that has not been measured says so instead of carrying a guess.
 | bun suites, credentialed | 2,745 s | 48 | 601.6k |
 | bun suites, credentialed (second run) | 3,843 s | 49 | 600.8k |
 | behaviour evals, credentialed | not yet measured — see below | | |
-| live swarm, credentialed | PENDING MEASUREMENT — see below | | |
+| live swarm, credentialed | 1,338 s | 3 | 2,453.4k (134.1k out) |
 | `tests/live-smoke.test.ts` alone | 74 s | 3 | 55.6k |
 
 The two bun-half rows are the two runs whose spend files still exist. `ladder.ts`
@@ -124,9 +124,17 @@ record it writes carries per-episode `ms`, so the figure is read off an artifact
 rather than estimated. It had never been measured because the arm produced no
 report at all until this change.
 
-**The live swarm arm has no completed credentialed run yet, and what is owed is one
-figure of each kind: wall seconds, model calls, tokens in/out, and what it crowned.**
-Three attempts, each stopped for a stated reason rather than by a guess:
+**What that live swarm row is, and it is a RED run rather than a passing one.** One
+credentialed run completed and reported: 1,338 s wall, 3 model calls accounted for,
+2,453,377 input / 134,076 output tokens, baseline 2,880,000 oracle calls (exactly
+2·1200² — the reference counting every token against every other, on both instances),
+`stop: aborted`, `expansions: 3`, **no winner**, `records.written: 0`, `fanIn.levels:
+0` with all three parents unusable. The eval failed on its first assertion,
+`expect(report.stop).not.toBe('aborted')`, which is the bound working: a run that did
+not settle is refused rather than measured. What is still OWED is a run that SETTLES,
+and with it the winner and the winner/baseline ratio.
+
+Three earlier attempts, each stopped for a stated reason rather than by a guess:
 
 1. Refused before any model call — the objective's floor was sent camelCase and
    `SwarmObjectiveSchema` answered `Invalid key: Expected "best_known_honest"`. The
@@ -136,22 +144,29 @@ Three attempts, each stopped for a stated reason rather than by a guess:
    Authentication error)`, three more sat at `status:'running'`, zero steps, for 63
    minutes with no store write and no exit. `tests/live-smoke.test.ts` passed 5 calls
    / 55.7k tokens an hour later, so that was a window rather than an outage.
-3. Healthy credential, real work: three heads read the reference, found the measure
-   harness, wrote and ran their own benchmark — and then one step ran 26 minutes on
-   the 50,000-token `hard-select-kth` instance while the runner held 91% CPU. The eval
-   now uses `hard-majority-vote` (n=1200) for that measured reason: the instance size
-   is what a NODE'S own experimentation costs, and the workspace substrate executes
-   in-process.
+3. Healthy credential, real work, wrong instance: three heads read the reference,
+   found the measure harness, wrote and ran their own benchmark — and then one step
+   ran 26 minutes on the 50,000-token `hard-select-kth` instance while the runner held
+   91% CPU. The eval now uses `hard-majority-vote` (n=1200) for that measured reason:
+   instance size is what a NODE'S own experimentation costs, and the workspace
+   substrate executes in-process.
 
-**Sizing this arm, which is the part worth knowing before you run it.** A node's step
-is unbounded and the caller's `abortSignal` is the only bound the surface forwards —
-`AGENTS_ACTION_FIELDS.swarm` records that a wall-clock cap is deliberately absent until
-something enforces one. That signal is consulted BETWEEN steps
-(`node-agent.ts:487`), which is exactly what was measured: on the fourth attempt one
-head moved to `aborted` at the 20-minute envelope while two others, inside a step,
-did not. So the envelope bounds a run to "one step past the deadline", and a step has
-no bound of its own. Neither the abort timer nor vitest's own `testTimeout` fires
-while the substrate is executing in-process.
+**Sizing this arm, which is the part worth knowing before you run it — and the finding
+the run produced.** A swarm node runs to `DEFAULT_MAX_STEPS` (500) because
+`SwarmRunDeps.maxSteps` exists and `runSwarmAction` never sets it, so there is no
+per-node step or time budget on this surface at all: `AGENTS_ACTION_FIELDS.swarm`
+records that an iteration cap and a wall-clock cap are DELIBERATELY ABSENT until
+something enforces them. Measured, one wave of three: 22, 25 and 26 model steps and
+25, 27 and 27 tool calls per node, 1,216–1,337 s each, ~2.45M input tokens between
+them, and not one measurable candidate. `depth × branches` bounds the SHAPE and
+nothing bounds the depth of one node's own loop.
+
+The caller's `abortSignal` is the only bound `runSwarmAction` forwards, and it does
+work: all three nodes settled `status:'aborted'` with their step counts recorded when
+the 20-minute envelope fired. It is consulted BETWEEN steps (`node-agent.ts:487`), so
+it bounds a run to one step past the deadline and a step has no bound of its own —
+measured on attempt 3, where neither that timer nor vitest's own `testTimeout` fired
+at all while the substrate executed in-process for 26 minutes.
 
 Cost here is **time, not rate**: the account's limit is 300 requests/minute and a
 full tier run averages under one. Nothing you can do to this tier makes it hit a
