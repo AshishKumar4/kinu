@@ -28,6 +28,7 @@ import {
   decodeJsonValue,
   type CodemodeProvider,
   type JsonValue,
+  SWARM_PRESET_DOCTRINE,
   type AgentsForkDeps,
   type AgentsToolDeps,
   type PeersToolDeps,
@@ -35,6 +36,7 @@ import {
   type TeamToolDeps,
   type SubordinateDelivery, type SubordinateHandoff,
 } from '../src/index';
+import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../src/strategy/swarm';
 import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 
 interface Call { action: string; input: JsonValue }
@@ -435,6 +437,19 @@ describe('agents.* codemode namespace — declared types', () => {
     expect(types).not.toContain('settle');
     // The refusal's classification is declared, like the file dispatcher's.
     expect(types).toContain('{ reason: string; error: string }');
+  });
+
+  test('the declared preset union is every preset the tool advertises, with the same doctrine', () => {
+    // Both unions were hardcoded literals and both had gone stale in the same
+    // direction: `prove` was absent, so a sandbox script naming the one preset
+    // with an exact checker was a TYPE ERROR — the declaration made a live
+    // capability unreachable rather than merely undescribed. Derived now, so the
+    // sandbox contract cannot come to offer a different set than the schema.
+    const types = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
+    for (const preset of SWARM_PRESETS) expect(types).toContain(`"${preset}"`);
+    expect(types).toContain(`preset: ${SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
+    expect(types).toContain(`from?: ${NAMED_SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
+    for (const line of SWARM_PRESET_DOCTRINE) expect(types).toContain(line);
   });
 
   test('the same action set renders byte-identically whatever built the deps', () => {

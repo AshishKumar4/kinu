@@ -34,7 +34,7 @@
 import { readExecSignal } from '../execution/signal';
 import * as v from 'valibot';
 import type { CodemodeProvider } from '../rlm';
-import { TOOL_REACH, type AgentsToolAction } from './registry';
+import { SWARM_PRESET_DOCTRINE, TOOL_REACH, type AgentsToolAction } from './registry';
 import { isJsonObject, JsonValueSchema, type JsonObject } from '../utils/json';
 import {
   agentsActionsFor,
@@ -42,6 +42,7 @@ import {
   parseAgentsToolInput,
   type AgentsToolDeps,
 } from './agents-tool';
+import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../strategy/swarm';
 
 /**
  * The sandbox-visible declaration of each action, one block per member.
@@ -60,12 +61,7 @@ const AGENTS_CODEMODE_MEMBERS = {
   swarm: `  /** Run a configured search whose candidates are MEASURED rather than judged.
    *  You name the shape with \`preset\` and what counts with \`objective\`, and
    *  every candidate is scored by your own verifier running in this workspace.
-   *    preset:"optimise" beats a number and REQUIRES \`objective\`.
-   *    preset:"ideate" is flat by design: no value signal, no \`objective\`, a
-   *      set of distinct approaches back.
-   *    preset:"research"/"audit"/"redteam" bin findings under a coverage \`key\`.
-   *    preset:"custom" states the axes in \`config\` under a \`label\`, optionally
-   *      seeded from \`from\`.
+${SWARM_PRESET_DOCTRINE.map((line) => `   *    ${line}`).join('\n')}
    *  \`verify\` names a REGISTERED instrument and carries its whole spec: a
    *  script path invented here does not resolve and the call is refused, which
    *  is the one guard that makes a measured number worth anything. A \`floor\`
@@ -80,12 +76,12 @@ const AGENTS_CODEMODE_MEMBERS = {
    *  top-level \`agents\` tool for one long search that must survive an
    *  eviction, which resumes from its search checkpoint. */
   swarm(input: {
-    preset: "ideate" | "research" | "audit" | "redteam" | "optimise" | "custom";
+    preset: ${SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};
     task: string;
     objective?: object;
     key?: string;
     config?: object;
-    from?: "ideate" | "research" | "audit" | "redteam" | "optimise";
+    from?: ${NAMED_SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};
     label?: string;
     branches?: number;
     depth?: number;

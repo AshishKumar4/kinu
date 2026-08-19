@@ -34,6 +34,7 @@ import {
   DELEGATION_FRAME,
   DELEGATION_INHERITANCE,
   DELEGATION_RUNGS,
+  SWARM_PRESET_DOCTRINE,
   type AgentsToolAction,
 } from './registry';
 import { SwarmConfigSchema, SwarmObjectiveSchema } from './swarm-input';
@@ -868,10 +869,7 @@ async function runSwarmAction(
   budget?: MissionGovernor,
 ): Promise<object> {
   if (!input.preset) {
-    return badInput('swarm needs `preset` — the shape of the search. optimise measures a number '
-      + 'you declare in `objective`; ideate samples in parallel with no value signal; '
-      + 'research/audit/redteam bin findings under a coverage `key`; custom states the axes in '
-      + '`config` under a `label`.');
+    return badInput(`swarm needs \`preset\` — the shape of the search. ${SWARM_PRESET_DOCTRINE.join(' ')}`);
   }
   if (!input.task) {
     return badInput('swarm needs `task` — what the search is for, in prose. The measured '
@@ -967,11 +965,11 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
     preset: {
       type: 'string',
       enum: [...SWARM_PRESETS],
-      description: 'For action=swarm: the shape of the search. optimise = beat a measured number (requires `objective`). ideate = flat parallel sampling with no value signal, which is why it takes no `objective` and returns a set. research/audit/redteam = bin findings into an archive under a coverage `key`. custom = state the axes yourself in `config`, with a `label`.',
+      description: `For action=swarm: the shape of the search. ${SWARM_PRESET_DOCTRINE.join(' ')}`,
     },
     objective: {
       type: 'object',
-      description: 'For action=swarm: what is measured. {kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}} and an optional floor:{value, kind:"certificate", proof, best_known_honest}. verify names a REGISTERED instrument and hands it its whole spec — a metric nothing can execute is not an objective, and a script path invented here is refused rather than run. kind:"witness" is a checkable certificate and needs a scalar `proxy` to be searchable; kind:"instanced" (one metric, 2+ instances) and kind:"vector" (2+ metrics) are the two front shapes. Field names are snake_case, like every field on this tool.',
+      description: 'For action=swarm: what is measured. {kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}} and an optional floor:{value, kind:"certificate", proof, best_known_honest}. verify names a REGISTERED instrument and hands it its whole spec — a metric nothing can execute is not an objective, and a script path invented here is refused rather than run. kind:"witness" is a checkable certificate and needs a scalar `proxy` to be searchable. kind:"instanced" and kind:"vector" declare a FRONT, and this runner measures one number per candidate, so both are refused today — reduce what you want to one scalar. Field names are snake_case, like every field on this tool.',
     },
     key: { type: 'string', description: 'For action=swarm with advance:"archive": the coverage descriptor elites are binned into, required there and refused under every other advance. It must name a quantity the objective\'s own verifier REPORTS beside its value, because the cell a candidate lands in is witnessed by the measurement rather than claimed by the candidate — a key naming nothing that instrument reports is refused before any candidate is expanded, and a key that can only say "distinct idea" means the task wants preset:"ideate".' },
     config: { type: 'object', description: 'For action=swarm with preset:"custom" only: the axes — unit, context, expand, score, advance, carry — as the OVERRIDE on `from`\'s shape, or all six when there is no `from`. Prohibited on a named preset, which is a tested path and cannot be refused.' },
