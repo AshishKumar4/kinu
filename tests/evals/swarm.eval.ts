@@ -264,24 +264,39 @@ const BRANCHES = 3;
 const LABEL = 'live-swarm-eval-verifier-fanin';
 
 /**
- * The WALL-CLOCK ENVELOPE this run is held to, through the tool's own abort seam.
+ * The wall-clock envelope this run ASKS for, through the only bound the surface has —
+ * and the measured statement of how far that bound actually reaches.
  *
- * MEASURED, and this is the reason it exists rather than a precaution. A first live
- * run against a worker proxy whose upstream Cloudflare login had expired produced
- * three depth-1 nodes that errored in ~1s with `Your Cloudflare login is no longer
- * valid ... (upstream: Authentication error)`, then three more whose head-journal rows
- * sat at `status:'running'`, `completed_at: NULL` for SIXTY-THREE MINUTES with no
- * further store write and no exit. Nothing in the settled surface bounds that:
- * `AGENTS_ACTION_FIELDS.swarm` records that a wall-clock cap is deliberately absent
- * until something enforces one, and `runSwarmAction` forwards only the caller's
- * `abortSignal`. So the caller's signal IS the bound, and passing one is what turns an
- * unresponsive provider from an hour of silence into `stop:'aborted'` — which the
- * assertions below refuse.
+ * `runSwarmAction` forwards exactly one thing a caller can use to end a search: the
+ * `abortSignal` on the tool-call options (`agents-tool.ts:909-910`).
+ * `AGENTS_ACTION_FIELDS.swarm` records that an iteration cap and a wall-clock cap are
+ * DELIBERATELY ABSENT until something enforces them, and nothing does. So this signal
+ * is the bound, and it is passed rather than omitted.
  *
- * 20 minutes because the budget is 6 nodes at up to `DEFAULT_MAX_STEPS` steps each
- * and this arm has to be affordable at `ci`; the vitest timeout below it is
- * deliberately LARGER, so the run ends through the seam under test rather than
- * through the runner's timer, and a red says which.
+ * WHAT IT DOES NOT BOUND, measured twice on this eval rather than reasoned about. A
+ * node consults the signal BETWEEN steps (`node-agent.ts:487`, `isAborted`), so a node
+ * inside ONE long step never observes it:
+ *
+ *   - against a worker proxy whose upstream Cloudflare login had expired, three
+ *     depth-1 heads errored in ~1 s (`Your Cloudflare login is no longer valid …
+ *     (upstream: Authentication error)`) and three more sat at `status:'running'`,
+ *     `completed_at: NULL`, zero steps, for SIXTY-THREE MINUTES with no store write
+ *     and no exit;
+ *   - against a healthy credential, three heads made 12 steps in 143 s — reading the
+ *     reference, finding the measure harness, writing and running their own benchmark,
+ *     which is the behaviour this eval wants — and then one step ran for 26 MINUTES on
+ *     the 50,000-token instance, held the runner at 91% CPU, and passed a 20-minute
+ *     `AbortSignal.timeout` with no effect at all. The vitest test timeout did not fire
+ *     either, which is consistent with a microtask-driven loop starving the timer
+ *     phase: neither timer can run while the workspace substrate executes in-process.
+ *
+ * So the signal is kept, honestly described, and the instrument above is what actually
+ * keeps this arm bounded — a small instance means short steps, and a step boundary is
+ * the only place a bound of any kind is currently observable.
+ *
+ * 20 minutes because the budget is 6 nodes; the vitest timeout below is deliberately
+ * larger, so a run that ends inside the envelope ends through this seam and reports
+ * `stop:'aborted'`, which the assertions refuse.
  */
 const ENVELOPE_MS = 1_200_000;
 

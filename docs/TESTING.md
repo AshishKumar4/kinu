@@ -38,7 +38,7 @@ bun test packages/cli-backend/tests
 ## The eval tier — the suites that call a real model
 
 ```bash
-bun run test:eval                        # both arms, and it RESOLVES A CREDENTIAL BY ITSELF
+bun run test:eval                        # every arm, and it RESOLVES A CREDENTIAL BY ITSELF
 ```
 
 Read the next paragraph before running that.
@@ -61,15 +61,33 @@ rather than in a bill.
 session to borrow, so it is free there and everything live skips. On your machine
 it is not.
 
-### The two arms
+### The three arms
 
-Two runners, because neither can see the other's files — `bun test` matches only
-`*.test.ts` / `*_test.*` / `*.spec.*`, never `*.eval.ts`.
+Two of them exist because two runners are needed and neither can see the other's
+files — `bun test` matches only `*.test.ts` / `*_test.*` / `*.spec.*`, never
+`*.eval.ts`. The third is one file on the vitest side, split off for **cost
+accounting**: an arm is the unit a spend file is written per, so an arm is the unit
+liveness can be asserted per.
 
 | Arm | What runs | What it measures |
 |---|---|---|
 | bun suites | `bun test ./tests/` | end-to-end lifecycle, evolution across sessions, MCTS reached and durably ranked, delegation conversion, one real turn per backend |
-| behaviour evals | `vitest --config vitest.evals.config.ts` over `tests/evals/**/*.eval.ts` | 17 corpus tasks × 2 repetitions = 34 full agent episodes, graded by eight scorers over the `run_events` ledger |
+| behaviour evals | `vitest --config vitest.evals.config.ts`, excluding the swarm file | 17 corpus tasks × 2 repetitions = 34 full agent episodes, graded by eight scorers over the `run_events` ledger |
+| live swarm | `vitest --config vitest.evals.config.ts tests/evals/swarm.eval.ts` | one `agents({action:'swarm'})` call through the real tool surface: a `depth:2 branches:3` verifier-scored search with `expand:'aggregate'`, graded on the caller's own `exec-ratio` instrument |
+
+**Why the swarm eval is its own arm.** `scripts/eval-spend.ts --expect-live` sums
+the lines in the spend file it is given, so a swarm eval sharing a file with five
+paid suites could stop reaching a model entirely and the tier would still report
+`proven`. The arm whose whole subject is a live search is the one arm whose zero has
+to be its own failure, so it gets its own spend file and its own assertion — driven
+by the same `EXPECT_LIVE` the banner printed, so the line you read and the assertion
+the run is held to cannot disagree. Everything it asserts is measured rather than
+judged: a winner crowned, its artifact's oracle-call count against the run's own
+measured baseline, `exploration_records` rows read back through the store's own
+reader under the objective's identity and floor digest, and the
+`judgeEnsemble`/`fanIn`/`carry` disclosures checked against the axes the report
+itself carries. Its credential-free half — the action is offered, and the strict
+parse refuses an unknown field naming the field it meant — runs at every tier.
 
 The behaviour arm's own knobs, none of which are documented anywhere else:
 `PROTEUS_EVAL_TIER=flash|pro` picks the model (`flash` is the volume arm and the
@@ -89,6 +107,7 @@ cell that has not been measured says so instead of carrying a guess.
 | bun suites, credentialed | 2,745 s | 48 | 601.6k |
 | bun suites, credentialed (second run) | 3,843 s | 49 | 600.8k |
 | behaviour evals, credentialed | not yet measured — see below | | |
+| live swarm, credentialed | PENDING MEASUREMENT — see below | | |
 | `tests/live-smoke.test.ts` alone | 74 s | 3 | 55.6k |
 
 The two bun-half rows are the two runs whose spend files still exist. `ladder.ts`
@@ -104,6 +123,35 @@ is the number this row is waiting on; the tier now reports it per arm, and the r
 record it writes carries per-episode `ms`, so the figure is read off an artifact
 rather than estimated. It had never been measured because the arm produced no
 report at all until this change.
+
+**The live swarm arm has no completed credentialed run yet, and what is owed is one
+figure of each kind: wall seconds, model calls, tokens in/out, and what it crowned.**
+Three attempts, each stopped for a stated reason rather than by a guess:
+
+1. Refused before any model call — the objective's floor was sent camelCase and
+   `SwarmObjectiveSchema` answered `Invalid key: Expected "best_known_honest"`. The
+   wire boundary working; the eval's transform is now in one named place.
+2. The worker proxy's upstream Cloudflare login had expired: three depth-1 heads
+   errored in ~1 s with `Your Cloudflare login is no longer valid … (upstream:
+   Authentication error)`, three more sat at `status:'running'`, zero steps, for 63
+   minutes with no store write and no exit. `tests/live-smoke.test.ts` passed 5 calls
+   / 55.7k tokens an hour later, so that was a window rather than an outage.
+3. Healthy credential, real work: three heads read the reference, found the measure
+   harness, wrote and ran their own benchmark — and then one step ran 26 minutes on
+   the 50,000-token `hard-select-kth` instance while the runner held 91% CPU. The eval
+   now uses `hard-majority-vote` (n=1200) for that measured reason: the instance size
+   is what a NODE'S own experimentation costs, and the workspace substrate executes
+   in-process.
+
+**Sizing this arm, which is the part worth knowing before you run it.** A node's step
+is unbounded and the caller's `abortSignal` is the only bound the surface forwards —
+`AGENTS_ACTION_FIELDS.swarm` records that a wall-clock cap is deliberately absent until
+something enforces one. That signal is consulted BETWEEN steps
+(`node-agent.ts:487`), which is exactly what was measured: on the fourth attempt one
+head moved to `aborted` at the 20-minute envelope while two others, inside a step,
+did not. So the envelope bounds a run to "one step past the deadline", and a step has
+no bound of its own. Neither the abort timer nor vitest's own `testTimeout` fires
+while the substrate is executing in-process.
 
 Cost here is **time, not rate**: the account's limit is 300 requests/minute and a
 full tier run averages under one. Nothing you can do to this tier makes it hit a
@@ -136,7 +184,10 @@ repairs.
   — which is a sentence you will have to defend.
 - **The run proved no liveness.** A target was resolved and the run cannot show
   it reached a model. That is the tier reporting on itself; `eval-spend.ts` names
-  which of the four shapes it is.
+  which of the four shapes it is. It is asserted TWICE — once over the live swarm
+  arm's own spend file and once over the tier's total — because a tier-wide sum
+  cannot fail on one arm's behalf, and `the live swarm arm proved no liveness` is
+  the sharper sentence of the two.
 - **Nothing at all, loudly.** With no credential anywhere the tier still runs and
   still passes: every live test skips, the ratchet proves the skips are the
   declared ones, and the liveness assertion says it has nothing to prove. That is
