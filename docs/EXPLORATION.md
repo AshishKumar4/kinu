@@ -1,6 +1,6 @@
 # Exploration
 
-> Edited and maintained by Claude, presented as-is.
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
 This document specifies the tree swarm: what one is, how to configure one, the six
 axes, what a node is, how a run is measured, what may be published, and how a
