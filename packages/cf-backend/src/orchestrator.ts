@@ -3317,7 +3317,7 @@ export class OrchestratorAgent extends ActorAgent {
    * mid-shadow, kick GEPA in the background. The counter keeps growing while a
    * pending is in flight, so a pass fires as soon as the shadow slot frees.
    */
-  private maybeRunAutoGepa(): void {
+  protected maybeRunAutoGepa(): void {
     const everyN = this.config.getAutoGepaEveryNTurns();
     if (everyN <= 0) return;
     // One-time honesty note: before autonomy defaults flipped ON, a disable

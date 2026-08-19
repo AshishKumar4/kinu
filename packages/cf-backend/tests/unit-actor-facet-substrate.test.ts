@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { createRequire } from 'node:module';
+import { join } from 'node:path';
+import { orchestratorHarness, subordinateHarness } from './helpers/actor-harness';
+import { mockAgentsSdk } from './helpers/agents-sdk';
 
 /**
  * The actor substrate's facet-feasibility contract (Wave A2 gate).
@@ -18,13 +20,37 @@ import { createRequire } from 'node:module';
  *   3. a `(ctx, env)` constructor — the SubAgentClass shape.
  * If an agents upgrade drops any of these, A2's subordinate design breaks —
  * fail here, not in production.
+ *
+ * The first two tests read the installed SDK's dist because the mechanism
+ * being pinned is THEIRS and is not reachable under bun (`ctx.facets` is
+ * workerd-only). Everything below them is our own substrate, so it is
+ * observed on real instances instead.
  */
 
-const src = (p: string) => readFileSync(join(import.meta.dir, '..', 'src', p), 'utf8');
 const agentsDist = readFileSync(
   createRequire(join(import.meta.dir, '..', 'package.json')).resolve('agents'),
   'utf8',
 );
+
+mockAgentsSdk();
+// Dynamic on purpose, exactly as tests/helpers/actor-harness.ts:26-29 does: the
+// real `agents` dist reaches `cloudflare:*`, so the SDK mock must be registered
+// before these modules evaluate, and a static import would hoist above it.
+const { ActorAgent } = await import('../src/actor-agent');
+const { OrchestratorAgent } = await import('../src/orchestrator');
+const { SubordinateAgent } = await import('../src/subordinate-agent');
+const { ExplorationAgent } = await import('../src/exploration');
+const { Think } = await import('@cloudflare/think');
+const entry = await import('../src/server');
+
+/** The three classes `ctx.exports` must resolve for a facet to spawn: the
+ *  name the lookup uses, the class itself, and the worker entry's binding
+ *  under that exact name. */
+const FACET_CLASSES = [
+  ['OrchestratorAgent', OrchestratorAgent, entry.OrchestratorAgent],
+  ['ExplorationAgent', ExplorationAgent, entry.ExplorationAgent],
+  ['SubordinateAgent', SubordinateAgent, entry.SubordinateAgent],
+] as const;
 
 describe('actor substrate — facet feasibility contract', () => {
   test('the installed agents SDK delegates facet schedule/keepAlive/fibers to the root DO', () => {
@@ -44,31 +70,96 @@ describe('actor substrate — facet feasibility contract', () => {
   });
 
   test('the actor substrate satisfies the SubAgentClass shape', () => {
-    const actor = src('actor-agent.ts');
-    expect(actor).toContain('export abstract class ActorAgent extends Think<Env>');
-    expect(actor).toContain('constructor(ctx: AgentContext, env: Env)');
-    expect(src('orchestrator.ts')).toContain('export class OrchestratorAgent extends ActorAgent');
+    // `SubAgentClass<T> = { new (ctx, env): T }` — every class the facets API
+    // may be handed takes exactly the two arguments it passes. Read off the
+    // constructors themselves and off instances the harness builds by CALLING
+    // them with those two arguments; a signature in the source could say
+    // anything, this is the invocation workerd would make.
+    for (const [, Cls] of FACET_CLASSES) {
+      expect(Cls.length).toBe(2);
+    }
+    // ExplorationAgent is a plain Agent; the two subordinate-tree roots are the
+    // ones that inherit the substrate, and ActorAgent is a Think directly —
+    // which is what makes a Think-based chat agent runnable as a facet at all.
+    expect(Object.getPrototypeOf(ActorAgent)).toBe(Think);
+    for (const Cls of [OrchestratorAgent, SubordinateAgent]) {
+      expect(Cls.prototype).toBeInstanceOf(ActorAgent);
+    }
+    expect(orchestratorHarness().agent).toBeInstanceOf(OrchestratorAgent);
+    expect(subordinateHarness().agent).toBeInstanceOf(SubordinateAgent);
   });
 
   test('facet classes are exported by exact name from the worker entry', () => {
-    const server = src('server.ts');
     // ctx.exports resolves classes by their EXPORT name; a facet class that
-    // is not exported (or re-exported under another name) cannot spawn.
-    expect(server).toMatch(/export \{ OrchestratorAgent \}/);
-    expect(server).toMatch(/export \{ ExplorationAgent \}/);
-    expect(server).toMatch(/export \{ SubordinateAgent \}/);
+    // is not exported (or re-exported under another name) cannot spawn. So
+    // the binding must be present AND be the very class whose `.name` the
+    // lookup key is built from — identity, not merely "something is exported".
+    for (const [name, Cls, exported] of FACET_CLASSES) {
+      expect(exported).toBe(Cls);
+      expect(Cls.name).toBe(name);
+    }
   });
 
-  test('the parent facet gate admits only active, registered subordinate facets', () => {
+  test('the parent facet gate admits only active, registered subordinate facets', async () => {
     // The gate is ActorAgent's, because a subordinate is now on both sides of
     // the relationship: it hires facets of its own, so it needs the same gate its
     // parent has. The class it admits comes from `subordinateFacet()` rather than
     // a named import, which is how the base class avoids importing its subclass.
-    const actor = src('actor-agent.ts');
-    expect(actor).toContain('override async onBeforeSubAgent(');
-    expect(actor).toContain('child.className !== this.subordinateFacet().name');
-    expect(actor).toContain("rosterEntry.status === 'dismissed'");
-    expect(actor).toContain('!this.hasSubAgent(child.className, child.name)');
-    expect(src('orchestrator.ts')).not.toContain('onBeforeSubAgent(');
+    for (const Cls of [OrchestratorAgent, SubordinateAgent]) {
+      expect(Object.getOwnPropertyDescriptor(Cls.prototype, 'onBeforeSubAgent')).toBeUndefined();
+      expect(Cls.prototype.onBeforeSubAgent).toBe(ActorAgent.prototype.onBeforeSubAgent);
+    }
+
+    const { agent } = orchestratorHarness();
+    const request = new Request('https://workspace.invalid/agents/orchestrator-agent/w/sub-agent');
+    const reach = (className: string, name: string) =>
+      agent.onBeforeSubAgent(request, { className, name });
+    const roster = agent.harnessRoster();
+    const hire = (name: string) => roster.create({
+      name,
+      displayName: name,
+      role: 'specialist',
+      createdBy: 'orchestrator',
+      status: 'idle',
+      currentTask: null,
+      createdAt: 1,
+      dismissedAt: null,
+    });
+
+    // Rostered, hired as a facet: the one combination that passes through.
+    hire('aria');
+    await agent.subAgent(SubordinateAgent, 'aria');
+    expect(await reach('SubordinateAgent', 'aria')).toBe(request);
+
+    // A class that is not this actor's subordinate facet. Registered under
+    // that class name AND rostered under that facet name, so nothing but the
+    // class check itself stands between it and the pass-through — the
+    // orchestrator's own class included, because "is an actor" is not the
+    // question the gate asks.
+    await agent.subAgent(OrchestratorAgent, 'aria');
+    expect(agent.hasSubAgent(OrchestratorAgent.name, 'aria')).toBe(true);
+    for (const className of ['OrchestratorAgent', 'ExplorationAgent', 'Agent']) {
+      expect(await reach(className, 'aria')).toMatchObject({ status: 404 });
+    }
+
+    // Registered as a facet but never rostered, and rostered but never
+    // registered: each half alone must be refused.
+    await agent.subAgent(SubordinateAgent, 'ghost');
+    expect(await reach('SubordinateAgent', 'ghost')).toMatchObject({ status: 404 });
+    hire('paper');
+    expect(await reach('SubordinateAgent', 'paper')).toMatchObject({ status: 404 });
+
+    // Dismissal revokes reachability while both the roster row and the facet
+    // registration survive — the case a "does it exist?" gate would admit.
+    await agent.subAgent(SubordinateAgent, 'dismissed-one');
+    hire('dismissed-one');
+    expect(await reach('SubordinateAgent', 'dismissed-one')).toBe(request);
+    roster.dismiss('dismissed-one', 2);
+    expect(roster.get('dismissed-one')?.status).toBe('dismissed');
+    expect(agent.hasSubAgent(SubordinateAgent.name, 'dismissed-one')).toBe(true);
+    expect(await reach('SubordinateAgent', 'dismissed-one')).toMatchObject({ status: 404 });
+
+    // Still reachable is still reachable: dismissing one facet revokes one.
+    expect(await reach('SubordinateAgent', 'aria')).toBe(request);
   });
 });
