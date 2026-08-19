@@ -711,9 +711,9 @@ requirements:
       - Proteus.Exploration.RecordsStore.a_cleared_seal_records_again
       - Proteus.Exploration.RecordsStore.a_breach_seals_the_store
     tsRefs:
-      - packages/core/src/strategy/records.ts:423
-      - packages/core/src/strategy/records.ts:437
-      - packages/core/src/strategy/records.ts:460
+      - packages/core/src/strategy/records.ts:429
+      - packages/core/src/strategy/records.ts:444
+      - packages/core/src/strategy/records.ts:466
       - packages/core/src/strategy/objective.ts:711
     remainingEvidence:
       - The store is a read-modify-write surface and this model is a single sequential fold, so two runs racing on one cell are unmodelled and no strengthening of these theorems reaches it
@@ -745,10 +745,10 @@ requirements:
       - Proteus.Exploration.ArchiveAdmission.the_refusal_names_the_nearest
       - Proteus.Exploration.ArchiveAdmission.inverting_the_search_admits_a_near_copy
     tsRefs:
-      - packages/core/src/strategy/archive.ts:36
-      - packages/core/src/strategy/archive.ts:220
-      - packages/core/src/strategy/archive.ts:222
-      - packages/core/src/strategy/archive.ts:227
+      - packages/core/src/strategy/archive.ts:32
+      - packages/core/src/strategy/archive.ts:238
+      - packages/core/src/strategy/archive.ts:240
+      - packages/core/src/strategy/archive.ts:242
     remainingEvidence:
       - archive.ts:32-39 states that the admission test bounds a cell's POPULATION; separated_cells_are_unboundedly_large refutes that, so the absence of an eviction rule is unjustified and the cell is unbounded in mutually-novel members
       - cellOccupants carries no LIMIT, so admission is a linear read of a cell this requirement proves unbounded, and that cost is recorded rather than modelled
@@ -789,10 +789,10 @@ requirements:
       - Proteus.Exploration.FanIn.an_orderable_set_applies_every_member
       - Proteus.Exploration.FanIn.the_offered_order_can_fail_rule_one
     tsRefs:
-      - packages/core/src/strategy/merge-back.ts:474
-      - packages/core/src/strategy/merge-back.ts:479
-      - packages/core/src/strategy/merge-back.ts:484
-      - packages/core/src/strategy/merge-back.ts:600
+      - packages/core/src/strategy/merge-back.ts:483
+      - packages/core/src/strategy/merge-back.ts:489
+      - packages/core/src/strategy/merge-back.ts:493
+      - packages/core/src/strategy/merge-back.ts:611
     remainingEvidence:
       - The ordering is proved over declared edges only; whether a member's declaration matches the files it actually touches is outside the model
       - The sweep bound's general adequacy is not proved, only shown tight on the worst case, so a bound reduced below the member count would produce a false cycle refusal that no theorem here rules out
@@ -825,8 +825,8 @@ requirements:
     tsRefs:
       - packages/core/src/strategy/merge-back.ts:180
       - packages/core/src/strategy/merge-back.ts:196
-      - packages/core/src/strategy/merge-back.ts:732
-      - packages/core/src/strategy/merge-back.ts:779
+      - packages/core/src/strategy/merge-back.ts:746
+      - packages/core/src/strategy/merge-back.ts:793
     remainingEvidence:
       - The digests are modelled as the argument tuples argumentDigest hashes, so every result reads up to a SHA-256 collision rather than ruling one out
       - Rule 4 is proved to have teeth but its precedence over rule 6 is not modelled, and the source records that the opposite order would leave this comparison as dead code
