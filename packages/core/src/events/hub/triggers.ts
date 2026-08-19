@@ -36,6 +36,12 @@ import {
 import { ulid } from './ulid';
 import type { SqlExec, SqlValue } from '../../types/primitives';
 import { parseJsonObject, type JsonObject } from '../../utils/json';
+// The DEFAULT is shared with the gate that enforces it; the RANGE is not. This
+// carried its own `?? 60`, a second copy of the same number, but it deliberately
+// does not call `normalizeWebhookRateLimitPerMin`: 0 means "block" to a trigger and
+// that function rejects it, so a trigger keeps `?? ` rather than `|| ` and keeps its
+// own admission rule.
+import { DEFAULT_RATE_LIMIT_PER_MIN } from '../ingress/rate-limit';
 
 export type ForkPolicy = 'copy' | 'sever' | 'share';
 
@@ -113,7 +119,7 @@ export class TriggerRegistry {
           created_at, paused_at, revoked_at, next_fire_at, last_fire_at, fire_count)
        VALUES (?, ?, ?, ?, ?, 'active', ?, ?, NULL, NULL, ?, NULL, 0)`,
       id, spec.kind, JSON.stringify(spec.spec), spec.creator_trust, fp,
-      spec.rate_limit_per_min ?? 60, now, spec.next_fire_at ?? null,
+      spec.rate_limit_per_min ?? DEFAULT_RATE_LIMIT_PER_MIN, now, spec.next_fire_at ?? null,
     );
     if (spec.next_fire_at) await this.alarm.scheduleAt(spec.next_fire_at);
     return id;
