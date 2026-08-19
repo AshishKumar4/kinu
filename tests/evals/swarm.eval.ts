@@ -68,7 +68,7 @@ import * as v from 'valibot';
 import type { LanguageModel, ToolSet } from 'ai';
 
 import {
-  buildBuiltinTools, createStrategyRegistry, execRatioImplementation, initWorkspaceSchema,
+  buildActorTools, createStrategyRegistry, execRatioImplementation, initWorkspaceSchema,
   type AgentRuntime, type Floor, type JsonValue, type LLMProviderConfig,
   type ObjectiveIdentity,
 } from '../../packages/core/src/index';
@@ -430,7 +430,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     for (const file of TASK.seed) await rt.storage.vfs.writeFile(file.path, file.content);
 
     model = liveChatModel(LLM_CONFIG);
-    tools = buildBuiltinTools({
+    tools = buildActorTools({
       rt,
       agents: {
         mode: 'build',
