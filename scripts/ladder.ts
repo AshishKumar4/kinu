@@ -396,6 +396,43 @@ export const LADDER: readonly Gate[] = [
     blind: 'a symbol referenced from live code that does nothing.',
   },
   {
+    run: 'bun run gate:wired',
+    // PUSH, beside `gate:dead-code` and for its reason: at 3.6s it is three times
+    // the priciest commit-tier static gate, and nothing can become unwired
+    // between a commit and the push that follows it.
+    tier: 'push',
+    seconds: 3.6,
+    catches: 'a capability that was designed, built, TESTED, and connected to nothing — the '
+      + 'class `gate:dead-code` is structurally unable to see, because knip\'s unit of "used" '
+      + 'for a re-exported symbol is the TERMINUS of the re-export chain, and every export in '
+      + '`packages/core` terminates at `src/index.ts`, which is the package `main` and '
+      + 'therefore an entry. Measured 2026-08-19 on a four-file probe carrying this repository '
+      + "own `knip` block: two leaf symbols called by nothing, published through `export *` "
+      + "from the entry, were clean in knip's default run AND in `--production`, and importing "
+      + 'one THROUGH the barrel from a test changed neither run. `ignoreExportsUsedInFile: '
+      + 'true` closes the other half, which is `FORK_STRATEGY_ID` exactly: declared at '
+      + '`strategy/heads.ts:36`, read at `:40`, never reported. This gate measures PRODUCTION '
+      + 'REACHABILITY instead — a path from an entrypoint that passes through no test and does '
+      + 'not consist solely of re-exports — over entrypoints DISCOVERED from the declarations '
+      + 'that create them: a handler bound under a `BUILTIN_TOOLS` name, a `@callable()`, a '
+      + '`.command()`, a method on a framework-rooted class that nothing here invokes, a module '
+      + '`export default` property, a `createRoot` mount, a shebang. It also reports the shape '
+      + 'reachability over exports cannot see: an OPTIONAL FIELD production reads that no '
+      + 'visible construction site of its interface supplies. 570 findings at 0fff343e, '
+      + 'ratcheted, against a `dead-code` lock of 12 symbols over the same 646 governed files.',
+    blind: 'dynamic dispatch through a registry or a string key — `strategy/heads.ts` reads as '
+      + 'reached because `fork-deps.ts` names its factory, and whether anything SELECTS that '
+      + 'strategy is a fact about the registry. A symbol named only in a config file, which '
+      + 'fails as a FALSE POSITIVE rather than quietly. A field ASSIGNED and never read: '
+      + '`StrategyResult.cost.selfMetered` is written at `heads.ts:119` and `mcts.ts:118` and '
+      + 'read nowhere, and this gate is silent on it. A symbol wired for one arm of a union and '
+      + 'unwired for another, which is how a toolless search came within one commit of running '
+      + 'free. Per-backend reach, the same residual `gate:dead-code` states. And whether a '
+      + 'reached symbol does anything at all. It prints every one of these on the GREEN path, '
+      + 'with the count of locked findings still outstanding, because debt visible only in red '
+      + 'output is invisible exactly when somebody is deciding how far to trust the tree.',
+  },
+  {
     run: 'bun run gate:silent-drop',
     tier: 'push',
     seconds: 1.4,
@@ -516,6 +553,28 @@ export const LADDER: readonly Gate[] = [
       + 'whose first run is mostly noise trains people to ignore it.',
     blind: 'whether the predicates in sources.ts describe the right sets. It proves nothing '
       + 'else re-spells them.',
+  },
+  {
+    run: 'bun test scripts/wired.test.ts',
+    tier: 'push',
+    seconds: 3.8,
+    catches: 'the wired gate firing on the shape that would get it switched off, and — the '
+      + 'half nobody writes — not firing at all. 24 cases over a fixture repository shaped '
+      + 'like this one: a barrel over a barrel over the declaring file, one entrypoint, one '
+      + 'suite. RED on an export with no production consumer, GREEN on the same export once '
+      + 'ONE production line calls it through the same barrel, and SILENT on a symbol a '
+      + 'production module genuinely imports through that barrel — the last is the false '
+      + 'positive that matters, because every export in `packages/core` is published this '
+      + 'way. It also pins the four resolver rules whose absence produced phantom findings: '
+      + 'the `@/*` alias (33 specifiers in one page, 3 resolved, 95 phantom components), a '
+      + 'default export resolved to the name its declaration carries, `Object.assign` as a '
+      + 'field supply, and a local import that resolves to nothing being FATAL rather than a '
+      + 'dropped edge. Over the live tree it asserts every one of the seven entrypoint kinds '
+      + 'still has an instance, so a detector that stops matching is red rather than '
+      + 'permissive.',
+    blind: 'whether the census is COMPLETE. Every case proves the gate does not lie about '
+      + 'what it reports; none of them can prove it reports everything, and the blind-spot '
+      + 'list the gate prints on its green path is the honest answer to that.',
   },
   {
     run: 'bun run test',
