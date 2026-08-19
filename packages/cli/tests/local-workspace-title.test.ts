@@ -11,11 +11,23 @@ import { Database } from 'bun:sqlite';
 import { createAgentConfigStore, initAgentConfigTable, type LLMProviderConfig } from '@proteus/core';
 import { createCLIRuntime } from '@proteus/cli-backend';
 
+// `AGENT_HOME` is resolved at MODULE LOAD (config.ts), so the only way this file
+// can name its own home is to assign the variable and then import — which is why
+// the two imports below are dynamic.
+//
+// And why the variable goes back afterwards. Bun runs every file of an
+// invocation in ONE process: left assigned, this named a directory that `afterAll`
+// then deleted, for every later file that reads `PROTEUS_HOME` or spawns a child
+// from `process.env`. Once the imports have bound it, the variable has done its
+// work and the process is put back the way it was found.
 const HOME = mkdtempSync(join(tmpdir(), 'proteus-title-home-'));
+const inheritedHome = process.env.PROTEUS_HOME;
 process.env.PROTEUS_HOME = HOME;
-afterAll(() => rmSync(HOME, { recursive: true, force: true }));
 const { autoTitleLocalWorkspace } = await import('../src/local-agent-client');
 const { loadConfigFile, upsertAgentConfig } = await import('../src/config');
+if (inheritedHome === undefined) delete process.env.PROTEUS_HOME;
+else process.env.PROTEUS_HOME = inheritedHome;
+afterAll(() => rmSync(HOME, { recursive: true, force: true }));
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'openai-compat', baseURL: 'http://localhost:0', headers: { Authorization: 'x' }, model: 'fake-model',

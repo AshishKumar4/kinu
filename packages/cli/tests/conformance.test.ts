@@ -30,10 +30,16 @@ import { resolveLLMConfig, agentDbPath, agentDir, AGENT_HOME, updateConfigFile }
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 
 // Dummy provider config so resolveLLMConfig succeeds offline — the capturing
-// model below intercepts before any network call could happen.
-process.env.PROTEUS_BASE_URL = process.env.PROTEUS_BASE_URL ?? 'http://localhost:0/v1';
-process.env.PROTEUS_AUTH = process.env.PROTEUS_AUTH ?? 'Bearer conformance';
-process.env.PROTEUS_MODEL = process.env.PROTEUS_MODEL ?? 'conformance-model';
+// model below intercepts before any network call could happen. Passed as
+// arguments rather than exported into `process.env`: bun runs every file of an
+// invocation in ONE process, so a variable assigned at module scope here was
+// read by every later file's subprocesses, and `behavior.test.ts` carries a
+// hand-written blank of these three names because of this line.
+const OFFLINE_PROVIDER = {
+  baseUrl: 'http://localhost:0/v1',
+  auth: 'Bearer conformance',
+  model: 'conformance-model',
+};
 
 // This suite wrote 274 of the 283 `agents` entries in the owner's REAL
 // ~/.proteus/config.json before this guard existed. Two independent causes, and
@@ -114,7 +120,7 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
 
   const dbPath = agentDbPath(AGENT_NAME);
   const db = new Database(dbPath);
-  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: resolveLLMConfig({}) });
+  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: resolveLLMConfig(OFFLINE_PROVIDER) });
 
   let captured: CapturedTool[] = [];
   const model = capturingModel((tools) => { captured = tools; });
