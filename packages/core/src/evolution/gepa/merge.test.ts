@@ -63,18 +63,19 @@ describe('findComplementaryPair', () => {
     const ids = ['i1', 'i2', 'i3'];
 
     // A stratified sweep of the unit interval rather than a seeded stream: it
-    // reads the whole distribution the weighting defines, and it is exact.
+    // reads the whole distribution the weighting defines, and it is exact. The
+    // wins each draw reported are kept per pair rather than asserted per draw —
+    // there are three distinct pairs, so 4000 in-loop assertions would say the
+    // same three things 4000 times.
     const draws = 4000;
     const share = new Map<string, number>();
+    const wins = new Map<string, string>();
     for (let step = 0; step < draws; step++) {
-      const u = (step + 0.5) / draws;
-      const pair = findComplementaryPair([a, b, c], ids, () => u);
+      const pair = findComplementaryPair([a, b, c], ids, () => (step + 0.5) / draws);
       if (!pair) throw new Error('a complementary pair exists in this pool');
-      // Whatever comes back must really be complementary, on the recorded scores.
-      expect(pair.aDominates.length).toBeGreaterThan(0);
-      expect(pair.bDominates.length).toBeGreaterThan(0);
       const key = [pair.a.id, pair.b.id].sort().join('');
       share.set(key, (share.get(key) ?? 0) + 1 / draws);
+      wins.set(key, `${pair.aDominates.join(',')}|${pair.bDominates.join(',')}`);
     }
 
     // Surface / total-surface, with total 2 + 3 + 3 = 8. Uniform selection would
@@ -82,6 +83,15 @@ describe('findComplementaryPair', () => {
     expect(share.get('ab')).toBeCloseTo(2 / 8, 2);
     expect(share.get('ac')).toBeCloseTo(3 / 8, 2);
     expect(share.get('bc')).toBeCloseTo(3 / 8, 2);
+
+    // Every pair the sweep drew is genuinely complementary on the recorded
+    // scores: each side wins somewhere, which is what makes it a merge candidate
+    // rather than a dominated pair.
+    expect([...wins.entries()].sort()).toEqual([
+      ['ab', 'i1|i2'],
+      ['ac', 'i1|i2,i3'],
+      ['bc', 'i2|i1,i3'],
+    ]);
   });
 });
 
