@@ -2,22 +2,30 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus uses Monte Carlo Tree Search to explore multiple solution approaches in parallel. Each branch is an isolated Durable Object (Facet) with its own SQLite database.
+This is the Monte Carlo Tree Search engine: a tree of solution approaches explored in parallel, where each branch is an isolated Durable Object (Facet) with its own SQLite database. It is one of three exploration shapes in the tree, and the only one no tool reaches.
 
-## How the engine is reached
+## No tool reaches this engine
 
-Not from the `agents` tool. `fork` has one settlement, a merge of the 2-6 briefs
-it requires, and tree search on the model-facing surface is `action:'swarm'` with
-a `depth`, whose candidates are measured against the caller's own `objective`
-through the verifier registry rather than ordered by a judged ensemble. No field
-on `fork` selects this engine.
+**Read this before you wire anything against this document.** The delegation
+surface is `swarm | hire | ask | send | reply | list | dismiss`, and none of those
+seven actions dispatches here. A model-facing call written against the engine
+below gets a refusal or a different engine.
 
-It is registered rather than vestigial, and reached programmatically:
+Tree search on the model-facing surface is `action:'swarm'` with a `depth`. Its
+candidates are measured against the caller's own `objective` through the verifier
+registry, and its runner is `strategy/swarm-run.ts`. That is a separate engine.
+The two share tree machinery — `uct.ts` for selection, `backpropagation.ts` for
+the ancestor mean, `record-node.ts` for the one INSERT, `pruning.ts` for
+retirement — and they share no dispatch. When the caller is a model, read
+[EXPLORATION.md](./EXPLORATION.md) instead of this file.
+
+This engine is registered rather than vestigial, and it is reached
+programmatically:
 
 - `strategy/mcts.ts` is registered in the `StrategyRegistry` on every backend
-  (`orchestrator/fork-deps.ts`), so anything dispatching an
-  `ExplorationStrategy` by id can drive it — the eval harness's A/B runner takes
-  any two of them (`core/eval/runner.ts`).
+  (`orchestrator/fork-deps.ts`), so anything dispatching an `ExplorationStrategy`
+  by id can drive it. The eval harness's A/B runner takes any two of them
+  (`runEvalPair` in `core/src/eval/runner.ts`).
 - The lifetime evolution cycle calls `runMCTS` directly (`evolution/engine.ts`,
   under `lifetimeMCTSBudget`).
 - A search interrupted by an eviction or a process exit resumes from its own
@@ -27,7 +35,7 @@ It is registered rather than vestigial, and reached programmatically:
   starting a new one. That ledger is shared with the swarm runner
   (`strategy/swarm-run.ts`), which writes a row per run under `engine: 'swarm'`
   and has no resume of its own — the resume query is scoped to `engine: 'mcts'`
-  rows so a swarm's tree can never be re-entered by this loop.
+  rows, so a swarm's tree can never be re-entered by this loop.
 
 Everything below describes live code.
 
@@ -300,13 +308,11 @@ no observation line rather than an invented one.
 
 ### Why branches are toolless, and where the tool-using ones live
 
-A branch is deliberately one model call with no `ToolSet` and no runtime. That
-is not an unfinished version of a subagent: it is the other half of a pair.
-`agents({action:'fork'})` resolves one strategy from the registry
-(`core/src/strategy/`) — `heads`, whose branches **are** full agentic loops, the
-same `ExplorationAgent` class in head mode, scored by this same `evaluation.ts`
-through `HeadController.scoreHeads`. Heads is the half the tool reaches; this
-engine is the half reached programmatically.
+A branch here is deliberately one model call with no `ToolSet` and no runtime.
+That is the other half of a pair rather than an unfinished subagent. The `heads`
+strategy (`core/src/strategy/heads.ts`) is the half whose branches **are** full
+agentic loops — the same `ExplorationAgent` class in head mode, scored by this
+same `evaluation.ts` through `HeadController.scoreHeads`.
 
 The two differ on the axis that matters for search:
 
@@ -319,9 +325,13 @@ The two differ on the axis that matters for search:
 
 Pointing MCTS expansion at `runAsHead` would collapse that pair. Tens of
 concurrent heads mutate one shared workspace with no structural isolation, and
-"grade a branch by what it changed" is unanswerable when every branch changed
-the same tree — while the file-level isolation that would fix it is exactly the
+"grade a branch by what it changed" is unanswerable when every branch changed the
+same tree — while the file-level isolation that would fix it is exactly the
 per-branch workspace the toolless design does not need.
+
+A swarm's nodes are the third shape, and they resolve that tension differently: a
+node is a full agent and it is graded on the candidate it **reports**, never on a
+diff of the tree. See [EXPLORATION.md](./EXPLORATION.md) — "A node is an agent".
 
 `initHead` / `runAsHead` / `abortHead` are the head-mode `@callable()`s on the
 same class. See [ARCHITECTURE.md](./ARCHITECTURE.md) for why that class
@@ -379,11 +389,11 @@ it did not earn.
 
 ## Formal Properties (Lean 4)
 
-Eleven of the corpus's 84 published theorems live in `lean/Proteus/MCTS/`.
-The backpropagation model is exact scaled-integer arithmetic, so these are
-statements about that model — SQLite backpropagates in IEEE-754 `REAL`. See
-[FORMAL-SPEC.md](./FORMAL-SPEC.md) for the claim taxonomy and what each status
-does and does not assert.
+Eleven of the corpus's 330 published theorems live in `lean/Proteus/MCTS/`
+(counted 2026-08-19). The backpropagation model is exact scaled-integer
+arithmetic, so these are statements about that model — SQLite backpropagates in
+IEEE-754 `REAL`. See [FORMAL-SPEC.md](./FORMAL-SPEC.md) for the claim taxonomy and
+what each status does and does not assert.
 
 | Property | File | Theorem | Claim status |
 |----------|------|---------|--------------|
