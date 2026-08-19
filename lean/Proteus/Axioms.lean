@@ -343,7 +343,28 @@ import Proteus
 
 /-! ### Proteus/Exploration/ArchiveAdmission.lean -/
 
-#print axioms Proteus.Exploration.ArchiveAdmission.entry_behaviour_is_readable
+#print axioms Proteus.Exploration.ArchiveAdmission.runOf_append
+#print axioms Proteus.Exploration.ArchiveAdmission.belowFloor_foldl
+#print axioms Proteus.Exploration.ArchiveAdmission.tooClose_iff_belowFloor
+#print axioms Proteus.Exploration.ArchiveAdmission.refuses_iff_an_occupant_is_too_close
+#print axioms Proteus.Exploration.ArchiveAdmission.admitted_of_all_far
+#print axioms Proteus.Exploration.ArchiveAdmission.admitted_is_far_from_every_occupant
+#print axioms Proteus.Exploration.ArchiveAdmission.step_preserves_separation
+#print axioms Proteus.Exploration.ArchiveAdmission.separation_is_invariant
+#print axioms Proteus.Exploration.ArchiveAdmission.no_near_copy_is_reachable
+#print axioms Proteus.Exploration.ArchiveAdmission.discreteDist_of_ne
+#print axioms Proteus.Exploration.ArchiveAdmission.discreteDist_symm
+#print axioms Proteus.Exploration.ArchiveAdmission.descending_length
+#print axioms Proteus.Exploration.ArchiveAdmission.lt_of_mem_descending
+#print axioms Proteus.Exploration.ArchiveAdmission.fresh_run
+#print axioms Proteus.Exploration.ArchiveAdmission.separated_cells_are_unboundedly_large
+#print axioms Proteus.Exploration.ArchiveAdmission.a_repeat_does_not_grow_the_population
+#print axioms Proteus.Exploration.ArchiveAdmission.a_near_copy_is_refused_and_names_the_occupant
+#print axioms Proteus.Exploration.ArchiveAdmission.an_empty_cell_admits
+#print axioms Proteus.Exploration.ArchiveAdmission.the_threshold_is_read_as_a_floor
+#print axioms Proteus.Exploration.ArchiveAdmission.an_identical_artifact_is_not_a_near_copy
+#print axioms Proteus.Exploration.ArchiveAdmission.the_refusal_names_the_nearest
+#print axioms Proteus.Exploration.ArchiveAdmission.inverting_the_search_admits_a_near_copy
 
 /-! ### Proteus/Exploration/FanIn.lean -/
 

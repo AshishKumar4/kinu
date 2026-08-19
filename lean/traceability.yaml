@@ -719,14 +719,41 @@ requirements:
       - The store is a read-modify-write surface and this model is a single sequential fold, so two runs racing on one cell are unmodelled and no strengthening of these theorems reaches it
       - The strictness of the comparison is proved NOT to be what makes the store monotone, so relaxing it needs a mutation test rather than a theorem here
   PR-ARCHIVE-002:
-    statement: Archive admission bounds a cell's population without an eviction rule, because a candidate too close to an occupant never lands.
+    statement: Archive admission keeps a cell's occupants pairwise at least the novelty floor apart over every finite write sequence, which bounds their similarity and provably does not bound their number.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.ArchiveAdmission.entry_behaviour_is_readable
+      - Proteus.Exploration.ArchiveAdmission.runOf_append
+      - Proteus.Exploration.ArchiveAdmission.belowFloor_foldl
+      - Proteus.Exploration.ArchiveAdmission.tooClose_iff_belowFloor
+      - Proteus.Exploration.ArchiveAdmission.refuses_iff_an_occupant_is_too_close
+      - Proteus.Exploration.ArchiveAdmission.admitted_of_all_far
+      - Proteus.Exploration.ArchiveAdmission.admitted_is_far_from_every_occupant
+      - Proteus.Exploration.ArchiveAdmission.step_preserves_separation
+      - Proteus.Exploration.ArchiveAdmission.separation_is_invariant
+      - Proteus.Exploration.ArchiveAdmission.no_near_copy_is_reachable
+      - Proteus.Exploration.ArchiveAdmission.discreteDist_of_ne
+      - Proteus.Exploration.ArchiveAdmission.discreteDist_symm
+      - Proteus.Exploration.ArchiveAdmission.descending_length
+      - Proteus.Exploration.ArchiveAdmission.lt_of_mem_descending
+      - Proteus.Exploration.ArchiveAdmission.fresh_run
+      - Proteus.Exploration.ArchiveAdmission.separated_cells_are_unboundedly_large
+      - Proteus.Exploration.ArchiveAdmission.a_repeat_does_not_grow_the_population
+      - Proteus.Exploration.ArchiveAdmission.a_near_copy_is_refused_and_names_the_occupant
+      - Proteus.Exploration.ArchiveAdmission.an_empty_cell_admits
+      - Proteus.Exploration.ArchiveAdmission.the_threshold_is_read_as_a_floor
+      - Proteus.Exploration.ArchiveAdmission.an_identical_artifact_is_not_a_near_copy
+      - Proteus.Exploration.ArchiveAdmission.the_refusal_names_the_nearest
+      - Proteus.Exploration.ArchiveAdmission.inverting_the_search_admits_a_near_copy
     tsRefs:
+      - packages/core/src/strategy/archive.ts:36
+      - packages/core/src/strategy/archive.ts:220
+      - packages/core/src/strategy/archive.ts:222
       - packages/core/src/strategy/archive.ts:227
     remainingEvidence:
-      - The novelty floor is caller-supplied per invocation and no preset declares one, so the bound this file proves is parametric in a number the specification refuses to invent
+      - archive.ts:32-39 states that the admission test bounds a cell's POPULATION; separated_cells_are_unboundedly_large refutes that, so the absence of an eviction rule is unjustified and the cell is unbounded in mutually-novel members
+      - cellOccupants carries no LIMIT, so admission is a linear read of a cell this requirement proves unbounded, and that cost is recorded rather than modelled
+      - The novelty floor is caller-supplied per invocation and no preset declares one, so every theorem here is quantified over a number the specification refuses to invent
+      - The distance function is a parameter, so an inverted noveltyDistance satisfies every theorem here and only a mutation reaches it
   PR-FANIN-001:
     statement: The fan-in order is a topological order of the dependency edges the members declare, and a cycle refuses the whole path rather than applying an orderable prefix.
     status: proved-in-abstract-model
