@@ -179,6 +179,59 @@ export function renderCauseChain(error: Error): string {
 }
 
 /**
+ * The same chain, for a value nobody has narrowed yet — a `catch` binding, a
+ * rejection, an RPC payload.
+ *
+ * THIS EXISTS BECAUSE THE ALTERNATIVE WAS WRITTEN 202 TIMES. Measured over
+ * `readSources()` at 2b7b020f, one expression in two spellings:
+ *
+ *   - 26 files declared it as a private helper, under eight different names —
+ *     `errorMessage`, `errorText`, `formatMcpError`, `describe`, `reasonText`,
+ *     `errText`, `providerFailureReason`, `message`.
+ *   - 176 sites wrote it inline, across 89 files.
+ *
+ * Every one of the 202 threw the chain away at its first frame, and nothing in a
+ * lint set that is otherwise total could see it: the no-swallow rules read `catch`
+ * bodies for what they RETURN, not for what they report, and a one-expression
+ * function is below `gate:duplication`'s node threshold, so 26 copies of one
+ * defect did not register as duplication either. `gate:silent-drop` counts both
+ * spellings now.
+ *
+ * The two-line body is the point. `renderCauseChain` requires an `Error` so a
+ * caller holding one cannot lose the type, and this narrows an untrusted value at
+ * one seam so a caller holding a `catch` binding does not have to write the
+ * narrowing — which is where all 202 copies got it wrong.
+ *
+ * TWO NAMES, AND NOT ONE JOB — asked and answered, because a second name for one
+ * job is exactly the duplication this function deleted 202 instances of:
+ *
+ *   `renderCauseChain(error)`          the value IS an `Error`. Keeps the type
+ *                                      guarantee; the 8 sites that hold one.
+ *   `renderThrownChain({ cause })`     the value is a `catch` binding, a
+ *                                      rejection, an RPC payload. The trust
+ *                                      boundary, narrowed once.
+ *   `renderCauseChain(toProteusError(  you ALSO have a `doing` frame and know
+ *     { doing, cause, otherwise }))`   what an unrecognised failure means at
+ *                                      THIS seam. Strictly better than the line
+ *                                      above — prefer it wherever both fit.
+ *
+ * Collapsing the first into the second would make every already-typed caller
+ * write `{ cause: error }` and lose the compiler's guarantee that it holds an
+ * `Error`. Collapsing the second into the third would mean inventing 202 prose
+ * strings and 202 seam classifications nobody has. The chain underneath is ONE
+ * function in all three, so no spelling can drift from another —
+ * `head-inference.ts` uses the third for the loop's own failure and the second for
+ * a tool call's, which is the distinction doing work.
+ *
+ * For an `Error` with no `cause` the answer is byte-identical to `error.message`,
+ * so replacing a copy changes nothing until there IS a chain, which is exactly
+ * when the old answer was wrong.
+ */
+export function renderThrownChain(input: { cause: unknown }): string {
+  return input.cause instanceof Error ? renderCauseChain(input.cause) : String(input.cause);
+}
+
+/**
  * `AbortError` and `TimeoutError` are DOMException names, and the NAME is the
  * only stable discriminator: measured on bun 2026-08-17, an aborted
  * `AbortController` rejects with `name: 'AbortError'` and legacy numeric

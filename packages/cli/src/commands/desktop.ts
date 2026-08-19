@@ -9,6 +9,7 @@ import {
 } from '../device-connect';
 import { ACCENT, DIM, ERR, OK } from '../display';
 import { authCommand } from './auth';
+import { renderThrownChain } from '@proteus/core/obs';
 
 export async function desktopCommand(action: string | undefined, opts: { label?: string }): Promise<void> {
   const sub = action ?? 'status';
@@ -58,7 +59,7 @@ async function requireAuthOrLogin(): Promise<{ origin: string; token: string; us
   try {
     return requireAuthConfig();
   } catch (err) {
-    if (!/Not authenticated/.test(err instanceof Error ? err.message : String(err))) throw err;
+    if (!/Not authenticated/.test(renderThrownChain({ cause: err }))) throw err;
   }
   const origin = resolveCloudOrigin();
   console.log(`${DIM('Not signed in. Starting Proteus login...')}`);

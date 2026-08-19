@@ -5,6 +5,7 @@ import { ACCENT, DIM, OK, WARN } from '../display';
 import { authCommand } from './auth';
 import { setupCommand } from './setup';
 import * as v from 'valibot';
+import { renderThrownChain } from '@proteus/core/obs';
 
 type ProviderAction = 'list' | 'connect' | 'disconnect';
 const ProviderNameSchema = v.picklist([
@@ -257,7 +258,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
       console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from your Proteus account.`);
       removed = true;
     } catch (e) {
-      console.log(`${WARN('!')} Could not reach your Proteus account: ${e instanceof Error ? e.message : String(e)}`);
+      console.log(`${WARN('!')} Could not reach your Proteus account: ${renderThrownChain({ cause: e })}`);
     }
   }
 
@@ -357,7 +358,7 @@ async function accountCredentials(): Promise<AccountCredentials> {
   try {
     return { credentials: await listCloudCredentials(cloud.origin, cloud.token) };
   } catch (error) {
-    return { unreachable: error instanceof Error ? error.message : String(error) };
+    return { unreachable: renderThrownChain({ cause: error }) };
   }
 }
 

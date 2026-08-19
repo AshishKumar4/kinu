@@ -25,6 +25,7 @@
 
 import { sha256Hex } from '../lib/crypto';
 import * as v from 'valibot';
+import { renderThrownChain } from '@proteus/core/obs';
 
 const BuildStampSchema = v.looseObject({
   sha: v.optional(v.string()),
@@ -96,7 +97,7 @@ async function probeHealth(deps: ProbeDeps): Promise<ProbeOutcome> {
   try {
     response = await get(deps, '/api/health');
   } catch (err) {
-    return fail(`GET /api/health did not answer: ${errorText(err)}`);
+    return fail(`GET /api/health did not answer: ${renderThrownChain({ cause: err })}`);
   }
   if (response.status !== 200) return fail(`GET /api/health returned HTTP ${response.status}`);
 
@@ -121,7 +122,7 @@ async function probeHealth(deps: ProbeDeps): Promise<ProbeOutcome> {
   } catch (err) {
     return fail(
       `${VERSION_MANIFEST} cannot name the build the download assets came from,`
-      + ` so the live build is unverified: ${errorText(err)}`,
+      + ` so the live build is unverified: ${renderThrownChain({ cause: err })}`,
     );
   }
   if (shipped !== live) {
@@ -151,7 +152,7 @@ async function probeDownloads(deps: ProbeDeps): Promise<ProbeOutcome> {
   try {
     [archive, checksum] = await Promise.all([get(deps, SOURCE_ARCHIVE), get(deps, SOURCE_CHECKSUM)]);
   } catch (err) {
-    return fail(`the CLI source download did not answer: ${errorText(err)}`);
+    return fail(`the CLI source download did not answer: ${renderThrownChain({ cause: err })}`);
   }
   if (archive.status !== 200) return fail(`GET ${SOURCE_ARCHIVE} returned HTTP ${archive.status}`);
   if (checksum.status !== 200) return fail(`GET ${SOURCE_CHECKSUM} returned HTTP ${checksum.status}`);
@@ -178,7 +179,7 @@ async function probeLogin(deps: ProbeDeps): Promise<ProbeOutcome> {
   try {
     response = await get(deps, '/login');
   } catch (err) {
-    return fail(`GET /login did not answer: ${errorText(err)}`);
+    return fail(`GET /login did not answer: ${renderThrownChain({ cause: err })}`);
   }
   if (response.status !== 200) return fail(`GET /login returned HTTP ${response.status}`);
   const body = await response.text();
@@ -191,6 +192,3 @@ async function probeLogin(deps: ProbeDeps): Promise<ProbeOutcome> {
   return { probe: 'login', ok: true, detail: 'sign-in page renders' };
 }
 
-function errorText<Thrown>(err: Thrown): string {
-  return err instanceof Error ? err.message : String(err);
-}

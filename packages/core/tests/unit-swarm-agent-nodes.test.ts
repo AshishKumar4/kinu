@@ -33,7 +33,8 @@
  * "Inherited context", "Isolation" and "The six axes".
  */
 import { describe, expect, test } from 'bun:test';
-import { MockLanguageModelV3 } from 'ai/test';
+import type { MockLanguageModelV3 } from 'ai/test';
+import { scriptedTurnModel } from '@proteus/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
@@ -196,7 +197,7 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
   const inheritedTurns: number[] = [];
   let generations = 0;
 
-  const model = new MockLanguageModelV3({
+  const model = scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-agent-node',
     doGenerate: async ({ prompt, tools }) => {

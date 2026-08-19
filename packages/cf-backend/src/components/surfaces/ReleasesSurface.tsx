@@ -41,6 +41,7 @@ import { releaseSubstrate, type ExecutorInfo } from "@/lib/executors";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState } from "./shared";
+import { renderThrownChain } from "@proteus/core/obs";
 
 /**
  * How many changes the board carries.
@@ -192,7 +193,7 @@ function ApprovalRow({ approval, binding, rpc, onRefresh }: {
     setBusy(decision);
     setErr(null);
     try { await rpc("decideReleaseApproval", [approval.id, decision]); onRefresh(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(renderThrownChain({ cause: e })); }
     finally { setBusy(null); }
   };
 

@@ -183,7 +183,7 @@ import {
   type DeferredApprovalNotice, type ApprovalGrant,
 } from "@proteus/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@proteus/core";
-import { diagnostics, toProteusError } from "@proteus/core/obs";
+import { diagnostics, renderThrownChain, toProteusError } from "@proteus/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route';
@@ -407,7 +407,7 @@ export class OrchestratorAgent extends ActorAgent {
             }));
             return { delivered: true };
           } catch (err) {
-            return { delivered: false, detail: err instanceof Error ? err.message : String(err) };
+            return { delivered: false, detail: renderThrownChain({ cause: err }) };
           }
         },
       };
@@ -1376,7 +1376,7 @@ export class OrchestratorAgent extends ActorAgent {
         ok: true,
         plan,
         queued: false,
-        queueError: error instanceof Error ? error.message : String(error),
+        queueError: renderThrownChain({ cause: error }),
       };
     }
   }
@@ -2543,12 +2543,21 @@ export class OrchestratorAgent extends ActorAgent {
    * same reasoning as `pending_actions_changed` — the client re-reads the ledger
    * it already renders from, so one channel cannot start disagreeing with the
    * other, and a subscriber that missed a frame is corrected by the next one.
+   *
+   * TRACED, and it is the cheapest span with the highest leverage here: every
+   * step of every head and every node blocks on this RPC, so its duration is on
+   * the critical path of the whole search. A journal write that has gone slow
+   * looks exactly like a facet that has gone quiet.
    */
   @callable()
   async recordHeadStep(headId: string, seq: number, step: HeadStep): Promise<{ ok: true }> {
-    this.headJournal.appendStep(headId, seq, step);
-    this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
-    return { ok: true };
+    return await this.tracing.invocation('rpc', 'head.record_step', async (_invocation, span) => {
+      span.setAttribute('proteus.head_id', headId);
+      span.setAttribute('proteus.step_seq', seq);
+      this.headJournal.appendStep(headId, seq, step);
+      this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
+      return { ok: true };
+    });
   }
 
   /**
@@ -3013,7 +3022,7 @@ export class OrchestratorAgent extends ActorAgent {
 
       return { stdout, stderr: isError ? stdout : '', exitCode: isError ? 1 : 0 };
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
+      const errMsg = renderThrownChain({ cause: err });
       void this.sql`INSERT INTO executor_output (executor, command, stderr, exit_code)
         VALUES (${executorId}, ${command}, ${errMsg}, ${1})`;
       // Broadcast on error too — symmetric with the success branch above.

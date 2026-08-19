@@ -26,7 +26,7 @@ import type { SubordinateActivityEvent } from './lib/protocol';
 import { parseProtocolMessage } from "agents/chat";
 import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { createAgentTracing, type AgentTracing } from "@proteus/core/obs";
+import { createAgentTracing, renderThrownChain, type AgentTracing } from "@proteus/core/obs";
 import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer,
@@ -117,7 +117,7 @@ import {
   // Background-job system (#173 — auto-background past the surface threshold)
   BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
   type BackgroundJobStore, type TaskListStore,
-  wrapToolsForBackground, resumeBackgroundJob,
+  wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob,
   // The control plane both roots expose over the same core implementations.
   cancelCurrentWork, getStoredModelSpec, setModel,
   type CancelWorkOutcome,
@@ -254,9 +254,6 @@ function parseClientRpcFrame<Message>(message: Message): ClientRpcFrame | null {
   return frame.success ? { id: frame.output.id, method: frame.output.method } : null;
 }
 
-function errorMessage<Thrown>(thrown: Thrown): string {
-  return thrown instanceof Error ? thrown.message : String(thrown);
-}
 
 function jsonObject<Input>(input: Input): JsonObject {
   const parsed = v.safeParse(JsonObjectSchema, input);
@@ -687,7 +684,7 @@ export abstract class ActorAgent extends Think<Env> {
             } catch (cleanupError) {
               throw new Error(
                 `Subordinate ${input.name} failed to seed and its storage could not be reclaimed: `
-                + `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+                + `${renderThrownChain({ cause: cleanupError })}`,
                 { cause: error },
               );
             }
@@ -2152,7 +2149,7 @@ export abstract class ActorAgent extends Think<Env> {
       ok: false,
       error: {
         code: isVfsError(error) ? error.code : 'EIO',
-        message: error instanceof Error ? error.message : String(error),
+        message: renderThrownChain({ cause: error }),
         path,
       },
     };
@@ -2612,22 +2609,35 @@ export abstract class ActorAgent extends Think<Env> {
    * search has already settled must not be handed a grant nobody will honour: the
    * children would be reserved against a budget that is gone, and the node would
    * report having been given work the engine never created.
+   *
+   * TRACED as its own invocation, because that is exactly what it is: an RPC
+   * INTO this object from a facet running elsewhere, and the node is blocked on
+   * the answer. A node that stalls waiting for a verdict and a node that stalls
+   * before asking for one are indistinguishable from the node's side and from
+   * every row either writes.
    */
   async nodeArbitrate(nodeId: string, proposal: BranchProposal): Promise<BranchDecision> {
-    const arbiter = this.nodeArbiters.get(nodeId);
-    if (!arbiter) {
-      // `budget-exhausted` rather than a sixth policy value: the vocabulary is
-      // closed on purpose, and this IS that fact — a settled search has no
-      // remaining children, so none can be reserved. The prose carries the
-      // detail, and the prose is what the node reads.
-      return {
-        kind: 'refused',
-        policy: 'budget-exhausted',
-        error: 'The search that spawned this node is no longer arbitrating, so no branch can be '
-          + 'reserved. Finish your own task and report.',
-      };
-    }
-    return await arbiter(proposal);
+    return await this.tracing.invocation('rpc', 'swarm.arbitrate', async (_invocation, span) => {
+      span.setAttribute('proteus.node_id', nodeId);
+      const arbiter = this.nodeArbiters.get(nodeId);
+      if (!arbiter) {
+        // `budget-exhausted` rather than a sixth policy value: the vocabulary is
+        // closed on purpose, and this IS that fact — a settled search has no
+        // remaining children, so none can be reserved. The prose carries the
+        // detail, and the prose is what the node reads.
+        span.setAttribute('proteus.arbiter_registered', false);
+        return {
+          kind: 'refused',
+          policy: 'budget-exhausted',
+          error: 'The search that spawned this node is no longer arbitrating, so no branch can be '
+            + 'reserved. Finish your own task and report.',
+        };
+      }
+      span.setAttribute('proteus.arbiter_registered', true);
+      const decision = await arbiter(proposal);
+      span.setAttribute('proteus.decision', decision.kind);
+      return decision;
+    });
   }
 
   /**
@@ -2787,7 +2797,7 @@ export abstract class ActorAgent extends Think<Env> {
           try {
             const rawResult = await userDOStub.userMcp_callTool(caller, serverId, mcpName, args);
             return projectJsonValue({ value: v.parse(JsonValueSchema, JSON.parse(rawResult)) });
-          } catch (err) { return { isError: true, error: errorMessage(err) }; }
+          } catch (err) { return { isError: true, error: renderThrownChain({ cause: err }) }; }
         },
       });
     }
@@ -3319,14 +3329,16 @@ export abstract class ActorAgent extends Think<Env> {
     });
   }
 
-  /** The shared background wrap (core background-tools): shallow clone, 30s
-   *  threshold on the backgroundable map (with its per-call gate — `agents`
-   *  detaches only action=fork), per-call AbortController merged with the
-   *  turn's signal. The tracking hook keeps foreground cancellation working
-   *  until a call settles or detaches. */
+  /** The shared background wrap (core jobs/background-wrap): shallow clone, 30s
+   *  threshold on the named set (with its per-call gate — `agents` detaches only
+   *  the search rung), per-call AbortController merged with the turn's signal. The
+   *  tracking hook keeps foreground cancellation working until a call settles or
+   *  detaches. An ACTOR names the full set; a confined surface names its own, which
+   *  is what keeps containment structural rather than incidental. */
   private wrapToolsForBackground(raw: ToolSet): ToolSet {
     return wrapToolsForBackground(raw, {
       jobRunner: this.jobRunner,
+      backgroundable: BACKGROUNDABLE_TOOLS,
       mode: () => this.turnWorkMode(),
       trackController: (controller) => {
         this._activeToolControllers.add(controller);

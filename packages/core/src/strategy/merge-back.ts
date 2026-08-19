@@ -62,6 +62,7 @@ import { admitsPublication, type PublicationState } from './objective';
 import { textPayload } from '../vfs/observe';
 import type { VFS } from '../types/primitives';
 import { isVfsError } from '../vfs/errno';
+import { renderThrownChain } from '../obs/index';
 
 /* ── The policies ─────────────────────────────────────────────────────────── */
 
@@ -879,7 +880,7 @@ async function applyOne(
   } catch (err) {
     const refusal = refuse('apply-failed', 'io',
       `node ${member.nodeId}'s apply failed at the substrate: ${
-        err instanceof Error ? err.message : String(err)
+        renderThrownChain({ cause: err })
       }. The transaction is all-or-nothing, so nothing of this member landed.`);
     deps.log.failure('swarm.merge_apply_failed',
       new ProteusError('io', refusal.error, { cause: err instanceof Error ? err : undefined }),

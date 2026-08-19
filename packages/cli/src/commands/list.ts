@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import { diagnostics, toProteusError } from '@proteus/core/obs';
+import { diagnostics, renderThrownChain, toProteusError } from '@proteus/core/obs';
 import { listCloudAgents } from '../cloud-api';
 import { reconcileAgentRefs } from '../agent-list';
 import { agentDbPath, listAgentDirs, loadConfigFile, resolveCloudSession } from '../config';
@@ -46,7 +46,7 @@ export async function listCommand(): Promise<void> {
       // nine, but a bare `catch {}` here is how three of the owner's real
       // workspaces read `(error reading)` for months while the actual cause was
       // `no such column: mission`. The reason travels with the row.
-      const reason = caught instanceof Error ? caught.message : String(caught);
+      const reason = renderThrownChain({ cause: caught });
       diagnostics.failure(
         'workspace.read_failed',
         toProteusError({ doing: 'reading a local workspace', cause: caught, otherwise: 'io' }),

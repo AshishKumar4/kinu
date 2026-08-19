@@ -52,6 +52,7 @@
 import type { Agent, SubAgentClass, SubAgentStub } from "agents";
 import type { BranchHandle, HeadId, HeadInput, NodeLoopResult, NodeRunSpec, SpawnedHead } from "@proteus/core";
 import type { ExplorationAgent } from "./exploration";
+import { renderThrownChain } from '@proteus/core/obs';
 
 /** The facet substrate a spawner rides. Both the workspace DO and a head
  *  splitting further expose it, so both can spawn — and both must reclaim. */
@@ -83,9 +84,6 @@ export interface ExplorationFacetIdentity {
   readonly sharedParent?: string | null;
 }
 
-function errorText<Thrown>(thrown: Thrown): string {
-  return thrown instanceof Error ? thrown.message : String(thrown);
-}
 
 /**
  * MID-FLIGHT eviction: stop the instance, KEEP its storage.
@@ -135,7 +133,7 @@ async function discardHalfSeededFacet<Cause>(host: FacetHost, id: string, cause:
   } catch (cleanupError) {
     throw new Error(
       `Exploration facet ${id} failed to bootstrap and its storage could not be reclaimed `
-      + `(leaked into the root's quota): ${errorText(cleanupError)}`,
+      + `(leaked into the root's quota): ${renderThrownChain({ cause: cleanupError })}`,
       { cause },
     );
   }
@@ -200,7 +198,7 @@ async function runOnceAndReclaim<Result>(
   } catch (cleanupError) {
     throw new Error(
       `${kind} facet ${id} settled but its storage was not reclaimed `
-      + `(leaked into the root's quota): ${errorText(cleanupError)}`,
+      + `(leaked into the root's quota): ${renderThrownChain({ cause: cleanupError })}`,
       { cause: cleanupError },
     );
   }

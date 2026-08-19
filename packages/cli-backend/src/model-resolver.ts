@@ -44,6 +44,7 @@ import { createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude
 import { createOpenCodeProvider, type OpenCodeProviderOptions } from './opencode-provider';
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import * as v from 'valibot';
+import { renderThrownChain } from '@proteus/core/obs';
 
 const cloudMenuSchema = v.object({
   models: v.optional(v.array(v.object({
@@ -610,7 +611,7 @@ function createProxyCredentialSource(
       if (cached) return cached.value;
       return {
         byKey: new Map(),
-        error: `Could not reach your Proteus account to list connected providers (${err instanceof Error ? err.message : String(err)}).`,
+        error: `Could not reach your Proteus account to list connected providers (${renderThrownChain({ cause: err })}).`,
       };
     }
   };

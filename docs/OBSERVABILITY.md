@@ -19,33 +19,86 @@ reading them.
 | Piece | State | Where |
 | --- | --- | --- |
 | `tolerate` / `classify` — the tolerable-failure signatures | built | `obs/expected-failure.ts` |
-| `Tracer` / `ScopedSpan` / `tracer.span(...)` — the span seam | built, **wired on one path** | `obs/tracer.ts`, `cf-backend/src/obs/cf-tracer.ts` |
+| `Tracer` / `ScopedSpan` / `tracer.span(...)` — the span seam | built, **wired at six boundaries** | `obs/tracer.ts`, `cf-backend/src/obs/cf-tracer.ts` |
 | `ErrorCode` / `ProteusError` / `toProteusError` | built | `obs/error.ts` |
+| `renderThrownChain` — the chain for an unnarrowed value | built, **202 chain-dropping copies deleted** | `obs/error.ts` |
 | `refusalText` — the refusal on the string channel | built, **all five executor tools converted** | `execution/exec-result.ts` |
 | `Logger` / `ReservedLogField` — the typed logger and its ban | built | `obs/log.ts` |
+| `gate:silent-drop` — the census of what the lint rules cannot see | built, ratcheted at 78 sites | `scripts/silent-drop.ts` |
 | `Result<T, ProteusError>` via `neverthrow` | **rejected**, see below | — |
 
-This row used to read "not wired", and that is no longer true. Measured
-2026-08-19: `this.tracing.` occurs exactly ONCE in `packages/cf-backend/src/` —
-`orchestrator.ts:1574`, which opens `this.tracing.invocation('alarm', 'tick', …)`
-on the live alarm path and takes four sibling spans under one root, so "the alarm
-was slow" becomes "the email reconcile was slow". The handle comes from the
-`tracing` getter at `actor-agent.ts:1980-1988`, which builds
-`createAgentTracing({tracer: createWorkersTracer(), isolateGen, selfPath})`.
+### Where spans are open, and where they are not
 
-So the honest state is one production path, not zero and not all of them. Opening
-a span still requires `SpanOpenAttributes` — `isolateGen` and `selfPath` — which
-only the CF Agent can supply, which is why every further call site is a
-cf-backend change rather than a core one. `selfPath` rather than `ctx.id` because
-two facets with distinct ids both reported under the ROOT's `durableObjectId` on
-the deployed runtime, so an id-keyed trace collapses every head and subordinate
-into one orchestrator.
+Six boundaries, all of them genuine invocation entry points, chosen on evidence
+rather than on coverage:
+
+| Span | Entry | Why this one |
+| --- | --- | --- |
+| `alarm.tick` + 4 phases | `OrchestratorAgent._proteusTimerTick` | A wake is a separate invocation from whatever armed it. Four sibling spans turn "the alarm was slow" into "the email reconcile was slow". |
+| `rpc.swarm.node` + `swarm.node.deps` / `swarm.node.loop` | `ExplorationAgent.runAsNode` | The 2026-08-19 live run: three nodes, 605s, `swarm.node_silent` ×3 at ~600,000ms idle, zero steps, zero model calls, no error. Whichever of the two phase spans has no end is the diagnosis; before this there were two hypotheses over one absence of rows. |
+| `rpc.head.run` + `head.deps` / `head.inference` | `ExplorationAgent.runAsHead` | Same split, same reason: a head with no report failed either acquiring its model and tools or inside the loop. |
+| `rpc.mcts.branch` + `mcts.branch.model` | `ExplorationAgent.explore` | One model call, so the span IS the branch latency. A 120s branch-RPC cap once killed every rollout against turns measuring 151/294/509s; a measured span makes the next such number arguable. |
+| `rpc.swarm.arbitrate` | `ActorAgent.nodeArbitrate` | The node is BLOCKED on this answer. Stalling before asking and stalling while waiting are indistinguishable from the node's side. |
+| `rpc.head.record_step` | `OrchestratorAgent.recordHeadStep` | Every step of every head and node blocks on it, so it is on the critical path of the whole search. A slow journal write looks exactly like a quiet facet. |
+
+`ExplorationAgent` — the facet a head, a node and an MCTS branch all run as — now
+has the same `tracing` getter the orchestrator has, over the same
+`AgentConfigStore.countIsolateGeneration`, because a capability only one of the
+three kinds has is a capability none of them can be reasoned about.
+
+**A TURN IS NOT A SPAN, and cannot be one at this pin.** `ActorAgent extends
+Think`, and Think's `_runInferenceLoop` is private: the hooks we own are
+`getTools()` at the start and `onChatResponse()` at the end, which is a PAIR. A
+scoped span has no `end()` by design, so it cannot wrap a pair — and the design is
+not the obstacle, it is the reason the gap is visible instead of being a stranded
+span. The same holds for a tool call: `beforeToolCall` and `afterToolCall` are two
+hooks, not one call. Both become spans the moment a turn is ONE function — which
+is what collapsing the three loops onto `runChat` produces, and is the strongest
+observability argument for it.
+
+Opening a span still requires `SpanOpenAttributes` — `isolateGen` and `selfPath` —
+which only a CF Agent can supply, which is why every call site is a cf-backend
+change rather than a core one. `selfPath` rather than `ctx.id` because two facets
+with distinct ids both reported under the ROOT's `durableObjectId` on the deployed
+runtime, so an id-keyed trace collapses every head and subordinate into one
+orchestrator.
 
 Across `alarm()` the absence of trace context is ENFORCED rather than merely
 expected: `tracing.invocation` revokes the handle when its method's promise
 settles, so a span opened from anything that escaped the tick throws. The turn
 that armed a trigger finished minutes or days ago, possibly in an isolate since
 reset, and a span covering both would measure an interval nothing observed.
+
+### What a span records about a failure: one boolean
+
+The pattern is `~/cloudflare-os/packages/backend-utils/src/tracing.ts`, whose four
+load-bearing properties this codebase now holds to:
+
+1. **Ambient context on every span.** `SpanOpenAttributes` makes it unforgettable
+   rather than conventional — no lint or dead-code gate can see a missing
+   attribute on a call, so the type is the only mechanism that can.
+2. **Tracing only.** Never logs, never mutates anything a caller can see.
+3. **An exception propagates UNCHANGED, marked with a boolean.** `proteus.error`,
+   set to `true` and never to `false`. Error TEXT is deliberately absent: it is
+   unbounded and possibly sensitive, and a trace attribute is neither the place to
+   bound it nor the place to redact it. The chain goes to `Logger.failure`, which
+   requires a classification and renders every `cause`.
+4. **The span stays open until the promise settles**, so async work gets its real
+   duration — which means the marker has to be attached to the promise the
+   callback returns, before returning it, or the span closes successfully and the
+   rejection arrives afterwards.
+
+`cf-tracer.ts` recorded `proteus.error_name` and `proteus.error_message` until
+2026-08-19. Two defects in one: an upstream error's message reached the trace
+stream, where `ReservedLogField` does not apply and no redaction exists; and it
+was written ONLY by `fail()`, so a THROWN failure — the common case — marked
+nothing at all. `unit-alarm-tracing.test.ts` now pins both directions, including
+that a planted credential in an error message reaches no attribute on either path.
+
+The prohibition that comes with property 4: **never wrap a pipelined RPC stub in a
+span.** Marking a rejection derives a promise from the returned value, and a
+derived promise is not a stub — pipelining is lost and the call becomes a round
+trip.
 
 ## The rules
 
@@ -55,7 +108,11 @@ something a reader cannot get from the rule alone.
 1. **No `catch` discards its error.** Don't catch, wrap-and-rethrow with `cause`,
    or handle a domain VALUE and record it. Enforced by `no-empty-catch`,
    `no-sentinel-catch`, `require-cause-on-rethrow`, `no-ddl-in-catch`. Never add an
-   `oxlint-disable` to pass one.
+   `oxlint-disable` to pass one. Those four are narrow by construction, and
+   `gate:silent-drop` is the census of what they cannot see — a sentinel behind a
+   log line, a chain projected to `error.message`, a `throw new Error` inside a
+   `.catch()`, an absorbing handler, a `void`-ed promise, a bare async call. Its
+   own header states the four blind spots it does not reach either.
 2. **A refusal carries a classification, reason FIRST** —
    `{ reason: ErrorCode, error: string }`. Reason first because every seam that
    shows a tool result to a human or hashes it for steering bounds it to a head

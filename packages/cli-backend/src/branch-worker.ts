@@ -30,7 +30,7 @@ import {
   type JsonValue,
   type LLMProviderConfig,
 } from '@proteus/core';
-import { diagnostics, ProteusError } from '@proteus/core/obs';
+import { diagnostics, ProteusError, renderThrownChain } from '@proteus/core/obs';
 import * as v from 'valibot';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver';
 import { createFileCodexAuthStore } from './codex-auth-store';
@@ -178,7 +178,7 @@ process.on('message', async (rawMessage: JsonValue) => {
   } catch (err) {
     // Always carry a message: an empty one reads as "no error" to any
     // presence-checking caller and hides the real failure.
-    const message = err instanceof Error && err.message ? err.message : String(err) || 'branch worker failed';
+    const message = renderThrownChain({ cause: err }) || 'branch worker failed';
     process.send!({ method, error: message });
   }
 });

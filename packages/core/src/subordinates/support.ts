@@ -29,6 +29,7 @@ import type {
   SubordinateStatus,
   TeamToolDeps,
 } from '../tools/agents-tool';
+import { renderThrownChain } from '../obs/index';
 
 export interface SubordinateLiveStatus {
   lastActivity: number | null;
@@ -729,9 +730,6 @@ async function rollbackSpawn<T>(
   throw error;
 }
 
-function errorMessage<T>(error: T): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 async function statusView(
   runtime: SubordinateRuntime,
@@ -741,7 +739,7 @@ async function statusView(
   try {
     return { roster, live: await runtime.status(roster.name) };
   } catch (error) {
-    return { roster, live: null, liveError: errorMessage(error) };
+    return { roster, live: null, liveError: renderThrownChain({ cause: error }) };
   }
 }
 

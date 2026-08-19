@@ -22,6 +22,7 @@ import { StepInjections, type RecordedInjection } from '../prompting/step-inject
 import { LAYERS, type Layer } from './layers';
 import { observePipeline, scoreAgainstBaseline } from './gate';
 import type { PipelineSubjects } from './subjects';
+import { renderThrownChain } from '../obs/index';
 
 export interface Fault<S = PipelineSubjects> {
   readonly id: string;
@@ -301,7 +302,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
       ...s,
       craftInvocationSites: (code, known) => known.filter((name) => code.includes(name)),
       craftInvocationError: (_name, cause) =>
-        new Error(cause instanceof Error ? cause.message : String(cause)),
+        new Error(renderThrownChain({ cause: cause })),
     }),
   },
   {

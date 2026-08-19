@@ -77,7 +77,13 @@ import {
   JsonObjectSchema,
   decodeJsonValue,
 } from '@proteus/core';
-import { diagnostics, ProteusError, toProteusError, tolerate } from '@proteus/core/obs';
+import {
+  diagnostics,
+  ProteusError,
+  renderThrownChain,
+  tolerate,
+  toProteusError,
+} from '@proteus/core/obs';
 import * as v from 'valibot';
 import { initUserTables } from './schema';
 import { bindAgentSql } from '../runtime';
@@ -187,9 +193,6 @@ const LooseObjectSchema = v.looseObject({});
 const NullableStringArraySchema = v.nullable(v.array(v.string()));
 const NullableStringRecordSchema = v.nullable(v.record(v.string(), v.string()));
 
-function errorMessage<ErrorValue>(error: ErrorValue): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function isTextWebSocketMessage(
   message: string | ArrayBuffer | ArrayBufferView,
@@ -1719,7 +1722,7 @@ export class UserDO extends Agent<Env> {
       }
       return { connected: true, selectedId, gateways, error: null };
     } catch (err) {
-      return { connected: true, selectedId, gateways: [], error: errorMessage(err) };
+      return { connected: true, selectedId, gateways: [], error: renderThrownChain({ cause: err }) };
     }
   }
 
@@ -1852,7 +1855,7 @@ export class UserDO extends Agent<Env> {
       this.sqlx(`DELETE FROM codex_device_flow`);
       return { connected: true, accountId: accountId ?? undefined };
     } catch (err) {
-      return { connected: false, error: errorMessage(err) };
+      return { connected: false, error: renderThrownChain({ cause: err }) };
     }
   }
 
@@ -2078,7 +2081,7 @@ export class UserDO extends Agent<Env> {
       this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
       this._userMcpUpdatedAt = Date.now();
       await this.userMcp().removeServer(id);
-      throw new Error(`MCP connect failed: ${errorMessage(err)}`, { cause: err });
+      throw new Error(`MCP connect failed: ${renderThrownChain({ cause: err })}`, { cause: err });
     }
     return { id, authUrl };
   }
@@ -2306,7 +2309,7 @@ export class UserDO extends Agent<Env> {
     if (wasCold) {
       // Cold start: hydrate the manager before dispatching.
       try { await manager.restoreConnectionsFromStorage('proteus-user-mcp'); }
-      catch (err) { throw new Error(`MCP not ready: ${errorMessage(err)}`, { cause: err }); }
+      catch (err) { throw new Error(`MCP not ready: ${renderThrownChain({ cause: err })}`, { cause: err }); }
     }
     // Type-check the server membership inside our SQL so a stale orchestrator
     // closure can't dispatch to a server the user just deleted.
@@ -2342,12 +2345,12 @@ export class UserDO extends Agent<Env> {
         // the connection could silently never be established after a successful
         // sign-in.
         try { await this.userMcp().establishConnection(result.serverId); }
-        catch (err) { return { ok: true, serverId: result.serverId, error: `connected but not established: ${errorMessage(err)}` }; }
+        catch (err) { return { ok: true, serverId: result.serverId, error: `connected but not established: ${renderThrownChain({ cause: err })}` }; }
         return { ok: true, serverId: result.serverId, error: null };
       }
       return { ok: false, serverId: result.serverId ?? null, error: result.authError };
     } catch (err) {
-      return { ok: false, serverId: null, error: errorMessage(err) };
+      return { ok: false, serverId: null, error: renderThrownChain({ cause: err }) };
     }
   }
 

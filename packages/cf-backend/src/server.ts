@@ -23,7 +23,7 @@
 
 import { routeAgentRequest } from "agents";
 import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
-import { diagnostics, toProteusError } from "@proteus/core/obs";
+import { diagnostics, renderThrownChain, toProteusError } from "@proteus/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
@@ -221,7 +221,7 @@ async function authenticateCliAgentTicketRequest(
       request: new Request(url.toString(), request),
     };
   } catch (err) {
-    return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), {
+    return new Response(JSON.stringify({ error: renderThrownChain({ cause: err }) }), {
       status: 401,
       headers: { 'content-type': 'application/json' },
     });
@@ -433,7 +433,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     try { identity = await authenticateRequest(request, env); }
     catch (e) {
       if (e instanceof AuthError) return authError(request, e);
-      const message = e instanceof Error ? e.message : String(e);
+      const message = renderThrownChain({ cause: e });
       return new Response(JSON.stringify({ error: message }), {
         status: 500, headers: { 'content-type': 'application/json' },
       });

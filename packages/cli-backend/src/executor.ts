@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import * as v from 'valibot';
+import { renderThrownChain } from '@proteus/core/obs';
 
 const TIMEOUT_MS = 30_000;
 const subprocessResultSchema = v.variant('ok', [
@@ -237,7 +238,7 @@ async function executeInProcess(
   } catch (error) {
     return {
       result: undefined,
-      error: error instanceof Error ? error.message : String(error),
+      error: renderThrownChain({ cause: error }),
     };
   } finally {
     if (timer) clearTimeout(timer);

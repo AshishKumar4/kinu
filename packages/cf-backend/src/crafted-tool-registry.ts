@@ -27,6 +27,7 @@
 import { DynamicWorkerExecutor, normalizeCode } from '@cloudflare/codemode';
 import { craftFailureMarker, filterByEffectiveScore, explainNativeToolReferenceError } from '@proteus/core';
 import type { CraftStore, SqlExecutor } from '@proteus/core';
+import { renderThrownChain } from '@proteus/core/obs';
 
 /** Codemode's resolved provider shape. */
 type DynamicProviderInput = Parameters<DynamicWorkerExecutor['execute']>[1];
@@ -125,7 +126,7 @@ function structuredError<Thrown>(
   toolName?: string,
   providerName?: string,
 ): StructuredExecutionError {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = renderThrownChain({ cause: err });
   const stack = err instanceof Error && err.stack
     ? err.stack.split('\n').slice(0, 10).join('\n')
     : undefined;
@@ -220,7 +221,7 @@ export class PreambleCraftedExecutor {
       // `tool-output-error` with the text as `errorText`.
       return {
         result: undefined,
-        error: err instanceof Error ? err.message : String(err),
+        error: renderThrownChain({ cause: err }),
       };
     }
   }

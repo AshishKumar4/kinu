@@ -31,8 +31,7 @@ export {
 export {
   createRecordingTracer,
   renderSelfPath,
-  SPAN_ATTR_ERROR_MESSAGE,
-  SPAN_ATTR_ERROR_NAME,
+  SPAN_ATTR_ERROR,
   SPAN_ATTR_ISOLATE_GEN,
   SPAN_ATTR_SELF_PATH,
   type RecordedSpan,
@@ -49,6 +48,7 @@ export {
   ProteusError,
   refusalOf,
   renderCauseChain,
+  renderThrownChain,
   toProteusError,
   type ErrorCode,
   type Refusal,

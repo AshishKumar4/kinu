@@ -64,6 +64,7 @@ import {
 import type { OrchestratorAgent } from '../orchestrator';
 import { ownerCaller, type UserCaller } from '../user/workspace-capability';
 import type { EgressInjection, EgressInjectionResult } from '../user/egress-vault';
+import { renderThrownChain } from '@proteus/core/obs';
 
 /**
  * The virtual host a container posts its own events to.
@@ -259,7 +260,7 @@ export async function handleContainerEvent(
     // makes it a named domain type before it crosses into the DO.
     body = v.parse(JsonValueSchema, await request.json());
   } catch (error) {
-    return refusal(400, `Body is not JSON: ${error instanceof Error ? error.message : String(error)}`);
+    return refusal(400, `Body is not JSON: ${renderThrownChain({ cause: error })}`);
   }
 
   // Used, not copied — same defect as `handleContainerEgress`, and it killed the

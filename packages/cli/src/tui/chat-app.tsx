@@ -66,6 +66,7 @@ import { renderSessionBrowser, selectSession } from './session-browser';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from './input-state';
 import { clipText } from './format';
 import { tuiColors } from './theme';
+import { renderThrownChain } from '@proteus/core/obs';
 
 export interface ChatAppOpts {
   client: AgentClient;
@@ -201,7 +202,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       await client.send(payload, { cwd: process.cwd() });
     } catch (err) {
       // Transport/pre-flight failures never reach the event stream.
-      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+      addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
     }
   }, [addMessage, client]);
 
@@ -230,7 +231,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         setClient(result.client);
         onClientChange?.(result.client);
         void previous.close().catch((closeError) => {
-          const reason = closeError instanceof Error ? closeError.message : String(closeError);
+          const reason = renderThrownChain({ cause: closeError });
           addMessage({ role: 'system', content: `The pre-fork session did not close cleanly: ${reason}` });
         });
       }
@@ -246,7 +247,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       setActiveSessionId(result.client.cliSession.id);
       setInputText(point.text);
     } catch (err) {
-      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+      addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
     }
   }, [addMessage, client, dispatchInput, onClientChange, setInputText]);
 
@@ -280,7 +281,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       setModelCatalog(menu.models);
       setModelPicker({ menu, loading: false, error: null });
     } catch (err) {
-      setModelPicker({ menu: EMPTY_MODEL_MENU, loading: false, error: err instanceof Error ? err.message : String(err) });
+      setModelPicker({ menu: EMPTY_MODEL_MENU, loading: false, error: renderThrownChain({ cause: err }) });
     }
   }, [client]);
 
@@ -291,7 +292,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       setModelPicker(null);
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
     } catch (err) {
-      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+      addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
     }
   }, [addMessage, client]);
 
@@ -313,7 +314,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       });
       if (result.ok) setChangelogView(await client.changelog());
     } catch (err) {
-      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+      addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
     }
   }, [addMessage, client]);
 
@@ -326,7 +327,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       const result = await client.pickTake(set.id, candidate.nodeId);
       addMessage({ role: 'system', content: describeTakePick(result, index) });
     } catch (err) {
-      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+      addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
     }
   }, [addMessage, client]);
 
@@ -454,7 +455,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
       try {
         await resumeSession(text, sessionPicker.sessions);
       } catch (err) {
-        addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+        addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
       }
       return;
     }
@@ -504,7 +505,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         }
         await applySlashOutcome(outcome);
       } catch (err) {
-        addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+        addMessage({ role: 'system', content: `Error: ${renderThrownChain({ cause: err })}` });
       }
       return;
     }
@@ -576,7 +577,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
             hintedTakesRef.current = set.id;
             addMessage({ role: 'system', content: `${set.candidates.length} takes — /takes to compare` });
           }).catch((takesError) => {
-            addMessage({ role: 'system', content: errorLine(`This turn's takes could not be read: ${takesError instanceof Error ? takesError.message : String(takesError)}`) });
+            addMessage({ role: 'system', content: errorLine(`This turn's takes could not be read: ${renderThrownChain({ cause: takesError })}`) });
           });
         }
         break;
@@ -616,7 +617,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
           // An unread history renders as an empty transcript, which is exactly
           // what a brand-new workspace looks like. Say which this is.
           if (!cancelled) {
-            addMessage({ role: 'system', content: errorLine(`Earlier messages could not be loaded: ${historyError instanceof Error ? historyError.message : String(historyError)}`) });
+            addMessage({ role: 'system', content: errorLine(`Earlier messages could not be loaded: ${renderThrownChain({ cause: historyError })}`) });
           }
         }
       }
@@ -645,10 +646,10 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         setStatus(next);
         setModelSpec((current) => current || (next.model ?? ''));
       })
-      .catch((error) => note(`Workspace status could not be read: ${error instanceof Error ? error.message : String(error)}`));
+      .catch((error) => note(`Workspace status could not be read: ${renderThrownChain({ cause: error })}`));
     void client.listModels()
       .then((menu) => { if (!cancelled) setModelCatalog(menu.models); })
-      .catch((error) => note(`The model catalog could not be read: ${error instanceof Error ? error.message : String(error)}`));
+      .catch((error) => note(`The model catalog could not be read: ${renderThrownChain({ cause: error })}`));
     return () => { cancelled = true; };
   }, [addMessage, client]);
 
@@ -970,7 +971,7 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
     try {
       await currentClient.close();
     } catch (error) {
-      closeFailure = error instanceof Error ? error.message : String(error);
+      closeFailure = renderThrownChain({ cause: error });
     }
     root.render(<box />);
     renderer.destroy();

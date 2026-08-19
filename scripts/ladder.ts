@@ -355,6 +355,21 @@ export const LADDER: readonly Gate[] = [
     blind: 'a symbol referenced from live code that does nothing.',
   },
   {
+    run: 'bun run gate:silent-drop',
+    tier: 'push',
+    seconds: 1.4,
+    catches: 'a failure destroyed in one of the six ways the four no-swallow lint rules are '
+      + 'structurally blind to — a sentinel returned behind a log line (the rule fires on a '
+      + 'ONE-statement handler only), a cause chain projected down to `error.message`, an '
+      + 'inline rejection handler that absorbs, a `throw new Error` inside a `.catch()` (the '
+      + 'rule needs a CatchClause ancestor), a `void`-ed promise, and a bare call to an async '
+      + 'function that can reject. 272 instances over 210 sites at 2b7b020f, ratcheted, over '
+      + "the same 665 sources and 709 `catch` occurrences no-swallow's own denominator counts.",
+    blind: 'a rejection handler passed by NAME, a promise stored and never awaited (a '
+      + 'type-level fact, and oxlint\'s type-aware pass is not enabled here), and a wrapper '
+      + 'factory that drops `cause` inside itself.',
+  },
+  {
     run: 'bun scripts/secret-scan.ts',
     tier: 'push',
     seconds: 2,
@@ -371,7 +386,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts',
     tier: 'push',
     seconds: 1.7,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
@@ -388,7 +403,11 @@ export const LADDER: readonly Gate[] = [
       + 'locator for one of our own numbers, and the REACH bound proven in both '
       + 'directions: a recorded 206KB blob yields nothing, the same bytes undeclared '
       + 'still refuse the parity adjective inside them, a claim three paragraphs from '
-      + 'its citation is still governed, and one past the bound is not. '
+      + 'its citation is still governed, and one past the bound is not. For silent-drop, all '
+      + 'six defect classes red on the shape as it appears in this tree and GREEN on its '
+      + 'repair, plus the three judgements that keep the count honest: a handler that FORWARDS '
+      + 'its error is not a drop, an async function whose whole body is a non-rethrowing try '
+      + 'cannot reject, and a one-statement sentinel handler is left to no-sentinel-catch. '
       + 'For infra, the three states a resource lookup can be in kept apart — a required '
       + 'resource absent, an OPTIONAL one absent, and a lookup that FAILED, the last of which '
       + 'fails the gate even on an optional resource because "we could not look" is not softened '
@@ -461,8 +480,11 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run test',
     tier: 'push',
     seconds: 24,
-    catches: 'behavioural regressions in agent-utils, core and compaction: 3,105 tests, '
-      + 'the whole shared spine both backends run on. Every gate on this list spells '
+    catches: 'behavioural regressions in agent-utils, core and compaction — the whole '
+      + 'shared spine both backends run on. No test COUNT is quoted here: this entry '
+      + 'carried 3,105 against a measured 3,917, and forty lines below it this same '
+      + 'file records the CLI count being 17 tests out of date for months. A number '
+      + 'copied into prose has nothing that re-runs it. Every gate on this list spells '
       + 'its suite ROOT-RELATIVE (`bun test packages/x/`) rather than `--cwd packages/x`: '
       + 'measured 2026-08-17, `--cwd` makes bun read a bunfig.toml from THAT directory, '
       + 'so the root one is not loaded and both `preload` and `pathIgnorePatterns` are '
@@ -556,20 +578,30 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test packages/cli/',
     tier: 'ci',
-    seconds: 92,
-    catches: 'the production CLI end to end, including the PTY and subprocess paths. 41 '
-      + 'of these 42 files run in no other tier today. Measured headless (setsid, no '
-      + 'tty): 295 pass, 0 fail — the "PTY tests need a terminal" exclusion was stale, '
-      + 'true only before 5183d69d.',
-    blind: 'nothing in its own surface. It is the slowest thing here: 54% of the suite\'s '
-      + 'wall clock for 7.5% of its tests, which is why it is not earlier.',
+    seconds: 74,
+    catches: 'the production CLI end to end, including the PTY and subprocess paths. Every '
+      + 'file it claims runs in no other tier, asserted in ladder.test.ts as an empty '
+      + 'overlap rather than as the count this sentence used to carry. It runs headless — '
+      + 'the "PTY tests need a terminal" exclusion was stale from 5183d69d — and this '
+      + 'gate\'s own exit code is the only honest statement of whether it passes. The pass '
+      + 'count quoted here for months (295) was 17 tests out of date, and the run that '
+      + 'produced it came from a shell exporting PROTEUS_ORIGIN + PROTEUS_TOKEN, which '
+      + 'silently moved ten of these tests onto their signed-in branch; '
+      + 'scripts/test-scratch-home.ts now strips those, so the result no longer depends '
+      + 'on whose shell ran it.',
+    blind: 'nothing in its own surface. It is the costliest gate at ci outside the live '
+      + 'eval tier — asserted from the declared costs in ladder.test.ts, where it used to '
+      + 'be a percentage of a denominator nobody could reproduce — which is why it is not '
+      + 'earlier.',
   },
   {
     run: 'bun test packages/pc-agent/',
     tier: 'ci',
     seconds: 0.3,
-    catches: 'the local-device daemon, 6 tests. Runs in no tier today — `bun run check` '
-      + 'only `node --check`s its syntax.',
+    catches: 'the local-device daemon. No count quoted, for the reason `bun run test` '
+      + 'states: this entry said 6 against a measured 11. `bun run check` only '
+      + '`node --check`s this package\'s syntax, so the suite is the only thing that '
+      + 'reads it.',
     blind: 'the pairing and transport it talks to.',
   },
   {
@@ -590,15 +622,18 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test ./tests/',
     tier: 'ci',
-    seconds: 0.3,
+    seconds: 1.3,
     catches: 'the root end-to-end and eval suites parsing, constructing their workspaces '
-      + 'and reaching their skip decision, credential-free — 27 tests, 23 of which skip '
-      + 'without a live-model target. Kept beside `test:eval` deliberately: this is the '
-      + 'run that needs no secret, so it is the one that reproduces anywhere, and '
-      + '`gate:skip-ratchet` is what turns its 23 skips from an invisible exit 0 into a '
-      + 'locked, reasoned list. Note the path form: `bun test tests` silently matches '
-      + 'NOTHING, and `bun test tests/` also matches nothing — only `./tests/` selects '
-      + 'them, which is exactly the kind of silent zero this ladder asserts against.',
+      + 'and reaching their skip decision, credential-free. Kept beside `test:eval` '
+      + 'deliberately: this is the run that needs no secret, so it is the one that '
+      + 'reproduces anywhere, and `gate:skip-ratchet` is what turns its skips from an '
+      + 'invisible exit 0 into a locked, reasoned list. The skip COUNT is not quoted '
+      + 'here on purpose — `scripts/skip-ratchet.lock.json` governs it, and a second '
+      + 'copy in prose is a number that rots while the lock stays right, which is how '
+      + 'this entry came to advertise 27 tests and 23 skips against a measured 28 and '
+      + '25. Note the path form: `bun test tests` silently matches NOTHING, and '
+      + '`bun test tests/` also matches nothing — only `./tests/` selects them, which '
+      + 'is exactly the kind of silent zero this ladder asserts against.',
     blind: 'everything it skips, which is most of it — declared, not hidden. It also '
       + 'cannot see a suite whose code no longer compiles, because bun strips types; '
       + 'that is `gate:typecheck-coverage` plus `tsc -p tests`, and the absence of both '

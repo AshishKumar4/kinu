@@ -151,7 +151,13 @@ export function createAgentTracing(deps: {
           const result = fn(handle, span);
           if (result instanceof Promise) {
             revokesLater = true;
-            void result.finally(revoke);
+            // `then(ok, err)` and not `finally`: `finally` derives a promise that
+            // REJECTS whenever `result` does, and nothing awaits this derivation —
+            // an unhandled rejection produced by the instrument itself, on every
+            // traced invocation that fails. Both arms settle it successfully;
+            // `result` still rejects for its real caller, and `Tracer.span` marks
+            // the span from that same rejection.
+            void result.then(revoke, revoke);
           }
           return result;
         } finally {

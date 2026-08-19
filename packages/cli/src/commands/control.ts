@@ -36,6 +36,7 @@ import {
   validateModelSpec,
   type AgentModelEntry,
 } from '../model-catalog';
+import { renderThrownChain } from '@proteus/core/obs';
 
 interface ControlOpts {
   model?: string;
@@ -122,7 +123,7 @@ async function loadModelCatalog(load: () => Promise<ModelMenu | CloudModelMenu>)
   try {
     return { models: normalizeModelMenu({ payload: await load() }).models };
   } catch (error) {
-    return { unreadable: error instanceof Error ? error.message : String(error) };
+    return { unreadable: renderThrownChain({ cause: error }) };
   }
 }
 

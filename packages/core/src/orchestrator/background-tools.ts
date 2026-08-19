@@ -1,39 +1,23 @@
 /**
- * Background-tool policy — which tool calls may auto-detach to the background
- * (with the per-call gate: `agents` detaches only the search rung — the
- * converse actions keep their inline semantics), the wrapper that arms it,
- * and the evict/exit resume policy. One implementation for both backends
- * (each previously carried its own copy of the map AND the wrapper AND the
- * resume gate).
+ * The ACTOR's background-detach policy, and the evict/exit resume policy. One
+ * implementation for both backends (each previously carried its own copy of the
+ * map AND the wrapper AND the resume gate).
  *
- * Two shapes of backgroundable work, one axis:
- *   'result' — the turn is waiting on the call's result and its duration is
- *              unknown (`run`, `execute_tools`), so it races the surface's
- *              detach threshold and only work that proved slow crosses.
- *   'spawn'  — the call launches a process whose completion arrives as a wake
- *              event (`agents` swarm). Where a wake can arrive it detaches the
- *              moment the spawn is confirmed started (the threshold wait could
- *              only ever be dead air); where none can, it runs inline to
- *              completion, because a detached result there has no reader.
+ * The WRAPPER is not here: it is `jobs/background-wrap.ts`, a leaf, along with the
+ * entries whose gate needs nothing. What is here is the one entry that cannot be
+ * — `agents`, whose gate is a translator of the delegation tool's own input — and
+ * that import is why the split exists: the delegation tool's implementation IS the
+ * search engine, which builds a swarm node, which needs the wrapper. A node
+ * reaching this module for it would close that ring.
  */
 
-import type { ToolExecutionOptions, ToolSet } from 'ai';
-import { combineAbortSignals } from '@proteus/agent-utils';
-import { SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from '../jobs/threshold';
+import type { ToolSet } from 'ai';
+import { CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool } from '../jobs/background-wrap';
 import { JobNotResumable } from '../jobs/runner';
-import type { BackgroundJobRunner } from '../jobs/runner';
 import type { WorkMode } from '../prompting/surface';
 import { resumableAgentsInput } from '../tools/agents-tool';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
-
-/** How a backgroundable tool's work detaches: racing the threshold for a
- *  result the turn waits on, or on spawn-confirm for a launched process. */
-export interface BackgroundableTool {
-  readonly completion: 'result' | 'spawn';
-  /** Per-call gate over the tool input. */
-  readonly detachable: (input: JsonValue) => boolean;
-}
 
 /** The detach gate and the resume gate are ONE predicate, deliberately: a call
  *  that could not be re-driven after an eviction must never be detached into a
@@ -42,80 +26,19 @@ function isResumableSpawn(input: JsonValue): boolean {
   return resumableAgentsInput('agents', input) !== null;
 }
 
-/** Tools whose work can be long enough to auto-detach to the background. */
-export const BACKGROUNDABLE_TOOLS: ReadonlyMap<string, BackgroundableTool> = new Map([
-  ['agents', { completion: 'spawn', detachable: isResumableSpawn }],
-  ['execute_tools', { completion: 'result', detachable: () => true }],
-  ['run', { completion: 'result', detachable: () => true }],
-]);
-
 /**
- * Return a SHALLOW CLONE of the raw toolset with the long-running tools'
- * execute wrapped in the surface's background detach (threshold race for
- * result-shaped work, spawn-confirm for spawn-shaped). Never mutates the
- * cached raw toolset — so the raw surface stays unwrapped for the eval
- * side-streams (shadow eval / scaffold / GEPA), where a long tool run must
- * complete inline instead of detaching a job into the user's chat.
+ * Tools whose work can be long enough to auto-detach on an ACTOR's surface: the
+ * two every surface has, plus delegation.
  *
- * Each detachable call gets its own AbortController (hard-cancel aborts the
- * underlying work), merged with the turn's signal so a turn abort still
- * propagates. `trackController` (cf) registers the controller for foreground
- * cancellation until the call settles; once detached, BackgroundJobRunner
- * owns it.
+ * `agents` is spawn-shaped because a search's completion arrives as a wake rather
+ * than as the call's return value, so it detaches the moment the spawn is
+ * confirmed started instead of waiting out a threshold that could only ever be
+ * dead air.
  */
-export function wrapToolsForBackground(raw: ToolSet, deps: {
-  jobRunner: Pick<BackgroundJobRunner, 'thresholdDeps' | 'policy'>;
-  /** Captured when the outer tool call begins, before it can detach. */
-  mode: () => WorkMode;
-  trackController?: (controller: AbortController) => (() => void);
-}): ToolSet {
-  const wrapped: ToolSet = { ...raw };
-  for (const [key, { completion, detachable }] of BACKGROUNDABLE_TOOLS) {
-    const orig = wrapped[key];
-    const exec = orig?.execute;
-    if (!orig || !exec) continue;
-    wrapped[key] = {
-      ...orig,
-      execute: (input, options) => {
-        const parsedInput = decodeJsonValue({ value: input });
-        if (!detachable(parsedInput)) return exec(input, options);
-        const controller = new AbortController();
-        const mode = deps.mode();
-        const turnSignal = options.abortSignal;
-        const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
-        const untrack = deps.trackController?.(controller);
-        // The policy is read per call, exactly like the threshold: on cf one
-        // runner serves both surfaces and only the turn in flight knows which
-        // it is.
-        let run: Promise<unknown>;
-        if (completion === 'spawn') {
-          if (!deps.jobRunner.policy.wakesAfterTurn) {
-            run = Promise.resolve(exec(input, { ...options, abortSignal }));
-          } else {
-            run = withSpawnDetach(
-              key,
-              (spawnStarted) => {
-                const execOptions: ToolExecutionOptions & { [SPAWN_STARTED_OPTION]: () => void } = {
-                  ...options, abortSignal, [SPAWN_STARTED_OPTION]: spawnStarted,
-                };
-                return exec(input, execOptions);
-              },
-              deps.jobRunner.thresholdDeps(key, input, mode, controller),
-            );
-          }
-        } else {
-          run = withBackgroundThreshold(
-            key,
-            () => exec(input, { ...options, abortSignal }),
-            deps.jobRunner.thresholdDeps(key, input, mode, controller),
-          );
-        }
-        return untrack ? run.finally(untrack) : run;
-      },
-    };
-  }
-  return wrapped;
-}
+export const BACKGROUNDABLE_TOOLS = {
+  ...CONFINED_BACKGROUNDABLE_TOOLS,
+  agents: { completion: 'spawn', detachable: isResumableSpawn },
+} as const satisfies Readonly<Record<string, BackgroundableTool>>;
 
 /**
  * Re-drive a background job interrupted by a DO eviction / CLI process exit

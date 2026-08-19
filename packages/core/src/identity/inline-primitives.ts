@@ -16,6 +16,7 @@ import type {
 import type { CraftedTool } from '../types/craft';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue } from '../utils/json';
+import { renderThrownChain } from '../obs/index';
 
 /** Database interface — satisfied by bun:sqlite Database */
 export interface AgentDatabase {
@@ -173,7 +174,7 @@ export function createInlineExecutor(): Executor {
       } catch (error) {
         return {
           result: undefined,
-          error: error instanceof Error ? error.message : String(error),
+          error: renderThrownChain({ cause: error }),
         };
       }
     },

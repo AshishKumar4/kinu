@@ -11,8 +11,8 @@
 // channels, node runtime) are exercised in cf-backend tests against the real
 // hubs; deps here are recorders.
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, createTestStrategy, toolExecute } from '@proteus/test-utils';
-import { MockLanguageModelV3 } from 'ai/test';
+import { createTestRuntime, createTestStrategy, toolExecute, scriptedTurnModel } from '@proteus/test-utils';
+
 import * as v from 'valibot';
 import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
 import { SWARM_PRESETS } from '../src/strategy/swarm';
@@ -46,7 +46,22 @@ function agentsTool(deps: TestAgentsToolDeps) {
   return { ...entry, execute: toolExecute<AgentsToolInput, AgentsTestResult>(entry) };
 }
 
-const testModel = new MockLanguageModelV3();
+/** A model that answers ONE text step and stops, both ways. Bare
+ *  `MockLanguageModelV3()` implements neither method, which was invisible while the
+ *  node loop used `generateText` and reads as `Not implemented` now that a node
+ *  streams like every other agent. */
+const testModel = scriptedTurnModel({
+  modelId: 'fake-agents-tool',
+  doGenerate: () => ({
+    content: [{ type: 'text', text: 'A node answer.' }],
+    finishReason: { unified: 'stop', raw: undefined },
+    usage: {
+      inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 3, text: 3, reasoning: undefined },
+    },
+    warnings: [],
+  }),
+});
 const ErrorResultSchema = v.object({ error: v.string() });
 /** The briefs a STORED `fork` row carried. Kept as a fixture because the resume
  *  translation has to name them as dropped; no live call takes them. */

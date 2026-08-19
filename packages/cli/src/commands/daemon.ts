@@ -3,7 +3,7 @@ import { basename, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { Database } from 'bun:sqlite';
 import { DEFAULT_SESSION_REFLECTION_INTERVAL } from '@proteus/core';
-import { tolerate } from '@proteus/core/obs';
+import { renderThrownChain, tolerate } from '@proteus/core/obs';
 import {
   LocalAgentSession,
   openWorkspaceCLI,
@@ -176,7 +176,7 @@ async function runDaemonLoop(): Promise<void> {
         const agentNext = await tickAgent(name, now);
         if (agentNext !== null) nextAt = nextAt === null ? agentNext : Math.min(nextAt, agentNext);
       } catch (err) {
-        log(`${name}: ${err instanceof Error ? err.message : String(err)}`);
+        log(`${name}: ${renderThrownChain({ cause: err })}`);
       }
     }
     const delay = nextAt === null
@@ -239,7 +239,7 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
       try {
         await session.end();
       } catch (error) {
-        log(`${name}: session teardown failed: ${error instanceof Error ? error.message : String(error)}`);
+        log(`${name}: session teardown failed: ${renderThrownChain({ cause: error })}`);
       }
     }
     return nextTriggerAt(db);

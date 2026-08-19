@@ -26,7 +26,7 @@ import {
   type TurnOutcomeRow,
 } from './outcomes';
 import { reconcileColumns } from '../identity/columns';
-import { tolerate } from '../obs/index';
+import { renderThrownChain, tolerate } from '../obs/index';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { nanoid } from '../utils/nanoid';
@@ -111,9 +111,6 @@ const ReplayInstanceResultSchema: v.GenericSchema<ReplayInstanceResult> = v.obje
   note: v.string(),
 });
 
-function errorMessage(input: { error: unknown }): string {
-  return input.error instanceof Error ? input.error.message : String(input.error);
-}
 
 function buildReplayJudgePrompt(row: TurnOutcomeRow, fresh: string): string {
   const head =
@@ -169,14 +166,14 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
     try {
       fresh = await opts.runTask(row.userMessage);
     } catch (err) {
-      results.push({ outcomeId: row.id, outcome: row.outcome, score: 0, note: `re-run failed: ${errorMessage({ error: err })}` });
+      results.push({ outcomeId: row.id, outcome: row.outcome, score: 0, note: `re-run failed: ${renderThrownChain({ cause: err })}` });
       continue;
     }
     try {
       const verdict = await judgeReplay(opts.judge, row, fresh);
       results.push({ outcomeId: row.id, outcome: row.outcome, ...verdict });
     } catch (err) {
-      results.push({ outcomeId: row.id, outcome: row.outcome, score: 0, note: `judge failed: ${errorMessage({ error: err })}` });
+      results.push({ outcomeId: row.id, outcome: row.outcome, score: 0, note: `judge failed: ${renderThrownChain({ cause: err })}` });
     }
   }
 

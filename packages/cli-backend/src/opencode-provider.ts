@@ -21,7 +21,7 @@ import {
 } from '@proteus/core';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@proteus/core';
-import { diagnostics, ProteusError } from '@proteus/core/obs';
+import { diagnostics, ProteusError, renderThrownChain } from '@proteus/core/obs';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -508,7 +508,7 @@ async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo
         apiNpm: metadata.api?.npm || undefined,
       });
     } catch (error) {
-      unreadable.push(`${id}: ${error instanceof Error ? error.message : String(error)}`);
+      unreadable.push(`${id}: ${renderThrownChain({ cause: error })}`);
     }
     header.lastIndex = end;
   }

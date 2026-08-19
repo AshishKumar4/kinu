@@ -136,13 +136,53 @@ gate fires when a tag disappears.
 
 - Avoid loading skills unless they are concretely needed for the task. Keep context focused and prefer direct source inspection for routine repo work.
 
+## How To Write Docs, Write-Ups, Descriptions, READMEs
+
+The owner's instruction, verbatim:
+
+> And ensure everything passes through the no-ai-slop skill, and is write it in ASD-STE100 or simplified technical english. And follow Zinsser's four principles of quality writing:
+> 1. Simplicity
+> 2. Brevity
+> 3. Clarity
+> 4. Humanity
+
+This governs every `.md` in this repository, every docstring a human reads for orientation, every
+model-facing prompt string, every commit body, and every changelog entry.
+
+- **Run the `no-ai-slop` skill on the text before it lands.** It is the standard, not a polish pass.
+  Its banned words (`delve`, `leverage`, `robust`, `seamless`, `transformative`, `harness`, and the
+  rest), its cut patterns and its em-dash rule all apply. The patterns that catch this repository
+  most often: binary contrasts ("not X, it's Y"), colon reveals, faux-insight setups ("what most
+  people miss"), importance puffery ("marks a pivotal moment"), fake-profound closing lines, and
+  summary-recap endings.
+- **Write ASD-STE100 Simplified Technical English.** One idea per sentence. Active voice. Present
+  tense. One meaning per word, and the SAME word every time for the same thing — synonym cycling is
+  forbidden here for the same reason it is forbidden in code: two names for one concept is how a
+  reader learns to distrust both. At most 20 words in a description, 25 in a procedure step. No noun
+  cluster longer than three words. State the condition before the instruction.
+- **Zinsser's four, in his order, because the order is the priority.** Simplicity: cut every word
+  doing no work. Brevity: the shortest version that keeps the meaning. Clarity: the reader gets it
+  on one pass. Humanity: it sounds like a person who cares, not a company.
+
+Two conventions this repository already had, and they survive unchanged: a doc that lands here
+carries a visible line at the top saying it is AI-edited and presented as-is, and user-facing prose
+is in the owner's own first-person voice.
+
+Where Simplified Technical English and readable English pull apart, the reader wins — keep the STE
+discipline that carries the weight (one idea, one word per meaning, active voice, short) and drop
+the letter of a rule that makes a sentence worse.
+
+**One rule specific to this codebase.** A doc here states what was MEASURED, with the number and
+the date, or it says the number is not measured. A prose figure nobody can reproduce is the defect
+this repository keeps finding in its own gates, and it is worse in a doc, because a doc has no test.
+
 ## Package Structure
 
 ```
 packages/
   core/         @proteus/core — abstract interfaces, MCTS, evolution, scaffold, craft
   cf-backend/   Cloudflare Workers backend — Think DOs, React UI, Vite+Wrangler
-  agent-utils/  Storage adapters (SqliteFS, MemoryStore, CraftStore, Shell)
+  agent-utils/  MemoryStore, CraftStore, VFS types, addressing, walk, encoding
   cli/          CLI frontend (commander-based)
   cli-backend/  CLI-specific backend (bun:sqlite, Node vm)
 tests/          E2E tests (run from repo root)

@@ -31,7 +31,7 @@ import { useParams } from "react-router";
 import type { Rpc } from "@/lib/protocol";
 import { joinDir, parentDir, type DirEntry } from "@proteus/core";
 import * as v from "valibot";
-import { tolerate } from "@proteus/core/obs";
+import { renderThrownChain, tolerate } from "@proteus/core/obs";
 
 interface FileState { content?: string; truncated?: boolean; error?: string }
 interface ExecutorDirectoryResponse { path?: string; entries?: DirEntry[]; error?: string }
@@ -88,7 +88,7 @@ export function FilesPane({ execName, rpc }: { execName: string; rpc: Rpc }) {
         setPath(r.path);
         setHome((current) => current === "" ? r.path ?? "" : current);
       }
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setEntries([]); }
+    } catch (e) { setErr(renderThrownChain({ cause: e })); setEntries([]); }
     finally { setLoading(false); }
   }, [rpc, execName]);
 
@@ -98,7 +98,7 @@ export function FilesPane({ execName, rpc }: { execName: string; rpc: Rpc }) {
     setFileLoading(true);
     try {
       setFile(await rpc<FileState>("readExecutorFile", [execName, full]));
-    } catch (e) { setFile({ error: e instanceof Error ? e.message : String(e) }); }
+    } catch (e) { setFile({ error: renderThrownChain({ cause: e }) }); }
     finally { setFileLoading(false); }
   }, [rpc, execName]);
 
@@ -134,7 +134,7 @@ export function FilesPane({ execName, rpc }: { execName: string; rpc: Rpc }) {
         setUploads((prev) => prev.filter((u) => u.name !== f.name));
       } catch (e) {
         setUploads((prev) => prev.map((u) => u.name === f.name
-          ? { ...u, status: "error" as const, error: e instanceof Error ? e.message : String(e) }
+          ? { ...u, status: "error" as const, error: renderThrownChain({ cause: e }) }
           : u));
       }
     }

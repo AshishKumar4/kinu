@@ -31,7 +31,7 @@ import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery';
 import { describeCostBasis, estimateCost } from './cost';
 import { persistableMCTSConfig } from './search-store';
 import { initMctsSearchTable } from './search-store';
-import { diagnostics } from '../obs/index';
+import { diagnostics, renderThrownChain } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import { isoDate } from '../utils/date';
 import * as v from 'valibot';
@@ -248,7 +248,7 @@ export async function runMCTS(
             type: 'branch-failed', stage: 'explore', iteration,
             branchId: branchIds[i] ?? '',
             error: r.status === 'rejected'
-              ? reasonText({ reason: r.reason })
+              ? renderThrownChain({ cause: r.reason })
               : 'branch returned no exploration',
           });
           return { text: '' };
@@ -353,7 +353,7 @@ export async function runMCTS(
           }
           report({
             type: 'branch-failed', stage: 'evaluate', iteration,
-            branchId: branchIds[i] ?? '', error: reasonText({ reason: r.reason }),
+            branchId: branchIds[i] ?? '', error: renderThrownChain({ cause: r.reason }),
           });
           scores.push(0);
           observations.push(null);
@@ -439,7 +439,7 @@ export async function runMCTS(
             (error) => {
               report({
                 type: 'branch-failed', stage: 'reflect', iteration,
-                branchId: branchIds[i] ?? '', error: reasonText({ reason: error }),
+                branchId: branchIds[i] ?? '', error: renderThrownChain({ cause: error }),
               });
               return '';
             },
@@ -560,9 +560,6 @@ function missionMeter(mission: MissionScope | undefined): MissionMeter {
   };
 }
 
-function reasonText(input: { reason: unknown }): string {
-  return input.reason instanceof Error ? input.reason.message : String(input.reason);
-}
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;

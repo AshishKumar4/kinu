@@ -32,6 +32,7 @@ import {
   type ExecutorPortRefresh,
   type PinnedPreviewPort,
 } from "../lib/preview-ports";
+import { renderThrownChain } from "@proteus/core/obs";
 
 export type { ExecutorInfo };
 
@@ -1294,8 +1295,13 @@ export function useProteus(target?: string | ProteusActorAddress) {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
+/** The chain, then the two shapes an RPC can reject with that are not `Error` at
+ *  all: a bare string from a JSON error body, and an object with no message.
+ *  `renderThrownChain` owns the first case for every reader in the repo; the two
+ *  fallbacks are this surface's own, because a browser panel showing
+ *  `[object Object]` has told the reader nothing. */
 function errorMessage<ErrorValue>(err: ErrorValue): string {
-  if (err instanceof Error && err.message) return err.message;
+  if (err instanceof Error && err.message) return renderThrownChain({ cause: err });
   const text = v.safeParse(v.string(), err);
   if (text.success && text.output.trim()) return text.output;
   try { return JSON.stringify(err) || "unknown error"; } catch { return "unknown error"; }

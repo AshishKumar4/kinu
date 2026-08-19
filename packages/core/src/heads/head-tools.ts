@@ -39,6 +39,7 @@ import { budgetExhausted, HEAD_BUILTIN_TOOLS, keepBuiltins } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
+import { renderThrownChain } from '../obs/index';
 
 export interface HeadSplitRequest {
   rationale: string;
@@ -156,7 +157,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
           return lines.join('\n');
         } catch (err) {
           capture.recordToolCall('split_subheads', { rationale, heads }, 'error');
-          return `split_subheads failed: ${err instanceof Error ? err.message : String(err)}`;
+          return `split_subheads failed: ${renderThrownChain({ cause: err })}`;
         }
       },
     });

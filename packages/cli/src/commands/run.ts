@@ -31,6 +31,7 @@ import {
   readLocalMemory,
   searchLocalMemory,
 } from '../local-inspection';
+import { renderThrownChain } from '@proteus/core/obs';
 
 /** Session flags as Commander actually delivers them: `--no-session` arrives
  *  as `session: false` on the shared option key, not as `noSession: true`. */
@@ -274,7 +275,7 @@ async function runRpc(
             const data = await runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value);
             output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: true, data } });
           } catch (err) {
-            output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: err instanceof Error ? err.message : String(err) } });
+            output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: renderThrownChain({ cause: err }) } });
           }
           continue;
         }
@@ -320,7 +321,7 @@ async function runRpc(
           const data = await runLocalRpcCommand(target.localName, cmd.value, client);
           output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: true, data } });
         } catch (err) {
-          output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: err instanceof Error ? err.message : String(err) } });
+          output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: renderThrownChain({ cause: err }) } });
         }
         continue;
       }
@@ -338,7 +339,7 @@ async function runRpc(
       await client.close();
     } catch (error) {
       // stdout carries the JSON-lines protocol, so this belongs on stderr.
-      process.stderr.write(`note: closing the workspace client failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`note: closing the workspace client failed: ${renderThrownChain({ cause: error })}\n`);
     }
   }
 }
@@ -621,7 +622,7 @@ function parseRpc(line: string): RpcParseResult {
       ? { ok: true, value: parsed.output }
       : { ok: false, error: 'Command must be an object with type' };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: renderThrownChain({ cause: err }) };
   }
 }
 
@@ -650,7 +651,7 @@ async function readOptionalStdin(): Promise<string> {
   if (first === 'idle') {
     // Not awaited: the idle path exists precisely to stop waiting on this pipe.
     void reader.cancel().catch((error) => {
-      process.stderr.write(`note: releasing idle stdin failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`note: releasing idle stdin failed: ${renderThrownChain({ cause: error })}\n`);
     });
     process.stderr.write(
       `note: stdin was open but idle for ${OPTIONAL_STDIN_GRACE_MS}ms and was ignored; ` +

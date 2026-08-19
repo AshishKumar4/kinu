@@ -43,6 +43,7 @@ import {
   type AgentsToolDeps,
 } from './agents-tool';
 import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../strategy/swarm';
+import { renderThrownChain } from '../obs/index';
 
 /**
  * The sandbox-visible declaration of each action, one block per member.
@@ -204,7 +205,7 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
         try {
           input = parseAgentsToolInput(candidate);
         } catch (error) {
-          return { error: `agents.${action}: ${error instanceof Error ? error.message : String(error)}` };
+          return { error: `agents.${action}: ${renderThrownChain({ cause: error })}` };
         }
         const signal = readExecSignal({ context });
         return dispatchAgentsAction({ ...deps(), mode }, input, signal ? { abortSignal: signal } : undefined);

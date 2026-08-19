@@ -116,7 +116,7 @@ export function EmptyState({ icon, title, hint, children }: {
 export const EMPTY_HINTS = {
   memory: "Ask your agent to remember something and it keeps it here.",
   tools: "Tools your agent learns appear here, extracted from successful conversations.",
-  forks: "When the agent forks itself to try more than one approach, each fork appears here as a tree, one branch per approach.",
+  forks: "When the agent searches a tree of approaches, each search appears here, one branch per candidate, scored against the measure it declared.",
   preview: "When the agent exposes a Workspace or Sandbox port, the running app appears here as a live preview.",
 };
 

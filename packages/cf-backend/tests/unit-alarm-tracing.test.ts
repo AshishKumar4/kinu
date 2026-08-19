@@ -30,9 +30,9 @@ import {
 import { orchestratorHarness } from './helpers/actor-harness';
 
 import {
-  createAgentTracing, createRecordingTracer, ProteusError,
-  SPAN_ATTR_INVOCATION, SPAN_ATTR_ISOLATE_GEN, SPAN_ATTR_SELF_PATH,
-  type AgentTracing, type TracedInvocation,
+  createAgentTracing, createRecordingTracer, ProteusError, renderCauseChain,
+  SPAN_ATTR_ERROR, SPAN_ATTR_INVOCATION, SPAN_ATTR_ISOLATE_GEN, SPAN_ATTR_SELF_PATH,
+  type AgentTracing, type RecordingTracer, type SpanAttributeValue, type TracedInvocation,
 } from '@proteus/core/obs';
 
 /** The four phases, in the order `_proteusTimerTick` runs them. Named here so a
@@ -227,5 +227,124 @@ describe('invocation handles are revoked, not merely discouraged', () => {
     // The `finally` is what makes this hold: a handle left live by a throwing
     // invocation is exactly the one a `.catch()` continuation would reach for.
     expect(() => seat.handle?.span('fetch.late', () => undefined)).toThrow(ProteusError);
+  });
+});
+
+/**
+ * The failure contract, both directions, on the SHIPPED tracer.
+ *
+ * Adopted from `~/cloudflare-os/packages/backend-utils/src/tracing.ts`: an
+ * exception is MARKED and propagates UNCHANGED, and no error TEXT reaches a trace
+ * attribute. Both halves are asserted, because the second is the one a future
+ * "make the trace more useful" change breaks: `proteus.error_message` was on this
+ * span until 2026-08-19, which put an upstream error's message — possibly a
+ * secret, certainly unbounded — on a stream `ReservedLogField` cannot reach, and
+ * marked ONLY the non-throwing `fail()` path, so a THROWN failure was not marked
+ * at all.
+ */
+describe('a span marks a failure and changes nothing about it', () => {
+  /** The tracer plus the first span's attributes, which is what every assertion
+   *  below reads. Inferred, so the fake's own surface is the contract. */
+  const spanFor = () => {
+    const tracer: RecordingTracer = createRecordingTracer();
+    const empty: ReadonlyMap<string, SpanAttributeValue> = new Map();
+    return { tracer, attributes: () => tracer.opened[0]?.attributes ?? empty };
+  };
+
+  test('a span opens and closes around real async work', async () => {
+    const { tracer } = spanFor();
+    const order: string[] = [];
+    const answer = await tracer.span('work', { isolateGen: 3, selfPath: 'A:a' }, async (span) => {
+      order.push('inside');
+      await Promise.resolve();
+      span.setAttribute('proteus.rows', 4);
+      order.push('after_await');
+      return 'done';
+    });
+    expect(answer).toBe('done');
+    expect(order).toEqual(['inside', 'after_await']);
+    // Opened, and opened ONCE. An empty `opened` is the shape of instrumentation
+    // that was never reached, which is the defect a tracing test exists to catch.
+    expect(tracer.opened).toHaveLength(1);
+    const span = tracer.opened[0];
+    expect(span?.name).toBe('work');
+    expect(span?.attributes.get(SPAN_ATTR_ISOLATE_GEN)).toBe(3);
+    expect(span?.attributes.get('proteus.rows')).toBe(4);
+    // Closed: no `proteus.error`, and the next span opened is a SIBLING rather
+    // than a child, which is the only observable a scoped span has for "closed".
+    expect(span?.attributes.has(SPAN_ATTR_ERROR)).toBe(false);
+    tracer.span('after', { isolateGen: 3, selfPath: 'A:a' }, () => undefined);
+    expect(tracer.opened[1]?.parent).toBeNull();
+  });
+
+  test('a synchronous throw is marked and propagates UNCHANGED', () => {
+    const { tracer, attributes } = spanFor();
+    const thrown = new ProteusError('io', 'writing the ledger', { cause: new Error('disk full') });
+    // Collected rather than parked in a `let`: the identity of what came out is the
+    // assertion, so nothing here may narrow or default it.
+    const caught: Error[] = [];
+    try {
+      tracer.span('write', { isolateGen: 1, selfPath: 'A:a' }, () => { throw thrown; });
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      caught.push(error);
+    }
+    // IDENTITY, not shape: a wrapped error would satisfy `toThrow(...)` while
+    // having destroyed the classification and the chain the caller has to read.
+    expect(caught[0]).toBe(thrown);
+    expect(caught[0]).toBeInstanceOf(ProteusError);
+    expect(renderCauseChain(thrown)).toBe('writing the ledger: disk full');
+    expect(attributes().get(SPAN_ATTR_ERROR)).toBe(true);
+  });
+
+  test('a rejection is marked and propagates UNCHANGED', async () => {
+    const { tracer, attributes } = spanFor();
+    const thrown = new ProteusError('timeout', 'awaiting the node', { cause: new Error('600s idle') });
+    const rejected: Error[] = [];
+    await tracer
+      .span('run', { isolateGen: 1, selfPath: 'A:a' }, async () => { await Promise.resolve(); throw thrown; })
+      .catch((error) => {
+        if (!(error instanceof Error)) throw error;
+        rejected.push(error);
+      });
+    expect(rejected[0]).toBe(thrown);
+    expect(attributes().get(SPAN_ATTR_ERROR)).toBe(true);
+  });
+
+  test('no error text reaches a trace attribute, on either path', async () => {
+    const secret = 'sk-live-0000000000000000';
+    const { tracer } = spanFor();
+    const absorbed: Error[] = [];
+    await tracer
+      .span('thrown', { isolateGen: 1, selfPath: 'A:a' }, async () => {
+        throw new Error(`upstream refused: ${secret}`);
+      })
+      .catch((error) => {
+        if (!(error instanceof Error)) throw error;
+        absorbed.push(error);
+      });
+    expect(absorbed).toHaveLength(1);
+    tracer.span('tolerated', { isolateGen: 1, selfPath: 'A:a' }, (span) => {
+      span.fail(new Error(`upstream refused: ${secret}`));
+    });
+    expect(tracer.opened).toHaveLength(2);
+    for (const span of tracer.opened) {
+      // The whole recorded surface, not a named key: a future attribute carrying
+      // the message under any other name is the same leak.
+      expect([...span.attributes.values()].join(' ')).not.toContain(secret);
+      expect(span.attributes.get(SPAN_ATTR_ERROR)).toBe(true);
+    }
+  });
+
+  test('a tolerated failure marks the span without throwing', () => {
+    const { tracer, attributes } = spanFor();
+    const answer = tracer.span('phase', { isolateGen: 1, selfPath: 'A:a' }, (span) => {
+      span.fail(new Error('the reconcile is degraded but the tick continues'));
+      return 'continued';
+    });
+    // The alarm tick's shape: the phase tolerates its failure and the invocation
+    // proceeds, so the span must say it failed while the caller sees success.
+    expect(answer).toBe('continued');
+    expect(attributes().get(SPAN_ATTR_ERROR)).toBe(true);
   });
 });

@@ -15,6 +15,7 @@ import type {
   ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
 } from './types';
 import { parseModelSpec } from './types';
+import { renderThrownChain } from '../obs/index';
 
 export interface DynamicProviderSource {
   /** Sync — build (or reuse) a provider for `providerId`, or undefined when
@@ -71,9 +72,12 @@ export interface ProviderRegistry {
  *  owns that failure. */
 export const CATALOG_SOURCE_ID = 'catalog';
 
+/** A provider failure's whole chain, and never the empty string: a catalog row
+ *  reading "" is indistinguishable from one that did not fail. The chain, not the
+ *  outermost message, because a 401 wrapped in "models.dev fetch failed" used to
+ *  arrive as the wrapper alone. */
 export function providerFailureReason({ error }: { error: unknown }): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.trim() || 'unknown error';
+  return renderThrownChain({ cause: error }).trim() || 'unknown error';
 }
 
 export function createProviderRegistry(): ProviderRegistry {

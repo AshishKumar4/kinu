@@ -41,6 +41,7 @@ import {
 } from '@proteus/core';
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import { appendFileSync } from 'node:fs';
+import { LIVE_MODEL_ENV } from './ambient-env';
 
 /** Which of the two resolution paths produced a target. */
 export type LiveModelPath = 'worker-proxy' | 'ai-gateway';
@@ -59,16 +60,6 @@ export type LiveModelResolution =
   | { readonly kind: 'absent'; readonly reason: string }
   /** Partially configured. Never a skip: someone meant this to run. */
   | { readonly kind: 'misconfigured'; readonly reason: string };
-
-/** The env vars this resolver reads, so the failure messages and the docs can
- *  name them without a second copy. */
-export const LIVE_MODEL_ENV = {
-  origin: 'PROTEUS_ORIGIN',
-  token: 'PROTEUS_TOKEN',
-  gatewayURL: ['AI_GATEWAY_BASE_URL', 'PROTEUS_BASE_URL'],
-  gatewayAuth: ['AI_GATEWAY_AUTH', 'PROTEUS_AUTH'],
-  model: ['AI_GATEWAY_MODEL', 'PROTEUS_MODEL'],
-} as const;
 
 type EnvSource = Record<string, string | undefined>;
 

@@ -31,6 +31,7 @@ import type {
   ScaffoldHistoryReader,
   ScaffoldRunOptions,
 } from '../scaffold/executor';
+import { renderThrownChain } from '../obs/index';
 
 export type {
   ScaffoldHistoryEntry,
@@ -202,7 +203,7 @@ export function createScaffoldCallTool(tools: () => ToolSet): NonNullable<Scaffo
       const result = await t.execute(input.value, options);
       return result === undefined ? undefined : decodeJsonValue({ value: result });
     } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) };
+      return { error: renderThrownChain({ cause: err }) };
     }
   };
 }

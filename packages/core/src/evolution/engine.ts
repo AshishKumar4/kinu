@@ -47,7 +47,7 @@ import type {
 import { DEFAULT_EVOLUTION_CONFIG } from './types';
 import { isoDate } from '../utils/date';
 import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../prompts/structured';
-import { tolerate } from '../obs/index';
+import { renderThrownChain, tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { upsertCraftedTool } from '../craft/conflict';
 import { periodicCraftConsolidation } from '../craft/consolidation';
@@ -875,7 +875,7 @@ export class EvolutionEngine {
         data: result,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = renderThrownChain({ cause: err });
       this.emit({
         type: 'mcts_complete',
         message: `Evolution failed: ${message}`,
@@ -917,7 +917,7 @@ export class EvolutionEngine {
       }
       return summary;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = renderThrownChain({ cause: err });
       this.emit({ type: 'replay_eval', message: `Replay eval failed: ${message}` });
       return null;
     }

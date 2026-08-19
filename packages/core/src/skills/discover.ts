@@ -10,7 +10,7 @@
 import { parseSkillFile } from './parse';
 import { BUILTIN_SKILLS } from './builtins';
 import { SKILLS_DIR, type ParsedSkill } from './types';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, renderThrownChain, toProteusError } from '../obs/index';
 
 /** Minimal VFS shape — duck-typed against any file view. */
 export interface SkillsVfs {
@@ -27,9 +27,6 @@ export interface DiscoverOpts {
   onParseError?: (file: string, error: string) => void;
 }
 
-function errorMessage({ error }: { error: unknown }): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /** Discover every valid skill — built-ins + VFS, with VFS taking precedence. */
 export async function discoverSkills(
@@ -73,7 +70,7 @@ export async function discoverSkills(
       }
       byName.set(parsed.skill.name, parsed.skill);
     } catch (error) {
-      onErr(path, errorMessage({ error }));
+      onErr(path, renderThrownChain({ cause: error }));
     }
   }
 

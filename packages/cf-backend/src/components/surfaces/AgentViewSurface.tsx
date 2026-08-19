@@ -29,6 +29,7 @@ import {
 import type { Rpc } from "@/lib/protocol";
 import { EmptyState, MarkdownContent, Section } from "./shared";
 import * as v from 'valibot';
+import { renderThrownChain } from "@proteus/core/obs";
 
 type SourceState = { data: JsonValue } | { error: string };
 const AgentViewResponseSchema = v.object({
@@ -274,7 +275,7 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
         const data = v.parse(JsonValueSchema, await rpc(source.rpc, args));
         return [sourceKey(source), { data }];
       } catch (err) {
-        return [sourceKey(source), { error: err instanceof Error ? err.message : String(err) }];
+        return [sourceKey(source), { error: renderThrownChain({ cause: err }) }];
       }
     }));
     setSources(new Map(results));
@@ -293,7 +294,7 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
       setVersion(result.version ?? null);
       await loadData(result.spec);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(renderThrownChain({ cause: err }));
     } finally {
       setLoading(false);
     }

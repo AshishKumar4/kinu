@@ -28,7 +28,7 @@ import {
 import { describePathology } from './pathology';
 import { formatScoreInterval, lossInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
-import { tolerate } from '../obs/index';
+import { renderThrownChain, tolerate } from '../obs/index';
 
 const ScaffoldRunEventSchema = v.object({
   fromVersion: v.optional(v.number()),
@@ -543,7 +543,7 @@ export async function executeChangelogRevert(
           if (result.ok) forgotten.push(target);
           else failures.push(`${target}: ${result.error ?? 'unknown error'}`);
         } catch (error) {
-          failures.push(`${target}: ${error instanceof Error ? error.message : String(error)}`);
+          failures.push(`${target}: ${renderThrownChain({ cause: error })}`);
         }
       }
       if (failures.length > 0) {

@@ -26,6 +26,7 @@ import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 import { ModeToggle } from "./mode-toggle";
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
+import { renderCauseChain, renderThrownChain } from "@proteus/core/obs";
 
 /** Live per-workspace activity, bridged from the mounted WorkspacePage socket
  *  via a window event (only the open workspace has a live socket, so the roster
@@ -73,7 +74,7 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
       const result = await rpc<{ displayName: string }>("setDisplayName", [displayName]);
       onSaved(result.displayName);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Rename failed");
+      setError(err instanceof Error ? renderCauseChain(err) : "Rename failed");
     } finally {
       setSaving(false);
     }
@@ -140,7 +141,7 @@ export default function Sidebar() {
   const refreshWorkspaces = useCallback(async () => {
     try { setWorkspaces(await listWorkspaces()); setListError(false); }
     catch (err) {
-      console.warn('[sidebar] listWorkspaces:', err instanceof Error ? err.message : String(err));
+      console.warn('[sidebar] listWorkspaces:', renderThrownChain({ cause: err }));
       setListError(true);
     }
   }, []);
@@ -197,7 +198,7 @@ export default function Sidebar() {
       await refreshWorkspaces();
       setDeleteTarget(null);
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : String(err));
+      setDeleteError(renderThrownChain({ cause: err }));
     } finally {
       setDeleteBusy(false);
     }

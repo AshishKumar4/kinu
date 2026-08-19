@@ -71,6 +71,7 @@ import type { SqlExecutor } from '../types/primitives';
 import { DEFAULT_CONFIG } from '../config';
 import { nowMs } from '../utils/date';
 import { filterByEffectiveScore, updateCraftScores } from './ema';
+import { renderThrownChain } from '../obs/index';
 
 /**
  * What one observed invocation of a crafted tool is worth.
@@ -233,7 +234,7 @@ export function craftFailureMarker(name: string): string {
  *  model sees WHICH crafted tool broke, which is the same information the
  *  score is taken from. */
 export function craftInvocationError(name: string, cause: Error | string): Error {
-  const message = cause instanceof Error ? cause.message : String(cause);
+  const message = renderThrownChain({ cause: cause });
   return new Error(`${craftFailureMarker(name)} ${message}`, { cause });
 }
 

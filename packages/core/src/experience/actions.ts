@@ -21,6 +21,7 @@ import { findPublishable, listPublishable } from './publishable';
 import { stageImport } from './imports';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
+import { renderThrownChain } from '../obs/index';
 
 /** The owner's library, as reached from a workspace. Every method crosses the
  *  capability boundary on the backend that implements it. */
@@ -134,6 +135,6 @@ export async function runExperienceAction<Input>(
       }
     }
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    return { error: renderThrownChain({ cause: err }) };
   }
 }

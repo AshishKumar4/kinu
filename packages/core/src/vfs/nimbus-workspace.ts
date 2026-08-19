@@ -32,7 +32,7 @@ import { provisionWorkspaceRuntimes } from './workspace-runtimes';
 import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, renderThrownChain, toProteusError } from '../obs/index';
 
 export { workspaceToolchainCapabilities } from './workspace-runtimes';
 export type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
@@ -57,7 +57,7 @@ const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.
 /** ENOENT is how Nimbus reports a missing path; the core VFS contract stats it
  *  as `null` and answers `exists` with `false`. */
 function isEnoent({ error }: { error: unknown }): boolean {
-  return error instanceof Error && error.message.startsWith('ENOENT');
+  return renderThrownChain({ cause: error }).includes('ENOENT');
 }
 
 function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefined {

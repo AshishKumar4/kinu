@@ -24,6 +24,7 @@ import {
 } from "../lib/user-api";
 import { inputCls } from "@/components/ui/form";
 import * as v from "valibot";
+import { renderThrownChain } from '@proteus/core/obs';
 
 const POLL_MS = 5000;
 
@@ -57,7 +58,7 @@ export default function UserMcpPage() {
       setErr(null);
       const rows = await listMcpServers();
       setServers(rows);
-    } catch (e) { setErr(errorMessage(e)); }
+    } catch (e) { setErr(renderThrownChain({ cause: e })); }
     finally { setLoading(false); }
   }, []);
 
@@ -84,7 +85,7 @@ export default function UserMcpPage() {
 
   const remove = useCallback(async (id: string, name: string) => {
     if (!confirm(`Remove "${name}"? All workspaces will lose access to its tools.`)) return;
-    try { await removeMcpServer(id); refresh(); } catch (e) { alert(errorMessage(e)); }
+    try { await removeMcpServer(id); refresh(); } catch (e) { alert(renderThrownChain({ cause: e })); }
   }, [refresh]);
 
   return (
@@ -228,7 +229,7 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
       if (headersText.trim()) {
         try {
           headers = v.parse(v.record(v.string(), v.string()), JSON.parse(headersText));
-        } catch (e) { throw new Error(`Bad headers JSON: ${errorMessage(e)}`, { cause: e }); }
+        } catch (e) { throw new Error(`Bad headers JSON: ${renderThrownChain({ cause: e })}`, { cause: e }); }
       }
       const tools = allowedTools.trim()
         ? allowedTools.split(',').map((s) => s.trim()).filter(Boolean)
@@ -240,7 +241,7 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
         window.open(result.authUrl, '_blank', 'noopener,noreferrer');
       }
       onAdded();
-    } catch (e) { setErr(errorMessage(e)); }
+    } catch (e) { setErr(renderThrownChain({ cause: e })); }
     finally { setSaving(false); }
   }, [name, serverUrl, transport, headersText, allowedTools, onAdded]);
 
@@ -296,6 +297,3 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
 
 const McpTransportSchema = v.picklist(['auto', 'sse', 'streamable-http']);
 
-function errorMessage<Thrown>(thrown: Thrown): string {
-  return thrown instanceof Error ? thrown.message : String(thrown);
-}

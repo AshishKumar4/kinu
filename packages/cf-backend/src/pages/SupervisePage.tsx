@@ -29,6 +29,7 @@ import type { Rpc } from "@/lib/protocol";
 import { fmtTokens, fmtPct } from "@/lib/format";
 import { addUsage, cacheHitRate, pageSchema, UsageSchema, usageTotal, type SeekCursor, type Usage } from "@proteus/core";
 import * as v from "valibot";
+import { renderThrownChain } from '@proteus/core/obs';
 
 const ProposedTaskSchema = v.object({
   id: v.string(), task: v.string(), rationale: v.string(), predictedSuccess: v.number(),
@@ -58,9 +59,6 @@ type TriggerRow = v.InferOutput<typeof TriggerRowSchema>;
 
 const AuthModeSchema = v.picklist(["hmac", "bearer", "mtls"]);
 
-function errorMessage<Thrown>(thrown: Thrown): string {
-  return thrown instanceof Error ? thrown.message : String(thrown);
-}
 
 export interface SupervisePageProps {
   rpc: Rpc;
@@ -297,7 +295,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
     if (!agentId) return;
     if (!confirm("Revoke this trigger? The URL stops working immediately.")) return;
     setErr(null);
-    try { await cancelTrigger(agentId, triggerId); } catch (e) { setErr(errorMessage(e)); }
+    try { await cancelTrigger(agentId, triggerId); } catch (e) { setErr(renderThrownChain({ cause: e })); }
     reload();
   }, [agentId, reload]);
 
@@ -462,7 +460,7 @@ function CreateWebhookModal({ agentName, onClose, onCreated }: {
       });
       onCreated(r);
     } catch (e) {
-      const msg = errorMessage(e);
+      const msg = renderThrownChain({ cause: e });
       if (msg.includes("step-up")) {
         if (confirm("A fresh login is required to create webhook URLs. Redirect to sign in?")) {
           const login = new URL("/login", window.location.origin);

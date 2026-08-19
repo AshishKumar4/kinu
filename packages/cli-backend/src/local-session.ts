@@ -40,7 +40,8 @@ import {
   AgentOrchestrator,
   createAgentStores, type AgentStores, collectDynamicContext,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
-  wrapToolsForBackground, resumeBackgroundJob, BACKGROUND_POLICY, type BackgroundPolicy,
+  wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob,
+  BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore, createDurableMctsSession,
   EventLog, ReplyChannelStore,
   type RunEventRecorder,
@@ -113,7 +114,7 @@ import {
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   priceCall, WORKSPACE_RUN_ID,
 } from '@proteus/core';
-import { diagnostics, ProteusError, toProteusError } from '@proteus/core/obs';
+import { diagnostics, ProteusError, renderThrownChain, toProteusError } from '@proteus/core/obs';
 import { makeSqlExec, type CLIRuntime } from './runtime';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
@@ -1584,7 +1585,7 @@ export class LocalAgentSession implements BackendHost {
     try {
       await this.runTurn(item, event, startedAt);
     } catch (error) {
-      const message = errorMessage({ error });
+      const message = renderThrownChain({ cause: error });
       this.orch.acc.hadError = true;
       this.closeRun(message.slice(0, 500));
       this.emit({ type: 'error', message });
@@ -1846,7 +1847,7 @@ export class LocalAgentSession implements BackendHost {
       // they append in drain order).
       for (const msg of this.userSteer.recordedMessages()) this.history.push(msg);
       this.orch.acc.hadError = true;
-      const message = err instanceof Error ? err.message : String(err);
+      const message = renderThrownChain({ cause: err });
       runError = message.slice(0, 500);
       this.emit({ type: 'error', message });
       // Overflow recovery — the shared core policy, APPLIED by the shared
@@ -1952,7 +1953,7 @@ export class LocalAgentSession implements BackendHost {
       if (this.turnWorkMode !== 'plan') this.engine.queueShadowTrial(turn, liveTurnOpts.history);
       this.emit({ type: 'turn-end', turn });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = renderThrownChain({ cause: err });
       this.orch.acc.hadError = true;
       this.closeRun(runError ?? message.slice(0, 500));
       diagnostics.failure(
@@ -2376,7 +2377,11 @@ export class LocalAgentSession implements BackendHost {
   /** The shared background wrap (core background-tools) — the SAME wrapper
    *  the cf backend applies: shallow clone, 30s threshold, per-call abort. */
   private wrapToolsForBackground(raw: ToolSet): ToolSet {
-    return wrapToolsForBackground(raw, { jobRunner: this.jobRunner, mode: () => this.turnWorkMode });
+    return wrapToolsForBackground(raw, {
+      jobRunner: this.jobRunner,
+      backgroundable: BACKGROUNDABLE_TOOLS,
+      mode: () => this.turnWorkMode,
+    });
   }
 
   /** Persist the exchange (user, any mid-turn steers, assistant); returns the
@@ -2603,10 +2608,6 @@ function normalizePromptInput(
   }), input);
 }
 
-function errorMessage(input: { error: unknown }): string {
-  const error = v.safeParse(v.instance(Error), input.error);
-  return error.success ? error.output.message : String(input.error);
-}
 
 /** Resolve when `work` settles or `ms` elapses, whichever comes first. The timer
  *  is always cleared, so a fast settle leaves nothing holding the event loop. */

@@ -5,7 +5,7 @@ import {
   decodeCodexAccountId,
   tokensToCredential,
 } from '@proteus/core';
-import { tolerate } from '@proteus/core/obs';
+import { renderThrownChain, tolerate } from '@proteus/core/obs';
 import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@proteus/cli-backend';
 import { setCloudCredential } from '../cloud-api';
 import { loadConfigFile, resolveCloudSession, saveConfigFile, setDefaultModel, updateConfigFile, type ProteusConfig } from '../config';
@@ -55,7 +55,7 @@ export async function storeProviderSecret(opts: {
     // surprise this whole change exists to remove. Say what happened and what
     // to do about it, and leave nothing behind.
     throw new Error(
-      `Your Proteus account did not accept the key (${err instanceof Error ? err.message : String(err)}). `
+      `Your Proteus account did not accept the key (${renderThrownChain({ cause: err })}). `
       + 'Nothing was saved. Try again, or re-run with --local to keep the key on this machine.',
       { cause: err },
     );
@@ -306,7 +306,7 @@ export async function setupCommand(opts: {
         // Pick the provider's configured default, or fall back to the first model.
         model = models[0].id;
       } catch (e) {
-        console.log(`${WARN('!')} Could not read opencode models: ${e instanceof Error ? e.message : String(e)}`);
+        console.log(`${WARN('!')} Could not read opencode models: ${renderThrownChain({ cause: e })}`);
         console.log(DIM(LOGIN_HINT_OPENCODE));
         return;
       }

@@ -16,6 +16,7 @@ import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types';
 import { unknownActionError } from './registry';
 import type { ReportToolDeps } from './builtins';
 import type { JsonValue } from '../utils/json';
+import { renderThrownChain } from '../obs/index';
 
 const StatusSchema = v.picklist(SUBORDINATE_REPORT_STATUSES);
 const ContentSchema = v.pipe(v.string(), v.trim(), v.minLength(1));
@@ -54,6 +55,6 @@ export async function dispatchReport(
   try {
     return await deps.report({ status: status.output, content: content.output });
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    return { error: renderThrownChain({ cause: err }) };
   }
 }

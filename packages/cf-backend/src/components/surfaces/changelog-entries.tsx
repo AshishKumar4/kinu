@@ -27,6 +27,7 @@ import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-proteus";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, describeError, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines, timeAgo } from "./shared";
+import { renderThrownChain } from "@proteus/core/obs";
 
 export interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: DiffLine[] }
@@ -126,7 +127,7 @@ export function ChangelogEntryCard({ entry, seenAt, rpc, onReverted }: Changelog
       setNotice({ text: r.ok ? `Reverted — ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
       if (r.ok) onReverted();
     } catch (e) {
-      setNotice({ text: e instanceof Error ? e.message : String(e), ok: false });
+      setNotice({ text: renderThrownChain({ cause: e }), ok: false });
     } finally {
       setBusy(false);
     }
@@ -245,7 +246,7 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Rpc;
       setNotice({ text: r.ok ? `Reverted — ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
       if (r.ok) onReverted();
     } catch (e) {
-      setNotice({ text: e instanceof Error ? e.message : String(e), ok: false });
+      setNotice({ text: renderThrownChain({ cause: e }), ok: false });
     } finally {
       setBusy(false);
     }

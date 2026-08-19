@@ -17,6 +17,7 @@ import {
 } from "@phosphor-icons/react";
 import type { Rpc, BackgroundJob } from "@/lib/protocol";
 import { timeAgo } from "./shared";
+import { renderThrownChain } from "@proteus/core/obs";
 
 function statusMeta(status: BackgroundJob["status"]) {
   switch (status) {
@@ -43,7 +44,7 @@ export function JobCard({ job, onRefresh, rpc }: JobCardProps) {
     setErr(null);
     try { await rpc(method, [job.id]); onRefresh(); }
     catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = renderThrownChain({ cause: error });
       setErr(`${method.replace("BackgroundJob", "")} failed: ${message}`);
     }
     finally { setBusy(false); }

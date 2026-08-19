@@ -29,6 +29,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import type { Rpc } from '@/lib/protocol';
 import * as v from 'valibot';
+import { renderThrownChain } from '@proteus/core/obs';
 
 const ArchiveCursorSchema = v.variant('phase', [
   v.object({ phase: v.literal('sql'), table: v.string(), after: v.nullable(v.number()), rows: v.number() }),
@@ -213,7 +214,7 @@ export default function SettingsPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setErr(errorMessage(e));
+      setErr(renderThrownChain({ cause: e }));
     } finally {
       setSaving(false);
     }
@@ -397,7 +398,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
       await rpc("revokeShellApprovalGrants", [[grant]]);
       reload();
     } catch (e) {
-      setErr(errorMessage(e));
+      setErr(renderThrownChain({ cause: e }));
     } finally {
       setBusy(null);
     }
@@ -474,7 +475,7 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
       await setDeviceConsentScope(current.device.id, agentName, full ? "all_local_actions" : "full_filesystem");
       reload();
     } catch (e) {
-      setErr(errorMessage(e));
+      setErr(renderThrownChain({ cause: e }));
     } finally {
       setBusy(false);
     }
@@ -563,7 +564,7 @@ function WorkspaceBackupCard({
       setStatus(`Downloaded ${records} records.`);
     } catch (e) {
       setStatus(null);
-      setErr(errorMessage(e));
+      setErr(renderThrownChain({ cause: e }));
     } finally {
       setBusy(false);
     }
@@ -632,7 +633,7 @@ function GepaOptimizationCard({
       }
       reload();
     } catch (e) {
-      setMsg(`Error: ${errorMessage(e)}`);
+      setMsg(`Error: ${renderThrownChain({ cause: e })}`);
     } finally {
       setRunning(false);
     }
@@ -689,7 +690,7 @@ function AlwaysActiveSkillsCard({
     try {
       const r = v.parse(SkillNamesSchema, await rpc('getAlwaysActiveSkills', []));
       setNames(r.names);
-    } catch (e) { setErr(errorMessage(e)); }
+    } catch (e) { setErr(renderThrownChain({ cause: e })); }
   }, [rpc]);
 
   useEffect(() => { void refresh(); }, [refresh]);
@@ -700,7 +701,7 @@ function AlwaysActiveSkillsCard({
     try {
       const r = v.parse(SkillNamesSchema, await rpc('setAlwaysActiveSkills', [next]));
       setNames(r.names);
-    } catch (e) { setErr(errorMessage(e)); }
+    } catch (e) { setErr(renderThrownChain({ cause: e })); }
     finally { setBusy(false); }
   }, [rpc]);
 
@@ -753,9 +754,6 @@ function AlwaysActiveSkillsCard({
   );
 }
 
-function errorMessage<Thrown>(thrown: Thrown): string {
-  return thrown instanceof Error ? thrown.message : String(thrown);
-}
 
 function NumField({ label, value, step, onChange }: { label: string; value: number; step: number; onChange: (v: number) => void }) {
   return (

@@ -9,7 +9,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from '@proteus/core';
-import { tolerate } from '@proteus/core/obs';
+import { renderThrownChain, tolerate } from '@proteus/core/obs';
 import type {
   CheckpointAvailability, FileCheckpointEntry, FileCheckpointListing,
   FileRestorePlan, FileRestoreResult,
@@ -306,7 +306,7 @@ export class CloudAgentClient implements AgentClient {
   steer(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
     if (this.activeTurns.size === 0) return false;
     void this.submit(prompt, opts, true).catch((err) => {
-      this.emit({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+      this.emit({ type: 'error', message: renderThrownChain({ cause: err }) });
     });
     return true;
   }
@@ -328,7 +328,7 @@ export class CloudAgentClient implements AgentClient {
         const r = v.parse(BranchTurnResultSchema, result);
         if (!r?.accepted) fail(r?.reason ?? 'The cloud agent rejected the branch.');
       })
-      .catch((err) => fail(err instanceof Error ? err.message : String(err)));
+      .catch((err) => fail(renderThrownChain({ cause: err })));
     return true;
   }
 
@@ -382,7 +382,7 @@ export class CloudAgentClient implements AgentClient {
       } catch (err) {
         // The turn-start already went out — keep the lifecycle paired.
         this.activeTurns.delete(requestId);
-        this.emit({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+        this.emit({ type: 'error', message: renderThrownChain({ cause: err }) });
         this.settleTurn(turn, true);
       }
     });
@@ -539,7 +539,7 @@ export class CloudAgentClient implements AgentClient {
     } catch (error) {
       this.emit({
         type: 'error',
-        message: `Could not mark the changelog as seen: ${error instanceof Error ? error.message : String(error)}`,
+        message: `Could not mark the changelog as seen: ${renderThrownChain({ cause: error })}`,
       });
     }
     return view;

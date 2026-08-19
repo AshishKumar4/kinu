@@ -1,4 +1,5 @@
-// Every test process gets a throwaway PROTEUS_HOME, and one release that runs.
+// Every test process gets a throwaway PROTEUS_HOME, no inherited credentials,
+// and one release that runs.
 //
 // `proteusHome()` falls back to `~/.proteus`, and a test that drives the local
 // runtime writes there for real: `createCLIRuntime` builds a shadow-git
@@ -28,9 +29,32 @@ import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { releaseScratch } from '../packages/test-utils/src/scratch';
+import { stripAmbientCredentials } from '../packages/test-utils/src/ambient-env';
 
 const home = mkdtempSync(join(tmpdir(), 'proteus-test-home-'));
 process.env.PROTEUS_HOME = home;
+
+// The throwaway home isolates a suite from the developer's CONFIG FILE. This is
+// the same property for the ENVIRONMENT, which was the half nobody had done:
+// `resolveCloudSession()` prefers `PROTEUS_TOKEN` over that config file, so a
+// shell that had run `bun run test:eval` or `proteus chat` silently moved ten of
+// `bun test packages/cli/`'s tests onto their signed-in branch and left them
+// red. See packages/test-utils/src/ambient-env.ts for the measurement.
+//
+// PROTEUS_EVAL_LIVE=1 is the exception because it is already the consent
+// boundary for the one tier that means to use these variables: scripts/
+// eval-tier.sh sets it, nothing else does, and `liveModelTarget()` refuses to
+// spend without it. One rule, not two.
+//
+// It says so rather than doing it quietly — a developer whose shell is signed in
+// should not have to infer why their credential is not in play.
+if (process.env.PROTEUS_EVAL_LIVE !== '1') {
+  const ignored = stripAmbientCredentials(process.env);
+  if (ignored.length > 0) {
+    console.warn(`[test-preload] ignoring ambient ${ignored.join(', ')} — a signed-in shell is `
+      + 'not an input to a suite; run the eval tier (PROTEUS_EVAL_LIVE=1) to use them');
+  }
+}
 
 /**
  * The ONE release, registered by each runner's entry as an `afterAll`.

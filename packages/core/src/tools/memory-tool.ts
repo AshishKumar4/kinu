@@ -19,12 +19,10 @@ import {
   memoryActionsFor, unknownActionError,
   type MemoryToolAction, type MEMORY_FACT_ACTIONS,
 } from './registry';
+import { renderThrownChain } from '../obs/index';
 
 const FactKeySchema = v.pipe(v.string(), v.nonEmpty());
 
-function errorMessage({ error }: { error: unknown }): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export interface MemoryToolDeps {
   memory: Memory;
@@ -112,7 +110,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
         value: { mode: 'browse', sessions: sessionSearch.browse(args.limit ?? 10) },
       });
     } catch (err) {
-      return { error: `session search unavailable: ${err instanceof Error ? err.message : String(err)}` };
+      return { error: `session search unavailable: ${renderThrownChain({ cause: err })}` };
     }
   };
 
@@ -128,7 +126,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
     if (action === 'remember') {
       let value: JsonValue;
       try { value = decodeJsonValue({ value: args.value }); }
-      catch (error) { return { error: `value not JSON-serializable: ${errorMessage({ error })}` }; }
+      catch (error) { return { error: `value not JSON-serializable: ${renderThrownChain({ cause: error })}` }; }
       facts.upsert(key.output, value, { confidence: args.confidence });
       return { ok: true, key: key.output };
     }

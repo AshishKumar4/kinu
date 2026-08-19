@@ -20,6 +20,7 @@ import type { Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines } from "./shared";
+import { renderThrownChain } from "@proteus/core/obs";
 
 interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: Array<{ kind: "add" | "del" | "ctx"; text: string }> }
@@ -116,7 +117,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
     setBusy(mode);
     setDecideErr(null);
     try { await rpc("applyScaffoldDecision", [mode]); reload(); if (selected != null) loadDetail(selected); }
-    catch (e) { setDecideErr(`${mode} failed: ${e instanceof Error ? e.message : String(e)}`); }
+    catch (e) { setDecideErr(`${mode} failed: ${renderThrownChain({ cause: e })}`); }
     finally { setBusy(null); }
   }, [rpc, reload, loadDetail, selected]);
 
@@ -128,7 +129,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
       const text = (r.events ?? []).filter((e) => e.type === "text_delta").map((e) => e.text ?? "").join("");
       setPreviewOut(r.error ? `Error: ${r.error}` : (text || "(no text output)"));
     } catch (e) {
-      setPreviewOut(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setPreviewOut(`Error: ${renderThrownChain({ cause: e })}`);
     } finally { setBusy(null); }
   }, [rpc, selected, previewTask]);
 

@@ -60,6 +60,7 @@ import * as v from 'valibot';
 import { sha256Hex } from '../safety/argument-digest';
 import type { ExecOutcome } from '../execution/exec-result';
 import type { MeasurementContext } from './objective';
+import { renderThrownChain } from '../obs/index';
 
 /** The file every task asks the agent to write. */
 export const SOLUTION_FILE = 'solution.mjs';
@@ -362,7 +363,7 @@ export async function runRatioMeasurement(
     submitted = read instanceof Uint8Array ? new TextDecoder().decode(read) : read;
   } catch (error) {
     submitted = `throw new Error(${JSON.stringify(
-      `${SOLUTION_FILE} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      `${SOLUTION_FILE} could not be read: ${renderThrownChain({ cause: error })}`,
     )});\n`;
   }
   await ctx.vfs.writeFile(candidateFile, submitted);

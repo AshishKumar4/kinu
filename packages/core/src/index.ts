@@ -1258,9 +1258,10 @@ export {
   type ScaffoldBridgeOpts, type ScaffoldHistoryQuery, type ScaffoldHistoryReader,
   type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
 } from './orchestrator/scaffold-host';
+export { BACKGROUNDABLE_TOOLS, resumeBackgroundJob } from './orchestrator/background-tools';
 export {
-  BACKGROUNDABLE_TOOLS, wrapToolsForBackground, resumeBackgroundJob,
-} from './orchestrator/background-tools';
+  wrapToolsForBackground, CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool,
+} from './jobs/background-wrap';
 export { buildStrategyForkDeps, type ForkDepsWiring } from './orchestrator/fork-deps';
 export { createDurableMctsSession } from './orchestrator/mcts-session';
 export {

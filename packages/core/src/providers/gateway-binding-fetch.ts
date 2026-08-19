@@ -19,6 +19,7 @@
 //    at ~1s, then 390 chunks over the following second).
 import { asFetchFunction } from './fetch-shim';
 import type { GatewayRunRequest, WorkersAIBinding } from './types';
+import { renderThrownChain } from '../obs/index';
 
 /** An AI Gateway HTTPS base parsed into what the binding addresses it by.
  *  `AI_GATEWAY_URL` is the single source of truth for both. */
@@ -44,7 +45,7 @@ export function parseGatewayTarget(raw: string | undefined): GatewayTargetResult
     url = new URL(raw);
   } catch (cause) {
     return {
-      reason: `AI_GATEWAY_URL is not a URL: ${cause instanceof Error ? cause.message : String(cause)}`,
+      reason: `AI_GATEWAY_URL is not a URL: ${renderThrownChain({ cause: cause })}`,
     };
   }
   const [version, account, id] = url.pathname.split('/').filter(Boolean);
@@ -88,7 +89,7 @@ export function createGatewayBindingFetch(opts: {
     try {
       url = new URL(rawURL);
     } catch (cause) {
-      return reject(`unparseable URL: ${cause instanceof Error ? cause.message : String(cause)}`);
+      return reject(`unparseable URL: ${renderThrownChain({ cause: cause })}`);
     }
     // Compare normalized origin + pathname, not raw strings, so a lexical
     // variant cannot split provider/endpoint differently than the wire would.
@@ -107,7 +108,7 @@ export function createGatewayBindingFetch(opts: {
     try {
       query = JSON.parse(bodyText);
     } catch (cause) {
-      return reject(`non-JSON request body: ${cause instanceof Error ? cause.message : String(cause)}`);
+      return reject(`non-JSON request body: ${renderThrownChain({ cause: cause })}`);
     }
 
     const signal = init?.signal ?? request?.signal ?? undefined;

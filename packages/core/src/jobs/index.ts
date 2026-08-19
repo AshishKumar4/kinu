@@ -29,3 +29,9 @@ export {
   type BackgroundJobRunnerDeps,
   type JobResumer,
 } from './runner';
+export { AgentWakeQueue } from './wake-queue';
+export {
+  wrapToolsForBackground,
+  CONFINED_BACKGROUNDABLE_TOOLS,
+  type BackgroundableTool,
+} from './background-wrap';

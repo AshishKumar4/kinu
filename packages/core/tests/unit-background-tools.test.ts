@@ -12,9 +12,8 @@
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import { toolExecute } from '@proteus/test-utils';
-import {
-  wrapToolsForBackground, BACKGROUNDABLE_TOOLS,
-} from '../src/orchestrator/background-tools';
+import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
+import { wrapToolsForBackground } from '../src/jobs/background-wrap';
 import { readSpawnStarted, BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -69,9 +68,9 @@ function executeTool<Args>(tools: ToolSet, name: string) {
 
 describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are result-shaped', () => {
   test('BACKGROUNDABLE_TOOLS declares the completion axis: agents=spawn, run/execute_tools=result', () => {
-    expect(BACKGROUNDABLE_TOOLS.get('agents')?.completion).toBe('spawn');
-    expect(BACKGROUNDABLE_TOOLS.get('run')?.completion).toBe('result');
-    expect(BACKGROUNDABLE_TOOLS.get('execute_tools')?.completion).toBe('result');
+    expect(BACKGROUNDABLE_TOOLS['agents']?.completion).toBe('spawn');
+    expect(BACKGROUNDABLE_TOOLS['run']?.completion).toBe('result');
+    expect(BACKGROUNDABLE_TOOLS['execute_tools']?.completion).toBe('result');
   });
 
   test('on the interactive surface, a fork detaches the instant it spawns — not after the 30s threshold', async () => {
@@ -85,7 +84,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     expect(jobRunner.policy.wakesAfterTurn).toBe(true);
 
     const raw: ToolSet = { agents: fakeForkTool(150) };
-    const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build' });
+    const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<ForkInput>(wrapped, 'agents')({ action: 'fork', task: 't' });
     const elapsedMs = performance.now() - start;
 
@@ -112,7 +111,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     expect(jobRunner.policy.wakesAfterTurn).toBe(false);
 
     const raw: ToolSet = { agents: fakeForkTool(60) };
-    const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build' });
+    const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<ForkInput>(wrapped, 'agents')({ action: 'fork', task: 't' });
 
     expect(crossings).toEqual([]);
@@ -128,7 +127,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
       { ...BACKGROUND_POLICY['one-shot'], detachAfterMs: 10 },
       (kind, promise) => { crossings.push(kind); void promise; return { detached: true, jobId: 'job-run' }; },
     );
-    const wrapped = wrapToolsForBackground({ run: fakeRunTool(60) }, { jobRunner, mode: () => 'build' });
+    const wrapped = wrapToolsForBackground({ run: fakeRunTool(60) }, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<RunInput>(wrapped, 'run')({ command: 'serve' });
 
     expect(crossings).toEqual(['run']);
@@ -149,7 +148,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     const jobRunner = fakeJobRunner(BACKGROUND_POLICY.interactive, () => {
       throw new Error('must not cross the threshold for a non-fork action');
     });
-    const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build' });
+    const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<ForkInput>(wrapped, 'agents')({ action: 'list' });
     expect(ran).toBe(true);
     expect(out).toEqual({ subordinates: [] });
@@ -162,7 +161,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
       (kind, promise) => { crossings.push(kind); void promise; return { detached: true, jobId: 'job-run' }; },
     );
     const raw: ToolSet = { run: fakeRunTool(80) };
-    const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build' });
+    const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<RunInput>(wrapped, 'run')({ command: 'sleep 1' });
 
     // Crossed via the TIMED race (20ms threshold, 80ms work) — not on any
@@ -177,7 +176,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
       () => { throw new Error('must not cross for fast work'); },
     );
     const raw: ToolSet = { run: fakeRunTool(10) };
-    const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build' });
+    const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<RunInput>(wrapped, 'run')({ command: 'ls' });
     expect(out).toBe('command output');
   });

@@ -60,18 +60,36 @@ export interface ScopedSpan {
   readonly isTraced: boolean;
   setAttribute(key: string, value: SpanAttributeValue): void;
   /**
-   * Records a failure that was NOT thrown — a tolerated error, an aborted
-   * fork, a degraded path that returns normally. A THROWN error needs no call:
-   * the runtime records the span's outcome on close either way, so a caller
-   * cannot forget it and a `fail()` on the throwing path would double-record.
+   * Marks a failure that was NOT thrown — a tolerated error, an aborted fork, a
+   * degraded path that returns normally. A THROWN error needs no call: `span`
+   * marks it and rethrows it unchanged.
+   *
+   * Takes the `Error` and records NONE of it. That is the point, twice over.
+   * The parameter is required so a caller cannot mark a failure it is not
+   * holding — and a caller holding one can log it, where the text belongs. What
+   * is recorded is one boolean, because error text is unbounded and possibly
+   * sensitive and a trace attribute is neither the place to bound it nor the
+   * place to redact it. The chain goes to `Logger.failure`, which demands a
+   * classification and renders the whole chain; the span says only THAT this
+   * span failed, which is what a trace query needs to find the log line.
    */
   fail(error: Error): void;
 }
 
 export interface Tracer {
   /**
-   * Opens a span, runs `fn` inside it, and closes the span when `fn` returns
-   * or its promise settles. A throw propagates unchanged.
+   * Opens a span, runs `fn` inside it, and closes the span when `fn` returns or
+   * its promise settles.
+   *
+   * A throw is MARKED and propagates UNCHANGED — not wrapped, not logged, not
+   * classified, not converted to a return value. An instrument that alters the
+   * failure it observes has stopped being an instrument, and the one thing every
+   * caller of this must be able to assume is that adding a span changed nothing
+   * about what its callers see.
+   *
+   * NEVER wrap a pipelined RPC stub in this. Marking a rejection means attaching
+   * a handler to the returned value, and a `.catch` on a stub is a new promise,
+   * not the stub — pipelining is lost and the call becomes a round trip.
    */
   span<T>(name: string, attributes: SpanOpenAttributes, fn: (span: ScopedSpan) => T): T;
 }
@@ -79,8 +97,10 @@ export interface Tracer {
 /** Attribute keys. One spelling, so a query and an emitter cannot drift. */
 export const SPAN_ATTR_ISOLATE_GEN = 'proteus.isolate_gen';
 export const SPAN_ATTR_SELF_PATH = 'proteus.self_path';
-export const SPAN_ATTR_ERROR_NAME = 'proteus.error_name';
-export const SPAN_ATTR_ERROR_MESSAGE = 'proteus.error_message';
+/** Set to `true`, and never to `false`: absent means the span did not fail, which
+ *  is what a trace query already reads. A boolean and nothing else — see
+ *  `ScopedSpan.fail` for why the message is not here. */
+export const SPAN_ATTR_ERROR = 'proteus.error';
 
 /**
  * `Agent.selfPath` is `ReadonlyArray<{className, name}>`, root-first. Rendered
@@ -106,8 +126,11 @@ export interface RecordedSpan {
    * second ran inside the first nor that the first covered the second's work.
    */
   readonly parent: number | null;
+  /** Everything recorded, including `proteus.error` when the span failed. ONE map
+   *  and no separate failure list, because the real tracer records a failure as an
+   *  attribute and a fake with a richer failure surface is a fake a test can
+   *  assert things about that production never carries. */
   readonly attributes: ReadonlyMap<string, SpanAttributeValue>;
-  readonly failures: readonly string[];
 }
 
 export interface RecordingTracer extends Tracer {
@@ -142,7 +165,6 @@ export function createRecordingTracer(): RecordingTracer {
         [SPAN_ATTR_ISOLATE_GEN, attributes.isolateGen],
         [SPAN_ATTR_SELF_PATH, attributes.selfPath],
       ]);
-      const failures: string[] = [];
       const index = opened.length;
       opened.push({
         name,
@@ -150,15 +172,14 @@ export function createRecordingTracer(): RecordingTracer {
         selfPath: attributes.selfPath,
         parent: stack.at(-1) ?? null,
         attributes: captured,
-        failures,
       });
       const span: ScopedSpan = {
         isTraced: true,
         setAttribute(key: string, value: SpanAttributeValue): void {
           captured.set(key, value);
         },
-        fail(error: Error): void {
-          failures.push(`${error.name}: ${error.message}`);
+        fail(): void {
+          captured.set(SPAN_ATTR_ERROR, true);
         },
       };
       stack.push(index);
@@ -166,6 +187,7 @@ export function createRecordingTracer(): RecordingTracer {
         const top = stack.lastIndexOf(index);
         if (top >= 0) stack.splice(top, 1);
       };
+      const failed = (): void => { captured.set(SPAN_ATTR_ERROR, true); };
       let closesLater = false;
       try {
         const result = fn(span);
@@ -176,9 +198,20 @@ export function createRecordingTracer(): RecordingTracer {
         // wrong `parent`, which is the thing these assertions read.
         if (result instanceof Promise) {
           closesLater = true;
-          void result.finally(close);
+          // `then(ok, err)` and not `finally`: `finally` derives a promise that
+          // REJECTS when `result` does, and nothing awaits this one — an unhandled
+          // rejection from inside the instrument, which `gate:silent-drop` names as
+          // `voided_promise`. Both arms settle this derivation successfully while
+          // `result` itself still rejects for its real caller, and the rejection arm
+          // takes no parameter because it records the FACT and never the error.
+          void result.then(close, () => { failed(); close(); });
         }
         return result;
+      } catch (error) {
+        // Marked, then rethrown UNCHANGED — `throw error`, not a wrap: the seam's
+        // contract is that adding a span alters nothing a caller can observe.
+        failed();
+        throw error;
       } finally {
         if (!closesLater) close();
       }

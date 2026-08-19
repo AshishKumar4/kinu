@@ -38,6 +38,7 @@ import { isClosedTree, isSettled, PlanProgress, TaskTree } from "./work-tasks";
 import { JobCard } from "./work-jobs";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";
 import type { SurfaceKind } from "./WorkSurface";
+import { renderThrownChain } from "@proteus/core/obs";
 
 /** Which filter a journal row answers to. `All` is not a filter, it is no
  *  filter — the chips are views over one list. */
@@ -312,7 +313,7 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
           ? "Approved, and Proteus will stop asking about these checks on that environment. It runs when the agent picks the decision up."
           : "Approved. It runs when the agent picks the decision up.");
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = renderThrownChain({ cause: e });
       setError(`Could not record the decision: ${message}`);
     } finally {
       setBusy(false);
