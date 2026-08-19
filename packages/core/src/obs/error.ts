@@ -202,6 +202,27 @@ export function renderCauseChain(error: Error): string {
  * one seam so a caller holding a `catch` binding does not have to write the
  * narrowing — which is where all 202 copies got it wrong.
  *
+ * TWO NAMES, AND NOT ONE JOB — asked and answered, because a second name for one
+ * job is exactly the duplication this function deleted 202 instances of:
+ *
+ *   `renderCauseChain(error)`          the value IS an `Error`. Keeps the type
+ *                                      guarantee; the 8 sites that hold one.
+ *   `renderThrownChain({ cause })`     the value is a `catch` binding, a
+ *                                      rejection, an RPC payload. The trust
+ *                                      boundary, narrowed once.
+ *   `renderCauseChain(toProteusError(  you ALSO have a `doing` frame and know
+ *     { doing, cause, otherwise }))`   what an unrecognised failure means at
+ *                                      THIS seam. Strictly better than the line
+ *                                      above — prefer it wherever both fit.
+ *
+ * Collapsing the first into the second would make every already-typed caller
+ * write `{ cause: error }` and lose the compiler's guarantee that it holds an
+ * `Error`. Collapsing the second into the third would mean inventing 202 prose
+ * strings and 202 seam classifications nobody has. The chain underneath is ONE
+ * function in all three, so no spelling can drift from another —
+ * `head-inference.ts` uses the third for the loop's own failure and the second for
+ * a tool call's, which is the distinction doing work.
+ *
  * For an `Error` with no `cause` the answer is byte-identical to `error.message`,
  * so replacing a copy changes nothing until there IS a chain, which is exactly
  * when the old answer was wrong.

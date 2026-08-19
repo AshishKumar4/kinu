@@ -39,7 +39,7 @@ import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summ
 import { HeadFileChanges } from './file-changes';
 import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { diagnostics, renderCauseChain, toProteusError } from '../obs/index';
+import { diagnostics, renderCauseChain, renderThrownChain, toProteusError } from '../obs/index';
 
 /**
  * The mutable findings a head accumulates as it runs — evidence/decisions
