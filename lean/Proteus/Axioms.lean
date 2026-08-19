@@ -368,7 +368,36 @@ import Proteus
 
 /-! ### Proteus/Exploration/FanIn.lean -/
 
-#print axioms Proteus.Exploration.FanIn.member_dependsOn_is_readable
+#print axioms Proteus.Exploration.FanIn.landsCleanly_append
+#print axioms Proteus.Exploration.FanIn.placeStep_preserves
+#print axioms Proteus.Exploration.FanIn.onePass_preserves
+#print axioms Proteus.Exploration.FanIn.sweeps_preserves
+#print axioms Proteus.Exploration.FanIn.placedOf_landsCleanly
+#print axioms Proteus.Exploration.FanIn.ordered_is_placedOf
+#print axioms Proteus.Exploration.FanIn.derived_order_satisfies_rule_one
+#print axioms Proteus.Exploration.FanIn.mem_of_filter_eq_nil
+#print axioms Proteus.Exploration.FanIn.every_member_is_ordered
+#print axioms Proteus.Exploration.FanIn.placeStep_allMembers
+#print axioms Proteus.Exploration.FanIn.onePass_allMembers
+#print axioms Proteus.Exploration.FanIn.sweeps_allMembers
+#print axioms Proteus.Exploration.FanIn.placedOf_allMembers
+#print axioms Proteus.Exploration.FanIn.unique_append_singleton
+#print axioms Proteus.Exploration.FanIn.placeStep_unique
+#print axioms Proteus.Exploration.FanIn.onePass_unique
+#print axioms Proteus.Exploration.FanIn.sweeps_unique
+#print axioms Proteus.Exploration.FanIn.placedOf_unique
+#print axioms Proteus.Exploration.FanIn.a_cycle_applies_nothing
+#print axioms Proteus.Exploration.FanIn.the_sweep_bound_is_tight
+#print axioms Proteus.Exploration.FanIn.a_chain_offered_backwards_still_orders
+#print axioms Proteus.Exploration.FanIn.a_dependent_offered_first_is_applied_last
+#print axioms Proteus.Exploration.FanIn.an_unordered_set_keeps_the_order_it_was_offered_in
+#print axioms Proteus.Exploration.FanIn.a_dependency_outside_the_offered_set_is_not_an_edge
+#print axioms Proteus.Exploration.FanIn.a_settled_dependency_is_not_an_edge
+#print axioms Proteus.Exploration.FanIn.a_cycle_is_refused_by_name
+#print axioms Proteus.Exploration.FanIn.a_self_dependency_is_a_cycle
+#print axioms Proteus.Exploration.FanIn.an_orderable_member_does_not_land_beside_a_cycle
+#print axioms Proteus.Exploration.FanIn.an_orderable_set_applies_every_member
+#print axioms Proteus.Exploration.FanIn.the_offered_order_can_fail_rule_one
 
 /-! ### Proteus/Exploration/Rebase.lean -/
 
