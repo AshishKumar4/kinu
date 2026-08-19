@@ -48,7 +48,7 @@ import { BLENDED_USD_PER_1K_TOKENS, estimateTokens, estimateUsdCost } from './ll
 import { reconcileColumns } from './identity/columns';
 import type { ModelPricing } from './providers/types';
 import type { JsonValue } from './utils/json';
-import { usageTotal, type Usage } from './usage';
+import { usageReported, usageTotal, type Usage } from './usage';
 
 /** A cap on a label. Either dimension may be omitted; a label with neither is a
  *  pure accounting scope (it meters, it never refuses). */
@@ -552,6 +552,43 @@ export function localMissionScope(
   labels: readonly string[],
 ): MissionScope | null {
   return labels.length === 0 ? null : { labels: [...labels], port: localMissionPort(governor) };
+}
+
+/**
+ * The two questions a search asks its mission ledger between units of work, or
+ * the pair of no-ops it asks when there is no ledger.
+ *
+ * The no-op half is the half that matters: an undeclared run is handed no scope,
+ * so `outOfBudget` is a constant `false` and `charge` returns without ever
+ * reaching a port. Nothing queries, nothing writes, and the search behaves
+ * exactly as it did before a governor existed.
+ *
+ * ONE PAIR FOR EVERY ENGINE. MCTS asks it per expansion and a swarm asks it per
+ * level and per toolless node; a second spelling of the same two questions is
+ * how two engines come to disagree about what "spent" means.
+ */
+export interface MissionMeter {
+  outOfBudget: () => Promise<boolean>;
+  charge: (usage: Usage | undefined) => Promise<void>;
+}
+
+export function missionMeter(mission: MissionScope | undefined): MissionMeter {
+  if (!mission) {
+    return { outOfBudget: async () => false, charge: async () => {} };
+  }
+  return {
+    outOfBudget: async () => (await mission.port.guard('model_call', mission.labels)) !== null,
+    charge: async (usage) => {
+      if (!usage) return;
+      // Work whose provider reported nothing is metered as the SPAWN it was, not
+      // as a free call: charging `0` here would be indistinguishable from a
+      // provider that reported zero tokens.
+      if (!usageReported(usage)) return;
+      await mission.port.debit(usageTotal(usage) ?? 0, {
+        labels: mission.labels, calls: 1, usage,
+      });
+    },
+  };
 }
 
 /**

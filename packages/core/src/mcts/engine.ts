@@ -13,7 +13,7 @@
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { MCTSConfig, MCTSPhase, MCTSProgressBody } from '../types/mcts';
-import type { MissionScope } from '../mission-budget';
+import { missionMeter } from '../mission-budget';
 import type { ConvergenceResult } from '../types/evaluation';
 import type { SessionWriter } from './record-node';
 import { DEFAULT_CONFIG } from '../config';
@@ -35,7 +35,7 @@ import { diagnostics, renderThrownChain } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import { isoDate } from '../utils/date';
 import * as v from 'valibot';
-import { UsageSchema, usageReported, usageTotal, type Usage } from '../usage';
+import { UsageSchema } from '../usage';
 
 const BranchExplorationSchema = v.object({
   text: v.string(),
@@ -525,39 +525,6 @@ export async function runMCTS(
       throw err;
     }
   });
-}
-
-/**
- * The two questions the loop asks its mission ledger, or the pair of no-ops it
- * asks when there is no ledger.
- *
- * The no-op half is the half that matters: an undeclared search is handed no
- * scope, so `outOfBudget` is a constant `false` and `charge` returns without
- * ever reaching a port. Nothing queries, nothing writes, and MCTS behaves
- * exactly as it did before a governor existed.
- */
-interface MissionMeter {
-  outOfBudget: () => Promise<boolean>;
-  charge: (usage: Usage | undefined) => Promise<void>;
-}
-
-function missionMeter(mission: MissionScope | undefined): MissionMeter {
-  if (!mission) {
-    return { outOfBudget: async () => false, charge: async () => {} };
-  }
-  return {
-    outOfBudget: async () => (await mission.port.guard('model_call', mission.labels)) !== null,
-    charge: async (usage) => {
-      if (!usage) return;
-      // A branch whose provider reported nothing is metered as the SPAWN it
-      // was, not as a free call: charging `0` here would be indistinguishable
-      // from a provider that reported zero tokens.
-      if (!usageReported(usage)) return;
-      await mission.port.debit(usageTotal(usage) ?? 0, {
-        labels: mission.labels, calls: 1, usage,
-      });
-    },
-  };
 }
 
 
