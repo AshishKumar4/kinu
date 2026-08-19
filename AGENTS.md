@@ -176,6 +176,20 @@ the letter of a rule that makes a sentence worse.
 the date, or it says the number is not measured. A prose figure nobody can reproduce is the defect
 this repository keeps finding in its own gates, and it is worse in a doc, because a doc has no test.
 
+**One name per referent, and the referent decides the name.** A swarm's agent is a **swarm node**,
+or a bare **node** once the context has established it. It is never a "search node", because
+`search_nodes` is a TABLE and a row in it is a tree vertex the engine writes, not an agent with a
+turn loop, a home and a credential. Two similar names for two different kinds of thing is worse
+than one long name for one of them: a reader who meets both has to work out which is which, and the
+answer is not guessable from either. The table identifier stays `search_nodes` — identifiers never
+change for prose reasons, and prose about a row may say so.
+
+This one is review, not a gate, and the reason is worth keeping. `gate:doc-claims` derives every
+verdict FROM CODE: a symbol resolves against an identifier index, a path against the tracked file
+list, a stated count against the measured length of a named enumerable. A banned phrase has no code
+side. Its only implementable form is a word list of size one wearing a derivation, and putting that
+in a code-derived gate gives the gate a second failure mode and its own drift surface.
+
 ## Package Structure
 
 ```

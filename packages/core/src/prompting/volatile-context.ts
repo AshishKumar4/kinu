@@ -71,7 +71,7 @@ export interface DynamicTask {
 /** An agent the agent has working for it right now: a spawned subordinate
  *  (parent roster) or a running search (heads journal). */
 export interface DynamicDelegate {
-  readonly kind: 'subordinate' | 'search';
+  readonly kind: 'subordinate' | 'swarm node';
   readonly name: string;
   /** Where it is — the roster status / head-run phase, as its own store words it. */
   readonly phase: string;
@@ -147,7 +147,7 @@ export function searchDelegates(
   runs: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>,
 ): DynamicDelegate[] {
   return runs.map((run) => ({
-    kind: 'search',
+    kind: 'swarm node',
     name: run.rootId,
     phase: `${run.running} of ${run.total} nodes running`,
     task: run.rationale || null,

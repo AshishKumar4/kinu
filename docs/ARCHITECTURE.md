@@ -42,7 +42,7 @@ graph TB
 
     Orch["orchestrator (default agent)<br/>the workspace's voice"] --> WS
     Subs["subordinates<br/>SubordinateAgent facets (subordinate-agent.ts)<br/>shared workspace, actor-scoped shell + scaffold"] -.->|assigned-work reports| Orch
-    Heads["search nodes · heads · MCTS branches<br/>ExplorationAgent facets (exploration.ts)<br/>shared workspace, own home under /home, private scaffold"] -.->|findings merge back| Orch
+    Heads["swarm nodes · heads · MCTS branches<br/>ExplorationAgent facets (exploration.ts)<br/>shared workspace file plane, private scaffold and shell state"] -.->|findings merge back| Orch
     Peers["peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
 ```
 

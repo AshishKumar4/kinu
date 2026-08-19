@@ -200,7 +200,7 @@ graph TB
 
 3. **CraftStore with automatic lifecycle management.** Learned tools are scored via exponential moving average, time-decayed for relevance, and automatically retired when they stop being useful.
 
-4. **Search nodes as isolated Durable Objects.** On Cloudflare a swarm node and an MCTS branch each run inside their own facet with their own SQLite storage. Lean proves a `StorageIsolated` invariant over an abstract transition model; implementation correspondence is tracked but still needs a covering branch-storage integration assertion.
+4. **Swarm nodes as isolated Durable Objects.** On Cloudflare a swarm node and an MCTS branch each run inside their own facet with their own SQLite storage. Lean proves a `StorageIsolated` invariant over an abstract transition model; implementation correspondence is tracked but still needs a covering branch-storage integration assertion.
 
 5. **Traceable Lean and TypeScript models.** Each formal requirement records theorem names, modeled TypeScript source locations, classification, and remaining evidence. CI rejects missing theorems, undocumented axioms, and traceability mismatches. The models are hand-maintained rather than generated from TypeScript.
 
