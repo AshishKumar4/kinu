@@ -231,10 +231,10 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
   // `BackgroundJob.label` existed but the real runtime never populated it —
   // every running job showed as a bare "agents running" with no clue what it
   // was actually doing. Same audit as the logActivity fix above.
-  test('an agents fork labels the task it is running', () => {
+  test('a backgrounded search labels the task it is running', () => {
     const { runner, store } = setup();
-    const id = runner.create('agents', { action: 'fork', task: 'investigate the flaky test' }, 'build', new AbortController());
-    expect(store.get(id)?.label).toBe('fork: investigate the flaky test');
+    const id = runner.create('agents', { action: 'swarm', task: 'investigate the flaky test' }, 'build', new AbortController());
+    expect(store.get(id)?.label).toBe('search: investigate the flaky test');
   });
 
   test('a run call labels the runtime + command', () => {
