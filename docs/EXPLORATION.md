@@ -373,6 +373,24 @@ A node's transcript is a **read model over its journal**, never a second store.
 Implemented by `HeadJournal` (`heads/journal.ts`), consumed through
 `strategy/node-agent.ts`.
 
+**One root id is one run, and it carries every half it wrote.** A run whose nodes
+are agents writes BOTH stores — `search_nodes` for the tree, `head_journal` for
+each node's transcript — and the run list says so with two independent facts
+(`hasSearchTree`, `hasNodeTranscripts`) rather than with one settlement tag. That
+tag was the removed `fork` verb's either/or, and under it such a run arrived as
+two rows sharing one id, so whichever half a caller's dedup kept was the only
+half it could draw. `read-models/fork-runs.ts` positions the page over the union
+of root ids, and `read-models/exploration-canvas.ts` composes both halves and
+both parameter halves onto the one row, so no caller reconciles anything.
+
+**What the run was dispatched with is persisted, including the judge clamp.** The
+runner writes its own row in the shared search ledger (`mcts_search_runs`, under
+`engine: 'swarm'`), so a reader can state the budget, branching factor, depth cap
+and mode the run actually used; and the ensemble a candidate was OBSERVED to
+sample is folded onto that row as it happens. A clamp computed, disclosed once in
+the settle report and persisted nowhere is the shape *Accepted and ignored*
+refuses — a measurement taken and dropped.
+
 ## Isolation
 
 **A node has its own home, and it is real.** A node's home is a real directory in
