@@ -52,6 +52,60 @@ export function mockAgentsSdk(): void {
        *  test that observes broadcasts overrides it on the instance
        *  (unit-mcts-broadcast.test.ts). */
       broadcast(_message: string | ArrayBuffer | ArrayBufferView, _without?: string[]): void {}
+      /** The sub-agent registry, reproduced rather than faked. `subAgent` and
+       *  `hasSubAgent` are the pair the parent facet gate is built on, and in
+       *  the real SDK the registry half of both is pure SQL over the DO's own
+       *  storage (`agents/dist/index.js`: the table at 5803, the row
+       *  `_cf_resolveSubAgent` writes at 5737, the count `hasSubAgent` reads
+       *  at 5870). A gate that admits a registered child is only meaningful
+       *  against the registry the SDK actually keeps, so that SQL is copied
+       *  rather than approximated.
+       *
+       *  What genuinely cannot exist here is the facet: `ctx.facets` and
+       *  `ctx.exports` are workerd-only, and the real `subAgent` refuses
+       *  without them. So the stub returned here throws on every call —
+       *  registration is the observable half, and it is the half the gate
+       *  reads. */
+      async subAgent(cls: { name: string }, name: string): Promise<object> {
+        this.#subAgentRegistry().exec(
+          `INSERT OR IGNORE INTO cf_agents_sub_agents (class, name, created_at) VALUES (?, ?, ?)`,
+          cls.name, name, Date.now(),
+        );
+        return new Proxy({}, {
+          get: (_target, prop) => {
+            if (prop === 'then') return undefined;
+            return async () => {
+              throw new Error(`harness subAgent: ${cls.name} "${name}".${String(prop)} needs a facet, which is workerd-only`);
+            };
+          },
+        });
+      }
+      /** The SDK declares a second overload taking the class, and reduces it
+       *  to `cls.name` (:5868); the registry key is the class NAME either way.
+       *  Only the name form is modelled, because that is the form the code
+       *  under test uses (`actor-agent.ts` passes `child.className`). A
+       *  class-form call added later would miss every row and turn the facet
+       *  gate red rather than pass quietly. */
+      hasSubAgent(className: string, name: string): boolean {
+        const rows = this.#subAgentRegistry().exec(
+          `SELECT COUNT(*) AS n FROM cf_agents_sub_agents WHERE class = ? AND name = ?`,
+          className, name,
+        ).toArray();
+        return Number(rows[0]?.n ?? 0) > 0;
+      }
+      #subAgentRegistry(): SqlStorage {
+        const sql = this.ctx?.storage.sql;
+        if (!sql) throw new Error('harness Agent: the sub-agent registry needs a ctx');
+        sql.exec(`CREATE TABLE IF NOT EXISTS cf_agents_sub_agents (
+          class TEXT NOT NULL,
+          name TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          identity_version TEXT,
+          identity_name TEXT,
+          PRIMARY KEY (class, name)
+        )`);
+        return sql;
+      }
       /** Ancestor chain + self, root-first. Copied from the SDK's own getter
        *  (`agents/dist/index.js:4205`: `[...this._parentPath, { className:
        *  this.constructor.name, name: this.name }]`) rather than approximated,

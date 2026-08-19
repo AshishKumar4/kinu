@@ -226,19 +226,20 @@ describe('runAutoShadowEval', () => {
       llmStream: noOpLlmStream,
       random: () => 0,
     });
-    // Result is either pending_unreadable OR — if execMockExecutor parsed
-    // the empty/missing scaffold as "true" — the run proceeded but the
-    // executor returned empty events. Either way, it shouldn't have
-    // recorded a meaningful evaluation. Assert that:
-    //   • either skipped with the right reason, OR
-    //   • not skipped but the pending output is empty (judge was called
-    //     with empty pending text — still legitimate behavior).
-    if (result.skipped) {
-      expect(result.reason).toBe('pending_unreadable');
-    } else {
-      // The mock executor accepted the empty/missing scaffold; eval recorded.
-      expect(result.evaluation).toBeDefined();
-    }
+    // One outcome, not two. This accepted BOTH — skipped with the reason, or
+    // not skipped with an evaluation recorded — so the claim in the title was
+    // undefended: a regression that stopped skipping and judged a missing
+    // scaffold as an empty candidate took the `else` arm and stayed green. The
+    // comment even argued "it shouldn't have recorded a meaningful evaluation"
+    // while the `else` asserted that it had.
+    //
+    // `readScaffoldVersion` returns null for an absent file, and auto-judge.ts
+    // turns that into `{ skipped: true, reason: 'pending_unreadable' }` before
+    // any scaffold runs. That is the contract.
+    expect(result).toEqual({ skipped: true, reason: 'pending_unreadable' });
+    // Skipping means nothing was judged and nothing was written, so a later
+    // trial still sees a clean slate.
+    expect(rt.storage.sql`SELECT COUNT(*) AS n FROM scaffold_evaluations`[0]).toEqual({ n: 0 });
   });
 
   test('config defaults honor DEFAULT_AUTO_JUDGE_CONFIG', () => {
@@ -304,6 +305,9 @@ describe('order-swapped double-win judging', () => {
     const judge = recordingJudge(() => ({ winner: 'tie', rationale: 'r', scoreA: 0.5, scoreB: 0.5 }));
     await runTrial(judge.fn, 0);
 
+    // The floor: a containment claim over an empty set is true of nothing, so a
+    // trial that never reached the judge would satisfy every line below.
+    expect(judge.prompts).toHaveLength(2);
     for (const prompt of judge.prompts) {
       expect(prompt).not.toContain('CURRENT');
       expect(prompt).not.toContain('PENDING');

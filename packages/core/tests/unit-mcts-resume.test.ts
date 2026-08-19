@@ -23,7 +23,7 @@ function initTables(rt: AgentRuntime): void {
   initSearchTables(rt.storage.execRaw, rt.storage.sql);
   initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initCraftScoreTables(rt.storage.execRaw);
-  initMctsSearchTable(rt.storage.execRaw);
+  initMctsSearchTable(rt.storage.execRaw, rt.storage.sql);
 }
 
 const TASK = 'pick the best database architecture';
@@ -146,5 +146,108 @@ describe('MCTS per-iteration checkpoint logging', () => {
       runMCTS(rt, createMockSession(), TASK, { budget: 2, branches: 1 }),
     );
     expect([...stdout, ...stderr].filter(isCheckpointLine)).toHaveLength(0);
+  });
+});
+
+/**
+ * The judge ensemble a run was OBSERVED to sample, folded onto its ledger row.
+ *
+ * The number exists because the two spend knobs share one per-evaluation call pool, so
+ * a request the pool cannot fund is realised lower — and it used to be disclosed once,
+ * in the settle report of the call that ran, and persisted nowhere. `fork-params.ts`
+ * answered a reader by recomputing the pool's CEILING from the knobs, which is not what
+ * a run that short-circuited before judging actually sampled.
+ */
+describe('the ledger records the ensemble a run was observed to sample', () => {
+  function ledger() {
+    const { rt, db } = createTestRuntime();
+    initTables(rt);
+    const store = new MctsSearchStore(makeSql(db));
+    store.begin({
+      rootId: 'r1', task: TASK, engine: 'mcts', rootMsgId: 'm1',
+      config: { budget: 2, branches: 2, judgeSamples: 20 }, budget: 2, now: 1_000,
+    });
+    const realised = () => makeSql(db)<{ judge_samples_realised: number | null }>`
+      SELECT judge_samples_realised FROM mcts_search_runs WHERE root_id = 'r1'`[0]
+      ?.judge_samples_realised ?? null;
+    return { store, realised };
+  }
+
+  test('a fresh row claims nothing until an ensemble is actually observed', () => {
+    expect(ledger().realised()).toBeNull();
+  });
+
+  test('the SMALLEST observation wins, whichever order the observations arrive in', () => {
+    // The number answers "was the request honoured", so a run that funded one candidate
+    // and clamped the next did clamp. Ascending and descending both, because a
+    // last-write-wins fold passes one order and fails the other.
+    const ascending = ledger();
+    for (const seen of [2, 5, 9]) ascending.store.observeJudgeEnsemble('r1', seen);
+    expect(ascending.realised()).toBe(2);
+
+    const descending = ledger();
+    for (const seen of [9, 5, 2]) descending.store.observeJudgeEnsemble('r1', seen);
+    expect(descending.realised()).toBe(2);
+  });
+
+  test('an observation for a root with no ledger row changes nothing', () => {
+    // A search whose settled row was pruned still has its tree, and a late observation
+    // against it must not resurrect a row: the fold is an UPDATE, never an upsert.
+    const { store, realised } = ledger();
+    store.observeJudgeEnsemble('some-other-root', 3);
+    expect(realised()).toBeNull();
+  });
+});
+
+/**
+ * Two engines write this ledger, and only one of them has a resume loop.
+ *
+ * `findResumable` keys on `status='running' AND task=?`, so without the engine column a
+ * swarm that died mid-run would be handed to the MCTS loop as a resumable search of the
+ * same task — which would then expand the swarm's tree with judged branches under the
+ * swarm's own root id and report the result as that run's. A swarm's config parses as a
+ * persisted MCTS config, so nothing downstream would notice.
+ */
+describe('the resume loop reclaims its own engine only', () => {
+  test('a still-running swarm row is never handed to the resume loop', () => {
+    const { rt, db } = createTestRuntime();
+    initTables(rt);
+    const store = new MctsSearchStore(makeSql(db));
+    store.begin({
+      rootId: 'swarm-root', task: TASK, engine: 'swarm', rootMsgId: null,
+      config: { budget: 6, branches: 3, mode: 'build', maxDepth: 2 }, budget: 6, now: 1_000,
+    });
+
+    // THE DENOMINATOR, so this cannot pass for the wrong reason: the row is running and
+    // its task is the one being asked for, which is every condition `findResumable`
+    // matches on except the engine.
+    expect(store.get('swarm-root')).toMatchObject({ status: 'running' });
+    expect(store.findResumable(TASK, 'build')).toBeNull();
+
+    // And the engine's own row beside it still resumes, so this is a filter rather than a
+    // resume that quietly stopped working.
+    store.begin({
+      rootId: 'mcts-root', task: TASK, engine: 'mcts', rootMsgId: 'm1',
+      config: { budget: 4, branches: 2, mode: 'build' }, budget: 4, now: 2_000,
+    });
+    expect(store.findResumable(TASK, 'build')?.rootId).toBe('mcts-root');
+  });
+
+  test('the ledger lists both engines and says which each row is', () => {
+    const { rt, db } = createTestRuntime();
+    initTables(rt);
+    const store = new MctsSearchStore(makeSql(db));
+    store.begin({
+      rootId: 'swarm-root', task: TASK, engine: 'swarm', rootMsgId: null,
+      config: { budget: 6, branches: 3 }, budget: 6, now: 1_000,
+    });
+    store.begin({
+      rootId: 'mcts-root', task: TASK, engine: 'mcts', rootMsgId: 'm1',
+      config: { budget: 4, branches: 2 }, budget: 4, now: 2_000,
+    });
+    const listed = store.list(10);
+    expect(listed).toHaveLength(2);
+    expect(listed.map((row) => [row.rootId, row.engine]))
+      .toEqual([['mcts-root', 'mcts'], ['swarm-root', 'swarm']]);
   });
 });

@@ -24,7 +24,10 @@ It is registered rather than vestigial, and reached programmatically:
   durable checkpoint. `mcts_search_runs` (`mcts/search-store.ts`) holds the
   resolved config, the iteration and the remaining budget under a lease epoch,
   so re-entering the engine on the same task continues that tree rather than
-  starting a new one.
+  starting a new one. That ledger is shared with the swarm runner
+  (`strategy/swarm-run.ts`), which writes a row per run under `engine: 'swarm'`
+  and has no resume of its own — the resume query is scoped to `engine: 'mcts'`
+  rows so a swarm's tree can never be re-entered by this loop.
 
 Everything below describes live code.
 
@@ -189,10 +192,15 @@ silent: the realised size comes back on each evaluation as
 `BranchEvaluation.judgeSamplesAttempted`, the engine logs
 `mcts.judge_ensemble_clamped` (`judgeSamplesRequested` / `judgeSamplesRealised` /
 `maxEvalLLMCalls`) once per realised size per search, the heads path logs
-`head.judge_ensemble_clamped` the same way, and `mcts_search_runs.config_json`
-records both RESOLVED knobs so the run read model
-(`read-models/fork-params.ts`) can report requested-versus-realised afterwards.
-Raising the request alone buys nothing — `maxEvalLLMCalls` has to move with it.
+`head.judge_ensemble_clamped` the same way, and both are recorded on the run's own
+ledger row: `mcts_search_runs.config_json` holds the RESOLVED knobs the request
+came from, and `mcts_search_runs.judge_samples_realised` holds the smallest
+ensemble any branch was OBSERVED to sample, folded in SQL as it happens. The run
+read model (`read-models/fork-params.ts`) reports requested-versus-realised off
+those two afterwards, and it never predicts the realised size from the knobs —
+the table above is a CEILING, which an evaluation that short-circuits before
+judging does not reach. Raising the request alone buys nothing —
+`maxEvalLLMCalls` has to move with it.
 
 `judgeSamplesAttempted` is also what separates two facts a single count used to
 conflate: `judgeSamplesUsed: 0` with `judgeSamplesAttempted: 3` is an ensemble

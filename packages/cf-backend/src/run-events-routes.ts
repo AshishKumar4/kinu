@@ -18,7 +18,9 @@ import { getAgentByName } from "agents";
 import type { OrchestratorAgent } from "./orchestrator";
 import type { RunEventQuery, RunEventType } from "@proteus/core";
 import * as v from 'valibot';
-import { decodeRunEventWire, type RunEventWire } from './lib/orchestrator-wire';
+import {
+  decodeRunEventWire, resumeIndexFromLastEventId, type RunEventWire,
+} from './lib/orchestrator-wire';
 
 const SSE_POLL_MS = 500;
 const SSE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
@@ -95,19 +97,14 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
   if (streamMatch) {
     const [, agentName, runId] = streamMatch;
     const lastEventId = request.headers.get('Last-Event-ID') ?? request.headers.get('last-event-id');
-    // Validate Last-Event-ID is a non-negative integer; otherwise replay
-    // from the start. A NaN would silently rewind to -1 and re-deliver
-    // every event the client has already seen.
-    let sinceIndex = -1;
-    if (lastEventId !== null) {
-      const n = Number(lastEventId);
-      if (Number.isFinite(n) && n >= -1 && Number.isInteger(n)) sinceIndex = n;
-    }
-    return streamRunEvents(env, agentName, runId, sinceIndex, request.signal);
+    return streamRunEvents(
+      env, agentName, runId, resumeIndexFromLastEventId(lastEventId), request.signal,
+    );
   }
 
   return null;
 }
+
 
 function streamRunEvents(
   env: Env,

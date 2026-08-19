@@ -186,6 +186,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // so a reader that finds no table is a fault rather than an empty result
     // nobody can tell from no takes (workspace-schema.ts:184).
     alternate_takes: EVERYWHERE,
+    // The exploration leaderboard, on every root for the same reason: the record
+    // read models are wired on the orchestrator and a local session forks down
+    // into the same workspace, so a table only the first swarm run creates would
+    // make an unsearched workspace's leaderboard a `no such table` throw.
+    exploration_records: EVERYWHERE,
 
     // ── events hub ──
     agent_log: EVERYWHERE,

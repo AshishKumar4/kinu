@@ -12,7 +12,9 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import {
   BackgroundJobStore, MctsSearchStore, RunEventRecorder,
   JsonArraySchema, JsonObjectSchema, JsonValueSchema, UsageSchema, type JsonValue,
-  initBackgroundJobsTable, initHeadsTables, initMctsSearchTable, initRunEventTables, initSearchTables,
+  initBackgroundJobsTable, initExplorationRecordsTable, initHeadsTables, initMctsSearchTable,
+  initRunEventTables, initSearchTables, recordExploration,
+  type ExplorationWrite, type ObjectiveIdentity,
 } from '@proteus/core';
 import { makeSql } from '@proteus/cli-backend';
 import { redactSecrets } from '../src/commands/debug';
@@ -64,7 +66,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
   initRunEventTables(execRaw);
   initHeadsTables(execRaw, makeSql(db));
   initSearchTables(execRaw, makeSql(db));
-  initMctsSearchTable(execRaw);
+  initMctsSearchTable(execRaw, makeSql(db));
   initBackgroundJobsTable(execRaw, makeSql(db));
   const sql = makeSql(db);
 
@@ -118,14 +120,14 @@ function seedInvestigationWorkspace(dbPath: string): void {
   insertNode.run('search-new-c2', 'search-new-c1', 'search-new', 'branch a.1', 2, 5200);
 
   const mcts = new MctsSearchStore(sql);
-  mcts.begin({ rootId: 'search-old', task: 'investigate', rootMsgId: 'm1', config: { budget: 1, branches: 1 }, budget: 1, now: 1000 });
+  mcts.begin({ rootId: 'search-old', task: 'investigate', engine: 'mcts', rootMsgId: 'm1', config: { budget: 1, branches: 1 }, budget: 1, now: 1000 });
   mcts.converge('search-old', 0, 1500);
   // budget=10, checkpointed at iteration=6/budget-remaining=4 — the SAME
   // invariant mcts/engine.ts holds by construction (iteration + remaining
   // budget == the original total), and the exact shape that used to render
   // as the misleading "iter=6/4" fraction (looks like an overrun) instead of
   // "iter=6/10 (4 left)".
-  mcts.begin({ rootId: 'search-new', task: 'investigate', rootMsgId: 'm2', config: { budget: 10, branches: 3 }, budget: 10, now: 5000 });
+  mcts.begin({ rootId: 'search-new', task: 'investigate', engine: 'mcts', rootMsgId: 'm2', config: { budget: 10, branches: 3 }, budget: 10, now: 5000 });
   mcts.checkpoint('search-new', 0, 6, 4, 5300);
 
   // ── Background jobs: the job the run above detached and got polled, PLUS
@@ -143,6 +145,44 @@ function seedInvestigationWorkspace(dbPath: string): void {
   });
   jobs.settle('job-1', 0, JSON.stringify({ ok: true }), 5050 + 125_000);
   jobs.create({ id: 'job-2', kind: 'agents', workMode: 'build', input: '{}', now: 5060 });
+
+  // ── The records store: two comparable sets, one unfloored with NO descriptor
+  // partition and one partitioned across three cells, five occupants in the
+  // largest. Written through the real writer, because the identity columns the
+  // bundle prints are only trustworthy as something that writer filled. ──
+  initExplorationRecordsTable(execRaw, sql);
+  const CALLS: ObjectiveIdentity = {
+    metric: 'oracle_calls', unit: 'oracle calls', direction: 'minimise',
+    scale: 'log', verifierDigest: 'exec-ratio@abc123',
+  };
+  const PASS: ObjectiveIdentity = {
+    metric: 'pass_rate', unit: 'fraction of held-out tasks', direction: 'maximise',
+    scale: 'linear', verifierDigest: 'suite@f00d',
+  };
+  const record = (over: Partial<ExplorationWrite>): void => {
+    recordExploration(sql, {
+      publication: { kind: 'open' },
+      write: {
+        identity: CALLS, descriptor: null, artifact: 'solve()', value: 23,
+        detail: '23 calls', measured: null, preset: 'optimise', label: null,
+        rootId: 'search-new', configDigest: 'cfg-1', depth: 5, branches: 3,
+        floor: null, costUsd: null, costTokens: null, at: 20_000, ...over,
+      },
+    });
+  };
+  for (const [index, value] of [41, 23, 88].entries()) {
+    record({ artifact: `calls-${String(index)}`, value, at: 20_000 + index });
+  }
+  const cells: ReadonlyArray<readonly [string, number]> = [
+    ['len=short', 0.71], ['len=short', 0.5], ['len=short', 0.44], ['len=short', 0.4],
+    ['len=short', 0.39], ['len=medium', 0.66], ['len=long', 0.6],
+  ];
+  for (const [index, [descriptor, value]] of cells.entries()) {
+    record({
+      identity: PASS, descriptor, value, at: 21_000 + index,
+      artifact: `pass artifact ${String(index)} unique tokens ${String(index)}`,
+    });
+  }
 
   db.close();
 }
@@ -194,6 +234,13 @@ describe('proteus debug — local backend', () => {
     expect(r.stdout).toContain('fork(settle=mcts): pick a migration-backfill approach');
     expect(r.stdout).toMatch(/job-2 agents running — running \d+d(?: \d+h)?/);
     expect(r.stdout).not.toContain(SECRET_TOKEN);
+    // The leaderboard line carries the UNIT and the direction's arrow. A bare real
+    // is the defect: 25.4% read as a reward level when it was a delta.
+    expect(r.stdout).toContain('Exploration records (2 comparable set(s)');
+    expect(r.stdout).toContain('best ↑0.71 fraction of held-out tasks');
+    expect(r.stdout).toContain('best ↓23 oracle calls');
+    expect(r.stdout).toContain('3 row(s) over 1 cell(s)');
+    expect(r.stdout).toContain('7 row(s) over 3 cell(s)');
     expect(r.stdout).not.toContain(SECRET_PROTEUS_TOKEN);
 
     // The bundle file: owner-only permissions, and never the raw secrets —
@@ -215,6 +262,27 @@ describe('proteus debug — local backend', () => {
     expect(counts.get('mcts_node')).toBe(4);
     expect(counts.get('background_job')).toBe(2);
     expect(counts.get('end')).toBe(1);
+    // The records store: 2 comparable sets, 1 + 3 cells, 3 + 7 occupants. The
+    // occupant count is the WALK's total — the reads are paged, so a cell whose
+    // rows arrived in more than one page would still have to total exactly its
+    // population, once each.
+    expect(counts.get('record_objective')).toBe(2);
+    expect(counts.get('record_cell')).toBe(4);
+    expect(counts.get('record')).toBe(10);
+    const RecordRowSchema = v.object({
+      t: v.literal('record'), descriptor: v.nullable(v.string()),
+      artifactDigest: v.string(), value: v.number(),
+    });
+    const rows = records.flatMap((record) => {
+      const parsed = v.safeParse(RecordRowSchema, record);
+      return parsed.success ? [parsed.output] : [];
+    });
+    expect(rows.length).toBeGreaterThan(0);
+    expect(new Set(rows.map((row) => row.artifactDigest)).size).toBe(rows.length);
+    // `descriptor: null` survives the bundle as null — the NO-PARTITION cell, not
+    // an unnamed one and not a dropped field.
+    expect(rows.filter((row) => row.descriptor === null)).toHaveLength(3);
+    expect(rows.filter((row) => row.descriptor === 'len=short')).toHaveLength(5);
     // Full per-run event fidelity — the richest source, verbatim.
     const RunEventSchema = v.object({ t: v.literal('run_event'), runId: v.string(), type: v.string() });
     const runEvents = records.flatMap((record) => {

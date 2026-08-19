@@ -18,16 +18,19 @@ export interface TestSql {
   close(): void;
 }
 
-/** Build a fresh in-memory database + sql template tag. Each test that calls
- *  this gets an isolated database. */
-export function createTestSql(): TestSql {
-  const db = new Database(':memory:');
-  const execRaw = (ddl: string) => { db.exec(ddl); };
-
+/**
+ * A tagged-template `SqlExecutor` over a database the caller already has.
+ *
+ * Separate from {@link createTestSql} because a test that drives a REAL actor gets its
+ * database from the actor's harness, and writing through a second connection would be
+ * writing to a different store. The tag itself is the same one, so a fixture and a
+ * harness-backed test bind values identically.
+ */
+export function sqlOver(db: Database): SqlExecutor {
   // Convert a template literal into `?`-bound prepared statement.
   // Returns rows as a typed array — Tagged-template form matches the
   // SqlExecutor signature: `sql<Row>\`SELECT ...\``.
-  const sql: SqlExecutor = function <T = unknown>(
+  return function <T = unknown>(
     strings: TemplateStringsArray,
     ...values: SqlValue[]
   ): T[] {
@@ -38,6 +41,16 @@ export function createTestSql(): TestSql {
     ));
     return db.prepare<T, SQLQueryBindings[]>(q).all(...bound);
   };
+}
 
-  return { sql, execRaw, db, close: () => db.close() };
+/** Build a fresh in-memory database + sql template tag. Each test that calls
+ *  this gets an isolated database. */
+export function createTestSql(): TestSql {
+  const db = new Database(':memory:');
+  return {
+    sql: sqlOver(db),
+    execRaw: (ddl: string) => { db.exec(ddl); },
+    db,
+    close: () => db.close(),
+  };
 }

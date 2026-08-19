@@ -18,7 +18,7 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import type { ToolSet } from 'ai';
-import type { IngressDescriptor, SqlExecRow, SqlValue } from '@proteus/core';
+import type { IngressDescriptor, SqlExecRow, SqlValue, SubordinateRosterStore } from '@proteus/core';
 import * as v from 'valibot';
 import { mockAgentsSdk } from './agents-sdk';
 import { platformGatewayEnv } from './platform-gateway';
@@ -38,6 +38,17 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
+  /** The parent-side roster the facet gate consults. Exposed rather than
+   *  wrapped: the production store IS the API a test seeds a subordinate
+   *  through, and a hand-written INSERT would be a second copy of its
+   *  status policy. */
+  harnessRoster(): SubordinateRosterStore { return this.subordinateRoster; }
+  /** One auto-GEPA cadence tick — the call a completed turn makes
+   *  (`orchestrator.ts` `onTurnComplete`). */
+  tickAutoGepa(): void { this.maybeRunAutoGepa(); }
+  /** The cadence a tick reads, and the deliberate disable a tick must respect. */
+  observeAutoGepaCadence(): number { return this.config.getAutoGepaEveryNTurns(); }
+  setAutoGepaCadence(turns: number): void { this.config.setAutoGepaEveryNTurns(turns); }
   /** Admit one event, through the only writer allowed to: `publish` is the
    *  single admitted author of `kind='event'` rows, so a test that wants an
    *  event in the log goes through it rather than around it with an INSERT. */

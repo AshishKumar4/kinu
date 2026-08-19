@@ -1,24 +1,29 @@
 /**
- * One fork, full screen.
+ * One search, full screen.
  *
  * The same tree the Exploration surface draws in Column C, with the room a
- * hundred-node search actually needs. `?run=<rootId>` names which fork; with
- * no `run` it opens the newest, which is what Expand sends for the selected
- * row anyway. Drill-down, not a second rendering: the tree, its loader and the
- * adapters are the surface's own, imported rather than re-implemented.
+ * hundred-node search actually needs, plus the resolution the run resolved above it.
+ * `?run=<rootId>` names which search; with no `run` it opens the newest, which is
+ * what Expand sends for the selected row anyway. Drill-down, not a second
+ * rendering: the tree, its loader, its resolution panel and the adapters are the
+ * surface's own, imported rather than re-implemented.
  */
 import { useMemo, useState } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { ArrowLeftIcon, GitForkIcon, TreeStructureIcon } from "@phosphor-icons/react";
-import { ForkTree } from "@/components/fork-tree";
+import { SwarmTree } from "@/components/swarm-tree";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import {
   findForkNode, terminalForkNode, treeStats, type ExplorerSelection,
-} from "@/components/fork-tree-model";
+} from "@/components/swarm-tree-model";
 import { EmptyState, EMPTY_HINTS, formatScore } from "@/components/surfaces/shared";
-import { describeSettle, useForkRunTree } from "@/components/surfaces/ExplorationSurface";
-import { selectForkRun, useExactForkRun, useLiveForkRuns } from "@/components/surfaces/fork-runs";
+import {
+  describeSettle, RunRefusalNote, SwarmResolutionPanel, useForkRunTree,
+} from "@/components/surfaces/ExplorationSurface";
+import {
+  selectForkRun, useExactForkRun, useLiveForkRuns,
+} from "@/components/surfaces/fork-runs";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useProteus } from "@/hooks/use-proteus";
 import { useElementSize } from "@/hooks/use-element-size";
@@ -50,11 +55,11 @@ export default function MCTSExplorer() {
         <Link to={`/workspace/${agentId}`}><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
         <div className="h-4 w-px bg-[var(--c-border)]" />
         <GitForkIcon size={16} className="p-accent" />
-        <span className="font-semibold text-sm p-text">Fork explorer</span>
+        <span className="font-semibold text-sm p-text">Search explorer</span>
         {run && <span className="text-xs p-text-2 truncate" title={run.task}>{run.task}</span>}
       </div>
       {run && selectionResource.status === "error" && (
-        <LoadFailure what="fresh fork runs" message={selectionResource.message} onRetry={reloadSelection} className="px-5 py-2 border-b p-border" />
+        <LoadFailure what="fresh exploration runs" message={selectionResource.message} onRetry={reloadSelection} className="px-5 py-2 border-b p-border" />
       )}
       {run ? (
         <ExplorerBody key={run.id} run={run} state={state} attach={attach} dims={dims}
@@ -93,27 +98,43 @@ function ExplorerBody({
   hasActiveWork: boolean;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const { tree, resource, reload } = useForkRunTree(
-    run,
-    state.rpc,
-    state.mctsTrees.get(run.id) ?? null,
-    hasActiveWork,
-  );
+  const {
+    tree, resolution, fanIn, why, refusal, resource, reload,
+  } = useForkRunTree(run, state.rpc, state.mctsTrees.get(run.id) ?? null, hasActiveWork);
   const stats = tree ? treeStats(tree) : null;
   const winner = tree ? terminalForkNode(tree) : null;
   const selected = tree && selectedId ? findForkNode(tree, selectedId) : null;
-  // One fork, so one band. The canvas renderer takes a list because the
-  // Exploration surface draws every fork at once; drilling into one is that
+  // One search, so one band. The canvas renderer takes a list because the
+  // Exploration surface draws every search at once; drilling into one is that
   // same renderer with a list of one, never a second rendering of the tree.
   const regions = useMemo(
-    () => tree ? [{ runId: run.id, root: tree, title: run.task, note: describeSettle(run) }] : [],
-    [tree, run],
+    () => tree
+      ? [{
+        runId: run.id, root: tree, title: run.task, note: describeSettle(run, undefined, resolution),
+        fanIn, why,
+      }]
+      : [],
+    [tree, run, resolution, fanIn, why],
   );
   const selection: ExplorerSelection | null =
     selectedId === null ? null : { runId: run.id, nodeId: selectedId };
 
   return (
     <>
+      {/* Which preset this search resolved and the tuple it resolved to, in the
+          same panel Column C uses. Above the canvas rather than in the footer: it
+          describes the whole tree, and the footer describes the node in it.
+
+          No `judges`: the clamp is a DISPATCH parameter, and this page reads one run
+          by id through `getForkRun`, which answers a summary. `getExplorationCanvas`
+          is the only read that carries parameters and it is page-scoped, so there is
+          no per-run parameter read to make here. Column C shows the clamp because it
+          holds that page. */}
+      <SwarmResolutionPanel resolution={resolution} />
+      {/* Why this run reached nothing, above its tree rather than instead of it: a
+          refused run still has a root and often has branches that failed for a
+          reason worth reading. */}
+      {refusal !== null && <RunRefusalNote refusal={refusal} />}
       {/* Canvas and transcript side by side: the whole point of a full-screen
           explorer is room, and a selected node that only produced a one-line
           footer chip was the reason opening one told the reader nothing. */}
@@ -125,19 +146,19 @@ function ExplorerBody({
           )}
           {!tree ? (
             resource.status === "error" ? (
-              <LoadFailure what="this fork" message={resource.message} onRetry={reload} />
+              <LoadFailure what="this search" message={resource.message} onRetry={reload} />
             ) : resource.status === "loading" ? (
               <div className="flex items-center justify-center h-full">
                 <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Loading tree…</div>
               </div>
             ) : (
               <div className="h-full flex items-center justify-center">
-                <EmptyState icon={<GitForkIcon size={28} />} title="Nothing recorded for this fork"
-                  hint="The run stopped before its first branch was recorded." />
+                <EmptyState icon={<GitForkIcon size={28} />} title="Nothing recorded for this search"
+                  hint="Neither store holds a row under this run's id." />
               </div>
             )
           ) : dims.w > 0 && dims.h > 0 ? (
-            <ForkTree
+            <SwarmTree
               regions={regions} width={dims.w} height={dims.h}
               selectedRunId={run.id} selection={selection}
               onSelectNode={(next) => setSelectedId(next.nodeId)} />
@@ -162,7 +183,10 @@ function ExplorerBody({
         <div className="flex items-center gap-6 text-xs">
           <span className="p-text-2">Branches: <span className="p-text font-medium">{Math.max(0, (stats?.nodes ?? 1) - 1)}</span></span>
           <span className="p-text-2">Depth: <span className="p-text font-medium">{stats?.depth ?? 0}</span></span>
-          <span className="p-text-3">{describeSettle(run)}</span>
+          {/* The resolution line is stated once, in the panel above the tree and on the
+              band's own title. A third copy here disagreed with both: it fell back to
+              the dispatch policy because it was never handed the resolution, so a swarm
+              read `settle=mcts` under a panel that said what its axes resolved to. */}
           {winner?.value != null && (
             <span className="p-text-2">Winner: <span className="p-success font-medium">{formatScore(winner.value)}</span></span>
           )}

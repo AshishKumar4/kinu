@@ -37,6 +37,7 @@ import { backpropagate } from '../src/mcts/backpropagation';
 import { selectFrontierNode, type FrontierPolicy } from '../src/mcts/frontier';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
+import { readExplorationCanvas } from '../src/read-models/exploration-canvas';
 import type { Refusal } from '../src/obs/error';
 import {
   arbitrateBranch, resolveSwarm, swarmValidity,
@@ -1032,6 +1033,43 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     // And no record is keyed by a judged run: it measured no objective, so it has no
     // identity, which is a different claim from writing zero rows.
     expect(result.report.records).toBeNull();
+  }, 120_000);
+
+  test('the clamp is PERSISTED, so a reader can state it once the call has returned', async () => {
+    // The clamp was computed, disclosed in the settle report, and written nowhere — so no
+    // surface could show it however well rendered, which is the accepted-and-ignored shape
+    // *Accepted and ignored* refuses: a measurement taken and dropped. It is now folded
+    // onto the run's own ledger row as the smallest ensemble any candidate reached.
+    const { rt } = createTestRuntime();
+    const { result } = await run({
+      depth: 1, branches: 2, proposeWidth: null,
+      config: { score: { kind: 'judge', samples: 20 } }, rt,
+    });
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+    expect(result.report.judgeEnsemble).toEqual({ requested: 20, realised: 3 });
+
+    const page = readExplorationCanvas(rt.storage.sql);
+    expect(page.items).toHaveLength(1);
+    const entry = page.items[0]!;
+    // The knobs this run ran under, from a ledger row the swarm path used to write not at
+    // all: `readForkRunParams` answered a swarm with the transcript half alone.
+    expect(entry.params?.search).toMatchObject({
+      budget: 2, branches: 2, maxDepth: 1, mode: 'build',
+      judgeSamplesRequested: 20, judgeSamplesRealised: 3,
+    });
+    // The persisted number and the disclosed one are the same number, which is the
+    // property that makes one of them a projection of the other rather than a second
+    // opinion.
+    expect(entry.params?.search?.judgeSamplesRealised)
+      .toBe(result.report.judgeEnsemble?.realised ?? null);
+    // A `thought` run holds no tools and journals nothing, so it has the tree half and
+    // only the tree half — the honest tree-only shape, told apart from a swarm of agents
+    // by the run's own two facts rather than by a settlement tag.
+    expect(entry.run.hasSearchTree).toBe(true);
+    expect(entry.tree.length).toBeGreaterThan(0);
+    expect(entry.run.hasNodeTranscripts).toBe(false);
+    expect(entry.head).toBeNull();
   }, 120_000);
 
   test('the clamp is DISCLOSED once per realised size, not left to be inferred', async () => {

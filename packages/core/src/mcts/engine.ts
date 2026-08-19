@@ -63,7 +63,7 @@ export async function runMCTS(
   initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
 
   const search = config.search;
-  if (search) initMctsSearchTable(rt.storage.execRaw);
+  if (search) initMctsSearchTable(rt.storage.execRaw, rt.storage.sql);
 
   // Resume an unfinished search for this task (one evicted mid-run): continue its
   // remaining budget against the persisted tree instead of starting over (B6).
@@ -131,12 +131,13 @@ export async function runMCTS(
     });
     initialPhase = { iteration: 0, budget: effective.budget, rootId, rootMsgId, task };
     search?.begin({
-      rootId, task, rootMsgId,
+      rootId, task, rootMsgId, engine: 'mcts',
       // The RESOLVED judge knobs, not just the caller-supplied ones. A read of
-      // this row has to be able to say what ensemble the run requested and what
-      // it realised, and both are unrecoverable from a blob that omits a knob
-      // the caller left at its default — which is also why the read model
-      // refuses to invent one (read-models/fork-params.ts).
+      // this row has to be able to say what ensemble the run REQUESTED, and that
+      // is unrecoverable from a blob that omits a knob the caller left at its
+      // default — which is also why the read model refuses to invent one
+      // (read-models/fork-params.ts). What it REALISED is not here: it is
+      // observed per branch and folded onto this row as it happens.
       config: persistableMCTSConfig({ ...effective, judgeSamples, maxEvalLLMCalls }),
       budget: effective.budget, now: Date.now(),
     });
@@ -329,6 +330,12 @@ export async function runMCTS(
             // reached at all: a cascade that short-circuited before judging
             // attempted zero samples, which is not a clamp.
             const realised = r.value.judgeSamplesAttempted;
+            if (realised > 0) {
+              // On the ledger row as well as in the diagnostic, because the surface
+              // reads the row: an event nobody can query later is not a field a run's
+              // parameters carry. The store keeps the smallest any branch reached.
+              search?.observeJudgeEnsemble(rootId, realised);
+            }
             if (realised > 0 && realised < judgeSamples && !reportedClampedEnsembles.has(realised)) {
               reportedClampedEnsembles.add(realised);
               diagnostics.event('mcts.judge_ensemble_clamped', {

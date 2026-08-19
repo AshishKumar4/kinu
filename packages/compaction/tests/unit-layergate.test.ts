@@ -51,6 +51,9 @@ describe('compaction-ladder layer gate', () => {
       expect(fault.patches.length).toBeGreaterThan(0);
     }
     const impacts = await runFaultMatrix(subjects, COMPACTION_FAULTS, COMPACTION_LAYERS);
+    // The floor packages/core's copy of this test carries and this one did not:
+    // a matrix that produced no rows satisfies every localization claim below.
+    expect(impacts).toHaveLength(COMPACTION_FAULTS.length);
     for (const impact of impacts) {
       expect(impact.ownDropPp).toBeGreaterThanOrEqual(LOCALIZATION_OWN_MIN_PP);
     }

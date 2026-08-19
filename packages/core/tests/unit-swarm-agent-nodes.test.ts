@@ -39,6 +39,10 @@ import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { runSwarm } from '../src/strategy/swarm-run';
+import { MctsSearchStore } from '../src/mcts/search-store';
+import {
+  readExplorationCanvas, readExplorationRun,
+} from '../src/read-models/exploration-canvas';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
 import { NODE_BUILTIN_TOOLS, PROPOSE_BRANCH_TOOL } from '../src/strategy/node-agent';
 import type { Objective } from '../src/strategy/objective';
@@ -471,5 +475,74 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     expect(script.calls).not.toContain(PROPOSE_BRANCH_TOOL);
     expect(result.report.expansions).toBe(2);
     expect(result.best?.score).toBe(1);
+  }, 180_000);
+});
+
+/**
+ * WHAT A LATER READER SEES OF THE RUN ABOVE.
+ *
+ * The suite above proves a swarm of agents writes a tree AND a transcript per node.
+ * These read the same workspace back through the production read model, because the
+ * two stores were what broke it: the list tagged each with one of the removed `fork`
+ * verb's two settlements, so this exact run arrived as TWO rows sharing one root id
+ * and the canvas handed each row one half. The tree-less half sorts newer, so a
+ * caller's dedup kept the row with `tree: []`.
+ */
+describe('the run a reader gets back', () => {
+  test('is ONE run carrying its tree, its transcripts, its params and its task', async () => {
+    const { rt, result, nodes } = await run({ depth: 2, branches: 2, proposeAtDepth1: true });
+    if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
+
+    // The denominators, before anything is claimed about the row: this workspace really
+    // holds both halves. A read model asserted over an empty tree or an empty journal
+    // passes for the wrong reason, which is the defect this repository keeps finding.
+    expect(nodes.length).toBeGreaterThan(0);
+    const journalled = rt.storage.sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM head_journal`[0]?.n ?? 0;
+    expect(journalled).toBeGreaterThan(0);
+
+    const page = readExplorationCanvas(rt.storage.sql);
+    expect(page.items).toHaveLength(1);
+    const entry = page.items[0]!;
+    expect(entry.run.hasSearchTree).toBe(true);
+    expect(entry.run.hasNodeTranscripts).toBe(true);
+    // Both halves in full, against the two stores the engine wrote.
+    expect(entry.tree).toHaveLength(nodes.length);
+    expect(entry.head?.heads.length).toBe(journalled);
+    // The TASK, not `label` — which is `agent-nodes` here and is what `recordSplit`
+    // stamps into `head_runs.rationale`, the column the list used to read as the task.
+    expect(entry.run.task).toContain('opaque tokens');
+    expect(entry.run.task).not.toBe('agent-nodes');
+    expect(entry.head?.rationale).toBe('agent-nodes');
+    // REAL PARAMS, from a ledger row the swarm path used to write nowhere at all.
+    expect(entry.params?.search).toMatchObject({
+      branches: 2, maxDepth: 2, budget: 4, mode: 'build',
+    });
+    expect(entry.params?.transcripts?.branches).toBe(journalled);
+    // A verify-scored run asked no judge, so it honestly claims no ensemble.
+    expect(entry.params?.search?.judgeSamplesRequested).toBeNull();
+    expect(entry.params?.search?.judgeSamplesRealised).toBeNull();
+    // And the permalink read says the same thing about the same run.
+    expect(readExplorationRun(rt.storage.sql, entry.run.id)).toEqual(entry);
+  }, 180_000);
+
+  test('the ledger row says the run settled, with what it actually spent', async () => {
+    const { rt, result } = await run({ depth: 1, branches: 2, proposeAtDepth1: true });
+    if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
+
+    const ledger = new MctsSearchStore(rt.storage.sql).list(10);
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]).toMatchObject({
+      engine: 'swarm',
+      status: 'converged',
+      // A swarm's budget unit is one child, so the candidates it produced ARE the
+      // expansions it spent and the rest is what it never reached.
+      iteration: result.report.expansions,
+      budget: 2 - result.report.expansions,
+    });
+    // `findResumable` cannot reach this row — it is `converged` — and it must not reach a
+    // swarm row that IS still running either. That direction needs a row nothing settled,
+    // so it is proven against the store in unit-mcts-resume.test.ts rather than asserted
+    // vacuously here.
   }, 180_000);
 });

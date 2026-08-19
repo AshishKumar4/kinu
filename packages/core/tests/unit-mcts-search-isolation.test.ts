@@ -26,7 +26,7 @@ function initTables(rt: AgentRuntime): void {
   initSearchTables(rt.storage.execRaw, rt.storage.sql);
   initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initCraftScoreTables(rt.storage.execRaw);
-  initMctsSearchTable(rt.storage.execRaw);
+  initMctsSearchTable(rt.storage.execRaw, rt.storage.sql);
 }
 
 /** An LLM whose judge verdicts are controlled per-search, so one search can be

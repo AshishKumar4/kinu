@@ -1390,16 +1390,32 @@ export type {
 } from './read-models/files';
 export {
   readLatestSearchTree, readSearchTree, readSearchNodeDetail,
-  type SearchNodeSummary, type SearchNodeDetail,
+  type SearchNodeDetail,
 } from './read-models/search-tree';
-export { readForkRunParams } from './read-models/fork-params';
-export { readExplorationCanvas } from './read-models/exploration-canvas';
+export { readExplorationCanvas, readExplorationRun } from './read-models/exploration-canvas';
 export type { ExplorationCanvasRun } from './read-models/exploration-canvas';
+export type { ForkRunParams, SearchRunParams } from './read-models/fork-params';
+export { listForkRuns } from './read-models/fork-runs';
+export type { ForkRunSummary } from './read-models/fork-runs';
+export {
+  listRecordCells, listRecordObjectives, readRecordCell,
+} from './read-models/exploration-records';
 export type {
-  ForkRunParams, ForkSettlePolicy, CompetedForkParams, MergedForkParams,
-} from './read-models/fork-params';
-export { listForkRuns, readForkRun } from './read-models/fork-runs';
-export type { ForkRunSummary, ForkRunStatus, ForkSettle } from './read-models/fork-runs';
+  RecordCellSummary, RecordObjectiveSummary,
+} from './read-models/exploration-records';
+// The store's own digest handles, on the surface because they are what an RPC's
+// request carries: a surface holds the opaque pair and passes it back, and deriving
+// the type from a read's signature is how a type stops having a name.
+//
+// The WRITER is here for one reason: a leaderboard RPC can only be proven over a
+// workspace whose rows the real writer wrote, and `cf-backend`'s suite is in another
+// package. Seeding with a hand-written INSERT would test the reads against rows nothing
+// in production produces — including the identity columns, whose whole value is that the
+// writer fills them from the identity it hashed.
+export { initExplorationRecordsTable, recordExploration } from './strategy/records';
+export type {
+  ExplorationWrite, RecordCellHandle, RecordObjectiveHandle,
+} from './strategy/records';
 export { readNodeTranscript } from './read-models/node-transcript';
 export type {
   NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,

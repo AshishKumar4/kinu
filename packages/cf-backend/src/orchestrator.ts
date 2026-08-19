@@ -136,9 +136,12 @@ import {
   // ── Read models: the folds a surface asks for, one implementation each ──
   getAgentStatus, getChatHistoryPage, getToolList, readLatestSearchTree, readSearchTree,
   readSearchNodeDetail, type SearchNodeDetail,
-  listForkRuns, readForkRun, type ForkRunSummary,
+  listForkRuns, type ForkRunSummary,
   readNodeTranscript, type NodeTranscriptView,
-  readExplorationCanvas, type ExplorationCanvasRun,
+  readExplorationCanvas, readExplorationRun, type ExplorationCanvasRun,
+  listRecordObjectives, listRecordCells, readRecordCell,
+  type RecordObjectiveSummary, type RecordCellSummary,
+  type RecordObjectiveHandle, type RecordCellHandle, type ExplorationRecord,
   type HeadStep,
   buildPendingActions, type PendingAction,
   type ChatHistoryEntry, type Page, type PageRequest,
@@ -1745,21 +1748,28 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * A page of every fork this workspace has run, newest first, whichever settle
-   * policy it chose — the one entry point the Exploration surface lists. Detail
-   * stays per-mechanism (`getSearchTree` for a competition, `getHeadRuns` for a
-   * merge); this is the list they are both reached from.
+   * A page of every exploration run this workspace has, newest first — the one entry
+   * point the Exploration surface lists.
    *
-   * Cursored because a bare `LIMIT 20` said "that is every fork" about the
-   * newest twenty, and the twenty-first was then reachable only by permalink.
+   * Cursored because a bare `LIMIT 20` said "that is every run" about the newest
+   * twenty, and the twenty-first was then reachable only by permalink.
    */
   @callable() async listForkRuns(request?: PageRequest): Promise<Page<ForkRunSummary>> {
     return listForkRuns(this.boundSql, request?.cursor ?? null, request?.limit);
   }
 
-  /** One named fork for a permalink, independent of the recent-list window. */
-  @callable() async getForkRun(rootId: string): Promise<ForkRunSummary | null> {
-    return readForkRun(this.boundSql, rootId);
+  /**
+   * One named run for a permalink, independent of the recent-list window — the SAME
+   * composed row {@link getExplorationCanvas} pages.
+   *
+   * The composed row rather than the bare summary, because the parameters used to
+   * travel only on the canvas page: the full-screen drill-down that opens one run by
+   * id had no way to read that run's own knobs, so the judge clamp was visible in the
+   * list column and invisible in the view with room to show it. Fetching a page of
+   * thirty runs and their trees to render one is not the answer.
+   */
+  @callable() async getForkRun(rootId: string): Promise<ExplorationCanvasRun | null> {
+    return readExplorationRun(this.boundSql, rootId);
   }
 
   /**
@@ -1772,6 +1782,47 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable() async getExplorationCanvas(request?: PageRequest): Promise<Page<ExplorationCanvasRun>> {
     return readExplorationCanvas(this.boundSql, request?.cursor ?? null, request?.limit);
+  }
+
+  /**
+   * A page of every comparable set the records store holds, most recently written
+   * first — the discovery read the leaderboard had none of.
+   *
+   * The store's own reads are scoped by an `ObjectiveIdentity`, which includes the
+   * digest of the verifier's source, so no surface could name a set it had not already
+   * been told about. This is where a surface gets the handle; the two reads below take
+   * it back opaquely rather than rebuilding it from parts.
+   *
+   * Each row carries the metric, the unit, the direction and the scale, because a
+   * leaderboard drawn on a bare value shows a number that cannot be read.
+   */
+  @callable() async listRecordObjectives(request?: PageRequest): Promise<Page<RecordObjectiveSummary>> {
+    return listRecordObjectives(this.boundSql, request?.cursor ?? null, request?.limit);
+  }
+
+  /**
+   * One set's cells and each cell's elite.
+   *
+   * `floorDigest` is REQUIRED and nullable: null is "the objective declared no floor",
+   * and a floor-blind handle would collapse a corrected floor and a wrong one.
+   */
+  @callable() async listRecordCells(
+    request: RecordObjectiveHandle & PageRequest,
+  ): Promise<Page<RecordCellSummary>> {
+    return listRecordCells(this.boundSql, request, request.cursor ?? null, request.limit);
+  }
+
+  /**
+   * One cell's population, best first, a page at a time.
+   *
+   * Paged rather than whole because a cell's population is provably unbounded
+   * (`ArchiveAdmission.lean — separated_cells_are_unboundedly_large`), and
+   * `descriptor: null` is the NO-PARTITION cell rather than an unnamed one.
+   */
+  @callable() async readRecordCell(
+    request: RecordCellHandle & PageRequest,
+  ): Promise<Page<ExplorationRecord>> {
+    return readRecordCell(this.boundSql, request, request.cursor ?? null, request.limit);
   }
 
   /**
@@ -3273,7 +3324,7 @@ export class OrchestratorAgent extends ActorAgent {
    * mid-shadow, kick GEPA in the background. The counter keeps growing while a
    * pending is in flight, so a pass fires as soon as the shadow slot frees.
    */
-  private maybeRunAutoGepa(): void {
+  protected maybeRunAutoGepa(): void {
     const everyN = this.config.getAutoGepaEveryNTurns();
     if (everyN <= 0) return;
     // One-time honesty note: before autonomy defaults flipped ON, a disable

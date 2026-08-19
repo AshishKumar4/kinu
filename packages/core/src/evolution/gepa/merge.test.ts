@@ -50,16 +50,48 @@ describe('findComplementaryPair', () => {
     expect(pair?.bDominates).toContain('i2');
   });
 
-  test('prefers pairs with larger complementary surface (weighted)', () => {
-    // Pair A vs B has complementary surface = 2 (both wins).
-    // Pair A vs C has complementary surface = 1 (only one win each).
+  test('draws each pair in proportion to its complementary surface', () => {
+    // Three pairwise surfaces over this pool: A/B is 2 (one win each), while
+    // A/C and B/C are 3 (C wins two instances against either). The previous
+    // version of this test asserted `pair.a.id === 'a' || ... || pair.b.id === 'c'`,
+    // which every pair drawable from {a,b,c} satisfies, under a comment that put
+    // A/C's surface at 1. It could not tell weighted selection from uniform, from
+    // first-pair-always, or from returning a dominated pair.
     const a = mkCandidate('a', { i1: 0.9, i2: 0.3, i3: 0.5 });
     const b = mkCandidate('b', { i1: 0.3, i2: 0.9, i3: 0.5 });
     const c = mkCandidate('c', { i1: 0.5, i2: 0.5, i3: 0.7 });
-    const pair = findComplementaryPair([a, b, c], ['i1', 'i2', 'i3'], seededRng(1));
-    expect(pair).not.toBeNull();
-    // Either AB or AC or BC; the weights favor the most-complementary one.
-    expect(pair?.a.id === 'a' || pair?.b.id === 'a' || pair?.a.id === 'b' || pair?.b.id === 'b' || pair?.a.id === 'c' || pair?.b.id === 'c').toBe(true);
+    const ids = ['i1', 'i2', 'i3'];
+
+    // A stratified sweep of the unit interval rather than a seeded stream: it
+    // reads the whole distribution the weighting defines, and it is exact. The
+    // wins each draw reported are kept per pair rather than asserted per draw —
+    // there are three distinct pairs, so 4000 in-loop assertions would say the
+    // same three things 4000 times.
+    const draws = 4000;
+    const share = new Map<string, number>();
+    const wins = new Map<string, string>();
+    for (let step = 0; step < draws; step++) {
+      const pair = findComplementaryPair([a, b, c], ids, () => (step + 0.5) / draws);
+      if (!pair) throw new Error('a complementary pair exists in this pool');
+      const key = [pair.a.id, pair.b.id].sort().join('');
+      share.set(key, (share.get(key) ?? 0) + 1 / draws);
+      wins.set(key, `${pair.aDominates.join(',')}|${pair.bDominates.join(',')}`);
+    }
+
+    // Surface / total-surface, with total 2 + 3 + 3 = 8. Uniform selection would
+    // put all three at 1/3, and any single-pair bias at 1 and 0.
+    expect(share.get('ab')).toBeCloseTo(2 / 8, 2);
+    expect(share.get('ac')).toBeCloseTo(3 / 8, 2);
+    expect(share.get('bc')).toBeCloseTo(3 / 8, 2);
+
+    // Every pair the sweep drew is genuinely complementary on the recorded
+    // scores: each side wins somewhere, which is what makes it a merge candidate
+    // rather than a dominated pair.
+    expect([...wins.entries()].sort()).toEqual([
+      ['ab', 'i1|i2'],
+      ['ac', 'i1|i2,i3'],
+      ['bc', 'i2|i1,i3'],
+    ]);
   });
 });
 
@@ -159,23 +191,9 @@ describe('runGepa with Merge end-to-end', () => {
     expect(result.winner.aggregateScore).toBeCloseTo(0.95, 3);
   });
 
-  test('useMerge: false disables the operator', async () => {
-    const evalSet: EvalInstance<string>[] = [
-      { id: 'i1', input: 'a' }, { id: 'i2', input: 'b' },
-    ];
-    const reflectionLm = async () => 'mut';
-    const metric = async (): Promise<MetricOutcome> => ({ score: 0.5, feedback: '' });
-    const result = await runGepa({
-      seed: 'seed',
-      evalSet,
-      metric,
-      reflectionLm,
-      budget: {
-        maxIterations: 5, maxMetricCalls: 200, minibatchSize: 1,
-        useMerge: false, mergeEveryN: 1, maxMergeInvocations: 5,
-      },
-      random: seededRng(1),
-    });
-    expect(result.iterationsRun).toBeGreaterThanOrEqual(0);
-  });
+  // `useMerge: false` is asserted in gepa.test.ts, by 'useMerge off means the
+  // operator never runs', which counts the merge prompts and requires zero. The
+  // test that stood here ran the same configuration and asserted
+  // `iterationsRun >= 0` — true for every possible outcome, since the engine sets
+  // it to `history.length - 1` and history always holds the seed.
 });

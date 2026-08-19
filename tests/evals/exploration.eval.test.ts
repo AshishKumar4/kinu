@@ -259,7 +259,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     recordLiveModelEpisode(rt.storage.sql);
 
     const score = scoreExploration(rt.storage.sql);
-    console.log(`    searches: ${String(score.competedRuns)}, branched: ${String(score.branchedRuns)}, `
+    console.log(`    searches: ${String(score.searchRuns)}, branched: ${String(score.branchedRuns)}, `
       + `ranked: ${String(score.rankedRuns)}, durably ranked: ${String(score.durablyRankedRuns)}`);
     for (const run of score.runs) {
       console.log(`      ${run.id}: ${String(run.branches)} branches, winner `
@@ -286,19 +286,19 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
 
     // The denominator, asserted before anything about quality. A fork that
     // never reached the store leaves every assertion below vacuously true.
-    expect(score.competedRuns).toBeGreaterThan(0);
+    expect(score.searchRuns).toBeGreaterThan(0);
 
     // More than one branch: a one-branch search ranked nothing because there
     // was no competition to win.
-    expect(score.branchedRuns).toBe(score.competedRuns);
+    expect(score.branchedRuns).toBe(score.searchRuns);
 
     // A ranked winner the READER can hand over — not just one the engine
     // returned in memory. A merged mcts run with no ranked winner has shipped.
-    expect(score.rankedRuns).toBe(score.competedRuns);
+    expect(score.rankedRuns).toBe(score.searchRuns);
 
     // And the ranking survived into the store as exactly one terminal node, so
     // a later reader sees the same winner this run picked.
-    expect(score.durablyRankedRuns).toBe(score.competedRuns);
+    expect(score.durablyRankedRuns).toBe(score.searchRuns);
   }, 900_000);
 
   liveTest('VISIBLE: every settle mode wrote where the Exploration reader reads', () => {
@@ -310,12 +310,12 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // raw SQLiteError mid-eval. A thrown error is not a measurement, and "0 of 0
     // roots invisible" over a table that is not there is worse: it is a pass.
     for (const half of score.stores) {
-      console.log(`    ${half.settle} (${half.store}): present=${String(half.present)}`);
+      console.log(`    ${half.half} (${half.store}): present=${String(half.present)}`);
       expect(half.present).toBe(true);
     }
 
     for (const half of score.stores) {
-      console.log(`    ${half.settle} (${half.store}): ${String(half.rootsVisible)}/`
+      console.log(`    ${half.half} (${half.store}): ${String(half.rootsVisible)}/`
         + `${String(half.rootsWritten)} roots visible`);
     }
 

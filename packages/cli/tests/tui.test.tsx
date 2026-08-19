@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/react */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { Database } from 'bun:sqlite';
 import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
@@ -87,15 +88,22 @@ describe('CLI TUI layout', () => {
       v.object({ version: v.string() }),
       JSON.parse(readFileSync(resolve(repoRoot, 'packages/cli/package.json'), 'utf8')),
     );
-    const displaySource = readFileSync(resolve(repoRoot, 'packages/cli/src/display.ts'), 'utf8');
-    const programSource = readFileSync(resolve(repoRoot, 'packages/cli/src/program.ts'), 'utf8');
-    const homeSource = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/home-app.tsx'), 'utf8');
 
     expect(VERSION).toBe(packageJson.version);
-    expect(displaySource).toContain("import cliPackage from '../package.json'");
-    expect(programSource).toContain(".version(VERSION, '-v, --version')");
-    expect(programSource).not.toContain(".version('0.1.0'");
-    expect(homeSource).toContain('workspaces · cli {VERSION}');
+    // What the CLI reports is the contract. The greps this replaced named the
+    // wiring instead — display.ts's package.json import, program.ts's
+    // `.version(VERSION)` call, home-app.tsx's header literal — and passed for
+    // any spelling of it while a `-v` that printed nothing would too. The home
+    // header is asserted where it renders, on the frame, by 'digit keys never
+    // select a workspace on the home screen'.
+    const reported = Bun.spawnSync({
+      cmd: [process.execPath, resolve(repoRoot, 'packages/cli/bin/cli.ts'), '-v'],
+      cwd: repoRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect({ exitCode: reported.exitCode, stdout: reported.stdout.toString().trim() })
+      .toEqual({ exitCode: 0, stdout: VERSION });
   });
 
   test('model picker is an absolute overlay and does not move the input area', async () => {
@@ -414,31 +422,118 @@ describe('CLI TUI layout', () => {
     }
   });
 
-  // A prohibition, so it is stated as one. The three positive assertions this
-  // used to also carry — that the source contains `focusArea === 'mission'`,
-  // `nextFocus` and `onMouseDown` — constrained nothing: renaming a local
-  // broke them with no behaviour change, and the literal `onMouseDown`
-  // appearing somewhere in a file is not evidence that a mouse does anything.
-  // What is worth locking is that the numeric handler stays gone.
-  test('home screen has no global numeric agent selection path', () => {
-    const source = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/home-app.tsx'), 'utf8');
+  // Digits belong to the mission, never to the workspace list. The grep this
+  // replaced ("home-app.tsx does not contain Number(key.name)") locked a
+  // spelling: renaming the local broke it with no behaviour change, and a
+  // numeric handler written any other way passed it. So drive the real screen
+  // and press the keys — with an arrow press afterwards, so "the selection did
+  // not move" cannot be "no key arrived".
+  test('digit keys never select a workspace on the home screen', () => {
+    const run = runHomeScreen({
+      workspaces: WORKSPACE_NAMES,
+      driver: `
+        const WORKSPACES = ${JSON.stringify(WORKSPACE_NAMES)};
+        const selected = () => WORKSPACES.find((name) => frame().includes('› ' + name)) ?? null;
 
-    expect(source).not.toContain('Number(key.name)');
-    expect(source).not.toContain('1-9');
+        await waitFor('the workspace list to render', () => frame().includes('Workspaces'));
+        const listed = WORKSPACES
+          .map((name) => ({ name, at: frame().split('\\n').findIndex((row) => row.includes(name + '  local')) }))
+          .sort((a, b) => a.at - b.at)
+          .map((entry) => entry.name);
+        mockInput.pressTab();
+        await waitFor('the workspace list to take the keyboard', () => rowWith('Workspaces').includes('↑/↓ select'));
+
+        const initial = selected();
+        for (const digit of ['1', '2', '3', '4', '5', '6', '7', '8', '9']) {
+          mockInput.pressKey(digit);
+          await settle(3);
+        }
+        const observed = {
+          listed,
+          initial,
+          afterDigits: selected(),
+          openedByDigits: action,
+          header: rowWith('Proteus workspaces'),
+        };
+        mockInput.pressArrow('down');
+        await waitFor('the down arrow to move the selection', () => selected() !== initial, 200);
+        observed.afterArrowDown = selected();
+        mockInput.pressEscape();
+        observed.finalAction = await opened;
+        console.log(JSON.stringify(observed));
+      `,
+    });
+    try {
+      // The actions stay unmodelled records: v.object would quietly drop a field
+      // the screen has no business sending, which is exactly the field that
+      // would carry a mission into chat.
+      const homeAction = v.nullable(v.record(v.string(), v.unknown()));
+      const observed = v.parse(v.object({
+        listed: v.array(v.string()),
+        initial: v.string(),
+        afterDigits: v.string(),
+        openedByDigits: homeAction,
+        header: v.string(),
+        afterArrowDown: v.string(),
+        finalAction: homeAction,
+      }), JSON.parse(run.stdout));
+
+      expect(observed.initial).toBe(observed.listed[0]);
+      expect(observed.afterDigits).toBe(observed.listed[0]);
+      expect(observed.openedByDigits).toBeNull();
+      expect(observed.afterArrowDown).toBe(observed.listed[1]);
+      expect(observed.finalAction).toEqual({ type: 'exit' });
+      // The home header renders the one VERSION, which is why the version test
+      // no longer greps home-app.tsx for the literal.
+      expect(observed.header).toBe(`Proteus workspaces · cli ${VERSION}`);
+    } finally {
+      rmSync(run.home, { recursive: true, force: true });
+    }
   });
 
   // The mission is what the workspace IS — it seeds SOUL.md and names the
-  // workspace server-side. Replaying it as the opening turn hands a standing
-  // brief over as a task, which is what "My personal assistant, Jarvis" being
-  // answered as a request came from. The CLI opens the new workspace with an
-  // empty conversation, exactly as the web app does.
+  // workspace. Replaying it as the opening turn hands a standing brief over as
+  // a task, which is what "My personal assistant, Jarvis" being answered as a
+  // request came from. The CLI opens the new workspace with an empty
+  // conversation, exactly as the web app does. Asserted on the created
+  // workspace itself and on the action the home screen hands to chat — the only
+  // channel a prompt could ride in on — rather than on the absence of the
+  // string 'initialPrompt' from three files.
   test('creating a workspace from a mission opens it without sending the mission', () => {
-    const home = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/home-app.tsx'), 'utf8');
-    const chat = readFileSync(resolve(repoRoot, 'packages/cli/src/commands/chat.ts'), 'utf8');
-    const chatLoop = readFileSync(resolve(repoRoot, 'packages/cli/src/chat-loop.ts'), 'utf8');
+    const mission = 'My personal assistant, Jarvis';
+    const run = runHomeScreen({
+      driver: `
+        await waitFor('the mission field to render', () => frame().includes('What is this workspace for?'));
+        await mockInput.typeText(${JSON.stringify(mission)});
+        await waitFor('the mission to reach the field', () => frame().includes(${JSON.stringify(mission)}));
+        mockInput.pressEnter({ ctrl: true });
+        await waitFor('the new workspace to open', () => action !== null, 3000);
+        console.log(JSON.stringify({ opened: await opened }));
+      `,
+    });
+    try {
+      const observed = v.parse(
+        v.object({ opened: v.record(v.string(), v.unknown()) }),
+        JSON.parse(run.stdout),
+      );
+      const created = readdirSync(run.home, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && existsSync(resolve(run.home, entry.name, 'agent.db')))
+        .map((entry) => entry.name);
+      expect(created).toHaveLength(1);
+      // Exactly this payload: an extra field is how a mission would reach chat
+      // as a first turn, and chat opens whatever `name` says.
+      expect(observed.opened).toEqual({ type: 'open-agent', name: created[0] });
 
-    expect(home).toContain("finishHome?.({ type: 'open-agent', name: created.name })");
-    for (const source of [home, chat, chatLoop]) expect(source).not.toContain('initialPrompt');
+      const db = new Database(resolve(run.home, created[0]!, 'agent.db'), { readonly: true });
+      try {
+        expect(db.query('SELECT COUNT(*) AS messages FROM messages').get()).toEqual({ messages: 0 });
+        expect(db.query('SELECT mission FROM workspace_identity').all()).toEqual([{ mission }]);
+      } finally {
+        db.close();
+      }
+    } finally {
+      rmSync(run.home, { recursive: true, force: true });
+    }
   });
 
   test('home model and effort selections persist as global defaults', () => {
@@ -597,6 +692,104 @@ function lineContaining(frame: string, text: string) {
   const line = frame.split('\n').findIndex((candidate) => candidate.includes(text));
   expect(line).toBeGreaterThanOrEqual(0);
   return line;
+}
+
+const WORKSPACE_NAMES = ['alpha', 'beta', 'gamma'] as const;
+
+/** Keys and tokens that would otherwise decide, from the developer's own shell,
+ *  whether the home screen comes up in cloud or local mode. */
+const INHERITED_CREDENTIALS = [
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'CODEX_ACCESS_TOKEN',
+  'OPENAI_API_KEY',
+  'OPENROUTER_API_KEY',
+  'PROTEUS_TOKEN',
+];
+
+const HOME_SCREEN_PRELUDE = `
+  import { mock } from 'bun:test';
+  import * as core from '@opentui/core';
+  import { createTestRenderer } from '@opentui/core/testing.js';
+
+  process.stdin.isTTY = true;
+  process.stdout.isTTY = true;
+  globalThis.fetch = async () => new Response('{}', {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+  const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
+    width: 100,
+    height: 40,
+    useThread: false,
+    maxFps: Number.POSITIVE_INFINITY,
+    // Ctrl+Enter creates the workspace, and only the kitty protocol carries a
+    // modifier on Return.
+    kittyKeyboard: true,
+  });
+  // runHomeTui is the entry point the CLI calls, and the completion callback it
+  // installs is module-private: rendering HomeApp on its own leaves it null, so
+  // "opens a workspace" cannot be observed at all. Swap the terminal renderer
+  // for the test one and drive the real thing. The import has to be dynamic —
+  // the swap must be in place before home-app resolves createCliRenderer.
+  await mock.module('@opentui/core', () => ({ ...core, createCliRenderer: async () => renderer }));
+  const { runHomeTui } = await import('./packages/cli/src/tui/home-app.tsx');
+
+  const frame = () => captureCharFrame();
+  const rowWith = (text) => (frame().split('\\n').find((row) => row.includes(text)) ?? '').replace(/\\s+/gu, ' ').trim();
+  const waitFor = async (what, predicate, rounds = 600) => {
+    for (let i = 0; i < rounds; i++) {
+      await renderOnce();
+      if (predicate()) return;
+      await Bun.sleep(10);
+    }
+    throw new Error('timed out waiting for ' + what);
+  };
+  const settle = async (rounds = 6) => {
+    for (let i = 0; i < rounds; i++) {
+      await renderOnce();
+      await Bun.sleep(10);
+    }
+  };
+
+  let action = null;
+  const opened = runHomeTui({}).then((resolved) => { action = resolved; return resolved; });
+  // A key pressed before the screen's own handler is attached is dropped, and a
+  // painted frame does not mean it is attached: the handler subscribes on the
+  // commit after the first paint. opentui's own keypress listener is the first,
+  // so the screen's is the second — that, not a frame, is "keys land now".
+  await waitFor('the home screen to start accepting keys', () => renderer.keyInput.listenerCount('keypress') > 1);
+`;
+
+/** Drives the home screen the CLI actually runs, in a subprocess so that one
+ *  PROTEUS_HOME and one renderer swap belong to one test. `driver` runs with
+ *  `frame`, `rowWith`, `waitFor`, `settle`, `mockInput`, `action` (whatever the
+ *  screen has finished with, or null) and `opened` in scope, and prints the one
+ *  JSON line the caller asserts on. The caller owns the returned home. */
+function runHomeScreen(options: { driver: string; workspaces?: readonly string[] }) {
+  const home = mkdtempSync(resolve(tmpdir(), 'proteus-home-tui-'));
+  writeFileSync(resolve(home, 'config.json'), JSON.stringify({
+    model: 'openai/gpt-5.5',
+    providers: { openai: { apiKey: 'sk-test' } },
+  }));
+  for (const name of options.workspaces ?? []) {
+    mkdirSync(resolve(home, name));
+    writeFileSync(resolve(home, name, 'agent.db'), '');
+  }
+  const env: NodeJS.ProcessEnv = { ...process.env, PROTEUS_HOME: home, PROTEUS_SKIP_DAEMON: '1' };
+  for (const name of INHERITED_CREDENTIALS) delete env[name];
+
+  const proc = Bun.spawnSync({
+    cmd: [process.execPath, '-e', `${HOME_SCREEN_PRELUDE}${options.driver}`],
+    cwd: repoRoot,
+    env,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  // A driver that timed out reports what never arrived on stderr, and Bun still
+  // exits 0 for a rejected top-level await, so stderr is what fails the test.
+  expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
+  return { home, stdout: proc.stdout.toString() };
 }
 
 const MODELS: AgentModelEntry[] = [
