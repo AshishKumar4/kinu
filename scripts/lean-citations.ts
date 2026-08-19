@@ -48,9 +48,18 @@ const leanRoot = join(repoRoot, 'lean');
  *  or the brace form `Execution/{Capabilities,ToolSystem}.lean`. */
 const LEAN_PATH = /(?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean/g;
 
+/** A citation naming a LINE rather than a theorem. For example `Foo.lean:470`, or a
+ *  range `Foo.lean:470-478` — `Foo` is a placeholder again. BOTH endpoints are
+ *  captured and both are checked: a range whose start is in the file and whose end
+ *  is past it is a live citation that reads as verified, and checking only the start
+ *  made any in-range number satisfy any range. */
+const CITED_LINE =
+  /((?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean):([1-9][0-9]*)(?:-([1-9][0-9]*))?/g;
+
 /**
- * A citation with theorem names attached, in the two spellings the tree uses. For
- * example `Foo.lean:name` and `Foo.lean — name, name`, with `Foo` a placeholder.
+ * A citation with theorem names attached, PATH FIRST, in the two spellings the tree
+ * uses. For example `Foo.lean:name` and `Foo.lean — name, name`, with `Foo` a
+ * placeholder.
  *
  * A name must be snake_case, and that is load-bearing rather than cosmetic: the
  * colon form runs into prose, so `StorageIsolation.lean: branch storage disjoint`
@@ -58,14 +67,31 @@ const LEAN_PATH = /(?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean/g;
  * theorem. The cost is one blind spot — an underscore-free theorem that gets
  * renamed — and `CITATION_OPAQUE` below is the ratchet that stops it growing.
  */
-/** A citation naming a LINE rather than a theorem. For example `Foo.lean:470`, or a
- *  range `Foo.lean:470-478` — `Foo` is a placeholder again. Only the first number is
- *  checked, because a range whose start is in the file and whose end is not is the
- *  same finding. */
-const CITED_LINE = /((?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean):([1-9][0-9]*)/g;
-
-const CITED_NAMES =
+const CITED_NAMES_TRAILING =
   /((?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean)(?::([a-z][A-Za-z0-9_']*)|[ \t]*(?:—|–|--)[ \t]*((?:[a-z][A-Za-z0-9_']*)(?:[ \t]*,\s*[a-z][A-Za-z0-9_']*)*))/g;
+
+/**
+ * The same citation with the two halves the other way round: NAME FIRST, the module
+ * following as a parenthesised locator. This is how the exploration spec and
+ * `docs/NODE-ISOLATION.md` write every one of theirs, and requiring the path to come
+ * first made all of them invisible — a rename of a theorem they name passed clean.
+ *
+ * ORDER-INDEPENDENCE IS NOT BOUGHT WITH FALSE POSITIVES. Three conditions, all
+ * required, and together they describe an authored citation rather than a sentence
+ * that happens to contain both halves:
+ *
+ * 1. The name is a CODE SPAN. An author writing prose about a theorem writes its
+ *    name as prose; an author citing one marks it as an identifier.
+ * 2. The name is SNAKE_CASE, enforced here rather than filtered afterwards. Without
+ *    the path-first anchor a bare lowercase word is far likelier to be an English
+ *    word, so the underscore does the work the anchor used to.
+ * 3. The locator is ADJACENT: nothing but whitespace may sit between the name's
+ *    closing backtick and the opening parenthesis. This is the condition that
+ *    separates a citation from prose, because prose puts WORDS in that gap — see
+ *    the negative case in `scripts/lean-citations.test.ts`.
+ */
+const CITED_NAMES_LEADING =
+  /`([a-z][A-Za-z0-9_']*_[A-Za-z0-9_']*)`\s*\(`?((?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean)/g;
 
 /** Theorem names this scanner cannot see, because they carry no underscore. The
  *  set is asserted against the declarations, so a NEW one fails the gate naming
@@ -170,9 +196,6 @@ const CITATION_ILLUSTRATIVE: readonly Illustrative[] = [
 const DOCUMENTING_PROSE =
   /\b(?:red-green|red->green|would fail|now fails|fails when|placeholder\w*|illustrat\w*|for example|example|past the module|does not exist|proven against|spelling\w*)\b/i;
 
-const findings: string[] = [];
-const fail = (message: string): void => { findings.push(message); };
-
 /** A brace form names two modules — for example the placeholder `{A,B}/x.lean`.
  *  Expanded rather than skipped: it is how `Execution/{Capabilities,ToolSystem}.lean`
  *  is spelled, and skipping it would leave a real citation unchecked. */
@@ -180,6 +203,25 @@ function expandBraces(path: string): string[] {
   const match = path.match(/\{([A-Za-z0-9_,]+)\}/);
   if (match === null) return [path];
   return match[1].split(',').flatMap((alt) => expandBraces(path.replace(match[0], alt)));
+}
+
+/** What the scan reads and what it counted, built once and carried across the corpus.
+ *  A factory rather than module state, so the red directions are provable against
+ *  synthetic text instead of by mutating the tree the gate governs — the shape
+ *  `scripts/literature-citations.ts` adopted for the same reason. */
+export interface Citations {
+  /** `qualified name -> the module that declares it`. */
+  readonly declarations: Map<string, string>;
+  /** `basename -> the modules carrying it`, for the bare-basename spelling. */
+  readonly byBasename: Map<string, string[]>;
+  /** `file -> the illustrations declared in it`, populated by `auditRegister` and
+   *  therefore empty until the register has been validated: an entry that failed
+   *  validation must exempt nothing. */
+  readonly illustrative: Map<string, Illustrative[]>;
+  modules: number;
+  names: number;
+  lines: number;
+  illustrativeSites: number;
 }
 
 /** `qualified name -> the module that declares it`, from the one Lean scanner. */
@@ -210,88 +252,98 @@ function readDeclarations(): Map<string, string> {
   return declarations;
 }
 
-const declarations = readDeclarations();
-const corpus = readMatching(isTextSource);
-
-/** Modules by basename, because `docs/MCTS.md` and the exploration spec cite bare
- *  `StorageIsolation.lean`. An ambiguous basename fails rather than guessing: two
- *  modules of one name make every bare citation of it unresolvable in principle,
- *  and picking the first is how a check starts governing a set it did not
- *  measure. */
-const byBasename = new Map<string, string[]>();
-for (const module of new Set(declarations.values())) {
-  const base = module.slice(module.lastIndexOf('/') + 1);
-  byBasename.set(base, [...(byBasename.get(base) ?? []), module]);
+export function citations(): Citations {
+  const declarations = readDeclarations();
+  // Modules by basename, because `docs/MCTS.md` and the exploration spec cite bare
+  // `StorageIsolation.lean`. An ambiguous basename fails rather than guessing: two
+  // modules of one name make every bare citation of it unresolvable in principle, and
+  // picking the first is how a check starts governing a set it did not measure.
+  const byBasename = new Map<string, string[]>();
+  for (const module of new Set(declarations.values())) {
+    const base = module.slice(module.lastIndexOf('/') + 1);
+    byBasename.set(base, [...(byBasename.get(base) ?? []), module]);
+  }
+  return {
+    declarations, byBasename, illustrative: new Map(),
+    modules: 0, names: 0, lines: 0, illustrativeSites: 0,
+  };
 }
 
 /** Repo-relative module path for a cited path, or `null` when nothing matches. */
-function resolveCitation(path: string): string | null {
+function resolveCitation(path: string, seen: Citations, findings: string[]): string | null {
   for (const prefix of ['', 'lean/', 'lean/Proteus/']) {
     const candidate = `${prefix}${path}`;
     if (candidate.startsWith('lean/')
       && resolve(repoRoot, candidate).startsWith(`${leanRoot}/`)
       && existsSync(join(repoRoot, candidate))) return candidate;
   }
-  const base = byBasename.get(path.slice(path.lastIndexOf('/') + 1));
+  const base = seen.byBasename.get(path.slice(path.lastIndexOf('/') + 1));
   if (base === undefined) return null;
   if (base.length > 1) {
-    fail(`ambiguous Lean module basename cited as ${path}: ${base.join(', ')}`);
+    findings.push(`ambiguous Lean module basename cited as ${path}: ${base.join(', ')}`);
     return null;
   }
   return base[0];
 }
 
-for (const name of declarations.keys()) {
-  if (!name.includes('_') && !Object.hasOwn(CITATION_OPAQUE, name)) {
-    fail(
-      `theorem name without an underscore is invisible to the citation scanner: ${name}`
-      + ' — rename it in snake_case, or enrol it in CITATION_OPAQUE and accept that a'
-      + ' rename of it will not be caught',
-    );
-  }
-}
-for (const name of Object.keys(CITATION_OPAQUE)) {
-  if (!declarations.has(name)) fail(`CITATION_OPAQUE names a theorem that no longer exists: ${name}`);
-}
-
 /**
- * Validate the register itself, before it is trusted to exempt anything.
+ * The declaration set and the illustration register, judged before either is trusted.
  *
- * Two of the three properties live here. PRESENT: the declared string must actually
- * occur in its file, so a register entry cannot outlive the prose it describes.
- * SELF-POLICING: the citation must not resolve to a real module, which is what makes
- * declaring a live reference as an illustration INEFFECTIVE rather than exculpatory.
+ * Two of the register's three properties live here. PRESENT: the declared string must
+ * actually occur in its file, so a register entry cannot outlive the prose it
+ * describes. SELF-POLICING: the citation must not resolve to a real module, which is
+ * what makes declaring a live reference as an illustration INEFFECTIVE rather than
+ * exculpatory. Only entries that pass reach `seen.illustrative`.
  */
-const illustrativeByFile = new Map<string, Illustrative[]>();
-for (const entry of CITATION_ILLUSTRATIVE) {
-  const module = resolveCitation(entry.cites.replace(/:.*$/, ''));
-  if (module !== null) {
-    fail(
-      `CITATION_ILLUSTRATIVE declares \`${entry.cites}\` (${entry.file}) an illustration,`
-      + ` but it names the real module ${module} — an illustration may not name a module`
-      + ' that exists, because that is how the category would launder a stale citation.'
-      + ' The citation is still checked live.',
-    );
-    continue;
+export function auditRegister(seen: Citations): string[] {
+  const findings: string[] = [];
+  for (const name of seen.declarations.keys()) {
+    if (!name.includes('_') && !Object.hasOwn(CITATION_OPAQUE, name)) {
+      findings.push(
+        `theorem name without an underscore is invisible to the citation scanner: ${name}`
+        + ' — rename it in snake_case, or enrol it in CITATION_OPAQUE and accept that a'
+        + ' rename of it will not be caught',
+      );
+    }
   }
-  if (entry.reason.length === 0) {
-    fail(`CITATION_ILLUSTRATIVE entry for \`${entry.cites}\` states no reason`);
-    continue;
+  for (const name of Object.keys(CITATION_OPAQUE)) {
+    if (!seen.declarations.has(name)) {
+      findings.push(`CITATION_OPAQUE names a theorem that no longer exists: ${name}`);
+    }
   }
-  const host = corpus.get(entry.file);
-  if (host === undefined) {
-    fail(`CITATION_ILLUSTRATIVE names a file outside the corpus: ${entry.file}`);
-    continue;
+
+  const corpus = readMatching(isTextSource);
+  for (const entry of CITATION_ILLUSTRATIVE) {
+    const module = resolveCitation(entry.cites.replace(/:.*$/, ''), seen, findings);
+    if (module !== null) {
+      findings.push(
+        `CITATION_ILLUSTRATIVE declares \`${entry.cites}\` (${entry.file}) an illustration,`
+        + ` but it names the real module ${module} — an illustration may not name a module`
+        + ' that exists, because that is how the category would launder a stale citation.'
+        + ' The citation is still checked live.',
+      );
+      continue;
+    }
+    if (entry.reason.length === 0) {
+      findings.push(`CITATION_ILLUSTRATIVE entry for \`${entry.cites}\` states no reason`);
+      continue;
+    }
+    const host = corpus.get(entry.file);
+    if (host === undefined) {
+      findings.push(`CITATION_ILLUSTRATIVE names a file outside the corpus: ${entry.file}`);
+      continue;
+    }
+    if (!host.includes(entry.cites)) {
+      findings.push(
+        `CITATION_ILLUSTRATIVE declares \`${entry.cites}\` in ${entry.file}, which no longer`
+        + ' contains it — a declaration that outlived its prose exempts nothing and hides'
+        + ' the next one that matters',
+      );
+      continue;
+    }
+    seen.illustrative.set(entry.file, [...(seen.illustrative.get(entry.file) ?? []), entry]);
   }
-  if (!host.includes(entry.cites)) {
-    fail(
-      `CITATION_ILLUSTRATIVE declares \`${entry.cites}\` in ${entry.file}, which no longer`
-      + ' contains it — a declaration that outlived its prose exempts nothing and hides'
-      + ' the next one that matters',
-    );
-    continue;
-  }
-  illustrativeByFile.set(entry.file, [...(illustrativeByFile.get(entry.file) ?? []), entry]);
+  return findings;
 }
 
 /**
@@ -318,36 +370,34 @@ function paragraphAround(text: string, index: number): string {
 /** Is this exact citation, at this site, a declared illustration whose paragraph
  *  reads like documentation? Both halves are required: the declaration alone is a
  *  skip, and the prose alone would let any unenrolled placeholder through. */
-function isIllustrative(file: string, cites: string, text: string, index: number): boolean {
-  const declared = illustrativeByFile.get(file)?.some((entry) => entry.cites === cites);
+function isIllustrative(
+  file: string, cites: string, text: string, index: number, seen: Citations,
+): boolean {
+  const declared = seen.illustrative.get(file)?.some((entry) => entry.cites === cites);
   if (declared !== true) return false;
   return DOCUMENTING_PROSE.test(paragraphAround(text, index));
 }
 
-let illustrativeSites = 0;
-let modulesCited = 0;
-let namesCited = 0;
-let linesCited = 0;
-for (const [file, text] of corpus) {
-  // `lean/` is the other side of the citation and is checked by the traceability
-  // gate. There is no per-file skip beyond that: this gate's own docstring is
-  // scanned like any other file, and the placeholders in it are enrolled in
-  // `CITATION_ILLUSTRATIVE` rather than excluded.
-  if (file.startsWith('lean/')) continue;
+/**
+ * One file, audited. Exported so every direction this gate claims to govern is
+ * provable against synthetic text rather than by mutating the tree it governs.
+ */
+export function auditCitations(file: string, text: string, seen: Citations): string[] {
+  const findings: string[] = [];
   // Strip JSDoc continuation leaders, so a citation wrapped across lines reads as
   // one string. `consolidation_never_empties,\n * consolidation_nonincreasing` is
   // the live case.
   const flat = text.replace(/^[ \t]*\*[ \t]?/gm, '');
 
   for (const match of flat.matchAll(LEAN_PATH)) {
-    if (isIllustrative(file, citedToken(flat, match), flat, match.index)) {
-      illustrativeSites += 1;
+    if (isIllustrative(file, citedToken(flat, match), flat, match.index, seen)) {
+      seen.illustrativeSites += 1;
       continue;
     }
     for (const path of expandBraces(match[0])) {
-      modulesCited += 1;
-      if (resolveCitation(path) === null) {
-        fail(`${file}: cites a Lean module that does not exist: ${path}`);
+      seen.modules += 1;
+      if (resolveCitation(path, seen, findings) === null) {
+        findings.push(`${file}: cites a Lean module that does not exist: ${path}`);
       }
     }
   }
@@ -359,71 +409,111 @@ for (const [file, text] of corpus) {
   // range-checks its own `tsRef`s this way, so the Lean side gets the same
   // treatment rather than a weaker one.
   for (const match of flat.matchAll(CITED_LINE)) {
-    if (isIllustrative(file, citedToken(flat, match), flat, match.index)) continue;
-    const module = resolveCitation(match[1]);
+    if (isIllustrative(file, citedToken(flat, match), flat, match.index, seen)) continue;
+    const module = resolveCitation(match[1], seen, findings);
     if (module === null) continue;   // already reported by the module scan above
-    linesCited += 1;
+    seen.lines += 1;
     const lineCount = readFileSync(join(repoRoot, module), 'utf8').split('\n').length;
-    if (Number(match[2]) > lineCount) {
-      fail(
-        `${file}: cites ${match[1]}:${match[2]}, but ${module} has ${String(lineCount)} lines`
-        + ' — the citation outlived the line it names',
+    // BOTH endpoints, and one finding per citation rather than one per endpoint: a
+    // range is a single claim, so a reader fixing it wants the whole claim named.
+    const gone = [match[2], match[3]]
+      .filter((endpoint) => endpoint !== undefined && Number(endpoint) > lineCount);
+    if (gone.length > 0) {
+      const cited = `${match[1]}:${match[2]}${match[3] === undefined ? '' : `-${match[3]}`}`;
+      findings.push(
+        `${file}: cites ${cited}, but ${module} has ${String(lineCount)} lines`
+        + ` — line ${gone.join(' and ')} does not exist and the citation outlived it`,
       );
     }
   }
 
-  for (const match of flat.matchAll(CITED_NAMES)) {
-    const modules = expandBraces(match[1]).map(resolveCitation).filter((m) => m !== null);
-    const names = (match[2] ?? match[3] ?? '').split(',')
-      .map((name) => name.trim())
-      .filter((name) => name.length > 0 && name.includes('_'));
-    for (const name of names) {
-      namesCited += 1;
-      const declaring = [...declarations].filter(([qualified]) => qualified.endsWith(`.${name}`));
+  // Either order. The path-first spellings are the tree's TypeScript-header habit;
+  // the name-first spelling is its documentation habit, and governing only the first
+  // meant a rename of a theorem the docs name passed clean.
+  const cited: { readonly path: string; readonly names: readonly string[] }[] = [];
+  for (const match of flat.matchAll(CITED_NAMES_TRAILING)) {
+    cited.push({ path: match[1], names: (match[2] ?? match[3] ?? '').split(',') });
+  }
+  for (const match of flat.matchAll(CITED_NAMES_LEADING)) {
+    cited.push({ path: match[2], names: [match[1]] });
+  }
+
+  for (const { path, names } of cited) {
+    const modules = expandBraces(path)
+      .map((one) => resolveCitation(one, seen, findings)).filter((m) => m !== null);
+    for (const name of names.map((one) => one.trim()).filter((one) => one.includes('_'))) {
+      seen.names += 1;
+      const declaring = [...seen.declarations]
+        .filter(([qualified]) => qualified.endsWith(`.${name}`));
       if (declaring.length === 0) {
-        fail(
-          `${file}: cites Lean theorem \`${name}\` (${match[1]}), which no Lean source declares`
+        findings.push(
+          `${file}: cites Lean theorem \`${name}\` (${path}), which no Lean source declares`
           + ' — a header naming a theorem nobody proves is worse than no header',
         );
         continue;
       }
       if (modules.length > 0 && !declaring.some(([, module]) => modules.includes(module))) {
-        fail(
-          `${file}: cites \`${match[1]} — ${name}\`, but ${name} is declared in`
+        findings.push(
+          `${file}: cites \`${path} — ${name}\`, but ${name} is declared in`
           + ` ${declaring.map(([, module]) => module).join(', ')} — the theorem moved and the`
           + ' citation did not',
         );
       }
     }
   }
+  return findings;
 }
 
-if (modulesCited === 0 || namesCited === 0) {
-  fail(
-    `citation scan found ${modulesCited} module and ${namesCited} theorem references,`
-    + ' so it cannot fail — a gate with an empty corpus certifies nothing',
+/** The corpus-wide check: a scan that found nothing certifies nothing. */
+export function auditCoverage(seen: Citations): string[] {
+  if (seen.modules > 0 && seen.names > 0) return [];
+  return [
+    `citation scan found ${String(seen.modules)} module and ${String(seen.names)} theorem`
+    + ' references, so it cannot fail — a gate with an empty corpus certifies nothing',
+  ];
+}
+
+/* ── The verdict ───────────────────────────────────────────────────────── */
+
+if (import.meta.main) {
+  const seen = citations();
+  const findings = auditRegister(seen);
+  const corpus = readMatching(isTextSource);
+  for (const [file, text] of corpus) {
+    // `lean/` is the other side of the citation and is checked by the traceability
+    // gate. There is no per-file skip beyond that: this gate's own docstring is
+    // scanned like any other file, and the placeholders in it are enrolled in
+    // `CITATION_ILLUSTRATIVE` rather than excluded.
+    if (file.startsWith('lean/')) continue;
+    findings.push(...auditCitations(file, text, seen));
+  }
+  findings.push(...auditCoverage(seen));
+
+  if (findings.length > 0) {
+    for (const finding of findings) console.error(`✗ ${finding}`);
+    console.error(`lean-citations: ${String(findings.length)} finding(s)`);
+    process.exit(1);
+  }
+  console.log(
+    `lean-citations: OK — ${String(seen.declarations.size)} theorems, ${String(seen.modules)} module,`
+    + ` ${String(seen.names)} theorem and ${String(seen.lines)} line citations across`
+    + ` ${String(corpus.size)} files`,
+  );
+  // Printed on the SUCCESS path, not only on failure: a blind spot that appears only
+  // in red output is invisible exactly when the tree is green, which is when it
+  // matters. Wording shared verbatim with `scripts/literature.ts`'s blind-spot block
+  // so a reader of either instrument learns the same thing in the same words.
+  console.log(
+    `lean-citations: BLIND SPOTS — ${String(seen.illustrativeSites)} citations carry an`
+    + ' author-declared category (CITATION_ILLUSTRATIVE): the declaration is TRUSTED, not'
+    + ' verified — this gate checks only that the site behaves like one, never that the'
+    + ' author was right to declare it.'
+    + ` ${String(Object.keys(CITATION_OPAQUE).length)} theorem name(s) carry no underscore`
+    + ' and are invisible to the name scanner, so a rename of one is not caught.'
+    + ` All ${String(seen.lines)} line citations are checked for EXISTENCE ONLY: both`
+    + ' endpoints of a range must be within the module, and nothing verifies that those'
+    + ' lines still contain the claimed content — an insertion above a cited range slides'
+    + ' it onto different code and stays green. A theorem NAME is the citation shape this'
+    + ' gate can actually verify; a line number is the shape it can only bound.',
   );
 }
-
-if (findings.length > 0) {
-  for (const finding of findings) console.error(`✗ ${finding}`);
-  console.error(`lean-citations: ${String(findings.length)} finding(s)`);
-  process.exit(1);
-}
-console.log(
-  `lean-citations: OK — ${String(declarations.size)} theorems, ${String(modulesCited)} module,`
-  + ` ${String(namesCited)} theorem and ${String(linesCited)} line citations across`
-  + ` ${String(corpus.size)} files`,
-);
-// Printed on the SUCCESS path, not only on failure: a blind spot that appears only
-// in red output is invisible exactly when the tree is green, which is when it
-// matters. Wording shared verbatim with `scripts/literature.ts`'s blind-spot block
-// so a reader of either instrument learns the same thing in the same words.
-console.log(
-  `lean-citations: BLIND SPOTS — ${String(illustrativeSites)} citations carry an`
-  + ' author-declared category (CITATION_ILLUSTRATIVE): the declaration is TRUSTED, not'
-  + ' verified — this gate checks only that the site behaves like one, never that the'
-  + ' author was right to declare it.'
-  + ` ${String(Object.keys(CITATION_OPAQUE).length)} theorem name(s) carry no underscore`
-  + ' and are invisible to the name scanner, so a rename of one is not caught.',
-);
