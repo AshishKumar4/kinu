@@ -217,7 +217,15 @@ describe('E2E Lifecycle', () => {
     console.log(`  Nodes: ${nodes.length}`);
     expect(nodes.length).toBe(3);
     expect(nodes.some((node) => node.id === result.winnerId)).toBe(true);
-  }, 300_000);
+    // The search is already at its floor — `budget: 1, branches: 2` is the
+    // smallest shape that can produce the three nodes asserted above — so the
+    // ceiling is what had to move. It was 300s against a step MEASURED at 290s
+    // one run and killed past 300s the next, which is a coin toss rather than a
+    // gate. Per-call latency on @cf/deepseek-ai/deepseek-v4-pro-0813 spans 22s to
+    // 293s inside a single run of this very suite, so a ceiling needs multiples
+    // of the measurement and not percent. 900s is what the sibling MCTS step in
+    // `exploration.eval.test.ts` uses, and these two are the same kind of step.
+  }, 900_000);
 
   liveTest('persistence', async () => {
     const msgsBefore = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM messages').get()?.c ?? 0;

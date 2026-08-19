@@ -79,6 +79,21 @@ const EXPLORATION_TASK =
   + 'the right one is not obvious — they trade freshness, memory and operational '
   + 'cost differently. Compare the competing approaches and recommend one.';
 
+/**
+ * The driven search's shape, stated here rather than inherited from
+ * `DEFAULT_CONFIG.mcts`.
+ *
+ * Iterations are the wall clock: production's 5 x 3 with 3 judge samples a branch
+ * ran past 900s against @cf/deepseek-ai/deepseek-v4-pro-0813 and was killed with
+ * rollouts still open. Two iterations is what the WORKS assertions require —
+ * competition needs one expansion of more than one branch, and the single durable
+ * winner comes from convergence, which runs once per search at any iteration
+ * count. Branches stay at production's 3, because the width IS the competition
+ * being scored; it is the depth that is bought and not measured.
+ */
+const EVAL_SEARCH_BUDGET = 2;
+const EVAL_SEARCH_BRANCHES = 3;
+
 /** Minimal in-memory session sink. MCTS needs somewhere to put a trajectory;
  *  what it holds is not what this suite measures. */
 function makeSessionWriter(): SessionWriter {
@@ -216,12 +231,26 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     const mcts = registry.get('mcts');
     if (!mcts) throw new Error('mcts strategy is not registered');
 
+    // BUDGET STATED, not inherited. `DEFAULT_CONFIG.mcts` is 5 iterations of 3
+    // branches, each branch judged over 3 samples — a shape tuned for real work,
+    // measured here at OVER 900s against @cf/deepseek-ai/deepseek-v4-pro-0813
+    // with three rollouts still in flight when the test was killed. A deploy gate
+    // that does not terminate is not a gate.
+    //
+    // Two iterations, because that is what the assertions below need and no more:
+    // competition (`branches > 1`) comes from one expansion, and the single
+    // durable winner comes from convergence, which runs once per search whatever
+    // the iteration count. The extra three iterations buy tree DEPTH, and depth
+    // is not what this suite scores. Nothing below is weakened — every assertion
+    // is the same assertion over a search that finishes.
     await mcts.explore({
       task: EXPLORATION_TASK,
       mode: 'build',
       rt,
       model,
-      options: { mcts: { session: makeSessionWriter() } },
+      options: {
+        mcts: { session: makeSessionWriter(), budget: EVAL_SEARCH_BUDGET, branches: EVAL_SEARCH_BRANCHES },
+      },
       reportModelCall: makeModelCallSink(rt),
     });
 
