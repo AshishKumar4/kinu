@@ -28,9 +28,8 @@
  * the head tool surface.
  */
 
-import * as v from 'valibot';
 import { diffLines, type FileStatus } from '../vfs/diff';
-import type { WriteEvent, WriteObserver } from '../vfs/observe';
+import { textPayload, type WriteEvent, type WriteObserver } from '../vfs/observe';
 
 /** One file a head changed, as a review would state it. */
 export interface HeadFileChange {
@@ -114,13 +113,14 @@ function withoutFinalNewline(content: string | null): string {
   return content.endsWith('\n') ? content.slice(0, -1) : content;
 }
 
-/** Content as text, or the fact that it is not. A non-string payload is never
- *  decoded into lines: an image has no line count, and inventing one would put
- *  a number in a review that means nothing. */
+/** Content as LINE-COUNTABLE text, or the fact that it is not. A non-string payload is
+ *  never decoded into lines: an image has no line count, and inventing one would put a
+ *  number in a review that means nothing. The empty text beside `binary: true` is what
+ *  makes the counts zero; `textPayload` owns the parse and this owns that mapping. */
 function asText(value: string | Uint8Array | null) {
-  if (value === null) return { text: null, binary: false };
-  const text = v.safeParse(v.string(), value);
-  if (text.success) return { text: text.output, binary: false };
+  const payload = textPayload(value);
+  if (payload.kind === 'absent') return { text: null, binary: false };
+  if (payload.kind === 'text') return { text: payload.text, binary: false };
   return { text: '', binary: true };
 }
 
