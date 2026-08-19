@@ -1,44 +1,86 @@
 # Proteus
 
-A Proteus workspace is a durable container with its own filesystem, execution environments, and sessions. Its agent improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. It runs in the cloud on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state, or entirely on your own machine — the same agent either way. There is also a CI-gated Lean 4 corpus of abstract models covering selected core algorithms.
+Proteus answers a task by searching a tree of agents. You give it the task and
+a way to measure an answer. It runs the tree and measures every candidate the
+way you said. A measured search writes its results to `exploration_records`,
+so a later search starts from them.
+
+That agent lives in a workspace: a durable container with its own filesystem,
+execution environments and sessions. The agent also learns reusable tools from
+its own conversations and can rewrite its own agentic loop. It runs in the
+cloud on Cloudflare's [Think](https://github.com/cloudflare/agents) framework
+with Durable Objects, or entirely on your own machine. The agent is the same
+either way. A Lean 4 corpus models selected core algorithms, and CI checks it
+on every push that touches `lean/` or a package source file.
 
 > Docs in this repo are edited & maintained by Claude and presented as-is; verify against the code when precision matters.
 
 **Live:** [proteus.ashishkumarsingh.com](https://proteus.ashishkumarsingh.com)
 
+## The swarm
+
+The search is one action on one tool. `agents({action:'swarm', …})` runs it.
+The other six actions are `hire`, `ask`, `send`, `reply`, `list` and
+`dismiss`, and they address agents that already exist.
+
+**You declare the measurement.** An `objective` names a metric, a unit, a
+direction and a target. It also names the verifier that measures a candidate.
+The verifier kind resolves through a closed registry, so a name nobody
+registered refuses the run instead of inventing a score. Under
+`score:'verify'` a candidate's number is the number that instrument reported.
+
+**A `preset` fixes the shape of the search.** `preset` takes one of seven
+values. Six are named searches, `prove` among them, and `custom` composes your
+own. Six axes carry the rest: `unit`, `context`, `expand`, `score`, `advance`
+and `carry`. `expand:'aggregate'` fans a level in and merges its members in
+dependency order. `advance:'archive'` keeps a grid of cells and one elite per
+coordinate.
+
+**A node is a whole agent, not a prompt.** It runs the same turn loop the
+workspace agent runs (`runChat`), and it takes several turns. Inside the one
+workspace filesystem it holds its own directory under `/home`, its own
+credential and its own `/tmp`. Work still running at 30 s detaches into a
+background job, and the node wakes when the job settles.
+
+**The engine says what it cannot do.** `advance:'pareto'` refuses, and the
+refusal names what is missing: a per-instance measurement path and a dominance
+comparison.
+
+[docs/EXPLORATION.md](docs/EXPLORATION.md) has the axes, the refusals, the
+publication seal and the records store in full.
+
 ## Architecture
 
-Everything the agent decides lives in `packages/core`, which is platform-clean: one workspace dependency, and no import of `agents`, `@cloudflare/*` or `cloudflare:workers`. Under it sits a seam of two interfaces: `AgentRuntime` for resource primitives (storage, memory, llm, schedule, …) and `BackendHost` for the few loop capabilities that are genuinely platform-shaped. Two backends implement that seam: Cloudflare Durable Objects, one per workspace, built on [Think](https://github.com/cloudflare/agents); and your own machine, on `bun:sqlite` and real processes. Both drive the same orchestrator, so the cloud and the CLI cannot drift into two pipelines.
+Everything the agent decides lives in `packages/core`, which is platform-clean: it depends on `@nimbus-sh/core` and `@proteus/agent-utils`, and it imports nothing from `agents`, `@cloudflare/*` or `cloudflare:workers`. Under it sits a seam of two interfaces: `AgentRuntime` for resource primitives (storage, memory, llm, schedule, …) and `BackendHost` for the few loop capabilities that are genuinely platform-shaped. Two backends implement that seam: Cloudflare Durable Objects, one per workspace, built on [Think](https://github.com/cloudflare/agents); and your own machine, on `bun:sqlite` and real processes. Both drive the same orchestrator, so the cloud and the CLI cannot drift into two pipelines.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/seam-dark.svg">
   <img alt="Clients and autonomous ingress feed packages/core, which owns the turn pipeline, tools, delegation, evolution, context, the canonical workspace file plane, the execution router and the event log. Below it, the AgentRuntime and BackendHost interfaces form the backend seam, implemented twice: by cf-backend on Cloudflare Durable Objects and by cli-backend on your own machine." src="docs/diagrams/seam.svg" width="900">
 </picture>
 
-The turn pipeline itself is `core/orchestrator`. A turn arrives either from a person or from the reactor (a drained event, a finished background job) and is assembled once: a system prompt of eight parts in a fixed order, then the durable history passed through the extension chain, which is where the compaction ladder fires. After that it is a step loop, and the interesting work happens at the step boundary: a dynamic-context block is re-rendered from live state and appended only when its bytes actually change, the cache tail is marked last so no earlier breakpoint moves, and anything asynchronous splices in through one seam rather than N.
+The turn pipeline itself is `core/orchestrator`. A turn arrives either from a person or from the reactor (a drained event, a finished background job) and is assembled once: a system prompt of nine parts in a fixed order, three of them conditional, then the durable history passed through the extension chain, which is where the compaction ladder fires. After that it is a step loop. At each step boundary a dynamic-context block is re-rendered from live state and appended only when its bytes actually change, the cache tail is marked last so no earlier breakpoint moves, and anything asynchronous splices in through one seam rather than N.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/turn-dark.svg">
   <img alt="A turn arrives from a user message or a programmatic wake and is queued one at a time. It is assembled once — system prompt plus transformed history, where the compaction ladder fires — then runs a step loop that re-weaves dynamic context, marks the cache tail and calls tools. Signals splice into the running step or queue the next turn. On settle the turn is snapshotted, recorded and reviewed, and pending events wake the next turn." src="docs/diagrams/turn.svg" width="900">
 </picture>
 
-Delegation is one tool, and its spawn actions are ordered by how long the helper needs to live. `fork` spawns ephemeral copies that settle back into the same turn; `hire` creates a subordinate that outlives it; the rest talk to what already exists. `swarm` sits beside `fork` on the measurement axis rather than the lifetime one: it is a configured tree search of any `depth` whose candidates are scored by a verifier the caller declared in its own `objective`, where a fork's findings are synthesised by a merge. That is the whole difference between them — who decides.
+Delegation is one tool with seven actions. `swarm` runs a tree search that settles back into this turn; `hire` creates a subordinate that outlives it; `ask`, `send`, `reply`, `list` and `dismiss` address agents that already exist. The two spawn actions differ on lifetime and on who decides: a swarm's candidates are measured against the caller's own `objective`, and a subordinate answers in its own words.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/delegation-dark.svg">
-  <img alt="One agents tool with eight actions. Fork creates ephemeral copies of the agent that settle back into the same turn, merging the 2-6 briefs it was given, which are required. Hire creates a persistent subordinate that outlives the turn and reports back as an event. Swarm sits beside fork on the measurement axis: a configured tree search of any depth whose candidates are scored by a verifier the caller declared rather than judged by a model. Ask, send, reply, list and dismiss address agents that already exist: subordinates here, or the owner's other workspaces as peers." src="docs/diagrams/delegation.svg" width="900">
+  <img alt="One agents tool with seven actions. Swarm runs a configured tree search that settles back into this turn, and its candidates are scored by the verifier the caller declared in its own objective rather than judged by a model. Hire creates a persistent subordinate that outlives the turn and reports back as an event. Ask, send, reply, list and dismiss address agents that already exist: subordinates here, or the owner's other workspaces as peers." src="docs/diagrams/delegation.svg" width="900">
 </picture>
 
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the detail these leave out: the workspace object model, message flow, events and ingress, and the Think lifecycle.
 
 ## Key Features
 
-- **Delegation as one ladder** — the `agents` tool covers all of it: `fork` for 2–6 ephemeral copies that merge back into this turn, `swarm` for a configured search whose candidates are measured rather than judged, `hire` for durable subordinates that outlive the turn, and `ask`/`send`/`reply`/`list`/`dismiss` for agents that already exist (subordinates here, or the owner's *other* workspaces as peers). A busy agent is never blocked on; the message is spliced into the turn it is already running.
-- **Measured parallel search** — a swarm runs to a `depth` and scores every candidate by executing the verifier the caller named, not by asking a model what it thinks of its own work. A branch is an isolated Durable Object facet in the cloud, a child process with its own SQLite file locally. The MCTS engine behind the older search — score-based selection, backpropagation, pruning, winner selection — is unchanged and still registered; it is reached by the durable search store and the eval harness rather than from the tool surface.
-- **3-timescale evolution** — turn-level (quality → reflection), session-level (pattern consolidation → scaffold mutation), lifetime (full MCTS exploration)
+- **Durable subordinates and peer workspaces** — `hire` creates a subordinate with its own turn loop, its own context and a share of this workspace's files. `ask`, `send`, `reply`, `list` and `dismiss` reach it, and reach the owner's *other* workspaces, through one set of names. A busy agent is never blocked on; the message is spliced into the turn it is already running.
+- **3-timescale evolution** — turn-level (quality → reflection), session-level (pattern consolidation → scaffold mutation), lifetime (`runMCTS`). The MCTS engine is unchanged: `core/src/evolution/engine.ts` and `proteus evolve` call it, and the `agents` tool does not.
 - **CraftStore** — learns reusable tools from conversations. EMA scoring with time decay. FTS5-indexed for search.
 - **Mutable scaffold** — the agent's agentic loop is code it can rewrite, validated through 4 structural gates
-- **POSIX shell emulator** — 16 commands (ls, grep, find, sed, cat, etc.) over virtual filesystem. No real OS needed on Workers.
+- **One real filesystem** — the workspace file plane is Nimbus over the backend's own SQLite: a durable POSIX filesystem, a real shell, ~95 coreutils, and language runtimes installed on demand. The same component runs on Workers and on your machine.
 - **Web search & fetch** — the built-in `web` tool (`search` and `fetch` actions) works with zero keys (DuckDuckGo search + Cloudflare's markdown service); add a Tavily key for ranked, answer-augmented search.
 - **Portable** — same core runs on Cloudflare Workers (Think + DOs) or local CLI (bun:sqlite)
 
@@ -117,10 +159,10 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 | [Evolution](docs/EVOLUTION.md) | 3-timescale self-evolution, CraftStore lifecycle, scaffold mutation |
 | [MCTS](docs/MCTS.md) | Monte Carlo Tree Search, UCT formula, branch isolation, convergence |
 | [Exploration](docs/EXPLORATION.md) | The six search axes, the node contract, the publication seal, settle and merge-back |
-| [Tools](docs/TOOLS.md) | The builtin agent tools, shell emulator, code execution, crafted tools |
+| [Tools](docs/TOOLS.md) | The eight builtin tools, the file plane, the `agents` delegation surface, the codemode sandbox and crafted tools |
 | [Context budget](docs/CONTEXT-BUDGET.md) | The reference-plus-digest invariant: where bulk spills, the turn-cumulative clamp, and the trip counters |
 | [Observability](docs/OBSERVABILITY.md) | The failure classification, the typed logger and its reserved-field ban, what is wired and what is not |
-| [Storage](docs/STORAGE.md) | Data model, SqliteFS, MemoryStore FTS5, table schemas |
+| [Storage](docs/STORAGE.md) | Data model, workspace files over the Nimbus VFS, MemoryStore FTS5, table schemas |
 | [Deployment](docs/DEPLOYMENT.md) | Local dev, Cloudflare deploy, AI Gateway setup, secrets |
 | [Formal Spec](docs/FORMAL-SPEC.md) | Lean 4 abstract models, assumptions, traceability, and CI gates |
 | [Bench](docs/BENCH.md) | Machine-scored harness for whether self-evolution helps: sealed split, paired stats, rejection by default |
@@ -131,8 +173,8 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 
 | Package | Description |
 |---------|-------------|
-| `core/` | The shared brain (platform-independent): turn pipeline + `ExtensionHost`, canonical VFS + ExecutionRouter, MCTS engine, EvolutionEngine, CraftStore, scaffold, the eight builtin tools, EventLog + SignalDelivery, types |
-| `agent-utils/` | SqliteFS (chunked VFS), MemoryStore (FTS5), CraftStore (FTS5), POSIX shell emulator |
+| `core/` | The shared brain (platform-independent): turn pipeline + `ExtensionHost`, canonical VFS + ExecutionRouter, the swarm engine, MCTS engine, EvolutionEngine, CraftStore, scaffold, the eight builtin tools, EventLog + SignalDelivery, types |
+| `agent-utils/` | MemoryStore (FTS5), CraftStore (FTS5), the shared VFS types, path addressing and small abort/encoding helpers |
 | `compaction/` | The default `transformContext` extension: vendored better-compact ladder + the Proteus AI-SDK⇄ladder codec |
 | `cf-backend/` | Cloudflare Workers: OrchestratorAgent (thin Think adapter), ExplorationAgent + SubordinateAgent (Facets), UserDO, React UI |
 | `cli/` | CLI commands: create, chat, exec, evolve, status, list, export, import |
