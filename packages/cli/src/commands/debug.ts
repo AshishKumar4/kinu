@@ -35,9 +35,11 @@
 import { appendFileSync } from 'node:fs';
 import { writeSecretFile } from '@proteus/cli-backend';
 import {
-  addUsage, decodeJsonValue, JsonObjectSchema, JsonValueSchema, projectJsonValue,
+  addUsage, decodeJsonValue, JsonObjectSchema, JsonValueSchema, pageSchema, projectJsonValue,
   usageReported, UsageSchema,
-  type JsonObject, type JsonValue, type Usage,
+  type ExplorationRecord, type JsonObject, type JsonValue, type Page,
+  type RecordCellHandle, type RecordCellSummary, type RecordObjectiveHandle,
+  type RecordObjectiveSummary, type SeekCursor, type Usage,
 } from '@proteus/core';
 import * as v from 'valibot';
 import { resolveAgentTarget } from '../agent-target';
@@ -47,8 +49,9 @@ import { ACCENT, DIM, ERR, OK, WARN } from '../display';
 import {
   getLocalAgentInfo, getLocalChangelog, getLocalChatHistory, getLocalFacts,
   getLocalScaffoldVersions, listLocalGepaRuns, listLocalHeads, listLocalJobs,
-  listLocalMcts, listLocalMctsSearchRuns, listLocalRunEvents, listLocalRuns,
-  listLocalTriggers, readLocalMemory, getLocalReleaseBoard, getLocalToolSurface,
+  listLocalMcts, listLocalMctsSearchRuns, listLocalRecordCells, listLocalRecordObjectives,
+  listLocalRunEvents, listLocalRuns, listLocalTriggers, readLocalMemory, readLocalRecordCell,
+  getLocalReleaseBoard, getLocalToolSurface,
 } from '../local-inspection';
 
 export interface DebugOpts {
@@ -80,6 +83,59 @@ function runEventRecord(event: DebugRunEvent): BundleRecord {
   const record: BundleRecord = { t: 'run_event', ...rest };
   if (usage !== undefined) record.usage = projectJsonValue({ value: usage });
   return record;
+}
+
+/**
+ * One comparable set as a bundle row. Projected field by field rather than
+ * spread, so what the bundle carries is a decision here rather than whatever the
+ * summary happens to hold — and `best` becomes its artifact digest, because the
+ * best row is itself written as a `record` below and a nested copy would be a
+ * second version of it that could disagree.
+ */
+function recordObjectiveRecord(objective: RecordObjectiveSummary): BundleRecord {
+  return {
+    t: 'record_objective',
+    objectiveId: objective.objectiveId,
+    floorDigest: objective.floorDigest,
+    metric: objective.metric,
+    unit: objective.unit,
+    direction: objective.direction,
+    scale: objective.scale,
+    cells: objective.cells,
+    rows: objective.rows,
+    best: objective.best?.artifactDigest ?? null,
+    bestValue: objective.best?.value ?? null,
+    lastRecordedAt: objective.lastRecordedAt,
+  };
+}
+
+/** One leaderboard row. `value` is RAW in the objective's unit — the
+ *  `record_objective` row above carries that unit and the direction it is read
+ *  in, which is what stops a reader taking a delta for a level. */
+function explorationRecordRecord(record: ExplorationRecord): BundleRecord {
+  return {
+    t: 'record',
+    objectiveId: record.objectiveId,
+    floorDigest: record.floorDigest,
+    descriptor: record.descriptor,
+    artifactDigest: record.artifactDigest,
+    artifact: record.artifact,
+    value: record.value,
+    detail: record.detail,
+    measured: record.measured === null ? null : { ...record.measured },
+    preset: record.preset,
+    label: record.label,
+    rootId: record.rootId,
+    configDigest: record.configDigest,
+    depth: record.depth,
+    branches: record.branches,
+    floorValue: record.floorValue,
+    floorProof: record.floorProof,
+    costUsd: record.costUsd,
+    costTokens: record.costTokens,
+    firstRecordedAt: record.firstRecordedAt,
+    displacements: record.displacements,
+  };
 }
 
 interface DebugRunEvent {
@@ -165,6 +221,38 @@ const DebugChangelogViewSchema: v.GenericSchema<DebugChangelogView> = v.object({
 });
 const WorkspaceSnapshotSchema = v.object({ status: JsonObjectSchema });
 
+/**
+ * The exploration LEADERBOARD's three reads, typed against core's own summaries
+ * rather than re-declared.
+ *
+ * `v.GenericSchema<RecordObjectiveSummary>` is the point: this is a parse at the
+ * CLI's wire boundary, and annotating it with core's type means the schema
+ * cannot drift from what the read model returns — it stops compiling instead.
+ * The two nullable keys are `v.nullable`, never optional: `floorDigest: null` is
+ * "declared no floor" and `descriptor: null` is "no descriptor partition", and an
+ * absent field would be a third meaning neither read has.
+ */
+const ExplorationRecordSchema: v.GenericSchema<ExplorationRecord> = v.object({
+  objectiveId: v.string(), descriptor: v.nullable(v.string()), artifactDigest: v.string(),
+  artifact: v.string(), value: v.number(), detail: v.string(),
+  measured: v.nullable(v.record(v.string(), v.number())),
+  preset: v.string(), label: v.nullable(v.string()), rootId: v.string(),
+  configDigest: v.string(), depth: v.number(), branches: v.number(),
+  floorDigest: v.nullable(v.string()), floorValue: v.nullable(v.number()),
+  floorProof: v.nullable(v.string()), costUsd: v.nullable(v.number()),
+  costTokens: v.nullable(v.number()), firstRecordedAt: v.number(), displacements: v.number(),
+});
+const RecordObjectiveSummarySchema: v.GenericSchema<RecordObjectiveSummary> = v.object({
+  objectiveId: v.string(), floorDigest: v.nullable(v.string()), metric: v.string(),
+  unit: v.string(), direction: v.picklist(['minimise', 'maximise']),
+  scale: v.picklist(['linear', 'log']), cells: v.number(), rows: v.number(),
+  best: v.nullable(ExplorationRecordSchema), lastRecordedAt: v.number(),
+});
+const RecordCellSummarySchema: v.GenericSchema<RecordCellSummary> = v.object({
+  descriptor: v.nullable(v.string()), occupants: v.number(),
+  elite: v.nullable(ExplorationRecordSchema),
+});
+
 /** The one fetch surface `writeBundle` walks — implemented once per backend,
  *  never duplicated by the writer itself. Every method already exists as a
  *  read model somewhere in the codebase; this interface just names the width
@@ -186,6 +274,22 @@ interface DebugSource {
   toolDescriptions(): Promise<JsonValue>;
   facts(limit: number): Promise<JsonObject[]>;
   memoryContent(): Promise<string>;
+  /**
+   * The records store — the CUMULATIVE half of exploration, and the one read
+   * model a debug bundle had no path to on either backend.
+   *
+   * Three calls rather than one because the store is a grid the caller walks:
+   * which comparable sets exist, which cells each spans, and then a cell's
+   * population A PAGE AT A TIME. That last one is not a style choice — a cell's
+   * population is provably unbounded (`ArchiveAdmission.lean —
+   * separated_cells_are_unboundedly_large`), so a bundle that read a cell whole
+   * would hold an unbounded set in memory to write it out row by row.
+   */
+  recordObjectives(limit: number): Promise<RecordObjectiveSummary[]>;
+  recordCells(handle: RecordObjectiveHandle, limit: number): Promise<RecordCellSummary[]>;
+  recordOccupants(
+    handle: RecordCellHandle, cursor: SeekCursor | null, limit: number,
+  ): Promise<Page<ExplorationRecord>>;
   /** Best-effort telemetry rollup (percentiles, remaining budgets, the
    *  activity log). Cloud-only today — `getActivitySnapshot` has no local
    *  peer; local sources return null and the section is omitted rather than
@@ -215,6 +319,28 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
     toolDescriptions: () => rpc('getToolDescriptions', JsonValueSchema),
     facts: (limit) => rpc('getFacts', JsonRowsSchema, [limit]),
     memoryContent: () => rpc('getMemoryContent', v.string()),
+    recordObjectives: (limit) =>
+      rpc('listRecordObjectives', pageSchema(RecordObjectiveSummarySchema), [{ limit }])
+        .then((page) => [...page.items]),
+    // Each request is built field by field rather than spread: the handles cross a
+    // JSON boundary, `SeekCursor` is a domain type with no index signature, and a
+    // spread of a whole summary would put a leaderboard row in a request. `cursor`
+    // is absent rather than null for the first page — that is what the request's
+    // optional field means.
+    recordCells: (handle, limit) =>
+      rpc('listRecordCells', pageSchema(RecordCellSummarySchema),
+        [{ objectiveId: handle.objectiveId, floorDigest: handle.floorDigest, limit }])
+        .then((page) => [...page.items]),
+    recordOccupants: (handle, cursor, limit) => {
+      const request: JsonObject = {
+        objectiveId: handle.objectiveId, floorDigest: handle.floorDigest,
+        descriptor: handle.descriptor, limit,
+      };
+      // ABSENT, not `undefined`: JSON has no undefined, and the request's optional
+      // `cursor` means "start at the beginning" by not being there.
+      if (cursor !== null) request.cursor = { after: cursor.after };
+      return rpc('readRecordCell', pageSchema(ExplorationRecordSchema), [request]);
+    },
     activitySnapshot: () => rpc('getActivitySnapshot', v.nullable(JsonObjectSchema), [{}]),
   };
 }
@@ -241,6 +367,10 @@ function localDebugSource(localName: string): DebugSource {
     toolDescriptions: async () => decodeJsonValue({ value: getLocalToolSurface(localName) }),
     facts: async (limit) => parseLocal(JsonRowsSchema, { value: getLocalFacts(localName, limit) }),
     memoryContent: async () => readLocalMemory(localName),
+    recordObjectives: async (limit) => listLocalRecordObjectives(localName, limit),
+    recordCells: async (handle, limit) => listLocalRecordCells(localName, handle, limit),
+    recordOccupants: async (handle, cursor, limit) =>
+      readLocalRecordCell(localName, handle, cursor, limit),
     activitySnapshot: async () => null,
   };
 }
@@ -363,6 +493,7 @@ interface DebugSummary {
   runs: RunStats[];
   headRuns: DebugHeadRun[];
   mctsSearches: MctsSearchSummary[];
+  recordObjectives: RecordObjectiveSummary[];
   backgroundJobs: DebugBackgroundJob[];
   changelogUnseen: number;
   scaffoldVersionCount: number;
@@ -469,6 +600,23 @@ function summarizeMctsSearches(nodes: RawMctsNode[], searches: DebugMctsSearchRu
 
 const DEFAULT_RUNS = 20;
 const DEFAULT_EVENT_PAGE = 500;
+const DEFAULT_RECORD_PAGE = 200;
+/**
+ * How many pages of ONE cell a bundle will walk.
+ *
+ * A bound rather than "until `end`", because the set being walked has no bound
+ * of its own: `separated_cells_are_unboundedly_large` means a cell can hold more
+ * occupants than a debug bundle should ever write, and a walk with no cap would
+ * turn one pathological cell into an unbounded file. The cap TRUNCATES a cell and
+ * says nothing false about it — the bundle is a sample of a store, and every
+ * other section is limited the same way.
+ *
+ * Unrelated to `INHERITED_CONTEXT_CAP` (core orchestrator/heads-support.ts), which
+ * happens to be the same round number: that one bounds how much context a head
+ * inherits, this one bounds how much of one cell a debug bundle writes. Neither
+ * decision constrains the other, so they are separate declarations on purpose.
+ */
+const RECORD_PAGE_CAP = 50;
 
 export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
@@ -484,6 +632,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
   const summary: DebugSummary = {
     identity: {}, messageCount: 0, runs: [], headRuns: [], mctsSearches: [],
     backgroundJobs: [], changelogUnseen: 0, scaffoldVersionCount: 0, gepaRunCount: 0,
+    recordObjectives: [],
     factCount: 0, errors: [],
   };
 
@@ -527,6 +676,38 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     for (const s of mctsSearches) writer.write({ t: 'mcts_search_run', ...s });
     for (const n of mctsNodes) writer.write({ t: 'mcts_node', ...n });
     summary.mctsSearches = summarizeMctsSearches(mctsNodes, mctsSearches);
+
+    // The records store, walked as the grid it is. Every value written here is
+    // RAW in the objective's own unit, and the unit and direction travel with it:
+    // a bundle row carrying a bare real is a number a reader has to guess the
+    // meaning of, which is the whole reason the store now records what it
+    // measured. Occupants are PAGED — a cell's population has no bound.
+    summary.recordObjectives = await safe(source.recordObjectives(sectionLimit), []);
+    for (const objective of summary.recordObjectives) {
+      writer.write(recordObjectiveRecord(objective));
+      const objectiveHandle = {
+        objectiveId: objective.objectiveId, floorDigest: objective.floorDigest,
+      };
+      const cells = await safe(source.recordCells(objectiveHandle, sectionLimit), []);
+      for (const cell of cells) {
+        writer.write({
+          t: 'record_cell', objectiveId: objective.objectiveId,
+          floorDigest: objective.floorDigest, descriptor: cell.descriptor,
+          occupants: cell.occupants, elite: cell.elite?.artifactDigest ?? null,
+        });
+        const handle = { ...objectiveHandle, descriptor: cell.descriptor };
+        let cursor: SeekCursor | null = null;
+        for (let page = 0; page < RECORD_PAGE_CAP; page += 1) {
+          const occupants: Page<ExplorationRecord> = await safe(
+            source.recordOccupants(handle, cursor, DEFAULT_RECORD_PAGE),
+            { status: 'end', items: [] },
+          );
+          for (const row of occupants.items) writer.write(explorationRecordRecord(row));
+          if (occupants.status === 'end') break;
+          cursor = occupants.next;
+        }
+      }
+    }
 
     const jobs = await safe(source.backgroundJobs(sectionLimit), []);
     summary.backgroundJobs = jobs;
@@ -672,6 +853,21 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
     if (summary.mctsSearches.length > 1) {
       const [latest, previous] = summary.mctsSearches;
       console.log(DIM(`  latest vs previous: ${latest!.nodeCount} vs ${previous!.nodeCount} nodes, depth ${latest!.maxDepth} vs ${previous!.maxDepth}`));
+    }
+  }
+
+  if (summary.recordObjectives.length > 0) {
+    console.log(`\n${ACCENT('Exploration records')} (${summary.recordObjectives.length} comparable set(s), newest first)`);
+    for (const objective of summary.recordObjectives.slice(0, 5)) {
+      // The unit and the arrow are the whole point: a raw value with neither is a
+      // number a reader has to guess the meaning of, and guessing a delta for a
+      // level is how 25.4% came to be read as a reward level.
+      const arrow = objective.direction === 'minimise' ? '↓' : '↑';
+      const best = objective.best === null
+        ? WARN('no rows')
+        : `best ${arrow}${String(objective.best.value)} ${objective.unit}`;
+      const floorTag = objective.floorDigest === null ? DIM('no floor') : DIM(`floor ${objective.floorDigest.slice(0, 8)}`);
+      console.log(`  ${DIM(new Date(objective.lastRecordedAt).toLocaleString())} ${ACCENT(objective.objectiveId.slice(0, 8))} ${objective.metric} — ${objective.rows} row(s) over ${objective.cells} cell(s), ${best}, ${floorTag}`);
     }
   }
 

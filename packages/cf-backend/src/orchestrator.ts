@@ -139,6 +139,9 @@ import {
   listForkRuns, readForkRun, type ForkRunSummary,
   readNodeTranscript, type NodeTranscriptView,
   readExplorationCanvas, type ExplorationCanvasRun,
+  listRecordObjectives, listRecordCells, readRecordCell,
+  type RecordObjectiveSummary, type RecordCellSummary,
+  type RecordObjectiveHandle, type RecordCellHandle, type ExplorationRecord,
   type HeadStep,
   buildPendingActions, type PendingAction,
   type ChatHistoryEntry, type Page, type PageRequest,
@@ -1772,6 +1775,47 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable() async getExplorationCanvas(request?: PageRequest): Promise<Page<ExplorationCanvasRun>> {
     return readExplorationCanvas(this.boundSql, request?.cursor ?? null, request?.limit);
+  }
+
+  /**
+   * A page of every comparable set the records store holds, most recently written
+   * first — the discovery read the leaderboard had none of.
+   *
+   * The store's own reads are scoped by an `ObjectiveIdentity`, which includes the
+   * digest of the verifier's source, so no surface could name a set it had not already
+   * been told about. This is where a surface gets the handle; the two reads below take
+   * it back opaquely rather than rebuilding it from parts.
+   *
+   * Each row carries the metric, the unit, the direction and the scale, because a
+   * leaderboard drawn on a bare value shows a number that cannot be read.
+   */
+  @callable() async listRecordObjectives(request?: PageRequest): Promise<Page<RecordObjectiveSummary>> {
+    return listRecordObjectives(this.boundSql, request?.cursor ?? null, request?.limit);
+  }
+
+  /**
+   * One set's cells and each cell's elite.
+   *
+   * `floorDigest` is REQUIRED and nullable: null is "the objective declared no floor",
+   * and a floor-blind handle would collapse a corrected floor and a wrong one.
+   */
+  @callable() async listRecordCells(
+    request: RecordObjectiveHandle & PageRequest,
+  ): Promise<Page<RecordCellSummary>> {
+    return listRecordCells(this.boundSql, request, request.cursor ?? null, request.limit);
+  }
+
+  /**
+   * One cell's population, best first, a page at a time.
+   *
+   * Paged rather than whole because a cell's population is provably unbounded
+   * (`ArchiveAdmission.lean — separated_cells_are_unboundedly_large`), and
+   * `descriptor: null` is the NO-PARTITION cell rather than an unnamed one.
+   */
+  @callable() async readRecordCell(
+    request: RecordCellHandle & PageRequest,
+  ): Promise<Page<ExplorationRecord>> {
+    return readRecordCell(this.boundSql, request, request.cursor ?? null, request.limit);
   }
 
   /**

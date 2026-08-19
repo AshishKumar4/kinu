@@ -68,6 +68,16 @@ import {
   decodeJsonValue,
   parseJsonValue,
   type SqlExec,
+  listRecordObjectives,
+  listRecordCells,
+  readRecordCell,
+  type ExplorationRecord,
+  type Page,
+  type RecordCellHandle,
+  type RecordCellSummary,
+  type RecordObjectiveHandle,
+  type RecordObjectiveSummary,
+  type SeekCursor,
 } from '@proteus/core';
 import {
   makeSql, makeSqlExec, createHostShell, hostToolchainCapabilities,
@@ -365,6 +375,46 @@ export function listLocalMcts(name: string): SearchNode[] {
 export function listLocalMctsSearchRuns(name: string, limit = 20): MctsSearchRunSummary[] {
   return withLocalDb(name, (db) => (
     tableExists(db, 'mcts_search_runs') ? new MctsSearchStore(makeSql(db)).list(limit) : []
+  ));
+}
+
+/**
+ * Local peers of the three record RPCs — the CUMULATIVE half of exploration.
+ *
+ * The trees above are per-run; `exploration_records` is what survived across
+ * runs, and it had no local read path at all. Guarded on the table existing for
+ * the same reason `listLocalMcts` is: a workspace created before it was part of
+ * the shared schema has no such table, and that is an absence rather than a
+ * failure. The read models themselves work over any `SqlExecutor`.
+ */
+export function listLocalRecordObjectives(name: string, limit = 20): RecordObjectiveSummary[] {
+  return withLocalDb(name, (db) => (
+    tableExists(db, 'exploration_records')
+      ? [...listRecordObjectives(makeSql(db), null, limit).items]
+      : []
+  ));
+}
+
+export function listLocalRecordCells(
+  name: string, handle: RecordObjectiveHandle, limit = 50,
+): RecordCellSummary[] {
+  return withLocalDb(name, (db) => (
+    tableExists(db, 'exploration_records')
+      ? [...listRecordCells(makeSql(db), handle, null, limit).items]
+      : []
+  ));
+}
+
+/** Paged, because a cell's population is provably unbounded
+ *  (`ArchiveAdmission.lean — separated_cells_are_unboundedly_large`). The cursor
+ *  is opaque and round-trips through the caller unchanged. */
+export function readLocalRecordCell(
+  name: string, handle: RecordCellHandle, cursor: SeekCursor | null, limit = 100,
+): Page<ExplorationRecord> {
+  return withLocalDb(name, (db) => (
+    tableExists(db, 'exploration_records')
+      ? readRecordCell(makeSql(db), handle, cursor, limit)
+      : { status: 'end', items: [] }
   ));
 }
 
