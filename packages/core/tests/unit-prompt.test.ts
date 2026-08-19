@@ -17,8 +17,15 @@ import {
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
   splitPromptSections,
+  AGENTS_TOOL_ACTIONS,
+  BUILTIN_SKILLS,
+  SWARM_PRESET_DOCTRINE,
   type ParsedSkill,
 } from '../src/index';
+import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
+import {
+  NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, isPresetPoint, resolveSwarm,
+} from '../src/strategy/swarm';
 import { createTestRuntime } from '@proteus/test-utils';
 
 describe('buildSystemPromptSync', () => {
@@ -246,6 +253,70 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/A search writes its own competing candidates from `task`/);
     expect(prompt).toMatch(/you supply what counts, not the angles/);
     expect(prompt).toMatch(/scores each one with the verifier you named in `objective`/);
+  });
+
+  test('every surface that enumerates presets names the ones that resolve, and says so about the ones that do not', () => {
+    // Three of six named presets stopped resolving — SWARM_PRESET_POINTS records
+    // the gap rather than inventing a threshold, so `resolveSwarm` refuses the row
+    // outright — while `prove`, the one preset with an exact checker, joined the
+    // advertised enum and was named in no sentence anywhere. Four hand-written
+    // copies of one list is how both happened, so the list is one constant now and
+    // this test is derived from the TABLE: declaring a threshold for research /
+    // audit / redteam fails it until the doctrine stops calling them
+    // unconstructible, and an eighth preset fails it until the doctrine names it.
+    const doctrine = SWARM_PRESET_DOCTRINE.join(' ');
+    for (const preset of SWARM_PRESETS) expect(doctrine).toContain(preset);
+
+    const unconstructible = NAMED_SWARM_PRESETS.filter((preset) => !isPresetPoint(SWARM_PRESET_POINTS[preset]));
+    expect(unconstructible).toEqual(['research', 'audit', 'redteam']);
+    const refused = SWARM_PRESET_DOCTRINE.filter((line) => line.includes('UNCONSTRUCTIBLE'));
+    expect(refused).toHaveLength(1);
+    for (const preset of unconstructible) expect(refused[0]).toContain(preset);
+    // …and no preset that DOES resolve is swept into that sentence.
+    for (const preset of NAMED_SWARM_PRESETS.filter((p) => isPresetPoint(SWARM_PRESET_POINTS[p]))) {
+      expect(refused[0]).not.toContain(preset);
+    }
+    // The claim is true of the engine, not just of the prose.
+    for (const preset of unconstructible) {
+      const resolved = resolveSwarm({ preset, task: 'x', key: 'k' });
+      expect(resolved).toHaveProperty('reason');
+    }
+  });
+
+  test('the preset list is rendered where `preset` is filled, and not a second time in the rung', () => {
+    // Which presets exist is FIELD doctrine — read at the moment the field is
+    // typed — so it rides the `preset` property and the missing-`preset` refusal.
+    // The rung carried its own copy, which is what drifted; it now carries only
+    // what decides whether to search at all, and the prompt's Delegation index
+    // never enumerated presets in the first place.
+    const doctrine = SWARM_PRESET_DOCTRINE.join(' ');
+    expect(DELEGATION_RUNGS.swarm).not.toContain('preset=optimise');
+    expect(DELEGATION_RUNGS.swarm).not.toContain('research/audit/redteam');
+    expect(DELEGATION_RUNGS.swarm).not.toContain(doctrine);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toContain('research/audit/redteam');
+    // Still says who names the shape — the pointer stays, only the list moved.
+    expect(DELEGATION_RUNGS.swarm).toContain('You name the shape with `preset`');
+    expect(buildSystemPromptSync(createTestRuntime().rt)).not.toContain(doctrine);
+  });
+
+  test('no built-in skill body calls an action or a field the tool surface does not have', () => {
+    // A skill body is prompt text verbatim on the turn it activates. This one
+    // still told the model to call `agents({action:"fork", forks:[...], budget})`
+    // — one dead action and two dead fields — which is the failure mode a naming
+    // drift produces silently, because nothing typechecks a template string.
+    const liveActions: readonly string[] = AGENTS_TOOL_ACTIONS;
+    const swarmFields: readonly string[] = AGENTS_ACTION_FIELDS.swarm;
+    for (const skill of BUILTIN_SKILLS) {
+      for (const [, action] of skill.body.matchAll(/action:\s*["'](\w+)["']/g)) {
+        expect(liveActions).toContain(action);
+      }
+      for (const [, field] of skill.body.matchAll(/agents\(\{([^}]*)\}/g)) {
+        for (const [, key] of field.matchAll(/(\w+):/g)) {
+          if (key === 'action') continue;
+          expect(swarmFields).toContain(key);
+        }
+      }
+    }
   });
 
   test('what a node can lean on is stated where the task is written, and nowhere twice', () => {

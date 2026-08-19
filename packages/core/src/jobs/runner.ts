@@ -151,15 +151,18 @@ function refusalMessage(kind: string, running: readonly BackgroundJob[]): string
  *  it directly on the store). Truncated to match the short-snippet
  *  convention every other debug summary line already uses (task.slice(0,60)
  *  for head runs, etc.) — this is a label, not a payload dump. */
-const ForkJobInputSchema = v.object({ task: v.string() });
+const SearchJobInputSchema = v.object({ task: v.string() });
 const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()) });
 const ExecuteJobInputSchema = v.object({ code: v.string() });
 
 function describeJobInput<T>(kind: string, input: T): string | undefined {
   if (kind === 'agents') {
-    const parsed = v.safeParse(ForkJobInputSchema, input);
+    const parsed = v.safeParse(SearchJobInputSchema, input);
     if (parsed.success) {
-      return `fork: ${parsed.output.task.slice(0, 80)}`;
+      // `search:`, not `fork:` — the only backgroundable `agents` action is
+      // swarm, and this label is rendered into the live-state block the model
+      // reads its own running work off.
+      return `search: ${parsed.output.task.slice(0, 80)}`;
     }
   }
   if (kind === 'run') {

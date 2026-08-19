@@ -46,14 +46,14 @@
 import { Agent, callable, type AgentContext } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import { generateText } from "ai";
-import { explorePrompt, formatInheritedContext, generateJson, isWorkMode, normalizeUsage, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
+import { explorePrompt, formatInheritedContext, isWorkMode, normalizeUsage, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator";
 import {
   type CraftedTool,
   type HeadId,
   type HeadInput,
   type HeadReport,
-  type HeadRuntime,
+  type WebSearchProvider,
   type HeadStep,
   type Decision,
   type MergeStrategy,
@@ -62,8 +62,6 @@ import {
   type SqlExecutor,
   HeadController,
   type HeadJournalPort,
-  MergeOutputSchema,
-  type MergeOutput,
   type BranchExploration,
   type BranchReflection,
   HeadCapture,
@@ -77,7 +75,7 @@ import {
 } from "@proteus/core";
 import { OwnedModelServices } from "./owned-model-services";
 import { FacetIdentity } from "./facet-identity";
-import { spawnHeadFacet } from "./facet-spawn";
+import { createHeadRuntime } from "./head-runtime";
 import { bindAgentSql, createCFRuntime, type CFRuntime, type CFRuntimeHooks } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
 import { buildHeadToolSet } from "@proteus/core";
@@ -295,8 +293,9 @@ export class ExplorationAgent extends Agent<Env> {
       abortReason: () => this.headAbortReason,
     };
     if (mission) options.mission = mission;
-    const reportStep = this.stepSink(input);
-    if (reportStep) options.reportStep = reportStep;
+    // Null only when this facet has no parent, which is an MCTS branch.
+    const parent = this.getSharedParentStub();
+    if (parent) options.reportStep = this.stepSink(parent, input.id);
     return runHeadInference(input, options);
   }
 
@@ -316,8 +315,12 @@ export class ExplorationAgent extends Agent<Env> {
   async runAsNode(): Promise<NodeLoopResult> {
     if (!this.nodeSpec) throw new Error("ExplorationAgent.runAsNode() called before initNode()");
     const spec = this.nodeSpec;
-    const port = this.getSharedParentStub();
-    if (!port) {
+    // Named `parent` like every other acquisition of this stub, and not only for
+    // style: unit-rpc-surface.test.ts derives a facet's cross-DO calls by that
+    // local's name, so a second spelling shrinks the scan silently. It did —
+    // `nodeArbitrate` went unchecked while this one was called something else.
+    const parent = this.getSharedParentStub();
+    if (!parent) {
       throw new Error('This node was spawned without a parent search; setSharedParent must run before runAsNode.');
     }
     const nodeId = spec.headInput.id;
@@ -330,19 +333,9 @@ export class ExplorationAgent extends Agent<Env> {
       // The runtime half of the arbitration rule. Its build-time half is
       // `spec.canPropose`, which the search decided: a stub is always non-null, so
       // presence alone cannot answer whether a branch could be granted.
-      arbitrate: spec.canPropose ? (proposal) => port.nodeArbitrate(nodeId, proposal) : null,
-      // The SAME sink a head's steps use, because a node's rows are head-journal
-      // rows: `insertSpawn` took a `HeadInput` and `appendStep` writes the same
-      // table, so one write has one name and a running node is readable live.
-      reportStep: (seq, step) => port.recordHeadStep(nodeId, seq, step).then(() => undefined),
-      executeTool: createExecuteToolsTool({
-        loader: this.env.LOADER,
-        rt,
-        sql: this.boundSql,
-        registry: this.ownedModelServices.providerRegistry(),
-        modelSpec: () => spec.headInput.model ?? null,
-        webSearch,
-      }),
+      arbitrate: spec.canPropose ? (proposal) => parent.nodeArbitrate(nodeId, proposal) : null,
+      reportStep: this.stepSink(parent, nodeId),
+      executeTool: this.facetExecuteTool(rt, spec.headInput, webSearch),
       webSearch,
     };
     // Assigned rather than spread: an unbudgeted node must leave the key ABSENT,
@@ -353,7 +346,7 @@ export class ExplorationAgent extends Agent<Env> {
   }
 
   /**
-   * Where this head's finished steps go: the parent's journal, over RPC, as each
+   * Where this facet's finished steps go: the parent's journal, over RPC, as each
    * one lands.
    *
    * Same shape and same reason as {@link missionScope} — the journal lives on the
@@ -361,14 +354,15 @@ export class ExplorationAgent extends Agent<Env> {
    * branch readable: the trace is the only thing that can say what a head is
    * doing before it reports, and the surface renders it as it arrives.
    *
-   * Null only when this facet has no parent, which is an MCTS branch — those are
-   * toolless one-shot rollouts with no multi-step trace to record.
+   * ONE sink for a head and a node alike, because a node's rows ARE head-journal
+   * rows — `insertSpawn` takes a `HeadInput` and `appendStep` writes the same
+   * table. The stub is passed in rather than resolved here because only one caller
+   * has an absence to handle: a node has already refused to run without a parent,
+   * and a head without one is an MCTS branch, which has no multi-step trace.
    */
-  private stepSink(input: HeadInput): ((seq: number, step: HeadStep) => Promise<void>) | null {
-    const parent = this.getSharedParentStub();
-    if (!parent) return null;
-    return async (seq, step) => {
-      await parent.recordHeadStep(input.id, seq, step);
+  private stepSink(parent: DurableObjectStub<OrchestratorAgent>, headId: HeadId) {
+    return async (seq: number, step: HeadStep): Promise<void> => {
+      await parent.recordHeadStep(headId, seq, step);
     };
   }
 
@@ -402,20 +396,28 @@ export class ExplorationAgent extends Agent<Env> {
 
   private buildHeadTools(input: HeadInput, capture: HeadCapture) {
     const rt = this.headRuntime(capture);
+    const webSearch = this.ownedModelServices.getWebSearchProvider();
     return buildHeadToolSet({
       input,
       capture,
       rt,
-      executeTool: createExecuteToolsTool({
-        loader: this.env.LOADER,
-        rt,
-        sql: this.boundSql,
-        registry: this.ownedModelServices.providerRegistry(),
-        modelSpec: () => input.model ?? null,
-        webSearch: this.ownedModelServices.getWebSearchProvider(),
-      }),
-      webSearch: this.ownedModelServices.getWebSearchProvider(),
+      executeTool: this.facetExecuteTool(rt, input, webSearch),
+      webSearch,
       split: (request) => this.runRecursiveSplit(request, input.budget, input),
+    });
+  }
+
+  /** The `execute_tools` surface a facet's mode gets over its own runtime. One
+   *  builder for a head and a node, because they differ in nothing but which
+   *  `HeadInput` names the model a crafted script may call. */
+  private facetExecuteTool(rt: CFRuntime, input: HeadInput, webSearch: WebSearchProvider) {
+    return createExecuteToolsTool({
+      loader: this.env.LOADER,
+      rt,
+      sql: this.boundSql,
+      registry: this.ownedModelServices.providerRegistry(),
+      modelSpec: () => input.model ?? null,
+      webSearch,
     });
   }
 
@@ -453,36 +455,24 @@ export class ExplorationAgent extends Agent<Env> {
       cacheMerge: (rootId, result, strategy) =>
         parent.headJournalCacheMerge(rootId, result, strategy),
     };
-    const runtime: HeadRuntime = {
-      spawnHead: (childInput: HeadInput) => {
-        return spawnHeadFacet(this, childInput, {
-          ownerUserId: this.identity.ownerUserId(),
-          capabilityToken: this.identity.capabilityToken(),
-          // The ROOT orchestrator, propagated unchanged so the whole subtree
-          // shares one findings scratch (not this intermediate head).
-          sharedParent: this.identity.parentWorkspace(),
-        });
-      },
-      mergeLLM: async (prompt: string): Promise<MergeOutput> => {
-        const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(parentInput.model, 'low');
-        const options: Parameters<typeof generateJson<MergeOutput>>[0] = {
-          model,
-          schema: MergeOutputSchema,
-          prompt,
-          // The merge synthesis is the one model call in a recursive split whose
-          // cost lands nowhere else: `head_merge_results.cost_total_tokens` is
-          // the sum of the HEADS, not of the call that merged them. Reported to
-          // the root over the same cross-DO port the journal above uses, because
-          // that is where the workspace's total is assembled.
-          spend: {
-            source: 'judge',
-            report: (report) => { void parent.reportFacetModelCall(report); },
-          },
-        };
-        if (providerOptions) options.providerOptions = providerOptions;
-        return generateJson(options);
-      },
-    };
+    const runtime = createHeadRuntime({
+      host: this,
+      identity: async () => ({
+        ownerUserId: this.identity.ownerUserId(),
+        capabilityToken: this.identity.capabilityToken(),
+        // The ROOT orchestrator, propagated unchanged so the whole subtree
+        // shares one findings scratch (not this intermediate head).
+        sharedParent: this.identity.parentWorkspace(),
+      }),
+      models: this.ownedModelServices,
+      mergeModelSpec: () => parentInput.model ?? null,
+      // Reported to the root over the same cross-DO port the journal above uses,
+      // because that is where the workspace's total is assembled.
+      reportModelCall: (report) => { void parent.reportFacetModelCall(report); },
+      // No `grounding`: a subtree's merge stays n=1 with neutral head scores.
+      // Grounding one multiplies it into `mergeSamples` syntheses plus a judge
+      // pass per head, and whether every level pays that is a heads-policy call.
+    });
 
     const controller = new HeadController(runtime, journal);
     const controllerInput: Parameters<HeadController['run']>[0] = {

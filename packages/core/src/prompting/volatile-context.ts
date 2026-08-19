@@ -69,9 +69,9 @@ export interface DynamicTask {
 }
 
 /** An agent the agent has working for it right now: a spawned subordinate
- *  (parent roster) or a forked head run (heads journal). */
+ *  (parent roster) or a running search (heads journal). */
 export interface DynamicDelegate {
-  readonly kind: 'subordinate' | 'fork';
+  readonly kind: 'subordinate' | 'search';
   readonly name: string;
   /** Where it is — the roster status / head-run phase, as its own store words it. */
   readonly phase: string;
@@ -134,16 +134,22 @@ export interface MissingCapability {
   readonly reason: string;
 }
 
-/** The live fork roster as delegates — the ONE mapping both backends apply to
- *  `HeadJournal.listLive()`, so a fork reads the same on either. Typed
- *  structurally: how a head run is journalled is not this layer's business. */
-export function forkDelegates(
+/** The live search roster as delegates — the ONE mapping both backends apply to
+ *  `HeadJournal.listLive()`, so a search reads the same on either. Typed
+ *  structurally: how a run is journalled is not this layer's business.
+ *
+ *  The words are the SURFACE's words, because this block is the model reading
+ *  its own live state and it can only act on what the tool surface calls
+ *  things. `swarm-run.ts` records every configured search into this journal, so
+ *  a row here IS a search — it rendered as `(fork)`, an action the ladder no
+ *  longer has, over "heads", which the prompt calls nodes. */
+export function searchDelegates(
   runs: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>,
 ): DynamicDelegate[] {
   return runs.map((run) => ({
-    kind: 'fork',
+    kind: 'search',
     name: run.rootId,
-    phase: `${run.running} of ${run.total} heads running`,
+    phase: `${run.running} of ${run.total} nodes running`,
     task: run.rationale || null,
   }));
 }
@@ -208,7 +214,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
     executors: sources.executors,
     jobs: sources.runningJobs.map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
     tasks: flattenTaskList(sources.openTasks),
-    delegates: forkDelegates(sources.liveHeadRuns),
+    delegates: searchDelegates(sources.liveHeadRuns),
   };
   if (sources.factsBlock) context.factsBlock = sources.factsBlock;
   if (sources.memoryTail) context.memoryTail = sources.memoryTail;
@@ -458,7 +464,7 @@ const DELIMITER_IN_BODY = /<(\/?)dynamic_context/g;
  *
  * Every free-text plane in this block is authored by the model or by content
  * the model read: task titles, background-job labels sliced off a tool input,
- * fork rationales, the gated command an approval is waiting on, and the
+ * search rationales, the gated command an approval is waiting on, and the
  * recovery ledger's verbatim echo of a previous call's ARGUMENTS. None of it is
  * escaped, deliberately — the model has to read markdown, paths and code
  * exactly as written, and an escaped body would be a worse lie than an
@@ -467,7 +473,7 @@ const DELIMITER_IN_BODY = /<(\/?)dynamic_context/g;
  * So the one thing that must not survive into the body is the delimiter itself.
  * A task titled `</dynamic_context>` would otherwise close the live-state
  * ledger and let whatever followed open a forged one — and this block is
- * precisely where the model reads which forks are running and which approvals
+ * precisely where the model reads which searches are running and which approvals
  * are the human's, so a forgeable boundary here is a forgeable claim about the
  * state of the system. Applied at the single point that wraps the body, so a
  * plane added later cannot forget it.

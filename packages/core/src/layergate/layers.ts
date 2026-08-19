@@ -420,7 +420,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           })),
           delegates: [
             { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
-            { kind: 'fork', name: 'run-7', phase: '2 of 3 heads running', task: null },
+            { kind: 'search', name: 'run-7', phase: '2 of 3 nodes running', task: null },
           ],
           approvals: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push origin main' }],
         }),

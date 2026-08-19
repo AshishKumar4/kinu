@@ -26,16 +26,18 @@ auto_activate: false
 # Audit your implementation
 
 You just shipped something — code, a refactor, a design — and want a
-second opinion using the same tree-search infrastructure you use to
-explore problems. This skill runs that audit.
+second opinion using the same search you use to explore problems. This
+skill runs that audit.
 
 ## Procedure
 
 1. Restate what you implemented in two or three sentences: the change,
    the user-facing effect, the files touched.
 
-2. Call \`agents({ action: "fork", task: <audit task>, forks: [...], budget: 3-4 })\`
-   with three or four forks in that array, each scoped to a distinct angle:
+2. Call \`agents({ action: "swarm", preset: "ideate", branches: 4, task: <the whole audit brief> })\`.
+   An audit wants distinct findings rather than a ranked winner, which is what
+   \`ideate\` returns; the nodes write their own angles from \`task\`, so name the
+   angles you want covered IN the task rather than as per-node briefs:
 
    - **correctness** — does the implementation match the stated
      intent? Bugs, missing edge cases, unhandled errors, broken
@@ -48,13 +50,13 @@ explore problems. This skill runs that audit.
      interface that's discoverable and hard to misuse? For backend
      work: is the error path as good as the happy path? Does logging
      surface what the operator needs?
-   - **simplicity** (optional, fourth head) — is there code that doesn't
+   - **simplicity** (optional, fourth angle) — is there code that doesn't
      earn its keep? Parallel paths? Compatibility shims? Apply the
      deletion test: would removing this and inlining the callsites
      produce clearer code?
 
-3. Each fork reports as evidence + a graded finding (P0–P3 or
-   none-found). The merge step synthesises into:
+3. Each node reports as evidence + a graded finding (P0–P3 or none-found), and
+   the settled set comes back unranked. Synthesise it yourself into:
 
    - the top three findings ranked by severity
    - a one-line "ship / fix-first / abort" verdict

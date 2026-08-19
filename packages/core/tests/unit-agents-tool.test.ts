@@ -15,11 +15,13 @@ import { createTestRuntime, createTestStrategy, toolExecute } from '@proteus/tes
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
+import { SWARM_PRESETS } from '../src/strategy/swarm';
 import {
   agentsActionsFor, buildBuiltinTools, createAgentsTool, createStrategyRegistry,
   renderAgentsToolDescription, resumableAgentsInput,
   AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS, DELEGATION_INHERITANCE, DELEGATION_RUNGS,
   delegationBudgetAtDepth, ROOT_DELEGATION_BUDGET,
+  SWARM_PRESET_DOCTRINE,
   FORK_STRATEGY_ID, PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION, TURN_WALL_CLOCK_ENVELOPE_MS,
   classifyToolFailure, JsonObjectSchema,
   type AgentsToolInput,
@@ -269,6 +271,49 @@ describe('agents tool — the field contract', () => {
     }));
     expect(refusal.error).toContain('swarm needs `preset`');
     expect(refusal.error).not.toContain('unknown field');
+  });
+
+  /** One advertised property's description, off the real tool the model is handed. */
+  function propertyDescription(input: { value: unknown }, field: string): string {
+    const properties = v.parse(v.object({
+      jsonSchema: v.object({ properties: v.record(v.string(), v.object({ description: v.string() })) }),
+    }), input.value).jsonSchema.properties;
+    const property = properties[field];
+    if (!property) throw new Error(`the swarm surface advertises no \`${field}\``);
+    return property.description;
+  }
+
+  test('the preset list reaches the model where `preset` is filled, from the one constant', () => {
+    // It used to be four hand-written copies — this property, the missing-`preset`
+    // refusal, the swarm rung and the codemode declaration — and they disagreed:
+    // `prove` was selectable and named in none of them, while research/audit/
+    // redteam went on being described as working after their rows stopped
+    // resolving. One constant, rendered where the field is typed.
+    const t = agentsTool({ fork: forkDeps() });
+    const preset = propertyDescription({ value: t.inputSchema }, 'preset');
+    expect(preset).toContain(SWARM_PRESET_DOCTRINE.join(' '));
+    for (const name of SWARM_PRESETS) expect(preset).toContain(name);
+  });
+
+  test('the missing-`preset` refusal names the same presets the property does', async () => {
+    const refusal = v.parse(ErrorResultSchema, await agentsTool({ fork: forkDeps() }).execute({
+      action: 'swarm', task: 'explore',
+    }));
+    expect(refusal.error).toContain(SWARM_PRESET_DOCTRINE.join(' '));
+  });
+
+  test('the objective kinds this runner cannot measure are advertised as refused', () => {
+    // `measuredHalf` returns null for kind:"instanced" and kind:"vector", so a
+    // score:"verify" run over either is refused as unsupported — and advance:
+    // "pareto", their only consumer, is refused unconditionally by the same
+    // runner. The description called them "the two front shapes", which reads as
+    // an offer: the model builds the nested objective and loses the call.
+    const objective = propertyDescription({ value: agentsTool({ fork: forkDeps() }).inputSchema }, 'objective');
+    expect(objective).toContain('both are refused today');
+    expect(objective).not.toContain('are the two front shapes');
+    // The two reachable kinds keep their instructions.
+    expect(objective).toContain('{kind:"scalar"');
+    expect(objective).toContain('kind:"witness" is a checkable certificate');
   });
 
   test('a cap on an action that cannot spend it is refused, not accepted and ignored', async () => {

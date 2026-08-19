@@ -16,7 +16,7 @@
  * no hiring actions on its `agents` tool. No flags.
  */
 
-import { type AgentContext, type Connection, type ConnectionContext, type SubAgentClass } from "agents";
+import { callable, type AgentContext, type Connection, type ConnectionContext, type SubAgentClass } from "agents";
 // Type-only, so it is erased and the base class carries no runtime import of
 // its own subclass. The VALUE comes from `subordinateFacet()`, which each
 // concrete root supplies.
@@ -87,7 +87,7 @@ import {
   // Branching heads
   HeadController, type HeadJournal,
   type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
-  type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type MergeResult,
+  type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type HeadGrounding, type MergeResult,
   type NodeLoopHost, type NodeArbiter, type BranchProposal, type BranchDecision,
   // Canonical memory-note read (the dynamic-context MEMORY.md tail)
   readMemoryTail,
@@ -117,6 +117,9 @@ import {
   BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
   type BackgroundJobStore, type TaskListStore,
   wrapToolsForBackground, resumeBackgroundJob,
+  // The control plane both roots expose over the same core implementations.
+  cancelCurrentWork, getStoredModelSpec, setModel,
+  type CancelWorkOutcome,
   type MctsSearchStore, readSearchTree, type MCTSProgressEvent,
   // EventsHub primitives (spec §1)
   EventLog,
@@ -161,7 +164,7 @@ import {
 } from "@proteus/core";
 import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
-import { createCFHeadRuntime } from "./heads/head-runtime";
+import { createHeadRuntime } from "./head-runtime";
 import { spawnNodeFacet } from "./facet-spawn";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
@@ -2223,6 +2226,69 @@ export abstract class ActorAgent extends Think<Env> {
     return this.config.getModel();
   }
 
+  // ── The control plane every root exposes ────────────────────────
+  //
+  // Declared twice, once per root, over the same core implementations: a chat is a
+  // chat, so what stops a turn and what changes the model are the same question
+  // wherever the chat is. `ensureSchema()` first on each, because a native DO RPC
+  // does not route through partyserver and can land before `onStart` — the race
+  // `installWorkspaceCapability` documents. It is flag-gated and idempotent.
+
+  /** The agent's stored model spec. The UI preselects a menu entry with it; the
+   *  available-models list comes from /api/user/models so it stays user-scoped. */
+  @callable()
+  async getStoredModelSpec(): Promise<{ spec: string | null }> {
+    this.ensureSchema();
+    return getStoredModelSpec(this.config);
+  }
+
+  @callable()
+  async setModel(spec: string) {
+    this.ensureSchema();
+    return setModel({
+      config: this.config,
+      normalize: (s) => this.providerRegistry().normalizeSpecSync(s),
+      onChanged: () => this.invalidateModelCaches(),
+    }, spec);
+  }
+
+  /**
+   * Steer the running turn with something the user just typed — the third
+   * composer action beside Stop and Branch, and the only one that neither
+   * abandons the turn nor forks it.
+   *
+   * `'idle'` means the turn ended before this arrived and NOTHING was buffered, so
+   * the caller must send the text as an ordinary message: "it went into the
+   * running turn" and "it started a new one" are different events for the person
+   * who typed it.
+   */
+  @callable()
+  async steerTurn(text: string): Promise<{ landed: UserSteerOutcome }> {
+    this.ensureSchema();
+    return { landed: this.acceptUserSteer(text) };
+  }
+
+  /** Stop everything this actor is doing — the composer's Stop button. */
+  @callable()
+  async cancelCurrentWork(): Promise<CancelWorkOutcome> {
+    this.ensureSchema();
+    return cancelCurrentWork({
+      jobRunner: this.jobRunner,
+      activeToolControllers: this._activeToolControllers,
+      broadcast: (payload) => this.broadcast(payload),
+      interruptSteers: () => this.interruptUserSteers(),
+      onCancelled: (outcome) => this.onWorkCancelled(outcome),
+    });
+  }
+
+  /**
+   * What this root does once its work is actually cancelled — the ONE thing that
+   * differed between the two copies above, kept as a difference: the orchestrator
+   * clears its in-flight flag and files an activity line, and whether a root's
+   * Stop settles its own turn state is that root's business, not the substrate's.
+   */
+  protected onWorkCancelled(_outcome: Omit<CancelWorkOutcome, 'ok'>): void {}
+
   // ── Think lifecycle overrides ──────────────────────────────────
 
   /** Think calls `getModel()` synchronously per turn. The memo lives in
@@ -2446,18 +2512,24 @@ export abstract class ActorAgent extends Think<Env> {
     if (this._cfHeadRuntime) return this._cfHeadRuntime;
     const ownerUserId = this.getOwnerUserId();
     if (!ownerUserId) return undefined;
-    const models = this.rt.judgeModel
+    const grounding: HeadGrounding = this.rt.judgeModel
       ? { executor: this.rt.executor, explorer: this.rt.llm, judge: this.rt.judgeModel }
       : { executor: this.rt.executor, explorer: this.rt.llm };
-    this._cfHeadRuntime = createCFHeadRuntime(
-      this,
-      this.env,
-      this.boundSql,
-      ownerUserId,
-      () => this.workspaceCapabilityToken(),
-      this.workspaceName(),
-      models,
-    );
+    this._cfHeadRuntime = createHeadRuntime({
+      host: this,
+      identity: async () => ({
+        ownerUserId,
+        capabilityToken: await this.workspaceCapabilityToken(),
+        // The REGISTERED workspace, never this actor's own DO name — the file
+        // plane is keyed by it, so a self-named head derives a second, empty
+        // filesystem (unit-head-fork.test.ts).
+        sharedParent: this.workspaceName(),
+      }),
+      models: this.ownedModelServices,
+      mergeModelSpec: () => this.getStoredModelId(),
+      reportModelCall: (report) => this.reportModelCall(report),
+      grounding,
+    });
     return this._cfHeadRuntime;
   }
 
@@ -2931,6 +3003,13 @@ export abstract class ActorAgent extends Think<Env> {
       executors: execs,
       availableTools: activeTools,
       agentsActions: actorAgentsActions(turnActorDeps),
+      // `createRLMProvider` is unconditional in buildCfExecuteTools, so
+      // `llm.query` is wired on every turn this backend runs. Omitting the flag
+      // here defaulted it false and made the ONE authoritative prompt (this
+      // object; TurnConfig.system overrides getSystemPrompt's cached base) the
+      // only surface that never said so — 143 tokens of decomposition doctrine
+      // and the ladder's zeroth rung, absent from every shipped turn.
+      rlmAvailable: true,
       externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
       workMode,

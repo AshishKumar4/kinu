@@ -250,7 +250,9 @@ export const DELEGATION_RUNGS = {
     // What separates this from every other way of spawning several things and
     // picking one: WHO DECIDES. A judge has an opinion; a verifier runs.
     + 'You name the shape with `preset` and what counts with `objective`, and every candidate is scored by your own verifier running in this workspace — not by a model\'s opinion of it. '
-    + 'preset=optimise beats a number you can measure (a cost, a runtime, a count) and requires `objective`; preset=ideate is deliberately flat and takes none, so it returns a set of distinct approaches with no ranking; research/audit/redteam bin findings into an archive under a coverage `key`. '
+    // The preset enumeration is NOT here. Which presets exist is read at the
+    // moment `preset` is filled, so it rides that field (SWARM_PRESET_DOCTRINE);
+    // the rung carries only what decides whether to search at all.
     + '`objective` states what is measured, in what unit, which direction is better, the target that counts as done, and `verify` as {kind, spec} naming a registered instrument — a verifier is CODE that runs, so a metric nothing can execute is not an objective. '
     + 'A floor is optional and is a PROOF: declare one and a candidate that measures past it is reported as a breach with the measurement kept, never as a score, because the bound may be what is wrong. '
     // The delivery contract, stated because it changes how a caller plans the turn.
@@ -273,6 +275,29 @@ export const DELEGATION_CONVERSE =
   // The delivery contract, stated because it changes how to delegate: there is
   // no waiting for a helper to free up, and no reason to hold work back.
   'A busy agent is never blocked on — your message is queued immediately for its own mode-homogeneous turn, so send follow-ups as soon as you have them.';
+
+/**
+ * What each preset IS, and which of them the table can actually construct.
+ *
+ * ONE enumeration, rendered by every surface a model can learn the preset set
+ * from — the `preset` property, the missing-`preset` refusal, and the
+ * `agents.swarm` codemode declaration. Four hand-written copies of it is how
+ * `prove` came to be reachable in the enum and named in none of them, while
+ * three presets that stopped resolving went on being described as working.
+ *
+ * The unconstructible three are stated rather than omitted BECAUSE they are
+ * still in the advertised enum: `SWARM_PRESET_POINTS` records the gap instead
+ * of inventing a threshold, and `resolveSwarm` refuses the row with the missing
+ * declaration quoted. A model that can select one and is told nothing spends a
+ * turn discovering that; one line here is cheaper than the turn.
+ */
+export const SWARM_PRESET_DOCTRINE = [
+  'optimise beats a number you can measure (a cost, a runtime, a count) and REQUIRES `objective`.',
+  'prove drives a checker that accepts or does not, so `objective` names that checker; it searches deepest, because a wrong branch is refuted rather than carried down by a plausible score.',
+  'ideate is deliberately flat — no value signal, so no `objective` — and returns a set of distinct approaches, unranked.',
+  'custom states all six axes in `config` under a `label`, optionally seeded from `from`.',
+  'research, audit and redteam are named but UNCONSTRUCTIBLE: each needs a threshold the preset table does not state, so a call naming one is refused, naming what is missing. State the axes as custom instead.',
+] as const;
 
 // ── Durable-state doctrine (single source) ──────────────────────────────────
 // `memory` is ONE tool because it is one concept — state this agent writes down

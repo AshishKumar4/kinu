@@ -28,6 +28,8 @@ export {
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
   budgetExhausted,
+  HEAD_BUILTIN_TOOLS,
+  keepBuiltins,
 } from './types';
 
 export {
@@ -62,6 +64,6 @@ export {
   type HeadInferenceDeps, type HeadWorkspaceLayout,
 } from './head-inference';
 export {
-  buildHeadToolSet, HEAD_BUILTIN_TOOLS,
+  buildHeadToolSet,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
 } from './head-tools';

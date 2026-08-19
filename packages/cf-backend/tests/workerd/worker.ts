@@ -14,6 +14,7 @@
  * a control group for a rule, not a second copy of the rule's subject.
  */
 import { DurableObject } from 'cloudflare:workers';
+import * as v from 'valibot';
 
 /** The storage key `armTimer` commits. Named after the real one so a reader of
  *  orchestrator.ts:542 recognises what is being lost. */
@@ -123,6 +124,312 @@ export class GatedDO extends DurableObject<Cloudflare.Env> {
    *  in 25,212 ms. Whatever this costs is the gate, not the query. */
   ping(): number {
     return this.ctx.storage.sql.exec<{ v: number }>('SELECT 1 AS v').one().v;
+  }
+}
+
+/**
+ * Defect surface 3 — `ctx.storage.transactionSync` atomicity.
+ *
+ * WHAT PRODUCTION STAKES ON IT. Core declares a `transaction` seam and states
+ * what it is for — "Run the admit + roster write atomically"
+ * (`events/ingress/subordinate.ts:45-46`). `receiveSubordinateEvent` puts the
+ * event-log insert and the roster update inside it
+ * (`events/ingress/subordinate.ts:71-85`), and the CF backend satisfies it with
+ * `(body) => this.ctx.storage.transactionSync(body)` (`actor-agent.ts:765`).
+ * `writeForkSnapshot` shares the same primitive for a whole workspace snapshot
+ * (`orchestrator.ts:3280`, `identity/fork.ts:211-213`).
+ *
+ * The second write throws on a LIVE path, which is what makes this load-bearing
+ * rather than theoretical: `SubordinateRosterStore.applyReport` opens with
+ * `requireActive(name)` (`subordinates/support.ts:393-394`), and by then the
+ * event row is already inserted.
+ *
+ * WHY `bun test` CANNOT HOST IT. Core's seam comment gives the non-CF fallback
+ * in its own words — "a backend without one runs the body directly"
+ * (`events/ingress/subordinate.ts:7-8`) — and `identity/fork.ts:212-213` says
+ * the bun path execs each statement separately, "where per-statement failure is
+ * acceptable". The bun arm is therefore not a weaker transaction but NO
+ * transaction, so every assertion here about a write failing to land is false
+ * there. `runDirectly` below is that exact arm, kept as the control group.
+ */
+export class TransactionDO extends DurableObject<Cloudflare.Env> {
+  /** Named after the two tables the production body writes. */
+  private ensureSchema(): void {
+    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS event_log (id TEXT PRIMARY KEY)');
+    this.ctx.storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS workspace_subordinates (
+         name TEXT PRIMARY KEY, status TEXT NOT NULL
+       )`,
+    );
+    this.ctx.storage.sql.exec(
+      "INSERT OR IGNORE INTO workspace_subordinates (name, status) VALUES ('relay', 'working')",
+    );
+  }
+
+  /**
+   * The write set that must be all-or-nothing, in production's order: publish
+   * the event the parent will drain, then advance the roster that says the
+   * subordinate reported.
+   *
+   * `failRoster` models `requireActive` throwing at the top of `applyReport` —
+   * after the event row has landed, which is the only ordering that can leave
+   * an orphan.
+   */
+  private admitBody(id: string, failRoster: boolean): void {
+    this.ctx.storage.sql.exec('INSERT INTO event_log (id) VALUES (?)', id);
+    if (failRoster) throw new Error('unknown subordinate "relay"');
+    this.ctx.storage.sql.exec(
+      "UPDATE workspace_subordinates SET status = 'idle' WHERE name = 'relay'",
+    );
+  }
+
+  /** The shipped shape (`actor-agent.ts:765`). */
+  admitAtomically(id: string, failRoster: boolean): void {
+    this.ensureSchema();
+    this.ctx.storage.transactionSync(() => { this.admitBody(id, failRoster); });
+  }
+
+  /** The seam core runs on a backend that has no transaction — the bun arm,
+   *  verbatim. Same body, same failure, no atomicity. */
+  runDirectly(id: string, failRoster: boolean): void {
+    this.ensureSchema();
+    this.admitBody(id, failRoster);
+  }
+
+  /**
+   * Why the seam's type is `transaction<T>(body: () => T): T` and not a
+   * promise-returning one. `transactionSync` runs its callback to completion
+   * SYNCHRONOUSLY and commits when it returns; an `async` callback returns at
+   * its first `await`, so the commit happens while the body is still running and
+   * a later throw has nothing left to roll back.
+   */
+  async admitViaAsyncBody(id: string): Promise<void> {
+    this.ensureSchema();
+    await this.ctx.storage.transactionSync(async () => {
+      this.ctx.storage.sql.exec('INSERT INTO event_log (id) VALUES (?)', id);
+      await scheduler.wait(1);
+      throw new Error('unknown subordinate "relay"');
+    });
+  }
+
+  /** What a parent would drain, and what its roster would say. */
+  async admitted(): Promise<{ events: number; rosterStatus: string }> {
+    this.ensureSchema();
+    return {
+      events: this.ctx.storage.sql.exec<{ n: number }>(
+        'SELECT COUNT(*) AS n FROM event_log',
+      ).one().n,
+      rosterStatus: this.ctx.storage.sql.exec<{ status: string }>(
+        "SELECT status FROM workspace_subordinates WHERE name = 'relay'",
+      ).one().status,
+    };
+  }
+}
+
+/**
+ * The read-back contract, identical in shape to production's
+ * `DeviceAttachmentSchema` (`device-hub.ts:54-72`). It is a schema and not a type
+ * because that is the point: an attachment survives a code deploy, so what a
+ * previous version wrote is untrusted input, and whether the parse SUCCEEDS is
+ * what decides if a device is recorded as having answered.
+ */
+const DeviceAttachmentSchema = v.object({
+  device: v.string(),
+  probe: v.optional(v.object({
+    present: v.array(v.string()),
+    probedAt: v.number(),
+  })),
+});
+
+type DeviceAttachment = v.InferOutput<typeof DeviceAttachmentSchema>;
+
+/**
+ * Defect surface 4 — what a hibernatable socket keeps, and what an isolate reset
+ * takes away.
+ *
+ * WHAT PRODUCTION STAKES ON IT. Every Agent-class Durable Object here hibernates:
+ * `Agent.options = { hibernate: true }` in the installed SDK is never overridden
+ * in `packages/cf-backend/src`, so partyserver picks its
+ * `HibernatingConnectionManager` for every chat and CLI socket. `UserDO` then
+ * hand-rolls a SECOND hibernatable socket type for device daemons
+ * (`user-do.ts:849-857` -> `device-hub.ts:106-113`), and that one keeps its
+ * entire per-connection record in the socket ATTACHMENT rather than in a field:
+ * `accept` writes `{ device }` (`device-hub.ts:112`), `recordProbe` rewrites it
+ * with the toolchain answer (`device-hub.ts:191-201`), and `probeRecord`,
+ * `liveSocket`, `isConnected` and `connectedDeviceId` all read it back through
+ * `ctx.getWebSockets(tag)` (`device-hub.ts:116-121, 184-189, 203-213`).
+ *
+ * WHY `bun test` CANNOT HOST IT. The fake socket the gallery and the bun suites
+ * use makes `serializeAttachment` a no-op and answers `deserializeAttachment()`
+ * with `null` unconditionally (`gallery.tsx:315-317`). So under bun EVERY socket
+ * reads as "not a device socket": `deviceIdFromSocket` is always null and
+ * `probeRecord` is always null. There is no fake that could fix this and still
+ * be a fake — the attachment is held by the runtime outside the isolate's heap,
+ * which is the entire property being relied on.
+ */
+export class SocketDO extends DurableObject<Cloudflare.Env> {
+  /** In-memory per-instance state, the shape production still keeps in fields:
+   *  `DeviceConsentRegistry.waiting` (`safety/device-consent.ts:135`) holds
+   *  `settle` closures that no attachment could carry. */
+  private readonly waiting = new Map<string, string>();
+
+  /** The upgrade path, reduced to `DeviceSocketHub.accept`
+   *  (`device-hub.ts:106-113`): tag the socket with the device it belongs to and
+   *  write the device id into the attachment. */
+  override async fetch(request: Request): Promise<Response> {
+    const deviceId = new URL(request.url).searchParams.get('device') ?? 'unknown';
+    const pair = new WebSocketPair();
+    this.ctx.acceptWebSocket(pair[1], [`device:${deviceId}`]);
+    pair[1].serializeAttachment({ device: deviceId });
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  /**
+   * `recordProbe` (`device-hub.ts:191-201`), both polarities.
+   *
+   * `asSet` is the trap the shipped line guards against: production spells the
+   * answer out as `{ present: [...probe.present], asked: [...probe.asked] }`
+   * because `DeviceAttachmentSchema` reads it back as `v.array(v.string())`.
+   * An attachment is structured-cloned, not JSON-encoded, so a `Set` handed
+   * here survives AS a `Set` and the schema then rejects the record it wrote.
+   */
+  recordProbe(deviceId: string, asSet: boolean): void {
+    const socket = this.liveSocket(deviceId);
+    if (!socket) throw new Error(`no live socket for ${deviceId}`);
+    const present = ['node', 'python3'];
+    socket.serializeAttachment({
+      device: deviceId,
+      probe: { present: asSet ? new Set(present) : present, probedAt: 1 },
+    });
+  }
+
+  /** `DeviceSocketHub.probeRecord` (`device-hub.ts:184-189`): find the socket by
+   *  tag, parse its attachment, and answer null when the parse fails. The parse
+   *  is the whole decision — an attachment is untrusted input on the way back,
+   *  because it outlives the code that wrote it. */
+  probeRecord(deviceId: string): DeviceAttachment | null {
+    const socket = this.liveSocket(deviceId);
+    if (!socket) return null;
+    const parsed = v.safeParse(DeviceAttachmentSchema, socket.deserializeAttachment());
+    return parsed.success ? parsed.output : null;
+  }
+
+  /** `DeviceSocketHub.isConnected` (`device-hub.ts:203-205`) — a live socket for
+   *  this device, whatever its record parses to. */
+  isConnected(deviceId: string): boolean {
+    return this.liveSocket(deviceId) !== null;
+  }
+
+  /** `DeviceSocketHub.liveSocket` (`device-hub.ts:116-121`) — the tag lookup the
+   *  hub has instead of a connection registry. */
+  private liveSocket(deviceId: string): WebSocket | null {
+    for (const ws of this.ctx.getWebSockets(`device:${deviceId}`)) {
+      if (ws.readyState === WebSocket.READY_STATE_OPEN) return ws;
+    }
+    return null;
+  }
+
+  /** One prompt raised in a field and the same fact committed to storage, so a
+   *  reset can be observed to take exactly one of them. */
+  async raise(consentId: string): Promise<void> {
+    this.waiting.set(consentId, 'pending');
+    await this.ctx.storage.put(`consent:${consentId}`, 'pending');
+  }
+
+  /** `DeviceConsentRegistry.resolve` answers false for an id it cannot find —
+   *  "already settled, or from a previous instance of this host"
+   *  (`safety/device-consent.ts:162-163`). */
+  async settled(consentId: string): Promise<{ inMemory: boolean; inStorage: boolean }> {
+    return {
+      inMemory: this.waiting.has(consentId),
+      inStorage: (await this.ctx.storage.get<string>(`consent:${consentId}`)) !== undefined,
+    };
+  }
+}
+
+/** What one object's alarm slot has done so far. Named here, at the object that
+ *  owns it, so the test reads the contract rather than deriving it. */
+export interface AlarmReport {
+  /** Deliveries of `alarm()` counted by the handler itself. */
+  readonly fires: number;
+  /** The handler reached its end without throwing at least once. */
+  readonly completed: boolean;
+  /** The pending alarm time, or null when the runtime has cleared the slot. */
+  readonly next: number | null;
+}
+
+/**
+ * Defect surface 5 — the Durable Object alarm, actually fired.
+ *
+ * WHAT PRODUCTION STAKES ON IT. Proteus owns no `alarm()` of its own: there are
+ * zero `setAlarm`/`deleteAlarm` calls and zero `alarm()` overrides in
+ * `packages/cf-backend/src`. Every wake rides the installed SDK's
+ * `cf_agents_schedules` table through `this.schedule(...)`, and `armTimer`
+ * collapses them onto ONE row with a soonest-wins dedup, because the object has
+ * exactly one alarm slot and the SDK owns it — `_scheduleNextAlarm` deletes any
+ * alarm it does not recognise, "so this must never call `setAlarm` itself"
+ * (`orchestrator.ts:484-485`). That dedup is only correct if a second
+ * `setAlarm` REPLACES the first rather than queueing beside it.
+ *
+ * The SDK also leans on the platform's retry: `_executeScheduleCallback` retries
+ * in-process, and on a code-update reset, a transient platform error or a memory
+ * kill it deliberately RETHROWS so the schedule row survives and the runtime's
+ * own alarm retry picks it up on the next invocation. That backstop is a
+ * platform behaviour, not a library one.
+ *
+ * WHY `bun test` CANNOT HOST IT. Nothing outside workerd invokes `alarm()` at
+ * all. The bun fake for the Agent SDK has no reference to alarm, schedule or
+ * setAlarm, and `unit-alarm-tracing.test.ts` reaches the tick by calling
+ * `_proteusTimerTick()` directly — which is the body, never the dispatch. The
+ * two guards over the dispatch itself are a regex for a shadowed `alarm()`
+ * missing `super.alarm()` and an AST walk; both read TEXT. Until this file
+ * nothing in CI had ever observed an alarm fire.
+ */
+export class AlarmDO extends DurableObject<Cloudflare.Env> {
+  /** Arm once. `armTimer`'s single durable wake, reduced to the platform call
+   *  the SDK makes on its behalf. */
+  async arm(delayMs: number): Promise<void> {
+    await this.ctx.storage.put('fires', 0);
+    await this.ctx.storage.setAlarm(Date.now() + delayMs);
+  }
+
+  /** Arm twice, later first, so a slot that QUEUED would fire twice and a slot
+   *  that REPLACES fires once. Mirrors two schedules colliding on one object. */
+  async armTwice(firstDelayMs: number, secondDelayMs: number): Promise<void> {
+    await this.ctx.storage.put('fires', 0);
+    await this.ctx.storage.setAlarm(Date.now() + firstDelayMs);
+    await this.ctx.storage.setAlarm(Date.now() + secondDelayMs);
+  }
+
+  /** Fail the first `failTimes` deliveries, then succeed — a transient failure,
+   *  which is the only kind the SDK rethrows to the platform for. */
+  async armFlaky(delayMs: number, failTimes: number): Promise<void> {
+    await this.ctx.storage.put('fires', 0);
+    await this.ctx.storage.put('failuresLeft', failTimes);
+    await this.ctx.storage.setAlarm(Date.now() + delayMs);
+  }
+
+  override async alarm(): Promise<void> {
+    const fires = (await this.ctx.storage.get<number>('fires')) ?? 0;
+    await this.ctx.storage.put('fires', fires + 1);
+    const failuresLeft = (await this.ctx.storage.get<number>('failuresLeft')) ?? 0;
+    if (failuresLeft > 0) {
+      await this.ctx.storage.put('failuresLeft', failuresLeft - 1);
+      // Uncaught out of `alarm()` is the whole point: it is what hands the retry
+      // decision to the runtime instead of keeping it in the library.
+      throw new Error('alarm-body-failed');
+    }
+    await this.ctx.storage.put('completedAt', Date.now());
+  }
+
+  /** `fires` counts deliveries; `next` is the slot itself, which the runtime
+   *  clears on a delivery it considers final. */
+  async report(): Promise<AlarmReport> {
+    return {
+      fires: (await this.ctx.storage.get<number>('fires')) ?? 0,
+      completed: (await this.ctx.storage.get<number>('completedAt')) !== undefined,
+      next: await this.ctx.storage.getAlarm(),
+    };
   }
 }
 

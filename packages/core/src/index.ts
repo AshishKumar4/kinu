@@ -427,6 +427,7 @@ export {
   DELEGATION_INHERITANCE,
   DELEGATION_RUNGS,
   DELEGATION_CONVERSE,
+  SWARM_PRESET_DOCTRINE,
   renderToolSchemaDescription,
   renderExecuteToolsDescription,
   // The reach axis — which surfaces each capability is projected onto, and the
@@ -601,7 +602,7 @@ export {
   agentDynamicContext,
   executorAvailabilityLabel,
   fnv1a64,
-  forkDelegates,
+  searchDelegates,
   observeSystemPromptHash,
   fnv1a64Bytes,
   renderDynamicContextBlock,

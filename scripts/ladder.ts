@@ -675,15 +675,31 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts',
     tier: 'ci',
-    seconds: 31.9,
+    seconds: 23,
     catches: 'the two UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. Both self-tests ran in NO tier until this line: the gates were '
       + 'built, deliberately kept off the deploy path for their Chrome cost, and their '
-      + 'logic was then guarded by nothing anywhere.',
+      + 'logic was then guarded by nothing anywhere. Now also the THEME axis, which had '
+      + 'no coverage at all: `gallery.html:8-15` resolves the initial `data-mode` from '
+      + '`prefers-color-scheme` and the harness never pinned that media query, so every '
+      + 'token assertion here was made against whichever palette the Chromium build '
+      + 'happened to prefer — measured dark on this one, and silently the other on a '
+      + 'build or CI image that answered differently. The four cascade scenarios now pin '
+      + 'dark AND assert they got it, since a pin nobody reads back is not a pin, and one '
+      + 'pass drives the real "Switch to light mode" control and audits the light palette '
+      + '(`index.css:300-388`) — a structurally distinct palette carrying its own record '
+      + 'of "three passes of complaint, all the same one", never once audited before, '
+      + 'where an unmapped role token renders as Kumo\'s uncustomised brand colour instead '
+      + 'of throwing.',
     blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
       + '19 frames at ~68s and stays a standalone run — a gate that fails because Chrome '
-      + 'is missing fails for a reason unrelated to the change under test.',
+      + 'is missing fails for a reason unrelated to the change under test. Also MOST OF '
+      + 'THE GALLERY: only `shell`, `streaming` and `environment` carry any assertion '
+      + 'here, while gallery.tsx dispatches ~29 frames, so the rest are proven to mount '
+      + 'and nothing more. The light palette is audited on `shell` alone. And the signed-in '
+      + 'SPA is unreachable in this environment — no OAuth provider is configured — so '
+      + 'everything past sign-in is unmeasured rather than green.',
   },
   {
     run: 'bun run layergate',
@@ -723,22 +739,41 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run test:workerd',
     tier: 'ci',
-    seconds: 7,
+    seconds: 12.7,
     catches: 'Durable Object semantics no bun test can express, executed inside real '
-      + 'workerd (1.20260811.1) via @cloudflare/vitest-pool-workers. Two of them are '
-      + 'defects we shipped and found only from production: `ctx.waitUntil` retains '
-      + 'nothing in an actor and its write is cancelled on reset with the exception '
-      + 'swallowed, and anything Durable Object init awaits stalls every later request '
-      + 'on that object. Both were guarded before this only by a source-text grep and an '
-      + 'AST walk — correct rules whose STATED REASON nothing re-established. Both '
-      + 'reproduce red here against the historical shape: 2ms instead of a held 700ms '
-      + 'invocation, and 703ms for a `SELECT 1`. Each polarity carries its own control, '
-      + 'so a green cannot come from a write that never happened.',
+      + 'workerd (1.20260811.1 — the pool\'s own nested copy, not the 1.20260601.1 the '
+      + 'top-level miniflare serves `bun scripts/tracing-gate.ts` from) via '
+      + '@cloudflare/vitest-pool-workers. Five surfaces, 18 tests. Two are defects we '
+      + 'shipped and found only from production: `ctx.waitUntil` retains nothing in an '
+      + 'actor and its write is cancelled on reset with the exception swallowed, and '
+      + 'anything Durable Object init awaits stalls every later request on that object. '
+      + 'Both were guarded before this only by a source-text grep and an AST walk — '
+      + 'correct rules whose STATED REASON nothing re-established. Both reproduce red '
+      + 'against the historical shape: 2ms instead of a held 700ms invocation, and 703ms '
+      + 'for a `SELECT 1`. The other two were guarded by nothing at all. '
+      + '`ctx.storage.transactionSync` is the atomicity core DECLARES it needs for the '
+      + 'admit-plus-roster write and the fork snapshot, on a backend whose documented '
+      + 'non-CF fallback runs the body directly — so a bun test passes whether it rolls '
+      + 'back, commits partially, or is absent. And the device plane keeps its whole '
+      + 'per-connection record in a socket ATTACHMENT, which the shared fake answers as '
+      + '`null` unconditionally, so every bun test over it observes the failure state as '
+      + 'green. And nothing had ever seen an ALARM fire: a second `setAlarm` replaces the '
+      + 'first rather than queueing, which is what makes `armTimer`\'s soonest-wins dedup a '
+      + 'collapse instead of a lost wake-up, and an uncaught throw out of `alarm()` is '
+      + 'redelivered until it succeeds, which is the backstop the SDK rethrows platform '
+      + 'errors to reach. Each polarity carries its own control, so a green cannot come '
+      + 'from a write that never happened.',
     blind: 'everything above the platform. This tier is deliberately NOT a second home '
       + 'for unit tests: `include` is exactly packages/*/tests/workerd and bunfig excludes '
-      + 'the same path, so the two runners cannot overlap. It also cannot see '
-      + '`ctx.facets.clone`, which needs @cloudflare/workers-types >= 5.20260804.1, nor '
-      + 'tailStream dispatch, which is absent platform-wide and was refuted as a local pin.',
+      + 'the same path, so the two runners cannot overlap. It cannot type '
+      + '`ctx.facets.clone`, which needs @cloudflare/workers-types >= 5.20260804.1 against '
+      + 'the installed 4.20260604.1 — the RUNTIME does carry it, so this is a types '
+      + 'ceiling and not a platform one. Nor tailStream dispatch, absent platform-wide and '
+      + 'refuted as a local pin. It fires an alarm but does NOT reach the SDK\'s own '
+      + 'dispatch chain (`_cf_runAlarmBody`), so the shadowed-`alarm()` defect that once '
+      + 'ran for two months is still only a regex\'s problem. And '
+      + '`abortAllDurableObjects` is a hard reset, NOT a hibernation wake — it drops the '
+      + 'sockets with the isolate, so what survives a real eviction is still unmeasured.',
   },
   {
     run: 'bun run gate:policy-drift',

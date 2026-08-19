@@ -35,37 +35,10 @@
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import { buildBuiltinTools } from '../tools/builtins';
 import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
-import { budgetExhausted } from './types';
+import { budgetExhausted, HEAD_BUILTIN_TOOLS, keepBuiltins } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
-
-/** The builtin tools a head keeps. `file` is the runtime's native file plane,
- *  `execute_tools` its executor namespaces, `run` its shell router, and `web`
- *  live research. Hosted `file` reaches the canonical workspace; local `file`
- *  reaches private scratch while `parent.*` reaches canonical files. `memory`
- *  and `skills` are withheld because they would address head-private stores. */
-export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'file', 'web'] as const;
-
-/**
- * The builtin surface narrowed to an explicit allow-list.
- *
- * The mechanism, not a convenience: what makes containment structural is that a
- * builtin added upstream tomorrow does not silently appear, and that holds only
- * if every confined surface is built by ONE filter over a NAMED set. Heads pass
- * {@link HEAD_BUILTIN_TOOLS}; a swarm node passes that set plus its report tool,
- * exactly the surface *A node is an agent* gives a node. A tool whose deps the
- * caller did not wire is absent from `builtin` already, so the "absent deps, absent
- * tool" half needs no check here.
- */
-export function keepBuiltins(builtin: ToolSet, names: readonly string[]): ToolSet {
-  const kept: ToolSet = {};
-  for (const name of names) {
-    const entry = builtin[name];
-    if (entry) kept[name] = entry;
-  }
-  return kept;
-}
 
 export interface HeadSplitRequest {
   rationale: string;

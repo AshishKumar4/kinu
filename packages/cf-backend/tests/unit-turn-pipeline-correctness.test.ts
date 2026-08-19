@@ -5,7 +5,7 @@ import { memberBody } from '@proteus/test-utils';
 import {
   orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
-import type { UIMessage } from 'ai';
+import type { ToolSet, UIMessage } from 'ai';
 import * as v from 'valibot';
 
 const TasksToolProbeSchema = v.object({ execute: v.function() });
@@ -16,12 +16,30 @@ const StanceResultSchema = v.object({ stance: v.string() });
 // the orchestrator (onChatResponse sequencing, schema, callables).
 const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
-const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'heads', 'head-runtime.ts'), 'utf8');
+const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'head-runtime.ts'), 'utf8');
 const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
 const facetSpawn = readFileSync(join(import.meta.dir, '..', 'src', 'facet-spawn.ts'), 'utf8');
 const ownedModelServices = readFileSync(join(import.meta.dir, '..', 'src', 'owned-model-services.ts'), 'utf8');
 const generateJson = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'prompts', 'structured.ts'), 'utf8');
 const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
+
+/** Every cf-backend source that turns a reasoning-effort level into provider
+ *  options. Core owns the function; this names its callers, so a second
+ *  derivation added anywhere in the backend shows up as a new entry. */
+function effortDerivationSites(): string[] {
+  const sites: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (/\.tsx?$/.test(entry.name) && readFileSync(path, 'utf8').includes('reasoningEffortOptions(')) {
+        sites.push(entry.name);
+      }
+    }
+  };
+  walk(join(import.meta.dir, '..', 'src'));
+  return sites.sort();
+}
 
 describe('turn-pipeline correctness wiring', () => {
   test('the actor prompt contains its loaded SOUL on both prompt-build paths', () => {
@@ -59,14 +77,22 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('facet-spawned heads inherit the registered parent workspace identity', () => {
-    expect(actor).toMatch(/createCFHeadRuntime\([\s\S]*?ownerUserId,[\s\S]*?this\.workspaceName\(\),/);
-    expect(headRuntime).toContain('parentWorkspaceName: string');
-    expect(headRuntime).toContain('sharedParent: parentWorkspaceName');
-    expect(headRuntime).not.toContain('sharedParent: orchestrator.name');
+    // The root's own split seeds the child with the REGISTERED workspace, never
+    // this actor's own DO name — the file plane is keyed by it, so a self-named
+    // head derives a second, empty filesystem.
+    const rootRuntime = memberBody(actor, 'protected getCFHeadRuntime()');
+    expect(rootRuntime).toContain('sharedParent: this.workspaceName()');
+    expect(rootRuntime).not.toContain('sharedParent: this.name');
     // A recursive split re-uses the ROOT it was given, never its own facet name.
     expect(exploration).toContain('sharedParent: this.identity.parentWorkspace()');
     // The spawn seam is what turns that into the child facet's persisted parent.
     expect(facetSpawn).toContain('await stub.setSharedParent(identity.sharedParent)');
+    // One factory for both, so there is exactly one place the seed can be wrong —
+    // and it resolves the identity per spawn rather than baking in a stale token.
+    expect(headRuntime).toContain('identity: () => Promise<ExplorationFacetIdentity>');
+    expect(headRuntime).toContain('spawnHeadFacet(deps.host, input, await deps.identity())');
+    // The actor's own model services, not a second provider registry.
+    expect(headRuntime).not.toContain('createAgentProviderRegistry');
   });
 
   test('the MEMORY.md tail is read once per turn and rides the per-step dynamic block', () => {
@@ -126,20 +152,24 @@ describe('turn-pipeline correctness wiring', () => {
 
   test('provider-agnostic auxiliary calls use low effort without implicit output caps', () => {
     expect(exploration).not.toContain('maxOutputTokens');
-    // Low effort is no longer DERIVED here. Both auxiliary calls (the MCTS
-    // rollout and the recursive-split merge) ask the shared owner-scoped
-    // services for it, and those services are the single place that turns an
-    // effort level into provider options — pinned globally below rather than by
-    // counting occurrences in this one file, which is strictly stronger: it
-    // catches a second derivation added ANYWHERE, not just in exploration.ts.
+    // Low effort is no longer DERIVED here. Every auxiliary caller asks the
+    // shared owner-scoped services for it, and those services are the single
+    // place that turns an effort level into provider options.
     expect(exploration).not.toContain('reasoningEffortOptions');
-    // Three askers: the MCTS rollout, the pruned-branch reflection, and the
-    // recursive-split merge. All three used to funnel through one local helper
-    // that derived the options itself; now they all ask the shared services.
-    expect(exploration.match(/resolveModelWithEffort\([^)]*'low'\)/g)?.length).toBe(3);
+    // Two askers in this file: the MCTS rollout and the pruned-branch
+    // reflection. The recursive-split merge asks through the one HeadRuntime,
+    // over this same services object.
+    expect(exploration.match(/resolveModelWithEffort\([^)]*'low'\)/g)?.length).toBe(2);
     expect(ownedModelServices.match(/reasoningEffortOptions\(/g)?.length).toBe(1);
     expect(headRuntime).not.toContain('maxOutputTokens');
-    expect(headRuntime).toContain("reasoningEffortOptions('low', parseModelSpec(spec).provider)");
+    expect(headRuntime).not.toContain('reasoningEffortOptions');
+    expect(headRuntime).toContain("resolveModelWithEffort(deps.mergeModelSpec(), 'low')");
+    // Global rather than per-file, which is what makes it a census: an effort
+    // level becomes provider options in exactly two places on this backend — the
+    // shared services every auxiliary caller asks, and the turn's own beforeTurn
+    // merge. The heads path used to be a third, deriving its own options off a
+    // second provider registry it built for itself.
+    expect(effortDerivationSites()).toEqual(['actor-agent.ts', 'owned-model-services.ts']);
 
     // The shadow eval's judge is the control plane's, and the plane builds it
     // over the cross-family REVIEW model at the judge stage's own effort. The
@@ -417,6 +447,29 @@ describe('turn-pipeline correctness wiring', () => {
     expect(turnMode).toContain('workModeForTurnMetadata(this.turnDrivingMetadata())');
     expect(turnMode).toContain('turnProvenanceForMetadata(this.turnDrivingMetadata())');
     expect(turnMode).toContain('if (!this._activeProgrammaticUserMessage) return this.turnUserMetadata();');
+  });
+
+  test('BOTH prompt paths advertise the RLM provider the sandbox always wires', async () => {
+    // `createRLMProvider` is unconditional in buildCfExecuteTools, so `llm.query`
+    // is wired on every turn this backend runs — and `rlmAvailable` was set on the
+    // cached base alone. TurnConfig.system overrides that base for every turn, so
+    // the ONE prompt the model actually receives was the one surface that never
+    // said the capability existed: 143 tokens of decomposition doctrine plus the
+    // ladder's zeroth rung, absent from every shipped turn. Both paths, because
+    // one path knowing is exactly the state that shipped.
+    const { agent } = orchestratorHarness();
+    const config = await agent.beforeTurn({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'summarise this file' }],
+      tools: {} satisfies ToolSet,
+      model: 'harness-model',
+      continuation: false,
+      body: {},
+    });
+    for (const prompt of [config?.system ?? '', agent.getSystemPrompt()]) {
+      expect(prompt).toContain('`llm.query(text, { model?, reasoning_effort? })` is available');
+      expect(prompt).toContain('The cheapest helper is not an agent');
+    }
   });
 
   test('the stance the agent set is in the prompt the DO actually builds', async () => {
