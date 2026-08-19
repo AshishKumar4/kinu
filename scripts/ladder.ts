@@ -723,22 +723,36 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run test:workerd',
     tier: 'ci',
-    seconds: 7,
+    seconds: 8.7,
     catches: 'Durable Object semantics no bun test can express, executed inside real '
-      + 'workerd (1.20260811.1) via @cloudflare/vitest-pool-workers. Two of them are '
-      + 'defects we shipped and found only from production: `ctx.waitUntil` retains '
-      + 'nothing in an actor and its write is cancelled on reset with the exception '
-      + 'swallowed, and anything Durable Object init awaits stalls every later request '
-      + 'on that object. Both were guarded before this only by a source-text grep and an '
-      + 'AST walk — correct rules whose STATED REASON nothing re-established. Both '
-      + 'reproduce red here against the historical shape: 2ms instead of a held 700ms '
-      + 'invocation, and 703ms for a `SELECT 1`. Each polarity carries its own control, '
-      + 'so a green cannot come from a write that never happened.',
+      + 'workerd (1.20260811.1 — the pool\'s own nested copy, not the 1.20260601.1 the '
+      + 'top-level miniflare serves `bun scripts/tracing-gate.ts` from) via '
+      + '@cloudflare/vitest-pool-workers. Four surfaces, 15 tests. Two are defects we '
+      + 'shipped and found only from production: `ctx.waitUntil` retains nothing in an '
+      + 'actor and its write is cancelled on reset with the exception swallowed, and '
+      + 'anything Durable Object init awaits stalls every later request on that object. '
+      + 'Both were guarded before this only by a source-text grep and an AST walk — '
+      + 'correct rules whose STATED REASON nothing re-established. Both reproduce red '
+      + 'against the historical shape: 2ms instead of a held 700ms invocation, and 703ms '
+      + 'for a `SELECT 1`. The other two were guarded by nothing at all. '
+      + '`ctx.storage.transactionSync` is the atomicity core DECLARES it needs for the '
+      + 'admit-plus-roster write and the fork snapshot, on a backend whose documented '
+      + 'non-CF fallback runs the body directly — so a bun test passes whether it rolls '
+      + 'back, commits partially, or is absent. And the device plane keeps its whole '
+      + 'per-connection record in a socket ATTACHMENT, which the shared fake answers as '
+      + '`null` unconditionally, so every bun test over it observes the failure state as '
+      + 'green. Each polarity carries its own control, so a green cannot come from a '
+      + 'write that never happened.',
     blind: 'everything above the platform. This tier is deliberately NOT a second home '
       + 'for unit tests: `include` is exactly packages/*/tests/workerd and bunfig excludes '
-      + 'the same path, so the two runners cannot overlap. It also cannot see '
-      + '`ctx.facets.clone`, which needs @cloudflare/workers-types >= 5.20260804.1, nor '
-      + 'tailStream dispatch, which is absent platform-wide and was refuted as a local pin.',
+      + 'the same path, so the two runners cannot overlap. It cannot type '
+      + '`ctx.facets.clone`, which needs @cloudflare/workers-types >= 5.20260804.1 against '
+      + 'the installed 4.20260604.1 — the RUNTIME does carry it, so this is a types '
+      + 'ceiling and not a platform one. Nor tailStream dispatch, absent platform-wide and '
+      + 'refuted as a local pin. It does not fire an ALARM: nothing here reaches the SDK '
+      + 'dispatch chain a shadowed `alarm()` breaks, which stays a regex. And '
+      + '`abortAllDurableObjects` is a hard reset, NOT a hibernation wake — it drops the '
+      + 'sockets with the isolate, so what survives a real eviction is still unmeasured.',
   },
   {
     run: 'bun run gate:policy-drift',
