@@ -160,6 +160,12 @@ describe('the tree it governs', () => {
 
   test('every prefix the tree mints is one preflight can see', () => {
     const audited = auditScratchOwnership(readScannableSources());
+    // The sibling above floors `files` and `mintingFiles`; this claim quantifies
+    // over `prefixes`, which nothing floored. An extractor that stopped finding
+    // mkdtemp prefixes would report an empty set, and "every prefix the tree
+    // mints is one preflight can see" would be true of nothing — the gate's whole
+    // subject silently gone while it printed ok.
+    expect(audited.prefixes.length).toBeGreaterThan(20);
     for (const prefix of audited.prefixes) {
       expect(SCRATCH_PREFIXES.some((known) => prefix.startsWith(known))).toBe(true);
     }
