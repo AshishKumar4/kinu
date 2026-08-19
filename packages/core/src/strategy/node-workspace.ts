@@ -1,27 +1,29 @@
 /**
- * The ONE seam through which a swarm node gets a place to work and an identity to
- * work as — EXPLORATION-SPEC §8.6, and the sixth of §8.1's six properties of a
- * node: *"its own workspace. §8.6, and it is the one of the six that does not
- * exist yet."*
+ * The ONE seam through which a swarm node gets a place to work and an identity
+ * to work as — the sixth of a node's six properties, and the one that used to
+ * be a promise.
  *
- * IT DOES NOT EXIST YET, AND THIS FILE IS WHERE THAT SHOWS. A node is an agent
- * with a shell (§8.1 rule 1-2), and until the substrate lands every node in a
- * search shares the origin's file plane. That is not a defect this module hides;
- * it is the state {@link NodeWorkspace.isolation} REPORTS, so nothing downstream
- * can assume a boundary it does not have. The grading consequence is the one
- * `tools/registry.ts` used to state as doctrine: you cannot grade a node on what
- * it changed when every node changed the same tree. So a shared-plane run is
- * graded on the candidate the node REPORTS, never on a diff of the workspace.
+ * IT EXISTS NOW. A node's home is a real directory in the ONE global view,
+ * owned by the node's own uid and moded `0o755`, and its commands run as that
+ * uid — so the boundary is uid/gid/mode on real inodes rather than convention.
+ * {@link agentHomeNodeProvisioner} is the implementation and `vfs/agent-home.ts`
+ * is the layout it provisions against.
  *
- * WHAT THE REAL IMPLEMENTATION IS, named rather than described, so the swap is
- * one line and not a redesign. `@nimbus-sh` now threads a per-call credential:
- * `NimbusExecOptions.cred` on the SDK handle (`box.exec(cmd, { cred })`) and
- * `ProgrammaticExecOptions.cred` on the worker twin, both typed {@link VfsCred}.
- * A backend that provisions homes therefore does, host-side and in this order —
- * `vfs.as(CRED_KERNEL).mkdir(home, { recursive: true })`, `chown(home, uid, gid)`,
- * `chmod(home, 0o700)` — because per-agent `chown` is uid-0-only, so a node
- * cannot create its own home. Then it wires {@link NodeWorkspaceProvisioner} and
- * every node here becomes `private-home` with no change to the search.
+ * Why permissions inside one filesystem and not a filesystem each: the
+ * regression at `cf-backend/tests/unit-head-fork.test.ts:4-8` was a subagent
+ * handed a freshly-created EMPTY filesystem, so an agent asked to research a
+ * codebase the user had cloned could see none of it. Isolation without a read
+ * window is a regression. One view with per-agent ownership cannot reproduce
+ * it, because there is no second filesystem to be empty — the read window is
+ * not a feature added back, it is the absence of a second tree.
+ *
+ * `shared-origin-plane` SURVIVES, and it is no longer a confession that the
+ * substrate is missing. It is what a host without a credentialled filesystem
+ * honestly is: an inline or test runner that has no uid-0 view to provision
+ * with. It is still REPORTED rather than hidden, because the grading
+ * consequence is real — you cannot grade a node on what it changed when every
+ * node changed the same tree, so a shared-plane run is graded on the candidate
+ * the node REPORTS, never on a diff of the workspace.
  *
  * A malformed credential is INVISIBLE at the substrate — Nimbus's `isVfsCred`
  * guard falls through to the session user rather than refusing — which is
@@ -30,6 +32,15 @@
  */
 
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
+import {
+  agentCred,
+  agentIdentity,
+  confineAgentTmp,
+  provisionAgentHome,
+  type HomeRootVfs,
+  type TmpConfiner,
+} from '../vfs/agent-home';
 
 /**
  * Whether a node actually got a boundary.
@@ -67,21 +78,64 @@ export interface NodeIdentity {
 }
 
 /**
- * A backend's home provisioner: the half of §8.6 that only a host can do,
- * because `chown` needs uid 0.
+ * A backend's home provisioner: the half only a host can do, because `chown`
+ * needs uid 0.
  *
- * Absent is the default and it is honest rather than convenient — see this
- * module's header.
+ * Still a seam rather than a direct call, because the three things it needs — a
+ * uid-0 view, the principal registry, and durable SQL — are all host-owned, and
+ * core stays clear of how a given backend obtained them.
  */
 export type NodeWorkspaceProvisioner = (node: NodeIdentity) => Promise<NodeWorkspace>;
 
 /**
- * The node's workspace, from the provisioner when one is wired and from the
- * honest fallback when none is.
+ * A node's name as an agent, and therefore its directory under `/home`.
  *
- * ONE function, so there is exactly one place that changes when the substrate
- * lands, and exactly one place a test can prove a node was told the truth about
- * its own boundary.
+ * Prefixed rather than raw: a node id is a `nanoid`, so it may begin with `-`,
+ * and `node-` supplies a safe first character while leaving the id itself
+ * untouched — which keeps the mapping INJECTIVE. Two nodes must never resolve
+ * to one home, so sanitising (which can map two ids together) would be a
+ * correctness bug and not a cosmetic choice.
+ */
+export function nodeAgentName(nodeId: string): string {
+  return `node-${nodeId}`;
+}
+
+/** What a host must hand over for a node to get a real home. */
+export interface NodeHomeHost {
+  /** The uid-0 view — `SqliteVFS.as(CRED_KERNEL)`. */
+  readonly root: HomeRootVfs;
+  /** The principal registry that scopes `/tmp`, i.e. the `SqliteVFS` itself. */
+  readonly confiner: TmpConfiner;
+  /** Durable storage for the uid allocation, so a home outlives its activation. */
+  readonly sql: SqlDatabase;
+}
+
+/**
+ * The real provisioner: a private home and a private `/tmp` per node.
+ *
+ * Synchronous underneath and `async` only to satisfy the seam — every substrate
+ * call here returns `void`, which is the same fact that makes `/pc` and
+ * `/sandbox` executors rather than mounts.
+ */
+export function agentHomeNodeProvisioner(host: NodeHomeHost): NodeWorkspaceProvisioner {
+  return async (node) => {
+    const name = nodeAgentName(node.nodeId);
+    const identity = agentIdentity(host.sql, name);
+    const home = provisionAgentHome(host.root, name, identity);
+    confineAgentTmp(host.root, host.confiner, name, identity);
+    return { home, cred: agentCred(identity), isolation: 'private-home' };
+  };
+}
+
+/**
+ * The node's workspace: from the host's provisioner when it has one, and from
+ * the shared-plane fallback when the host has no credentialled filesystem.
+ *
+ * ONE function, so there is exactly one place a test can prove a node was told
+ * the truth about its own boundary. The fallback is reached only where there is
+ * no uid-0 view to provision against, and it is reported rather than disguised
+ * as a home — an invented directory would be a boundary a node believes in and
+ * does not have, which is worse than no boundary at all.
  */
 export async function nodeWorkspace(
   node: NodeIdentity,
