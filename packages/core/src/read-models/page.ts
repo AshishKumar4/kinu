@@ -146,8 +146,11 @@ export function mapPage<In, Out>(
  * failure is recovered by retrying the same one.
  */
 export class StaleCursorError extends Error {
-  constructor(what: string, anchor: string) {
-    super(`Cannot resume this ${what}: ${JSON.stringify(anchor)} is no longer in it.`);
+  /** `options` carries the `cause` of an anchor that could not even be PARSED, so a
+   *  malformed cursor stays diagnosable without a second error type: the recovery is
+   *  the same restart either way. */
+  constructor(what: string, anchor: string, options?: ErrorOptions) {
+    super(`Cannot resume this ${what}: ${JSON.stringify(anchor)} is no longer in it.`, options);
     this.name = 'StaleCursorError';
   }
 }
