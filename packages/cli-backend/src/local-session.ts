@@ -64,7 +64,7 @@ import {
   createChatModel, runChat, resolveMaxSteps, estimateTokens,
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT,
-  openTurnRun, closeTurnRun, snapshotCompletedTurn,
+  openTurnRun, closeTurnRun, snapshotCompletedTurn, creditedTurnId,
   persistMeasuredPromptTokens, applyOverflowRecovery,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   PROGRAMMATIC_MESSAGE_ID_PREFIX,
@@ -1914,25 +1914,28 @@ export class LocalAgentSession implements BackendHost {
         fullText,
       );
 
-      // Alternate Takes captured during this turn's think-mcts runs get the
-      // turn id they competed for, so a pick can credit the right turn. A turn
-      // that settles without an assistant message id — or that errored, whose
-      // captures competed for an answer that no longer exists — cannot be
-      // credited, so its captures are purged (mirroring the cf backend's
-      // purge-on-error) and the next turn never claims them as its own.
-      if (this.turnWorkMode !== 'plan' && assistantMsgId && !this.orch.acc.hadError) {
+      // Alternate Takes and steer branches were both captured mid-turn, before
+      // this id existed, and both are attributed to it — one decision, made by
+      // core (orchestrator/turn-lifecycle.ts `creditedTurnId`) rather than once
+      // here and again in the cf backend's onChatResponse.
+      const credited = creditedTurnId({
+        messageId: assistantMsgId,
+        completed: runError === null,
+        workMode: this.turnWorkMode,
+      });
+      if (credited !== null) {
         claimAlternateTakesForTurn(this.rt.storage.sql, {
-          turnId: assistantMsgId, sessionId: this.sessionId, startedAt,
+          turnId: credited, sessionId: this.sessionId, startedAt,
         });
       } else {
         purgeUnclaimedAlternateTakes(this.rt.storage.sql);
       }
 
       // Steer-as-Branch redirects launched during this turn settle against its
-      // answer — detached, so a slow branch never delays turn-end.
-      if (this.turnWorkMode !== 'plan') {
-        this.settlePendingBranches(this.orch.acc.hadError ? null : assistantMsgId, fullText);
-      }
+      // answer — detached, so a slow branch never delays turn-end. An
+      // uncreditable turn settles them against nothing, which is what they
+      // report; leaving them pending would strand the surface's live chips.
+      this.settlePendingBranches(credited, fullText);
 
       // The confirming turn is over: what the agent did with its free re-look
       // IS the gate's conversion number, and closeRun writes it.

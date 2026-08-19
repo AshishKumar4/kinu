@@ -7,7 +7,7 @@ import { Database } from 'bun:sqlite';
 import {
   initRunEventTables, RunEventRecorder,
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
-  persistMeasuredPromptTokens, applyOverflowRecovery,
+  persistMeasuredPromptTokens, applyOverflowRecovery, creditedTurnId,
   TurnAccumulator, TurnSteering, CraftCycle, TurnEscalationLedger,
   OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   SPILL_DIRS,
@@ -276,6 +276,40 @@ describe('applyOverflowRecovery', () => {
     expect(rateLimit.forceCompaction).toBe(false);
     expect(signals.delivered).toEqual([]);
     expect(state.armed).toEqual(['k']); // only the genuine overflow armed
+  });
+});
+
+// The credit decision — which id the work captured INSIDE a turn is attributed
+// to. Both backends attribute two capture kinds (alternate takes, steer
+// branches) to the same answer, so this is the cross-backend contract for both.
+describe('creditedTurnId', () => {
+  test('a completed build turn credits its message id', () => {
+    expect(creditedTurnId({ messageId: 'msg-1', completed: true, workMode: 'build' })).toBe('msg-1');
+  });
+
+  test('a turn that never reached its own end credits nothing', () => {
+    expect(creditedTurnId({ messageId: 'msg-1', completed: false, workMode: 'build' })).toBeNull();
+  });
+
+  test('a completed turn with no durable message credits nothing', () => {
+    expect(creditedTurnId({ messageId: null, completed: true, workMode: 'build' })).toBeNull();
+  });
+
+  test('a plan turn credits nothing — a plan is not an answer to have competed against', () => {
+    expect(creditedTurnId({ messageId: 'msg-1', completed: true, workMode: 'plan' })).toBeNull();
+  });
+
+  // `hadError` is deliberately NOT an input: the accumulator raises it from the
+  // transport discriminator on ANY failed tool result, and a turn that ran the
+  // suite, saw it red, fixed it and answered has an answer. The CLI used to
+  // read that flag here and dropped the captures of every such turn.
+  test('a failed tool call inside a turn that still answered does not void the credit', () => {
+    const acc = new TurnAccumulator();
+    acc.reset(0);
+    acc.recordToolCall({ toolName: 'run', input: {}, success: false, error: 'exit 1' });
+    acc.recordToolCall({ toolName: 'run', input: {}, success: true, output: 'ok' });
+    expect(acc.hadError).toBe(true);
+    expect(creditedTurnId({ messageId: 'msg-1', completed: true, workMode: 'build' })).toBe('msg-1');
   });
 });
 

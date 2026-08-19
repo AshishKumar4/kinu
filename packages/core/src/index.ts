@@ -1235,8 +1235,8 @@ export {
 export { assembleTurnMessages, type TurnContextInput } from './orchestrator/turn-context';
 export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
-  persistMeasuredPromptTokens, applyOverflowRecovery,
-  type CompactionTriggerState,
+  persistMeasuredPromptTokens, applyOverflowRecovery, creditedTurnId,
+  type CompactionTriggerState, type SettledTurn,
 } from './orchestrator/turn-lifecycle';
 export {
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,

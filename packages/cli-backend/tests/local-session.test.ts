@@ -2269,6 +2269,58 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     await session.end();
   });
 
+  // A BEHAVIOUR CHANGE, recorded as one: this turn's takes used to be purged.
+  // The claim read `acc.hadError`, which the accumulator raises from the
+  // transport discriminator on any failed tool result — so a turn that hit one
+  // bad tool call, recovered and answered dropped its captures, while the cf
+  // backend claimed them. The credit decision is now core's `creditedTurnId`
+  // and reads whether the turn ENDED, which is what "an answer that no longer
+  // exists" was reaching for.
+  test('a turn that answered despite a failing tool call still claims its takes', async () => {
+    let step = 0;
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    const failingToolModel = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'fake-model',
+      doStream: async () => {
+        step += 1;
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              if (step === 1) {
+                controller.enqueue({
+                  type: 'tool-call', toolCallId: 'call-1', toolName: 'memory',
+                  input: JSON.stringify({ action: 'save', content: 'note' }),
+                });
+                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+              } else {
+                controller.enqueue({ type: 'text-start', id: '0' });
+                controller.enqueue({ type: 'text-delta', id: '0', delta: 'answered with A' });
+                controller.enqueue({ type: 'text-end', id: '0' });
+                controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              }
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    });
+    const { session, rt, events } = setup('unused', failingToolModel);
+    rt.memory.append = async () => { throw new Error('disk full'); };
+    seedTakes(rt);
+
+    await session.send('solve it');
+
+    const turnEnd = events.find((event) => event.type === 'turn-end');
+    if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
+    expect(turnEnd.turn.hadError).toBe(true);
+    const turnId = rt.storage.sql<{ id: string }>`
+      SELECT id FROM messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1`[0]!.id;
+    expect(session.latestAlternateTakes()).toMatchObject({ turnId, sessionId: 'default' });
+    await session.end();
+  });
+
   test('picking a sibling writes the take_pick ledger row, re-points, and queues the continuation', async () => {
     const { session, rt, events } = setup('answered with A');
     seedTakes(rt);

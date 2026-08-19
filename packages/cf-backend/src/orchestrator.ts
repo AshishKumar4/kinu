@@ -119,7 +119,7 @@ import {
   type CheckpointAvailability, type FileCheckpointListing,
   type FileRestorePlan, type FileRestoreResult,
   // Shared turn lifecycle
-  snapshotCompletedTurn,
+  snapshotCompletedTurn, creditedTurnId,
   // The session tree — `messages` as a projection of the SDK's message DAG
   reconcileSessionTree,
   type DynamicContext,
@@ -877,24 +877,34 @@ export class OrchestratorAgent extends ActorAgent {
       responseMessages: await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true }),
     });
 
+    const msgId = result.message.id;
+    // Alternate Takes and steer branches were both captured mid-turn, before
+    // this id existed, and both are attributed to it — one decision, made by
+    // core (orchestrator/turn-lifecycle.ts `creditedTurnId`) rather than once
+    // here and again in the CLI's runTurn. Reached only on the completed path
+    // (the early return above owns the rest), so what it still decides here is
+    // an unattributable turn and a PLAN turn: a plan is not an answer the
+    // captures competed against.
+    const credited = creditedTurnId({
+      messageId: msgId ?? null,
+      completed: true,
+      workMode: turnMode,
+    });
+    if (credited !== null) {
+      claimAlternateTakesForTurn(this.boundSql, {
+        turnId: credited, sessionId: 'default', startedAt: this.acc.startedAt,
+      });
+    } else {
+      purgeUnclaimedAlternateTakes(this.boundSql);
+    }
+
     // Record which crafted tools this turn used, keyed by the assistant
     // message id, so async thumbs feedback (setTurnFeedback) can re-score
     // exactly those tools. Feedback is inherently asynchronous — it arrives
     // after the turn completes — so turn.feedback is null here; the outcome
     // review (engine.reviewTurn, dispatched when the NEXT user message
     // arrives) populates it from explicit thumbs or the follow-up classifier.
-    const msgId = result.message.id;
-    if (!msgId) {
-      // Completed but unattributable — without a message id the takes cannot
-      // credit this turn, and they must not leak into the next one's claim.
-      purgeUnclaimedAlternateTakes(this.boundSql);
-    }
     if (msgId) {
-      // Alternate Takes captured during this turn's think-mcts runs get the
-      // turn id they competed for, so a pick can credit the right turn.
-      claimAlternateTakesForTurn(this.boundSql, {
-        turnId: msgId, sessionId: 'default', startedAt: this.acc.startedAt,
-      });
       // The crafted tools this turn called, as the in-episode craft clock saw
       // them. Not "every tool name that is not built in": a crafted tool is
       // codemode-only and never appears as a tool-call name, so that filter
@@ -911,7 +921,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     // Steer-as-Branch redirects launched during this turn settle against its
     // answer — detached, so a slow branch never blocks the TurnQueue.
-    this.settlePendingBranches(msgId ?? null, assistantText);
+    this.settlePendingBranches(credited, assistantText);
 
     // Mission Inbox: a turn injected by the event drain carries the synthetic
     // turn id its events were bound to — reply their open email_thread
