@@ -1,12 +1,14 @@
 #!/usr/bin/env bun
 /**
- * The silent-drop census — six defect classes that destroy a failure while every
+ * The silent-drop census — seven defect classes that destroy a failure while every
  * no-swallow rule stays green.
  *
  * WHY A SECOND CHECK BESIDE FOUR WORKING LINT RULES. `no-empty-catch`,
  * `no-sentinel-catch`, `require-cause-on-rethrow` and `no-ddl-in-catch` are all
- * errors and all proven red-to-green through the real `oxlint` binary over 709
- * `catch` occurrences in 665 sources (`no-swallow.gate.test.ts`). They are not
+ * errors and all proven red-to-green through the real `oxlint` binary over every
+ * `catch` occurrence in the product sources (`no-swallow.gate.test.ts` reports the
+ * corpus it measured; this header does not restate it, because a copied count has
+ * nothing that re-runs it and this one drifted). They are not
  * weak. They are NARROW, and each one's edge is a defect a reader would call the
  * same thing:
  *

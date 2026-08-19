@@ -2,15 +2,18 @@
  * Exploration — every time the agent tried more than one path.
  *
  * ONE list and ONE tree, not a tab per mechanism. The old surface split MCTS
- * from Branches, which mirrored a storage split (search_nodes vs head_journal)
- * that `agents(action:'swarm')` and `agents(action:'fork')` write to separately —
- * so exploring alternatives landed in a different tab depending on which of the
- * two ran, and the owner twice found an empty pane where his forks should have been.
+ * from Branches, which mirrored a storage split: a search writes `search_nodes`
+ * for its tree and `head_journal` for each node's transcript. Exploring
+ * alternatives therefore landed in a different tab depending on which store a
+ * run happened to fill, and the owner twice found an empty pane where his
+ * searches should have been.
  *
- * The unification is honest because a fork IS a tree either way: a merge is
- * that tree at depth 1 (the task, then one branch per head) and a competition
- * is the same tree deeper, with scores on it. Master-detail rather than
- * latest-vs-past tabs: every fork the workspace ever ran is a row, newest
+ * The unification is honest because a run IS a tree either way: one level with a
+ * branch per candidate is that tree at depth 1, and a deeper search is the same
+ * tree with more levels and scores on it. A run carries both halves at once, so
+ * the two facts a row reports are `hasSearchTree` and `hasNodeTranscripts`
+ * rather than one tag admitting one store. Master-detail rather than
+ * latest-versus-past tabs: every search the workspace ever ran is a row, newest
  * first, the live one selected on arrival.
  *
  * NOT the chat's thinking text — that streams inline as reasoning blocks in the

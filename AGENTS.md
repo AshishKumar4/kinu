@@ -182,7 +182,7 @@ this repository keeps finding in its own gates, and it is worse in a doc, becaus
 packages/
   core/         @proteus/core — abstract interfaces, MCTS, evolution, scaffold, craft
   cf-backend/   Cloudflare Workers backend — Think DOs, React UI, Vite+Wrangler
-  agent-utils/  Storage adapters (SqliteFS, MemoryStore, CraftStore, Shell)
+  agent-utils/  MemoryStore, CraftStore, VFS types, addressing, walk, encoding
   cli/          CLI frontend (commander-based)
   cli-backend/  CLI-specific backend (bun:sqlite, Node vm)
 tests/          E2E tests (run from repo root)
