@@ -218,11 +218,13 @@ export async function receivePeerMessage(
 
 // ── PeerHub — sender/receiver endpoint over one agent's hub ─────
 
-/** Delivery retry policy: exponential backoff from 5s, capped at 1h; a row
- *  dead-letters after 8 attempts. Receiver refusals dead-letter immediately. */
+/** Delivery retry policy: exponential backoff from 5s over at most 8 attempts, so
+ *  the longest wait a row ever gets is 5_000·2⁶ = 320 s and then it dead-letters.
+ *  Receiver refusals dead-letter immediately. There is no ceiling constant — the 1h
+ *  one that used to sit here could not bind at 8 attempts, so it was a bound that
+ *  could not fail. */
 const MAX_DELIVERY_ATTEMPTS = 8;
 const RETRY_BASE_MS = 5_000;
-const RETRY_MAX_MS = 3_600_000;
 
 interface PeerBackHolder {
   agent_name: string;
@@ -512,7 +514,7 @@ export class PeerHub {
               attempts, `undeliverable after ${attempts} attempts: ${message}`, row.id,
             );
           } else {
-            const next = now + Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** row.attempt_count);
+            const next = now + RETRY_BASE_MS * 2 ** row.attempt_count;
             this.deps.sql.exec(
               `UPDATE peer_outbox SET attempt_count = ?, next_attempt_at = ?, last_error = ? WHERE id = ?`,
               attempts, next, message, row.id,

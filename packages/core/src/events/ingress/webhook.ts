@@ -26,9 +26,6 @@ import { normalizeWebhookRateLimitPerMin, tryConsumeWebhookRateLimit } from './r
 /** How far an HMAC delivery's timestamp may be from the receiver's clock. */
 const HMAC_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
-/** How long the delivery's reply channel stays open for a held response. */
-const WEBHOOK_REPLY_TTL_MS = 30_000;
-
 export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls';
 
 /**
@@ -215,12 +212,15 @@ export async function acceptWebhookDelivery(
   // Open a reply channel for the event system. HTTP delivery itself returns
   // 202 immediately; a future held-response path can wait on this channel
   // without changing the durable event shape.
+  // No `ttl_ms_override`: `http_pending` already carries this kind's TTL in
+  // reply-channel.ts's own table, and the override here was a second copy of that
+  // same 30_000 — two names for one policy, which is how one of them gets edited
+  // alone.
   const reply_channel_id = deps.replies.open({
     event_id: 'pending',
     kind: 'http_pending',
     holder_addr: `delivery:${delivery_id}`,
     payload_policy: 'redact',
-    ttl_ms_override: WEBHOOK_REPLY_TTL_MS,
   }, opts.now);
 
   // A delivery larger than the brief budget is spilled to this agent's own

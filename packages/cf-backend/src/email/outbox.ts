@@ -44,11 +44,14 @@ export type OutboundSendResult =
   | { status: 'deduped'; messageId: string }
   | { status: 'failed'; messageId: string; error: string };
 
-/** Retry policy for the reconciliation sweep — exponential backoff from 30s,
- *  capped at 1h; an intent dead-letters after 8 attempts. */
+/** Retry policy for the reconciliation sweep — exponential backoff from 30s over
+ *  at most 8 attempts, so the longest wait an intent gets is 30_000·2⁶ = 1,920 s
+ *  and then it dead-letters. There is no ceiling constant — the 1h one that used to
+ *  sit here could not bind at 8 attempts, so it was a bound that could not fail.
+ *  The 30s base is this outbox's own (an outbound provider, not the in-process peer
+ *  hub, whose base is 5s); only the dead-letter discipline is shared. */
 const MAX_SEND_ATTEMPTS = 8;
 const RETRY_BASE_MS = 30_000;
-const RETRY_MAX_MS = 3_600_000;
 
 export const EMAIL_OUTBOX_DDL = `
 CREATE TABLE IF NOT EXISTS email_outbox (
@@ -188,7 +191,7 @@ export class EmailOutbox {
       );
       return;
     }
-    const next = now + Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (attempts - 1));
+    const next = now + RETRY_BASE_MS * 2 ** (attempts - 1);
     this.sql.exec(
       `UPDATE email_outbox SET attempt_count = ?, next_attempt_at = ?, last_error = ? WHERE idempotency_key = ?`,
       attempts, next, error, key,

@@ -152,7 +152,16 @@ const GIT = `git -c user.name=Proteus -c user.email=proteus@agent -c core.hooksP
 const OUTPUT_CAP = 20_000;
 const APPLY_TIMEOUT_MS = 120_000;
 const CLONE_TIMEOUT_MS = 300_000;
-const CHECK_TIMEOUT_MS = 300_000;
+/**
+ * `runChecks` runs whatever command the caller named, so this bound is only
+ * honest if it clears the longest check this repository itself declares. That is
+ * `scripts/bench-corpus.ts`'s `lean-verify` at 900_000 ms; its `core-tests` and
+ * `core-typecheck` entries declare 180_000. It was 300_000, under the first of
+ * those, and a check killed by this bound is recorded `failed` with no exit code
+ * — indistinguishable from a check that ran and found a real defect, which is a
+ * release gate reporting a fault it never observed.
+ */
+const CHECK_TIMEOUT_MS = 900_000;
 const DEPLOY_TIMEOUT_MS = 600_000;
 const MAX_CHECKS_PER_RUN = 8;
 

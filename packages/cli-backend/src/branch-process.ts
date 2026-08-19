@@ -10,6 +10,7 @@ import type {
   BranchHandle, BranchExploration, BranchReflection, SpawnBranch, AbortBranch,
 } from '@proteus/core';
 import type { CraftedTool, LLMProviderConfig, WorkMode } from '@proteus/core';
+import { TURN_WALL_CLOCK_ENVELOPE_MS } from '@proteus/core';
 import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -20,29 +21,26 @@ const activeBranches = new Map<string, ChildProcess>();
 
 /**
  * Wall clock on ONE branch RPC — an `explore` is a whole agent turn, not a single
- * completion.
+ * completion, so it gets {@link TURN_WALL_CLOCK_ENVELOPE_MS} and no number of its
+ * own. That constant carries the measurement this bound was raised by; it used to
+ * be restated here, which made this file the only place in the tree the numbers
+ * lived.
  *
- * It was 120_000, commented "2 minutes per exploration", and that is under the
- * work. Measured against @cf/deepseek-ai/deepseek-v4-pro-0813 in one eval-tier
- * run: single turns of 151s and 294s, a five-turn conversation of 509s, and eight
- * algorithmic challenges averaging 92s each. So on the default model EVERY rollout
- * hit this ceiling — `Branch RPC timeout: explore` three times out of three — and
- * the consequence is not a visible error. The engine scores a failed branch 0
- * (mcts/engine.ts:351), every node keeps the DDL's `value = 0`, and `converge`
- * then correctly refuses to crown a winner over a zero-signal tree and abandons
- * it (mcts/convergence.ts:96-113). A CLI search therefore returned no winner and
- * said only that nothing scored, which is why this was invisible until a driven
- * eval wired `onProgress` and read the branch failures.
+ * It was 120_000, commented "2 minutes per exploration", and the damage was silent
+ * rather than loud: every rollout hit the ceiling, the engine scores a failed
+ * branch 0 (mcts/engine.ts:351), every node keeps the DDL's `value = 0`, and
+ * `converge` then correctly refuses to crown a winner over a zero-signal tree and
+ * abandons it (mcts/convergence.ts:96-113). A CLI search therefore returned no
+ * winner and said only that nothing scored, which is why this was invisible until
+ * a driven eval wired `onProgress` and read the branch failures.
  *
- * 600_000 clears the longest turn measured here by roughly 2x. It stays a BOUND
- * rather than becoming unbounded, because the judge seam documents the failure it
- * prevents: an upstream that accepts a request and never answers leaves a promise
- * pending inside a background fiber that carries no wall clock, and the stall is
- * permanent (mcts/evaluation.ts DEFAULT_JUDGE_CALL_TIMEOUT_MS). It also sits under
- * the 900s ceiling the live suites give a search, so a stuck branch surfaces as a
- * named branch failure rather than as the test being killed with no account.
+ * It stays a BOUND rather than becoming unbounded, because the judge seam
+ * documents the failure it prevents: an upstream that accepts a request and never
+ * answers leaves a promise pending inside a background fiber that carries no wall
+ * clock, and the stall is permanent (mcts/evaluation.ts
+ * DEFAULT_JUDGE_CALL_TIMEOUT_MS).
  */
-export const BRANCH_RPC_TIMEOUT_MS = 600_000;
+export const BRANCH_RPC_TIMEOUT_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
 
 export interface BranchSpawnerConfig {
   llm: LLMProviderConfig;

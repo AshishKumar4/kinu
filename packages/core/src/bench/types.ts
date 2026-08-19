@@ -6,6 +6,7 @@
 // process exits 0.
 import { unitHash } from './stats';
 import { normalizeUsage, usageTotal } from '../usage';
+import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import type { LanguageModelUsage } from 'ai';
 import * as v from 'valibot';
 
@@ -45,15 +46,24 @@ export interface AttemptBudget {
 }
 
 /**
- * Measured, not guessed. On a 5-task pilot against deepseek-v4-flash, a 200k
- * token cap breached on 2 of 5 attempts (40%) and scored them failed; the same
- * five tasks with a 600k cap passed 5/5. A cap that tight measures the budget
- * rather than the solver, and it does so ASYMMETRICALLY — it penalises whichever
- * variant explores more, which in a scaffold comparison is the thing under test.
- * Raised with headroom; an attempt that genuinely runs away still terminates.
+ * Measured, not guessed — both fields, separately.
+ *
+ * `maxTokens`: on a 5-task pilot against deepseek-v4-flash, a 200k token cap
+ * breached on 2 of 5 attempts (40%) and scored them failed; the same five tasks
+ * with a 600k cap passed 5/5. A cap that tight measures the budget rather than
+ * the solver, and it does so ASYMMETRICALLY — it penalises whichever variant
+ * explores more, which in a scaffold comparison is the thing under test. Raised
+ * with headroom; an attempt that genuinely runs away still terminates.
+ *
+ * `wallClockMs`: the identical argument, which this field did NOT have. It was
+ * 300_000 while sharing the sentence above, and an attempt is one whole Proteus
+ * turn against the sandbox — measured at up to 509 s
+ * ({@link TURN_WALL_CLOCK_ENVELOPE_MS}). So the tighter arm of the pair was the
+ * clock, breaching on exactly the attempts that explored longest and scoring
+ * them failed. It gets the measured turn envelope.
  */
 export const DEFAULT_ATTEMPT_BUDGET: AttemptBudget = {
-  wallClockMs: 300_000,
+  wallClockMs: TURN_WALL_CLOCK_ENVELOPE_MS,
   maxTokens: 600_000,
 };
 

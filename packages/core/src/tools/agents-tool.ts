@@ -47,6 +47,7 @@ import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics } from '../obs/index';
+import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -204,13 +205,29 @@ export interface PeersToolDeps {
 /** Reserved topic for transport-generated reply envelopes; user sends must not claim it. */
 export const PEER_REPLY_TOPIC = 'peer_reply';
 
-const ASK_TIMEOUT_DEFAULT_MS = 120_000;
-const ASK_TIMEOUT_MIN_MS = 5_000;
-const ASK_TIMEOUT_MAX_MS = 600_000;
+/**
+ * How long an `ask` (or a `hire scope=workspace`) waits for the addressed agent
+ * to answer — its whole turn, not a completion.
+ *
+ * This was 120_000 default / 600_000 ceiling. 120_000 is the same number, on the
+ * same workload, that `branch-process.ts` measured wrong: on the default model
+ * every peer whose turn took 151-509 s answered a caller that had already been
+ * told `no_reply`. Softer than the branch case — the real reply is not lost, it
+ * lands later as an event — but the calling turn concludes on a false premise and
+ * may route around a peer that was working. So the default IS the measured
+ * envelope, and so is the ceiling: a caller asking for more than one turn's worth
+ * of waiting is asking to hold its own turn open indefinitely.
+ *
+ * There is no floor. It was 5_000, which silently overrode a caller that asked
+ * for one second, and nothing depends on it: a tiny timeout returns `no_reply`
+ * with the note saying the answer arrives later as an event, which is honest.
+ * Zero is the floor a duration has anyway.
+ */
+const ASK_TIMEOUT_CEILING_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
 
 function askTimeoutMs(timeoutSeconds: number | undefined): number {
-  if (timeoutSeconds === undefined || !Number.isFinite(timeoutSeconds)) return ASK_TIMEOUT_DEFAULT_MS;
-  return Math.min(ASK_TIMEOUT_MAX_MS, Math.max(ASK_TIMEOUT_MIN_MS, Math.round(timeoutSeconds * 1000)));
+  if (timeoutSeconds === undefined || !Number.isFinite(timeoutSeconds)) return ASK_TIMEOUT_CEILING_MS;
+  return Math.min(ASK_TIMEOUT_CEILING_MS, Math.max(0, Math.round(timeoutSeconds * 1000)));
 }
 
 /** What the sender is told about a handoff, in the tool's snake_case shape. */
@@ -1003,7 +1020,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
         description: 'For action=hire: subordinate (default) hires into THIS workspace; workspace creates (or reuses by name) a specialist workspace of its own, sends `message` to it, and awaits the result.',
       },
       topic: { type: 'string', maxLength: 80, description: 'Optional short label for a peer ask/send (default "message").' },
-      timeout_seconds: { type: 'number', description: 'For a peer ask / hire scope=workspace: seconds to wait for the reply (default 120, max 600). On timeout the reply still arrives later as an event.' },
+      timeout_seconds: { type: 'number', description: `For a peer ask / hire scope=workspace: seconds to wait for the reply (default and max ${TURN_WALL_CLOCK_ENVELOPE_MS / 1000}, which is one measured agent turn). On timeout the reply still arrives later as an event.` },
       event_id: { type: 'string', description: 'For action=reply: the agent message event id you were given.' },
     });
   }

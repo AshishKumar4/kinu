@@ -208,7 +208,26 @@ export function codexCredentialToHeaders(cred: OAuthCredential) {
   return { ...headers, 'ChatGPT-Account-ID': accountId };
 }
 
-export function codexAccessTokenExpiring(accessToken: string, skewSec = 60): boolean {
+/**
+ * How early a Codex access token counts as expiring, so it is refreshed before a
+ * request could be authorised with a token that dies mid-flight.
+ *
+ * ONE window, because there were two for the same decision: this default was 60 s
+ * and `codex-auth-store.ts` passed 300 s beside its own separate
+ * `Date.now() + 5*60_000 >= expiresAt` check, so the CLI's two refresh paths
+ * disagreed by 5x on when a token is too old to use. 300 s is the window that was
+ * actually chosen for a path someone looked at; the 60 s was the one nobody did.
+ *
+ * NOT derived, and the measurement that would derive it is absent: a streamed
+ * completion is one HTTP request and the longest measured turn is 509 s
+ * (`LONGEST_MEASURED_TURN_MS`), so a lead of 300 s does not guarantee the token
+ * outlives the request it opened. Closing that needs the actual `expires_in`
+ * Codex issues, which nothing in this tree records — a lead longer than a short
+ * token's whole life would refresh on every call instead.
+ */
+export const CODEX_REFRESH_LEAD_SEC = 300;
+
+export function codexAccessTokenExpiring(accessToken: string, skewSec = CODEX_REFRESH_LEAD_SEC): boolean {
   const payload = decodeJwtPayload(accessToken);
   if (!payload) return true;
   const parsedExp = v.safeParse(v.number(), payload.exp);

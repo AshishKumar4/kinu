@@ -73,7 +73,7 @@ import { fencedBlocks, readProposalCode } from '../execution/code-fence';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
-import { DEFAULT_CONFIG } from '../config';
+import { DEFAULT_CONFIG, TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 
 /** Score bands. Execution verdicts dominate: fail ceiling < pass floor, and
  *  prose confidence is capped below a passing branch with a median judge.
@@ -102,14 +102,21 @@ const PROSE_CONFIDENCE = 0.75;
  *
  * A timed-out judge is DROPPED (see sampleJudgeScore / generateAssertionSuite), so
  * the ensemble degrades to the samples that did answer instead of the search
- * dying. A judge that FAILS is not the same thing and is not dropped: it
- * propagates to the engine's allSettled, which reports branch-failed with the
- * reason and scores the branch 0. Generous by design — a real judge completion on
- * a bounded prompt finishes well inside this even on a reasoning model; only a
- * genuinely stuck call is cut. Override per-evaluation via
+ * dying. That is exactly why the number has to be generous rather than prudent: a
+ * bound under a real completion's latency does not error, it shrinks the ensemble
+ * invisibly, and a median over the two samples that answered is not the ensemble
+ * the caller asked for. A judge that FAILS is not the same thing and is not
+ * dropped: it propagates to the engine's allSettled, which reports branch-failed
+ * with the reason and scores the branch 0.
+ *
+ * So one completion gets the same envelope as the whole turn it is part of —
+ * {@link TURN_WALL_CLOCK_ENVELOPE_MS}, whose 509 s longest measured turn is an
+ * upper bound on any single call inside one. This was 120_000, which is under
+ * every turn in that measurement and was never checked against a completion's
+ * latency at all. Override per-evaluation via
  * EvaluateBranchOptions.judgeCallTimeoutMs.
  */
-export const DEFAULT_JUDGE_CALL_TIMEOUT_MS = 120_000;
+export const DEFAULT_JUDGE_CALL_TIMEOUT_MS = TURN_WALL_CLOCK_ENVELOPE_MS;
 
 /** `judge.complete`, bounded. Returns null when the provider does not answer
  *  within `timeoutMs` — the timeout is the ensemble's own envelope, so it is a

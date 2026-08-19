@@ -2,6 +2,7 @@ import {
   CODEX_CRED_KEY,
   JsonObjectSchema,
   JsonValueSchema,
+  CODEX_REFRESH_LEAD_SEC,
   codexAccessTokenExpiring,
   codexCredentialToHeaders,
   createCodexOAuthClient,
@@ -108,8 +109,11 @@ async function refreshUnderLock(
 
 function needsRefresh(credential: OAuthCredential, opts?: { forceRefresh?: boolean }): boolean {
   if (opts?.forceRefresh) return true;
-  if (credential.expiresAt && Date.now() + 5 * 60_000 >= credential.expiresAt) return true;
-  return codexAccessTokenExpiring(credential.accessToken, 300);
+  // One lead, two places it can be read from: the stored `expiresAt` and the JWT's
+  // own `exp`. These were 5*60_000 and 300 — the same window written twice in
+  // different units, which is how they come to disagree.
+  if (credential.expiresAt && Date.now() + CODEX_REFRESH_LEAD_SEC * 1_000 >= credential.expiresAt) return true;
+  return codexAccessTokenExpiring(credential.accessToken);
 }
 
 function readCredential(configPath: string): OAuthCredential | null {
