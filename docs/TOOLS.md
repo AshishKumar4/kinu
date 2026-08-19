@@ -205,9 +205,9 @@ The rungs themselves:
    shape of the search, `objective` says what is measured, and `depth` says how
    deep the search may go. A verifier registered in
    `strategy/verifier-registry.ts` scores every candidate, and it runs in this
-   workspace. Each node is a full agent with its own multi-step tool loop. Tree
-   search of every depth lives here; [EXPLORATION.md](./EXPLORATION.md) is the
-   document for the search itself.
+   workspace. Each swarm node is a full agent with its own multi-step tool loop.
+   Tree search of every depth lives here; [EXPLORATION.md](./EXPLORATION.md) is
+   the document for the search itself.
 3. **Persistent subordinate** (`hire`) — long-lived, starts from a blank context, keeps its own
    across turns, stays in the roster.
 

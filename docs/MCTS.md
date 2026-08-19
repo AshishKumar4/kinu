@@ -331,9 +331,10 @@ concurrent heads mutate one shared workspace with no structural isolation, and
 same tree — while the file-level isolation that would fix it is exactly the
 per-branch workspace the toolless design does not need.
 
-A swarm's node is a third shape again, and it resolves that tension differently. A
-node is a full agent, and it is graded on the candidate it **reports**, never on a
-diff of the tree. See [EXPLORATION.md](./EXPLORATION.md) — "A node is an agent".
+A swarm node is a third shape again, and it resolves that tension differently. A
+swarm node is a full agent, and it is graded on the candidate it **reports**,
+never on a diff of the tree. See [EXPLORATION.md](./EXPLORATION.md) — "A node is
+an agent".
 
 `initHead` / `runAsHead` / `abortHead` are the head-mode `@callable()`s on the
 same class. See [ARCHITECTURE.md](./ARCHITECTURE.md) for why that class

@@ -24,10 +24,11 @@ either side.
 
 ## What a tree swarm is
 
-A swarm is a tree search whose nodes are agents. The caller states two things.
-`preset` fixes the shape of the search, and `objective` says what is measured.
-Every candidate is then scored by the caller's own registered verifier, running
-in this workspace.
+A swarm is a tree search whose nodes are agents. One of those agents is a
+**swarm node**, and this document says node for short. The caller states two
+things. `preset` fixes the shape of the search, and `objective` says what is
+measured. Every candidate is then scored by the caller's own registered verifier,
+running in this workspace.
 
 A verifier is code. It runs, and it reports a raw number in its own unit, so the
 number decides which candidate wins. A caller who asks for `score:'judge'`
