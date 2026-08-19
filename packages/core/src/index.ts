@@ -1232,7 +1232,10 @@ export {
   COMPLETION_OBSERVATION_MAX_CHARS, COMPLETION_TASK_ECHO_MAX_CHARS,
   type TurnCompletionFacts,
 } from './orchestrator/completion-gate';
-export { assembleTurnMessages, type TurnContextInput } from './orchestrator/turn-context';
+export {
+  assembleTurnMessages, measureCompactionTrigger,
+  type TurnContextInput, type CompactionTriggerReader, type MeasuredCompactionTrigger,
+} from './orchestrator/turn-context';
 export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery, creditedTurnId,

@@ -147,7 +147,7 @@ import {
   // Shared catalog view of the resolved model
   ModelCatalogSession,
   // Shared turn-context assembly — the SAME ordering runChat runs on the CLI
-  assembleTurnMessages,
+  assembleTurnMessages, measureCompactionTrigger,
   // The tool-call pairing invariant — applied wherever messages reach the model
   // WITHOUT going through assembleTurnMessages (the scaffold replay below).
   settleUnpairedToolCalls,
@@ -2948,22 +2948,18 @@ export abstract class ActorAgent extends Think<Env> {
 
     const cfg: TurnConfig = { system: systemOverride };
 
-    // The measured trigger: the previous turn's final request as the provider
-    // actually priced it, persisted at turn end (onChatResponse). Null until
-    // the session's first turn completes — the engine's char estimate gates
-    // alone until then — and voided by the length guard when the durable
-    // history shrank (undo/restore) since the measurement. Attachment
+    // The measured compaction trigger, read from the durable state by core in
+    // the one correct order (orchestrator/turn-context.ts). Attachment
     // sanitization is per-part in-place replacement, so the raw count IS the
-    // sanitized durable length.
+    // sanitized durable length — and it is stashed because
+    // recordTurnTelemetry writes the next measurement against the same number.
     const rawMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
     this._turnDurableLength = rawMessages.length;
-    const lastPromptTokens = this.compactionState.loadPromptTokens(this.name, rawMessages.length);
     this._turnContextWindow = this.sessionContextWindow();
-    // The forced rebuild, armed either by overflow recovery (onChatResponse, on
-    // a context_length failure) or by the agent itself (agent.compactNow):
-    // consume it — at most one rebuild per arm, never a loop.
-    const trigger = this.compactionState.takeForceCompaction(this.name) ? 'force' as const : 'auto' as const;
-    if (trigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
+    const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
+    // The forced rebuild was armed either by overflow recovery (onChatResponse,
+    // on a context_length failure) or by the agent itself (agent.compactNow).
+    if (measured.trigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
     // The newest MEMORY.md lessons/reflections ride the dynamic block too (the
     // same bounded tail the CLI supplies) — the reflection loop assumes the
     // model sees its latest lessons in-turn. Read once here rather than per
@@ -2987,9 +2983,11 @@ export abstract class ActorAgent extends Think<Env> {
       turnLocal: turnLocal ? [turnLocal] : [],
       sessionKey: this.name,
       contextWindow: this._turnContextWindow,
-      trigger,
+      trigger: measured.trigger,
     };
-    if (lastPromptTokens !== null) assembly.providerReportedTokens = lastPromptTokens;
+    if (measured.providerReportedTokens !== undefined) {
+      assembly.providerReportedTokens = measured.providerReportedTokens;
+    }
     cfg.messages = await assembleTurnMessages(assembly);
 
     // Extension-contributed tools join the turn's ToolSet without ever

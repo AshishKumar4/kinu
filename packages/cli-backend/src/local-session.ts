@@ -65,7 +65,7 @@ import {
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT,
   openTurnRun, closeTurnRun, snapshotCompletedTurn, creditedTurnId,
-  persistMeasuredPromptTokens, applyOverflowRecovery,
+  persistMeasuredPromptTokens, applyOverflowRecovery, measureCompactionTrigger,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   PROGRAMMATIC_MESSAGE_ID_PREFIX,
   ExtensionHost, UserSteerDrain,
@@ -1716,17 +1716,12 @@ export class LocalAgentSession implements BackendHost {
     const cache = this.cacheIdentity();
     const effort = this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat;
     const providerOptions = reasoningEffortOptions(effort, cache.providerId ?? '');
-    // The measured trigger: the previous turn's final request as the provider
-    // actually priced it, persisted at turn end below — voided by the length
-    // guard when the durable history shrank (restart truncation) since the
-    // measurement.
+    // The measured compaction trigger, read from the durable state by core in
+    // the one correct order (orchestrator/turn-context.ts). `historyLength` is
+    // the durable length the measurement is bound to, so it is also what
+    // persistMeasuredPromptTokens writes against at turn end.
     const historyLength = this.history.length;
-    const lastPromptTokens = this.compactionState.loadPromptTokens(cache.sessionKey, historyLength);
-    // Overflow recovery (armed below on a context_length failure): consume
-    // the flag — at most one forced rebuild per arm, never a loop.
-    const transformTrigger = this.compactionState.takeForceCompaction(cache.sessionKey)
-      ? 'force' as const
-      : 'auto' as const;
+    const measured = measureCompactionTrigger(this.compactionState, cache.sessionKey, historyLength);
     // Resolved once for the whole turn so compaction, the step-prune budget,
     // and overflow recovery all budget against the same number.
     const contextWindow = this.sessionContextWindow();
@@ -1752,12 +1747,14 @@ export class LocalAgentSession implements BackendHost {
       dynamicContext,
       turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
       tools: turnTools,
-      transformTrigger,
+      transformTrigger: measured.trigger,
       maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
       cache,
       budget: this.budget,
     };
-    if (lastPromptTokens !== null) liveTurnOpts.providerReportedTokens = lastPromptTokens;
+    if (measured.providerReportedTokens !== undefined) {
+      liveTurnOpts.providerReportedTokens = measured.providerReportedTokens;
+    }
     if (providerOptions) liveTurnOpts.providerOptions = providerOptions;
     // `meter` rides the LIVE turn only, never liveTurnOpts: a shadow-eval
     // replay re-runs those opts off the priced path, and its composition would
