@@ -15,10 +15,11 @@
  * climbable progress that a linear scale scores as almost nothing.
  *
  * WHY THIS NORMALISES AND THE INSTRUMENT DOES NOT. `MeasuredValue.value` is RAW in the
- * objective's own unit (docs/EXPLORATION-SPEC.md §3.5): the number a search climbs and
- * the number a record keeps are different numbers, and conflating them makes two runs
- * with different baselines incomparable forever. The ladder needs the climbable one, so
- * it is computed here, from quantities that all survive in `measured`.
+ * objective's own unit (docs/EXPLORATION.md — "The objective", *Raw units*): the
+ * number a search climbs and the number a record keeps are different numbers, and
+ * conflating them makes two runs with different baselines incomparable forever. The
+ * ladder needs the climbable one, so it is computed here, from quantities that all
+ * survive in `measured`.
  */
 import {
   REFERENCE_FILE,

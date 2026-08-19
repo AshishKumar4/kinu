@@ -1,24 +1,26 @@
-// Entry zero of the exploration fixture suite: ONE complete `agents.swarm` call
-// for docs/EXPLORATION-SPEC.md §2.4(a), executable, so the spec's own worked
-// example and the surface that carries it cannot drift apart.
+// Entry zero of the exploration fixture suite: ONE complete `agents.swarm` call,
+// executable, so the worked example and the surface that carries it cannot drift
+// apart. This file IS that worked example — there is no document holding a second
+// copy of it.
 //
-// The class, not the instance. An audit of that spec found the tool boundary had
-// no owner end to end — one review found `objective.verify` declared as a closure
-// while `agents.swarm` is a valibot-validated JSON action, a second found the
+// The class, not the instance. An audit of the exploration specification found the tool
+// boundary had no owner end to end — one review found `objective.verify` declared as a
+// closure while `agents.swarm` is a valibot-validated JSON action, a second found the
 // action has no result type, a third found every empirical receipt measured a
 // different surface, and none of them wrote the call. Writing it is what forced
 // the decision, and the decision it forced is the concrete serialisable form of
 // `verify`:
 //
 //   - `Verifier = (ctx) => Promise<Measurement>` is UNAUTHORABLE over a JSON tool
-//     argument, not merely undigestible. §11.5 conceded the digest and stopped a
-//     step short. The counter-example is not hypothetical and not a stand-in: the
-//     hard-task corpus's own `HardTask.verify` is a real shipped closure, and it
-//     fails the JSON boundary below at runtime.
-//   - §3.4's one real guard — "a fabricated script cannot resolve, so the run
-//     faults before it can publish" — is incoherent for a closure, which has no
-//     name to fail to resolve. The closure arm is not merely unpublishable, it is
-//     unguarded.
+//     argument, not merely undigestible — which is what *What the engine refuses
+//     outright* now states, where the earlier treatment conceded the digest and
+//     stopped a step short. The counter-example is not hypothetical and not a
+//     stand-in: the hard-task corpus's own `HardTask.verify` is a real shipped
+//     closure, and it fails the JSON boundary below at runtime.
+//   - The one real guard of *The closed verifier registry* — "a fabricated script
+//     cannot resolve, so the run faults before it can publish" — is incoherent for a
+//     closure, which has no name to fail to resolve. The closure arm is not merely
+//     unpublishable, it is unguarded.
 //   - So the only inhabitable arm on this surface is `VerifierSpec = {kind, spec}`
 //     with `kind` CLOSED over a registry's declared set, and `spec` carrying every
 //     field the digest is defined over rather than a pointer at them. Agreed with
@@ -32,10 +34,15 @@
 // is kept in the comment, because a pin whose history is erased cannot be checked
 // against what it was protecting.
 //
-// The numbers are READ FROM THE CORPUS, never retyped. §2.4(a) claims its figures
-// are `hard-majority-vote`'s; sourcing them from `HARD_TASKS` makes that claim a
-// test rather than a footnote, so retargeting the task turns this red instead of
-// leaving a normative document quoting a number nothing measures.
+// The numbers are READ FROM THE CORPUS, never retyped. Entry zero's figures are
+// `hard-majority-vote`'s; sourcing them from `HARD_TASKS` makes that a test rather
+// than a footnote, so retargeting the task turns this red instead of leaving a
+// worked example quoting a number nothing measures.
+//
+// Specified by docs/EXPLORATION.md — "The objective", "What the engine refuses
+// outright", "The closed verifier registry", "Comparability", "The floor", "Presets",
+// "Validity over the resolved configuration", "Accepted and ignored", "Settle is
+// derived", "Arbitration" and "Inherited context".
 import { describe, test, expect } from 'bun:test';
 import { HARD_TASKS, type HardTask } from '@proteus/test-utils';
 import * as v from 'valibot';
@@ -53,15 +60,15 @@ import { AGENTS_TOOL_ACTIONS } from '../src/tools/registry';
 import { parseAgentsToolInput } from '../src/tools/agents-tool';
 import { JsonObjectSchema } from '../src/utils/json';
 
-/** The corpus task §2.4(a) is written over. Its absence is a broken instrument
+/** The corpus task entry zero is written over. Its absence is a broken instrument
  *  rather than a skipped case — every number in the example comes from here, so
- *  a missing task means the spec quotes figures nothing measures. */
+ *  a missing task means the example quotes figures nothing measures. */
 function majorityVote(): HardTask {
   const found = HARD_TASKS.find((task) => task.id === 'hard-majority-vote');
   if (!found) {
     throw new Error(
-      'hard-majority-vote is absent from HARD_TASKS, so EXPLORATION-SPEC §2.4(a) '
-      + 'quotes numbers no shipped task measures',
+      'hard-majority-vote is absent from HARD_TASKS, so entry zero quotes numbers '
+      + 'no shipped task measures',
     );
   }
   return found;
@@ -71,12 +78,12 @@ const TASK = majorityVote();
 const PROBLEM = TASK.problem;
 
 /**
- * `verify` for §2.4(a), in the only form that crosses a JSON tool argument.
+ * `verify` for entry zero, in the only form that crosses a JSON tool argument.
  *
  * `kind` names the instrument the spec names in prose — the metered-oracle harness —
  * and `spec` is `RatioProblem` in FULL rather than a pointer at a corpus entry. Full
- * because §5.1 makes the digest the comparability key exactly on the grounds that "a
- * name is a claim the caller can get wrong": a `spec` naming `hard-majority-vote`
+ * because *Comparability* makes the digest the comparability key exactly on the grounds
+ * that a name is a claim the caller can get wrong: a `spec` naming `hard-majority-vote`
  * would digest a label whose contents can change underneath it, which is the
  * silent-recomparison failure the digest exists to prevent. `RatioProblem` costs
  * nothing to send this way — it is already fully data, every field
@@ -99,12 +106,12 @@ const VERIFY: VerifierSpec = {
 };
 
 /**
- * §2.4(a)'s floor as it crosses the WIRE, with both numbers read off the corpus.
+ * Entry zero's floor as it crosses the WIRE, with both numbers read off the corpus.
  *
- * `best_known_honest` rather than `bestKnownHonest`: §2.2 makes the objective's wire
- * form snake_case, and this is the one multiword field entry zero contains — the
- * naming collision the fixture originally recorded as an open question (G13), now
- * decided and mapped at the boundary. The parse below is what proves the mapping.
+ * `best_known_honest` rather than `bestKnownHonest`: *Wire form* makes the objective's
+ * wire form snake_case, and this is the one multiword field entry zero contains — the
+ * naming collision the fixture originally recorded as an open question, now decided by
+ * that rule and mapped at the boundary. The parse below is what proves the mapping.
  *
  * `best_known_honest` and `target` are the same number here and that is not a
  * duplicated literal: `targetOps` is documented as the MEASURED cost of the best
@@ -165,11 +172,11 @@ const FLOOR: Floor = v.parse(
 );
 
 /**
- * §6.3's `optimise` row, RESOLVED rather than hand-built.
+ * The `optimise` row *Presets* fixes, RESOLVED rather than hand-built.
  *
  * FLIPPED (was: a hand-built `SwarmConfig` the fixture called "the fixture's reading
- * of that prose and not a resolution", usable only for `settleOf` because §6.5 says
- * validity is checked over the RESOLVED configuration and nothing resolved a named
+ * of that prose and not a resolution", usable only for `settleOf` because validity is
+ * checked over the RESOLVED configuration and nothing resolved a named
  * preset). `resolve(preset) → SwarmConfig` exists, so this reads the row instead of
  * guessing it, and every assertion that used to be scoped to `settleOf` now runs
  * against the real thing.
@@ -177,10 +184,10 @@ const FLOOR: Floor = v.parse(
 const OPTIMISE = SWARM_PRESET_POINTS.optimise;
 const VERIFIER_TREE: SwarmConfig = OPTIMISE.config;
 
-/** The tree selectors §6.6 property 6 is exercised over. */
+/** The tree selectors *Settle is derived* is exercised over. */
 const TREE_ADVANCES = ['uct', 'best-first'] as const satisfies readonly SwarmAdvance[];
 
-describe('§2.4(a) crosses a JSON tool boundary, or it is not a call', () => {
+describe('entry zero crosses a JSON tool boundary, or it is not a call', () => {
   test('every field of the call is JSON', () => {
     expect(v.is(JsonObjectSchema, CALL)).toBe(true);
     expect(JSON.parse(JSON.stringify(CALL))).toEqual(CALL);
@@ -207,9 +214,9 @@ describe('§2.4(a) crosses a JSON tool boundary, or it is not a call', () => {
     const resolved = resolveVerifier(VERIFY);
     expect('reason' in resolved).toBe(false);
     if ('reason' in resolved) return;
-    // §3.4's guard, made real: the kind resolved to an INSTRUMENT — one that says
-    // where a candidate is written and which quantity is the run's own measured
-    // baseline — rather than to a name the caller asked to be trusted.
+    // *The closed verifier registry*'s guard, made real: the kind resolved to an
+    // INSTRUMENT — one that says where a candidate is written and which quantity is the
+    // run's own measured baseline — rather than to a name the caller asked to be trusted.
     expect(resolved.artifact).toBe('solution.mjs');
     expect(resolved.baselineKey).toBe('refOps');
     // G6: identity captures WHICH implementation the kind resolved to, which
@@ -222,8 +229,8 @@ describe('§2.4(a) crosses a JSON tool boundary, or it is not a call', () => {
     expect(fabricated).toMatchObject({ reason: 'bad_input' });
     expect('error' in fabricated ? fabricated.error : '').toContain(unregisteredKindRefusal());
     expect('error' in fabricated ? fabricated.error : '').not.toContain('closure');
-    // A spec missing the floor's input leaves §4.5 C1 and C2 with no numbers, and
-    // the refusal NAMES the field rather than reporting a shape mismatch.
+    // A spec missing the floor's input leaves *Floor margin* with no numbers to show,
+    // and the refusal NAMES the field rather than reporting a shape mismatch.
     const incomplete = resolveVerifier({
       kind: 'exec-ratio',
       spec: {
@@ -236,10 +243,10 @@ describe('§2.4(a) crosses a JSON tool boundary, or it is not a call', () => {
   });
 
   test('the wire form is snake_case and `spec` is not touched by it', () => {
-    // G13, decided. The objective's own multiword field crosses as snake_case and
+    // *Wire form*, applied. The objective's own multiword field crosses as snake_case and
     // arrives camelCase; the verifier's `spec` crosses UNCHANGED, because a
     // transform reaching inside it would make `verifierDigest` depend on which side
-    // of that transform it was computed on — §5.1's failure mode through a naming
+    // of that transform it was computed on — *Comparability*'s failure mode through a naming
     // convention.
     expect(Object.keys(WIRE_FLOOR)).toContain('best_known_honest');
     expect(FLOOR.bestKnownHonest).toBe(PROBLEM.targetOps);
@@ -257,8 +264,8 @@ describe('§2.4(a) crosses a JSON tool boundary, or it is not a call', () => {
   });
 });
 
-describe('entry zero is the spec\'s example, and its numbers are the corpus\'s', () => {
-  test('§2.4(a) verbatim', () => {
+describe('entry zero is the worked example, and its numbers are the corpus\'s', () => {
+  test('the worked example verbatim', () => {
     expect(OBJECTIVE.metric).toBe('oracle_calls');
     expect(OBJECTIVE.unit).toBe('oracle calls');
     expect(OBJECTIVE.direction).toBe('minimise');
@@ -269,9 +276,9 @@ describe('entry zero is the spec\'s example, and its numbers are the corpus\'s',
     expect(FLOOR.bestKnownHonest).toBe(2992);
   });
 
-  // The other end of the same drift: the assertions above pin the document, these
-  // pin the instrument. Retarget the task and this goes red while the spec keeps
-  // quoting 2992, which is the failure sourcing them from HARD_TASKS prevents.
+  // The other end of the same drift: the assertions above pin the worked example, these
+  // pin the instrument. Retarget the task and this goes red instead of leaving the
+  // example quoting 2992, which is the failure sourcing them from HARD_TASKS prevents.
   test('and those numbers are hard-majority-vote\'s', () => {
     expect(PROBLEM.targetOps).toBe(2992);
     expect(PROBLEM.lowerBoundOps).toBe(1200);
@@ -280,7 +287,7 @@ describe('entry zero is the spec\'s example, and its numbers are the corpus\'s',
 });
 
 describe('validity over entry zero, as far as the document defines it', () => {
-  test('§2.5: optimise requires objective and prohibits key, config, from, label', () => {
+  test('*Accepted and ignored*: optimise requires objective and prohibits key, config, from, label', () => {
     const entry = swarmCall();
     expect(SWARM_PRESETS).toContain(entry.preset);
     expect(PARSED.objective).toBeDefined();
@@ -310,8 +317,8 @@ describe('validity over entry zero, as far as the document defines it', () => {
       .toMatchObject({ reason: 'bad_input' });
   });
 
-  test('§6.5: entry zero is LEGAL over its resolved configuration', () => {
-    // FLIPPED (was: nothing to assert — §6.5 is stated over the resolved
+  test('*Validity over the resolved configuration*: entry zero is LEGAL', () => {
+    // FLIPPED (was: nothing to assert — validity is stated over the resolved
     // configuration and no resolution existed, so the fixture could only check the
     // requiredness table above). This is the assertion the whole gap list was about.
     const resolved = resolveSwarm(swarmCall());
@@ -322,11 +329,11 @@ describe('validity over entry zero, as far as the document defines it', () => {
     expect(swarmValidity(resolved)).toBeNull();
   });
 
-  test('§4.5 C1: the floor leaves room, and the margin is computed not asserted', () => {
+  test('*Floor margin*: the floor leaves room, and the margin is computed not asserted', () => {
     expect(floorMargin(FLOOR, OBJECTIVE.direction)).toBeCloseTo(0.599, 3);
   });
 
-  test('§2.3: the measured baseline leaves the target a range to score on', () => {
+  test('*Measured baseline*: the baseline leaves the target a range to score on', () => {
     // The seeded reference counts every token against every other, so the
     // baseline is quadratic per instance and quadratic again over the pair. A
     // target at or beyond the measured baseline refuses the run.
@@ -338,7 +345,7 @@ describe('validity over entry zero, as far as the document defines it', () => {
     // optional with no stated default anywhere in the document, so entry zero could
     // not say how wide or how deep it runs and inventing a number here would have
     // made the fixture the source of truth for a quantity the spec never set).
-    // §6.3's tuple table states both per preset now, so the CALL still states
+    // The preset rows now state both (*Presets*), so the CALL still states
     // neither and the RESOLUTION states both — with the origin recorded, which is
     // what keeps an inherited default distinguishable from a chosen one.
     expect(PARSED.branches).toBeUndefined();
@@ -355,8 +362,8 @@ describe('validity over entry zero, as far as the document defines it', () => {
 });
 
 /**
- * §6.3's other half: `resolve(preset)` for a COMPOSITION, where `config` is the
- * override and `from` names the base.
+ * The other half of *Presets*: `resolve(preset)` for a COMPOSITION, where `config` is
+ * the override and `from` names the base.
  *
  * Written because the precedence was stated and unguarded. The docstring on the
  * tuple table says "`config` overrides `from`'s row, so state only what differs",
@@ -456,7 +463,7 @@ describe('what the live tool surface does with entry zero', () => {
 
 describe('the implementation, asserted where absences used to be pinned', () => {
   test('the strategy modules export the resolution, the predicate and the result half', () => {
-    // FLIPPED (was: "nothing resolves a named preset, so §6.5 validity has no
+    // FLIPPED (was: "nothing resolves a named preset, so the validity predicate has no
     // input" — this test pinned the VALUE EXPORT SETS of both strategy modules so
     // that landing a preset table, a validity predicate, a verifier-kind registry or
     // a call parser would turn it red and force the fixture onto the real thing
@@ -470,18 +477,19 @@ describe('the implementation, asserted where absences used to be pinned', () => 
       'PUBLICATION_SURFACES', 'PUBLISHING_CARRIES', 'admitsPublication',
       'carrySuppression', 'floorMargin', 'isBetter', 'normalisedScore',
     ]);
-    // GROWN BY FOUR since §8.2's arbiter landed. `arbitrateBranch` is the executable
+    // GROWN BY FOUR since *Arbitration*'s arbiter landed. `arbitrateBranch` is the executable
     // port of `Exploration/Arbitration.lean`'s `arbitrate`, and two of the constants are
     // the bounds its theorems quantify over — `BRANCH_PROPOSAL_WIDTH` is the 2-4 band
     // `accepted_width_in_range` proves, `BRANCH_REFUSAL_POLICIES` the five reasons
-    // `every_refusal_is_reachable` proves none of is unreachable. `SWARM_CONTEXTS` is
-    // §8.4's axis, which arrived with agent nodes and is the trigger of the fifth
-    // refusal. Named here because that is what this pin is for: growth stays a decision.
+    // `every_refusal_is_reachable` proves none of is unreachable. `SWARM_CONTEXTS` is the
+    // axis *Inherited context* governs, which arrived with agent nodes and is the trigger
+    // of the fifth refusal. Named here because that is what this pin is for: growth stays
+    // a decision.
     //
     // GROWN BY TWO AGAIN, and both came from the records store landing.
     // `configDigestOf` is `ExplorationRecord.configDigest`, computed beside the
     // resolution because what it digests is what the resolution produced.
-    // `judgeMarginalisationRefusal` is §6.5's marginalisation floor extracted out of
+    // `judgeMarginalisationRefusal` is the marginalisation floor lifted out of
     // `swarmValidity` so that `runSwarm` — which the tool surface does not route
     // through — enforces the same bound rather than a second copy of it.
     //
@@ -506,8 +514,8 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // `config` must come back naming every axis, so an axis added to `SwarmConfig` and
     // forgotten in the resolver's list fails HERE instead of letting an incomplete tuple
     // through as if it were resolved. `context` is in the list because agent nodes gave
-    // inheritance one spelling (§8.4); `observe` and `decorrelate` are NOT, because
-    // they were cut, and a composition is no longer asked to state an axis that no
+    // inheritance one spelling (*Inherited context*); `observe` and `decorrelate` are NOT,
+    // because they were cut, and a composition is no longer asked to state an axis that no
     // longer decides anything.
     const refusal = resolveSwarm({ preset: 'custom', task: 'x', label: 'l', config: {} });
     expect(refusal).toMatchObject({ reason: 'bad_input' });
@@ -519,15 +527,15 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     }
   });
 
-  test('§6.6 property 6: settleOf answers for entry zero under every tree advance', () => {
+  test('*Settle is derived*: settleOf answers for entry zero under every tree advance', () => {
     for (const advance of TREE_ADVANCES) {
       expect(settleOf({ ...VERIFIER_TREE, advance: { kind: advance } })).toBe('best');
     }
   });
 
-  test('§6.3: a row the document does not state is REFUSED, never resolved to a guess', () => {
-    // The gap this fixture found while flipping: §6.3 gives `research` and `audit`
-    // `carry:'artifacts'`, whose admission threshold the table never states, so
+  test('*Presets*: a row the document does not state is REFUSED, never resolved to a guess', () => {
+    // The gap this fixture found while flipping: the preset rows give `research` and
+    // `audit` `carry:'artifacts'` (*Presets*), whose admission threshold nothing states, so
     // neither row can be constructed as printed. It is declared undeclared and the
     // resolver refuses it naming the missing parameter — which is the same rule this
     // file already applied to `branches` and `depth`: a number the specification
@@ -541,13 +549,13 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     }
     // `redteam` JOINED them, and this is the assertion that records the cost. It
     // resolved until `novelty` re-homed onto `advance:'archive'` as a required
-    // parameter; §6.3 states no threshold for it, so the row stopped being
+    // parameter; no preset row states a threshold for it, so the row stopped being
     // constructible. The same rule, newly reaching a third row.
     expect(isPresetPoint(SWARM_PRESET_POINTS.redteam)).toBe(false);
     const redteam = resolveSwarm({ preset: 'redteam', task: 'x', key: 'k' });
     expect(redteam).toMatchObject({ reason: 'bad_input' });
     expect('error' in redteam ? redteam.error : '').toContain("advance:'archive'");
-    // And the rows §6.3 does state resolve, so the refusals above are about the
+    // And the preset rows that ARE stated resolve, so the refusals above are about the
     // document rather than about the resolver.
     for (const preset of ['ideate', 'optimise', 'prove'] as const) {
       expect(isPresetPoint(SWARM_PRESET_POINTS[preset])).toBe(true);

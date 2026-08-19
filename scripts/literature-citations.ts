@@ -7,9 +7,9 @@
  * theorems that had never existed in any module. The generalisation is the point:
  * this tree's citations are in unusually good shape wherever a checker exists —
  * ~40 repo `file:line` references audited, every one resolving — and drifted
- * wherever a boundary was crossed that nothing measures. A seven-number audit of
- * `docs/EXPLORATION-SPEC.md` found six of seven DIGITS correct and four QUALIFIERS
- * wrong. A gate that compared digits would have passed all seven.
+ * wherever a boundary was crossed that nothing measures. A removed internal audit of
+ * seven numbers found six of seven DIGITS correct and four QUALIFIERS wrong. A gate
+ * that compared digits would have passed all seven.
  *
  * So this aims at the qualifier:
  *
@@ -141,8 +141,8 @@ const ABBREVIATION = new RegExp(
 
 /**
  * A paragraph marking a number as retracted. Read over the PARAGRAPH, because a
- * retraction is a paragraph-level act: §6.5's correction heads one sentence and
- * quotes the withdrawn claim in the next.
+ * retraction is a paragraph-level act: the correction that set this rule headed one
+ * sentence and quoted the withdrawn claim in the next.
  *
  * Stems are open (`withdraw\w*`), not enumerated suffixes: `LeanModel` hit exactly this
  * writing the sibling category — `\b(?:illustrat)\b` never matched "illustrations", the
@@ -208,9 +208,9 @@ export function citable(file: string, text: string): string {
  * timestamp's `-08` — arrived as an unlocated claim about a paper.
  *
  * The value is measured, not chosen. Below 3,700 the corpus starts losing real claim
- * sites: `docs/EXPLORATION-SPEC.md` §6.5 opens with a citation and then argues for
- * four paragraphs naming no author, which is the longest carry this tree actually
- * uses. At 4000 the corpus governs the same 133 claim sites and the same 54 register
+ * sites: the longest carry measured in this tree was a passage in a removed internal
+ * audit that opened with a citation and then argued for four paragraphs naming no
+ * author. At 4000 the corpus governs the same 133 claim sites and the same 54 register
  * entries as unbounded paragraphs did. Beyond that distance it is a real blind spot,
  * and it is printed as one.
  *
@@ -515,8 +515,9 @@ export function auditProse(file: string, text: string, seen: Coverage): string[]
   // A doc comment is not paragraph-structured prose: it is a dense block where one
   // `Self-MoA` mention would pool a module's constants, so there a citation reaches
   // its own sentence only. In Markdown it reaches forward through the section —
-  // §6.5 opens `Koh et al. 2407.01476 Table 4 (§5.1) holds node expansions fixed …`
-  // and then argues for four paragraphs that name no author at all. Carry-forward is
+  // the passage that set this bound opened with
+  // `Koh et al. 2407.01476 Table 4 (§5.1) holds node expansions fixed …`
+  // and then argued for four paragraphs that name no author at all. Carry-forward is
   // reset by a heading, replaced by the next citation, and expires at REACH, so the
   // reach is exactly "the work currently under discussion" and never the whole file.
   const narrow = isParseable(file);

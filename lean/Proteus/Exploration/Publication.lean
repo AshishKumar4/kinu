@@ -2,28 +2,28 @@
   Proteus.Exploration.Publication — S7, S6, S4 and S1. 0 sorry.
 
   Models `PublicationState`, `FloorRederivation` and `ExplorationRecord`
-  (`packages/core/src/strategy/objective.ts`) against
-  `docs/EXPLORATION-SPEC.md` sections 3.3, 3.4, 3.8, 4.4, 5.1, 5.3 and 10.1, plus
-  `PUBLICATION_SURFACES` / `admitsPublication` / `CarrySuppression` on
-  `fix/publication-seal`.
+  (`packages/core/src/strategy/objective.ts`), plus `PUBLICATION_SURFACES` /
+  `admitsPublication` / `CarrySuppression`. Specified by docs/EXPLORATION.md —
+  "The objective", "The closed verifier registry", "The publication seal",
+  "Comparability" and "The Lean invariants".
 
   -- Why this file departs from the existing idiom, deliberately:
   `mctsTransition` (`MCTS/StorageIsolation.lean:25-44`) and `evolTransition`
   (`Evolution/Timescales.lean:15-48`) are relations `State → State → Action →
   Prop` whose cases are HAND-ASSERTED postconditions, and `PR-MCTS-003`'s own
-  `remainingEvidence` records that as a weakness. Section 10.1 asks for S7 as a
-  REACHABILITY claim, and reachability cannot be stated against hand-asserted
+  `remainingEvidence` records that as a weakness. *The publication seal* asks for S7
+  as a REACHABILITY claim, and reachability cannot be stated against hand-asserted
   postconditions: such a relation admits every successor it does not forbid, so
   "no trace publishes" is not expressible over it. So `stepOf` here is a TOTAL
   FUNCTION and `runOf` folds it over a trace. Reachability then quantifies over
   all finite action lists and each theorem is about the definition rather than
   about an assumption. That is strictly stronger than the idiom it replaces, in
-  the one place section 10.1 asked for strength.
+  the one place *The publication seal* asked for strength.
 
   -- WHAT THIS ABSTRACTION KEEPS: the action alphabet, the ordering of writes
   against seals and halts, the separation of the run's actions from a human's, the
   ENUMERATED publication surface set, and the two independent gates on a
-  publication (an admitting seal, and section 3.8 B1's discrimination requirement).
+  publication (an admitting seal, and B1's discrimination requirement).
 
   -- WHAT IT DISCARDS, and whether the danger lives there:
 
@@ -51,14 +51,13 @@
   4. WHETHER THE SCORE CAME FROM THE ENVIRONMENT. S4 proves a recorded node always
      carries an observation. That the observation is the ENVIRONMENT's reply rather
      than the node's own claim is a property of the TypeScript surface — there is
-     no field through which a score arrives from the node's side (section 3.3) —
+     no field through which a score arrives from the node's side (*No self-grading*) —
      which Lean can only restate, not check.
 
-  5. WHETHER THE METRIC MEASURES THE RIGHT THING. Section 3.8's closing paragraph
-     states this and so does `discrimination_is_not_relevance` below: an objective
-     that varies, discriminates against null, and still measures the wrong quantity
-     passes every theorem here. The danger lives there and the only mitigation the
-     spec claims is disclosure.
+  5. WHETHER THE METRIC MEASURES THE RIGHT THING. `discrimination_is_not_relevance`
+     below states it: an objective that varies, discriminates against null, and
+     still measures the wrong quantity passes every theorem here. The danger lives
+     there and the only mitigation the spec claims is disclosure.
 -/
 
 import Proteus.Exploration.Objective
@@ -91,13 +90,13 @@ def Breach.wellFormed (b : Breach) : Bool :=
 
 /-! ## The seal's key
 
-  Section 4.4 requires a record to say WHICH FLOOR it was published under — "a
-  digest over the whole `Floor` and not merely its value" — and section 5.1
-  EXCLUDES the floor from `ObjectiveIdentity`, which is right for comparability.
-  The two theorems below are why both decisions are needed together: the identity
-  is floor-blind by design, so an identity-keyed seal cannot tell a corrected floor
-  from the breached one and would seal the run that re-derived the bound — which is
-  precisely what section 4.4 says clears a seal. -/
+  `floorDigest` (`objective.ts:823-834`) requires a record to say WHICH FLOOR it was
+  published under — a digest over the whole `Floor` and not merely its value — and
+  the identity *Comparability* defines EXCLUDES the floor, which is right for
+  comparability. The two theorems below are why both decisions are needed together:
+  the identity is floor-blind by design, so an identity-keyed seal cannot tell a
+  corrected floor from the breached one and would seal the run that re-derived the
+  bound — which is precisely what *The publication seal* says clears a seal. -/
 
 /-- The comparability key, reduced to what matters here: it does not mention the
     floor. -/
@@ -111,14 +110,15 @@ structure Identity where
 /-- Keyed on the identity ALONE — the wrong key. -/
 def identityKey (i : Identity) (_f : Floor) : Identity := i
 
-/-- Keyed on the identity and the floor's digest — what section 4.4 requires. -/
+/-- Keyed on the identity and the floor's digest — what `objective.ts:823-834`
+    requires. -/
 def sealKey (dg : Floor → String) (i : Identity) (f : Floor) : Identity × String :=
   (i, dg f)
 
 /-- **The identity is floor-blind**, so the breached floor and its correction
     collapse to one key. An identity-keyed seal therefore over-seals: it would
-    seal a later run carrying the corrected bound. The witness is section 4.3's
-    own pair of floors. -/
+    seal a later run carrying the corrected bound. The witness is the majority-vote
+    pair of floors. -/
 theorem identityKey_is_floor_blind (i : Identity) :
     ∃ f₁ f₂ : Floor, f₁ ≠ f₂ ∧ identityKey i f₁ = identityKey i f₂ := by
   refine ⟨majorityVoteOldFloor, majorityVoteFixedFloor, ?_, rfl⟩
@@ -134,12 +134,12 @@ theorem sealKey_discriminates (dg : Floor → String)
   intro h
   exact hne (hinj f₁ f₂ (by simpa [sealKey] using congrArg Prod.snd h))
 
-/-! ## Section 3.8 B1 — inertness, and two scopings the prose does not state
+/-! ## B1 — inertness, and two scopings the prose does not state
 
   B1: "A metric whose value does not vary across k distinct scored candidates is
   measuring nothing. Emit `exploration.objective_inert`; refuse to publish."
 
-  B1 is what makes S1 provable at all. Section 10.1's S1 asks for
+  B1 is what makes S1 provable at all. S1 asks for
   `verifierFallible n` — "scored by something that could have FAILED" — which is
   counterfactual: a claim about the verifier's behaviour on inputs it was never
   given, which no abstract model sees. Modelling it as a Bool field would make S1
@@ -171,7 +171,7 @@ theorem sealKey_discriminates (dg : Floor → String)
   B1 reads MEASURED values only and ignores `unmeasurable` outcomes. That is
   correct and load-bearing rather than an oversight. A fabricated verifier
   returning `unmeasurable` for junk and one constant for everything parseable
-  produces a varying SCORE vector (section 3.4 scores an `unmeasurable` at the
+  produces a varying SCORE vector (`objective.ts:100` scores an `unmeasurable` at the
   direction's worst) while its metric measures nothing. Reading scores instead of
   measurements would certify it. -/
 
@@ -183,8 +183,8 @@ structure Scored where
   deriving Repr, BEq, Inhabited
 
 /-- The distinct measured candidates, one entry per artifact. An `unmeasurable`
-    contributes none: it is a legitimate outcome (section 3.4), but it is not a
-    measurement. -/
+    contributes none: it is a legitimate outcome (`objective.ts:102-106`), but it is
+    not a measurement. -/
 def distinctMeasured : List Scored → List (String × Int)
   | [] => []
   | s :: ss =>
@@ -230,7 +230,7 @@ def inertValues : List Int → Bool
   | [] => true
   | v :: vs => constantList v vs
 
-/-- Section 3.8 B1, with its own `k` and its own `distinct` honoured. -/
+/-- B1, with its own `k` and its own `distinct` honoured. -/
 def discrimination (k : Nat) (ss : List Scored) : Discrimination :=
   let vs := measuredValues ss
   if vs.length < k then .insufficient
@@ -305,8 +305,8 @@ theorem identity_free_b1_accepts_verifier_noise :
                        { digest := "a", measurement := .measured 3 }]).length = 1 := by
   refine ⟨by decide, by decide⟩
 
-/-- **And the baseline is what makes B1's `k = 2` satisfiable at all.** Section 2.3
-    measures a baseline on every run before any candidate exists, and section 3.8
+/-- **And the baseline is what makes B1's `k = 2` satisfiable at all.**
+    *Measured baseline* puts a baseline on every run before any candidate exists, and
     B2 already names it "the null candidate". Counted among the distinct
     candidates, a single candidate differing from the baseline is discriminating —
     so B1 and B2 are one check at `k = 2` rather than two, which the prose does not
@@ -330,11 +330,12 @@ theorem unmeasurable_does_not_discriminate :
   **This section is a restatement forced by a moved rule, and the move is the whole
   point of having isolated the clause.**
 
-  Section 4.4 used to state the seal over a RECORDS-STORE write, and this file used
-  to prove exactly that. `SpecAudit`'s adversarial consultation found the hole and
-  `SealSideDoor` carried it here by theorem name: section 5.3 routed
-  `carry:'artifacts'` publication through `experience_library` and called it
-  "separate and unchanged", so nothing gated that path on `PublicationState`. The
+  The seal used to be stated over a RECORDS-STORE write, and this file used to prove
+  exactly that. `SpecAudit`'s adversarial consultation found the hole and
+  `SealSideDoor` carried it here by theorem name: `carry:'artifacts'` publication was
+  routed through `experience_library` and called "separate and unchanged", so nothing
+  gated that path on `PublicationState` — the hole *The publication seal* now records
+  in as many words. The
   old `sealed_publishes_nothing` was therefore **a true theorem about a false
   property** — it quantified over actions writing one field, and the laundering
   channel was not one of those actions. A run that breached its floor could publish
@@ -407,7 +408,7 @@ structure Rederivation where
   deriving Repr, BEq, Inhabited
 
 /-- A re-derivation that cannot state its proof is not one, and a replacement bound
-    itself refuted by section 4.5 C1 or C2 is not a re-derivation either — it is the
+    itself refuted by C1 or C2 is not a re-derivation either — it is the
     same defect again. -/
 def Rederivation.admissible (rd : Rederivation) (baseline : Int) (d : Direction) : Bool :=
   floorAdmissible rd.floor baseline d && !(rd.adjudication == "")
@@ -456,7 +457,7 @@ theorem admits_iff_not_uncleared (p : Publication) (sfc : Surface) :
   | sealed b cleared => cases cleared <;> rfl
 
 /-- A published row. `verifierDigest` is carried because retroactive publication is
-    gated on section 5.1's digest equality: it decides which withheld measurements
+    gated on *Comparability*'s digest equality: it decides which withheld measurements
     are still the same measurement. -/
 structure Row where
   digest : String
@@ -484,12 +485,13 @@ structure RunState where
       because the theorem worth having is about the egress and not about any table:
       the previous version's defect was exactly that it named one sink. -/
   published : List (Surface × Row)
-  /-- How many publications the seal refused. Section 4.4's disclosure obligation
-      needs a COUNT, and a count nobody accumulates is a count nobody can report. -/
+  /-- How many publications the seal refused. *The publication seal*'s disclosure
+      obligation needs a COUNT, and a count nobody accumulates is a count nobody can
+      report. -/
   suppressed : Nat
   scored : List Scored
   nodes : List Node
-  /-- A `VerifierFault` took the run down (section 3.4). -/
+  /-- A `VerifierFault` took the run down (`objective.ts:232-243`). -/
   halted : Bool
   deriving Repr, Inhabited
 
@@ -499,8 +501,8 @@ def initRun (i : Identity) : RunState :=
 
 /-- **The actions the RUN can take. A re-derivation is deliberately absent.**
 
-    Section 4.4: "Nothing clears a seal except a RECORDED re-derivation. Not a
-    retry, and not a later candidate scoring back inside the bound." That is not a
+    *The publication seal*: a seal is cleared only by a RECORDED re-derivation — not
+    by a retry, and not by a later candidate scoring inside the bound. That is not a
     guard to be checked, it is a statement about WHOSE alphabet contains the
     clearing edge — so it is two disjoint types. `sealed_is_absorbing` is that
     sentence, and it is the load-bearing step of S7. -/
@@ -512,8 +514,8 @@ inductive RunAction where
       old unindexed form is what let a laundering channel sit outside the
       theorem. -/
   | publish (sfc : Surface) (r : Row)
-  /-- Section 4.4's retroactive publication of a withheld entry, additionally gated
-      on section 5.1's `verifierDigest` equality. -/
+  /-- Retroactive publication of a withheld entry, additionally gated on
+      *Comparability*'s `verifierDigest` equality. -/
   | retroPublish (sfc : Surface) (r : Row)
   /-- The engine records a node together with the observation it earned. The
       observation is an ARGUMENT, which is how S4 is made unstateable rather than
@@ -524,17 +526,17 @@ inductive RunAction where
   | retry
   deriving Repr, Inhabited
 
-/-- Section 3.8 B1's half of the gate: the metric must have discriminated. Separate
+/-- B1's half of the gate: the metric must have discriminated. Separate
     from `admits` on purpose — a publication refused because the objective is inert
     is not a seal suppression, and counting it as one would inflate the disclosure
-    section 4.4 requires. -/
+    *The publication seal* requires. -/
 def publishable (s : RunState) : Bool :=
   (discrimination 2 s.scored).isDiscriminating
 
 /-- One step of the run. Total, so every theorem below is about this definition.
 
-    A halted run is a fixed point: section 3.4's fault "fails the RUN", so nothing
-    after it is scored, published or recorded. -/
+    A halted run is a fixed point: a `VerifierFault` "fails the RUN"
+    (`objective.ts:232-243`), so nothing after it is scored, published or recorded. -/
 def stepOf (s : RunState) (a : RunAction) : RunState :=
   if s.halted then s else
     match a with
@@ -602,8 +604,8 @@ theorem retroPublish_requires_open (s : RunState) (b : Breach) (sfc : Surface) (
   · simp [stepOf, hh]
   · simp [stepOf, hh, h, admits]
 
-/-- **No action of the run clears a seal.** Section 4.4's sentence, and the step S7
-    turns on. Quantified over EVERY `RunAction`, including `retry`, a later
+/-- **No action of the run clears a seal.** *The publication seal*'s sentence, and
+    the step S7 turns on. Quantified over EVERY `RunAction`, including `retry`, a later
     `evaluate` that measures back inside the bound, and a `retroPublish` to any
     surface. -/
 theorem sealed_is_absorbing (s : RunState) (a : RunAction) (b : Breach)
@@ -623,11 +625,11 @@ theorem sealed_is_absorbing (s : RunState) (a : RunAction) (b : Breach)
     sealed state, NO finite sequence of the run's own actions publishes to ANY
     enumerated surface.**
 
-    This is the theorem section 4.4 asked for in place of a guard, restated over the
-    property it was supposed to be about. A guard is a one-step property and can be
-    bypassed by a path that does not pass through it; this quantifies over every
-    trace, so there is no such path to find — and now over every surface, so there
-    is no such sink either. -/
+    This is the theorem *The publication seal* asked for in place of a guard,
+    restated over the property it was supposed to be about. A guard is a one-step
+    property and can be bypassed by a path that does not pass through it; this
+    quantifies over every trace, so there is no such path to find — and now over
+    every surface, so there is no such sink either. -/
 theorem sealed_publishes_nothing (s : RunState) (b : Breach)
     (h : s.pub = .sealed b none) (as : List RunAction) :
     (runOf s as).published = s.published := by
@@ -678,14 +680,14 @@ theorem every_surface_is_retro_writable (s : RunState) (sfc : Surface) (r : Row)
     (stepOf s (.retroPublish sfc r)).published = (sfc, r) :: s.published := by
   simp [stepOf, hh, ho, admits, hp, hdg]
 
-/-- **A retry does not clear a seal** (section 4.4, named explicitly). -/
+/-- **A retry does not clear a seal** (*The publication seal*, named explicitly). -/
 theorem retry_does_not_clear (s : RunState) (b : Breach)
     (h : s.pub = .sealed b none) : (stepOf s .retry).pub = .sealed b none := by
   by_cases hh : s.halted = true <;> simp [stepOf, hh, h]
 
 /-- **A later candidate scoring back inside the bound does not clear a seal**
-    (section 4.4, named explicitly: "neither is evidence about which hypothesis was
-    true, and treating the second as exoneration would let a single lucky
+    (*The publication seal*, named explicitly: "neither is evidence about which
+    hypothesis was true, and treating the second as exoneration would let one lucky
     measurement restore a guarantee nobody re-proved"). -/
 theorem good_measurement_does_not_clear (s : RunState) (b : Breach) (c : Scored)
     (h : s.pub = .sealed b none) :
@@ -706,7 +708,7 @@ theorem admissible_rederivation_admits (s : RunState) (rd : Rederivation) (b : B
   refine ⟨by simp [rederive, h, hs], by simp [rederive, h, hs, admits], by simp [rederive, h, hs]⟩
 
 /-- **A re-derivation whose replacement bound is itself refuted does not clear the
-    seal.** You cannot clear a seal with the same defect again: section 4.5 C1
+    seal.** You cannot clear a seal with the same defect again: C1
     applies to the replacement floor exactly as it applied to the original. -/
 theorem refuted_replacement_does_not_clear (s : RunState) (rd : Rederivation)
     (baseline : Int) (d : Direction) (b : Breach)
@@ -742,7 +744,7 @@ theorem rederivation_restores_publication (s : RunState) (rd : Rederivation) (b 
 /-! ### Retroactive publication is gated on the verifier, not merely on the seal -/
 
 /-- **A retroactive write whose measurement came from a different verifier writes
-    nothing**, on any surface, even with the seal cleared. Section 5.1: a digest
+    nothing**, on any surface, even with the seal cleared. *Comparability*: a digest
     mismatch means these are not the same measurement. -/
 theorem retroPublish_requires_same_verifier (s : RunState) (sfc : Surface) (r : Row)
     (h : r.verifierDigest ≠ s.identity.verifierDigest) :
@@ -753,11 +755,12 @@ theorem retroPublish_requires_same_verifier (s : RunState) (sfc : Surface) (r : 
     · simp [stepOf, hh, ha, h]
     · simp [stepOf, hh, ha]
 
-/-! ### Section 4.4's continuation rule: the run CONTINUES
+/-! ### The continuation rule: the run CONTINUES
 
-  `SealSideDoor` requires these three to survive the restatement verbatim, because
-  the seal must cover what carries the CLAIM and never what carries the CAVEAT.
-  They do. -/
+  *The floor* states that a breach voids the floor's guarantee and not the search,
+  and `SealSideDoor` requires these three to survive the restatement verbatim,
+  because the seal must cover what carries the CLAIM and never what carries the
+  CAVEAT. They do. -/
 
 /-- A breach does not halt the run. Halting would discard sound work over an unsound
     bound, and the bound is the thing under suspicion. -/
@@ -779,11 +782,11 @@ theorem breach_records_suspension (s : RunState) (b : Breach) (hh : s.halted = f
 
 /-! ### The disclosure obligation, and the count that makes it load-bearing
 
-  Section 4.4 now obliges the settle report to state that a seal voided the `carry`
-  axis, WITH the count of cells whose best the run reached and could not record —
-  because via section 5.2's monotone invariant a suppressed elite means the next run
-  starts from a worse one, so the seal degrades FUTURE runs and that is invisible
-  without a number.
+  *The publication seal* obliges the settle report to state that a seal voided the
+  `carry` axis, WITH the count of cells whose best the run reached and could not
+  record — because via *The records store*'s monotone invariant a suppressed elite
+  means the next run starts from a worse one, so the seal degrades FUTURE runs and
+  that is invisible without a number.
 
   The model's contribution is that the count is provably COMPLETE: every refusal is
   counted, so the disclosure cannot under-report. -/
@@ -838,7 +841,7 @@ def hasFault : List RunAction → Bool
 /-- **The disclosure cannot under-report: from an uncleared seal, the suppression
     count grows by exactly the number of publications the trace attempted.**
 
-    This is what makes section 4.4's count trustworthy rather than best-effort. A
+    This is what makes the disclosed count trustworthy rather than best-effort. A
     faultless trace is required because a fault stops the run, and after a fault
     there is nothing left to suppress — which is S6, not a gap. -/
 theorem suppression_counts_every_refusal (s : RunState) (b : Breach)
@@ -880,8 +883,8 @@ theorem suppression_counts_every_refusal (s : RunState) (b : Breach)
 
 /-! ### The OTHER number, and why it must not be derived from this one
 
-  Section 4.4's disclosure carries two quantities and they are different things
-  with different jobs. `suppressed` above counts refused publication ATTEMPTS, and
+  The disclosure carries two quantities and they are different things with different
+  jobs. `suppressed` above counts refused publication ATTEMPTS, and
   it is the right quantity for proving the disclosure cannot under-report.
   `CarrySuppression.suppressedCells` counts DAMAGE TO FUTURE RUNS, and its
   cardinality follows from what the number is for: future damage is one fact per
@@ -951,7 +954,8 @@ theorem suppressedCells_monotone (c : Cell) (cs : List Cell) :
 /-- **The two disclosed numbers are independent quantities.** Neither is derivable
     from the other: the first witness refuses two publications while damaging one
     cell, the second refuses one while damaging two. So a reader who has one number
-    has learned nothing about the other, which is why section 4.4 requires both. -/
+    has learned nothing about the other, which is why `objective.ts:492-512` keeps
+    them as two — "the two numbers differ on purpose". -/
 theorem suppression_quantities_are_independent :
     ∃ (as₁ : List RunAction) (cs₁ : List Cell),
       publishAttempts as₁ = 2 ∧ suppressedCells cs₁ = 1
@@ -963,8 +967,9 @@ theorem suppression_quantities_are_independent :
 
 /-! ## S6 — crash is not zero
 
-  Section 3.4. The same absorbing-state machinery as S7 on a different flag, and the
-  discard is different: S7's gap is concurrency, S6's is that Lean cannot see a
+  `VerifierFault` (`objective.ts:232-243`). The same absorbing-state machinery as S7
+  on a different flag, and the discard is different: S7's gap is concurrency, S6's is
+  that Lean cannot see a
   `catch` converting a throw into an `unmeasurable`. -/
 
 theorem fault_halts (s : RunState) (e : String) (hh : s.halted = false) :
@@ -1133,8 +1138,8 @@ theorem discrimination_is_not_relevance :
 
 /-! ## How a run reports itself, and why the seal does not reach it -/
 
-/-- Five outcomes plus inertness. Section 4.4 requires the breach to be its OWN
-    outcome; B1 requires inertness to be distinct from no-signal; and this file's
+/-- Five outcomes plus inertness. *The publication seal* requires the breach to be its
+    OWN outcome; B1 requires inertness to be distinct from no-signal; and this file's
     first finding requires `insufficient` to be distinct from `inert`. -/
 inductive Report where
   | success (best : Int)
@@ -1196,7 +1201,7 @@ def report (d : Direction) (s : RunState) : Report :=
 /-- **A sealed run still reports, and reports the breach.** The seal covers what
     carries the CLAIM and never what carries the CAVEAT: suppressing the report is
     exactly how a breach becomes "the floor was wrong and nothing said so", which is
-    the failure section 4 exists to prevent. -/
+    the failure the floor exists to prevent. -/
 theorem sealed_still_reports (d : Direction) (s : RunState) (b : Breach)
     (h : s.pub = .sealed b none) (hh : s.halted = false) : report d s = .breached := by
   simp [report, hh, h, Publication.uncleared]

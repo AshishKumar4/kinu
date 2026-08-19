@@ -1,11 +1,11 @@
 /**
  * BUDGET CONSERVATION, and the race that makes it a type instead of a `let`.
  *
- * EXPLORATION-SPEC §8.11 states the rule this file is about: *"the allocations an
- * arbiter grants to a node's children MUST sum to no more than the parent's remaining
- * budget. Depth and width bound the SHAPE; conservation bounds the SPEND, and without
- * it one branch that keeps proposing eats the run while every individual grant looks
- * legal."*
+ * Specified by docs/EXPLORATION.md — "Budget conservation", which is the rule this file
+ * is about: the allocations an arbiter grants to a node's children MUST sum to no more
+ * than the parent's remaining budget. Depth and width bound the SHAPE; conservation
+ * bounds the SPEND, and without it one branch that keeps proposing eats the run while
+ * every individual grant looks legal.
  *
  * WHY THE RACE IS REAL NOW AND WAS NOT BEFORE. A toolless node's proposal was answered
  * in the run loop, one node at a time, so nothing could run between reading the

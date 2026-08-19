@@ -1,5 +1,6 @@
 /**
- * The archive — §6.3's grid of cells, and the admission test that keeps it a grid.
+ * The archive — a grid of cells over a descriptor, and the admission test that keeps
+ * it a grid.
  *
  * WHAT THE SUBSTRATE IS, AND WHY THERE IS NO SECOND STORE. `exploration_records`
  * ALREADY IS the grid, and the check was made before anything was built rather than
@@ -34,9 +35,9 @@
  * here, it is unreachable by construction: nothing is ever deleted from a cell,
  * because the thing that bounds a cell's population is the admission test rather than
  * a row cap — a candidate too close to an occupant never lands, so a cell cannot
- * accumulate the near-copies an eviction rule would exist to remove. §11.4's *"cell
- * capacity is a number nobody has measured"* is therefore a number this file does not
- * have to invent, which is the point.
+ * accumulate the near-copies an eviction rule would exist to remove. *Cell capacity
+ * and bin width are deliberately absent* — neither has been measured — so a capacity
+ * is a number this file does not have to invent, which is the point.
  *
  * NO BIN WIDTH. A coordinate is the value the instrument reported, at the resolution
  * the instrument reports it. Binning a continuous descriptor into a grid needs a width,
@@ -44,12 +45,16 @@
  * run can claim. So the grid's resolution is a property of the instrument, stated,
  * rather than a constant here that no evidence supports.
  *
- * NO JUDGED DESCRIPTOR, and this is a refusal §6.5 already carries with its evidence:
+ * NO JUDGED DESCRIPTOR, a refusal *The archive* already carries with its evidence:
  * judge variance in the archive KEY is unrecoverable, because a mis-ranked candidate can
  * be re-ranked while a mis-binned elite is silently lost — a grid that fills completely
  * with bins holding the wrong behaviours reports coverage it does not have. The
- * coordinate is witnessed by the same instrument that measured the value — §2.3's
- * *measured, never asserted*, applied to the descriptor as well as to the number.
+ * coordinate is witnessed by the same instrument that measured the value —
+ * *Measured baseline*'s "measured, never asserted", applied to the descriptor as well
+ * as to the number.
+ *
+ * Specified by docs/EXPLORATION.md — "The archive", with *Cell capacity and bin width
+ * are deliberately absent* and *How a descriptor is produced is unspecified*.
  */
 import { admitsPublication, type ExplorationRecord, type PublicationState } from './objective';
 import { cellOccupants, recordExploration, type ExplorationWrite, type RecordVerdict } from './records';
@@ -81,7 +86,7 @@ export type ArchiveCell =
  * value was derived from"* — and it is the only place a coordinate can come from
  * without either a second model binning candidates or a node labelling itself. That
  * bounds what a key may name today: the map is `Record<string, number>`, so an archive
- * bins on a quantity an instrument counts. A categorical coordinate — §6.3's ATT&CK
+ * bins on a quantity an instrument counts. A categorical coordinate — an ATT&CK
  * tactic, a finding class — needs the instrument to report one, which is a change to a
  * registered verifier kind and is named here rather than faked by asking a node.
  *
@@ -181,15 +186,15 @@ export type ArchiveVerdict =
  *
  * THE SEAL IS CHECKED HERE, FIRST, AND IT IS NOT A DUPLICATE OF THE TWO GATES AROUND
  * IT. `admitCarry` decides admission at the settle barrier and `recordExploration`
- * decides a write, and §4.4's hole was exactly a publication path that called itself
- * separate and unchanged — so a third path that reached the store would need its own
- * check whatever the other two do. What makes this one load-bearing rather than
- * ceremonial is the ORDER: everything below it READS the cell, and a breached run must
- * not so much as inspect the store it may not write. Without the check a sealed run
- * would compute novelty against occupants it is not entitled to see and report a
- * candidate as *too close to* one of them, which names the wrong cause for the wrong
- * reason — the run was not refused for duplicating anything, it was refused for having
- * crossed its floor.
+ * decides a write, and the hole *The publication seal* names was exactly a
+ * publication path that called itself separate and unchanged — so a third path that
+ * reached the store would need its own check whatever the other two do. What makes
+ * this one load-bearing rather than ceremonial is the ORDER: everything below it
+ * READS the cell, and a breached run must not so much as inspect the store it may not
+ * write. Without the check a sealed run would compute novelty against occupants it is
+ * not entitled to see and report a candidate as *too close to* one of them, which
+ * names the wrong cause for the wrong reason — the run was not refused for
+ * duplicating anything, it was refused for having crossed its floor.
  *
  * THE NEAREST OCCUPANT IS THE ONE NAMED, not the first one that fails. A cell is read
  * best-first, so refusing on the first failure would name whichever occupant the

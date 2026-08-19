@@ -1,9 +1,11 @@
 /**
  * WHERE THE NEXT UNIT OF BUDGET GOES — the `advance` axis, executable.
  *
+ * Specified by docs/EXPLORATION.md — "Arbitration" and "The Lean invariants".
+ *
  * One scheduler. Every `advance` value a run can reach resolves through this one
  * function, so there is no route by which a node expands without selection having
- * chosen it (§8.2: "a proposal is an input to selection, never a bypass of it").
+ * chosen it — *Arbitration*: "a proposal is an input to selection, never a bypass of it".
  * The three policies here are what a run selects BY. `advance:'archive'` runs and
  * takes `none`'s single expansion off the root, because an archive is pinned to
  * depth 1 — it selects by CELL and its cells are written at the settle barrier, so
@@ -14,8 +16,8 @@
  * (`strategy/swarm-run.ts`).
  *
  * THE DEPTH CAP IS A WHERE-CLAUSE EXCLUSION IN EVERY ARM, never a search abort —
- * the WP-A4 discipline `uct.ts` states and the reason §10.1 files S3 as "true by
- * construction". A node at the cap is skipped and the budget keeps flowing to the
+ * the WP-A4 discipline `uct.ts` states and the reason *The Lean invariants* files S3 as
+ * "true by construction". A node at the cap is skipped and the budget keeps flowing to the
  * shallower frontier. Because a child's `depth` is written by the engine as its
  * parent's plus one, and this clause reads that column, a node cannot reach depth
  * `maxDepth + 1` by any route: the number it would have to lie about is one it

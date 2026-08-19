@@ -142,7 +142,7 @@ import Proteus
 #print axioms Proteus.Storage.SqliteFSCorrectness.chunk_reassembly
 #print axioms Proteus.Storage.SqliteFSCorrectness.writes_commute
 
-/-! ## Proteus/Exploration -- docs/EXPLORATION-SPEC.md section 10 -/
+/-! ## Proteus/Exploration -- docs/EXPLORATION.md — "The Lean invariants" -/
 
 /-! ### Proteus/Exploration/Objective.lean -/
 

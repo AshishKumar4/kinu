@@ -20,6 +20,9 @@
  * ride TeamToolDeps' facet substrate, and peer messaging rides PeersToolDeps'
  * EventsHub transport. Which actions exist is decided structurally by which
  * deps the backend wires — see agentsActionsFor.
+ *
+ * The swarm action's call contract is specified by docs/EXPLORATION.md — "Presets",
+ * "Validity over the resolved configuration" and "Accepted and ignored".
  */
 import { tool, jsonSchema } from 'ai';
 import type { LanguageModel, ToolSet } from 'ai';
@@ -369,7 +372,8 @@ export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
 export interface AgentsToolInput {
   action: AgentsToolAction;
   // swarm — the configured-search rung. `preset` and `objective` are the two halves
-  // of §6.4's rule: a preset fixes the search, the caller supplies the objective.
+  // of the *Presets* rule: a preset fixes the search, the caller supplies the
+  // objective.
   /** What the search is for, in prose — never the measured quantity. */
   task?: string;
   /** Cumulative spend cap for everything this helper transitively spawns.
@@ -428,15 +432,16 @@ export type AgentsToolInputField = Exclude<keyof AgentsToolInput, 'action'>;
  * accepted and ignored.
  */
 export const AGENTS_ACTION_FIELDS = {
-  // The mission caps sit beside the swarm's own fields because §6.4 puts them there
-  // deliberately: `budget_usd`, `budget_tokens` and `budget_label` are PRE-EXISTING
-  // caps on this input, read through `missionScope` and enforced by the governor.
+  // The mission caps sit beside the swarm's own fields because *Presets* puts them
+  // there deliberately: `budget_usd`, `budget_tokens` and `budget_label` are
+  // PRE-EXISTING caps on this input, read through `missionScope` and enforced by the
+  // governor.
   //
   // An ITERATION cap and a WALL-CLOCK cap are DELIBERATELY ABSENT, and that is a
-  // disagreement with §2.5 recorded rather than papered over. The table calls both
-  // optional on every preset — but nothing here cuts a search off on either, so
-  // declaring them would make this surface accept a cap nothing applies, which is
-  // the precise defect the specification is written against. A caller who sends one
+  // disagreement recorded rather than papered over: the removed specification called
+  // both optional on every preset — but nothing here cuts a search off on either, so
+  // declaring them would make this surface accept a cap nothing applies, which is the
+  // precise defect *Accepted and ignored* is written against. A caller who sends one
   // is TOLD (the field refusal names the actions that read it) instead of quietly
   // ignored. They join this list when something enforces them.
   swarm: [
@@ -851,11 +856,11 @@ function missionScope(
  * and "we cannot do that yet" in one bucket, which is the distinction a caller needs
  * most: only one of the three is worth correcting.
  *
- * WHY THIS READS THE CAPS. §6.4 keeps the mission caps on this input rather than
- * duplicating them onto `SwarmInput`, so a search nests under the caller's mission
- * scope through the seam every spawn uses — `missionScope` reads `budget_usd` /
- * `budget_tokens` / `budget_label`, and the governed model is what the expansion
- * runs on.
+ * WHY THIS READS THE CAPS. Under *Presets* the mission caps live on this input
+ * rather than being duplicated onto `SwarmInput`, so a search nests under the
+ * caller's mission scope through the seam every spawn uses — `missionScope` reads
+ * `budget_usd` / `budget_tokens` / `budget_label`, and the governed model is what the
+ * expansion runs on.
  */
 async function runSwarmAction(
   deps: AgentsForkDeps,
@@ -884,11 +889,12 @@ async function runSwarmAction(
   if (input.depth !== undefined) Object.assign(call, { depth: input.depth });
   if (input.models) Object.assign(call, { models: input.models });
 
-  // §6.3 — resolution first, because §6.5 is stated over the resolved configuration
-  // and has no input without it.
+  // Resolution first, per *Presets* — *Validity over the resolved configuration* is
+  // stated over the resolved tuple and has no input without it.
   const resolved = resolveSwarm(call);
   if ('reason' in resolved) return resolved;
-  // §6.5 — legality, over the resolved tuple and never over the preset name.
+  // Legality, per *Validity over the resolved configuration*: over the resolved
+  // tuple and never over the preset name.
   const illegal = swarmValidity(resolved);
   if (illegal) return illegal;
 

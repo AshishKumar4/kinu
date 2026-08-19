@@ -1,5 +1,7 @@
-// Merge-back — the four policies by which a settled swarm's work reaches the origin
-// (EXPLORATION-SPEC §8.5), and the two refusals that carry the correctness.
+// Merge-back — the four policies by which a settled swarm's work reaches the origin,
+// and the two refusals that carry the correctness.
+//
+// Specified by docs/EXPLORATION.md — "Merge-back" and "The publication seal".
 //
 // EACH POLICY IS ASSERTED WHERE IT CAN ACTUALLY FAIL, not at the derivation. Proving
 // `mergePolicyOf('best') === 'apply-winner'` proves a lookup table; what matters is
@@ -143,10 +145,10 @@ function named(log: RecordingLogger, event: string) {
   return log.emitted.filter((line) => line.event === event);
 }
 
-/* ── The derivation (§8.5's table) ────────────────────────────────────────── */
+/* ── The derivation (*Merge-back*'s mapping) ──────────────────────────────── */
 
 describe('the policy is derived from settle, never chosen', () => {
-  test('each settle shape maps to its §8.5 policy', () => {
+  test('each settle shape maps to the policy *Merge-back* derives', () => {
     expect(mergePolicyOf('best')).toBe('apply-winner');
     expect(mergePolicyOf('archive')).toBe('sequential-rebase');
     expect(mergePolicyOf('front')).toBe('sequential-rebase');
@@ -162,7 +164,7 @@ describe('the policy is derived from settle, never chosen', () => {
   });
 
 
-  test("§9.3's six rules and the substrate's preconditions stay distinct lists", () => {
+  test("the six settle rules and the substrate's preconditions stay distinct lists", () => {
     expect(SETTLE_RULES).toHaveLength(6);
     // Widened by assignment rather than asserted: the two arrays have disjoint literal
     // types, so `toContain` would otherwise be comparing types instead of values and
@@ -408,7 +410,7 @@ describe('sequential-rebase', () => {
   });
 });
 
-/* ── §9.1's order, and the cycle that has none ────────────────────────────── */
+/* ── *Dependency order*, and the cycle that has none ──────────────────────── */
 
 // THE ORDER IS THE CLAIM `expand:'aggregate'` MAKES, so it is asserted where it can
 // actually invert: a member set whose dependent is offered FIRST. Rule 1 already refuses
@@ -615,8 +617,8 @@ describe('conflict-spawns-a-merge-node', () => {
     expect(outcome.spawned).toBe('merge-node-1');
   });
 
-  // A conflict DOES NOT FAIL. This is the assertion that separates §8.5's policy from
-  // the obvious wrong implementation, where a collision is an error path.
+  // A conflict DOES NOT FAIL. This is the assertion that separates the policy *Merge-back*
+  // specifies from the obvious wrong implementation, where a collision is an error path.
   test('a conflict is not a refusal', async () => {
     const h = harness({ 'shared.ts': 'V0\n' });
     const first = await memberOf(h.origin, 'n1', [{ path: 'shared.ts', base: 'V0\n', after: 'MINE\n' }]);
@@ -926,7 +928,7 @@ describe('an absent atomic write refuses rather than tearing', () => {
   });
 });
 
-/* ── §9.3's gate ──────────────────────────────────────────────────────────── */
+/* ── The settle gate ──────────────────────────────────────────────────────── */
 
 describe('the settle gate', () => {
   // Provenance and not the node's storage: a diff OBSERVED on the shared plane is
@@ -1129,9 +1131,9 @@ describe('carry admission', () => {
     })).toEqual({ kind: 'admitted' });
   });
 
-  // §4.4's seal, over the real shape rather than a cast: `carry:'artifacts'` routes
-  // through `experience_library`, which is the widest-blast-radius surface in the
-  // governed set and exactly the hole §4.4 closed. A sealed run must not publish
+  // *The publication seal*, over the real shape rather than a cast: `carry:'artifacts'`
+  // routes through `experience_library`, which is the widest-blast-radius surface in the
+  // governed set and exactly the hole that seal closed. A sealed run must not publish
   // there however well the candidate scored, so the seal is checked BEFORE the
   // threshold — a high score is not evidence about which hypothesis was true.
   test('a sealed store refuses the carry before the threshold is even consulted', () => {

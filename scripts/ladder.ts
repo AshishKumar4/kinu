@@ -186,8 +186,8 @@ export const LADDER: readonly Gate[] = [
     seconds: 1,
     catches: 'a QUALIFIER lost crossing the one boundary nothing else checks — prose to a paper '
       + 'nobody in this process can open. `lean-citations` closed TypeScript -> Lean and caught '
-      + 'three stale citations immediately; docs -> literature was the boundary still open, and a '
-      + 'seven-number audit of `docs/EXPLORATION-SPEC.md` found six of seven DIGITS correct and '
+      + 'three stale citations immediately; docs -> literature was the boundary still open, and '
+      + 'a removed internal audit of seven numbers found six of seven DIGITS correct and '
       + 'four QUALIFIERS wrong, so a digit-comparing gate would have passed all seven. This one '
       + 'refuses the qualifier instead: an external number with no register entry and therefore '
       + 'no locator; a compute-dependent claim under a bare parity ADJECTIVE (`+12.5 at matched '

@@ -1,10 +1,13 @@
 /**
  * What is measured, who measures it, and where the number is kept.
  *
- * Specified by docs/EXPLORATION-SPEC.md sections 2-5. Declarations only — no
- * strategy registers these, no DDL creates the records table, and nothing calls
- * a verifier yet. The types exist so the spec is compiled rather than prose, and
- * so the Lean stage has concrete field names to model.
+ * Specified by docs/EXPLORATION.md — "The objective", "Witness objectives", "The
+ * closed verifier registry", "Comparability", "The floor", "The publication seal"
+ * and "The records store". This module is the declarations those rules are stated
+ * over: `strategy/swarm-run.ts` wires them into a run, `strategy/verifier-registry.ts`
+ * resolves an instrument, and `strategy/records.ts` creates and writes the records
+ * table. The types exist so the specification is compiled rather than prose, and so
+ * the Lean stage has concrete field names to model.
  *
  * THE ONE RULE EVERYTHING HERE SERVES. A node never supplies its own score. A
  * verifier is handed a filesystem and a shell and nothing else — no model, no
@@ -127,10 +130,11 @@ export type Verifier = (ctx: MeasurementContext) => Promise<Measurement>;
  * safety/argument-digest.ts — takes `JsonValue`, so a digest is only definable
  * over JSON. `Function.prototype.toString()` returns a function's BODY and not its
  * captured environment, so two closures with identical source and different
- * captures produce an IDENTICAL digest and DIFFERENT behaviour. Under §5.1 that
- * silently compares incomparable runs; under §4.4's retroactive-publication rule it
- * silently re-admits a measurement taken by a different verifier. Both are
- * undetectable after the fact, which is the worst class of failure this spec has.
+ * captures produce an IDENTICAL digest and DIFFERENT behaviour. Under *Comparability*
+ * that silently compares incomparable runs; under the retroactive-publication rule in
+ * *The publication seal* it silently re-admits a measurement taken by a different
+ * verifier. Both are undetectable after the fact, which is the worst class of failure
+ * this specification has.
  *
  * WHY THE THREAT MODEL IS ALREADY SOLVED HERE. safety/argument-digest.ts exists so
  * that "an Approval authorizes ONE described invocation, identified by a Digest
@@ -149,32 +153,34 @@ export interface VerifierSpec {
   /**
    * A verifier kind, drawn from a CLOSED set the registry declares.
    *
-   * Closed, not a free string, and the reason is this spec's own §3.8 argument one
-   * level up: **a `kind` nobody registered is a fabricated script wearing a type.**
-   * An open string would let a caller invent `'exec-ratio'` exactly as a model
-   * invented `scripts/simulate_conversion.py`, and §3.4's one real guard — a
-   * fabricated name cannot resolve — would become advisory again. So an unregistered
-   * kind is a CALL-TIME `bad_input` naming the registered kinds.
+   * Closed, not a free string, and the reason is *The closed verifier registry*'s own
+   * argument one level up: **a `kind` nobody registered is a fabricated script wearing
+   * a type.** An open string would let a caller invent `'exec-ratio'` exactly as a
+   * model invented `scripts/simulate_conversion.py`, and that section's one real
+   * guard — a fabricated name cannot resolve — would become advisory again. So an
+   * unregistered kind is a CALL-TIME `bad_input` naming the registered kinds.
    *
-   * Consequence for §5.1 that follows from closing it: **the registry is part of the
-   * objective's identity.** Two runs whose `kind` resolves to different
+   * Consequence for *Comparability* that follows from closing it: **the registry is
+   * part of the objective's identity.** Two runs whose `kind` resolves to different
    * implementations are not comparable, and `argumentDigest({kind, spec})` does not
    * capture that on its own. Found by `FixtureZero` while forcing the JSON boundary.
    */
   readonly kind: string;
   /**
    * Everything that kind needs, as JSON. Model it on `RatioProblem` and keep every
-   * field: a spec that drops `lowerBoundOps` leaves §4's floor nowhere to live and
-   * §4.5's C1/C2 checks with no input.
+   * field: a spec that drops `lowerBoundOps` leaves the floor nowhere to live, which
+   * is what *The floor* requires the field for, and leaves *Floor margin*'s C1/C2
+   * checks with no input.
    *
-   * WHICH FORM THE DIGEST IS TAKEN OVER, which §5.1 had left unnamed. `stableStringify`
-   * fixes key ORDER and says nothing about key SPELLING — and `objective`'s wire form is
-   * snake_case (§2.2) while `RatioProblem`'s fields are camelCase. If a naming
-   * convention reached inside `spec`, something would transform it between wire and
-   * registry, and `verifierDigest` would differ **depending on which side of that
-   * transform it was computed on**: two runs of the identical instrument, incomparable,
-   * with nothing detecting it. That is §5.1's own failure mode reached through a naming
-   * convention. Found by `FixtureZero`.
+   * WHICH FORM THE DIGEST IS TAKEN OVER, which *Comparability* had left unnamed.
+   * `stableStringify` fixes key ORDER and says nothing about key SPELLING — and
+   * `objective`'s wire form is snake_case (*Wire form*) while `RatioProblem`'s fields
+   * are camelCase. If a naming convention reached inside `spec`, something would
+   * transform it between wire and registry, and `verifierDigest` would differ
+   * **depending on which side of that transform it was computed on**: two runs of the
+   * identical instrument, incomparable, with nothing detecting it. That is
+   * *Comparability*'s own failure mode reached through a naming convention. Found by
+   * `FixtureZero`.
    *
    * Both halves are needed, and the CANONICAL FORM IS THE WIRE FORM — every digest in
    * this specification is computed on the wire form, after normalisation, once. It is
@@ -189,9 +195,9 @@ export interface VerifierSpec {
    * sides, so "wire form" and "as received" are the same bytes and there is nothing for
    * two honest implementations to disagree about.
    *
-   * This completes §5.1's one rule rather than sitting beside it: an identity that names
-   * an implementation must digest what the name resolves to, **and must say in which
-   * form**.
+   * This completes *Comparability*'s one rule rather than sitting beside it: an
+   * identity that names an implementation must digest what the name resolves to,
+   * **and must say in which form**.
    */
   readonly spec: JsonValue;
 }
@@ -202,20 +208,20 @@ export interface VerifierSpec {
  *
  * `VerifierSpec` is the ONLY arm reachable from the tool surface. `agents.swarm` is a
  * valibot-validated JSON action, so **the closure arm is unauthorable there, not
- * merely undigestible** — a model cannot send a function at all. Since §2.5 makes
- * `objective` REQUIRED on `optimise`, `VerifierSpec` is the only inhabitable arm on
- * the flagship preset.
+ * merely undigestible** — a model cannot send a function at all. Since *Accepted and
+ * ignored* makes `objective` REQUIRED on `optimise`, `VerifierSpec` is the only
+ * inhabitable arm on the flagship preset.
  *
  * The closure arm exists for IN-PROCESS callers only: tests, the hard-task corpus,
  * core code. It stays legal because one-off local work should not require registering
  * a kind, and a closure-backed objective is NOT PUBLISHABLE — said at CALL time, not
  * discovered at settle.
  *
- * AND THE CLOSURE ARM IS UNGUARDED, WHICH IS THE STRONGER REASON. §3.4's one real
- * guard is that a fabricated instrument cannot resolve — but **a closure cannot fail
- * to resolve**, so on that arm the guard does not exist. That is why the arm is
- * confined to callers who wrote the closure themselves rather than merely marked
- * unpublishable. Found by `FixtureZero`.
+ * AND THE CLOSURE ARM IS UNGUARDED, WHICH IS THE STRONGER REASON. *The closed
+ * verifier registry*'s one real guard is that a fabricated instrument cannot
+ * resolve — but **a closure cannot fail to resolve**, so on that arm the guard does
+ * not exist. That is why the arm is confined to callers who wrote the closure
+ * themselves rather than merely marked unpublishable. Found by `FixtureZero`.
  */
 export type VerifierSource = VerifierSpec | Verifier;
 
@@ -247,7 +253,7 @@ export interface VerifierFault {
  * A floor exists so a cheat is DETECTABLE: a candidate below the floor cannot
  * have derived its answer through the measured channel. It is a PROOF, and a
  * floor that is not a proof is worse than no floor at all — see
- * {@link FloorBreach} and docs/EXPLORATION-SPEC.md section 4.3.
+ * {@link FloorBreach} and *The floor*.
  */
 export interface Floor {
   /** The bound, in the objective's unit, on the same side as `direction` makes
@@ -297,8 +303,8 @@ export interface Floor {
  *
  * A named function rather than an inline expression because the sign convention
  * depends on `direction` and getting it backwards inverts the check it exists to
- * perform — the exact class of mistake §4.3's floor was. It is also the predicate
- * §4.5 C1 and the Lean model are stated over.
+ * perform — the exact class of mistake the floor described in *The floor* was. It is
+ * also the predicate *Floor margin*'s C1 check and the Lean model are stated over.
  */
 export function floorMargin(floor: Floor, direction: ObjectiveDirection): number {
   const best = floor.bestKnownHonest;
@@ -348,15 +354,16 @@ export interface FloorBreach {
  *
  * Stated as a REACHABILITY property rather than a guard, which is what makes it
  * checkable: a write requires `'open'`, so a breach makes publication unreachable.
- * That is Lean invariant S7 in docs/EXPLORATION-SPEC.md §10.1.
+ * That is Lean invariant S7, in *The Lean invariants*.
  *
  * **This governs SEVERAL surfaces, not this file's records store.** It lives here
  * because the records store is where the seal was first stated, and stating it over
- * one table was a hole: §5.3 routed `carry:'artifacts'` through
- * `experience_library` and called that publication "separate and unchanged", so a
- * breached run could publish cross-workspace while the leaderboard was sealed. The
- * governed set is {@link PUBLICATION_SURFACES} and the gate is
- * {@link admitsPublication} — do not re-derive "it is about the table".
+ * one table was a hole, and *The publication seal* carries it as the reason the
+ * surface set is wide: `carry:'artifacts'` routed through `experience_library` and
+ * called that publication "separate and unchanged", so a breached run could publish
+ * cross-workspace while the leaderboard was sealed. The governed set is
+ * {@link PUBLICATION_SURFACES} and the gate is {@link admitsPublication} — do not
+ * re-derive "it is about the table".
  */
 export type PublicationState =
   | { readonly kind: 'open' }
@@ -386,8 +393,9 @@ export type PublicationState =
  * channel was not one of them. The members below come from a writer census rather
  * than from the spec's own inventory, which is why there are six and not one:
  *
- * - `records` — §5.2/§5.3's one new table; {@link ExplorationRecord} is its row.
- *   No writer exists yet.
+ * - `records` — the one new table, shared by *The records store* and this seal;
+ *   {@link ExplorationRecord} is its row and `recordExploration`
+ *   (`strategy/records.ts`) is its writer.
  * - `experience_library` — `experience/library.ts` `publish()`. CROSS-WORKSPACE,
  *   the widest blast radius in the set, and `carry:'artifacts'` routes here.
  * - `craft` — `craft/discovery.ts` `maybeStoreCraftedTool`, called from
@@ -407,7 +415,10 @@ export type PublicationState =
  *
  * Adding a publication surface without adding it here is a specification
  * violation, and `contract-publication-seal.test.ts` holds both directions: a
- * writer census against this set, and set equality against §4.4's own table.
+ * writer census of the settle path's egress against this set, and set equality of
+ * the gate's refused set with it. There is no second table to compare against —
+ * *The publication seal* names this constant as the governed set rather than
+ * restating its members.
  */
 export const PUBLICATION_SURFACES = [
   'records', 'experience_library', 'craft', 'memory', 'task_history',
@@ -420,8 +431,8 @@ export type PublicationSurface = (typeof PUBLICATION_SURFACES)[number];
  * Why a publication was refused, carrying the breach so the caller can disclose it.
  *
  * A refusal is a VALUE rather than a throw, because the caller's next move is to
- * report the suppression (§4.4) and a thrown seal would be indistinguishable from a
- * store that broke.
+ * report the suppression *The publication seal* requires, and a thrown seal would be
+ * indistinguishable from a store that broke.
  */
 export type PublicationVerdict =
   | { readonly kind: 'admitted' }
@@ -438,9 +449,10 @@ export type PublicationVerdict =
  * store without choosing a member of the enumeration.
  *
  * A sealed state with a recorded {@link FloorRederivation} admits again — that is
- * §4.4's retroactive publication, and it is the one edge out of a seal. Tested with
- * `!== null` and never for falsiness: a re-derivation is present or absent, and
- * absent is not the same claim as a re-derivation that adjudicated nothing.
+ * the retroactive publication *The publication seal* allows, and it is the one edge
+ * out of a seal. Tested with `!== null` and never for falsiness: a re-derivation is
+ * present or absent, and absent is not the same claim as a re-derivation that
+ * adjudicated nothing.
  */
 export function admitsPublication(
   state: PublicationState, surface: PublicationSurface,
@@ -467,8 +479,8 @@ export type PublishingCarry = (typeof PUBLISHING_CARRIES)[number];
  * primary consumer and the verifier still works — so silence is the defect, not the
  * spend.
  *
- * Disclosure as DATA, never a rendered string, for §3.5's reason: every consumer
- * reads fields and nothing downstream couples to how it is rendered.
+ * Disclosure as DATA, never a rendered string, for the reason behind *Raw units*:
+ * every consumer reads fields and nothing downstream couples to how it is rendered.
  */
 export interface CarrySuppression {
   /** The configured value that was voided. Naming it beats "publication stopped",
@@ -482,10 +494,11 @@ export interface CarrySuppression {
    * per cell, however many times that cell's best moved and however many surfaces
    * refused it.
    *
-   * The load-bearing field, and the reason is §5.2's monotone invariant: a sealed
-   * run that found a better elite and could not write it means the NEXT run's carry
-   * starts from a worse elite than the search actually reached. The seal degrades
-   * FUTURE runs, not only this record, and that is invisible without a number.
+   * The load-bearing field, and the reason is the monotone invariant in *The records
+   * store*: a sealed run that found a better elite and could not write it means the
+   * NEXT run's carry starts from a worse elite than the search actually reached. The
+   * seal degrades FUTURE runs, not only this record, and that is invisible without a
+   * number.
    *
    * **The cardinality follows from what the number is FOR, and it is deliberately
    * not the count of refused publications.** Future damage is one fact per cell —
@@ -527,8 +540,8 @@ export function carrySuppression(
  * REQUIRED to clear a seal, and required to carry the same burden the original
  * floor did — because a seal cleared by an action nobody can audit reintroduces
  * "a floor is a proof or it is nothing" at the RECOVERY step, which is exactly the
- * failure §4 exists to prevent. This closes a hole in the continuation rule that
- * the rule's own author found rather than the audit.
+ * failure *The floor* exists to prevent. This closes a hole in the continuation rule
+ * that the rule's own author found rather than the audit.
  */
 export interface FloorRederivation {
   /** The replacement floor, carrying its own `proof`, `kind` and
@@ -602,17 +615,18 @@ export interface ScalarObjective {
  * require a `VectorObjective` and refuse a scalar — which refused GEPA's own
  * configuration, i.e. the sole technique that earns the axis value. GEPA's front is
  * over TASK INSTANCES under ONE metric: arXiv:2507.19457 Algorithm 2 line 4 is
- * `s*[i] <- max_k S_P[k][i]` with `i` indexing instances, and §2 defines a single
- * metric. Our own implementation says the same thing and is the first-hand proof:
+ * `s*[i] <- max_k S_P[k][i]` with `i` indexing instances, and *The objective*
+ * defines a single metric. Our own implementation says the same thing and is the
+ * first-hand proof:
  * `gepa_pareto_membership` is keyed `(run_id, instance_id, candidate_id)` with ONE
  * `score` (evolution/gepa/persistence.ts:89-95), `scores_json` is
  * `Map<instanceId, number>` (:23), and `computeParetoFront(pool, instanceIds)`
  * comments "For each instance, find the max score" (gepa/pareto.ts:39).
  *
- * The spec had the right reading elsewhere and disagreed with itself: §3.6 already
- * said `advance:'pareto'` needs a gradient ACROSS INSTANCES and cited SEIDR's
- * lexicase result, lexicase being the canonical per-instance operator. Found by
- * `SpecAudit`/`SpecEvidence`, severity `wrong`.
+ * The spec had the right reading elsewhere and disagreed with itself: *What the
+ * engine refuses outright* already said `advance:'pareto'` needs a gradient ACROSS
+ * INSTANCES and cited SEIDR's lexicase result, lexicase being the canonical
+ * per-instance operator. Found by `SpecAudit`/`SpecEvidence`, severity `wrong`.
  */
 export interface InstancedObjective {
   readonly kind: 'instanced';
@@ -700,10 +714,10 @@ export interface ObjectiveIdentity {
  * is the live precedent for refusing to read a winner out of a tie.
  *
  * A named function rather than an inline comparison for three reasons the rule
- * admits: it is the definition monotone displacement (§5.2) is stated over, the
- * Lean invariant S2 (§10.1) quantifies over it by name, and its three intended
- * call sites — displacement, eviction, and a cell's best — must move in lockstep
- * or the store stops being monotone in one of them.
+ * admits: it is the definition monotone displacement (*The records store*) is stated
+ * over, the Lean invariant S2 (*The Lean invariants*) quantifies over it by name, and
+ * its three intended call sites — displacement, eviction, and a cell's best — must
+ * move in lockstep or the store stops being monotone in one of them.
  */
 export function isBetter(
   candidate: number, incumbent: number, direction: ObjectiveDirection,
@@ -712,22 +726,24 @@ export function isBetter(
 }
 
 /**
- * §3.5's normalisation: the raw measurement mapped onto the [0,1] a search climbs.
+ * The normalisation *Raw units* leaves to the harness: the raw measurement mapped
+ * onto the [0,1] a search climbs.
  *
  * `0` means "no better than the baseline the harness measured" and `1` means
  * "reached the declared target". The BASELINE is an argument rather than a field on
- * the objective because §2.3 forbids a caller supplying one — it is measured on the
- * workspace as found, before any candidate exists.
+ * the objective because *Measured baseline* forbids a caller supplying one — it is
+ * measured on the workspace as found, before any candidate exists.
  *
  * `null` means THERE IS NO RANGE TO SCORE ON: the baseline already meets the target,
  * or a `log` scale was asked for over a value that has no logarithm. Null rather than
  * 0, because a degenerate span makes every candidate saturate and a fabricated 0
  * would be indistinguishable from a candidate that genuinely improved on nothing —
- * the caller refuses the run instead (§2.3's second normative consequence).
+ * the caller refuses the run instead — *Measured baseline*'s second normative
+ * consequence.
  *
  * A named function for the same reason as {@link floorMargin} and {@link isBetter}:
  * the direction and the scale both invert the arithmetic, getting either backwards
- * silently reverses the search, and this is the expression §3.5 is stated as.
+ * silently reverses the search, and this is the expression *Raw units* is stated as.
  */
 export function normalisedScore(input: {
   readonly value: number;
@@ -779,8 +795,8 @@ export interface ExplorationRecord {
   /** The preset that produced it, or `'custom'`. */
   readonly preset: string;
   /** `label` when the configuration was composed. NULL for an unmodified preset
-   *  run — and under the decision in docs/EXPLORATION-SPEC.md section 6.4, a
-   *  named preset is never modified, so NULL here means exactly "a tested path". */
+   *  run — and *Presets* states that a named preset is never modified, so NULL here
+   *  means exactly "a tested path". */
   readonly label: string | null;
   /** `search_nodes.root_id` of the run that found it, so the record points back
    *  at its tree. Not `mcts_search_runs.root_id`: that ledger deletes settled

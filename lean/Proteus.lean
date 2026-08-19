@@ -47,7 +47,7 @@ import Proteus.Storage.SqliteFSCorrectness
 import Proteus.Execution.Capabilities
 import Proteus.Execution.ToolSystem
 
--- Exploration proofs (docs/EXPLORATION-SPEC.md section 10)
+-- Exploration proofs (docs/EXPLORATION.md — "The Lean invariants")
 import Proteus.Exploration.Objective
 import Proteus.Exploration.Publication
 import Proteus.Exploration.Settle

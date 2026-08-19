@@ -18,6 +18,9 @@
 // under `=`, and NULLs are DISTINCT inside a SQLite UNIQUE index, so a key with a
 // nullable column enforces nothing. Neither failure is reachable against an in-memory
 // map standing in for a database.
+//
+// Specified by docs/EXPLORATION.md — "The records store", "The archive", "The publication
+// seal" and "Comparability".
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';
@@ -113,7 +116,7 @@ describe('the seal gates the write, checked in the writer and not assumed of the
   test('a breached run writes NOTHING, and the refusal names the seal', () => {
     // THE RED DIRECTION: delete the `admitsPublication` call at the top of
     // `recordExploration` and this goes red on both halves — the verdict becomes
-    // `recorded` and the row appears. That is the whole §4.4 property at this surface,
+    // `recorded` and the row appears. That is *The publication seal* at this surface,
     // and it is stated here rather than at the barrier because the barrier's own gate is
     // a SECOND check: either one alone leaves the other path reachable.
     const sql = store();
@@ -123,10 +126,10 @@ describe('the seal gates the write, checked in the writer and not assumed of the
   });
 
   test('a seal is not a boolean: a RECORDED re-derivation publishes again', () => {
-    // §4.4's one edge out of a seal, and the reason the writer asks
-    // `admitsPublication` rather than testing `kind === 'sealed'` itself. A writer that
-    // read the tag would refuse this row forever, which is retroactive publication
-    // silently deleted.
+    // The one edge out of a seal that *The publication seal* allows, and the reason the
+    // writer asks `admitsPublication` rather than testing `kind === 'sealed'` itself. A
+    // writer that read the tag would refuse this row forever, which is retroactive
+    // publication silently deleted.
     const sql = store();
     const verdict = recordExploration(sql, { publication: REDERIVED, write: write() });
     expect(verdict.kind).toBe('recorded');
@@ -142,10 +145,10 @@ describe('the seal gates the write, checked in the writer and not assumed of the
 
 describe("a cell's best never falls, and the store says which way it refused", () => {
   test('THE NONDETERMINISTIC VERIFIER: re-recording one artifact worse is refused and changes nothing', () => {
-    // The exact defect that made §5.2's monotone invariant false. One artifact, measured
-    // 23 and then 40 by the same instrument on a different day — the second measurement
-    // is not evidence the program got worse, and writing it would lower this cell's best
-    // for every run that comes after.
+    // The exact defect that made *The records store*'s monotone invariant false. One
+    // artifact, measured 23 and then 40 by the same instrument on a different day — the
+    // second measurement is not evidence the program got worse, and writing it would
+    // lower this cell's best for every run that comes after.
     //
     // REFUSED rather than ignored, which is the choice this test pins: a silent no-op
     // leaves the caller unable to tell "nothing moved" from "the write happened".
@@ -311,8 +314,8 @@ describe('the key carries the floor, and the two nullable halves of it behave', 
   });
 
   test('a different INSTRUMENT is a different objective, so nothing is pooled across it', () => {
-    // §5.1's identity completed: two runs whose `kind` resolved to different code are
-    // not comparable, and `argumentDigest({kind, spec})` cannot tell.
+    // The identity *Comparability* requires, completed: two runs whose `kind` resolved
+    // to different code are not comparable, and `argumentDigest({kind, spec})` cannot tell.
     const sql = store();
     const other: ObjectiveIdentity = {
       ...CHEAPER,
@@ -478,8 +481,9 @@ describe('the archive admits by cell and refuses by novelty', () => {
     // The whole admission test. The second artifact measures BETTER and is still refused:
     // a cell holds a behaviour, and a better way of writing the same answer adds no
     // coverage. That is what an archive is FOR — ten variants of one exploit are one
-    // finding — and §6.5 carries the measured evidence that an archive without a rejection
-    // test collapses onto one answer per cell while still reporting coverage.
+    // finding — and an archive with no rejection test collapses onto one answer per cell
+    // while still reporting coverage, which is why *The archive* admits by a rejection
+    // test and never by a score.
     const sql = store();
     admitToArchive(sql, { publication: OPEN, write: cellWrite(), novelty: 0.5 });
     const occupant = bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: CELL });

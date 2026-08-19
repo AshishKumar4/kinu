@@ -14,6 +14,8 @@
 // and throws otherwise, because a mutation test whose edit silently missed is a test
 // that proves the guard is load-bearing by never removing it. That check is the reason
 // this file can be believed.
+//
+// Specified by docs/EXPLORATION.md — "Merge-back", including *Dependency order*.
 import { afterAll, describe, expect, test } from 'bun:test';
 import { rmSync, writeFileSync } from 'node:fs';
 import { MAX_TX_BLOB_BYTES } from '@nimbus-sh/core/constants.js';
@@ -312,7 +314,7 @@ describe('the stale-verdict refusal is load-bearing', () => {
   });
 });
 
-/* ── Red-proof 3: §9.1's derived order ────────────────────────────────────── */
+/* ── Red-proof 3: the derived order (*Dependency order*) ──────────────────── */
 
 const DERIVED_ORDER = 'dependencyOrder(members, settled)';
 
@@ -329,7 +331,7 @@ async function vertexBeforeParent(origin: Origin, module: MergeBackModule) {
   ];
 }
 
-describe("§9.1's derived order is load-bearing", () => {
+describe('the derived dependency order is load-bearing', () => {
   test('GREEN: the order comes off the edges, so both members land', async () => {
     const origin = tearingOrigin({ 'a.ts': 'A0\n', 'c.ts': 'C0\n' });
     const members = await vertexBeforeParent(origin, pristine);

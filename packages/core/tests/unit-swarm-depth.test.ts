@@ -1,7 +1,7 @@
 // `depth > 1` — the half of the swarm surface that was declared and not real.
 //
 // A `depth` cap that cannot produce a second level is an axis in the docstring and a
-// no-op in the engine, which is the accepted-and-ignored defect §2.5 exists to refuse.
+// no-op in the engine, which is the defect *Accepted and ignored* exists to refuse.
 // So these tests are about the three things that make the cap real, and each is
 // asserted at the level where it can actually fail:
 //
@@ -22,6 +22,9 @@
 // a node could reach depth `maxDepth + 1` — selection returning a node at the cap, an
 // accepted proposal granting children past it, or a child's depth being taken from
 // something other than its parent's row — and each has its own test below.
+//
+// Specified by docs/EXPLORATION.md — "Accepted and ignored", "Arbitration", "Presets",
+// "Inherited context", "The publication seal" and "Merge-back".
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import { MAX_TX_BLOB_BYTES } from '@nimbus-sh/core/constants.js';
@@ -66,7 +69,8 @@ function caps(depth: number | null, branches: number): ResolvedSwarmCaps {
   };
 }
 
-/** A legal proposal: the minimum width §8.2 states, and no context conflict. */
+/** A legal proposal: the minimum width `BRANCH_PROPOSAL_WIDTH` states, and no context
+ *  conflict. */
 function proposal(over?: Partial<BranchProposal>): BranchProposal {
   return {
     rationale: 'this thread splits into two independent sub-questions',
@@ -97,7 +101,7 @@ function widthOf(width: number): BranchProposal {
   });
 }
 
-describe('§8.2 the arbiter: a node proposes, the engine decides', () => {
+describe('*Arbitration* — a node proposes, the engine decides', () => {
   test('a legal proposal is accepted at its own width — the arbiter is not vacuous', () => {
     // Sharpness, and it is load-bearing: every theorem below is an implication OUT of
     // `accepted`, so without this one they would all hold of an arbiter that refuses
@@ -136,9 +140,9 @@ describe('§8.2 the arbiter: a node proposes, the engine decides', () => {
         config: treeConfig(), caps: caps(5, 3), atDepth: 3,
         remainingChildren: 1, proposal: proposal(),
       }),
-      // The fifth arm moved axis with §8.4: a search resolved `fresh` refuses a child
-      // that asks to `fork`, which is "a node may narrow and never widen" over the axis
-      // that actually owns inheritance.
+      // The fifth arm moved onto the axis *Inherited context* governs: a search resolved
+      // `fresh` refuses a child that asks to `fork`, which is "a node may narrow and
+      // never widen" over the axis that actually owns inheritance.
       arbitrateBranch({
         config: treeConfig({ context: 'fresh' }), caps: caps(5, 3), atDepth: 1,
         remainingChildren: 10, proposal: forking(),
@@ -160,8 +164,8 @@ describe('§8.2 the arbiter: a node proposes, the engine decides', () => {
   });
 
   test('an absent depth cap refuses as ABSENT, which is not the same as exhausted', () => {
-    // Reachable only through `custom` with no `from`: §6.3 declares rows for the named
-    // presets and nothing for a composition that named no base. A run whose depth
+    // Reachable only through `custom` with no `from`: a row exists for every named preset
+    // (*Presets*) and none for a composition that named no base. A run whose depth
     // nothing states cannot grant depth, and saying "exhausted" would claim a number
     // was consumed when none was ever declared.
     const verdict = arbitrateBranch({
@@ -212,8 +216,8 @@ describe('§8.2 the arbiter: a node proposes, the engine decides', () => {
   });
 
   test('every proposal gets a verdict — there is no third outcome meaning "ignored"', () => {
-    // `every_proposal_gets_a_verdict`, over a grid that crosses every arm. Silence is
-    // the failure mode §8.2 is written against: a node that cannot tell refusal from
+    // `every_proposal_gets_a_verdict`, over a grid that crosses every arm. Silence is the
+    // failure mode *Arbitration* is written against: a node that cannot tell refusal from
     // being ignored will simply propose again.
     for (const advance of SWARM_ADVANCES) {
       for (const context of ['fork', 'fresh'] as const) {
@@ -641,9 +645,10 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
   }, 120_000);
 
   test('a REFUSED proposal names its reason, and the node still gets expanded', async () => {
-    // Seven sub-questions against §8.2's band of 2-4. The refusal must reach the
-    // diagnostics stream carrying its policy token and its prose, because a toolless
-    // node has already finished its turn and this is the only channel that exists.
+    // Seven sub-questions against the arbiter's declared band of 2-4
+    // (`BRANCH_PROPOSAL_WIDTH`). The refusal must reach the diagnostics stream carrying
+    // its policy token and its prose, because a toolless node has already finished its
+    // turn and this is the only channel that exists.
     const { logger, result, nodes } = await run({ depth: 2, branches: 2, proposeWidth: 7 });
     expect('reason' in result).toBe(false);
 
@@ -691,9 +696,10 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
   }, 120_000);
 
   test('nothing a node asks for is dropped in silence — every proposal is answered', async () => {
-    // §8.2's rule, as a count: a node that cannot tell refusal from being ignored will
-    // simply propose again. Every child here proposes, so every child must appear in
-    // exactly one verdict — the ones selection reached, and the ones swept afterwards.
+    // The rule *Arbitration* states, as a count: a node that cannot tell refusal from
+    // being ignored will simply propose again. Every child here proposes, so every child
+    // must appear in exactly one verdict — the ones selection reached, and the ones swept
+    // afterwards.
     const { logger, nodes } = await run({ depth: 2, branches: 2, proposeWidth: 2 });
     const answered = logger.emitted
       .filter((line) => line.event === 'swarm.branch_refused')
@@ -714,8 +720,8 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
     expect(budget.length).toBeGreaterThan(0);
     expect(String(budget[0]?.fields.error)).toContain('budget exhausted at depth');
     // AND A NODE AT THE CAP THAT PROPOSES ANYWAY IS TOLD SO — route 1, reached end to
-    // end. A depth-2 node in a depth-2 search is never INVITED to propose (§8.2's
-    // build-time rule: a request that could only be refused is not offered), but this
+    // end. A depth-2 node in a depth-2 search is never INVITED to propose (*Build-time
+    // exclusion*: a request that could only be refused is not offered), but this
     // model appends a block regardless, which is exactly what an untrusted node does.
     // The sweep answers it by name instead of dropping it.
     const capped = logger.emitted.filter((line) =>
@@ -973,11 +979,11 @@ describe('the records store: what one run reached, the next one starts from', ()
   }, 120_000);
 
   test('A BREACHED RUN WRITES NOTHING — the seal reaches the store', async () => {
-    // §4.4 at this surface, through the real engine: the run measures a candidate past a
-    // bound the candidate itself refutes, the floor is suspended, and the leaderboard
-    // stays empty. The run does NOT halt — the verifier still works and the calling turn
-    // is the primary consumer — which is what makes "wrote nothing" the assertion rather
-    // than "refused".
+    // *The publication seal* at this surface, through the real engine: the run measures a
+    // candidate past a bound the candidate itself refutes, the floor is suspended, and the
+    // leaderboard stays empty. The run does NOT halt — the verifier still works and the
+    // calling turn is the primary consumer — which is what makes "wrote nothing" the
+    // assertion rather than "refused".
     const { rt } = createTestRuntime();
     const breached = await run({
       depth: 1, branches: 2, proposeWidth: null, rt,
@@ -1235,8 +1241,8 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     expect(fanIn.levels).toBeGreaterThan(0);
 
     // THE FIRST BARRIER, in full. Three parents: two agree and accumulate, and the third
-    // disagrees — so exactly one node is spawned, and it is spawned through §8.5's
-    // conflict policy rather than through anything this engine added beside it.
+    // disagrees — so exactly one node is spawned, and it is spawned through the conflict
+    // policy *Merge-back* names rather than through anything this engine added beside it.
     const [first] = fanInEvents(logger, 'swarm.aggregate_fan_in');
     expect(first).toMatchObject({ depth: 1, parents: 3, members: 3, merged: 2 });
     const [spawned] = fanInEvents(logger, 'swarm.merge_node_spawned');
@@ -1608,9 +1614,10 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
   }, 180_000);
 
   test('A BREACHED RUN WRITES NOTHING TO THE ARCHIVE, and says how many cells that cost', async () => {
-    // §4.4 at this surface. The seal is checked at the barrier AND inside the archive's own
-    // writer, and this is the barrier half through the real engine: the run measures a
-    // candidate past a bound that candidate itself refutes, and the grid stays empty.
+    // *The publication seal* at this surface. The seal is checked at the barrier AND inside
+    // the archive's own writer, and this is the barrier half through the real engine: the
+    // run measures a candidate past a bound that candidate itself refutes, and the grid
+    // stays empty.
     //
     // The cell COUNT is the archive-shaped half of the disclosure. It was pinned at one
     // because a flat run has exactly one partition; here two candidates were witnessed into

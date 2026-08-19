@@ -72,8 +72,8 @@ const CITED_NAMES_TRAILING =
 
 /**
  * The same citation with the two halves the other way round: NAME FIRST, the module
- * following as a parenthesised locator. This is how the exploration spec and
- * `docs/NODE-ISOLATION.md` write every one of theirs, and requiring the path to come
+ * following as a parenthesised locator. This is how the specification prose citing
+ * this corpus wrote every one of its citations, and requiring the path to come
  * first made all of them invisible — a rename of a theorem they name passed clean.
  *
  * ORDER-INDEPENDENCE IS NOT BOUGHT WITH FALSE POSITIVES. Three conditions, all
@@ -102,7 +102,7 @@ const CITATION_OPAQUE = { 'Proteus.Execution.Capabilities.chain': true } as cons
  * Citations presented as ILLUSTRATIONS rather than as references — the declared
  * category, and the reason it is a category and not a skip.
  *
- * The defect it answers: `docs/EXPLORATION-SPEC.md` §10.1 documents THIS GATE's own
+ * The defect it answers: a specification section documented THIS GATE's own
  * red-proof, and writing down how the instrument catches a bad citation made the
  * gate fire on the documentation. The only way to green the tree was to delete the
  * account of the check, which would make this an instrument for undocumented gates.
@@ -404,10 +404,10 @@ export function auditCitations(file: string, text: string, seen: Citations): str
 
   // A line citation — for example the placeholder `Foo.lean:470` — is the other way
   // a Lean reference rots, and it rots FASTER than a name: a theorem keeps its name
-  // across edits and loses its line number on the next insertion above it. §10.1's
-  // S7 row cites three theorems by line, and `check-traceability.mjs` already
-  // range-checks its own `tsRef`s this way, so the Lean side gets the same
-  // treatment rather than a weaker one.
+  // across edits and loses its line number on the next insertion above it. Three
+  // theorems were cited by line in the specification prose, and
+  // `check-traceability.mjs` already range-checks its own `tsRef`s this way, so the
+  // Lean side gets the same treatment rather than a weaker one.
   for (const match of flat.matchAll(CITED_LINE)) {
     if (isIllustrative(file, citedToken(flat, match), flat, match.index, seen)) continue;
     const module = resolveCitation(match[1], seen, findings);

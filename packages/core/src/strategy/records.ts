@@ -1,5 +1,5 @@
 /**
- * The records store — §5.2's leaderboard, and the writer it did not have.
+ * The records store — the leaderboard, and the writer it did not have.
  *
  * `PUBLICATION_SURFACES` has enumerated `records` since the seal was restated over a
  * SET of surfaces, and nothing wrote it. That is what made the whole surface
@@ -13,11 +13,12 @@
  *
  * 1. THE SEAL IS CHECKED HERE. {@link admitsPublication} gates every write, over the
  *    `records` member of the enumeration, and a breached run writes NOTHING. Checked
- *    in the writer rather than trusted to the caller for §4.4's own reason: the hole
- *    that made the seal a true theorem about a false property was a publication path
- *    that called itself separate and unchanged. `admitCarry` checks it too, and that
- *    is not a duplicate gate — it is the barrier deciding admission and this deciding
- *    a write, and either one alone would leave the other reachable.
+ *    in the writer rather than trusted to the caller, for the reason *The publication
+ *    seal* gives: the hole that made the seal a true theorem about a false property
+ *    was a publication path that called itself separate and unchanged. `admitCarry`
+ *    checks it too, and that is not a duplicate gate — it is the barrier deciding
+ *    admission and this deciding a write, and either one alone would leave the other
+ *    reachable.
  *
  * 2. THE KEY CARRIES THE FLOOR. A row is identified by the objective's identity
  *    TOGETHER WITH the floor digest, never by `objectiveId` alone. A floor-blind key
@@ -28,8 +29,8 @@
  * 3. A CELL'S BEST NEVER FALLS. A re-record that would lower the value stored for a
  *    row is REFUSED — `cause: 'not-better'` — and the stored measurement stands. A
  *    nondeterministic verifier re-measuring the same artifact worse is the exact
- *    defect that made §5.2's monotone invariant false, and the choice between
- *    refusing and silently ignoring is made here rather than left to a reader:
+ *    defect that made *The records store*'s monotone invariant false, and the choice
+ *    between refusing and silently ignoring is made here rather than left to a reader:
  *    ignoring it is the silent no-op this repository refuses everywhere else, so the
  *    writer returns a verdict the caller can disclose. Since rows are never deleted
  *    and no row's value ever falls, `best(cell)` — a maximum in the objective's
@@ -51,6 +52,9 @@
  * detail and not a reported field: every declared column of
  * {@link ExplorationRecord} is present, and none of them is a fabricated sentinel
  * standing in for absent.
+ *
+ * Specified by docs/EXPLORATION.md — "The records store", "The publication seal" and
+ * "Comparability".
  */
 import * as v from 'valibot';
 import { argumentDigest, sha256Hex } from '../safety/argument-digest';
@@ -198,8 +202,9 @@ export type RecordVerdict =
   | { readonly kind: 'refused'; readonly cause: 'sealed' | 'not-better' };
 
 /**
- * What one run did with the records store, as DATA — §3.5's rule that every consumer
- * reads fields and nothing downstream couples to how a disclosure is rendered.
+ * What one run did with the records store, as DATA — the rule behind *Raw units*:
+ * every consumer reads fields and nothing downstream couples to how a disclosure is
+ * rendered.
  *
  * The two halves answer the two questions the store exists to make answerable: did
  * this run START from what an earlier one reached, and did what it reached SURVIVE.

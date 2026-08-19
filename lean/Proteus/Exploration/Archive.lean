@@ -1,8 +1,8 @@
 /-
   Proteus.Exploration.Archive — S5, the descriptor partition. 0 sorry.
 
-  Models `ExplorationRecord.descriptor` (`objective.ts:401-407`) against
-  `docs/EXPLORATION-SPEC.md` at 127a62c1, sections 6.5, 6.6 and 10.1 S5.
+  Models `ExplorationRecord.descriptor` (`objective.ts:401-407`). Specified by
+  docs/EXPLORATION.md — "The archive", "Presets" and "The Lean invariants".
 
   -- WHAT THIS ABSTRACTION KEEPS: the shape of the binning decision — whether one
   candidate maps to exactly one cell — and the shape of a coverage report.
@@ -13,14 +13,14 @@
   1. EXTRACTION. `functional_descriptor_partitions` holds because a Lean function is total
      and single-valued. That is not a discovery, it is the statement that IF
      descriptor extraction is a total function THEN S5 holds — and the danger
-     lives ENTIRELY in that antecedent, which section 11.3 records as unspecified:
-     "nothing here says how a descriptor is produced". So the useful half of this
-     file is not the positive theorem, it is
+     lives ENTIRELY in that antecedent:
+     *How a descriptor is produced is unspecified* records exactly that. So the
+     useful half of this file is not the positive theorem, it is
      `judged_descriptor_breaks_partition`: a descriptor that can bin one candidate
-     two ways REFUTES S5, which turns section 6.5's refusal of a judged descriptor
-     from a preference into a forced consequence. `bucketOf` then discharges the
-     antecedent for one concrete extraction, so S5 is not left resting on an
-     assumption nothing satisfies.
+     two ways REFUTES S5, which turns *The archive*'s refusal of a judged archive key
+     from a preference into a forced consequence.
+     `bucketOf` then discharges the antecedent for one concrete extraction, so S5
+     is not left resting on an assumption nothing satisfies.
 
   2. QUALITY. The archive's coverage claim is about BINNING, never about worth. A
      full archive of junk satisfies every theorem here, and
@@ -28,7 +28,7 @@
      reader to hope otherwise. That is Pugh et al.'s result — "the grid is
      completely filled … but many bins contain low-quality behaviors" — and the
      danger DOES live in this discarded part. What covers it is not this file: it
-     is section 6.5's OTHER archive refusal, the novelty rejection test, whose
+     is *The archive*'s OTHER refusal, the novelty rejection test, whose
      absence Rainbow Teaming measured collapsing an archive onto one prompt across
      every cell while still reporting coverage.
 -/
@@ -51,8 +51,9 @@ structure Candidate where
 
 /-! ## S5 — total and disjoint
 
-  Section 10.1 states S5 as `∀ c, ∃! cell, inCell c cell`, i.e. one predicate
-  carrying both halves: totality is the `∃`, disjointness is the uniqueness. -/
+  S5 is the descriptor partition *The Lean invariants* names for this module,
+  stated as `∀ c, ∃! cell, inCell c cell`, i.e. one predicate carrying both
+  halves: totality is the `∃`, disjointness is the uniqueness. -/
 
 /-- "Exactly one", spelled out. Lean 4 core has no `∃!` notation and this corpus
     takes no Mathlib dependency (`lean/lakefile.lean`), so the two halves S5
@@ -74,7 +75,7 @@ theorem functional_descriptor_partitions (desc : Candidate → Nat) :
 
 /-- **A descriptor that can bin one candidate two ways refutes S5.**
 
-    This is section 6.5's refusal of `archive` + judged descriptor, as a forced
+    This is *The archive*'s refusal of `archive` + judged descriptor, as a forced
     consequence rather than a preference: judge variance in the archive KEY is not
     a ranking error that can be re-ranked, it is a partition that is not a
     partition, and everything the archive reports downstream is then a claim about
@@ -90,7 +91,7 @@ theorem judged_descriptor_breaks_partition
 
 /-- And a descriptor that can bin a candidate NOWHERE refutes S5 too — the other
     half of totality, which a partial extraction (a regex that did not match, a
-    tool call that returned nothing) is exactly how you get. Section 9.2's rule
+    tool call that returned nothing) is exactly how you get. *Merge-back*'s rule
     applies: when a fact is missing, degrade toward less authority. There is no
     "the unnamed cell" to degrade into, which is why `descriptor` is NULL for NO
     PARTITION and NULL is not a cell (`objective.ts:401-407`). -/
@@ -104,10 +105,10 @@ theorem partial_descriptor_breaks_partition
 
 /-! ## One concrete extraction that discharges S5's antecedent
 
-  Section 11.3 leaves descriptor extraction unspecified, so the positive theorem
-  above rests on a hypothesis nothing in the tree yet satisfies. `bucketOf` is a
-  witness that the hypothesis is satisfiable by something cheap and mechanical:
-  count the declared boundaries the behaviour exceeds. -/
+  *How a descriptor is produced is unspecified* leaves descriptor extraction exactly
+  that, so the positive theorem above rests on a hypothesis nothing in the tree yet
+  satisfies. `bucketOf` is a witness that the hypothesis is satisfiable by something
+  cheap and mechanical: count the declared boundaries the behaviour exceeds. -/
 
 /-- The cell index of a behaviour, against a list of declared boundaries. Total
     for every behaviour and every boundary list, including the empty one (which
@@ -146,7 +147,7 @@ def coverageCount (desc : Candidate → Nat) (cs : List Candidate) (grid : List 
 
 /-- **No phantom coverage: a cell reported as covered has a member.** The
     archive's coverage number is the thing `research` and `audit` return
-    (section 6.3), so a coverage count that could exceed what landed would be the
+    (*Presets*), so a coverage count that could exceed what landed would be the
     one number those presets exist to produce, wrong. -/
 theorem covered_has_a_member (desc : Candidate → Nat) (cs : List Candidate) (k : Nat)
     (h : covered desc cs k = true) : ∃ c ∈ cs, desc c = k := by
@@ -200,7 +201,7 @@ theorem full_coverage_fills_every_cell (desc : Candidate → Nat) (cs : List Can
 
 /-- A two-cell grid filled by two candidates whose quality is the direction's
     worst. Coverage reports 2 of 2. This is Pugh et al.'s finding inside the
-    model, and it is why section 6.5's OTHER archive refusal — the novelty
+    model, and it is why *The archive*'s OTHER refusal — the novelty
     rejection test — is not optional. -/
 theorem full_coverage_says_nothing_about_quality :
     ∃ (desc : Candidate → Nat) (cs : List Candidate) (grid : List Nat),

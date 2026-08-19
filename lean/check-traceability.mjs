@@ -365,6 +365,89 @@ for (const name of declarations.axioms) {
   if (!axiomOwners.has(name)) fail(`source axiom is not enrolled as a trusted model assumption: ${name}`);
 }
 
+// A Lean inductive that claims to mirror a TS axis constant, and nothing checking
+// it, reads as verified and is only asserted. `Settle.lean` carried `step`,
+// `trajectory`, `mutate`, `agree`, `novelty` and `beam` after the code cut all
+// six, plus whole `Observe` and `Decorrelate` axes after the code removed both,
+// under a heading claiming it matched `swarm.ts` exactly. Constructors are
+// lowercase identifiers and the TS values are string literals, so the comparison
+// is a set equality; camelCase spans the hyphen (`bestFirst` <-> `best-first`).
+//
+// Enrolled rather than discovered: a mirror nobody declared cannot be checked, so
+// adding an axis means adding a row here, which is a reviewable edit.
+const AXIS_MIRRORS = [
+  { lean: "Proteus.Exploration.Settle.Unit", ts: "SWARM_UNITS" },
+  { lean: "Proteus.Exploration.Settle.Expand", ts: "SWARM_EXPANDS" },
+  { lean: "Proteus.Exploration.Settle.Score", ts: "SWARM_SCORES" },
+  { lean: "Proteus.Exploration.Settle.Advance", ts: "SWARM_ADVANCES" },
+  { lean: "Proteus.Exploration.Settle.Carry", ts: "SWARM_CARRIES" },
+  { lean: "Proteus.Exploration.Arbitration.Context", ts: "SWARM_CONTEXTS" },
+];
+const AXIS_SOURCE = "packages/core/src/strategy/swarm.ts";
+
+/** `| a | b | c` constructor names of one inductive, or null when absent. */
+function leanConstructors(source, name) {
+  const declaration = new RegExp(`^\\s*inductive\\s+${name}\\s+where\\s*$`, "m").exec(source);
+  if (declaration === null) return null;
+  const names = [];
+  for (const line of source.slice(declaration.index + declaration[0].length).split("\n")) {
+    if (/^\s*\|/.test(line)) {
+      for (const match of line.matchAll(/\|\s*([A-Za-z][\w']*)/g)) names.push(match[1]);
+    } else if (names.length > 0) break;
+  }
+  return names;
+}
+
+function auditAxisMirrors() {
+  let axisSource;
+  try {
+    axisSource = readFileSync(join(repoRoot, AXIS_SOURCE), "utf8");
+  } catch {
+    fail(`axis mirror source does not exist: ${AXIS_SOURCE}`);
+    return;
+  }
+  const fold = (value) => value.replaceAll("-", "").toLowerCase();
+  for (const { lean, ts } of AXIS_MIRRORS) {
+    const declared = new RegExp(
+      `export const ${ts}\\s*=\\s*\\[([^\\]]*)\\]\\s*as const`,
+    ).exec(axisSource);
+    if (declared === null) {
+      fail(`axis mirror: ${AXIS_SOURCE} declares no \`export const ${ts} = [...] as const\``);
+      continue;
+    }
+    const values = [...declared[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    if (values.length === 0) {
+      fail(`axis mirror: ${ts} parsed as empty, so the comparison would pass on nothing`);
+      continue;
+    }
+    const dot = lean.lastIndexOf(".");
+    const module = join(leanRoot, `${lean.slice(0, dot).replaceAll(".", "/")}.lean`);
+    let constructors;
+    try {
+      constructors = leanConstructors(stripLeanComments(readFileSync(module, "utf8")), lean.slice(dot + 1));
+    } catch {
+      fail(`axis mirror: no Lean module for ${lean} at ${relativePath(module)}`);
+      continue;
+    }
+    if (constructors === null) {
+      fail(`axis mirror: ${relativePath(module)} declares no \`inductive ${lean.slice(dot + 1)}\``);
+      continue;
+    }
+    const modelled = new Set(constructors.map(fold));
+    const shipped = new Set(values.map(fold));
+    const extra = constructors.filter((c) => !shipped.has(fold(c)));
+    const missing = values.filter((v) => !modelled.has(fold(v)));
+    if (extra.length > 0) {
+      fail(`axis mirror ${lean}: models ${extra.join(", ")}, which ${ts} does not ship`);
+    }
+    if (missing.length > 0) {
+      fail(`axis mirror ${lean}: ${ts} ships ${missing.join(", ")}, which the model omits`);
+    }
+  }
+}
+
+auditAxisMirrors();
+
 // `scripts/lean-citations.ts` checks the reverse direction — that a source header
 // naming a Lean theorem names one that exists. It needs this scanner's answer and
 // `scripts/sources.ts`'s file enumeration, and it cannot import both: the
