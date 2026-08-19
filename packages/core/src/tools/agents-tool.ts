@@ -396,7 +396,6 @@ export interface AgentsToolInput {
   label?: string;
   branches?: number;
   depth?: number;
-  models?: string[];
   // hire / converse
   agent?: string;
   role?: string;
@@ -446,7 +445,7 @@ export const AGENTS_ACTION_FIELDS = {
   // ignored. They join this list when something enforces them.
   swarm: [
     'task', 'preset', 'objective', 'key', 'config', 'from', 'label', 'branches', 'depth',
-    'models', 'budget_usd', 'budget_tokens', 'budget_label',
+    'budget_usd', 'budget_tokens', 'budget_label',
   ],
   hire: ['agent', 'role', 'mission', 'model', 'scope', 'message', 'timeout_seconds'],
   ask: ['agent', 'message', 'topic', 'timeout_seconds', 'deliverable', 'deadline_hint'],
@@ -484,7 +483,6 @@ const AgentsInputEntries = {
   label: v.optional(v.string()),
   branches: v.optional(v.number()),
   depth: v.optional(v.number()),
-  models: v.optional(v.array(v.string())),
   agent: v.optional(v.string()),
   role: v.optional(v.string()),
   mission: v.optional(v.string()),
@@ -887,7 +885,6 @@ async function runSwarmAction(
   if (input.label) Object.assign(call, { label: input.label });
   if (input.branches !== undefined) Object.assign(call, { branches: input.branches });
   if (input.depth !== undefined) Object.assign(call, { depth: input.depth });
-  if (input.models) Object.assign(call, { models: input.models });
 
   // Resolution first, per *Presets* — *Validity over the resolved configuration* is
   // stated over the resolved tuple and has no input without it.
@@ -986,7 +983,6 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
     label: { type: 'string', maxLength: 120, description: 'For action=swarm with preset:"custom": required provenance. A composed shape recorded repeatedly under one label is the evidence for a new preset.' },
     branches: { type: 'integer', minimum: 1, description: 'For action=swarm: candidates per expansion. Omit to take the preset\'s own width.' },
     depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion; deeper selects down a tree with `advance`, scoring each node against your own `objective`. The literature runs 3-7 (ToT <=3, LATS 7, Koh 5). advance:"none" has no selection step, so it fixes depth at 1 and a deeper cap is refused rather than silently flattened.' },
-    models: { type: 'array', items: { type: 'string' }, description: 'For action=swarm: per-node model routing — a cheap model for recon, a strong one for synthesis. NOT for diversity: a mixed panel tracks its AVERAGE member, so a weaker model added for variety measurably subtracts. Diversity is unconditional: every node is already given its own angle.' },
     budget_usd: { type: 'number', minimum: 0, description: 'For action=swarm: cumulative USD cap for the whole search, including its measurements. Omit for no cap.' },
     budget_tokens: { type: 'integer', minimum: 1, description: 'For action=swarm: cumulative token cap, same scope as budget_usd.' },
     budget_label: { type: 'string', maxLength: 120, description: 'For action=swarm: name the sub-ledger so several calls share one cumulative budget.' },
