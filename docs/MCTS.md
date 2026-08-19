@@ -2,7 +2,9 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-This is the Monte Carlo Tree Search engine: a tree of solution approaches explored in parallel, where each branch is an isolated Durable Object (Facet) with its own SQLite database. It is one of three exploration shapes in the tree, and the only one no tool reaches.
+The Monte Carlo Tree Search engine. It explores a tree of solution approaches in
+parallel, and each branch is an isolated Durable Object facet with its own SQLite
+database. No tool reaches it.
 
 ## No tool reaches this engine
 
@@ -329,8 +331,8 @@ concurrent heads mutate one shared workspace with no structural isolation, and
 same tree — while the file-level isolation that would fix it is exactly the
 per-branch workspace the toolless design does not need.
 
-A swarm's nodes are the third shape, and they resolve that tension differently: a
-node is a full agent and it is graded on the candidate it **reports**, never on a
+A swarm's node is a third shape again, and it resolves that tension differently. A
+node is a full agent, and it is graded on the candidate it **reports**, never on a
 diff of the tree. See [EXPLORATION.md](./EXPLORATION.md) — "A node is an agent".
 
 `initHead` / `runAsHead` / `abortHead` are the head-mode `@callable()`s on the

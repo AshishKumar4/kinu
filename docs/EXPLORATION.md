@@ -31,8 +31,8 @@ in this workspace.
 
 A verifier is code. It runs, and it reports a raw number in its own unit, so the
 number decides which candidate wins. A caller who asks for `score:'judge'`
-instead gets the median of a model ensemble, which is an opinion: it ranks
-candidates and it measures nothing, so a judged run writes no record.
+instead gets the median of a model ensemble. An ensemble ranks candidates and
+measures nothing, so a judged run writes no record.
 
 Six axes describe the search — `unit`, `context`, `expand`, `score`, `advance`,
 `carry` — and a preset is one point in them. `advance` selects down the tree.
@@ -380,8 +380,11 @@ coordinate is ever a claim a node made about itself.
 An archive admits a candidate by a **rejection test**, not by a score. The
 candidate must sit at least `novelty` away from every occupant of its cell. An
 archive with no rejection test collapses onto one artifact across every cell while
-still reporting coverage, measured at self-BLEU 0.42 rising to 0.79 when the
-filter was dropped.
+still reporting coverage. The figure recorded for that collapse is self-BLEU 0.42
+rising to 0.79 when the filter was dropped, which
+`SwarmAdvanceSetting` in `strategy/swarm.ts` states in its own docstring. **No date
+is recorded for that measurement and nothing here can reproduce it**, so read it as
+the reason the filter exists rather than as a number to quote.
 
 An archive descriptor is **not judge-scored** — a judged archive key is refused. A
 mis-ranked candidate can be re-ranked; a mis-binned elite is silently lost, and a
