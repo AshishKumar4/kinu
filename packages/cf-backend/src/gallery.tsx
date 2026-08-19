@@ -28,9 +28,20 @@
  *   /gallery.html?frame=settings → the per-agent Settings page
  *   /gallery.html?frame=forks    → Exploration on a real 106-node, depth-6
  *                                  competition, in Column C's actual width
- *   /gallery.html?frame=forkmerge → the same surface on a MERGED fork: the same
- *                                  tree at depth 1, with no score encodings
+ *   /gallery.html?frame=forkmerge → the same surface on a run with NO search
+ *                                  tree: the same tree at depth 1, with no score
+ *                                  encodings
+ *   /gallery.html?frame=forkpreset → a swarm under a NAMED PRESET: which preset it
+ *                                  resolved AND the tuple it resolved to, with
+ *                                  `settle` derived from two of those axes
+ *   /gallery.html?frame=forkfanin → a `custom` composition that FANS IN: the
+ *                                  `expand:'aggregate'` vertices marked in the
+ *                                  tree, and the honest note that a composition's
+ *                                  axes are not recoverable from any read model
+ *   /gallery.html?frame=forkrefused → a search that STARTED and reached nothing:
+ *                                  a refusal naming its cause, never an empty tree
  *   /gallery.html?frame=forkfull → the same competition in the full-screen explorer
+ *   /gallery.html?frame=forkswarmfull → the fan-in swarm, full-screen
  *   /gallery.html?frame=forkbig  → the scale probe: 520 nodes, depth 9
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
@@ -321,6 +332,7 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
     if (json === undefined) return;
     const parsed = v.safeParse(v.object({
       type: v.optional(v.string()), id: v.optional(v.string()), method: v.optional(v.string()),
+      args: v.optional(v.array(v.unknown())),
     }), json);
     if (!parsed.success) return;
     const frame = parsed.output;
@@ -328,6 +340,14 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
     const method = frame.method;
     const result = AGENT_RPC.has(method)
       ? AGENT_RPC.get(method)
+      // The exploration reads are ANSWERED here rather than falling through, and the
+      // fall-through is why: a blanket `[]` for every `get*` is a lie for any read
+      // whose answer is not an array, and `getHeadRun` answering `[]` reached
+      // `headRunToTree` as `[].heads` and took the whole page down with it. Column C
+      // injects an `Rpc` directly while the full-screen explorer reads through this
+      // socket, so both transports resolve the same fixture stores or neither is
+      // trustworthy.
+      : EXPLORATION_READS.has(method) ? explorationRead(method, frame.args ?? [])
       : method.startsWith("list") || method.startsWith("get") ? [] : {};
     queueMicrotask(() => {
       const message = new MessageEvent("message", {
@@ -457,13 +477,244 @@ const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
   return rpcResult({}).json<T>();
 };
 
+/* ── swarm searches: the shipped model's own states ─────────────── */
+
 /**
- * Every fork the Exploration frames list, and the stores behind them.
+ * A search under a NAMED PRESET, so the resolved tuple has something to resolve.
  *
- * Both settle policies are in the same list on purpose: that IS the change.
- * `getMctsNodeDetail` legitimately answers null for a node the server has
- * retired and the view falls back to the row it holds — stubRpc's blanket `[]`
- * for a `get*` is not that shape and crashes the inspector.
+ * `prove` rather than `optimise` because it is the row whose axes are least
+ * guessable from its name: `unit:generator` (a proof is produced by something that
+ * can run its own checker between steps), `advance:best-first` (an exact signal has
+ * no noise to re-widen against) and `carry:artifacts ≥1` (kept exactly when the
+ * checker accepted). A panel that only printed "prove" would tell a reader none of
+ * that, which is the whole reason the tuple is rendered beside the name.
+ */
+const PROVE_ROWS: MctsRow[] = [
+  {
+    id: "pv000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
+    action: "Prove the coupon guard terminates",
+    task: "Prove that applyCoupon terminates for every coupon row, including kind = null.",
+    observation: "The workspace as found: lean/Checkout/Coupon.lean, 3 sorries.",
+    created_at: NOW - 78e5,
+  },
+  {
+    id: "pv001", parent_id: "pv000", depth: 1, visits: 4, value: 0.31, status: "open",
+    action: "Induct on the discount list", observation: "Checker accepted 1 of 3 goals.",
+    created_at: NOW - 77e5,
+  },
+  {
+    id: "pv002", parent_id: "pv000", depth: 1, visits: 1, value: 0.12, status: "pruned",
+    action: "Case-split on kind first", observation: "Below the prune floor after one rollout.",
+    created_at: NOW - 77e5,
+  },
+  {
+    id: "pv003", parent_id: "pv001", depth: 2, visits: 3, value: 0.68, status: "open",
+    action: "Strengthen the induction hypothesis", observation: "Checker accepted 2 of 3 goals.",
+    created_at: NOW - 76e5,
+  },
+  {
+    id: "pv004", parent_id: "pv000", depth: 1, visits: 0, value: 0, status: "failed",
+    action: "Reduce to the existing monotonicity lemma",
+    observation: "Branch errored: the lemma this cites was renamed and no longer resolves.",
+    created_at: NOW - 77e5,
+  },
+  {
+    id: "pv005", parent_id: "pv003", depth: 3, visits: 5, value: 0.94, status: "terminal",
+    action: "Discharge the null case from the guard",
+    observation: "Checker accepted 3 of 3 goals. No sorries remain.",
+    code_used: "theorem applyCoupon_terminates : ∀ c, Terminates (applyCoupon c) := by",
+    created_at: NOW - 75e5,
+  },
+];
+
+/**
+ * A search that FANS IN — `expand:'aggregate'`, which no named preset resolves to,
+ * so it is necessarily a `custom` composition and the frame photographs that too.
+ *
+ * `sw004` and `sw009` are the aggregate vertices, at two different depths. Both are
+ * ordinary scored rows: the store records a vertex's SELECTION parent and nothing
+ * else, so nothing in these rows says either of them consumed a level — which is
+ * exactly the state the tree's fan-in marking exists to make readable, and it is
+ * read off the journal below rather than out of here.
+ */
+const SWARM_ROWS: MctsRow[] = [
+  {
+    id: "sw000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
+    action: "Reconcile the three coupon fixes",
+    task: "Reduce checkout p95 without regressing the coupon guard.",
+    observation: "The workspace as found: p95 = 412ms on the failing fixture.",
+    created_at: NOW - 22e5,
+  },
+  {
+    id: "sw001", parent_id: "sw000", depth: 1, visits: 3, value: 0.44, status: "open",
+    action: "Cache the resolved kind per coupon id", observation: "p95 = 318ms.",
+    created_at: NOW - 21e5,
+  },
+  {
+    id: "sw002", parent_id: "sw000", depth: 1, visits: 2, value: 0.37, status: "open",
+    action: "Index rules by kind at load", observation: "p95 = 341ms.",
+    created_at: NOW - 21e5,
+  },
+  {
+    id: "sw003", parent_id: "sw000", depth: 1, visits: 1, value: 0.19, status: "pruned",
+    action: "Precompute the whole discount table", observation: "p95 = 402ms — below the prune floor.",
+    created_at: NOW - 21e5,
+  },
+  {
+    id: "sw004", parent_id: "sw001", depth: 2, visits: 4, value: 0.71, status: "open",
+    action: "Reconcile the cache with the load-time index",
+    observation: "p95 = 244ms. Both parents' writes touched pricing.ts; this candidate is the merge.",
+    created_at: NOW - 20e5,
+  },
+  {
+    id: "sw005", parent_id: "sw002", depth: 2, visits: 2, value: 0.52, status: "open",
+    action: "Narrow the index to the percentage path", observation: "p95 = 296ms.",
+    created_at: NOW - 20e5,
+  },
+  {
+    id: "sw006", parent_id: "sw002", depth: 2, visits: 1, value: 0.28, status: "pruned",
+    action: "Index every rule field", observation: "p95 = 377ms — below the prune floor.",
+    created_at: NOW - 20e5,
+  },
+  {
+    id: "sw007", parent_id: "sw004", depth: 3, visits: 6, value: 0.93, status: "terminal",
+    action: "Drop the redundant second lookup",
+    observation: "p95 = 188ms. The guard's fixture still passes.",
+    code_used: "const kind = cached ?? inferKind(coupon);",
+    created_at: NOW - 19e5,
+  },
+  {
+    id: "sw008", parent_id: "sw004", depth: 3, visits: 2, value: 0.61, status: "open",
+    action: "Warm the cache on first read", observation: "p95 = 271ms.",
+    created_at: NOW - 19e5,
+  },
+  {
+    id: "sw009", parent_id: "sw005", depth: 3, visits: 3, value: 0.66, status: "open",
+    action: "Reconcile the narrowed index with the warm cache",
+    observation: "p95 = 258ms. Consumed both depth-2 candidates that scored.",
+    created_at: NOW - 19e5,
+  },
+];
+
+/** One journalled node, at the shape `HeadRunView.heads` carries. The rationale is
+ *  the field that matters here: it is the engine's own reason for the node existing,
+ *  and for an aggregate vertex it is the ONLY record that reaches a client. */
+function swarmNode(
+  id: string, task: string, rationale: string,
+  extra: Partial<HeadRunView["heads"][number]> = {},
+): HeadRunView["heads"][number] {
+  return {
+    id, task, rationale, status: "completed", summary: null, errorMessage: null,
+    usage: { input: 6_200, output: 480 }, wallClockMs: 12_400,
+    spawnedAt: NOW - 21e5, lastStepAt: NOW - 20e5, decisions: [], steps: [],
+    ...extra,
+  };
+}
+
+/**
+ * The journal behind {@link PROVE_ROWS}. `rationale` on the RUN is where
+ * `journal.recordSplit` writes `resolved.label ?? resolved.preset`, so for a preset
+ * run it is the preset name and nothing else.
+ */
+const PROVE_RUN: HeadRunView = {
+  rootId: "pv000",
+  task: "Prove that applyCoupon terminates for every coupon row, including kind = null.",
+  rationale: "prove",
+  status: "completed",
+  spawnedAt: NOW - 78e5,
+  heads: [
+    swarmNode("pv001", "Discharge the termination goal", "expansion 1 of 3"),
+    swarmNode("pv002", "Discharge the termination goal", "expansion 2 of 3"),
+    swarmNode("pv004", "Discharge the termination goal", "expansion 3 of 3", {
+      status: "errored", errorMessage: "Checker refused: unknown identifier `discount_monotone`.",
+      lastStepAt: null,
+    }),
+    swarmNode("pv003", "Discharge the termination goal", "the strongest accepted line so far"),
+    swarmNode("pv005", "Discharge the termination goal", "close the remaining null case"),
+  ],
+  merge: null,
+};
+
+/**
+ * The journal behind {@link SWARM_ROWS} — a `custom` composition, and the two
+ * fan-in rationales the engine writes verbatim.
+ *
+ * `fan-in over k parents of depth d` is `strategy/swarm-run.ts`'s own sentence for
+ * an aggregate vertex. It is quoted here rather than paraphrased because the
+ * surface reads the count out of it, and a fixture that paraphrased would
+ * photograph a marking the real store cannot produce.
+ */
+const SWARM_RUN: HeadRunView = {
+  rootId: "sw000",
+  task: "Reduce checkout p95 without regressing the coupon guard.",
+  rationale: "conflict-reconciling ensemble",
+  status: "completed",
+  spawnedAt: NOW - 22e5,
+  heads: [
+    swarmNode("sw001", "Reduce checkout p95", "expansion 1 of 3"),
+    swarmNode("sw002", "Reduce checkout p95", "expansion 2 of 3"),
+    swarmNode("sw003", "Reduce checkout p95", "expansion 3 of 3"),
+    swarmNode("sw004", "Reduce checkout p95", "fan-in over 3 parents of depth 1"),
+    swarmNode("sw005", "Reduce checkout p95", "expansion 1 of 2"),
+    swarmNode("sw006", "Reduce checkout p95", "expansion 2 of 2"),
+    swarmNode("sw007", "Reduce checkout p95", "expansion 1 of 2"),
+    swarmNode("sw008", "Reduce checkout p95", "expansion 2 of 2"),
+    swarmNode("sw009", "Reduce checkout p95", "fan-in over 2 parents of depth 2"),
+  ],
+  merge: null,
+};
+
+/**
+ * A search that STARTED and reached nothing: the root was written, the first wave
+ * errored, and the ledger recorded the run as failed.
+ *
+ * The state this frame exists for. It used to draw as a one-dot canvas under a
+ * settled-looking label, which reads as "the search found nothing" — a claim about
+ * the world rather than about this run. A refusal names its cause instead, and the
+ * cause is the branch's own message.
+ *
+ * NOT a refused CALL: `resolveSwarm` and `swarmValidity` refuse before the engine
+ * writes a root, so a call refused for `advance:'pareto'` or an undeclared preset
+ * leaves nothing to select and cannot reach this surface at all.
+ */
+const REFUSED_ROWS: MctsRow[] = [
+  {
+    id: "rf000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
+    action: "Find a coupon row that breaks the guard",
+    task: "Find a coupon row that makes applyCoupon throw after the migration.",
+    observation: "The workspace as found: 41 coupon fixtures.",
+    created_at: NOW - 4e5,
+  },
+];
+
+const REFUSED_RUN: HeadRunView = {
+  rootId: "rf000",
+  task: "Find a coupon row that makes applyCoupon throw after the migration.",
+  rationale: "ideate",
+  status: "errored",
+  spawnedAt: NOW - 4e5,
+  heads: [
+    swarmNode("rf001", "Find a breaking coupon row", "expansion 1 of 5", {
+      status: "errored", lastStepAt: null,
+      errorMessage: "Every node failed to provision a home: the workspace filesystem "
+        + "has no credential on this host, so no candidate could be measured.",
+    }),
+  ],
+  merge: null,
+};
+
+/**
+ * Every run the Exploration frames list, and the stores behind them.
+ *
+ * Every state the surface has to draw is in ONE list on purpose: a legacy judged
+ * search (whose ensemble was clamped), two swarm searches — one under a named
+ * preset, one a `custom` composition that fans in — a search that started and
+ * reached nothing, and two journalled runs with no search tree. That is the set,
+ * and the frames below focus one of them each.
+ *
+ * `getMctsNodeDetail` legitimately answers null for a node the server has retired
+ * and the view falls back to the row it holds — stubRpc's blanket `[]` for a `get*`
+ * is not that shape and crashes the inspector.
  *
  * The list is longer than one page on purpose too. A workspace that has forked
  * thirty-four times is the case where the old bare `LIMIT 30` quietly answered
@@ -472,8 +723,28 @@ const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
  */
 const FORK_RUNS: ForkRunSummary[] = [
   {
+    // Derived, because `forkbig` generates 520 rows for this same run and a hardcoded
+    // 105 made the scale frame photograph `105 branches` beside `Branches: 519`.
     id: "n000", task: "Find why the SAVE20 coupon 500s", startedAt: NOW - 36e5,
-    status: "completed", settle: "competed", branches: 105, winnerScore: 0.91,
+    status: "completed", settle: "competed",
+    branches: MCTS_ROWS.length - 1, winnerScore: 0.91,
+  },
+  {
+    id: "sw000", task: "Reduce checkout p95 without regressing the coupon guard",
+    startedAt: NOW - 22e5, status: "completed", settle: "competed",
+    branches: SWARM_ROWS.length - 1, winnerScore: 0.93,
+  },
+  {
+    id: "pv000", task: "Prove that applyCoupon terminates for every coupon row",
+    startedAt: NOW - 78e5, status: "completed", settle: "competed",
+    branches: PROVE_ROWS.length - 1, winnerScore: 0.94,
+  },
+  {
+    // Branchless BY CONSTRUCTION: the root is the only row, so `branches` is 0 and
+    // the surface owes the reader a cause rather than an empty canvas.
+    id: "rf000", task: "Find a coupon row that makes applyCoupon throw",
+    startedAt: NOW - 4e5, status: "failed", settle: "competed",
+    branches: 0, winnerScore: null,
   },
   {
     id: "root-merge-1", task: "Check every other call site that indexes rules by kind",
@@ -567,6 +838,7 @@ const MERGED_RUN: HeadRunView = {
     headCount: 5, totalTokens: 24_820,
   },
 };
+
 
 /**
  * The six things a node panel can be showing, as `getNodeTranscript` answers.
@@ -788,29 +1060,47 @@ const FORK_PARAMS: ForkRunParams[] = [
   { rootId: "root-merge-0", policy: "merge", mergeStrategy: "best_of", branches: 2 },
 ];
 
+/** Every store's rows for one run, keyed by the run's root id — the same key the
+ *  read model composes on, so a fixture cannot pair one run's tree with another's
+ *  journal. */
+const SEARCH_ROWS_BY_ROOT: ReadonlyMap<string, readonly MctsRow[]> = new Map([
+  ["n000", MCTS_ROWS],
+  ["sw000", SWARM_ROWS],
+  ["pv000", PROVE_ROWS],
+  ["rf000", REFUSED_ROWS],
+]);
+
+const JOURNAL_BY_ROOT: ReadonlyMap<string, HeadRunView> = new Map(
+  [MERGED_RUN, SWARM_RUN, PROVE_RUN, REFUSED_RUN].map((run) => [run.rootId, run]),
+);
+
 /**
- * The canvas as the server composes it: ONE ROW PER FORK, each carrying its own
- * parameters and BOTH halves of its own branches — search rows for a
- * competition, the journalled run for a merge. Not parallel collections keyed by
- * root id, and not a separately bounded head-runs read: either shape is what let
- * the trees and the fork list beside them disagree.
+ * The canvas as the server composes it: ONE ROW PER RUN, each carrying its own
+ * parameters and every half it has — the search rows where the engine wrote any,
+ * the journalled nodes where it wrote those. Not parallel collections keyed by root
+ * id, and not a separately bounded head-runs read: either shape is what let the
+ * trees and the run list beside them disagree.
+ *
+ * A swarm search has BOTH halves, which is why neither is chosen by a tag: its tree
+ * is in `search_nodes` and the reason each of its nodes exists is in `head_journal`,
+ * and a surface holding one of those cannot say which node fanned a level in.
  */
 const CANVAS_ROWS: readonly ExplorationCanvasRun[] = FORK_RUNS.map((run) => ({
   run,
   params: FORK_PARAMS.find((entry) => entry.rootId === run.id) ?? null,
-  tree: run.id === "n000" ? MCTS_ROWS.map(asSearchNode) : [],
-  head: run.id === MERGED_RUN.rootId ? MERGED_RUN : null,
+  tree: (SEARCH_ROWS_BY_ROOT.get(run.id) ?? []).map((row) => asSearchNode(row, run.id)),
+  head: JOURNAL_BY_ROOT.get(run.id) ?? null,
 }));
 
 /** The generator writes the CLIENT's loose row shape, which is what the socket
  *  broadcast and `getSearchTree` really deliver. This stub is standing in for the
  *  server, so the canvas payload has to be the server's row — every column
  *  present, including the ones a partial row leaves out. */
-function asSearchNode(row: MctsRow): SearchNode {
+function asSearchNode(row: MctsRow, rootId: string): SearchNode {
   return {
     id: row.id,
     parent_id: row.parent_id,
-    root_id: "n000",
+    root_id: rootId,
     task: row.task ?? "",
     action: row.action,
     observation: row.observation ?? "",
@@ -849,31 +1139,95 @@ const GalleryPageRequestSchema: v.GenericSchema<PageRequest> = v.object({
   limit: v.optional(v.number()),
 });
 
-const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getExplorationCanvas") return rpcResult(canvasPage(CANVAS_ROWS, args)).json<T>();
+/**
+ * The exploration reads whose answer is NOT an array, answered from the fixture
+ * stores — and the one place both transports resolve them.
+ *
+ * Column C is handed an `Rpc` directly; the full-screen explorer reads through the
+ * agent socket. A fixture that answered one and let the other fall through to the
+ * blanket `[]` is not a smaller version of the same thing: `getHeadRun` answering
+ * `[]` is truthy, and `headRunToTree` then read `[].heads` and took the page to a
+ * blank body. Every read that can answer null or a record is listed here.
+ */
+const EXPLORATION_READS = new Set([
+  "getExplorationCanvas", "listForkRuns", "getForkRun", "getSearchTree", "getHeadRun",
+  "getMctsNodeDetail", "getNodeTranscript",
+]);
+
+/** Everything an exploration read can answer with. Named rather than `unknown`,
+ *  because a stub that widened its own answers could serve a value the real read
+ *  models cannot produce — which is the entire failure mode of a fixture. */
+type ExplorationAnswer =
+  | Page<ExplorationCanvasRun>
+  | Page<ForkRunSummary>
+  | ForkRunSummary
+  | readonly MctsRow[]
+  | HeadRunView
+  | NodeTranscriptView
+  | null;
+
+function explorationRead(
+  method: string, args: readonly unknown[], rows: readonly ExplorationCanvasRun[] = CANVAS_ROWS,
+): ExplorationAnswer {
+  const mutable = [...args];
+  if (method === "getExplorationCanvas") return canvasPage(rows, mutable);
   if (method === "listForkRuns") {
-    const page = canvasPage(CANVAS_ROWS, args);
-    return rpcResult({ ...page, items: page.items.map((entry) => entry.run) }).json<T>();
+    const page = canvasPage(rows, mutable);
+    return { ...page, items: page.items.map((entry) => entry.run) };
   }
-  if (method === "getForkRun") return rpcResult(FORK_RUNS.find((run) => run.id === args?.[0]) ?? null).json<T>();
-  if (method === "getSearchTree") return rpcResult(MCTS_ROWS).json<T>();
-  if (method === "getHeadRun") return rpcResult(args?.[0] === MERGED_RUN.rootId ? MERGED_RUN : null).json<T>();
-  if (method === "getMctsNodeDetail") return rpcResult(null).json<T>();
-  // A node NEITHER store holds answers null — the fifth state, and the one the
-  // panel must not render as "recorded nothing".
-  if (method === "getNodeTranscript") return rpcResult(TRANSCRIPT_BY_NODE.get(String(args?.[1])) ?? null).json<T>();
+  if (method === "getForkRun") return FORK_RUNS.find((run) => run.id === args[0]) ?? null;
+  if (method === "getSearchTree") return SEARCH_ROWS_BY_ROOT.get(String(args[0])) ?? [];
+  if (method === "getHeadRun") return JOURNAL_BY_ROOT.get(String(args[0])) ?? null;
+  // A retired node the server no longer details, and a node NEITHER store holds:
+  // both answer null, and the panel must not render either as "recorded nothing".
+  if (method === "getMctsNodeDetail") return null;
+  return TRANSCRIPT_BY_NODE.get(String(args[1])) ?? null;
+}
+
+const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (EXPLORATION_READS.has(method)) return rpcResult(explorationRead(method, args ?? [])).json<T>();
   return stubRpc<T>(method, args);
 };
 
-/** The same surface with the MERGED run selected — a fork is a tree at depth 1,
- *  and every score encoding has to be absent rather than drawn from a zero no
- *  branch earned. This frame is where that claim is checked. */
-const MERGE_FIRST_ROWS = CANVAS_ROWS.slice(1).map((entry) => ({ ...entry, tree: [] }));
+/**
+ * One frame each, focused on the state it exists to photograph.
+ *
+ * The surface focuses `runs[0]` on arrival, so a frame chooses its subject by
+ * putting that run first. Selected by ROOT ID rather than by slicing an index:
+ * `forkmerge` used `slice(1)` and therefore silently re-aimed at whatever row
+ * happened to be second once this list grew.
+ */
+function forkRpcOver(rows: readonly ExplorationCanvasRun[]): Rpc {
+  return async <T,>(method: string, args?: unknown[]): Promise<T> =>
+    EXPLORATION_READS.has(method)
+      ? rpcResult(explorationRead(method, args ?? [], rows)).json<T>()
+      : stubRpc<T>(method, args);
+}
 
-const mergeFirstRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getExplorationCanvas") return rpcResult(canvasPage(MERGE_FIRST_ROWS, args)).json<T>();
-  return forkRpc<T>(method, args);
-};
+function focusRun(rootId: string, rows: readonly ExplorationCanvasRun[] = CANVAS_ROWS): Rpc {
+  const wanted = rows.filter((entry) => entry.run.id === rootId);
+  return forkRpcOver([...wanted, ...rows.filter((entry) => entry.run.id !== rootId)]);
+}
+
+/** The same surface on a run with NO search tree — a journalled run is a tree at
+ *  depth 1, and every score encoding has to be absent rather than drawn from a zero
+ *  no branch earned. This frame is where that claim is checked. */
+const mergeFirstRpc = focusRun(
+  MERGED_RUN.rootId,
+  CANVAS_ROWS.filter((entry) => entry.tree.length === 0),
+);
+
+/** A swarm search under a named preset: the resolved tuple, and `settle` derived
+ *  from two of its axes rather than chosen. */
+const provePresetRpc = focusRun("pv000");
+
+/** A `custom` composition that FANS IN. No named preset resolves to
+ *  `expand:'aggregate'`, so this state is necessarily a composition — which is also
+ *  why its axes are not recoverable and the panel says so. */
+const swarmFanInRpc = focusRun("sw000");
+
+/** A search that started and reached nothing. Never an empty tree: a refusal. */
+const refusedRunRpc = focusRun("rf000");
 
 /* ── Compositions (markup mirrors WorkspacePage) ────────────────── */
 
@@ -2481,9 +2835,15 @@ async function mount() {
   if (frame === "shell") node = <Shell />;
   else if (frame === "forks") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
   else if (frame === "forkmerge") node = <Shell surface="Exploration" rpc={mergeFirstRpc} />;
-  else if (frame === "forkfull" || frame === "forkbig") {
+  else if (frame === "forkpreset") node = <Shell surface="Exploration" rpc={provePresetRpc} />;
+  else if (frame === "forkfanin") node = <Shell surface="Exploration" rpc={swarmFanInRpc} />;
+  else if (frame === "forkrefused") node = <Shell surface="Exploration" rpc={refusedRunRpc} />;
+  else if (frame === "forkfull" || frame === "forkbig" || frame === "forkswarmfull") {
+    // The one dynamic import in this dispatch, and it stays one: the page pulls d3
+    // and the whole tree renderer, so every frame that does not open it must not
+    // pay for them. Which RUN it opens is the only thing that differs.
     const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
-    entries = ["/mcts/checkout-fixes?run=n000"];
+    entries = [`/mcts/checkout-fixes?run=${frame === "forkswarmfull" ? "sw000" : "n000"}`];
     node = <Routes><Route path="/mcts/:agentId" element={<div className="h-screen p-bg p-text"><MCTSExplorer /></div>} /></Routes>;
   }
   else if (frame === "modal") node = <GalleryModal />;

@@ -19,7 +19,7 @@ import {
   FORK_IDLE_REVALIDATE_MS, FORK_REVALIDATE_MS, forkRunsRevalidateMs, hasLiveForkRun,
   hasActiveForkWork, headRunToTree, selectForkRun, forkParamRows,
 } from '../src/components/surfaces/fork-runs';
-import { isCompeted, principalVariation, maxVisits } from '../src/components/fork-tree-model';
+import { isCompeted, principalVariation, maxVisits } from '../src/components/swarm-tree-model';
 
 function summary(over: Partial<ForkRunSummary> = {}): ForkRunSummary {
   return {
@@ -122,9 +122,19 @@ describe('fork revalidation policy', () => {
     expect(workSurface).toContain('liveTrees={props.mctsTrees}');
     expect(fullPage).toContain('state.mctsTrees.get(run.id) ?? null');
 
+    // The full page's failure copy says "exploration runs" and the embedded surface
+    // still says "fork runs": the strings moved with the surface's vocabulary when
+    // the fork verb left the delegation surface, and the invariant this pins is that
+    // BOTH read a failure through `LoadFailure` rather than swallowing one.
     expect(embedded).toContain('<LoadFailure what="fresh fork runs"');
-    expect(fullPage).toContain('<LoadFailure what="fresh fork runs"');
+    expect(fullPage).toContain('<LoadFailure what="fresh exploration runs"');
     expect(fullPage).toContain('<LoadFailure what="the latest fork tree"');
+    // Paged reads are consumed as pages. `listForkRuns` answers a `Page` and a bare
+    // limit is not a `PageRequest`, so the hook may not ask for an array: it did,
+    // and `Page` has no `some`, so the revalidation clock threw on the first
+    // successful load against a real server.
+    expect(source('src/components/surfaces/fork-runs.ts'))
+      .toContain('rpc<Page<ForkRunSummary>>("listForkRuns", [{ limit: FORK_RUN_LIMIT }])');
     expect(embedded).not.toContain('rpc<ForkRunSummary[]>("listForkRuns"');
     expect(fullPage).not.toContain('rpc<ForkRunSummary[]>("listForkRuns"');
     expect(fullPage).toContain('useExactForkRun(state.rpc, runId, hasActiveWork)');

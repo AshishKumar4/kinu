@@ -1,21 +1,23 @@
 /**
- * Fork runs, as the Exploration surface reads them.
+ * Exploration runs, as the surface reads them.
  *
  * Two jobs, both pure enough to test without a DOM:
  *
- *  1. **The adapters.** A fork is a tree whichever way it settled, so the two
- *     stores are folded into ONE node shape here and the renderer never learns
- *     which store a tree came from. A merge is that tree at depth 1 — the
- *     split's task at the root, one head per child; a competition is the same
- *     tree deeper, carrying scores and rollouts the merge simply does not have.
+ *  1. **The adapters.** A search is a tree whatever its axes resolved to, so the
+ *     two stores are folded into ONE node resolution here and the renderer never learns
+ *     which store a tree came from. `search_nodes` is the tree the engine selected
+ *     down; `head_journal` is one row per node, carrying the reason that node
+ *     exists. An agent-unit search writes BOTH, so neither store is chosen by a
+ *     tag — the search rows are the tree wherever there are any, and the journal
+ *     answers the questions the rows cannot.
  *
  *  2. **The revalidation policy.** Nothing pushes either store to the client:
- *     both are written row by row as the fork runs, and a view that loads once
- *     renders the first instant of a split and then lies for the rest of it.
- *     An open tab always revalidates — fast while work is visibly live, at a
- *     slow keep-fresh cadence otherwise. Never zero: a split can start from a
- *     detached job, a drain or an autonomous turn, none of which stream
- *     through this tab's chat socket.
+ *     both are written row by row as the search runs, and a view that loads once
+ *     renders the first instant of it and then lies for the rest. An open tab
+ *     always revalidates — fast while work is visibly live, at a slow keep-fresh
+ *     cadence otherwise. Never zero: a search can start from a detached job, a
+ *     drain or an autonomous turn, none of which stream through this tab's chat
+ *     socket.
  */
 import { useCallback, useMemo } from "react";
 import type {
@@ -25,6 +27,7 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { buildTree } from "@/lib/fork-tree-rows";
 import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
+import { swarmResolutionOf, type SwarmResolution } from "./swarm-resolution";
 
 export const FORK_RUN_LIMIT = 30;
 
@@ -76,9 +79,20 @@ export function forkRunsRevalidateMs(
   return hasActiveWork || hasLiveForkRun(runs) ? FORK_REVALIDATE_MS : FORK_IDLE_REVALIDATE_MS;
 }
 
-/** The single live fork-list resource. `MCTSExplorer` drills into ONE run, so
- *  the list is all it needs; the embedded canvas uses
- *  {@link useExplorationCanvas}, which also brings every tree and its params. */
+/**
+ * The single live run-list resource. `MCTSExplorer` drills into ONE run, so the
+ * list is all it needs; the embedded canvas uses {@link useExplorationCanvas},
+ * which also brings every tree, its journal and its params.
+ *
+ * `listForkRuns` is PAGED and takes a `PageRequest`. This read passed the limit as
+ * a bare number and typed the answer as an array, which is two silent failures in
+ * one line: `(30)?.limit` is undefined so the server answered its own default page
+ * size and the requested thirty was discarded, and the `Page` that came back was
+ * then handed to `runs?.some(...)` — a `Page` has no `some`, so the revalidation
+ * clock threw on the first successful load against a real server. The gallery's
+ * socket stub answered `[]` for every `get*`/`list*`, which is an array, so the
+ * frames could not see it.
+ */
 export function useLiveForkRuns(
   rpc: Rpc,
   isStreaming: boolean,
@@ -86,15 +100,16 @@ export function useLiveForkRuns(
 ) {
   const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
   const load = useCallback(
-    () => rpc<ForkRunSummary[]>("listForkRuns", [FORK_RUN_LIMIT]),
+    () => rpc<Page<ForkRunSummary>>("listForkRuns", [{ limit: FORK_RUN_LIMIT }]),
     [rpc],
   );
   const revalidate = useCallback(
-    (runs: ForkRunSummary[] | null) => forkRunsRevalidateMs(runs, hasActiveWork),
+    (page: Page<ForkRunSummary> | null) =>
+      forkRunsRevalidateMs(page === null ? null : page.items, hasActiveWork),
     [hasActiveWork],
   );
   const { resource, reload } = useAsyncResource(load, revalidate);
-  return { resource, reload, runs: lastValue(resource), hasActiveWork };
+  return { resource, reload, runs: lastValue(resource)?.items ?? null, hasActiveWork };
 }
 
 /**
@@ -169,7 +184,10 @@ export function useExplorationCanvas(
     return rows;
   }, [first, tail.fetched]);
 
-  /** Every fork's tree, whichever store recorded it. */
+  /** Every search's tree. The search rows are the tree wherever the engine wrote
+   *  any; the journal's depth-1 projection stands in only for a run that has no
+   *  search rows at all. Never chosen by a settle tag: an agent-unit swarm writes
+   *  BOTH stores, so a tag that admits one store per run cannot decide this. */
   const trees = useMemo(() => {
     const folded = new Map<string, ForkNode>();
     for (const entry of entries ?? []) {
@@ -188,8 +206,42 @@ export function useExplorationCanvas(
     return byRoot;
   }, [entries]);
 
+  /** Each search's per-node journal — the only record of why any individual node
+   *  exists, and therefore of which of them fanned a level in. */
+  const journals = useMemo(() => {
+    const byRoot = new Map<string, HeadRunView>();
+    for (const entry of entries ?? []) {
+      if (entry.head !== null) byRoot.set(entry.run.id, entry.head);
+    }
+    return byRoot;
+  }, [entries]);
+
+  /**
+   * Each search's resolved resolution — the preset it resolved and the tuple it resolved
+   * to. Derived ONCE here rather than per surface, so the canvas, the run list and
+   * the full-screen explorer cannot come to disagree about what a run's axes were.
+   *
+   * Read only for a run that has BOTH halves, and the gate is load-bearing rather
+   * than defensive. `head_runs.rationale` holds two different things: for a search
+   * it is `resolved.label ?? resolved.preset`, and for a pre-swarm branching-heads
+   * run it is the author's prose "why split". A run with a journal and no search
+   * rows is the second kind, and reading its prose as a composition's label
+   * rendered `custom "Three call sites, three readers — cheaper in parallel than in
+   * sequence."` over a run that was never a search. Only a search writes both
+   * stores, so holding both IS the discriminator.
+   */
+  const resolutions = useMemo(() => {
+    const byRoot = new Map<string, SwarmResolution>();
+    for (const entry of entries ?? []) {
+      if (entry.head === null || entry.tree.length === 0) continue;
+      const resolution = swarmResolutionOf(entry.head.rationale);
+      if (resolution !== null) byRoot.set(entry.run.id, resolution);
+    }
+    return byRoot;
+  }, [entries]);
+
   return {
-    resource, reload, hasActiveWork, trees, params,
+    resource, reload, hasActiveWork, trees, params, journals, resolutions,
     runs: entries === null ? null : entries.map((entry) => entry.run),
     /** A first page that already said 'end' is exhausted before the pager runs,
      *  and the pager has no way to know that. Never set by a failure. */
@@ -321,22 +373,33 @@ export function forkParamRows(params: ForkRunParams | undefined): ForkParamRow[]
   if (params.explorationWeight !== null) {
     rows.push({ label: "exploration c", value: params.explorationWeight.toFixed(2) });
   }
-  if (params.judgeSamplesRequested !== null) {
-    // Realised first, and the word "requested" wherever the realised size is not
-    // known to equal it. Rendering the request as a per-branch figure is the
-    // original defect: a run that asked for 20 and ran 3 read as one that ran 20,
-    // and a run whose call budget was never recorded reads the same way.
-    const realised = params.judgeSamplesRealised;
-    const requested = params.judgeSamplesRequested;
-    rows.push({
-      label: "judges",
-      value: realised === null
-        ? `${requested} requested`
-        : realised < requested
-          ? `${realised} of ${requested} requested`
-          : `${realised} per branch`,
-    });
-  }
+  const judges = judgeEnsembleLabel(params);
+  if (judges !== null) rows.push({ label: "judges", value: judges });
   if (params.mode !== null) rows.push({ label: "mode", value: params.mode });
   return rows;
+}
+
+/**
+ * The judge ensemble a run ASKED for and the one it ran, as one phrase.
+ *
+ * Realised first, and the word "requested" wherever the realised size is not known
+ * to equal it. Rendering the request as a per-branch figure is the original defect:
+ * a run that asked for twenty and ran three read as one that ran twenty, and a run
+ * whose call budget was never recorded read the same way. The two numbers are not
+ * independent knobs — `judgeSamples` shares one per-evaluation call pool with check
+ * generation, so a code-bearing branch realises `min(samples, maxEvalLLMCalls − 1)`
+ * — and a clamp binding in silence is the defect class this repository keeps
+ * fixing.
+ *
+ * ONE definition, because it is read in two places: the dispatch parameter strip,
+ * and the resolved-resolution panel beside a search's axes. Null when the run named no
+ * ensemble at all, which is every run that scored by anything other than a judge.
+ */
+export function judgeEnsembleLabel(params: ForkRunParams | undefined): string | null {
+  if (params === undefined || params.policy !== "mcts") return null;
+  const requested = params.judgeSamplesRequested;
+  if (requested === null) return null;
+  const realised = params.judgeSamplesRealised;
+  if (realised === null) return `${requested} requested`;
+  return realised < requested ? `${realised} of ${requested} requested` : `${realised} per branch`;
 }

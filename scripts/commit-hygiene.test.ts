@@ -280,11 +280,11 @@ describe('a message that narrates the session or argues in the first person is r
       isCode).map((violation) => violation.rule)).toEqual(['narration']);
   });
 
-  test('NodeTranscript and ForkTree are identifiers, so their possessives are clean', () => {
+  test('NodeTranscript and SwarmTree are identifiers, so their possessives are clean', () => {
     // Raised against the live tree: readNodeTranscript / getNodeTranscript /
     // useNodeTranscript all exist, so the AST derivation spares the name.
     const live = codeIdentifierTest(readMatching(isParseable));
-    for (const name of ['NodeTranscript', 'ForkTree']) expect(live(name)).toBe(true);
+    for (const name of ['NodeTranscript', 'SwarmTree']) expect(live(name)).toBe(true);
   });
 });
 

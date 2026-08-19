@@ -32,7 +32,7 @@ import { usageTotal } from "@proteus/core";
 import { MessageView } from "@/pages/WorkspacePage";
 import { DetailSection, EmptyState, MarkdownContent, Metric, timeAgo } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { cleanNodeLabel, findForkNode } from "@/components/fork-tree-model";
+import { cleanNodeLabel, findForkNode } from "@/components/swarm-tree-model";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { fmtTokens } from "@/lib/format";
 import type { ForkNode, Rpc } from "@/lib/protocol";

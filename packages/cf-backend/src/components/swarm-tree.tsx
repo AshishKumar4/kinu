@@ -1,12 +1,15 @@
 /**
- * The fork trees — every time the agent split its work, drawn as the trees they
+ * The swarm trees — every search the workspace has run, drawn as the trees they
  * are, on ONE canvas.
  *
- * A merge (`action:'fork'`) is this tree at depth 1: the task at the root, one
- * head per child. A search (`action:'swarm'` with a `depth`) is the same tree
+ * `agents(action:'swarm')` is the only verb that grows one. A search whose axes
+ * resolve to `advance:'none'` is this tree at depth 1 — the task at the root, one
+ * candidate per child — and a search that selects down a tree is the same tree
  * deeper, with its branches scored against each other. One renderer, one node
- * shape, depth varying — because the alternative was two panes where the same
- * user action landed in one or the other depending on an internal strategy id.
+ * shape, depth varying, because the alternative was two panes where the same user
+ * action landed in one or the other depending on an internal strategy id.
+ *
+ * The file was `fork-tree`, named for a verb the delegation surface no longer has.
  *
  * ONE canvas, not one per search. Each search used to get its own fixed-height
  * SVG in its own card, so the room a tree could use was decided before anyone
@@ -33,7 +36,8 @@
  * branches away on request, and drops labels below the zoom at which they would
  * collide.
  *
- * What the picture says before anything is clicked, when the fork COMPETED:
+ * What the picture says before anything is clicked, when the search SCORED its
+ * candidates:
  *   fill                 score, on the product's danger→warning→success ramp
  *   radius               rollouts spent here (area ∝ visits)
  *   brass spine          the principal variation — the line the search paid for
@@ -44,10 +48,17 @@
  * and always, whichever way it settled:
  *   hollow, danger ring  the branch failed
  *   amber fill           the branch is still running
+ *   square, accent edge  an `expand:'aggregate'` FAN-IN VERTEX — a node that
+ *                        consumed a whole level rather than sampling beside its
+ *                        siblings. NOT a separate node kind: it is graded through
+ *                        the same scoring body, carries the same fill and radius,
+ *                        and is marked only because `search_nodes` records its
+ *                        SELECTION parent and nothing else, so a reader with the
+ *                        tree alone cannot tell which node fanned a level in.
  *
- * Every score/rollout encoding is gated on the branches actually carrying
- * those numbers. A merge ranks nothing, and a ramp fill or a winning spine
- * drawn from its absent values would state a verdict the fork never reached.
+ * Every score/rollout encoding is gated on the branches actually carrying those
+ * numbers. A search that ranks nothing has no such values, and a ramp fill or a
+ * winning spine drawn from their absence would state a verdict it never reached.
  */
 import { useRef, useEffect, useState, useCallback } from "react";
 import * as d3 from "d3";
@@ -61,17 +72,33 @@ import {
 	ancestorIds, cleanNodeLabel, isCompeted, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX,
 	NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, truncate,
 	type ExplorerSelection,
-} from "./fork-tree-model";
+} from "./swarm-tree-model";
 
 /** One search's band on the canvas. */
-export interface ForkTreeRegion {
+export interface SwarmTreeRegion {
 	/** The search root's id — what a selection names, and what the tree maps key on. */
 	runId: string;
 	root: ForkNode;
-	/** What the fork was asked to do, written above its tree inside the boundary. */
+	/** What the search was asked to do, written above its tree inside the boundary. */
 	title: string;
-	/** How it settled and what it was dispatched with. */
+	/** The shape it resolved to and what it was dispatched with. */
 	note: string;
+	/**
+	 * Nodes that fanned a level in, by node id → the number of parents each
+	 * consumed. Absent for a search that only ever sampled, and for one whose
+	 * per-node journal the store no longer holds.
+	 *
+	 * NOT a node kind: a fan-in vertex is graded through the same scoring body as
+	 * a sampled sibling, so it keeps that sibling's fill and radius and gains only
+	 * a silhouette. It needs one because `search_nodes` records its SELECTION
+	 * parent and nothing else — the other k−1 edges are not in the tree being
+	 * drawn, so nothing in the picture could otherwise say which node consumed a
+	 * whole level.
+	 */
+	fanIn?: ReadonlyMap<string, number>;
+	/** Each node's own reason for existing, by node id — the journal's rationale,
+	 *  verbatim. Shown on the node's tooltip, where a truncated label cannot. */
+	why?: ReadonlyMap<string, string>;
 }
 
 interface Props {
@@ -80,7 +107,7 @@ interface Props {
 	 * stable across renders that changed nothing — the render effect keys on it,
 	 * and a fresh array each poll would rebuild the scene several times a second.
 	 */
-	regions: readonly ForkTreeRegion[];
+	regions: readonly SwarmTreeRegion[];
 	width?: number;
 	height?: number;
 	/** Which band is lit, and what the view fits itself to. */
@@ -126,6 +153,11 @@ function foldKey(runId: string, nodeId: string): string {
 	return `${runId}\u0000${nodeId}`;
 }
 
+/** One allocation for every search that has no journal, so a poll over a
+ *  workspace of them does not churn a Map per band per render. */
+const EMPTY_NODE_MAP: ReadonlyMap<string, number> = new Map();
+const EMPTY_TEXT_MAP: ReadonlyMap<string, string> = new Map();
+
 /** One search, laid out and placed in the scene. */
 interface RegionLayout {
 	runId: string;
@@ -139,6 +171,10 @@ interface RegionLayout {
 	competed: boolean;
 	visitMax: number;
 	depth: number;
+	/** {@link SwarmTreeRegion.fanIn}, defaulted so the render never branches on
+	 *  whether a search had a journal. */
+	fanIn: ReadonlyMap<string, number>;
+	why: ReadonlyMap<string, string>;
 	/** Rows of this tree, in the tree's own coordinates. */
 	rows: { start: number; end: number };
 	/** Scene y the tree's rows are translated by. */
@@ -160,7 +196,7 @@ interface RenderState {
  * about where a tree is.
  */
 function layoutRegions(
-	regions: readonly ForkTreeRegion[],
+	regions: readonly SwarmTreeRegion[],
 	collapsed: ReadonlySet<string>,
 ): RenderState {
 	const layout = d3.tree<ForkNode>().nodeSize([ROW, COL])
@@ -188,6 +224,8 @@ function layoutRegions(
 			pv: principalVariation(region.root),
 			competed: isCompeted(region.root),
 			visitMax: maxVisits(region.root),
+			fanIn: region.fanIn ?? EMPTY_NODE_MAP,
+			why: region.why ?? EMPTY_TEXT_MAP,
 			depth,
 			rows: { start: rowStart, end: rowEnd },
 			shiftY: 0,
@@ -293,7 +331,7 @@ function applyEmphasis(
 		.attr("data-pinned", (d) => (selectedId === d.data.id || hoverId === d.data.id ? "" : null));
 }
 
-export function ForkTree({
+export function SwarmTree({
 	regions, width = 800, height = 600, selectedRunId, selection, onSelectRun, onSelectNode,
 }: Props) {
 	const svgRef = useRef<SVGSVGElement>(null);
@@ -325,7 +363,7 @@ export function ForkTree({
 	 *  reader DOES, never a state they are handed — see the note on the fold
 	 *  control below. */
 	const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set<string>());
-	const [tooltip, setTooltip] = useState<{ x: number; y: number; node: ForkNode; competed: boolean } | null>(null);
+	const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 	const mode = useTheme();
 
 	/**
@@ -583,6 +621,28 @@ export function ForkTree({
 				.attr("r", (d) => radiusOf(d.data))
 				.attr("fill", (d) => nodeFill(d.data, ramp));
 
+			// THE FAN-IN VERTEX, and the only encoding it gets: a square around the
+			// same dot. The fill and the radius stay exactly a sibling's, because a
+			// vertex is graded through the same scoring body and a second colour
+			// would claim it was scored differently. What the square answers is the
+			// one question the tree cannot: this node consumed a whole level, and its
+			// other k−1 edges are not in the picture.
+			//
+			// A silhouette rather than a tint, so it survives the zoom at which
+			// labels are dropped — an overview of 520 nodes is exactly where "which
+			// of these fanned in" is worth asking.
+			nodeG.filter((d) => region.fanIn.has(d.data.id))
+				.append("rect")
+				.attr("class", "mcts-fan-in")
+				.attr("x", (d) => -radiusOf(d.data) - 3)
+				.attr("y", (d) => -radiusOf(d.data) - 3)
+				.attr("width", (d) => radiusOf(d.data) * 2 + 6)
+				.attr("height", (d) => radiusOf(d.data) * 2 + 6)
+				.attr("rx", 1.5)
+				.attr("fill", "none")
+				.attr("stroke", "var(--c-accent)")
+				.attr("stroke-width", 1.25);
+
 			// A generous invisible hit area: a 3.5px dot is not a pointer target.
 			nodeG.append("circle").attr("r", ROW / 2).attr("fill", "transparent");
 
@@ -642,12 +702,24 @@ export function ForkTree({
 				.text((d) => ` +${subtreeCount(d.data)}`)
 				.attr("font-family", "var(--font-mono)").attr("font-size", "9px")
 				.attr("fill", "var(--c-accent-fg)");
+			// `⋈k` — the join, and how many parents it joined. Mono and accent, after
+			// the name rather than before it, so a column of labels still scans on
+			// its scores.
+			text.filter((d) => region.fanIn.has(d.data.id))
+				.append("tspan")
+				.text((d) => ` ⋈${region.fanIn.get(d.data.id) ?? 0}`)
+				.attr("font-family", "var(--font-mono)").attr("font-size", "9px")
+				.attr("fill", "var(--c-accent-fg)");
 
 			nodeG
 				.on("mouseenter", (event: MouseEvent, d) => {
 					const [x, y] = d3.pointer(event, svgRef.current);
 					hoverRef.current = { runId: region.runId, nodeId: d.data.id };
-					setTooltip({ x, y, node: d.data, competed: region.competed });
+					setTooltip({
+						x, y, node: d.data, competed: region.competed,
+						fanIn: region.fanIn.get(d.data.id) ?? null,
+						why: region.why.get(d.data.id) ?? null,
+					});
 					applyEmphasis(rg, region, selectedNodeIn(selectionRef.current, region.runId), d.data.id);
 				})
 				.on("mouseleave", () => {
@@ -739,8 +811,12 @@ export function ForkTree({
 		);
 	}, [selection, collapsed, width, height]);
 
-	const competedSelected = stateRef.current?.regions
-		.find((r) => r.runId === selectedRunId)?.competed ?? true;
+	const selectedRegion = stateRef.current?.regions.find((r) => r.runId === selectedRunId);
+	const competedSelected = selectedRegion?.competed ?? true;
+	/** The key only claims a fan-in where the selected search actually has one:
+	 *  `expand:'sample'` fans in nothing, and a legend entry for an encoding that
+	 *  is not on the canvas teaches the reader to look for something absent. */
+	const fansInSelected = (selectedRegion?.fanIn.size ?? 0) > 0;
 
 	return (
 		<div className="relative w-full h-full overflow-hidden">
@@ -785,11 +861,18 @@ export function ForkTree({
 						/* Nothing was ranked here, so the key says what the picture
 						   actually encodes: lifecycle, and only lifecycle. */
 						<>
-							<span>every branch fed the merge · none was ranked</span>
+							<span>every branch fed the settle · none was ranked</span>
 							{width >= 470 && (
 								<span className="opacity-70">amber = running · hollow = failed</span>
 							)}
 						</>
+					)}
+					{fansInSelected && (
+						<span className="flex items-center gap-1">
+							<span aria-hidden className="inline-block size-2 rounded-[1px] border"
+								style={{ borderColor: "var(--c-accent)" }} />
+							fan-in vertex
+						</span>
 					)}
 				</div>
 				<div className="shrink-0 pointer-events-auto flex items-center gap-0.5 rounded-md border p-border p-surface p-shadow-menu px-0.5 py-0.5">
@@ -798,13 +881,11 @@ export function ForkTree({
 					<span aria-hidden className="mx-0.5 h-3.5 w-px" style={{ background: "var(--c-border)" }} />
 					<TreeControl label="Zoom out" onClick={() => scaleBy(1 / 1.5)}><MagnifyingGlassMinusIcon size={13} /></TreeControl>
 					<TreeControl label="Zoom in" onClick={() => scaleBy(1.5)}><MagnifyingGlassPlusIcon size={13} /></TreeControl>
-					<TreeControl label="Fit the selected fork to view" onClick={() => fit(true)}><ArrowsOutIcon size={13} /></TreeControl>
+					<TreeControl label="Fit the selected search to view" onClick={() => fit(true)}><ArrowsOutIcon size={13} /></TreeControl>
 				</div>
 			</div>
 
-			{tooltip && (
-				<NodeTip node={tooltip.node} x={tooltip.x} y={tooltip.y} width={width} competed={tooltip.competed} />
-			)}
+			{tooltip && <NodeTip tip={tooltip} width={width} />}
 		</div>
 	);
 }
@@ -875,9 +956,10 @@ function positionRuler(
 		.text((d) => `d${d}`);
 }
 
-/** What a branch's state MEANS depends on how the fork settled: `open` is
- *  "still explorable" in a competition and "done, its findings went into the
- *  merge" in a merge. Same word in the data, two different facts. */
+/** What a branch's state MEANS depends on whether the search ranked its
+ *  candidates: `open` is "still explorable" where there is a selector to reach it
+ *  and "done, its answer went into the settle" where there is not. Same word in
+ *  the data, two different facts. */
 const STATUS_NOTE = {
 	competed: {
 		open: "still explorable",
@@ -887,24 +969,39 @@ const STATUS_NOTE = {
 		running: "still running",
 	},
 	merged: {
-		open: "finished, its findings went into the merge",
-		terminal: "finished, its findings went into the merge",
+		open: "finished, its answer went into the settle",
+		terminal: "finished, its answer went into the settle",
 		pruned: "abandoned",
 		failed: "this branch errored",
 		running: "still running",
 	},
 } satisfies Record<"competed" | "merged", Record<ForkNode["status"], string>>;
 
-function NodeTip(
-	{ node, x, y, width, competed }:
-	{ node: ForkNode; x: number; y: number; width: number; competed: boolean },
-) {
+/** What the hovered node is, and everything about it the label had no room for. */
+interface TooltipState {
+	readonly x: number;
+	readonly y: number;
+	readonly node: ForkNode;
+	readonly competed: boolean;
+	/** Parents this node fanned in, or null for a sampled sibling. */
+	readonly fanIn: number | null;
+	/** The node's own reason for existing, verbatim from the journal, or null. */
+	readonly why: string | null;
+}
+
+function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
+	const { node, competed, fanIn, why } = tip;
 	const TIP_W = 260;
-	const flip = x + TIP_W + 24 > width;
+	const flip = tip.x + TIP_W + 24 > width;
 	return (
 		<div
 			className="absolute z-50 pointer-events-none p-surface p-border border rounded-lg px-3 py-2 p-shadow-menu text-xs animate-scale-in"
-			style={{ width: TIP_W, left: flip ? undefined : x + 16, right: flip ? width - x + 16 : undefined, top: y + 12 }}
+			style={{
+				width: TIP_W,
+				left: flip ? undefined : tip.x + 16,
+				right: flip ? width - tip.x + 16 : undefined,
+				top: tip.y + 12,
+			}}
 		>
 			<div className="font-medium p-text mb-1.5 leading-snug line-clamp-2">
 				{cleanNodeLabel(node.action, "(root)")}
@@ -926,6 +1023,23 @@ function NodeTip(
 			<div className="p-text-3 mt-1">
 				{STATUS_NOTE[competed ? "competed" : "merged"][node.status] ?? node.status}
 			</div>
+			{/* The fan-in, spelled out. The square on the node says THAT it fanned a
+			    level in; only here is there room to say how wide, and to say that the
+			    tree above it shows one of those parents and not the rest. */}
+			{fanIn !== null && (
+				<div className="mt-1.5 flex items-baseline gap-1.5 p-accent-fg">
+					<span className="font-mono text-[10px]">⋈{fanIn}</span>
+					<span className="leading-snug">
+						fan-in vertex — aggregated {fanIn} parents. The edge drawn above it is the
+						selection parent; the other {fanIn - 1} are not in this tree.
+					</span>
+				</div>
+			)}
+			{/* The node's own reason for existing. A wave sibling carries the
+			    proposal's own why, which the 20-character label always truncates. */}
+			{why !== null && (
+				<div className="mt-1.5 p-text-3 leading-snug line-clamp-2">{why}</div>
+			)}
 			{node.observation && (
 				<div className="mt-1.5 pt-1.5 border-t p-border p-text-2 leading-relaxed line-clamp-3">
 					{node.observation}

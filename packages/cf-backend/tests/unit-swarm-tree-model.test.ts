@@ -6,7 +6,7 @@ import type { ForkNode } from '../src/lib/protocol';
 import {
   ancestorIds, cleanNodeLabel, findForkNode, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX,
   NODE_R_MIN, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats, truncate,
-} from '../src/components/fork-tree-model';
+} from '../src/components/swarm-tree-model';
 
 let seq = 0;
 function node(over: Partial<ForkNode> = {}): ForkNode {
