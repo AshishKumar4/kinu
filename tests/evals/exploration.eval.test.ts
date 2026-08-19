@@ -38,6 +38,7 @@ import {
   buildBuiltinTools,
   createMCTSStrategy,
   createStrategyRegistry,
+  DEFAULT_CONFIG,
   initWorkspaceSchema,
   readSoul,
   RunEventRecorder,
@@ -81,17 +82,22 @@ const EXPLORATION_TASK =
 
 /**
  * The driven search's shape, stated here rather than inherited from
- * `DEFAULT_CONFIG.mcts`.
+ * `DEFAULT_CONFIG.mcts`, and taken from the one shape in this repository that has
+ * a MEASUREMENT behind it.
  *
- * Iterations are the wall clock: production's 5 x 3 with 3 judge samples a branch
- * ran past 900s against @cf/deepseek-ai/deepseek-v4-pro-0813 and was killed with
- * rollouts still open. Two iterations is what the WORKS assertions require —
- * competition needs one expansion of more than one branch, and the single durable
- * winner comes from convergence, which runs once per search at any iteration
- * count. Branches stay at production's 3, because the width IS the competition
- * being scored; it is the depth that is bought and not measured.
+ * Production's 5 iterations x 3 branches, each branch judged over 3 samples, ran
+ * past 900s against @cf/deepseek-ai/deepseek-v4-pro-0813 and was killed with
+ * rollouts still open. So did 2 x 3. `E2E Lifecycle > MCTS evolution` drives one
+ * iteration and measured 290s, so one iteration is what this uses: a search sized
+ * by a number somebody recorded rather than by how cautious a guess felt. At that
+ * budget the whole suite measured 375s.
+ *
+ * The WIDTH stays at production's 3 and is not reduced with the depth. Width is
+ * the competition being scored — `branches > 1` is an assertion about it — and it
+ * is also what gives the judge distinct proposals to separate. Depth is what the
+ * larger shapes bought and what this suite never scores.
  */
-const EVAL_SEARCH_BUDGET = 2;
+const EVAL_SEARCH_BUDGET = 1;
 const EVAL_SEARCH_BRANCHES = 3;
 
 /** Minimal in-memory session sink. MCTS needs somewhere to put a trajectory;
@@ -231,19 +237,11 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     const mcts = registry.get('mcts');
     if (!mcts) throw new Error('mcts strategy is not registered');
 
-    // BUDGET STATED, not inherited. `DEFAULT_CONFIG.mcts` is 5 iterations of 3
-    // branches, each branch judged over 3 samples — a shape tuned for real work,
-    // measured here at OVER 900s against @cf/deepseek-ai/deepseek-v4-pro-0813
-    // with three rollouts still in flight when the test was killed. A deploy gate
-    // that does not terminate is not a gate.
-    //
-    // Two iterations, because that is what the assertions below need and no more:
-    // competition (`branches > 1`) comes from one expansion, and the single
-    // durable winner comes from convergence, which runs once per search whatever
-    // the iteration count. The extra three iterations buy tree DEPTH, and depth
-    // is not what this suite scores. Nothing below is weakened — every assertion
-    // is the same assertion over a search that finishes.
-    await mcts.explore({
+    // The search's shape is STATED rather than inherited from `DEFAULT_CONFIG.mcts`
+    // — see EVAL_SEARCH_BUDGET for the measurements that set it. Nothing below is
+    // weakened by that: every assertion is the same assertion over a search that
+    // finishes, and a deploy gate that does not terminate is not a gate.
+    const result = await mcts.explore({
       task: EXPLORATION_TASK,
       mode: 'build',
       rt,
@@ -268,6 +266,24 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     for (const run of score.runs) {
       console.log(`      ${run.id}: ${String(run.branches)} branches, winner `
         + `${String(run.winnerScore)}, terminal nodes ${String(run.terminalNodes)}`);
+    }
+
+    // WHY there is no winner, when there is no winner. `converge` refuses to crown
+    // one in exactly two states and marks no terminal node in either
+    // (mcts/convergence.ts:73-113): distinct approaches scoring BYTE-IDENTICALLY,
+    // which means the scorer is not a function of the proposal; and a best score
+    // under `minAcceptableScore`. Both abandon the tree, so both arrive at the
+    // assertions below as `ranked: 0` — indistinguishable without these scores.
+    // Printed unconditionally rather than in a failure branch, because the
+    // passing run's margin over the 0.3 floor is the number that says how close
+    // this suite is to going red for a reason nobody changed.
+    const scores = result.all.map((candidate) => candidate.score);
+    console.log(`    winner score: ${result.best.score.toFixed(3)} (floor `
+      + `${String(DEFAULT_CONFIG.mcts.minAcceptableScore)}), candidates: `
+      + `${scores.map((s) => s.toFixed(3)).join(', ') || '(none)'}`);
+    if (new Set(scores).size < scores.length) {
+      console.log('    NOTE: candidate scores contain an exact duplicate — the '
+        + 'undifferentiated-search refusal, not the score floor');
     }
 
     // The denominator, asserted before anything about quality. A fork that
