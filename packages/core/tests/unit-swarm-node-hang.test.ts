@@ -66,6 +66,9 @@ const REFERENCE = `export function solve(input, oracle) {
 }
 `;
 
+/** Where the reference sits in the workspace, so a node has a real file to read. */
+const REFERENCE_PATH = 'candidate/reference.js';
+
 const BODY = `
 const values = shuffle(Array.from({ length: P.n }, (_unused, i) => i + 1));
 const tokens = values.map(tok);
@@ -201,6 +204,64 @@ function oneAnsweringProvider(): MockLanguageModelV3 {
   });
 }
 
+/**
+ * A node that takes LONGER THAN ONE ENVELOPE IN TOTAL while never being silent for one —
+ * the population a runtime bound would kill and a progress bound must not.
+ *
+ * It reads the reference, then reports, then closes, pausing before each answer. Every gap
+ * is inside the envelope and the sum of them is outside it, which is the whole difference
+ * between the two kinds of bound: the measured healthy nodes ran 1,216,358 ms with a step
+ * every 55,289 ms, so this is their shape at test scale rather than a contrived one.
+ *
+ * REAL TIME, DELIBERATELY, and the only instrument that can answer this question. The
+ * watchdog under test IS a `setTimeout` re-armed off `Date.now()`, so a frozen clock stops
+ * it firing and a frozen `Date.now()` reads every member as idle for zero — the arm would
+ * pass against a bound that does not exist. The pause is also cheaper than the
+ * alternative: exceeding the envelope on real work alone would need roughly twenty steps
+ * of VFS and SQL per node instead of three sleeps.
+ */
+function slowSteppingProvider(pauseMs: number): MockLanguageModelV3 {
+  return new MockLanguageModelV3({
+    provider: 'fake',
+    modelId: 'fake-slow-stepping',
+    doGenerate: async ({ prompt }) => {
+      await Bun.sleep(pauseMs);
+      const read = prompt.some((message) => message.role === 'tool');
+      const reported = prompt.filter((message) => message.role === 'tool').length > 1;
+      const content: LanguageModelV3Content[] = reported
+        ? [{ type: 'text', text: 'Reported: a single linear scan.' }]
+        : read
+          ? [{
+            type: 'tool-call',
+            toolCallId: 'report-1',
+            toolName: 'report',
+            input: JSON.stringify({
+              status: 'completed',
+              content: `A single scan is enough.\n\n\`\`\`javascript\n${OPTIMAL}\`\`\``,
+            }),
+          }]
+          : [
+            { type: 'text', text: 'Reading the current implementation first.' },
+            {
+              type: 'tool-call',
+              toolCallId: 'read-1',
+              toolName: 'file',
+              input: JSON.stringify({ action: 'read', path: REFERENCE_PATH }),
+            },
+          ];
+      return {
+        content,
+        finishReason: { unified: reported ? 'stop' as const : 'tool-calls' as const, raw: undefined },
+        usage: {
+          inputTokens: { total: 30, noCache: 30, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 12, text: 12, reasoning: undefined },
+        },
+        warnings: [],
+      };
+    },
+  });
+}
+
 /* ── Running one node directly, to reach the transport ─────────────────────── */
 
 interface NodeFixture {
@@ -309,6 +370,11 @@ const PROGRESS_MS = 250;
 
 async function runWith(model: MockLanguageModelV3): Promise<SilentRun> {
   const { rt } = createTestRuntime();
+  // A real file, so a node that reads before it answers reads something. The read is what
+  // makes a step a step: a text-only turn ends the loop, so a node cannot demonstrate
+  // progress over several steps without a tool call in each of them.
+  await rt.storage.vfs.mkdir('candidate', { recursive: true });
+  await rt.storage.vfs.writeFile(REFERENCE_PATH, REFERENCE);
   const logger = createRecordingLogger();
   const startedAt = Date.now();
   const result = await runSwarm(
@@ -379,6 +445,25 @@ describe('a level whose nodes never answer', () => {
     for (const row of rows) {
       expect(row.status).not.toBe('running');
       expect(row.completed_at).toBeGreaterThan(0);
+    }
+  });
+
+  test('a node slower than the envelope survives it by making progress', async () => {
+    // THE DIFFERENCE BETWEEN THE TWO KINDS OF BOUND, and the reason the barrier reads the
+    // journal instead of a stopwatch. Every node here outlives one envelope and none is
+    // ever silent for one, so a flat deadline would cut all three off mid-work while this
+    // barrier lets them finish. Without this arm a refactor to a runtime bound passes.
+    const pauseMs = Math.floor(PROGRESS_MS / 2);
+    const { result, rows } = await runWith(slowSteppingProvider(pauseMs));
+
+    expect('reason' in result).toBe(false);
+    expect(rows.length).toBe(BRANCHES);
+    for (const row of rows) {
+      expect(row.status).toBe('completed');
+      // The load-bearing number: the node's own recorded lifetime is past the envelope it
+      // was watched against, and it was not given up on.
+      expect(row.wall_clock_ms).toBeGreaterThan(PROGRESS_MS);
+      expect(row.error_message).toBeNull();
     }
   });
 });
