@@ -30,9 +30,11 @@ import {
 import type {
   NodeAgentDeps,
   NodeAgentInput,
+  NodeLoopDeps,
   NodeRunSpec,
 } from '../src/strategy/node-agent';
 import type { BranchDecision } from '../src/strategy/swarm-budget';
+import type { MissionScope } from '../src/mission-budget';
 
 /**
  * A real grant, proposal and all.
@@ -114,6 +116,7 @@ function fixture(opts?: {
   readonly host?: NodeAgentDeps['host'];
   readonly nodeId?: string;
   readonly offered?: Set<string>;
+  readonly mission?: MissionScope;
 }): Fixture {
   const { rt } = createTestRuntime();
   const journal = new HeadJournal(rt.storage.sql);
@@ -144,6 +147,7 @@ function fixture(opts?: {
     logger: createRecordingLogger(),
   };
   if (opts?.host !== undefined) deps.host = opts.host;
+  if (opts?.mission !== undefined) deps.mission = opts.mission;
   return { input, deps, journal };
 }
 
@@ -256,6 +260,83 @@ describe('one runtime, two transports', () => {
     const recorded = journal.readHead(input.nodeId);
     expect(recorded).not.toBeNull();
     expect(recorded?.status).toBe('completed');
+  });
+
+  test('a hosted node carries its mission labels, so the far side can find the ledger', async () => {
+    // THE UNDER-CHARGE THIS CLOSES. `NodeLoopDeps.mission` is a live port and a spec is
+    // data, so the port cannot cross. The far side rebuilds one from the LABELS —
+    // `exploration.ts` reads `HeadInput.missionLabels` and opens an RPC back to the
+    // actor holding the ledger — and a spec that carried no labels would make the same
+    // search free on the backend that hosts its nodes and charged on the one that does
+    // not.
+    const specs: NodeRunSpec[] = [];
+    const charged: number[] = [];
+    const mission: MissionScope = {
+      labels: ['nightly', 'sweep'],
+      port: {
+        guard: async () => null,
+        debit: async (tokens) => { charged.push(tokens); },
+      },
+    };
+    const { input, deps } = fixture({
+      mission,
+      host: async (spec) => {
+        specs.push(spec);
+        // The far side rebuilds the port from what the spec carried, which is exactly
+        // what a facet does. Nothing here is handed the parent's port.
+        const rebuilt: MissionScope | null = spec.headInput.missionLabels?.length
+          ? { labels: spec.headInput.missionLabels, port: mission.port }
+          : null;
+        const inner = fixture({ nodeId: spec.headInput.id });
+        const loop: NodeLoopDeps = {
+          rt: inner.deps.rt,
+          model: inner.deps.model,
+          logger: inner.deps.logger,
+          arbitrate: null,
+        };
+        if (rebuilt) loop.mission = rebuilt;
+        return await runNodeLoop(spec, loop);
+      },
+    });
+
+    const run = await runNodeAgent(input, deps);
+
+    // The denominators: the node really ran, really reported steps, and the labels
+    // really crossed as data a facet could receive.
+    expect(run.report.status).toBe('completed');
+    expect(run.report.stepCount).toBeGreaterThan(0);
+    expect(specs).toHaveLength(1);
+    expect(specs[0]?.headInput.missionLabels).toEqual(['nightly', 'sweep']);
+    expect(() => structuredClone(specs[0])).not.toThrow();
+
+    // AND THE REBUILT PORT WAS CHARGED, per step, for what the provider reported —
+    // 11 in plus 7 out on every call this model serves.
+    expect(charged.length).toBe(run.report.stepCount);
+    expect(charged.every((tokens) => tokens === 18)).toBe(true);
+  });
+
+  test('an unbudgeted node carries no labels at all, so nothing opens a ledger', async () => {
+    // The absent-key rule where it is load-bearing: an empty array would make the far
+    // side ask a ledger that was never declared.
+    const specs: NodeRunSpec[] = [];
+    const { input, deps } = fixture({
+      host: async (spec) => {
+        specs.push(spec);
+        const inner = fixture({ nodeId: spec.headInput.id });
+        return await runNodeLoop(spec, {
+          rt: inner.deps.rt,
+          model: inner.deps.model,
+          logger: inner.deps.logger,
+          arbitrate: null,
+        });
+      },
+    });
+
+    const run = await runNodeAgent(input, deps);
+
+    expect(run.report.status).toBe('completed');
+    expect(specs).toHaveLength(1);
+    expect(specs[0]?.headInput).not.toHaveProperty('missionLabels');
   });
 });
 
