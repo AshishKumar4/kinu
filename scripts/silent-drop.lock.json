@@ -1,6 +1,7 @@
 [
   "handler_absorbs/wire packages/cf-backend/src/components/surfaces/plan-annotation-save.ts#enqueue",
   "handler_absorbs/wire packages/core/src/execution/device-tunnel.ts#probeLiveness",
+  "handler_absorbs/wire packages/core/src/obs/tracer.ts#span",
   "logged_default/wire packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#annotationSaves",
   "logged_default/wire packages/cf-backend/src/hooks/use-proteus.ts#refreshLiveResource",
   "logged_default/wire packages/cf-backend/src/memory-sync.ts#backfillMemoryVectors",
@@ -71,8 +72,6 @@
   "voided_promise/wire packages/core/src/heads/controller.ts#timeout",
   "voided_promise/wire packages/core/src/jobs/runner.ts#runToSettlement",
   "voided_promise/wire packages/core/src/mcts/engine.ts#onSignalAbort",
-  "voided_promise/wire packages/core/src/obs/agent-tracing.ts#invocation",
-  "voided_promise/wire packages/core/src/obs/tracer.ts#span",
   "voided_promise/wire packages/core/src/orchestrator/agent-orchestrator.ts#recordTurn",
   "voided_promise/wire packages/core/src/orchestrator/agent-orchestrator.ts#runDueSessionEvolution",
   "voided_promise/wire packages/core/src/orchestrator/model-catalog.ts#info",

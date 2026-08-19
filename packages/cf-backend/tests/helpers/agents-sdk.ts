@@ -198,7 +198,12 @@ export function mockAgentsSdk(): void {
           });
           if (result instanceof Promise) {
             closesLater = true;
-            void result.finally(close);
+            // `then(ok, err)` and not `finally`: `finally` derives a promise that
+            // rejects whenever `result` does, and nothing awaits this one — an
+            // unhandled rejection from inside the stub, which surfaced the moment
+            // a traced production path first rejected (unit-head-fork). Both arms
+            // settle it; `result` still rejects for the test that awaits it.
+            void result.then(close, close);
           }
           return result;
         } finally {

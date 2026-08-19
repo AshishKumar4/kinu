@@ -79,7 +79,11 @@ import { createHeadRuntime } from "./head-runtime";
 import { bindAgentSql, createCFRuntime, type CFRuntime, type CFRuntimeHooks } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
 import { buildHeadToolSet } from "@proteus/core";
-import { createConsoleLogger } from "@proteus/core/obs";
+import {
+  createAgentTracing, createConsoleLogger, type AgentTracing,
+} from "@proteus/core/obs";
+import { createAgentConfigStore, initAgentConfigTable } from "@proteus/core";
+import { createWorkersTracer } from "./obs/cf-tracer";
 
 export class ExplorationAgent extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
@@ -123,6 +127,44 @@ export class ExplorationAgent extends Agent<Env> {
   private get boundSql(): SqlExecutor {
     if (!this._boundSql) this._boundSql = bindAgentSql(this);
     return this._boundSql;
+  }
+
+  private _tracing: AgentTracing | null = null;
+
+  /**
+   * The same tracing seam the orchestrator has, on the facet, for the same
+   * reason the owner gives for everything else: a node and its parent are the
+   * same kind of thing and a capability only one of them has is a capability
+   * neither can be reasoned about.
+   *
+   * This is the instrument the 2026-08-19 live run needed and did not have.
+   * Three nodes, 605s, `swarm.node_silent` ×3 at ~600,000ms idle: zero steps,
+   * zero model calls, zero tokens, no error. `insertSpawn` had run, so the rows
+   * were `running` — something between the spawn and the first finished step
+   * blocked forever, and nothing could say WHICH side of `runNodeLoop` it was on
+   * because the only observable was the absence of rows the loop writes.
+   * `runAsNode` is one RPC invocation, so its phases are spans, and an
+   * unterminated `swarm.node.loop` under a terminated `swarm.node.deps` is the
+   * whole diagnosis.
+   *
+   * `isolateGen` through `AgentConfigStore.countIsolateGeneration` — the same
+   * function the orchestrator calls, over the same `IF NOT EXISTS` table, so the
+   * counter means the same thing on both and a discontinuity is comparable
+   * across a parent and its facets. `selfPath` and never `ctx.id`: two facets
+   * with distinct ids both report under the ROOT's `durableObjectId`
+   * (`do.facet.id_is_root_namespace`), which is exactly the collapse that would
+   * make a per-node trace useless here.
+   */
+  private get tracing(): AgentTracing {
+    if (!this._tracing) {
+      initAgentConfigTable((ddl) => { this.ctx.storage.sql.exec(ddl); });
+      this._tracing = createAgentTracing({
+        tracer: createWorkersTracer(),
+        isolateGen: createAgentConfigStore(this.boundSql).countIsolateGeneration(),
+        selfPath: this.selfPath,
+      });
+    }
+    return this._tracing;
   }
 
   /** A facet's private plane over the PARENT's file plane: private SQL ledgers and
@@ -209,6 +251,10 @@ export class ExplorationAgent extends Agent<Env> {
   // Deliberately toolless and runtime-free: a branch reasons, it does not act.
   // Nothing here may reach headRuntime().
 
+  /** Traced because this is the ONE model call a branch makes, so its span IS the
+   *  branch's latency — and a 120s branch-RPC cap once silently killed every
+   *  rollout against turns measuring 151/294/509s. A measured span is what makes
+   *  the next such number arguable instead of guessed. */
   @callable()
   async explore(
     priorHistory: Array<{ role: string; content: string }>,
@@ -218,26 +264,32 @@ export class ExplorationAgent extends Agent<Env> {
     siblings: readonly string[] = [],
   ): Promise<BranchExploration> {
     if (!isWorkMode(mode)) throw new Error('Branch exploration requires a trusted work mode');
-    const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(null, 'low');
-    const { system, user } = explorePrompt({
-      mode,
-      context: formatInheritedContext(priorHistory),
-      craftedTools,
-      languages,
-      siblings,
+    return await this.tracing.invocation('rpc', 'mcts.branch', async (invocation) => {
+      const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(null, 'low');
+      const { system, user } = explorePrompt({
+        mode,
+        context: formatInheritedContext(priorHistory),
+        craftedTools,
+        languages,
+        siblings,
+      });
+
+      const request: Parameters<typeof generateText>[0] = {
+        model,
+        system,
+        messages: [{ role: "user" as const, content: user }],
+      };
+      if (providerOptions) request.providerOptions = providerOptions;
+      const { text, usage } = await invocation.span('mcts.branch.model', async (span) => {
+        const answer = await generateText(request);
+        span.setAttribute('proteus.output_tokens', answer.usage.outputTokens ?? 0);
+        return answer;
+      });
+
+      const trimmed = text.trim();
+      void this.sql`INSERT INTO traces (step, text) VALUES (1, ${trimmed})`;
+      return { text: trimmed, usage: normalizeUsage(usage) };
     });
-
-    const request: Parameters<typeof generateText>[0] = {
-      model,
-      system,
-      messages: [{ role: "user" as const, content: user }],
-    };
-    if (providerOptions) request.providerOptions = providerOptions;
-    const { text, usage } = await generateText(request);
-
-    const trimmed = text.trim();
-    void this.sql`INSERT INTO traces (step, text) VALUES (1, ${trimmed})`;
-    return { text: trimmed, usage: normalizeUsage(usage) };
   }
 
   @callable()
@@ -276,32 +328,47 @@ export class ExplorationAgent extends Agent<Env> {
 
   /** Run the head's inference loop over the forked runtime and return its
    *  HeadReport. The ToolSet — and what is deliberately absent from it — is
-   *  declared in @proteus/core head-tools. */
+   *  declared in @proteus/core head-tools.
+   *
+   *  Traced with the same two phases as `runAsNode`, for the same reason: a head
+   *  that produces no report has either failed to acquire its model and tools or
+   *  failed inside the loop, and those are different defects with the same
+   *  observable. */
   @callable()
   async runAsHead(): Promise<HeadReport> {
     if (!this.headInput) throw new Error("ExplorationAgent.runAsHead() called before initHead()");
     const input = this.headInput;
-    const capture = new HeadCapture();
-    // The loop + report assembly live in core (runHeadInference); the Facet
-    // supplies its model + the forked tool surface. Abort is driven by
-    // abortHead() flipping this.headAborted.
-    const mission = this.missionScope(input);
-    const options: Parameters<typeof runHeadInference>[1] = {
-      model: this.ownedModelServices.resolveModel(input.model),
-      tools: this.buildHeadTools(input, capture),
-      capture,
-      workspaceLayout: 'shared-workspace',
-      // The same envelope the parent turn runs to — ActorAgent.maxSteps reads
-      // this identical Worker var. A fork of a turn gets the turn's room.
-      maxSteps: resolveMaxSteps(this.env.PROTEUS_MAX_STEPS),
-      isAborted: () => this.headAborted,
-      abortReason: () => this.headAbortReason,
-    };
-    if (mission) options.mission = mission;
-    // Null only when this facet has no parent, which is an MCTS branch.
-    const parent = this.getSharedParentStub();
-    if (parent) options.reportStep = this.stepSink(parent, input.id);
-    return runHeadInference(input, options);
+    return await this.tracing.invocation('rpc', 'head.run', async (invocation, root) => {
+      root.setAttribute('proteus.head_id', input.id);
+      const capture = new HeadCapture();
+      // The loop + report assembly live in core (runHeadInference); the Facet
+      // supplies its model + the forked tool surface. Abort is driven by
+      // abortHead() flipping this.headAborted.
+      const headOptions = invocation.span('head.deps', (): Parameters<typeof runHeadInference>[1] => {
+        const mission = this.missionScope(input);
+        const options: Parameters<typeof runHeadInference>[1] = {
+          model: this.ownedModelServices.resolveModel(input.model),
+          tools: this.buildHeadTools(input, capture),
+          capture,
+          workspaceLayout: 'shared-workspace',
+          // The same envelope the parent turn runs to — ActorAgent.maxSteps reads
+          // this identical Worker var. A fork of a turn gets the turn's room.
+          maxSteps: resolveMaxSteps(this.env.PROTEUS_MAX_STEPS),
+          isAborted: () => this.headAborted,
+          abortReason: () => this.headAbortReason,
+        };
+        if (mission) options.mission = mission;
+        // Null only when this facet has no parent, which is an MCTS branch.
+        const parent = this.getSharedParentStub();
+        if (parent) options.reportStep = this.stepSink(parent, input.id);
+        return options;
+      });
+      return await invocation.span('head.inference', async (span) => {
+        const report = await runHeadInference(input, headOptions);
+        span.setAttribute('proteus.head_status', report.status);
+        return report;
+      });
+    });
   }
 
   // ── Node mode @callables ────────────────────────────────────────
@@ -313,41 +380,66 @@ export class ExplorationAgent extends Agent<Env> {
     return { ok: true, id: spec.headInput.id };
   }
 
-  /** Run this node's loop and return everything the search takes out of it.
-   *  Journals nothing — the ledger is the parent's, which is why the step sink and
-   *  the arbiter below are RPCs back to it rather than local writes. */
+  /**
+   * Run this node's loop and return everything the search takes out of it.
+   * Journals nothing — the ledger is the parent's, which is why the step sink and
+   * the arbiter below are RPCs back to it rather than local writes.
+   *
+   * TRACED as one invocation with two sibling phases, and the split is the
+   * diagnosis rather than decoration. `swarm.node.deps` covers everything before
+   * the loop: the facet runtime, the model resolution (which reaches the owner's
+   * credentials over RPC and can therefore block), the tool surface. `swarm.node.loop`
+   * covers `runNodeLoop`. A node reported silent for 600s with zero steps and
+   * zero model calls is now a question with an answer — whichever of the two spans
+   * has no end is the one that blocked — where before it was two indistinguishable
+   * hypotheses over the same absence of rows.
+   */
   @callable()
   async runAsNode(): Promise<NodeLoopResult> {
     if (!this.nodeSpec) throw new Error("ExplorationAgent.runAsNode() called before initNode()");
     const spec = this.nodeSpec;
-    // Named `parent` like every other acquisition of this stub, and not only for
-    // style: unit-rpc-surface.test.ts derives a facet's cross-DO calls by that
-    // local's name, so a second spelling shrinks the scan silently. It did —
-    // `nodeArbitrate` went unchecked while this one was called something else.
-    const parent = this.getSharedParentStub();
-    if (!parent) {
-      throw new Error('This node was spawned without a parent search; setSharedParent must run before runAsNode.');
-    }
-    const nodeId = spec.headInput.id;
-    const rt = this.facetRuntime('node', {});
-    const webSearch = this.ownedModelServices.getWebSearchProvider();
-    const deps: NodeLoopDeps = {
-      rt,
-      model: this.ownedModelServices.resolveModel(spec.headInput.model),
-      logger: createConsoleLogger(),
-      // The runtime half of the arbitration rule. Its build-time half is
-      // `spec.canPropose`, which the search decided: a stub is always non-null, so
-      // presence alone cannot answer whether a branch could be granted.
-      arbitrate: spec.canPropose ? (proposal) => parent.nodeArbitrate(nodeId, proposal) : null,
-      reportStep: this.stepSink(parent, nodeId),
-      executeTool: this.facetExecuteTool(rt, spec.headInput, webSearch),
-      webSearch,
-    };
-    // Assigned rather than spread: an unbudgeted node must leave the key ABSENT,
-    // because the loop reads presence to decide whether the ledger exists at all.
-    const mission = this.missionScope(spec.headInput);
-    if (mission) deps.mission = mission;
-    return await runNodeLoop(spec, deps);
+    return await this.tracing.invocation('rpc', 'swarm.node', async (invocation, root) => {
+      root.setAttribute('proteus.node_id', spec.headInput.id);
+      const deps = invocation.span('swarm.node.deps', (): NodeLoopDeps => {
+        // Named `parent` like every other acquisition of this stub, and not only for
+        // style: unit-rpc-surface.test.ts derives a facet's cross-DO calls by that
+        // local's name, so a second spelling shrinks the scan silently. It did —
+        // `nodeArbitrate` went unchecked while this one was called something else.
+        const parent = this.getSharedParentStub();
+        if (!parent) {
+          throw new Error('This node was spawned without a parent search; setSharedParent must run before runAsNode.');
+        }
+        const nodeId = spec.headInput.id;
+        const rt = this.facetRuntime('node', {});
+        const webSearch = this.ownedModelServices.getWebSearchProvider();
+        const built: NodeLoopDeps = {
+          rt,
+          model: this.ownedModelServices.resolveModel(spec.headInput.model),
+          logger: createConsoleLogger(),
+          // The runtime half of the arbitration rule. Its build-time half is
+          // `spec.canPropose`, which the search decided: a stub is always non-null, so
+          // presence alone cannot answer whether a branch could be granted.
+          arbitrate: spec.canPropose ? (proposal) => parent.nodeArbitrate(nodeId, proposal) : null,
+          reportStep: this.stepSink(parent, nodeId),
+          executeTool: this.facetExecuteTool(rt, spec.headInput, webSearch),
+          webSearch,
+        };
+        // Assigned rather than spread: an unbudgeted node must leave the key ABSENT,
+        // because the loop reads presence to decide whether the ledger exists at all.
+        const mission = this.missionScope(spec.headInput);
+        if (mission) built.mission = mission;
+        return built;
+      });
+      return await invocation.span('swarm.node.loop', async (span) => {
+        const result = await runNodeLoop(spec, deps);
+        // The two facts that distinguish every outcome the search cares about
+        // from the silent one: a node that never reached a model call reports
+        // neither a status nor a report, and this span then has no end at all.
+        span.setAttribute('proteus.node_status', result.report.status);
+        span.setAttribute('proteus.node_reported', result.reported !== null);
+        return result;
+      });
+    });
   }
 
   /**

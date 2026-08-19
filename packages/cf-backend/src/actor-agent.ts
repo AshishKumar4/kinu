@@ -2609,22 +2609,35 @@ export abstract class ActorAgent extends Think<Env> {
    * search has already settled must not be handed a grant nobody will honour: the
    * children would be reserved against a budget that is gone, and the node would
    * report having been given work the engine never created.
+   *
+   * TRACED as its own invocation, because that is exactly what it is: an RPC
+   * INTO this object from a facet running elsewhere, and the node is blocked on
+   * the answer. A node that stalls waiting for a verdict and a node that stalls
+   * before asking for one are indistinguishable from the node's side and from
+   * every row either writes.
    */
   async nodeArbitrate(nodeId: string, proposal: BranchProposal): Promise<BranchDecision> {
-    const arbiter = this.nodeArbiters.get(nodeId);
-    if (!arbiter) {
-      // `budget-exhausted` rather than a sixth policy value: the vocabulary is
-      // closed on purpose, and this IS that fact — a settled search has no
-      // remaining children, so none can be reserved. The prose carries the
-      // detail, and the prose is what the node reads.
-      return {
-        kind: 'refused',
-        policy: 'budget-exhausted',
-        error: 'The search that spawned this node is no longer arbitrating, so no branch can be '
-          + 'reserved. Finish your own task and report.',
-      };
-    }
-    return await arbiter(proposal);
+    return await this.tracing.invocation('rpc', 'swarm.arbitrate', async (_invocation, span) => {
+      span.setAttribute('proteus.node_id', nodeId);
+      const arbiter = this.nodeArbiters.get(nodeId);
+      if (!arbiter) {
+        // `budget-exhausted` rather than a sixth policy value: the vocabulary is
+        // closed on purpose, and this IS that fact — a settled search has no
+        // remaining children, so none can be reserved. The prose carries the
+        // detail, and the prose is what the node reads.
+        span.setAttribute('proteus.arbiter_registered', false);
+        return {
+          kind: 'refused',
+          policy: 'budget-exhausted',
+          error: 'The search that spawned this node is no longer arbitrating, so no branch can be '
+            + 'reserved. Finish your own task and report.',
+        };
+      }
+      span.setAttribute('proteus.arbiter_registered', true);
+      const decision = await arbiter(proposal);
+      span.setAttribute('proteus.decision', decision.kind);
+      return decision;
+    });
   }
 
   /**
