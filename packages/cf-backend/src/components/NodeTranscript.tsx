@@ -11,9 +11,9 @@
  * reasoning blocks that expand, tool calls with real input/output panels and
  * language-aware code fences, failure detection, and markdown prose, none of
  * which a second renderer would keep in step. The user affordances are removed
- * by NOT passing them: `onFork`, `onFeedback`, `onRestoreFiles`, `takes` and
- * `onPickTake` are optional, every step is `role: 'assistant'`, and a branch has
- * no user turns to draw in the first place.
+ * by NOT passing them: `onFork`, `onFeedback`, `onRestoreFiles` and `takesChip`
+ * are optional, every step is `role: 'assistant'`, and a branch has no user
+ * turns to draw in the first place.
  *
  * What this file owns is therefore only the fold — `HeadStep` → `UIMessage` — and
  * the frame around it: the task pinned and expandable, the answer highlighted
@@ -29,7 +29,7 @@ import {
 import type { UIMessage } from "ai";
 import type { HeadStep, HeadStepToolCall, NodeTranscriptView } from "@proteus/core";
 import { usageTotal } from "@proteus/core";
-import { MessageView } from "@/pages/WorkspacePage";
+import { MessageView } from "@/components/MessageView";
 import { DetailSection, EmptyState, MarkdownContent, Metric, timeAgo } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { cleanNodeLabel, findForkNode } from "@/components/swarm-tree-model";
