@@ -294,9 +294,24 @@ const LABEL = 'live-swarm-eval-verifier-fanin';
  * keeps this arm bounded — a small instance means short steps, and a step boundary is
  * the only place a bound of any kind is currently observable.
  *
- * 20 minutes because the budget is 6 nodes; the vitest timeout below is deliberately
- * larger, so a run that ends inside the envelope ends through this seam and reports
- * `stop:'aborted'`, which the assertions refuse.
+ * WHAT THIS NUMBER IS, corrected by the measurement it produced. It was written as
+ * "20 minutes because the budget is 6 nodes", which reads as a DERIVED bound and is not
+ * one: the run it bounded measured three nodes still working at 1,216,358 / 1,310,061 /
+ * 1,336,833 ms across 22 / 25 / 26 steps, so this number is smaller than ONE node of the
+ * six it claimed to cover. The derived node envelope is `nodeWallClockEnvelopeMs` in
+ * `strategy/node-agent.ts` — the node's step cap times the measured turn envelope — and
+ * 1_200_000 is under it by more than two orders of magnitude at the shipped step cap.
+ *
+ * So it is kept and RELABELLED: this is a COST CEILING on one paid arm, not a claim
+ * about how long a node needs. A run that reaches it is a run that did not fit in the
+ * ceiling, and it says so precisely — `stop:'aborted'`, every candidate carrying
+ * `incomplete` with its node's status, step count and clock, and nothing scored. The
+ * assertions below refuse that outcome, which is the arm reporting "this did not fit"
+ * rather than "the model was bad". Raising the ceiling is a decision about money and
+ * belongs to whoever pays for the tier; it is not a fix and is not made here.
+ *
+ * The vitest timeout below is deliberately larger, so a run that ends inside the ceiling
+ * ends through this seam rather than through the runner.
  */
 const ENVELOPE_MS = 1_200_000;
 
@@ -315,6 +330,10 @@ const CandidateSchema = v.object({
   artifact: v.string(),
   measured: v.nullable(MeasuredSchema),
   unmeasurable: v.nullable(v.string()),
+  /** Why a node produced no answer at all. Read because without it a candidate with no
+   *  measurement reads as the INSTRUMENT's failure, and on the run that produced the
+   *  figures above every one of the three was a node this arm's own ceiling stopped. */
+  incomplete: v.nullable(v.string()),
   score: v.nullable(v.number()),
 });
 
@@ -539,9 +558,16 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     console.log(`    baseline ${String(report.baseline ?? 'none')} ${UNIT}, `
       + `winner ${String(best?.measured?.value ?? 'none')} (score ${String(best?.score ?? 'none')})`);
     for (const candidate of candidates) {
-      console.log(`      ${candidate.id}: ${candidate.measured === null
-        ? `unmeasurable — ${String(candidate.unmeasurable)}`
-        : `${String(candidate.measured.value)} calls, score ${String(candidate.score)}`}`);
+      // THREE OUTCOMES, not two. A candidate with no measurement is either a node that
+      // never finished or an answer the instrument declined; printing both as
+      // "unmeasurable" is what sent the last reading of this arm to the verifier for a
+      // cause that was the ceiling above.
+      const outcome = candidate.incomplete !== null
+        ? `did not finish — ${candidate.incomplete}`
+        : candidate.measured === null
+          ? `unmeasurable — ${String(candidate.unmeasurable)}`
+          : `${String(candidate.measured.value)} calls, score ${String(candidate.score)}`;
+      console.log(`      ${candidate.id}: ${outcome}`);
     }
     console.log(`    fanIn ${JSON.stringify(report.fanIn)}`);
     console.log(`    records ${JSON.stringify(report.records)}`);
