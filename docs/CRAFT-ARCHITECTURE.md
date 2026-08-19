@@ -174,7 +174,7 @@ Where each phase actually landed, verified against the tree:
 | A: preamble pattern | **Shipped.** `PreambleCraftedExecutor` in `cf-backend/src/crafted-tool-registry.ts` delegates to upstream `DynamicWorkerExecutor` and injects the preamble; `LiveCraftedExecutor` and `CraftedToolRegistry` survive only in that file's header comment. |
 | B: structured error payload | **Shipped**, flat rather than nested (see below). |
 | C: helpers inside crafted-tool bodies | **Shipped.** The namespaces are documented in the `Namespace contract` comment in `tools/registry.ts`. |
-| D: signature enforcement + hint | **Partly.** The *description* now says the code must be an async arrow, but no check enforces it. `createTool` validates argument presence, identifier sanitization, case collision, and the misevolution gate, not the signature. Its `types` block also still promises SAME-turn callability while the AI-SDK-visible description says next-call. |
+| D: signature enforcement + hint | **The hint shipped, the check did not.** `createTool`'s docstring now names `tools.<name>(args)` on the next `execute_tools` call and names `codemode.<name>` as refused, so it agrees with the AI-SDK-visible description and with the hosted dispatcher. No check enforces the async-arrow shape: `createTool` validates argument presence, identifier sanitization, case collision and the misevolution gate, not the signature. |
 | E: dual surfacing | **Not shipped**, as recommended. Crafted tools are still not top-level `ToolSet` entries. |
 
 Two wiring points moved. What the phases below call
@@ -249,7 +249,8 @@ dispatch happens through the preamble.
 
 **Still to do.**
 - `packages/core/src/execution/inline.ts`: in `createTool.execute`, after the name-sanitization block, add signature validation: `codeStr.trim().startsWith("async") && codeStr.includes("=>")`. On failure return `{ ok: false, error: "Crafted tools must be async arrow functions: async (args) => { ... }. Got: <first 60 chars>" }`.
-- `packages/core/src/execution/inline.ts`: the `types` block still reads "Immediately callable as `codemode.<name>(args)` in the SAME turn — no turn boundary needed", which contradicts the AI-SDK-visible description in the same file. One of the two is what the model believes, so they must say the same thing.
+
+**Fixed since.** The `types` block used to promise same-turn callability under `codemode.<name>`, contradicting the AI-SDK-visible description forty lines above it in the same file and contradicting the hosted dispatcher, which throws on that spelling. `createTool`'s docstring now reads: callable as `tools.<name>(args)` on the NEXT `execute_tools` call in this turn, because the sandbox that created the tool is already built, and `codemode.<name>` is named as refused rather than offered (`core/src/execution/inline.ts:482-488`). Read it from source; a verbatim quote here would rot the next time it changes.
 
 **Before.** Arbitrary code is accepted. `const fn = (${code})` silently ate declarations by wrapping them as grouping expressions, failing at first call with a compile error. On the CLI path the equivalent failure is a `new Function` throw inside `createNodeCraftedExecute`.
 
