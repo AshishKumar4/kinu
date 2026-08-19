@@ -490,6 +490,11 @@ const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
  * checker accepted). A panel that only printed "prove" would tell a reader none of
  * that, which is the whole reason the tuple is rendered beside the name.
  */
+// The Lean module named below is a placeholder: this fixture invents
+// `lean/Checkout/Coupon.lean` along with the coupon table it proves over, and the
+// module does not exist. Citing a real one would be worse, because the frame would
+// then break whenever that module was renamed and a reader would take an invented
+// sorry count for a measured one. Enrolled in `CITATION_ILLUSTRATIVE`.
 const PROVE_ROWS: MctsRow[] = [
   {
     id: "pv000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
