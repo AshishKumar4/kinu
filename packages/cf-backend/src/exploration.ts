@@ -1,7 +1,7 @@
 /**
  * ExplorationAgent — the parallel sub-agent Facet.
  *
- * One class, two modes — and the difference between them is the whole point:
+ * One class, three modes — and the difference between them is the whole point:
  *
  *   MCTS mode — short-form one-shot rollouts for the MCTS engine. @callable
  *               explore() is a single bare generateText with NO ToolSet and NO
@@ -20,7 +20,15 @@
  *               and the containment that keeps the delegation surface off it —
  *               is declared in @proteus/core head-tools.
  *
- * Both modes share: Facet class, composed owner/model services, lifecycle,
+ *   NODE mode — one node of a swarm search, HOSTED. initNode() takes core's
+ *               NodeRunSpec over RPC and runAsNode() calls the very same
+ *               runNodeLoop() an in-isolate node runs, rebuilding here only the
+ *               live seams a serialisable spec cannot carry: the model, the
+ *               runtime, the search's arbiter and its step journal. Hosting buys
+ *               a storage boundary and a teardown verb, not parallelism —
+ *               facets share one thread.
+ *
+ * All three modes share: Facet class, composed owner/model services, lifecycle,
  * and parallel-spawn infrastructure. Heads are a mode of this Facet, not a
  * separate agent class. ExplorationAgent extends the bare `Agent`, never
  * `ActorAgent`, so no head can inherit the full actor tool surface.
@@ -60,15 +68,20 @@ import {
   type BranchReflection,
   HeadCapture,
   runHeadInference,
+  runNodeLoop,
+  type NodeRunSpec,
+  type NodeLoopDeps,
+  type NodeLoopResult,
   type MissionScope,
   type WorkMode,
 } from "@proteus/core";
 import { OwnedModelServices } from "./owned-model-services";
 import { FacetIdentity } from "./facet-identity";
 import { spawnHeadFacet } from "./facet-spawn";
-import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime";
+import { bindAgentSql, createCFRuntime, type CFRuntime, type CFRuntimeHooks } from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
 import { buildHeadToolSet } from "@proteus/core";
+import { createConsoleLogger } from "@proteus/core/obs";
 
 export class ExplorationAgent extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
@@ -80,6 +93,7 @@ export class ExplorationAgent extends Agent<Env> {
   private headInput: HeadInput | null = null;
   private headAborted = false;
   private headAbortReason: string | null = null;
+  private nodeSpec: NodeRunSpec | null = null;
 
   /** Owner, capability token and parent workspace — one store, one schema.
    *  Every accessor below is a THUNK, never a construction-time value: a facet's
@@ -108,22 +122,34 @@ export class ExplorationAgent extends Agent<Env> {
     return this._boundSql;
   }
 
-  /** A head has private SQL ledgers and shell state, but not another workspace.
-   * Its canonical file plane is wrapped with this run's observer before tools
-   * are built, so writes are attributable without another executor or VFS. */
-  private headRuntime(capture: HeadCapture): CFRuntime {
+  /** A facet's private plane over the PARENT's file plane: private SQL ledgers and
+   *  private shell state, from the one `createCFRuntime` call every mode that has a
+   *  runtime at all shares.
+   *
+   *  `workspaceName` is the parent workspace and never this facet's own name.
+   *  `SqliteVFS` is keyed `${ownerUserId}|${workspaceName}`, so a facet that named
+   *  itself would derive a SECOND, EMPTY filesystem — the empty-workspace
+   *  regression pinned by tests/unit-head-fork.test.ts. */
+  private facetRuntime(scope: 'head' | 'node', hooks: CFRuntimeHooks): CFRuntime {
     const parent = this.getSharedParentStub();
     const workspaceName = this.identity.parentWorkspace();
     if (!parent || !workspaceName) {
-      throw new Error('This head was spawned without a parent workspace; setSharedParent must run before runAsHead.');
+      throw new Error(`This ${scope} was spawned without a parent workspace; setSharedParent must run before it can run.`);
     }
     return createCFRuntime(this, { env: this.env, ctx: this.ctx }, {
       ownerUserId: () => this.identity.ownerUserId(),
       workspaceName,
-      shellId: `head:${this.name}`,
-      scaffoldPath: `.proteus/heads/${encodeURIComponent(this.name)}/scaffold/agent.js`,
+      shellId: `${scope}:${this.name}`,
+      scaffoldPath: `.proteus/${scope}s/${encodeURIComponent(this.name)}/scaffold/agent.js`,
       capabilityToken: async () => this.identity.capabilityToken(),
-    }, { workspaceObserver: capture.files });
+    }, hooks);
+  }
+
+  /** A head's runtime: the shared plane above wrapped with this run's observer
+   *  before tools are built, so writes are attributable without another executor
+   *  or VFS. */
+  private headRuntime(capture: HeadCapture): CFRuntime {
+    return this.facetRuntime('head', { workspaceObserver: capture.files });
   }
 
   /** ExplorationAgents inherit ownership from the orchestrator that spawned
@@ -272,6 +298,58 @@ export class ExplorationAgent extends Agent<Env> {
     const reportStep = this.stepSink(input);
     if (reportStep) options.reportStep = reportStep;
     return runHeadInference(input, options);
+  }
+
+  // ── Node mode @callables ────────────────────────────────────────
+
+  /** Initialize this facet as one swarm node's host. */
+  @callable()
+  async initNode(spec: NodeRunSpec): Promise<{ ok: true; id: string }> {
+    this.nodeSpec = spec;
+    return { ok: true, id: spec.headInput.id };
+  }
+
+  /** Run this node's loop and return everything the search takes out of it.
+   *  Journals nothing — the ledger is the parent's, which is why the step sink and
+   *  the arbiter below are RPCs back to it rather than local writes. */
+  @callable()
+  async runAsNode(): Promise<NodeLoopResult> {
+    if (!this.nodeSpec) throw new Error("ExplorationAgent.runAsNode() called before initNode()");
+    const spec = this.nodeSpec;
+    const port = this.getSharedParentStub();
+    if (!port) {
+      throw new Error('This node was spawned without a parent search; setSharedParent must run before runAsNode.');
+    }
+    const nodeId = spec.headInput.id;
+    const rt = this.facetRuntime('node', {});
+    const webSearch = this.ownedModelServices.getWebSearchProvider();
+    const deps: NodeLoopDeps = {
+      rt,
+      model: this.ownedModelServices.resolveModel(spec.headInput.model),
+      logger: createConsoleLogger(),
+      // The runtime half of the arbitration rule. Its build-time half is
+      // `spec.canPropose`, which the search decided: a stub is always non-null, so
+      // presence alone cannot answer whether a branch could be granted.
+      arbitrate: spec.canPropose ? (proposal) => port.nodeArbitrate(nodeId, proposal) : null,
+      // The SAME sink a head's steps use, because a node's rows are head-journal
+      // rows: `insertSpawn` took a `HeadInput` and `appendStep` writes the same
+      // table, so one write has one name and a running node is readable live.
+      reportStep: (seq, step) => port.recordHeadStep(nodeId, seq, step).then(() => undefined),
+      executeTool: createExecuteToolsTool({
+        loader: this.env.LOADER,
+        rt,
+        sql: this.boundSql,
+        registry: this.ownedModelServices.providerRegistry(),
+        modelSpec: () => spec.headInput.model ?? null,
+        webSearch,
+      }),
+      webSearch,
+    };
+    // Assigned rather than spread: an unbudgeted node must leave the key ABSENT,
+    // because the loop reads presence to decide whether the ledger exists at all.
+    const mission = this.missionScope(spec.headInput);
+    if (mission) deps.mission = mission;
+    return await runNodeLoop(spec, deps);
   }
 
   /**
