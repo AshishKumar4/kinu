@@ -28,8 +28,8 @@
  *     recover" is a query rather than a guess.
  *
  * Owned per turn by the TurnAccumulator, exactly like the context budget, and
- * per ROOT by construction — a fork builds its own toolset and therefore its own
- * ledger, which is correct: a fork reads its own files.
+ * per ROOT by construction — a node builds its own toolset and therefore its own
+ * ledger, which is correct: a node reads its own files.
  */
 
 import { fnv1a64 } from '../prompting/volatile-context';

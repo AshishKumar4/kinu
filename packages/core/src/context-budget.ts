@@ -23,8 +23,8 @@
  * Deterministic by construction: the cap for result N is a pure function of
  * the sizes of results 1..N-1, so a replayed turn clamps identically. Owned
  * per turn by the TurnAccumulator (reset with the rest of the turn's
- * accounting), and by construction per ROOT — a fork or a subordinate builds
- * its own tools and therefore budgets its own turns, which is correct: a fork
+ * accounting), and by construction per ROOT — a node or a subordinate builds
+ * its own tools and therefore budgets its own turns, which is correct: a node
  * is its own root.
  */
 
