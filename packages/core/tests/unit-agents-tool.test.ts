@@ -11,18 +11,18 @@
 // channels, node runtime) are exercised in cf-backend tests against the real
 // hubs; deps here are recorders.
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, createTestStrategy, toolExecute, scriptedTurnModel } from '@proteus/test-utils';
+import { createTestRuntime, toolExecute, scriptedTurnModel } from '@proteus/test-utils';
 
 import * as v from 'valibot';
 import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
 import { SWARM_PRESETS } from '../src/strategy/swarm';
 import {
-  agentsActionsFor, buildBuiltinTools, createAgentsTool, createStrategyRegistry,
+  agentsActionsFor, buildBuiltinTools, createAgentsTool,
   renderAgentsToolDescription, resumableAgentsInput,
   AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS, DELEGATION_INHERITANCE, DELEGATION_RUNGS,
   delegationBudgetAtDepth, ROOT_DELEGATION_BUDGET,
   SWARM_PRESET_DOCTRINE,
-  FORK_STRATEGY_ID, PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION, TURN_WALL_CLOCK_ENVELOPE_MS,
+  PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION, TURN_WALL_CLOCK_ENVELOPE_MS,
   classifyToolFailure, JsonObjectSchema,
   type AgentsToolInput,
   type AgentsForkDeps, type AgentsToolDeps, type PeersToolDeps,
@@ -81,11 +81,8 @@ const HandoffResultSchema = v.object({
 });
 
 function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
-  const reg = createStrategyRegistry();
-  reg.register(createTestStrategy({ id: FORK_STRATEGY_ID, answer: 'forked' }));
-  reg.register(createTestStrategy({ id: 'mcts', answer: 'searched' }));
   const { rt } = createTestRuntime();
-  return { registry: reg, rt, model: testModel, ...overrides };
+  return { rt, model: testModel, ...overrides };
 }
 
 function actionEnum(input: { value: unknown }): string[] {
@@ -919,7 +916,9 @@ describe('agents tool — resuming a stored delegation row', () => {
     // of those is dropped by the same rule, and the result must be a call the
     // strict parse accepts.
     const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('think', {
-      strategy: FORK_STRATEGY_ID, task: 'search', heads: twoForks, budget: 4, unknown_since: 'ever',
+      // The engine a pre-unification row named directly, as a stored STRING: the
+      // point of the arm is that `strategy` is dropped whatever it says.
+      strategy: 'heads', task: 'search', heads: twoForks, budget: 4, unknown_since: 'ever',
     }));
     expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
     const dropped = lines.filter((line) => line.includes('agents.resume.fields_dropped'));

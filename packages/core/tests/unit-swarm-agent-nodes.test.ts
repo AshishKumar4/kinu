@@ -41,7 +41,7 @@ import * as v from 'valibot';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import { MissionGovernor } from '../src/mission-budget';
 import {
-  createAgentsCodemodeProvider, createStrategyRegistry, type AgentsToolDeps,
+  createAgentsCodemodeProvider, type AgentsToolDeps,
 } from '../src/index';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createRecordingLogger } from '../src/obs/index';
@@ -638,7 +638,7 @@ describe('the mission ledger a search charges', () => {
     const { model, script } = workingNode({ proposeAtDepth1: true });
     const deps: AgentsToolDeps = {
       mode: 'build',
-      fork: { registry: createStrategyRegistry(), rt, model },
+      fork: { rt, model },
       budget: governor,
     };
     const provider = createAgentsCodemodeProvider(() => deps);

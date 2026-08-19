@@ -169,7 +169,6 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
       agents: {
         mode: 'build',
         fork: {
-          registry,
           rt,
           model,
           defaultOptions: () => ({ mcts: { session: makeSessionWriter() } }),

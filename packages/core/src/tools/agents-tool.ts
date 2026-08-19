@@ -48,7 +48,7 @@ import {
   localMissionScope, readMissionLimits,
   type MissionGovernor, type MissionScope,
 } from '../mission-budget';
-import type { BuiltinStrategyOptions, StrategyRegistry } from '../strategy/types';
+import type { BuiltinStrategyOptions } from '../strategy/types';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
@@ -260,13 +260,12 @@ const ASSIGN_NOTES = {
  * and the exploration substrate it names — the heads runtime, the durable MCTS
  * session — is the same substrate a search's nodes run on.
  *
- * `runSwarmAction` reads `rt` and `model`. The other three carry the strategy
- * plumbing the backends assemble around that substrate; they are declared here
- * because the backends' one builder produces the whole bag, not because this
- * module dispatches a strategy.
+ * `runSwarmAction` reads `rt`, `model` and `nodeHost`. The remaining two carry
+ * the strategy plumbing the backends assemble around that substrate; they are
+ * declared here because the backends' one builder produces the whole bag, not
+ * because this module dispatches a strategy.
  */
 export interface AgentsForkDeps {
-  registry: StrategyRegistry;
   rt: AgentRuntime;
   model: LanguageModel;
   /** What the resolved model charges, for gates on projected spend before

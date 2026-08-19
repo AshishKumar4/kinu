@@ -19,7 +19,7 @@ import {
   type MissionBudgetRefusal,
 } from '../src/mission-budget';
 import {
-  createAgentsCodemodeProvider, createStrategyRegistry,
+  createAgentsCodemodeProvider,
   type AgentsToolDeps,
 } from '../src/index';
 import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
@@ -95,7 +95,6 @@ function searchableDeps(opts: {
   return {
     mode: 'build',
     fork: {
-      registry: createStrategyRegistry(),
       rt,
       model: expandingModel(opts.usage),
     },

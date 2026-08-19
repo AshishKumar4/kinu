@@ -4,8 +4,15 @@
 // Per-strategy options (StrategyContext.options.heads):
 //   { controller: HeadController, heads: SplitRequest['heads'],
 //     mergeStrategy?, maxDepth?, inheritedContext?, onPhase? }
-// `controller`, `inheritedContext` and `onPhase` are host-injected (via the
-// agents tool's fork defaultOptions); `heads` / `mergeStrategy` come from the LLM.
+// `controller`, `inheritedContext` and `onPhase` are host-injected; `heads` /
+// `mergeStrategy` come from the LLM.
+//
+// NO MODEL-FACING ACTION REACHES THIS PROJECTION. The `agents` tool dispatches
+// `swarm`, which runs the engine directly, so nothing looks a strategy up by id
+// any more. The heads RUNTIME is a different thing and is very much live — a
+// split runs through `HeadController`, which five sites construct — and this
+// wrapper is only the ExplorationStrategy shape over it, kept because the eval
+// harness compares strategies through that shape.
 import type { HeadController, SplitPhaseEvent } from '../heads/controller';
 import type {
   HeadBudget, SerializedMessage, SplitRequest, MergeStrategy, MergeResult,
@@ -27,17 +34,13 @@ interface HeadsStrategyOptions {
   /** Host hook fired once the merge completes, carrying the full MergeResult
    *  (per-head grounded scores + texts) and the split task. The host records an
    *  Alternate-Takes set from the comparable heads so the pick lands in the
-   *  preference ledger — injected by the agents tool's fork defaultOptions, like onPhase. */
+   *  preference ledger — host-injected, like onPhase. */
   onComplete?: (merge: MergeResult, task: string) => void;
 }
 
-/** The ephemeral-fork rung of the delegation ladder — the strategy an
- *  `agents` fork settles by when the caller names none (settle=merge). */
-export const FORK_STRATEGY_ID = 'heads';
-
 export function createHeadsStrategy(): ExplorationStrategy {
   return {
-    id: FORK_STRATEGY_ID,
+    id: 'heads',
     label: 'Branching heads (parallel reasoning + merge)',
     description:
       'Spawn 2–6 parallel reasoning heads, each exploring a distinct angle of the task. ' +

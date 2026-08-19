@@ -68,7 +68,7 @@ import * as v from 'valibot';
 import type { LanguageModel, ToolSet } from 'ai';
 
 import {
-  buildActorTools, createStrategyRegistry, execRatioImplementation, initWorkspaceSchema,
+  buildActorTools, execRatioImplementation, initWorkspaceSchema,
   type AgentRuntime, type Floor, type JsonValue, type LLMProviderConfig,
   type ObjectiveIdentity,
 } from '../../packages/core/src/index';
@@ -454,10 +454,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
       agents: {
         mode: 'build',
         // The exploration substrate, which is what puts `swarm` in the action enum.
-        // `registry` carries no strategy this rung dispatches — `runSwarmAction` runs
-        // the engine directly — but it is a required member of the deps every backend
-        // builds, so it is built the same way here.
-        fork: { registry: createStrategyRegistry(), rt, model },
+        fork: { rt, model },
       },
     });
     const entry = tools.agents;

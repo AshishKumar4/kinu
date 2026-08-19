@@ -1,20 +1,21 @@
 /**
- * The `agents` tool's fork substrate, fully wired — single-shot + MCTS +
- * branching heads over one strategy registry, with the host-injected
- * infrastructure the LLM must not set. Both backends previously built this
- * identically: the same three registrations and the same defaultOptions
- * closure shape (MCTS gets a fresh SessionWriter + the operator's stored
- * overrides — an explicit LLM budget still wins; heads get the controller,
- * the live conversation as inheritedContext, and the phase/complete sinks).
- * The team/peer halves of AgentsToolDeps stay on each backend's profile.
+ * The `agents` tool's fork substrate, fully wired: the host-injected
+ * infrastructure the LLM must not set, assembled identically by both backends
+ * so neither can drift from the other. MCTS gets a fresh SessionWriter + the
+ * operator's stored overrides — an explicit LLM budget still wins; heads get the
+ * controller, the live conversation as inheritedContext, and the phase/complete
+ * sinks. The team/peer halves of AgentsToolDeps stay on each backend's profile.
+ *
+ * It registered three strategies into a registry until that registry lost its
+ * last reader: removing the `fork` action removed the only dispatcher, so
+ * nothing looked a strategy up by id any more. Registrations nobody resolves are
+ * not a smaller version of a working dispatch, so they are gone rather than kept
+ * warm — `createHeadsStrategy` and the heads RUNTIME are untouched, and the
+ * runtime is what a split actually runs through.
  */
 
 import type { LanguageModel } from 'ai';
 import type { AgentRuntime } from '../types/agent-runtime';
-import { createStrategyRegistry } from '../strategy/types';
-import { createSingleShotStrategy } from '../strategy/single-shot';
-import { createMCTSStrategy } from '../strategy/mcts';
-import { createHeadsStrategy } from '../strategy/heads';
 import type { AgentsForkDeps } from '../tools/agents-tool';
 import type { SessionWriter } from '../mcts/record-node';
 import type { MctsSearchStore } from '../mcts/search-store';
@@ -104,12 +105,7 @@ export interface ForkDepsWiring {
 }
 
 export function buildStrategyForkDeps(wiring: ForkDepsWiring): AgentsForkDeps {
-  const registry = createStrategyRegistry();
-  registry.register(createSingleShotStrategy());
-  registry.register(createMCTSStrategy());
-  registry.register(createHeadsStrategy());
   return {
-    registry,
     rt: wiring.rt,
     model: wiring.model,
     costModel: wiring.costModel,

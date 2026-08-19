@@ -28,7 +28,6 @@ import {
   BUILTIN_TOOL_DESCRIPTIONS,
   createAgentsCodemodeProvider,
   createProviderRegistry,
-  createStrategyRegistry,
   parseJsonValue,
   type AgentsToolDeps,
   type JsonValue,
@@ -143,10 +142,7 @@ function expandingModel() {
 
 function searchOnlyDeps(): AgentsToolDeps {
   const { rt } = createTestRuntime();
-  // The registry is empty deliberately: `swarm` dispatches through no strategy,
-  // so a registration here would be a fixture scripting a path the action does
-  // not take. `AgentsForkDeps` still declares the field, so it is still passed.
-  return { mode: 'build', fork: { registry: createStrategyRegistry(), rt, model: expandingModel() } };
+  return { mode: 'build', fork: { rt, model: expandingModel() } };
 }
 
 function fullDeps(): AgentsToolDeps {
