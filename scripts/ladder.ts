@@ -575,13 +575,21 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test packages/cli/',
     tier: 'ci',
-    seconds: 92,
-    catches: 'the production CLI end to end, including the PTY and subprocess paths. 41 '
-      + 'of these 42 files run in no other tier today. Measured headless (setsid, no '
-      + 'tty): 295 pass, 0 fail — the "PTY tests need a terminal" exclusion was stale, '
-      + 'true only before 5183d69d.',
-    blind: 'nothing in its own surface. It is the slowest thing here: 54% of the suite\'s '
-      + 'wall clock for 7.5% of its tests, which is why it is not earlier.',
+    seconds: 74,
+    catches: 'the production CLI end to end, including the PTY and subprocess paths. Every '
+      + 'file it claims runs in no other tier, asserted in ladder.test.ts as an empty '
+      + 'overlap rather than as the count this sentence used to carry. It runs headless — '
+      + 'the "PTY tests need a terminal" exclusion was stale from 5183d69d — and this '
+      + 'gate\'s own exit code is the only honest statement of whether it passes. The pass '
+      + 'count quoted here for months (295) was 17 tests out of date, and the run that '
+      + 'produced it came from a shell exporting PROTEUS_ORIGIN + PROTEUS_TOKEN, which '
+      + 'silently moved ten of these tests onto their signed-in branch; '
+      + 'scripts/test-scratch-home.ts now strips those, so the result no longer depends '
+      + 'on whose shell ran it.',
+    blind: 'nothing in its own surface. It is the costliest gate at ci outside the live '
+      + 'eval tier — asserted from the declared costs in ladder.test.ts, where it used to '
+      + 'be a percentage of a denominator nobody could reproduce — which is why it is not '
+      + 'earlier.',
   },
   {
     run: 'bun test packages/pc-agent/',

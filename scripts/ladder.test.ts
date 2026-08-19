@@ -263,6 +263,20 @@ describe('every test file is claimed by some runner', () => {
     expect(empty).toEqual([]);
   });
 
+  test('the CLI suite is the only tier that runs its own files', () => {
+    // `bun test packages/cli/` says so in prose, and said "41 of these 42 files"
+    // until the 43rd landed. Derived as an empty overlap rather than as a count,
+    // for the reason claims() gives above: a cardinality over a globbed set is
+    // drift by construction, and this one drifted while nothing noticed.
+    const cliGate = 'bun test packages/cli/';
+    const cliFiles = claims(cliGate, tracked);
+    expect(cliFiles.length).toBeGreaterThan(0);
+    const elsewhere = new Set(gatesFor('ci', deploy)
+      .filter((gate) => gate.run !== cliGate)
+      .flatMap((gate) => claims(gate.run, tracked)));
+    expect(cliFiles.filter((path) => elsewhere.has(path))).toEqual([]);
+  });
+
   test('bun does not discover the files it cannot run', () => {
     // The other half of the same contract: tools/oxlint/anti-slop errors under
     // bun (oxlint's RuleTester needs Node raw transfer), the gitignored
@@ -365,6 +379,23 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
       .filter((gate) => gate.seconds <= 0 || gate.blind.length < 20 || gate.catches.length < 20)
       .map((gate) => gate.run);
     expect(vague).toEqual([]);
+  });
+
+  test('the CLI suite is the costliest gate at ci outside the live eval tier', () => {
+    // Its `blind` claims this, and claimed it as "54% of the suite's wall clock
+    // for 7.5% of its tests" — two percentages over denominators nobody could
+    // reproduce, beside a pass count that had drifted by 17. An ordering over the
+    // declared costs cannot rot: a gate that overtakes it turns this red on the
+    // commit that makes the sentence wrong.
+    const atCi = gatesFor('ci', deploy);
+    const cliGate = 'bun test packages/cli/';
+    const cli = atCi.find((gate) => gate.run === cliGate);
+    if (!cli) throw new Error(`${cliGate} is not a gate at ci`);
+    const dearer = atCi
+      .filter((gate) => gate.run !== cliGate && gate.run !== 'bun run test:eval')
+      .filter((gate) => gate.seconds >= cli.seconds)
+      .map((gate) => `${gate.run} — ${String(gate.seconds)}s`);
+    expect(dearer).toEqual([]);
   });
 });
 
