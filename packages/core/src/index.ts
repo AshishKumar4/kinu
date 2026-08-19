@@ -482,15 +482,23 @@ export {
   type DelegationDepthRefusal,
 } from './subordinates/depth';
 export {
-  buildBuiltinTools, PEER_REPLY_TOPIC,
-  type AgentsToolDeps, type AgentsForkDeps,
+  buildBuiltinTools,
   type BuiltinToolDeps,
   type CraftedToolSet, type CreateExecuteToolFactory,
+  type ReportToolDeps,
+} from './tools/builtins';
+// An actor's surface is buildBuiltinTools plus `agents` — the one tool whose
+// implementation is the search engine, so the factory that emits a node's own
+// surface cannot hold it. See tools/actor-tools.ts.
+export {
+  buildActorTools, PEER_REPLY_TOPIC,
+  type ActorToolsetDeps,
+  type AgentsToolDeps, type AgentsForkDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
   type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
-  type PeersToolDeps, type ReportToolDeps,
+  type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
-} from './tools/builtins';
+} from './tools/actor-tools';
 // Web search + fetch — provider seam + key-less default + codemode provider.
 export * from './web/index';
 // Recursive Language Models — the llm.query codemode provider (both backends).

@@ -1,6 +1,9 @@
 /**
- * The canonical built-in tool factory. Both CF and CLI surfaces call this —
- * the single source of truth for the LLM's capability surface.
+ * The canonical built-in tool factory — the single source of truth for the
+ * LLM's capability surface. An ACTOR is built from `buildActorTools`
+ * (tools/actor-tools.ts), which is this factory plus the one tool this one
+ * cannot hold; a head or a swarm node is built from this factory directly and
+ * filtered by `keepBuiltins` (heads/types.ts).
  *
  * The agent's tool surface is deliberately SMALL: not for token cost, but
  * because every native tool is a standing choice the model weighs on EVERY
@@ -21,10 +24,15 @@
  *   4. agents         — the ONE delegation tool: ephemeral forks (heads /
  *                       mcts settle), persistent subordinates, and peer
  *                       workspace messaging behind a single action surface.
- *                       Gated on deps.agents; each ACTION is further gated on
- *                       the deps group that powers it (fork / team / peers),
- *                       so a CLI session gets fork only and a subordinate
- *                       actor never sees hire. See tools/agents-tool.ts.
+ *                       NOT registered here — see tools/actor-tools.ts, which
+ *                       wraps this factory with it. Its implementation IS the
+ *                       search engine (strategy/swarm-run → strategy/node-agent),
+ *                       and a node's own surface comes back through this
+ *                       factory, so holding it here was a runtime import cycle:
+ *                       the module-scope reader at the far end of that ring is
+ *                       what put six tests in the TDZ. No confined surface has
+ *                       this tool anyway (HEAD_BUILTIN_TOOLS omits it), so the
+ *                       split costs nothing it was buying.
  *   5. memory         — the ONE durable-state tool: prose notes (save / search,
  *                       auto-hybrid FTS5 + Vectorize when a VectorStore is
  *                       wired), the typed keyed world model (remember / recall
@@ -49,8 +57,8 @@
  * enough that it does not earn a standing top-level choice.
  *
  * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
- * execute_tools, the agents fork substrate) are injected through
- * BuiltinToolDeps so the factory stays portable.
+ * execute_tools) are injected through BuiltinToolDeps so the factory stays
+ * portable; the agents fork substrate rides ActorToolDeps for the reason above.
  */
 
 import { tool, jsonSchema } from 'ai';
@@ -78,7 +86,6 @@ import { craftInvocationError } from '../craft/in-episode';
 import { DEFAULT_CONFIG } from '../config';
 import { formatExecResult, isFailingResultText, refusalText } from '../execution/exec-result';
 import { TurnEscalationLedger } from '../execution/escalation';
-import { createAgentsTool, type AgentsToolDeps } from './agents-tool';
 import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool';
 import { createTasksDispatcher, type TasksToolInput } from './tasks-tool';
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index';
@@ -171,10 +178,6 @@ export interface BuiltinToolDeps {
     /** Default 20. */
     maxRelevant?: number;
   };
-  /** The `agents` delegation tool's deps: fork substrate (StrategyRegistry +
-   *  model + host-injected infra) and/or subordinate + peer transports. The
-   *  tool is registered when ANY group is wired; actions gate per group. */
-  agents?: AgentsToolDeps;
   /** Subordinate → parent progress reporting (the `report` tool). Wired only
    *  on subordinate actors. */
   report?: ReportToolDeps;
@@ -213,18 +216,6 @@ export interface BuiltinToolDeps {
    */
   logger?: Logger;
 }
-
-// The Team/Peers deps contracts (and the reserved peer-reply topic) live with
-// the tool that consumes them — tools/agents-tool.ts — and are re-exported
-// here for the backends that implement them.
-export {
-  PEER_REPLY_TOPIC,
-  type AgentsToolDeps, type AgentsForkDeps,
-  type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
-  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
-  type PeersToolDeps,
-  type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
-} from './agents-tool';
 
 // ── Report (subordinate → parent) tool contract ─────────────────────────────
 
@@ -615,14 +606,6 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     budget,
     memory,
   });
-
-  // ── agents — the ONE delegation tool ──────────────────────────────────
-  // Fork dispatch (heads / mcts settle), subordinate hiring and peer
-  // messaging behind a single action surface. Registered when any deps group
-  // is wired; per-action gating lives in createAgentsTool.
-  if (deps.agents && (deps.agents.fork || deps.agents.team || deps.agents.peers)) {
-    tools.agents = createAgentsTool(deps.agents);
-  }
 
   // ── 5. memory — the ONE durable-state tool ────────────────────────────────
   // Prose notes (save / search), the typed keyed world model (remember /

@@ -404,8 +404,14 @@ export function requireSandboxedExecutors(taskId: string, rt: AgentRuntime): voi
  * zero for a reason that has nothing to do with the agent, and a corpus of
  * unearned zeros is as useless as one of unearned ones. Checked before the model
  * is driven, so the misconfiguration costs nothing.
+ *
+ * EXPORTED because the live swarm eval needs the same fact for the same reason: its
+ * objective's verifier is `exec-ratio`, which spawns node inside this shell, so a
+ * shell-less runtime would report every candidate unmeasurable and the search would
+ * conclude that the model found nothing. One check, two callers — a second copy is a
+ * second thing to keep in step with `AgentRuntime`.
  */
-function requireVerifierShell(taskId: string, rt: AgentRuntime): Shell {
+export function requireVerifierShell(taskId: string, rt: AgentRuntime): Shell {
   const shell = rt.shell;
   if (!shell) {
     throw new DegenerateRuntimeError(taskId,

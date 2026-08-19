@@ -3,11 +3,13 @@
   "jsPlugins": [
     { "name": "anti-slop", "specifier": "./tools/oxlint/anti-slop/index.ts" }
   ],
+  "plugins": ["eslint", "unicorn", "oxc", "typescript", "import"],
   "options": {
     "denyWarnings": true,
     "reportUnusedDisableDirectives": "error"
   },
   "rules": {
+    "import/no-cycle": "error",
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
     "anti-slop/no-copy-rpc-stub": "error",

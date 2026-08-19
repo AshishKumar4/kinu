@@ -25,6 +25,7 @@ import type { FacetHost } from '../src/facet-spawn';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
+const { ExplorationAgent } = await import('../src/exploration');
 const { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet, spawnHeadFacet } =
   await import('../src/facet-spawn');
 
@@ -61,6 +62,12 @@ function headInput(id: string): HeadInput {
 }
 
 const identity = { ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main' };
+
+/** The class this host creates facets as. Nothing below asserts on it — the
+ *  count is keyed by facet id — but `FacetHost` requires the host to supply the
+ *  class, because the spawner imports it type-only. A subclass because that is
+ *  exactly what `SubAgentClass<ExplorationAgent>` admits — no cast needed. */
+class FakeExplorationFacet extends ExplorationAgent {}
 
 /**
  * A facet host that MODELS STORAGE rather than just recording calls.
@@ -106,10 +113,12 @@ function storageModelingHost(options: { runAsHeadRejects?: boolean } = {}) {
     deleteSubAgent: async (_cls: { name: string }, id: string) => {
       liveFacets.delete(id);
     },
+    explorationFacet: () => FakeExplorationFacet,
   };
 
-  // SAFETY: this locally constructed host implements all three members FacetHost
-  // owns, and every stub method spawnBranchFacet/spawnHeadFacet invokes.
+  // SAFETY: this locally constructed host implements all four members FacetHost
+  // owns — the three SDK verbs plus `explorationFacet` — and every stub method
+  // spawnBranchFacet/spawnHeadFacet invokes.
   return {
     host: host as FacetHost,
     liveCount: () => liveFacets.size,

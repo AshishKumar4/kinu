@@ -35,7 +35,7 @@ import { tmpdir } from 'node:os';
 import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 
 import {
-  buildBuiltinTools,
+  buildActorTools,
   createMCTSStrategy,
   createStrategyRegistry,
   DEFAULT_CONFIG,
@@ -164,7 +164,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     registry = createStrategyRegistry();
     registry.register(createMCTSStrategy());
 
-    tools = buildBuiltinTools({
+    tools = buildActorTools({
       rt,
       agents: {
         mode: 'build',

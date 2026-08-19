@@ -51,7 +51,7 @@ import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores"
 import { generateText, type LanguageModelUsage } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
-import { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet } from "./facet-spawn";
+import { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet, type FacetHost } from "./facet-spawn";
 import {
   createHubDeviceTransport,
   type DeviceHubClient,
@@ -87,7 +87,7 @@ import * as v from 'valibot';
  * legitimately needs them. A subclass (which DOES have access) passes `this`
  * cast to this view — so the access is sound, just opened to these helpers.
  */
-type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'abortSubAgent' | 'deleteSubAgent'>;
+type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'> & FacetHost;
 
 export interface CFRuntimeAccess {
   readonly env: Env;

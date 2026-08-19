@@ -174,9 +174,9 @@ describe('fork revalidation policy', () => {
     );
     // One renderer, not two: the steps go through the chat's component, and the
     // user affordances are absent because they are simply not passed.
-    expect(transcript).toContain('import { MessageView } from "@/pages/WorkspacePage"');
+    expect(transcript).toContain('import { MessageView } from "@/components/MessageView"');
     expect(transcript).toContain('<MessageView');
-    for (const affordance of ['onFork', 'onFeedback', 'onRestoreFiles', 'onPickTake']) {
+    for (const affordance of ['onFork', 'onFeedback', 'onRestoreFiles', 'takesChip']) {
       expect(transcript).not.toContain(`${affordance}=`);
     }
     // One read model, not a client-side choice of store.

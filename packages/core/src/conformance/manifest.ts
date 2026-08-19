@@ -4,7 +4,7 @@
  *
  * The disease this kills: "X never worked on Y backend". Every builtin tool,
  * agents action, memory action and SQL table is dep-gated at a composition
- * root (`buildBuiltinTools`, `ensureSchema`, …), so a capability someone
+ * root (`buildActorTools`, `ensureSchema`, …), so a capability someone
  * forgot to wire is structurally indistinguishable from one deliberately left
  * out — absence carries no record of intent. This manifest is that record:
  * for each capability, each root either wires it or names the reason it does

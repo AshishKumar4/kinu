@@ -21,6 +21,13 @@ mockAgentsSdk();
 const { ExplorationAgent } = await import('../src/exploration');
 const { spawnNodeFacet } = await import('../src/facet-spawn');
 
+/** The class the fake host hands the spawner, and a DISTINCT identity from
+ *  `ExplorationAgent` on purpose: the spawner must create whatever class its
+ *  host supplies, and a class the spawner cannot name is what proves the
+ *  argument is forwarded rather than hardcoded. A subclass because that is
+ *  exactly what `SubAgentClass<ExplorationAgent>` admits — no cast needed. */
+class FakeExplorationFacet extends ExplorationAgent {}
+
 interface Call { method: string; args: unknown[] }
 
 function nodeSpec(): NodeRunSpec {
@@ -105,10 +112,12 @@ function makeHost(options: { deleteSubAgentThrows?: boolean; runAsNodeRejects?: 
       calls.push({ method: 'deleteSubAgent', args: [cls, name] });
       if (options.deleteSubAgentThrows) throw new Error('facet storage is unreachable');
     },
+    explorationFacet: () => FakeExplorationFacet,
   };
-  // SAFETY: this locally constructed host implements all three members FacetHost
-  // owns, and the stub it returns declares every exploration method the node
-  // spawner reaches, each recording its exact argument list.
+  // SAFETY: this locally constructed host implements all four members FacetHost
+  // owns — the three SDK verbs plus `explorationFacet` — and the stub it returns
+  // declares every exploration method the node spawner reaches, each recording
+  // its exact argument list.
   return { host: host as FacetHost, calls };
 }
 
@@ -126,8 +135,8 @@ describe('swarm-node facet spawn', () => {
     });
 
     expect(methods(calls)).toEqual(['subAgent', 'setOwner', 'setSharedParent', 'initNode']);
-    // A node spawns the bare ExplorationAgent, keyed by the search's own node id.
-    expect(calls[0]?.args).toEqual([ExplorationAgent, 'node-1']);
+    // A node spawns the class its host supplies, keyed by the search's own node id.
+    expect(calls[0]?.args).toEqual([FakeExplorationFacet, 'node-1']);
     expect(calls[1]?.args).toEqual(['user-1', 'pwc_parent']);
     // The ROOT workspace, unchanged: a node's file plane is the origin's, and the
     // search it reports to runs there.
@@ -148,10 +157,10 @@ describe('swarm-node facet spawn', () => {
     node.abort('the search was aborted');
 
     expect(methods(calls)).toEqual(['runAsNode', 'deleteSubAgent', 'abortSubAgent']);
-    expect(calls[1]?.args).toEqual([ExplorationAgent, 'node-1']);
+    expect(calls[1]?.args).toEqual([FakeExplorationFacet, 'node-1']);
     // Nothing is asked of the facet before eviction: a node has no abort callable,
     // so the reason rides the SDK's own abort channel.
-    expect(calls[2]?.args).toEqual([ExplorationAgent, 'node-1', 'the search was aborted']);
+    expect(calls[2]?.args).toEqual([FakeExplorationFacet, 'node-1', 'the search was aborted']);
   });
 
   test('a crashed node still reclaims its storage, and the run error reaches the caller', async () => {

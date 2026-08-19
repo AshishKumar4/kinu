@@ -175,13 +175,22 @@ function durableObjectCorpus(): {
     `no source found under ${WORKER}; a facet scan over an empty corpus finds no facets and passes`,
   );
 
-  // Facet classes, named where they are instantiated. Deliberately the call sites and not an
-  // `extends Agent` scan: a base class or a test double also matches that shape, while a name passed
-  // to the SDK's facet API is a class the deployment really activates.
+  // Facet classes, named to the SDK's facet API. Deliberately not an `extends Agent` scan: a base
+  // class or a test double also matches that shape, while a name the SDK's facet API is given is a
+  // class the deployment really activates.
+  //
+  // TWO forms, because a facet class reaches that API two ways and this gate must not be keyed on
+  // the syntax of one of them. `subAgent(Cls, id)` names it at the call site. `SubAgentClass<Cls>`
+  // names it in the hook a concrete root supplies the value through — the shape
+  // `ActorAgent.subordinateFacet()` and `FacetHost.explorationFacet()` use, which exists precisely
+  // so a low-level module carries no runtime import of the class it spawns. Matching only the call
+  // site made this corpus collapse to zero the moment `facet-spawn.ts` stopped naming
+  // `ExplorationAgent` directly, which is an empty-corpus pass, not a fix.
   const facets = [
     ...new Set(
       sources.flatMap((text) => [
         ...text.matchAll(/\b(?:sub|abort|delete)SubAgent\(\s*([A-Z][A-Za-z0-9_$]*)/gu),
+        ...text.matchAll(/\bSubAgentClass<\s*([A-Z][A-Za-z0-9_$]*)/gu),
       ].map((m) => m[1]!)),
     ),
   ];

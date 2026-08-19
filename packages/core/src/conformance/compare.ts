@@ -2,7 +2,7 @@
  * Backend conformance comparator — reality vs the manifest, both directions.
  *
  * The comparator never observes anything itself: each backend package owns a
- * harness that runs its REAL composition root (the actual `buildBuiltinTools`
+ * harness that runs its REAL composition root (the actual `buildActorTools`
  * call site, the actual schema path) and hands the observed sets here. Keeping
  * observation in the backend and judgment in core is what stops the gate from
  * growing a parallel re-implementation of the wiring it checks.

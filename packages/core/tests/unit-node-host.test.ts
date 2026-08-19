@@ -23,7 +23,9 @@ import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
-import { PROPOSE_BRANCH_TOOL, runNodeAgent, runNodeLoop } from '../src/strategy/node-agent';
+import {
+  nodeWallClockEnvelopeMs, PROPOSE_BRANCH_TOOL, runNodeAgent, runNodeLoop,
+} from '../src/strategy/node-agent';
 import type {
   NodeAgentDeps,
   NodeAgentInput,
@@ -134,6 +136,10 @@ function fixture(opts?: {
     model: scriptedReporter(opts?.answer ?? 'sort once instead of comparing every pair', opts?.offered),
     journal,
     maxSteps: 4,
+    // Required, and derived rather than picked, for the reason the type now enforces:
+    // a node with no deadline of its own leaves the search's abort signal as its only
+    // clock, and that signal cuts a whole wave at once.
+    maxWallClockMs: nodeWallClockEnvelopeMs(4),
     logger: createRecordingLogger(),
   };
   if (opts?.host !== undefined) deps.host = opts.host;

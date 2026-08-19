@@ -51,6 +51,26 @@ const VITEST_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
     </testsuite>
 </testsuites>`;
 
+/**
+ * The LIVE SWARM arm's report, verbatim from a credential-free run of the third arm.
+ *
+ * Its own fixture rather than a variant of the one above, because the property the
+ * two prove together is that each arm is INDEPENDENTLY provable: both are vitest, so
+ * they share the reporter's shape and differ only in which file they name — which is
+ * exactly the confusion a single fixture would hide. One skip and one test that runs,
+ * which is what this arm reports with no credential.
+ */
+const SWARM_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="2" failures="0" errors="0" time="0.044844334">
+    <testsuite name="tests/evals/swarm.eval.ts" tests="2" failures="0" errors="0" skipped="1" time="0.044844334">
+        <testcase classname="tests/evals/swarm.eval.ts" name="Swarm evals — a live measured search through the settled tool surface &gt; the settled surface is the path: swarm is offered, and an unknown field is refused by name" time="0.003815921">
+        </testcase>
+        <testcase classname="tests/evals/swarm.eval.ts" name="Swarm evals — a live measured search through the settled tool surface &gt; MEASURED: a live swarm crowns a winner that beats its own measured baseline" time="0">
+            <skipped/>
+        </testcase>
+    </testsuite>
+</testsuites>`;
+
 describe('parseJUnit', () => {
   test('counts every testcase, not only the self-closing ones', () => {
     // A regex matching only `<testcase ... />` would report 1 test and 0 skips
@@ -239,17 +259,25 @@ describe('unmatchedTargets', () => {
 
   // RED BEFORE: `./tests/` is satisfied by the bun arm alone, so a run that
   // reported only bun looked complete while the whole vitest arm went unmeasured.
-  test('a bun-only report leaves the vitest target unmatched', () => {
+  test('a bun-only report leaves every vitest target unmatched', () => {
     expect(unmatchedTargets(parseJUnit(REPORT))).toEqual([...SKIP_RATCHET_VITEST_TARGETS]);
   });
 
-  test('both arms reporting satisfies every target', () => {
-    const merged = mergeReports([parseJUnit(REPORT), parseJUnit(VITEST_REPORT)]);
+  test('every arm reporting satisfies every target', () => {
+    const merged = mergeReports(
+      [REPORT, VITEST_REPORT, SWARM_REPORT].map((xml) => parseJUnit(xml)),
+    );
     expect(unmatchedTargets(merged)).toEqual([]);
   });
 
-  test('a vitest-only report leaves the bun target unmatched', () => {
-    expect(unmatchedTargets(parseJUnit(VITEST_REPORT))).toEqual([...SKIP_RATCHET_TARGETS]);
+  // ONE ARM AT A TIME, both directions, because the two vitest arms are the pair a
+  // single target could not tell apart: they run under one config and differ only in
+  // the file they select, so a report from either must leave the OTHER owing one.
+  test('a report from one vitest arm leaves the bun target and the other arm unmatched', () => {
+    expect(unmatchedTargets(parseJUnit(VITEST_REPORT)))
+      .toEqual([...SKIP_RATCHET_TARGETS, './tests/evals/swarm.eval.ts']);
+    expect(unmatchedTargets(parseJUnit(SWARM_REPORT)))
+      .toEqual([...SKIP_RATCHET_TARGETS, './tests/evals/behaviour.eval.ts']);
   });
 });
 

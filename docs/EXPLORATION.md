@@ -301,6 +301,50 @@ implementation, and it would be the version without the mid-flight guard.
 Implemented by `strategy/node-agent.ts` over `heads/head-inference.ts`; the tool
 surface is `heads/head-tools.ts`.
 
+## The node envelope
+
+A node's wall clock is **derived from its step cap**, never chosen: a node is
+`maxSteps` steps and one step is bounded by the measured turn envelope, so the
+node's clock is the product. A node is many turns, so pinning its whole clock at
+one turn envelope is as wrong as pinning a turn at 120 s was — one live run's
+three nodes were still working at 1,216,358 / 1,310,061 / 1,336,833 ms across
+22 / 25 / 26 steps, and their mean steps were 55,289 / 52,403 / 51,417 ms.
+
+Every node has one. It used to be opt-in and no caller opted in, which left the
+search's abort signal as a node's only clock — and that signal is a **run-level**
+bound: it cuts a whole wave mid-step at once, so three nodes each inside their
+own step budget were stopped together and the search crowned nothing.
+
+**A cooperative deadline cannot pre-empt a step.** It is read between steps, so
+the step that is running when the deadline passes runs to completion however long
+that takes; on one measurement a single step held the runner at 91% CPU for 26
+minutes and neither this deadline nor a caller's `AbortSignal` had any effect on
+it. That is a documented limit rather than a solved problem: bounding it would
+mean bounding what one step may request, and nothing in the measurement says what
+that bound should be. What IS bounded is a many-step node, which is what a node
+is.
+
+Implemented by `nodeWallClockEnvelopeMs` in `strategy/node-agent.ts`, enforced
+through `budgetExhausted` in the shared loop's stop condition.
+
+## A node that did not finish is not a node that measured badly
+
+An unfinished node — aborted, out of steps, errored — still returns a report, and
+that report's summary is a **status line**, not an answer. It is never measured:
+the instrument is not asked and the ensemble is not sampled, so no score exists
+to rank it by and the candidate carries the status, the step count and the clock
+instead.
+
+This is a different fact from **unmeasurable**, which is the instrument declining
+to turn a real answer into a number. Collapsing the two reports the verifier's
+complaint about a status line as the story of a node the clock stopped; and where
+the status line happens to carry a code fence, collapsing them **scores** the
+unfinished node, so the ranking measures how far a node got before the clock
+rather than how good its answer was.
+
+Implemented by `SwarmCandidate.incomplete` and the scoring loop in
+`strategy/swarm-run.ts`.
+
 ## Node identity
 
 A node's id and its depth come from the **engine's own row**. A node states

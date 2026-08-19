@@ -28,6 +28,7 @@ import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
 import {
+  buildActorTools,
   buildBuiltinTools,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS,
@@ -185,7 +186,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const stubReport = {
       report: async () => ({ delivered: true }),
     };
-    const t = buildBuiltinTools({
+    const t = buildActorTools({
       rt,
       craftedToolExecute: nodeCraftedExecute,
       createExecuteTool: nodeExecFactory,

@@ -1341,8 +1341,22 @@ export interface SwarmCandidate {
   readonly id: string;
   readonly artifact: string;
   readonly measured: MeasuredValue | null;
-  /** Why there is no measurement, when there is none. */
+  /** Why the INSTRUMENT produced no number for an answer this node did produce. */
   readonly unmeasurable: string | null;
+  /**
+   * Why this node produced no answer at all — its status, its step count and its wall
+   * clock — and null when it ran to completion.
+   *
+   * SEPARATE FROM {@link unmeasurable} because they are opposite facts and a ranking
+   * that confuses them ranks on the clock. An unmeasurable candidate is an answer the
+   * instrument could not turn into a number; an incomplete one is a node that was
+   * aborted, ran out of steps or errored, so the string the instrument would have been
+   * handed is a status line rather than an answer. Both leave `score` null and both are
+   * out of selection; only this one says the run was cut short, and without it a swarm
+   * whose whole wave was stopped by its caller's deadline reports the verifier's
+   * complaint about the status line and nothing about the deadline.
+   */
+  readonly incomplete: string | null;
   readonly score: number | null;
 }
 

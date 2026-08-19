@@ -17,6 +17,7 @@
  */
 
 import { callable, type AgentContext, type Connection, type ConnectionContext, type SubAgentClass } from "agents";
+import { ExplorationAgent } from './exploration';
 // Type-only, so it is erased and the base class carries no runtime import of
 // its own subclass. The VALUE comes from `subordinateFacet()`, which each
 // concrete root supplies.
@@ -57,7 +58,7 @@ import {
   SCAFFOLD_TURN_TIMEOUT_MS,
   effortFor, type CompletedTurn, type TurnContinuity,
   // canonical tool + prompt surface — single source of truth
-  buildBuiltinTools,
+  buildActorTools,
   withClampedToolResults,
   type WebSearchProvider,
   buildSystemPromptSync,
@@ -553,6 +554,12 @@ export abstract class ActorAgent extends Think<Env> {
    *  base class must not import its own subclass — the TYPE is imported (and
    *  erased), the VALUE comes from here. */
   protected abstract subordinateFacet(): SubAgentClass<SubordinateAgent>;
+
+  /** Exploration facets (heads, branches, swarm nodes) of this actor. The VALUE
+   *  lives here rather than in facet-spawn.ts so that helper carries no runtime
+   *  import of the class it spawns — that import closed a cycle through
+   *  runtime.ts and head-runtime.ts. */
+  explorationFacet(): SubAgentClass<ExplorationAgent> { return ExplorationAgent; }
 
   /**
    * The roster half of the actor profile — wired only while this actor has room
@@ -2427,7 +2434,7 @@ export abstract class ActorAgent extends Think<Env> {
       // No registry sync: PreambleCraftedExecutor reads craftStore.list()
       // fresh at every execute. See docs/CRAFT-ARCHITECTURE.md §5.6.
 
-      const builtinDeps: Parameters<typeof buildBuiltinTools>[0] = {
+      const builtinDeps: Parameters<typeof buildActorTools>[0] = {
         rt: this.rt,
         preBuiltExecuteTool: this.getExecuteToolsTool(mode, profileKey),
         // The turn's cumulative bulk budget lives on the accumulator, so the
@@ -2461,7 +2468,7 @@ export abstract class ActorAgent extends Think<Env> {
       };
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
       if (mode === 'plan' && actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
-      const tools = buildBuiltinTools(builtinDeps);
+      const tools = buildActorTools(builtinDeps);
 
       // Anthropic prompt-caching: one breakpoint on the last tool caches the
       // whole stable tool surface (tools precede system+messages in Anthropic's

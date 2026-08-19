@@ -107,5 +107,9 @@
   {
     "key": "tests/evals/behaviour.eval.ts › corpus quality — can this corpus rank anything at all > the corpus is not saturated — arms could disagree on it",
     "reason": "needs a live model: reads the task_outcome rows the 34 episodes above produced and refuses a corpus that every attempt swept or every attempt failed. Skipped rather than passed without a model on purpose — an empty observation list must never read as a satisfied property. Its sibling in the same describe (`the corpus is large enough for significance to be reachable`) is static and runs at every tier."
+  },
+  {
+    "key": "tests/evals/swarm.eval.ts › Swarm evals — a live measured search through the settled tool surface > MEASURED: a live swarm crowns a winner that beats its own measured baseline",
+    "reason": "needs a live model BY DEFINITION: it drives agents({action:'swarm'}) through the real tool surface and grades the tree on the caller's own exec-ratio verifier — a winner crowned, its artifact measured against the run's own measured baseline, exploration_records rows reachable under the objective's key, and the judgeEnsemble/fanIn/carry disclosures consistent with the axes in force. A mock model writes whatever the fixture scripts, so 'did a real search beat the reference' is not a question one can answer. The credential-free half of the same file — the action is offered, and the strict parse refuses an unknown field naming the field it meant — runs at every tier, and the engine's own tree, arbiter, DAG and records behaviour is covered credential-free at packages/core/tests/unit-swarm-depth.test.ts. Runs in the eval tier's own live swarm arm, which is held to its own liveness assertion."
   }
 ]
