@@ -137,10 +137,10 @@ Seven presets exist and four of them resolve:
 | `custom` | none of the three fits, so state all six axes in `config` under a `label`, optionally seeded from `from` | as the axes require |
 
 `ideate` is flat by construction. `advance:'none'` means there is no selection
-step, so there is no second level and depth is fixed at 1. `optimise` climbs one
-number with `uct` over a verifier, at depth 5 and 3 branches. `prove` searches
-deepest, at depth 7, because a checker refutes a wrong branch instead of letting
-a plausible score carry it down.
+step, so there is no second level: its row is depth 1 and 5 branches. `optimise`
+climbs one number with `uct` over a verifier, at depth 5 and 3 branches. `prove`
+searches deepest, at depth 7 and 3 branches, because a checker refutes a wrong
+branch instead of letting a plausible score carry it down.
 
 **Three of the seven refuse to resolve, and each refusal names what is missing.**
 `research` and `audit` are given `carry:'artifacts'`, and `redteam` is given
