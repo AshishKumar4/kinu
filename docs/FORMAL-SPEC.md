@@ -36,14 +36,20 @@ Counts are `#print axioms` entries in `lean/Proteus/Axioms.lean` grouped by
 namespace, measured 2026-08-19. Every one of the 330 is claimed by a requirement
 in the traceability map, which the checker holds in both directions.
 
-Of the 330 theorems, the map classifies **256 as `proved-in-abstract-model`** and
-**74 as `by-construction-witness`**. Near-definitional statements such as
-nonnegativity of a `Nat` EMA score, and the inability of a constructor to produce
-`SQLWrite`, are witnesses rather than deep safety proofs.
+**Two denominators, and confusing them is the mistake this section exists to
+prevent.** A status is declared on a REQUIREMENT and inherited by every theorem
+that requirement claims, so the same four words count twice over two different
+totals. Name the denominator every time.
 
-Of the 43 requirements: 25 are `proved-in-abstract-model`, 12 are
-`by-construction-witness`, 5 are `specified-not-modeled` and 1 is a
-`trusted-model-assumption`.
+By theorem, over 330: **256 `proved-in-abstract-model`** and **74
+`by-construction-witness`**. Near-definitional statements such as nonnegativity of
+a `Nat` EMA score, and the inability of a constructor to produce `SQLWrite`, are
+witnesses rather than deep safety proofs.
+
+By requirement, over 43: **25 `proved-in-abstract-model`**, **12
+`by-construction-witness`**, **5 `specified-not-modeled`** and **1
+`trusted-model-assumption`**. The requirement total carries two statuses the
+theorem total cannot, because five requirements claim no theorem at all.
 
 ## Claim taxonomy
 
@@ -118,6 +124,27 @@ The traceability checker has no package dependencies. It fails when:
   assumption;
 - a requirement has an invalid status, missing evidence, duplicate claims, or
   a TypeScript reference whose file or line does not exist.
+
+### What the citation gate cannot verify
+
+The gate prints its own blind spots on every pass, and they are the numbers a
+reader needs to decide how much a citation is worth. Measured 2026-08-19 over
+1,461 files, against 93 module citations, 46 theorem citations and 1 line
+citation:
+
+- **A theorem name is the only shape this gate can verify.** It resolves the name
+  against the declaration, so a rename turns the gate red.
+- **A line citation is bounded, not verified.** Both endpoints of a range must sit
+  inside the module, and nothing checks that those lines still hold the claimed
+  content. An insertion above a cited range slides it onto different code and the
+  gate stays green. That is why this document cites by name.
+- **25 citations carry an author-declared category** (`CITATION_ILLUSTRATIVE`).
+  The declaration is TRUSTED, not verified: the gate checks only that the site
+  behaves like an illustration, never that the author was right to declare one.
+  The gallery fixture naming a Lean module that does not exist is one of the 25.
+- **1 theorem name carries no underscore** and is invisible to the name scanner,
+  so a rename of that one is not caught. The blind spot is enrolled rather than
+  discovered, so a new one fails the gate naming itself.
 
 ## Implementation correspondence
 
