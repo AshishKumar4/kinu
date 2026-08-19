@@ -46,7 +46,7 @@ export type SwarmUnit = (typeof SWARM_UNITS)[number];
  * `own` — this node's own observation. `ancestors` — every ancestor's, walked
  * root-ward. The axis is load-bearing rather than cosmetic: without it
  * Tree-of-Thoughts and LATS-over-programs are the same configuration, and they
- * are measurably not (feat/mcts-as-lats, commit 0da703d6).
+ * are measurably not (feat/mcts-as-lats, commit 47845c27).
  */
 export const SWARM_OBSERVES = ['none', 'own', 'ancestors'] as const;
 export type SwarmObserve = (typeof SWARM_OBSERVES)[number];

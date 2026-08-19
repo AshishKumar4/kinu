@@ -3,7 +3,7 @@
  *
  * `bun pm scan` was named in `scripts/ladder.ts` as the tool covering the CVE
  * blind spot of `install-scripts-gate.ts` and was wired nowhere: measured at
- * b4b2f2d2 it appears in no package.json script, no workflow and no
+ * d02f146b it appears in no package.json script, no workflow and no
  * `scripts/*.ts`. Running it proves why — bun ships NO built-in scanner, so a
  * bare `bun pm scan` exits 1 with `error: no security scanner configured` and
  * `bun install` performs no advisory check at all. The blind spot was not a
@@ -244,7 +244,7 @@ export interface ReviewedPackage {
 
 /**
  * Every advisory this repository accepts, reviewed 2026-08-17 against bun.lock
- * at b4b2f2d2: 54 ids over 19 packages. Provenance in every reason is measured
+ * at d02f146b: 54 ids over 19 packages. Provenance in every reason is measured
  * `bun pm why` output, not inference.
  *
  * Seventeen arrive through wrangler, miniflare, puppeteer, the MCP SDK, @opentui

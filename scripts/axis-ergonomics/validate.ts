@@ -123,7 +123,7 @@ function r7Error(count: number, order: RemedyOrder): string {
       + 'for capability or cost routing, which is what the field is for.';
 }
 
-// R7 — landed in the spec at f30e48a0 as a direct result of this study's zoo
+// R7 — landed in the spec at ee8402e6 as a direct result of this study's zoo
 // arm, and this implementation exists to test the thing the arm could not:
 // does a REFUSAL hold where a docstring sentence did not? Stated over the
 // resolved composition rather than over intent, which no predicate reads:

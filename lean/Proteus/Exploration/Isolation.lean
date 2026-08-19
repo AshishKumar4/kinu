@@ -2,7 +2,7 @@
   Proteus.Exploration.Isolation — why the existing storage-isolation proof does NOT
   reach an agent node, proved rather than asserted. 0 sorry.
 
-  Models `docs/EXPLORATION-SPEC.md` §10.3 at `spec/exploration` HEAD f30e48a0.
+  Models `docs/EXPLORATION-SPEC.md` §10.3 at `spec/exploration` HEAD ee8402e6.
 
   **THIS FILE PROVES NOTHING ABOUT AGENT-NODE ISOLATION, AND THAT IS ITS POINT.**
 

@@ -3,7 +3,7 @@
  *
  * `install-scripts-gate.ts` decides which dependency lifecycle scripts may
  * EXECUTE and says so in its own blind-spot note: it cannot see CVEs, and
- * `bun pm scan` is the tool that can. Measured at b4b2f2d2, `bun pm scan` was
+ * `bun pm scan` is the tool that can. Measured at d02f146b, `bun pm scan` was
  * invoked nowhere in this repository — and could not have been useful if it had
  * been, because bun ships no scanner and answers `error: no security scanner
  * configured`. `scripts/security-scanner.ts` supplies one; this gate is what
