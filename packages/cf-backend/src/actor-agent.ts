@@ -1821,6 +1821,17 @@ export abstract class ActorAgent extends Think<Env> {
         // `headRuntime` uses, because it is the same question one level down: the
         // CLI wires none and its nodes run in process.
         nodeHost: nodeLoopHost === undefined ? undefined : () => nodeLoopHost,
+        // `nodeHome` is deliberately NOT wired, and this is the one place a reader
+        // would look for it. *Isolation* needs a uid-0 view of the workspace
+        // filesystem and the principal registry that scopes `/tmp`; this backend
+        // reaches its workspace by RPC to a Nimbus Durable Object, where every
+        // pid-less filesystem call acts as the session user
+        // (@nimbus-sh/worker session/rpc.js `callerCred`) and `confinePrincipal`
+        // has no RPC at all — it is a method on `SqliteVFS`, which lives in that
+        // other isolate. A facet is no better placed: an ExplorationAgent builds
+        // its runtime over the same remote session. So nodes here report
+        // `shared-origin-plane`, and are graded on what they REPORT. Inventing a
+        // directory would hand a node a boundary it does not have.
         mcts: {
           session: () => this.createMCTSSession(),
           search: this.mctsSearchStore,

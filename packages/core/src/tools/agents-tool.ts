@@ -49,6 +49,7 @@ import {
   type MissionGovernor, type MissionScope,
 } from '../mission-budget';
 import type { BuiltinStrategyOptions } from '../strategy/types';
+import { agentHomeNodeProvisioner, type NodeHomeHost } from '../strategy/node-workspace';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
@@ -260,10 +261,10 @@ const ASSIGN_NOTES = {
  * and the exploration substrate it names — the heads runtime, the durable MCTS
  * session — is the same substrate a search's nodes run on.
  *
- * `runSwarmAction` reads `rt`, `model` and `nodeHost`. The remaining two carry
- * the strategy plumbing the backends assemble around that substrate; they are
- * declared here because the backends' one builder produces the whole bag, not
- * because this module dispatches a strategy.
+ * `runSwarmAction` reads `rt`, `model`, `nodeHost` and `nodeHome`. The remaining
+ * two carry the strategy plumbing the backends assemble around that substrate;
+ * they are declared here because the backends' one builder produces the whole
+ * bag, not because this module dispatches a strategy.
  */
 export interface AgentsForkDeps {
   rt: AgentRuntime;
@@ -282,6 +283,22 @@ export interface AgentsForkDeps {
    * loop runs in this isolate — the same body, without a storage boundary.
    */
   nodeHost?: () => NodeLoopHost;
+  /**
+   * The three host-owned things a node's PRIVATE HOME needs — a uid-0 view of
+   * the workspace filesystem, the principal registry that scopes `/tmp`, and
+   * durable SQL for the uid allocation. *Isolation*.
+   *
+   * A FACTORY returning a promise, for `nodeHost`'s reason plus one of its own:
+   * an in-isolate filesystem boots, so a backend that resolved this at wiring
+   * time would serialise every turn on a boot only a search needs.
+   *
+   * Absent is a host with no credentialled filesystem — the hosted backend,
+   * whose workspace is a remote Nimbus session with no uid-0 view in the isolate
+   * and no `confinePrincipal` RPC. Then every node reports
+   * `shared-origin-plane`, which is REPORTED rather than disguised as a home: an
+   * invented directory would be a boundary a node believes in and does not have.
+   */
+  nodeHome?: () => Promise<NodeHomeHost>;
   /** Per-strategy infrastructure options the LLM must not set — e.g.
    *  `{ mcts: { session }, heads: { controller, inheritedContext, onPhase } }`. */
   defaultOptions?: () => BuiltinStrategyOptions;
@@ -931,6 +948,14 @@ async function runSwarmAction(
   // one: an absent key is what runs the loop in this isolate.
   const host = deps.nodeHost?.();
   if (host) Object.assign(runDeps, { host });
+  // The per-node private home, from the ONE construction site: a backend hands
+  // over the three things only a host has, never a provisioner of its own, so
+  // there is exactly one place a node's boundary is built. Resolved once per
+  // swarm call and awaited per node, so a turn that never searches never boots a
+  // filesystem, and an absent factory leaves the key absent — which is what makes
+  // every node report the shared plane instead of a home it does not have.
+  const nodeHome = deps.nodeHome;
+  if (nodeHome) Object.assign(runDeps, { provisionHome: agentHomeNodeProvisioner(nodeHome()) });
   readSpawnStarted(toolOptions)?.();
   const result = await runSwarm(runDeps, resolved);
   if ('reason' in result) return result;

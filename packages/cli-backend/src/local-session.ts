@@ -2294,10 +2294,10 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** The `agents` tool's fork substrate — the SAME shared factory the DO
-   *  wires (core fork-deps): single-shot + MCTS + heads, host-injected infra
-   *  recomputed per fork call. MCTS explores over rt.spawnBranch; heads run
-   *  in-process via the CLI HeadRuntime. The CLI wires no team or peer
-   *  transport, so fork is the tool's only action here. */
+   *  wires (core fork-deps): host-injected infra recomputed per fork call. A
+   *  swarm's nodes run their loops in this process and get their private homes
+   *  from this workspace's own uid-0 view. The CLI wires no team or peer
+   *  transport, so swarm is the tool's only action here. */
   private buildAgentsForkDeps(mode: WorkMode): AgentsForkDeps {
     return buildStrategyForkDeps({
       rt: this.rt,
@@ -2309,6 +2309,11 @@ export class LocalAgentSession implements BackendHost {
         spec: this.effectiveModelSpec(),
         pricing: this.modelCatalog.pricing(),
       }),
+      // *Isolation*: this backend's filesystem is in this isolate, so it can hand
+      // over the uid-0 view a home is chown'ed with. A runtime built elsewhere
+      // (`buildCLIHeadRuntime`, a bare AgentRuntime in a harness) wires none, and
+      // then its nodes report `shared-origin-plane` rather than a home they lack.
+      nodeHome: this.rt.nodeHome,
       mcts: {
         session: () => this.createMCTSSession(),
         search: this.mctsSearchStore,

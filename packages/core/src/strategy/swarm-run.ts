@@ -99,14 +99,16 @@
  * storage. So `unit:'thought'` is still inside the proof — one `generateText` call
  * whose entire output is text, `AcquiresOwnStorage` false, branch set empty,
  * `init_isolated` sufficient — and an AGENT node is NOT, because it holds a shell.
- * That obligation is named rather than assumed away, and what bounds it today is
- * `nodeWorkspace`: every agent node reports `isolation:'shared-origin-plane'`, which
- * is to say the search creates no per-node storage at all and therefore still adds
- * no branch storage — the workspace is the ORIGIN's, one plane, exactly as before.
- * What that costs is attribution, and the engine pays it the only honest way: a node
- * is graded on the candidate it REPORTS, never on a diff of a tree every node wrote.
- * A per-node home (*Isolation*) is what would need the preservation theorem
- * extended, and it is deliberately not built here.
+ * That obligation is named rather than assumed away, and it is now LIVE rather
+ * than hypothetical: on a host whose filesystem is in this isolate, `provisionHome`
+ * is wired and every agent node reports `isolation:'private-home'`, which is a node
+ * acquiring a storage identity no existing branch holds — exactly the case the
+ * preservation theorem does not reach. On a host without a uid-0 view the value is
+ * `shared-origin-plane`, the search creates no per-node storage, and the workspace
+ * is the ORIGIN's one plane exactly as before. What THAT costs is attribution, and
+ * the engine pays it the only honest way: a node is graded on the candidate it
+ * REPORTS, never on a diff of a tree every node wrote — which is why the grading
+ * rule is the same under both values and needs no theorem at all.
  */
 import { generateText } from 'ai';
 import type { LanguageModel, ModelMessage } from 'ai';

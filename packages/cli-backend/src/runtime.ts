@@ -24,7 +24,7 @@ import {
   DefaultExecutionRouter, createInlineExecutor, formatExecResult,
   withApprovalGatedShell,
   selectFastModel, createAgentConfigStore, initAgentConfigTable, initActorTables,
-  type ModelCallSink,
+  type ModelCallSink, type NodeHomeHost,
 } from '@proteus/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
@@ -95,6 +95,23 @@ export interface CLIRuntimeConfig {
  */
 export interface CLIRuntime extends AgentRuntime {
   setModelCallSink?(sink: ModelCallSink | null): void;
+  /**
+   * The three host-owned things a swarm node's private home needs — the uid-0
+   * view of this workspace's filesystem, the principal registry that scopes
+   * `/tmp`, and the SQL the uid allocation is a row in. *Isolation*.
+   *
+   * Present here and nowhere else because this backend's filesystem is an
+   * in-isolate `NimbusWorkspace`: the hosted backend reaches its workspace by RPC
+   * to another Durable Object, where every pid-less filesystem call is the session
+   * user and `confinePrincipal` has no RPC at all, so there is nothing there to
+   * hand over.
+   *
+   * A factory returning a promise, because the workspace boots: a turn that never
+   * searches must not pay for a boot only a search needs. Optional for the same
+   * reason `setModelCallSink` is — a plain `AgentRuntime` still satisfies this
+   * type, and then its nodes report `shared-origin-plane`.
+   */
+  nodeHome?: () => Promise<NodeHomeHost>;
 }
 
 /** The bun:sqlite surface every local SQL adapter here needs. */
@@ -372,10 +389,11 @@ export function createCLIRuntime(
   // component the cloud backend runs — a durable POSIX filesystem with a real
   // shell over it. The user's actual machine is the `laptop` EXECUTOR, not a
   // directory of this filesystem.
+  const workspaceSql = nimbusSql(db);
   const workspace = createWorkspaceFilesystem({
-    sql: nimbusSql(db),
+    sql: workspaceSql,
     transactions: localTransactions(db),
-    generation: nextWorkspaceGeneration(nimbusSql(db)),
+    generation: nextWorkspaceGeneration(workspaceSql),
     runtimes: WORKSPACE_RUNTIMES,
   });
   const vfs = workspace.vfs;
@@ -462,6 +480,11 @@ export function createCLIRuntime(
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
   }), {
     setModelCallSink: (sink: ModelCallSink | null) => { modelCallSink = sink; },
+    // A swarm node's home is provisioned against THIS filesystem — the same bytes
+    // `vfs` and the workspace shell address, so a node still reads everything the
+    // origin has — and the uid it is chown'ed to is a row in the same database
+    // that filesystem lives in, so a home outlives the activation that made it.
+    nodeHome: async () => ({ ...await workspace.privileged(), sql: workspaceSql }),
   });
 }
 

@@ -31,6 +31,7 @@ import {
   AGENT_HOME_MODE,
   AGENT_TMP_MODE,
   AGENT_UID_FLOOR,
+  SESSION_UID,
   type NodeIdentity,
   type NodeWorkspace,
   type NodeWorkspaceProvisioner,
@@ -48,6 +49,14 @@ afterEach(() => {
 });
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
+
+/** The ORIGIN: the session user every unnamed exec already runs as, and the owner
+ *  of the repository a node is asked to work on. Its uid is the substrate's, not
+ *  this file's — see {@link SESSION_UID}. */
+const ORIGIN: VfsCred = { uid: SESSION_UID, gid: SESSION_UID, groups: [SESSION_UID], umask: 0o022 };
+
+/** A tree only the ORIGIN has: the read window a node must keep. */
+const ORIGIN_REPO = '/home/user/repo';
 
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
@@ -184,6 +193,24 @@ describe('a provisioned node gets a real home', () => {
     expect(f.workspace.vfs.as(credB).readdir('/tmp').map((entry) => entry.name)).toEqual([]);
     expect(statOf(f.workspace, 'tmp/node-aX9').mode).toBe(AGENT_TMP_MODE);
   });
+
+  test('two readers who are not the node can read it — which is what 0o755 is for', async () => {
+    const f = await openFixture();
+    const provisioned = await f.provision(node('aX9'));
+    f.workspace.vfs.as(credOf(provisioned)).writeFile(`${provisioned.home}/candidate.md`, 'my answer\n');
+
+    // The GRADER is scored on what is in a node's home and does not run as the
+    // node; MERGE-BACK copies the winner's diff out. Both are the ORIGIN here,
+    // and both need traverse plus read. Asserted as a read rather than against
+    // `AGENT_HOME_MODE`, because comparing the substrate's record to the constant
+    // that set it moves both sides of the comparison together — a home narrowed
+    // to 0o700 satisfies that equality and locks both readers out.
+    const origin = f.workspace.vfs.as(ORIGIN);
+    expect(origin.readdir(provisioned.home).map((entry) => entry.name)).toEqual(['candidate.md']);
+    expect(origin.readFileString(`${provisioned.home}/candidate.md`)).toBe('my answer\n');
+    // The literal, once: owner writes, everyone reads.
+    expect(statOf(f.workspace, provisioned.home).mode).toBe(0o755);
+  });
 });
 
 describe('the allocation is durable and injective', () => {
@@ -234,5 +261,123 @@ describe('one node cannot write into another node\u2019s home', () => {
 
     expect(() => f.workspace.vfs.as(credA).writeFile('/home/node-bK2/leak.txt', 'leak'))
       .toThrow(expect.objectContaining({ code: 'EACCES' }));
+  });
+});
+
+/** A repository only the ORIGIN has, with a needle deep enough that finding it
+ *  requires walking rather than stat-ing a path the test already knows. */
+function seedOriginRepo(workspace: NimbusWorkspace): void {
+  const origin = workspace.vfs.as(ORIGIN);
+  origin.mkdir(`${ORIGIN_REPO}/src/parser`, { recursive: true });
+  origin.writeFile(`${ORIGIN_REPO}/README.md`, 'the origin cloned this\n');
+  origin.writeFile(`${ORIGIN_REPO}/src/parser/lexer.ts`, 'export const NEEDLE_TOKEN = 1;\n');
+}
+
+describe('a node keeps the origin\u2019s read window', () => {
+  test('it reads a file only the origin has', async () => {
+    const f = await openFixture();
+    seedOriginRepo(f.workspace);
+    const provisioned = await f.provision(node('aX9'));
+
+    // Through the filesystem, and through the one real shell, because a node
+    // reads with both and a boundary that held for only one is not a boundary.
+    expect(f.workspace.vfs.as(credOf(provisioned)).readFileString(`${ORIGIN_REPO}/README.md`))
+      .toBe('the origin cloned this\n');
+    expect(await rpcExec(f.host, `cat ${ORIGIN_REPO}/README.md`, { cred: credOf(provisioned) }))
+      .toMatchObject({ exitCode: 0, stdout: 'the origin cloned this\n' });
+  });
+
+  test('it WALKS and greps the origin tree, rather than stat-ing one known path', async () => {
+    const f = await openFixture();
+    seedOriginRepo(f.workspace);
+    const cred = credOf(await f.provision(node('aX9')));
+
+    // The distinction that matters: a walk needs +x on every directory down the
+    // chain, and a grep needs +r on files the node never named. The empty-tree
+    // regression this design exists to prevent would pass a single stat of a path
+    // handed to it and fail exactly here.
+    const walked = await rpcExec(f.host, `find ${ORIGIN_REPO} -type f`, { cred });
+    expect(walked.exitCode).toBe(0);
+    expect(walked.stdout.split('\n').filter((line) => line.length > 0).sort()).toEqual([
+      `${ORIGIN_REPO}/README.md`,
+      `${ORIGIN_REPO}/src/parser/lexer.ts`,
+    ]);
+
+    const grepped = await rpcExec(f.host, `grep -rn NEEDLE_TOKEN ${ORIGIN_REPO}`, { cred });
+    expect(grepped.exitCode).toBe(0);
+    expect(grepped.stdout).toContain(`${ORIGIN_REPO}/src/parser/lexer.ts:1:`);
+  });
+});
+
+describe('a node cannot write outside its own home, fail-closed', () => {
+  test('the origin\u2019s tree refuses it, EACCES on the filesystem itself', async () => {
+    const f = await openFixture();
+    seedOriginRepo(f.workspace);
+    const cred = credOf(await f.provision(node('aX9')));
+
+    expect(() => f.workspace.vfs.as(cred).writeFile(`${ORIGIN_REPO}/planted.ts`, 'planted'))
+      .toThrow(expect.objectContaining({ code: 'EACCES' }));
+    // And through the shell, where a refusal the node can actually read matters.
+    const refused = await rpcExec(f.host, `echo planted > ${ORIGIN_REPO}/planted.ts`, { cred });
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr.toLowerCase()).toContain('permission denied');
+    expect(f.workspace.vfs.as(ROOT).exists(`${ORIGIN_REPO}/planted.ts`)).toBe(false);
+  });
+
+  test('an existing origin file cannot be overwritten either', async () => {
+    const f = await openFixture();
+    seedOriginRepo(f.workspace);
+    const cred = credOf(await f.provision(node('aX9')));
+
+    // Separate from creating one: the parent directory's write bit stops a create,
+    // the FILE's own bits stop an overwrite, and only one of those was asserted.
+    expect(() => f.workspace.vfs.as(cred).writeFile(`${ORIGIN_REPO}/README.md`, 'rewritten'))
+      .toThrow(expect.objectContaining({ code: 'EACCES' }));
+    expect(f.workspace.vfs.as(ROOT).readFileString(`${ORIGIN_REPO}/README.md`))
+      .toBe('the origin cloned this\n');
+  });
+});
+
+describe('a node cannot widen its own home nor chown it away', () => {
+  test('widening past its own principal is refused, and the mode is unchanged', async () => {
+    const f = await openFixture();
+    const provisioned = await f.provision(node('aX9'));
+    const cred = credOf(provisioned);
+
+    // The owner triad moves freely — `u+x` on a script a node wrote must work, or
+    // the node cannot run what it built. What must not move is group and other,
+    // and a confined principal is what makes that a substrate rule rather than a
+    // convention: `confineAgentTmp` registers the uid, and registration is also
+    // what makes the chmod ceiling apply.
+    expect(() => f.workspace.vfs.as(cred).chmod(provisioned.home, 0o777))
+      .toThrow(expect.objectContaining({ code: 'EPERM' }));
+    expect(statOf(f.workspace, provisioned.home).mode).toBe(AGENT_HOME_MODE);
+  });
+
+  test('a sibling still cannot write it after the attempt', async () => {
+    const f = await openFixture();
+    const target = await f.provision(node('aX9'));
+    const credA = credOf(target);
+    const credB = credOf(await f.provision(node('bK2')));
+
+    // The consequence, not just the refusal: a widened home would be a sibling's
+    // to overwrite, which is the whole thing the boundary is for.
+    expect(() => f.workspace.vfs.as(credA).chmod(target.home, 0o777)).toThrow();
+    expect(() => f.workspace.vfs.as(credB).writeFile(`${target.home}/leak.txt`, 'leak'))
+      .toThrow(expect.objectContaining({ code: 'EACCES' }));
+  });
+
+  test('giving the home away is refused — only uid 0 may chown across uids', async () => {
+    const f = await openFixture();
+    const provisioned = await f.provision(node('aX9'));
+    const cred = credOf(provisioned);
+
+    // Handing it to the origin would put a node's graded output under an owner the
+    // grader cannot attribute, which is the shared plane again by another route.
+    expect(() => f.workspace.vfs.as(cred).chown(provisioned.home, SESSION_UID, SESSION_UID))
+      .toThrow(expect.objectContaining({ code: 'EPERM' }));
+    expect(statOf(f.workspace, provisioned.home)).toEqual({
+      uid: cred.uid, gid: cred.uid, mode: AGENT_HOME_MODE,
+    });
   });
 });
