@@ -512,7 +512,6 @@
   "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.logger (unsupplied-field)",
   "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.maxSteps (unsupplied-field)",
   "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.maxWallClockMs (unsupplied-field)",
-  "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.mission (unsupplied-field)",
   "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.originContext (unsupplied-field)",
   "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.provisionHome (unsupplied-field)",
   "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.reportModelCall (unsupplied-field)",

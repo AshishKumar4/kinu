@@ -418,8 +418,10 @@ export const LADDER: readonly Gate[] = [
       + '`.command()`, a method on a framework-rooted class that nothing here invokes, a module '
       + '`export default` property, a `createRoot` mount, a shebang. It also reports the shape '
       + 'reachability over exports cannot see: an OPTIONAL FIELD production reads that no '
-      + 'visible construction site of its interface supplies. 570 findings at 0fff343e, '
-      + 'ratcheted, against a `dead-code` lock of 12 symbols over the same 646 governed files.',
+      + 'visible construction site of its interface supplies — `SwarmRunDeps.mission` was one, '
+      + 'and wiring it at f5c8dbd5 turned this gate red on a lock entry that no longer '
+      + 'reproduced. 570 findings measured at 0fff343e, 569 locked at f5c8dbd5, against a '
+      + '`dead-code` lock of 12 symbols over the same 646 governed files.',
     blind: 'dynamic dispatch through a registry or a string key — `strategy/heads.ts` reads as '
       + 'reached because `fork-deps.ts` names its factory, and whether anything SELECTS that '
       + 'strategy is a fact about the registry. A symbol named only in a config file, which '
