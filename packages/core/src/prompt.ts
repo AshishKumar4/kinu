@@ -326,7 +326,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
       '## Code execution and learned capabilities',
       '- Before building from scratch, check `workspace.listTools()` and `memory` search for existing tools and prior lessons.',
       '- When you have built a reusable routine, save it with `workspace.createTool` — saved tools become callable as `codemode.<name>(args)` / `tools.<name>(args)` on your next execute_tools call.',
-      ...(surface.rlmAvailable ? ['- `llm.query(text, { model?, reasoning_effort? })` is available inside execute_tools for one-level decomposition over large inputs: read the file, slice it, `llm.query` each slice (cheap at low reasoning_effort), aggregate in code. Handle either a string result or `{ error }`. For slices that themselves need decomposition, fork (`agents` action=fork) — forks run full tool loops with llm.query in scope.'] : []),
+      ...(surface.rlmAvailable ? ['- `llm.query(text, { model?, reasoning_effort? })` is available inside execute_tools for one-level decomposition over large inputs: read the file, slice it, `llm.query` each slice (cheap at low reasoning_effort), aggregate in code. Handle either a string result or `{ error }`. For slices that themselves need decomposition, delegate the whole shape instead (`agents` action=swarm) — its nodes run their own full tool loops.'] : []),
       '- `agent.proposeCurriculum(count?)` proposes self-improvement tasks; `agent.listCurriculum(status?)` / `agent.acceptCurriculumTask(id)` manage them.',
       '- `agent.proposeScaffold(rationale, code, baseVersion?)` proposes a new version of your own agentic-loop scaffold; it must pass the validation gates and win shadow evaluation before going live. `agent.scaffoldVersions(limit?)` lists your scaffold archive (lineage + shadow record) — you may branch from any archived version via `baseVersion`.',
       '- `agent.schedule({ cron | atMs, label?, payload? })` can create a future autonomous wake; use it only when the user or task genuinely calls for recurrence or a reminder. Add `budget_usd`/`budget_tokens` when the owner names a spending limit — the host then caps that whole run cumulatively; `agent.budget()` reads what is left.',
@@ -341,7 +341,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
     // `agents` schema: each rung's triggers are selection doctrine, which the
     // schema owns (registry.ts renderToolSchemaDescription) and every family
     // reads. What stays is the prompt-only operational doctrine no tool schema
-    // carries — the frame, the turn output budget, the fork artifact trail,
+    // carries — the frame, the turn output budget, the node artifact trail,
     // the coordination loop, the codemode namespace. Rungs gate on the actions
     // this actor's deps actually wire (surface.agentsActions), exactly like
     // the tool's enum.
@@ -352,7 +352,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
       lines.push(
         'Delegation is one tool — `agents` — and one question: how long does the helper need to live?'
         // The zeroth rung is not an agent at all: flat map-reduce sub-calls.
-        // Weight-ordered, it sits between doing it yourself and forking, and
+        // Weight-ordered, it sits between doing it yourself and searching, and
         // it renders only where the llm provider is actually wired.
         + (surface.rlmAvailable
           ? ' The cheapest helper is not an agent: for bulk text that needs no tools, slice it and `llm.query` each slice inside execute_tools — reach for the ladder only when the work needs tool loops.'
@@ -372,41 +372,39 @@ function renderAgentStateSection(surface: PromptSurface): string {
         'Delegate once the shape of the work is settled: naming the parts is yours, running them is theirs. Work alone on a single coherent change in one file, on a direct answer that needs no change, and on a command the user asked you to run; work with two or more independent parts goes to the ladder.',
       );
     }
-    if (has('fork')) {
-      // The rung said what a fork IS and never what work calls for one. The
+    if (has('swarm')) {
+      // The rung said what a search IS and never what work calls for one. The
       // schema's Breadth/Doubt triggers are selection doctrine and stay there;
       // what belongs here is the SHAPE test, because deciding the work has
       // parts is upstream of picking a tool. Compressed to a clause rather
       // than restated: turn-steering already says this mechanically, but only
       // at 25 steps, which is after the shape was already chosen wrong.
-      lines.push('- Ephemeral fork (action=fork) — copies of you, running on your context, that run their own tool loops in parallel and merge back this turn. Fork when the work already has 2+ independent angles, or when one step is uncertain enough to be worth two attempts at once.');
+      lines.push('- Ephemeral search (action=swarm) — nodes of you, each running its own tool loop in parallel, whose candidates are measured and settled back this turn. Reach for it when the work already has 2+ independent angles, or when one step is uncertain enough to be worth two attempts at once.');
     }
     if (has('hire')) {
       // The CONTEXT half of the index, which is the half that decides which rung
-      // a task wants: a fork inherits the caller's window, a hire does not, so
+      // a task wants: a node may inherit the caller's window, a hire never does,
       // one takes a one-line brief and the other takes a written one. The rung
       // itself (DELEGATION_RUNGS.hire) carries the mechanism; this is the index.
       lines.push('- Persistent subordinate (action=hire) — a helper that outlives this turn and stays in your roster. It starts with a blank context, so its mission is the whole brief; hire when the work needs its own memory across turns rather than one answer now.');
     }
-    if (has('fork')) {
+    if (has('swarm')) {
       lines.push(
-        // Per-fork `model` is named as a case and never a default: panel
+        // Per-node `models` routing is named as a case and never a default: panel
         // quality tracks the AVERAGE member (Self-MoA, arXiv 2502.00674), so
         // the caveat rides the parameter in agents-tool.ts, where it is read
         // at the moment the field is being filled.
-        // A fork has one settlement, so the line that decides the rung is
-        // fork-against-swarm: who writes the candidates, and whether anything
-        // MEASURES them. `forks` reads as a fact rather than a default because
-        // a call with none is refused rather than inferred (agents-tool.ts
-        // forkBriefsRefusal).
-        "A fork keeps every piece: each brief in `forks` — required, nothing infers the angles for you — is a real agent with its own tool loop, and their findings merge back into this turn. A fork can take its own `model` — how you put a different vendor on a genuinely open question. When you want the candidates written for you and MEASURED against an `objective` you declare, that is action=swarm rather than a fork.",
+        // The line that decides the rung is who WRITES the candidates and whether
+        // anything MEASURES them, because "spawn several and pick the best"
+        // describes several things and only one of them runs a verifier.
+        "A search writes its own competing candidates from `task` and scores each one with the verifier you named in `objective` — you supply what counts, not the angles. `models` puts a different vendor on a genuinely open question; a weaker model added for variety measurably subtracts.",
         // The sibling-visibility half of this line went to the field that is read
-        // when a brief is being WRITTEN: DELEGATION_INHERITANCE.fork.brief names
-        // both blind spots (this turn as it continues, and what siblings are
-        // doing) on `forks[].task` itself. Repeating it thousands of tokens
-        // earlier bought nothing the field does not already say at the moment it
-        // matters. What stays is the artifact trail, which no schema carries.
-        'Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary.',
+        // when the task is being WRITTEN: DELEGATION_INHERITANCE.swarm.brief names
+        // what a node can lean on, on `task` itself. Repeating it thousands of
+        // tokens earlier bought nothing the field does not already say at the
+        // moment it matters. What stays is the artifact trail, which no schema
+        // carries.
+        'Nodes recurse up to search depth 3 and leave durable findings under `shared/findings/` — read them after the settle for detail beyond the summary.',
       );
     }
     // The rungs are also a codemode namespace, so a multi-step plan is code
@@ -418,7 +416,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
         // What `workspace.createTool` produces is the Code-execution section's
         // own bullet; what belongs here is only that a delegated plan is one
         // of the scripts worth saving.
-        'The same rungs are callable inside execute_tools as `agents.<action>`, so a multi-step plan can be one script — loop, branch, Promise.all — and `workspace.createTool` saves that script as a reusable workflow. A fork started there rides that call, which does not resume after an eviction.',
+        'The same rungs are callable inside execute_tools as `agents.<action>`, so a multi-step plan can be one script — loop, branch, Promise.all — and `workspace.createTool` saves that script as a reusable workflow. A search started there rides that call, which does not resume after an eviction.',
       );
     }
     if (has('hire')) {
@@ -446,7 +444,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
   if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'agents')) {
     parts.push([
       '## Background work',
-      'Work moves to the background two ways: a fork backgrounds the moment it spawns on a live session, and a long `execute_tools` or `run` call backgrounds once it outruns the surface threshold. Either way the call returns `{ background: true, jobId }` and the work KEEPS RUNNING unwatched — never start the same work again; the running copy will land its effects.',
+      'Work moves to the background two ways: a search backgrounds the moment it spawns on a live session, and a long `execute_tools` or `run` call backgrounds once it outruns the surface threshold. Either way the call returns `{ background: true, jobId }` and the work KEEPS RUNNING unwatched — never start the same work again; the running copy will land its effects.',
       'A background job needs nothing from you while it runs, and you are woken with its full result when it settles — mid-turn if you are still working, as a fresh turn if you are idle. Finish whatever other work you have, then end your turn; the wake is how the result arrives.',
     ].join('\n'));
   }

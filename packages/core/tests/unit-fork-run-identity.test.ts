@@ -8,8 +8,8 @@
  * five heads.
  *
  * Mechanism: a detached fork's background job is re-driven by evict/exit
- * recovery (jobs/runner.ts, MAX_RESUME_ATTEMPTS = 5), and `resumeForkBackgroundJob`
- * re-executes the raw `agents` fork with the stored input. MCTS survives that
+ * recovery (jobs/runner.ts, MAX_RESUME_ATTEMPTS = 5), and `resumeBackgroundJob`
+ * re-executes the raw `agents` call with the stored input. MCTS survives that
  * because re-entry reclaims the same search by task, keeping ONE `root_id`.
  * `HeadController.run` had no such reclaim: `opts.rootId ?? opts.parentHeadId ??
  * nanoid()` with a top-level split passing neither, so every re-drive minted a
@@ -110,7 +110,7 @@ function splitRequest(branches: number, rationale = TASK): SplitRequest {
   };
 }
 
-/** One drive of the fork, exactly as `resumeForkBackgroundJob` drives it: a
+/** One drive of the head, exactly as `resumeBackgroundJob` drives it: a
  *  fresh controller call carrying the stored input and no run identity. */
 function drive(journal: HeadJournal, spawned: HeadInput[], settles: boolean, branches = 5) {
   return new HeadController(runtime({ settles, spawned }), journal).run({

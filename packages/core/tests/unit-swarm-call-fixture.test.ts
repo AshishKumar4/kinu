@@ -178,7 +178,7 @@ const OPTIMISE = SWARM_PRESET_POINTS.optimise;
 const VERIFIER_TREE: SwarmConfig = OPTIMISE.config;
 
 /** The tree selectors §6.6 property 6 is exercised over. */
-const TREE_ADVANCES: readonly SwarmAdvance[] = ['uct', 'beam', 'best-first'];
+const TREE_ADVANCES = ['uct', 'best-first'] as const satisfies readonly SwarmAdvance[];
 
 describe('§2.4(a) crosses a JSON tool boundary, or it is not a call', () => {
   test('every field of the call is JSON', () => {
@@ -369,35 +369,34 @@ describe('what the live tool surface does with entry zero', () => {
   });
 
   test('a field is refused for the action that does not read it, and the refusal names the one that does', () => {
-    // FLIPPED TWICE, and the history is the point. First it pinned the silent drop:
-    // `AgentsToolInputSchema` was one flat `v.object`, valibot's `object` EXCLUDES
-    // unknown entries rather than rejecting them, so `preset`, `objective`,
-    // `branches` and `depth` reached the dispatcher as ABSENT — indistinguishable
-    // from a caller who never sent them. Then `v.strictObject` made them "unknown
-    // field" refusals. Now they are REAL fields of a REAL action, so the same call
-    // is refused for the sharper reason: they belong to `swarm`, and `fork` would
-    // ignore them. Still through an action that IS on the picklist, so it remains a
-    // property of the schema rather than of a missing action.
+    // FLIPPED THREE TIMES, and the history is the point. First it pinned the
+    // silent drop: `AgentsToolInputSchema` was one flat `v.object`, valibot's
+    // `object` EXCLUDES unknown entries rather than rejecting them, so `preset`,
+    // `objective`, `branches` and `depth` reached the dispatcher as ABSENT —
+    // indistinguishable from a caller who never sent them. Then `v.strictObject`
+    // made them "unknown field" refusals. Then they became REAL fields of a REAL
+    // action and the smuggling vehicle was `fork`, which has since left the
+    // picklist — so the property is asserted through `hire`, an action that IS on
+    // the picklist and reads none of them.
     const smuggle = () => parseAgentsToolInput({
-      action: 'fork',
-      task: CALL.task,
+      action: 'hire',
+      role: 'researcher',
+      mission: CALL.task,
       preset: CALL.preset,
       objective: CALL.objective,
       branches: 8,
       depth: 4,
     });
-    expect(smuggle).toThrow(/field "preset" does not apply to action "fork"/);
+    expect(smuggle).toThrow(/field "preset" does not apply to action "hire"/);
     expect(smuggle).toThrow(/it is read by swarm/);
     // Every one of them, not just the first: a refusal that named one field at a
     // time would cost a round trip per field of the call entry zero writes.
     for (const field of ['objective', 'branches', 'depth']) {
-      expect(smuggle).toThrow(new RegExp(`field "${field}" does not apply to action "fork"`));
+      expect(smuggle).toThrow(new RegExp(`field "${field}" does not apply to action "hire"`));
     }
-    // And the correction: what `fork` does take, so a caller can fix the call
-    // from the message alone rather than guessing again. `settle` is absent
-    // because tree search is `action:'swarm'` with a `depth` — a fork has one
-    // settlement and nothing to choose between.
-    expect(smuggle).toThrow(/action "fork" takes: task, forks, merge_strategy/);
+    // And the correction: what `hire` does take, so a caller can fix the call
+    // from the message alone rather than guessing again.
+    expect(smuggle).toThrow(/action "hire" takes: agent, role, mission/);
   });
 
   test('and the money case is refused by the spelling it got wrong', () => {
@@ -412,16 +411,16 @@ describe('what the live tool surface does with entry zero', () => {
     // this surface, not an exotic one — which is why the refusal has to name the
     // snake_case spelling and not merely reject the key.
     const camelCase = () => parseAgentsToolInput({
-      action: 'fork', task: CALL.task, budgetUsd: 5, wallClockMs: 1_000,
+      action: 'swarm', preset: PARSED.preset, task: CALL.task, budgetUsd: 5, budgetLabel: 'zero',
     });
     expect(camelCase).toThrow(/unknown field "budgetUsd" — did you mean "budget_usd"\?/);
-    expect(camelCase).toThrow(/unknown field "wallClockMs" — did you mean "wall_clock_ms"\?/);
+    expect(camelCase).toThrow(/unknown field "budgetLabel" — did you mean "budget_label"\?/);
 
     // Both spellings of the same request: one is heard, and the other is now
     // TOLD, where before it was dropped and the two were indistinguishable.
     expect(parseAgentsToolInput({
-      action: 'fork', task: CALL.task, budget_usd: 5,
-    })).toEqual({ action: 'fork', task: CALL.task, budget_usd: 5 });
+      action: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5,
+    })).toEqual({ action: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5 });
   });
 });
 
@@ -451,7 +450,7 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     expect(Object.keys(swarmModule).sort()).toEqual([
       'BRANCH_PROPOSAL_WIDTH', 'BRANCH_REFUSAL_POLICIES',
       'JUDGE_MARGINALISATION_MIN', 'NAMED_SWARM_PRESETS', 'SWARM_ADVANCES', 'SWARM_CARRIES',
-      'SWARM_CONTEXTS', 'SWARM_DECORRELATES', 'SWARM_EXPANDS', 'SWARM_OBSERVES',
+      'SWARM_CONTEXTS', 'SWARM_EXPANDS',
       'SWARM_PRESETS', 'SWARM_PRESET_POINTS', 'SWARM_SCORES', 'SWARM_TREE_ADVANCES',
       'SWARM_UNITS', 'arbitrateBranch', 'isPresetPoint', 'isTreeAdvance', 'resolveSwarm',
       'settleOf', 'swarmValidity',
@@ -463,14 +462,14 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // `config` must come back naming every axis, so an axis added to `SwarmConfig` and
     // forgotten in the resolver's list fails HERE instead of letting an incomplete tuple
     // through as if it were resolved. `context` is in the list because agent nodes gave
-    // inheritance one spelling (§8.4); `observe` and `decorrelate` are still in it
-    // because §6.7's cut of them has not landed and an axis nothing has removed is an
-    // axis a composition must still state.
+    // inheritance one spelling (§8.4); `observe` and `decorrelate` are NOT, because
+    // they were cut, and a composition is no longer asked to state an axis that no
+    // longer decides anything.
     const refusal = resolveSwarm({ preset: 'custom', task: 'x', label: 'l', config: {} });
     expect(refusal).toMatchObject({ reason: 'bad_input' });
     const error = 'error' in refusal ? refusal.error : '';
     for (const axis of [
-      'unit', 'context', 'observe', 'expand', 'decorrelate', 'score', 'advance', 'carry',
+      'unit', 'context', 'expand', 'score', 'advance', 'carry',
     ]) {
       expect(error).toContain(axis);
     }
@@ -478,7 +477,7 @@ describe('the implementation, asserted where absences used to be pinned', () => 
 
   test('§6.6 property 6: settleOf answers for entry zero under every tree advance', () => {
     for (const advance of TREE_ADVANCES) {
-      expect(settleOf({ ...VERIFIER_TREE, advance })).toBe('best');
+      expect(settleOf({ ...VERIFIER_TREE, advance: { kind: advance } })).toBe('best');
     }
   });
 
@@ -496,9 +495,17 @@ describe('the implementation, asserted where absences used to be pinned', () => 
       expect(refusal).toMatchObject({ reason: 'bad_input' });
       expect('error' in refusal ? refusal.error : '').toContain('carry:\'artifacts\'');
     }
-    // And the three rows §6.3 does state resolve, so the refusal above is about the
+    // `redteam` JOINED them, and this is the assertion that records the cost. It
+    // resolved until `novelty` re-homed onto `advance:'archive'` as a required
+    // parameter; §6.3 states no threshold for it, so the row stopped being
+    // constructible. The same rule, newly reaching a third row.
+    expect(isPresetPoint(SWARM_PRESET_POINTS.redteam)).toBe(false);
+    const redteam = resolveSwarm({ preset: 'redteam', task: 'x', key: 'k' });
+    expect(redteam).toMatchObject({ reason: 'bad_input' });
+    expect('error' in redteam ? redteam.error : '').toContain("advance:'archive'");
+    // And the rows §6.3 does state resolve, so the refusals above are about the
     // document rather than about the resolver.
-    for (const preset of ['ideate', 'redteam', 'optimise'] as const) {
+    for (const preset of ['ideate', 'optimise', 'prove'] as const) {
       expect(isPresetPoint(SWARM_PRESET_POINTS[preset])).toBe(true);
     }
   });

@@ -17,11 +17,10 @@ import {
   MissionGovernor,
   MissionBudgetExhausted,
   type MissionBudgetRefusal,
-  type MissionScope,
 } from '../src/mission-budget';
 import {
-  createAgentsCodemodeProvider, createStrategyRegistry, FORK_STRATEGY_ID,
-  type AgentsToolDeps, type ExplorationStrategy, type StrategyContext,
+  createAgentsCodemodeProvider, createStrategyRegistry,
+  type AgentsToolDeps,
 } from '../src/index';
 import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 import { composePrepareStep } from '../src/prompting/prepare-step';
@@ -43,54 +42,40 @@ function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   });
 }
 
-/** A fork refuses a call that supplies no briefs — so each call carries the
- *  two-brief minimum. Nothing in this file is about the fork's shape: a refusal
- *  observed below has to be the budget's. */
-const TWO_FORKS = [
-  { task: 'survey prior art', rationale: 'establish baseline' },
-  { task: 'sketch design', rationale: 'exercise constraints' },
-];
+/** One expansion's provider-reported usage: 5 in + 3 out. A run's total is then
+ *  arithmetic over the expansion count rather than a number read back off the
+ *  thing under test. */
+const PER_EXPANSION_TOKENS = 8;
 
-/** A fork strategy that spends: one completion through the runtime's LLM (the
- *  governed seam) plus a reported sub-agent token cost (what the heads runtime
- *  hands back). */
-function spendingStrategy(id: string, opts: { reportedTokens?: number } = {}): ExplorationStrategy {
-  return {
-    id,
-    async explore(ctx: StrategyContext) {
-      const text = await ctx.rt.llm.complete('q'.repeat(40));
-      return {
-        strategy: id,
-        best: { text, score: 1, source: id },
-        all: [{ text, score: 1, source: id }],
-        cost: { durationMs: 0, iterations: 1, tokens: opts.reportedTokens },
-      };
-    },
-  };
+/** A model that answers once per expansion. `usage: 'silent'` is a provider that
+ *  reported nothing, which is a different fact from reporting zero. */
+function expandingModel(usage: 'reported' | 'silent' = 'reported') {
+  return new MockLanguageModelV3({
+    provider: 'fake',
+    modelId: 'fake-spawn-seam',
+    doGenerate: async () => ({
+      content: [{ type: 'text', text: 'one approach' }],
+      finishReason: { unified: 'stop' as const, raw: undefined },
+      usage: usage === 'reported'
+        ? {
+          inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 3, text: 3, reasoning: undefined },
+        }
+        : {
+          inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: undefined, text: undefined, reasoning: undefined },
+        },
+      warnings: [],
+    }),
+  });
 }
 
-/** A fork strategy shaped like heads: it debits its own spend through the
- *  scope it was handed (each head does, per step) and reports the total as
- *  already metered. */
-function selfMeteringStrategy(id: string, tokens: number): ExplorationStrategy {
-  return {
-    id,
-    async explore(ctx: StrategyContext) {
-      if (ctx.mission) {
-        await ctx.mission.port.debit(tokens, { labels: ctx.mission.labels, calls: 1 });
-      }
-      return {
-        strategy: id,
-        best: { text: 'done', score: 1, source: id },
-        all: [{ text: 'done', score: 1, source: id }],
-        cost: ctx.mission
-          ? { durationMs: 0, iterations: 1, tokens, selfMetered: true }
-          : { durationMs: 0, iterations: 1, tokens },
-      };
-    },
-  };
-}
-
+/** The smallest real search: two sibling answers at one level, no score and no
+ *  advance. Nothing in this file is about the search's shape — every token on the
+ *  ledger below came from an expansion, so a movement observed here is the
+ *  budget's. */
+const TWO_BRANCHES = { preset: 'ideate' as const, branches: 2, depth: 1 };
+const RUN_TOKENS = 2 * PER_EXPANSION_TOKENS;
 /** The sandbox's view of `agents.*`, over deps that record every spawn. */
 function sandbox(deps: AgentsToolDeps) {
   const provider = createAgentsCodemodeProvider(() => deps);
@@ -100,22 +85,20 @@ function sandbox(deps: AgentsToolDeps) {
   return ns;
 }
 
-function forkableDeps(opts: {
+function searchableDeps(opts: {
   budget?: MissionGovernor;
-  reportedTokens?: number;
-  /** Register a heads-shaped strategy that charges its own spend instead. */
-  selfMetering?: number;
+  usage?: 'reported' | 'silent';
   spawns?: string[];
 }): AgentsToolDeps {
-  const registry = createStrategyRegistry();
-  registry.register(opts.selfMetering !== undefined
-    ? selfMeteringStrategy(FORK_STRATEGY_ID, opts.selfMetering)
-    : spendingStrategy(FORK_STRATEGY_ID, { reportedTokens: opts.reportedTokens }));
-  const { rt } = createTestRuntime({ llmResponses: { qqqq: 'a'.repeat(40) } });
+  const { rt } = createTestRuntime();
   const spawns = opts.spawns ?? [];
   return {
     mode: 'build',
-    fork: { registry, rt, model: new MockLanguageModelV3() },
+    fork: {
+      registry: createStrategyRegistry(),
+      rt,
+      model: expandingModel(opts.usage),
+    },
     team: {
       delegation: ROOT_DELEGATION_BUDGET,
       list: async () => [],
@@ -137,9 +120,11 @@ function forkableDeps(opts: {
   };
 }
 
-describe('spawn seam — transitive debit through fork-from-codemode', () => {
-  const ForkTextSchema = v.object({ text: v.string() });
-  const ForkBudgetSchema = v.object({
+describe('spawn seam — transitive debit through a search from codemode', () => {
+  const SearchReportSchema = v.object({
+    report: v.object({ expansions: v.number(), tokens: v.nullable(v.number()) }),
+  });
+  const SearchBudgetSchema = v.object({
     mission_budget: v.optional(v.object({
       label: v.string(),
       remaining: v.object({ tokens: v.optional(v.number()) }),
@@ -151,48 +136,46 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
     label: v.string(),
   });
 
-  test('a fork inside the sandbox debits the mission its run spends against', async () => {
+  test('a search inside the sandbox debits the mission its run spends against', async () => {
     const governor = newGovernor();
     governor.declare('nightly', {});
     governor.activate(['nightly']);
 
-    const deps = forkableDeps({ budget: governor, reportedTokens: 900 });
-    const result = v.parse(ForkTextSchema, await sandbox(deps).fork!({ task: 'explore', forks: TWO_FORKS }));
-    expect(result.text).toBe('a'.repeat(40));
+    const deps = searchableDeps({ budget: governor });
+    const result = v.parse(SearchReportSchema, await sandbox(deps).swarm!({ task: 'explore', ...TWO_BRANCHES }));
+    expect(result.report.expansions).toBe(2);
+    expect(result.report.tokens).toBe(RUN_TOKENS);
 
     const [mission] = governor.snapshot('nightly');
-    // 900 reported by the strategy for its sub-agents + (40 prompt + 40 reply)
-    // chars / 4 for the one completion that crossed the governed LLM seam.
-    expect(mission?.spent.tokens).toBe(920);
+    expect(mission?.spent.tokens).toBe(RUN_TOKENS);
     expect(mission?.spawns).toBe(1);
-    expect(mission?.calls).toBe(1);
-  });
+  }, 60_000);
 
-  test('a fork that declares its own cap nests under the mission and both are charged', async () => {
+  test('a search that declares its own cap nests under the mission and both are charged', async () => {
     const governor = newGovernor();
     governor.declare('nightly', {});
     governor.activate(['nightly']);
 
-    const deps = forkableDeps({ budget: governor, reportedTokens: 100 });
-    await sandbox(deps).fork!({ task: 'explore', forks: TWO_FORKS, budget_tokens: 5_000, budget_label: 'sweep' });
+    const deps = searchableDeps({ budget: governor });
+    await sandbox(deps).swarm!({ task: 'explore', ...TWO_BRANCHES, budget_tokens: 5_000, budget_label: 'sweep' });
 
-    expect(governor.snapshot('sweep')[0]?.spent.tokens).toBe(120);
+    expect(governor.snapshot('sweep')[0]?.spent.tokens).toBe(RUN_TOKENS);
     expect(governor.snapshot('sweep')[0]?.parent).toBe('nightly');
-    expect(governor.snapshot('nightly')[0]?.spent.tokens).toBe(120);
-  });
+    expect(governor.snapshot('nightly')[0]?.spent.tokens).toBe(RUN_TOKENS);
+  }, 60_000);
 
-  test('the fork returns its own ledger position so a script can steer on it', async () => {
+  test('the search returns its own ledger position so a script can steer on it', async () => {
     const governor = newGovernor();
     governor.declare('nightly', {});
     governor.activate(['nightly']);
-    const deps = forkableDeps({ budget: governor, reportedTokens: 10 });
+    const deps = searchableDeps({ budget: governor });
     const out = v.parse(
-      ForkBudgetSchema,
-      await sandbox(deps).fork!({ task: 'x', forks: TWO_FORKS, budget_tokens: 1_000, budget_label: 'sweep' }),
+      SearchBudgetSchema,
+      await sandbox(deps).swarm!({ task: 'x', ...TWO_BRANCHES, budget_tokens: 1_000, budget_label: 'sweep' }),
     );
     expect(out.mission_budget?.label).toBe('sweep');
-    expect(out.mission_budget?.remaining.tokens).toBe(970);
-  });
+    expect(out.mission_budget?.remaining.tokens).toBe(1_000 - RUN_TOKENS);
+  }, 60_000);
 
   test('an exhausted mission refuses every spawn without touching the substrate', async () => {
     const governor = newGovernor();
@@ -201,10 +184,10 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
     governor.debit(10);
 
     const spawns: string[] = [];
-    const ns = sandbox(forkableDeps({ budget: governor, spawns }));
+    const ns = sandbox(searchableDeps({ budget: governor, spawns }));
 
     for (const [member, input] of [
-      ['fork', { task: 'x', forks: TWO_FORKS }],
+      ['swarm', { task: 'x', ...TWO_BRANCHES }],
       ['hire', { role: 'r', mission: 'm' }],
       ['ask', { agent: 'helper', message: 'm' }],
       ['send', { agent: 'helper', message: 'm' }],
@@ -223,118 +206,71 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
     governor.activate(['nightly']);
     governor.debit(1);
 
-    const ns = sandbox(forkableDeps({ budget: governor }));
+    const ns = sandbox(searchableDeps({ budget: governor }));
     expect(await ns.list!({})).toMatchObject({ subordinates: [] });
     expect(await ns.dismiss!({ agent: 'helper' })).toMatchObject({ ok: true });
   });
 
-  test('no governor and no scope leave the fork path byte-for-byte unbudgeted', async () => {
+  test('no governor and no scope leave the search path unbudgeted, and identically so', async () => {
     const governor = newGovernor();
-    const withGovernorNoScope = await sandbox(forkableDeps({ budget: governor, reportedTokens: 7 })).fork!({ task: 'x', forks: TWO_FORKS });
-    const withoutGovernor = await sandbox(forkableDeps({ reportedTokens: 7 })).fork!({ task: 'x', forks: TWO_FORKS });
-    expect(withGovernorNoScope).toEqual(withoutGovernor);
+    const withGovernorNoScope = await sandbox(searchableDeps({ budget: governor })).swarm!({ task: 'x', ...TWO_BRANCHES });
+    const withoutGovernor = await sandbox(searchableDeps({})).swarm!({ task: 'x', ...TWO_BRANCHES });
+
+    // Node ids are minted per run, so the runs are compared on everything else:
+    // an unscoped governor must add no key, no ledger row and no charge.
+    expect(v.parse(SearchReportSchema, withGovernorNoScope))
+      .toEqual(v.parse(SearchReportSchema, withoutGovernor));
+    const keys = v.record(v.string(), v.unknown());
+    expect(Object.keys(v.parse(keys, withGovernorNoScope)).sort())
+      .toEqual(Object.keys(v.parse(keys, withoutGovernor)).sort());
     expect(withoutGovernor).not.toHaveProperty('mission_budget');
-  });
+    expect(withGovernorNoScope).not.toHaveProperty('mission_budget');
+    expect(governor.snapshot()).toEqual([]);
+  }, 60_000);
 });
 
-describe('spawn seam — work that runs where the ledger is not reachable', () => {
-  test('a fork is handed the scope, so a head in another process can charge it', async () => {
+describe('spawn seam — spend the ledger sees only once the run returns', () => {
+  const SearchReportSchema = v.object({
+    report: v.object({ expansions: v.number(), tokens: v.nullable(v.number()) }),
+  });
+
+  test("a search's whole reported total is billed here, as one lump", async () => {
+    // A search expands through its OWN model rather than the governed `rt.llm`
+    // seam, so nothing below this point has debited a token. The lump is not a
+    // convenience: it is the only place the spend is visible.
     const governor = newGovernor();
     governor.declare('nightly', {});
     governor.activate(['nightly']);
 
-    let handed: { labels: readonly string[] } | undefined;
-    const registry = createStrategyRegistry();
-    registry.register({
-      id: FORK_STRATEGY_ID,
-      async explore(ctx: StrategyContext) {
-        handed = ctx.mission ? { labels: ctx.mission.labels } : undefined;
-        return {
-          strategy: FORK_STRATEGY_ID,
-          best: { text: 'x', score: 1, source: 'x' },
-          all: [], cost: { durationMs: 0 },
-        };
-      },
-    });
-    const { rt } = createTestRuntime();
-    await sandbox({
-      mode: 'build',
-      fork: { registry, rt, model: new MockLanguageModelV3() },
-      budget: governor,
-    }).fork!({ task: 't', forks: TWO_FORKS });
-    expect(handed).toEqual({ labels: ['nightly'] });
-  });
-
-  test('an unbudgeted fork is handed no scope at all', async () => {
-    let handed: MissionScope | 'unset' = 'unset';
-    const registry = createStrategyRegistry();
-    registry.register({
-      id: FORK_STRATEGY_ID,
-      async explore(ctx: StrategyContext) {
-        handed = ctx.mission ?? 'unset';
-        return {
-          strategy: FORK_STRATEGY_ID,
-          best: { text: 'x', score: 1, source: 'x' },
-          all: [], cost: { durationMs: 0 },
-        };
-      },
-    });
-    const { rt } = createTestRuntime();
-    await sandbox({
-      mode: 'build',
-      fork: { registry, rt, model: new MockLanguageModelV3() },
-    }).fork!({ task: 't', forks: TWO_FORKS });
-    expect(handed).toBe('unset');
-  });
-
-  test('spend a strategy already charged is not charged again at this seam', async () => {
-    // Heads debit every step as they make it — that is what lets an exhausted
-    // budget stop one mid-flight. Charging the reported total here too would
-    // bill the same tokens twice and halve every budget.
-    const governor = newGovernor();
-    governor.declare('nightly', {});
-    governor.activate(['nightly']);
-
-    const deps = forkableDeps({ budget: governor, selfMetering: 900 });
-    await sandbox(deps).fork!({ task: 'explore', forks: TWO_FORKS });
+    const deps = searchableDeps({ budget: governor });
+    await sandbox(deps).swarm!({ task: 'explore', ...TWO_BRANCHES });
 
     const [mission] = governor.snapshot('nightly');
-    expect(mission?.spent.tokens).toBe(900);
-    // The spawn is still recorded — only the tokens moved.
+    expect(mission?.spent.tokens).toBe(RUN_TOKENS);
+    // Charged as one spawn and no model calls: the calls happened where this
+    // ledger could not see them.
+    expect(mission?.calls).toBe(0);
     expect(mission?.spawns).toBe(1);
-  });
+  }, 60_000);
 
-  test('a strategy that could NOT charge itself is still billed the lump', async () => {
-    // An MCTS rollout runs where the ledger is not reachable, so its total is
-    // seen only at this seam.
+  test('a run whose provider reported NO usage is charged none of it, and the spawn still records', async () => {
+    // An unmeasured search is not a free one. No reported usage means the run
+    // could not measure what it spent, so this seam charges nothing for it — the
+    // alternative readings are both wrong: billing a guess, or dropping the spawn
+    // row and pretending the work never happened.
     const governor = newGovernor();
     governor.declare('nightly', {});
     governor.activate(['nightly']);
 
-    const deps = forkableDeps({ budget: governor, reportedTokens: 900 });
-    await sandbox(deps).fork!({ task: 'explore', forks: TWO_FORKS });
-    expect(governor.snapshot('nightly')[0]?.spent.tokens).toBe(920);
-  });
-
-  test('a fork that reported NO total is charged none of it, and the spawn still records', async () => {
-    // An unmeasured fork is not a free one. `cost.tokens` absent means the
-    // strategy could not measure what its sub-agents spent, so this seam charges
-    // nothing for it — the alternative readings are both wrong: billing a guess,
-    // or dropping the spawn row and pretending the work never happened.
-    const governor = newGovernor();
-    governor.declare('nightly', {});
-    governor.activate(['nightly']);
-
-    const deps = forkableDeps({ budget: governor });
-    await sandbox(deps).fork!({ task: 'explore', forks: TWO_FORKS });
+    const deps = searchableDeps({ budget: governor, usage: 'silent' });
+    const out = v.parse(SearchReportSchema, await sandbox(deps).swarm!({ task: 'explore', ...TWO_BRANCHES }));
+    expect(out.report.expansions).toBe(2);
+    expect(out.report.tokens).toBeNull();
 
     const [mission] = governor.snapshot('nightly');
-    // Only the (40 prompt + 40 reply) / 4 chars the governed LLM seam estimated
-    // for the one completion that really crossed it. No lump on top.
-    expect(mission?.spent.tokens).toBe(20);
-    expect(mission?.calls).toBe(1);
+    expect(mission?.spent.tokens).toBe(0);
     expect(mission?.spawns).toBe(1);
-  });
+  }, 60_000);
 });
 
 describe('model-call seam — the step pipeline declines the next request', () => {

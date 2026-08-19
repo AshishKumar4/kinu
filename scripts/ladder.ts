@@ -218,6 +218,45 @@ export const LADDER: readonly Gate[] = [
       + 'spot visible only in red output is invisible exactly when the tree is clean.',
   },
   {
+    run: 'bun run gate:commit-message',
+    tier: 'commit',
+    seconds: 0.1,
+    catches: 'a commit message that credits an orchestration subagent as if it were a human '
+      + 'reviewer, narrates the session that produced it, or argues with a previous position in '
+      + 'the first person — plus the absence of any prefix convention. Measured over all 1,898 '
+      + 'commits of the pre-convention history: nine agent names landed as cited actors (`Main\'s '
+      + 'ruling`, `FixtureZero\'s findings`, `SealSideDoor\'s publication-seal work`), an act '
+      + 'credited to `the owner` in 118 commits, `this session` in 5, 84 lone `I`s across 49, and 187 distinct '
+      + 'type-prefix tokens over 1,604 non-generated subjects with 627 carrying no prefix at all. '
+      + 'Every commit here is authored under one person\'s name, so those lines read as him '
+      + 'crediting colleagues who do not exist and contradicting himself. The subagent rule is '
+      + 'DERIVED, not listed: a possessive-or-attribution to a CamelCase name that no tracked '
+      + 'source file uses as an IDENTIFIER, read from the AST so the same name in a comment does '
+      + 'not excuse it — which is exactly how nine of them are already spelled in this tree. Its '
+      + 'sibling `.githooks/commit-msg` runs the same program over the message git is about to '
+      + 'write, because a commit message is immutable the instant it exists; this tier covers the '
+      + 'rebase and `--no-verify` paths, where git runs no commit-msg hook.'
+      + ' `the owner` and `this session` are gated only where an ACT is credited or a session is '
+      + 'used as work or time, because both are DOMAIN nouns here — `the owner` occurs in 119 '
+      + 'tracked source files as a modelled entity with a UserDO, credentials and an approval '
+      + 'queue. The bare phrase would have failed 27 of the 844 messages in the first rewritten '
+      + 'history, all of them technically correct, and a gate wrong 3% of the time on day one is '
+      + 'a gate somebody switches off. Past tense is the discriminator: `the owner asked` is a '
+      + 'report of an instruction, `the owner asks what the WORKSPACE cost` is a product sentence.',
+    blind: 'colon-reveal subjects (302 of 1,898, and the prefix rule rejects 298 of them for '
+      + 'having no prefix rather than for their rhetoric — the 4 behind a legal prefix are '
+      + 'invisible), binary contrasts (180 measured), em-dash density (3,234 across 61.4% of '
+      + 'bodies) and sentence length (mean 26.6 words, 45.0% past ASD-STE100\'s ceiling). All '
+      + 'four are real defects and all four have legitimate instances, so a gate on them would '
+      + 'produce false positives and be disabled — they are review criteria and the gate prints '
+      + 'them on its GREEN path. Also blind to the scope inside the parens (162 tokens in use), '
+      + 'to a bare non-possessive mention of an agent, to an all-caps agent name (so that GEPA, '
+      + 'LATS, MCTS and OpenAI are not findings), and to the DIFF — a well-formed subject '
+      + 'describing a different commit passes every rule, and so does a pasted requester quotation '
+      + 'with no attributing verb. History is not read as a standard: the '
+      + 'governed range starts at the commit that added the gate.',
+  },
+  {
     run: 'bun run gate:install-scripts',
     tier: 'commit',
     seconds: 0.2,
@@ -235,6 +274,25 @@ export const LADDER: readonly Gate[] = [
       + 'only forces the set to be a decision. Also blind to what a script does at runtime, to '
       + 'transitive `bun.lock` integrity, and to CVEs — `bun run gate:dependency-advisories` '
       + 'is the gate for the last, and shares the reviewed-set shape with this one.',
+  },
+  {
+    run: 'bun run gate:patch-parity',
+    tier: 'commit',
+    seconds: 0.16,
+    catches: 'a committed patch that does not reproduce the `node_modules` the suites ran '
+      + 'against. Four dependencies are patched, so every green result in this repository stands '
+      + 'on that equality, and nothing checked it. The incident: a core patch regenerated BEFORE '
+      + 'its `.d.ts` hunks were written restored undeclared type files on a fresh install and '
+      + 'failed `bun run check` — while `check` and the runtime parity test both read green, '
+      + 'because one typechecked a tree that already held the edits and the other reads only '
+      + '`dist/*.js`. Both directions are covered: a patch missing a hunk the tree has, and a '
+      + 'patch carrying one it does not. The corpus is `patchedDependencies` itself, never a '
+      + 'second list — a hand-maintained mirror is the defect class this closes.',
+    blind: 'files the patch does NOT touch; whether the patch is a good idea; and WHICH CHECKOUT '
+      + 'it answers for — `setup-worktree.sh` symlinks each node_modules entry to the main '
+      + "checkout's, so one shared directory serves every worktree while `patches/` is per-commit, "
+      + 'and at most one checkout can be truthful at a time. The gate prints its full blind-spot '
+      + 'list on the GREEN path, where it is actually needed.',
   },
   {
     run: 'bun run gate:skip-ratchet',
@@ -276,7 +334,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/infra.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts',
     tier: 'push',
     seconds: 1.7,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
@@ -909,7 +967,7 @@ if (import.meta.main) {
     }
     console.log(
       `ladder: core.hooksPath = ${HOOKS_DIR} (relative, so every worktree resolves its own) `
-      + '— pre-commit runs the commit tier, pre-push the push tier',
+      + '— pre-commit runs the commit tier, pre-push the push tier, commit-msg the message rules',
     );
     process.exit(0);
   }
@@ -942,7 +1000,7 @@ if (import.meta.main) {
   }).stdout.toString().trim();
   console.log(
     configured === HOOKS_DIR
-      ? `hooks: installed (${HOOKS_DIR}) — pre-commit runs the commit tier, pre-push the push tier`
+      ? `hooks: installed (${HOOKS_DIR}) — pre-commit runs the commit tier, pre-push the push tier, commit-msg the message rules`
       : `hooks: NOT INSTALLED — core.hooksPath is "${configured}", so the commit and push `
         + 'tiers do not execute in this checkout. Fix: bun scripts/ladder.ts --install-hooks',
   );

@@ -10,33 +10,28 @@
  *      literally told it can call — and on the actor kinds that are told
  *      nothing, because they were handed no delegation deps.
  *
- *   2. Reentrancy. An in-sandbox `agents.fork` calls back into the DO while
- *      the DO is awaiting the sandbox, and that callback spawns facets.
- *      `workspace.exec` / `llm.query` already prove the callback path itself;
- *      what is new is a callback that spawns a head. This drives the real
- *      `spawnHeadFacet` from inside an in-flight sandbox call against the
- *      recording facet host, which proves the APPLICATION layer holds no
- *      guard against it — the busy check that rejects `forkAgent` mid-turn
- *      sits on the workspace-clone RPC, not here. The workerd RPC isolate
- *      cannot be run in this harness, so that layer stays a live probe.
+ *   2. The dispatcher round-trip. A sandbox call's arguments cross the isolate
+ *      boundary as JSON, so a member's typed non-string fields arrive only if
+ *      that crossing carries them — and a branch count that arrived as a string
+ *      reads back as a cap nobody set rather than as a marshalling fault.
+ *      `agents.swarm` runs its branches IN-PROCESS on this origin plane and
+ *      spawns no facet, so the crossing is the whole risk: the test below
+ *      drives the real provider resolution with the argument array JSON
+ *      round-tripped exactly as the dispatcher marshals it, and reads the
+ *      resolved caps back off the answer.
  */
 
 import { describe, expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
   decodeJsonValue,
-  FORK_STRATEGY_ID,
   BUILTIN_TOOL_DESCRIPTIONS,
   createAgentsCodemodeProvider,
   createProviderRegistry,
   createStrategyRegistry,
   parseJsonValue,
-  strategyOption,
   type AgentsToolDeps,
-  type HeadInput,
-  type HeadReport,
   type JsonValue,
-  type StrategyContext,
   type SubordinateHandoff,
   type WebSearchProvider,
 } from '@proteus/core';
@@ -57,11 +52,15 @@ mockAgentsSdk();
 // imported after the mock is registered.
 const { resolveProvider } = await import('@cloudflare/codemode/ai');
 const { createExecuteToolsTool } = await import('../src/execute-tools');
-const { ExplorationAgent } = await import('../src/exploration');
-const { spawnHeadFacet } = await import('../src/facet-spawn');
-type FacetHost = Parameters<typeof spawnHeadFacet>[0];
 
-const ForkResultSchema = v.object({ text: v.string() });
+/** A search's answer, narrowed to what the round-trip is read back off. */
+const SearchResultSchema = v.object({
+  caps: v.object({
+    branches: v.object({ value: v.number(), origin: v.string() }),
+    depth: v.object({ value: v.number(), origin: v.string() }),
+  }),
+  report: v.object({ expansions: v.number(), tokens: v.nullable(v.number()) }),
+});
 
 function workerLoader(): WorkerLoader {
   return {
@@ -118,34 +117,41 @@ function executeToolsDescription(agents?: () => AgentsToolDeps): string {
   return built.description;
 }
 
-function forkOnlyDeps(explore?: (ctx: StrategyContext) => Promise<JsonValue>): AgentsToolDeps {
-  const registry = createStrategyRegistry();
-  registry.register({
-    id: FORK_STRATEGY_ID,
-    async explore(ctx) {
-      const detail = await explore?.(ctx);
-      return {
-        strategy: FORK_STRATEGY_ID,
-        best: { text: JSON.stringify(detail ?? 'settled'), score: 1, source: FORK_STRATEGY_ID },
-        all: [],
-        cost: { durationMs: 0 },
-      };
-    },
+/** One expansion's provider-reported usage: 5 in + 3 out. A run's total is then
+ *  arithmetic over the expansion count rather than a number read back off the
+ *  thing under test. */
+const PER_EXPANSION_TOKENS = 8;
+
+/** A model that answers once per expansion. `swarm` runs its branches in THIS
+ *  process off `rt` and `model`, so the model is the seam a search's behaviour
+ *  is scripted through — there is no strategy in between to script instead. */
+function expandingModel() {
+  return new MockLanguageModelV3({
+    provider: 'fake',
+    modelId: 'fake-search',
+    doGenerate: async () => ({
+      content: [{ type: 'text', text: 'one approach' }],
+      finishReason: { unified: 'stop' as const, raw: undefined },
+      usage: {
+        inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 3, text: 3, reasoning: undefined },
+      },
+      warnings: [],
+    }),
   });
-  const { rt } = createTestRuntime();
-  return { mode: 'build', fork: { registry, rt, model: new MockLanguageModelV3() } };
 }
 
-/** A fork RUNS the briefs it is given and refuses a call with none — so every
- *  fork below carries the two-brief minimum. */
-const TWO_FORKS = [
-  { task: 'read it', rationale: 'ground it' },
-  { task: 'test it', rationale: 'check it' },
-];
+function searchOnlyDeps(): AgentsToolDeps {
+  const { rt } = createTestRuntime();
+  // The registry is empty deliberately: `swarm` dispatches through no strategy,
+  // so a registration here would be a fixture scripting a path the action does
+  // not take. `AgentsForkDeps` still declares the field, so it is still passed.
+  return { mode: 'build', fork: { registry: createStrategyRegistry(), rt, model: expandingModel() } };
+}
 
 function fullDeps(): AgentsToolDeps {
   return {
-    ...forkOnlyDeps(),
+    ...searchOnlyDeps(),
     team: {
       delegation: ROOT_DELEGATION_BUDGET,
       list: async () => [],
@@ -224,20 +230,20 @@ describe('agents.* in the cf codemode tool', () => {
   test('the namespace is declared in the sandbox types the model reads', () => {
     const description = executeToolsDescription(fullDeps);
     expect(description).toContain('export declare const agents: {');
-    for (const member of ['fork(input', 'hire(input', 'ask(input', 'send(input', 'reply(input', 'list(input', 'dismiss(input']) {
+    for (const member of ['swarm(input', 'hire(input', 'ask(input', 'send(input', 'reply(input', 'list(input', 'dismiss(input']) {
       expect(description).toContain(member);
     }
     // Its neighbours are untouched — this is one more namespace, not a rewrite.
     expect(description).toContain('export declare const llm: {');
   });
 
-  test('a fork-only actor is told about fork and nothing else', () => {
-    const deps = forkOnlyDeps();
+  test('a search-only actor is told about swarm and nothing else', () => {
+    const deps = searchOnlyDeps();
     const description = executeToolsDescription(() => deps);
-    expect(description).toContain('fork(input');
+    expect(description).toContain('swarm(input');
     expect(description).not.toContain('hire(input');
     expect(description).not.toContain('dismiss(input');
-    // The cost of forking in-sandbox is in the docstring, not only the prompt.
+    // The cost of searching in-sandbox is in the docstring, not only the prompt.
     expect(description).toContain('NOT resumable from here');
   });
 
@@ -250,170 +256,34 @@ describe('agents.* in the cf codemode tool', () => {
   });
 });
 
-// ── Reentrancy: a sandbox callback that spawns facets ───────────────────────
+// ── The dispatcher round-trip across the isolate boundary ───────────────────
 
-describe('agents.fork called back from an in-flight sandbox call', () => {
-  const headReport: HeadReport = {
-    id: 'head-1', status: 'completed', summary: 'done', evidence: [], decisions: [],
-    artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], stepCount: 0,
-    usage: { input: 1, output: 1 }, wallClockMs: 1,
-  };
-
-  function headInput(): HeadInput {
-    return {
-      id: 'head-1', rootId: 'root-1', parentId: null, depth: 1,
-      task: 'investigate', mode: 'build', rationale: 'one angle', inheritedContext: [],
-      budget: { maxDepth: 1, maxWallClockMs: 1000, spawnedAt: 0 },
-      mergeStrategy: 'synthesize',
-    };
-  }
-
-  interface FacetStub {
-    setOwner(): Promise<{ ok: boolean }>;
-    setSharedParent(): Promise<{ ok: boolean }>;
-    initHead(): Promise<{ ok: boolean }>;
-    abortHead(): Promise<{ ok: boolean }>;
-    runAsHead(): Promise<HeadReport>;
-  }
-
-  interface FacetHostProbe {
-    subAgent(cls: typeof ExplorationAgent, name: string): Promise<FacetStub>;
-    /** Mid-flight eviction — keeps the facet's storage. */
-    abortSubAgent(): void;
-    /** Terminal reclamation — WIPES the facet's storage. Recorded separately
-     *  from abortSubAgent so a leak can never read as a reclamation. */
-    deleteSubAgent(): Promise<void>;
-  }
-
-  function facetHost(probe: FacetHostProbe): FacetHost {
-    const host: Partial<FacetHost> = {};
-    Object.assign(host, probe);
-    // SAFETY: the constructed probe implements the three methods spawnHeadFacet
-    // invokes; every returned facet method is explicitly typed above.
-    return host as FacetHost;
-  }
-
-  /** The recording facet host — the Agent SDK is the only thing stubbed. */
-  function makeHost() {
-    const calls: string[] = [];
-    const stub = {
-      setOwner: async () => ({ ok: true }),
-      setSharedParent: async () => ({ ok: true }),
-      initHead: async () => ({ ok: true }),
-      abortHead: async () => ({ ok: true }),
-      runAsHead: async () => { calls.push('runAsHead'); return headReport; },
-    };
-    const host: FacetHostProbe = {
-      subAgent: async (_cls, name) => { calls.push(`subAgent:${name}`); return stub; },
-      abortSubAgent: () => { calls.push('abortSubAgent'); },
-      deleteSubAgent: async () => { calls.push('deleteSubAgent'); },
-    };
-    return { host: facetHost(host), calls };
-  }
-
+describe('agents.swarm marshalled through the sandbox dispatcher', () => {
   /** Invoke the namespace the way the sandbox does: through codemode's own
    *  provider resolution, with the argument array JSON round-tripped as the
    *  dispatcher marshals it across the isolate boundary. */
-  async function sandboxFork(deps: AgentsToolDeps, input: JsonValue) {
+  async function sandboxSwarm(deps: AgentsToolDeps, input: JsonValue) {
     const { fns } = resolveProvider(createAgentsCodemodeProvider(() => deps));
-    const fork = v.parse(v.function(), fns.fork);
+    const swarm = v.parse(v.function(), fns.swarm);
     const roundTrippedInput = parseJsonValue(JSON.stringify(input));
-    return decodeJsonValue({ value: await fork(roundTrippedInput) });
+    return decodeJsonValue({ value: await swarm(roundTrippedInput) });
   }
 
-  test('the fork input survives the dispatcher round-trip intact', async () => {
-    let seen: StrategyContext | undefined;
-    const deps = forkOnlyDeps(async (ctx) => { seen = ctx; return null; });
-    await sandboxFork(deps, {
-      task: 'review the diff',
-      forks: [{ task: 'read it', rationale: 'ground it' }, { task: 'test it', rationale: 'check it' }],
-      budget: 12,
-    });
-    expect(seen?.task).toBe('review the diff');
-    expect(seen?.budget?.maxIterations).toBe(12);
-    expect(strategyOption(seen?.options, 'heads')).toEqual({
-      heads: [
-        { task: 'read it', rationale: 'ground it' },
-        { task: 'test it', rationale: 'check it' },
-      ],
-    });
-  });
-
-  test('the callback spawns, runs and tears down a head facet while the outer call awaits', async () => {
-    const { host, calls } = makeHost();
-    // The fork strategy does what the heads strategy does — spawn a facet —
-    // so the spawn happens INSIDE the provider callback, which is what an
-    // in-sandbox fork makes happen inside an awaited execute_tools call.
-    const deps = forkOnlyDeps(async () => {
-      const head = await spawnHeadFacet(host, headInput(), {
-        ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
-      });
-      const report = await head.run();
-      await head.abort('done');
-      return report.summary;
-    });
-
-    let outerSettled = false;
-    // The enclosing execute_tools call is still awaiting when the callback runs.
-    const outer = sandboxFork(deps, { task: 'investigate', forks: TWO_FORKS }).then((result) => {
-      outerSettled = true;
-      return result;
-    });
-    expect(outerSettled).toBe(false);
-
-    const result = v.parse(ForkResultSchema, await outer);
-    expect(parseJsonValue(result.text)).toBe('done');
-    // run() RECLAIMS the facet (deleteSubAgent) before the later abort merely
-    // evicts an already-wiped id. Before the C3 fix this sequence ended at a
-    // lone 'abortSubAgent' and the head's database was stranded in the root.
-    expect(calls).toEqual(['subAgent:head-1', 'runAsHead', 'deleteSubAgent', 'abortSubAgent']);
-  });
-
-  test('two forks scripted in parallel each get their own facet', async () => {
-    const { host, calls } = makeHost();
-    const deps = forkOnlyDeps(async (ctx) => {
-      const head = await spawnHeadFacet(host, { ...headInput(), id: ctx.task }, {
-        ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
-      });
-      await head.run();
-      await head.abort('done');
-      return ctx.task;
-    });
-    await Promise.all([
-      sandboxFork(deps, { task: 'a', forks: TWO_FORKS }),
-      sandboxFork(deps, { task: 'b', forks: TWO_FORKS }),
-    ]);
-    expect(calls.filter((c) => c.startsWith('subAgent:')).sort()).toEqual(['subAgent:a', 'subAgent:b']);
-    // One terminal delete per head's run(), plus one evict per explicit abort.
-    expect(calls.filter((c) => c === 'deleteSubAgent')).toHaveLength(2);
-    expect(calls.filter((c) => c === 'abortSubAgent')).toHaveLength(2);
-  });
-
-  test('heads spawn the bare ExplorationAgent, so an in-sandbox fork cannot widen the spawn tree', async () => {
-    const spawned: Array<typeof ExplorationAgent> = [];
-    const host: FacetHostProbe = {
-      subAgent: async (cls) => {
-        spawned.push(cls);
-        return {
-          setOwner: async () => ({ ok: true }),
-          setSharedParent: async () => ({ ok: true }),
-          initHead: async () => ({ ok: true }),
-          abortHead: async () => ({ ok: true }),
-          runAsHead: async () => headReport,
-        };
-      },
-      abortSubAgent: () => {},
-      deleteSubAgent: async () => {},
-    };
-    const deps = forkOnlyDeps(async () => {
-      await spawnHeadFacet(facetHost(host), headInput(), {
-        ownerUserId: 'u',
-        capabilityToken: null,
-        sharedParent: 'p',
-      });
-      return null;
-    });
-    await sandboxFork(deps, { task: 't', forks: TWO_FORKS });
-    expect(spawned).toEqual([ExplorationAgent]);
+  test('the search input survives the dispatcher round-trip intact', async () => {
+    // `branches` and `depth` are the fields with something to lose on the way
+    // across: they are NUMBERS, and the resolver reports where each cap's value
+    // came from. So a crossing that dropped one, or handed it over as a string,
+    // comes back as `origin:'preset'` carrying ideate's own defaults rather than
+    // as a parse complaint — which is exactly the failure a round-trip test has
+    // to be able to see.
+    const result = v.parse(SearchResultSchema, await sandboxSwarm(searchOnlyDeps(), {
+      task: 'review the diff', preset: 'ideate', branches: 2, depth: 1,
+    }));
+    expect(result.caps.branches).toEqual({ value: 2, origin: 'call' });
+    expect(result.caps.depth).toEqual({ value: 1, origin: 'call' });
+    // And the caps that arrived are the ones the run was actually governed by:
+    // two branches expanded, each charging one expansion's reported usage.
+    expect(result.report.expansions).toBe(2);
+    expect(result.report.tokens).toBe(2 * PER_EXPANSION_TOKENS);
   });
 });

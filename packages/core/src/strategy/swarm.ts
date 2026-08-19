@@ -75,55 +75,50 @@ export const SWARM_CONTEXTS = ['fork', 'fresh'] as const;
 export type BranchContext = (typeof SWARM_CONTEXTS)[number];
 
 /**
- * What ENVIRONMENT FEEDBACK enters the expansion prompt.
- *
- * `own` — this node's own observation. `ancestors` — every ancestor's, walked
- * root-ward. The axis is load-bearing rather than cosmetic: without it
- * Tree-of-Thoughts and LATS-over-programs are the same configuration, and they
- * are measurably not (feat/mcts-as-lats, commit 47845c27).
- */
-export const SWARM_OBSERVES = ['none', 'own', 'ancestors'] as const;
-export type SwarmObserve = (typeof SWARM_OBSERVES)[number];
 
-/**
  * How children are produced.
  *
  * `aggregate` is fan-in — k parents consumed by one child — and it is precisely
  * what makes a graph a DAG rather than a tree. Graph-of-Thoughts' `Aggregate`
  * vertex and Mixture-of-Agents' layers are both this value.
+ *
+ * `mutate` was CUT. It asked what a child starts from — the parent's own answer
+ * rather than the workspace as found — and that is the {@link SWARM_CONTEXTS}
+ * question, asked once for the caller-to-root edge and every branch edge
+ * together. Two axes asking one question is the second spelling §6.4's first
+ * reason exists to prevent, and `context` is the one that also binds the root.
  */
-export const SWARM_EXPANDS = ['sample', 'mutate', 'aggregate'] as const;
+export const SWARM_EXPANDS = ['sample', 'aggregate'] as const;
 export type SwarmExpand = (typeof SWARM_EXPANDS)[number];
 
 /**
- * How hard children are pushed apart.
+ * How a node is valued.
  *
- * This is where decorrelation lives, and it is the ONLY place it lives. Varying
- * models is not decorrelation — see {@link SwarmConfig.models}.
- *
- * `blind` — a child is expanded WITHOUT sight of its siblings' proposals. Named
- * `blind` and not `fresh` because `fresh` was measured unusable: 0/6 on a reverse
- * probe, read as RECENCY by both vendors shown the bare name, and 4 of its 10
- * in-context uses described the `angles` mechanism instead **with the gloss in front of
- * the model**. Three independent instruments, six model families
- * (`AxisErgonomics`, 245 answered calls). It is the only axis value the study found
- * unusable and the only rename argued from measurement rather than taste.
- *
- * `angles` STAYS despite scoring 2/6 on the same bare-name probe, because it was
- * correct in all 29 of its in-context uses — and `carry` stays for the same reason
- * (23/24 with the mechanism present). A name is only ever read beside the question it
- * answers, so a bare-probe failure is a documentation constraint and not a rename.
+ * TWO VALUES WERE CUT AND THEY WENT DIFFERENT WAYS. `agree` was `judge` with the
+ * population as the judge, and the ensemble it needed already lives on the judge
+ * arm as `samples` — so it was a second spelling of a value this axis already
+ * had. `novelty` was never a grader at all: it is an archive's ADMISSION rule,
+ * and it re-homed onto {@link SwarmAdvanceSetting}'s `archive` arm, where the
+ * parameter cannot exist unless the archive that owns it does.
  */
-export const SWARM_DECORRELATES = ['none', 'angles', 'blind'] as const;
-export type SwarmDecorrelate = (typeof SWARM_DECORRELATES)[number];
-
-/** How a node is valued. */
-export const SWARM_SCORES = ['verify', 'agree', 'novelty', 'judge', 'none'] as const;
+export const SWARM_SCORES = ['verify', 'judge', 'none'] as const;
 export type SwarmScore = (typeof SWARM_SCORES)[number];
 
-/** Where the next unit of budget goes. */
+/**
+ * Where the next unit of budget goes.
+ *
+ * `beam` was CUT, and unlike the others it TOOK SOMETHING WITH IT rather than
+ * collapsing onto an equivalent. Best-first plus a level barrier is a SCHEDULE
+ * and not a selector — the selection rule is identical, the difference is only
+ * that a whole level is expanded before the next is entered. What is gone is
+ * that level-synchronised order and the `beamWidth` that ranked it; there is no
+ * composition that reproduces it, and a caller who wanted level-synchrony now
+ * gets best-first's frontier order instead. The barrier itself survives for a
+ * different owner: shared compaction and comparative sibling judging both need
+ * one, so it is a property of a level rather than of a selector.
+ */
 export const SWARM_ADVANCES = [
-  'uct', 'beam', 'best-first', 'pareto', 'archive', 'none',
+  'uct', 'best-first', 'pareto', 'archive', 'none',
 ] as const;
 export type SwarmAdvance = (typeof SWARM_ADVANCES)[number];
 
@@ -167,14 +162,51 @@ export type SwarmSettle = 'best' | 'archive' | 'front' | 'merge';
  */
 export type SwarmScoreSetting =
   | { readonly kind: 'verify' }
-  | { readonly kind: 'agree' }
-  | { readonly kind: 'novelty' }
   | { readonly kind: 'none' }
   | {
       readonly kind: 'judge';
       /** Ensemble size. REQUIRED here and unrepresentable elsewhere, so §6.5's
        *  marginalisation refusal always has its input. */
       readonly samples: number;
+    };
+
+/**
+ * Where the next unit of budget goes, together with the parameter that belongs to
+ * exactly one of those places.
+ *
+ * THIS IS WHERE `novelty` LIVES NOW, and the move is the same one {@link
+ * SwarmScoreSetting} records for `judgeSamples`. `novelty` sat on `score` as
+ * though it graded a node, and it does not: it decides whether a candidate is
+ * ADMITTED to an archive cell, which is a property of the archive and of nothing
+ * else. While it was a score, the shipped refusal *"an archive with score:X has no
+ * novelty rejection test"* had to exist, because the two were independently
+ * settable and the invalid pair was reachable. Tagged onto the arm that owns it,
+ * an archive without a rejection test cannot be WRITTEN DOWN — the refusal is not
+ * relaxed, it is dissolved, which is strictly stronger than being enforced.
+ *
+ * IT COSTS SOMETHING AND THE COST IS REAL. §6.3 never stated a τ for any preset —
+ * its 0.6 is Rainbow Teaming's measured filter offered as evidence that a
+ * rejection test is needed, not a threshold this specification declares — so every
+ * preset that resolves to `archive` now has a required parameter the table does
+ * not supply, and `redteam` joins `research` and `audit` as an UNDECLARED row.
+ * That is three of the archive presets refusing to resolve where one of them used
+ * to. Inventing the number here is the one thing this file may not do.
+ */
+export type SwarmAdvanceSetting =
+  | { readonly kind: 'uct' }
+  | { readonly kind: 'best-first' }
+  | { readonly kind: 'pareto' }
+  | { readonly kind: 'none' }
+  | {
+      readonly kind: 'archive';
+      /**
+       * The novelty floor a candidate must clear to be admitted to its cell.
+       * REQUIRED here and unrepresentable elsewhere: an archive that accepted
+       * everything collapses onto one prompt across every cell while still
+       * reporting coverage — measured at self-BLEU 0.42 → 0.79 when the filter
+       * was dropped.
+       */
+      readonly novelty: number;
     };
 
 export type SwarmCarrySetting =
@@ -243,19 +275,19 @@ export interface SwarmConfig {
    * one axis carries both edges.
    */
   readonly context: BranchContext;
-  readonly observe: SwarmObserve;
   readonly expand: SwarmExpand;
-  readonly decorrelate: SwarmDecorrelate;
   /**
    * How a node is valued. A TAGGED value rather than a bare string, because
-   * `score:'judge'` carries a parameter and the other four do not.
+   * `score:'judge'` carries a parameter and the other two do not.
    *
    * `SWARM_SCORES` remains the axis's value set — the tags ARE the values, so the
-   * coverage matrix and `settleOf` read `score.kind` and the 28-value derivation is
-   * unchanged.
+   * coverage matrix and `settleOf` read `score.kind`.
    */
   readonly score: SwarmScoreSetting;
-  readonly advance: SwarmAdvance;
+  /** Where the next unit of budget goes, tagged for the same reason as
+   *  {@link score}: `archive` carries the novelty rejection test and the other
+   *  four carry nothing. See {@link SwarmAdvanceSetting}. */
+  readonly advance: SwarmAdvanceSetting;
   /** What survives, tagged for the same reason as {@link score}: two of the four
    *  values carry an admission threshold and two do not. */
   readonly carry: SwarmCarrySetting;
@@ -265,8 +297,8 @@ export interface SwarmConfig {
    */
   readonly explorationWeight?: number;
   /**
-   * Pruning policy. Applies to the REGION of tree selectors (`uct`, `beam`,
-   * `best-first`) rather than to one axis value, which is why it cannot be tagged
+   * Pruning policy. Applies to the REGION of tree selectors (`uct`, `best-first`)
+   * rather than to one axis value, which is why it cannot be tagged
    * onto a value the way {@link score} is. **Its applicability condition must
    * therefore be CHECKED rather than assumed**: supplying either under
    * `advance:'archive'`/`'pareto'`/`'none'` is a refusal, not a silent no-op, because
@@ -290,16 +322,23 @@ export interface SwarmConfig {
 }
 
 /**
- * The five tested paths, plus the honest declaration that none of them fits.
+ * The six tested paths, plus the honest declaration that none of them fits.
  *
- * `custom` is not a sixth preset. It is the statement that no preset is the base,
- * which matters because the matrix holds 27 techniques while the presets pin 5
- * points: Reflexion, Graph-of-Thoughts, Mixture-of-Agents, GEPA, Promptbreeder
- * and ADAS are none of them, and naming one as the base for a composition that
- * overrode four of seven axes would be a lie about provenance in the run record.
+ * `custom` is not a seventh preset. It is the statement that no preset is the
+ * base, which matters because the matrix holds the techniques while the presets
+ * pin six points: Reflexion, Graph-of-Thoughts, Mixture-of-Agents, GEPA,
+ * Promptbreeder and ADAS are none of them, and naming one as the base for a
+ * composition that overrode four of six axes would be a lie about provenance in
+ * the run record.
+ *
+ * `prove` is the sixth and it is the second row with a checker. It exists because
+ * a mathematical proof or a formal claim is the one search whose value signal is
+ * EXACT — a checker accepts or it does not — and every other preset either has no
+ * verifier or has a noisy one, so a proof run composed out of them would have been
+ * `optimise` with its depth and its thresholds argued from scratch every time.
  */
 export const SWARM_PRESETS = [
-  'ideate', 'research', 'audit', 'redteam', 'optimise', 'custom',
+  'ideate', 'research', 'audit', 'redteam', 'optimise', 'prove', 'custom',
 ] as const;
 export type SwarmPreset = (typeof SWARM_PRESETS)[number];
 
@@ -399,19 +438,17 @@ export interface SwarmInput {
    * aggregator; the paper claims no cost parity), quality dominating diversity by up
    * to 3.2×.
    * A model zoo is measured WORSE than repeated sampling from the best model when
-   * the purpose is decorrelation. Decorrelation is {@link SwarmConfig.decorrelate}.
+   * the purpose is diversity. Diversity is not this field's job and never was.
    *
-   * Cost routing is understood 3/3 across vendors, so the field earns its place. The
-   * warning holds 2/3 against a caller who demands a zoo for diversity, which is why
-   * the composition `models.length > 1` with a resolved `decorrelate` of `'none'` is
-   * REFUSED rather than merely discouraged — a docstring is advice, and advice loses
-   * to an instruction from the caller.
+   * Cost routing is understood 3/3 across vendors, so the field earns its place.
    *
-   * Because the refusal reads the RESOLVED `decorrelate`, a named preset whose own
-   * `decorrelate` is not `'none'` accepts `models` freely. A preset that resolves to
-   * `decorrelate:'none'` must instead PROHIBIT `models.length > 1` at its own
-   * boundary — declared per preset, never discovered as a refusal, because §6.4
-   * requires a named preset to be unrefusable.
+   * THIS FIELD USED TO CARRY A REFUSAL AND NO LONGER DOES. `models.length > 1` was
+   * refused under `decorrelate:'none'`, on the argument that a zoo was then the
+   * run's only source of candidate diversity. That axis is gone and sibling angles
+   * are unconditional, so the premise cannot hold: a zoo is never the only source
+   * any more. The measurement above still stands and is still the reason to reach
+   * for `models` for routing rather than for variety — it is advice now, which is
+   * what it can honestly be once the composition it warned about is unreachable.
    */
   readonly models?: readonly string[];
 }
@@ -439,9 +476,9 @@ export interface SwarmRefusal {
  * fall through to `'best'`.
  */
 export function settleOf(config: SwarmConfig): SwarmSettle {
-  if (config.advance === 'archive') return 'archive';
-  if (config.advance === 'pareto') return 'front';
-  if (config.score.kind === 'none' && config.advance === 'none') return 'merge';
+  if (config.advance.kind === 'archive') return 'archive';
+  if (config.advance.kind === 'pareto') return 'front';
+  if (config.score.kind === 'none' && config.advance.kind === 'none') return 'merge';
   return 'best';
 }
 
@@ -487,15 +524,26 @@ export function isPresetPoint(row: SwarmPresetRow): row is SwarmPresetPoint {
  * §6.3's tuple table, which is normatively `resolve(preset) → SwarmConfig` and the
  * ONLY definition of it. A named preset resolves to exactly its row; `custom`
  * resolves to `config`, optionally seeded from `from`'s row. There is deliberately
- * no `custom` row: `config` IS the override and `from` names the base, and a sixth
+ * no `custom` row: `config` IS the override and `from` names the base, and a second
  * row would be the second spelling §6.4's first reason exists to prevent.
  *
- * TWO ROWS ARE UNDECLARED, and both are the same gap. §6.3 gives `research` and
- * `audit` `carry:'artifacts'`, but `carry` is a TAGGED value and its `artifacts`
- * arm requires an admission `threshold` the table never states. §6.5's τ=0.6 is
- * Rainbow Teaming's measurement offered as evidence that a rejection test is
- * needed, not a threshold this specification declares for a preset — so there is
- * nothing to put there, and this table says so instead of inventing it.
+ * THREE ROWS ARE UNDECLARED AND ALL THREE ARE THE SAME GAP — a tagged arm whose
+ * parameter §6.3 never states. `research` and `audit` were already here for
+ * `carry:'artifacts'`. `redteam` JOINED THEM in this change, and that is a cost
+ * rather than a tidy-up: it used to resolve. Its `advance:'archive'` now requires
+ * the novelty rejection test that re-homed off `score` (see
+ * {@link SwarmAdvanceSetting}), and §6.5's τ=0.6 is Rainbow Teaming's measured
+ * filter offered as evidence that a rejection test is NEEDED — it is not a
+ * threshold this specification declares for a preset. So there is nothing to put
+ * there, and this table says so instead of inventing it.
+ *
+ * `prove` is declared rather than undeclared even though it too takes an
+ * `artifacts` threshold, and the difference is not special pleading: it is the one
+ * preset whose admission rule is DERIVED rather than chosen. Its checker accepts
+ * or it does not, so an artifact is kept exactly when the checker accepted it, and
+ * the normalised threshold for that is 1. `research` and `audit` have no checker
+ * and therefore no derivation — which is precisely why their number would have to
+ * be invented.
  */
 export const SWARM_PRESET_POINTS = {
   ideate: {
@@ -504,8 +552,8 @@ export const SWARM_PRESET_POINTS = {
       // inherit — the root's parent is the caller, and `context` binds the branch
       // edge, of which this preset has none.
       unit: { kind: 'answer' }, context: 'fresh',
-      observe: 'none', expand: 'sample', decorrelate: 'angles',
-      score: { kind: 'none' }, advance: 'none', carry: { kind: 'none' },
+      expand: 'sample',
+      score: { kind: 'none' }, advance: { kind: 'none' }, carry: { kind: 'none' },
     },
     // Depth is one BY CONSTRUCTION rather than by choice: `advance:'none'` means there is no
     // selection step, so there is no second level to reach (§8.3).
@@ -523,30 +571,50 @@ export const SWARM_PRESET_POINTS = {
       + 'declares this one collides with',
   },
   redteam: {
-    config: {
-      // `fresh`: a probe of a new coverage cell wants the parent's RESULTS, not its
-      // transcript (§6.3's note on the archive rows).
-      unit: { kind: 'answer' }, context: 'fresh',
-      observe: 'own', expand: 'mutate', decorrelate: 'angles',
-      score: { kind: 'novelty' }, advance: 'archive', carry: { kind: 'elites' },
-    },
-    depth: 3,
-    branches: 4,
+    undeclared: "§6.3 gives `redteam` advance:'archive', whose novelty rejection test is now a "
+      + 'parameter of that arm rather than a `score` value, and the table states no threshold '
+      + 'for it. This row USED TO RESOLVE: it resolved while an archive without a rejection '
+      + "test was merely refused, and it stops resolving now that it is unconstructible. τ=0.6 "
+      + 'is Rainbow Teaming\'s measured filter, not this preset\'s declared threshold',
   },
   optimise: {
     config: {
-      // `fork`, and §6.3 states why: a fork IS `observe:'ancestors'` by
-      // construction, because a forked conversation contains the ancestor chain's
-      // observations transitively. The two values agree here rather than one
-      // standing in for the other.
+      // `fork`: a forked conversation carries the ancestor chain's measurements
+      // transitively, which is what a run climbing a value needs its children to
+      // have seen.
       unit: { kind: 'answer' }, context: 'fork',
-      observe: 'ancestors', expand: 'mutate', decorrelate: 'angles',
-      score: { kind: 'verify' }, advance: 'uct', carry: { kind: 'elites' },
+      expand: 'sample',
+      score: { kind: 'verify' }, advance: { kind: 'uct' }, carry: { kind: 'elites' },
     },
-    // The deepest of the five because it is the only preset with a verifier — the
-    // one value signal the literature says earns a tree — and still inside the 3-7
-    // band every cited system runs rather than at the shipped default of 20.
+    // Deep because it has a verifier — the one value signal the literature says
+    // earns a tree — and still inside the 3-7 band every cited system runs rather
+    // than at the shipped default of 20.
     depth: 5,
+    branches: 3,
+  },
+  prove: {
+    config: {
+      // `generator`: a proof is produced by something that can run its own checker
+      // between steps, not by a single answer handed back.
+      unit: { kind: 'generator' }, context: 'fork',
+      expand: 'sample',
+      // The checker IS the score. `verify` requires an `objective`, which is where
+      // the caller names the checker — a `prove` call without one is refused by the
+      // same rule every other verifier composition is.
+      score: { kind: 'verify' },
+      // Best-first rather than `uct`: an exact signal has no noise to re-widen
+      // against, so the exploration term buys nothing and re-selection would spend
+      // budget re-deriving a step the checker already accepted.
+      advance: { kind: 'best-first' },
+      // 1 because the checker accepted it. See the table note: this is the derived
+      // threshold, not a chosen one.
+      carry: { kind: 'artifacts', threshold: 1 },
+    },
+    // The top of the same 3-7 band `optimise` sits inside. A proof is the one
+    // search whose value signal is exact rather than noisy, so depth costs less
+    // here than anywhere else in the table: a wrong branch is refuted by the
+    // checker instead of being carried down by a plausible score.
+    depth: 7,
     branches: 3,
   },
 } as const satisfies Record<NamedSwarmPreset, SwarmPresetRow>;
@@ -605,8 +673,8 @@ export interface ResolvedSwarmCaps {
  * and the objective's arguments carried alongside.
  *
  * The arguments are HERE rather than left on the input because §6.5's refusals are
- * stated over them — `pareto` reads the objective's kind, R7 reads `models` against
- * the resolved `decorrelate`, C1 reads the floor — and a predicate that cannot see
+ * stated over them — `pareto` reads the objective's kind, the archive rules read
+ * `key`, C1 reads the floor — and a predicate that cannot see
  * its own input is the §3.8 defect this specification exists to refuse.
  */
 export interface ResolvedSwarm {
@@ -642,20 +710,24 @@ function badInput(error: string): SwarmRefusal {
  * interface and forgotten here makes that assertion fail rather than making the
  * resolver quietly accept an incomplete tuple.
  *
- * THE COUNT IS EIGHT HERE AND SIX IN §6.1, AND THAT IS AN INTERIM RATHER THAN A
- * DISAGREEMENT. `context` joined because §8.4's inheritance needs one spelling for
- * the caller-to-root edge and the branch edge together. The two §6.7 cut that this
- * commit does not — `observe`, whose `ancestors` value a forked conversation supplies
- * by construction, and `decorrelate`, whose sibling angles §6.1 makes unconditional
- * default behaviour — are still declared and still executed, so a caller composing
- * them gets what they ask for rather than a silently ignored field. Removing them is
- * the rest of §6.7's obligation list and it is not this change: an axis deleted while
- * its consumers still read it is the accepted-and-ignored defect, and deleting them
- * correctly means re-pointing the coverage matrix and the ergonomics corpus that
- * measure them.
+ * THE COUNT IS SIX, and it agrees with §6.1 now. `context` joined because §8.4's
+ * inheritance needs one spelling for the caller-to-root edge and the branch edge
+ * together; `observe` and `decorrelate` left in the same change, and neither is a
+ * deferral. `observe` collapsed value by value onto things that already exist —
+ * `none` is what a `thought` node IS, `own` is what holding tools MEANS now that
+ * every other unit is a real agent, and `ancestors` is what `context:'fork'`
+ * supplies by construction. `decorrelate` shipped with all three of its values
+ * behaving identically: sibling angles were handed out under every one of them
+ * INCLUDING `blind`, which names the opposite, so no caller was ever choosing
+ * anything. Diversification is now unconditional, which removes the ability to
+ * turn angles OFF and keeps the ability that was working.
+ *
+ * What is genuinely missing is a convergence DETECTOR at the level barrier — the
+ * thing `decorrelate` was reached for and never did. It is a separate obligation
+ * and it is deliberately not smuggled in here as a fourth value of a dead axis.
  */
 const AXES = [
-  'unit', 'context', 'observe', 'expand', 'decorrelate', 'score', 'advance', 'carry',
+  'unit', 'context', 'expand', 'score', 'advance', 'carry',
 ] as const satisfies readonly (keyof SwarmConfig)[];
 
 /** Whether a merged override names every axis. A type guard rather than a check
@@ -808,27 +880,16 @@ function floorsOf(objective: Objective): readonly { floor: Floor; direction: Obj
  * composition and a preset run through one definition of legal.
  */
 export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
-  const { config, objective, caps, models } = resolved;
-  const tree = isTreeAdvance(config.advance);
+  const { config, objective, caps } = resolved;
+  const advance = config.advance.kind;
+  const tree = isTreeAdvance(advance);
 
   if (tree && config.score.kind === 'none') {
-    return badInput(`advance:"${config.advance}" selects on value and score:"none" supplies none, so this `
+    return badInput(`advance:"${advance}" selects on value and score:"none" supplies none, so this `
       + 'composition is a breadth-first enumerator whose winner is row order: at zero signal a 42-node '
       + 'tree agrees with the genuinely best node 0% of the time. Give it a signal — score:"verify" with '
-      + 'an `objective`, or score:"novelty" with a `key` — or use advance:"none" and get honest parallel '
-      + 'sampling.');
-  }
-  if (config.advance === 'archive' && config.score.kind === 'judge') {
-    return badInput('an archive bins elites by a descriptor, and a judged descriptor is unrecoverable: a '
-      + 'mis-ranked candidate can be re-ranked, a mis-binned elite is silently lost, and the grid fills '
-      + 'while its cells hold low-quality behaviours. Bin on something a ToolCallRecord can witness — '
-      + 'score:"novelty" — and keep the judge for a tree.');
-  }
-  if (config.advance === 'archive' && config.score.kind !== 'novelty') {
-    return badInput(`an archive with score:"${config.score.kind}" has no novelty rejection test, and without `
-      + 'one it collapses onto a single prompt across every cell while still reporting coverage — '
-      + 'measured at self-BLEU 0.42 → 0.79 when the filter was dropped. Use score:"novelty", or '
-      + 'advance:"uct" if what you want is to climb a value.');
+      + 'an `objective`, or score:"judge" with enough `samples` — or use advance:"none" and get honest '
+      + 'parallel sampling.');
   }
   if (tree && config.score.kind === 'judge' && config.score.samples < JUDGE_MARGINALISATION_MIN) {
     return badInput(`a judged scalar is a noisy scorer and a tree amplifies scorer noise, so score:"judge" `
@@ -847,7 +908,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
       + 'or use advance:"none" and accept that this is parallel sampling, which for a witness hunt is '
       + 'honest and often correct.');
   }
-  if (config.advance === 'pareto') {
+  if (advance === 'pareto') {
     if (!objective) {
       return badInput('advance:"pareto" reports a frontier, and a frontier needs several axes to be a '
         + 'frontier at all: supply an `objective` of kind "instanced" (one metric across ≥2 instances) or '
@@ -862,19 +923,19 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
   }
   if (config.score.kind === 'verify' && !objective) {
     return badInput('score:"verify" measures something and this composition did not say what. Supply '
-      + '`objective` with a `metric`, a `unit`, a `direction` and a `target`, or use score:"novelty" with '
-      + 'a coverage `key` — or score:"none" for a flat run with no value signal.');
+      + '`objective` with a `metric`, a `unit`, a `direction` and a `target` — or score:"none" for a flat '
+      + 'run with no value signal.');
   }
-  if (config.advance === 'archive' && !resolved.key) {
+  if (advance === 'archive' && !resolved.key) {
     return badInput('an archive needs a descriptor to bin elites into, and it must name something a '
       + '`ToolCallRecord` can witness. Supply `key`. A key that can only say "distinct idea" is a task '
       + 'with no coverage objective — that task wants preset:"ideate".');
   }
-  if (resolved.key && config.advance !== 'archive') {
-    return badInput(`\`key\` is the descriptor an archive bins elites into, and advance:"${config.advance}" `
+  if (resolved.key && advance !== 'archive') {
+    return badInput(`\`key\` is the descriptor an archive bins elites into, and advance:"${advance}" `
       + 'keeps no archive, so this run would accept a coverage key and report no coverage — which is a '
       + 'silent lie about what it did rather than a harmless extra. Drop `key`, or use '
-      + 'advance:"archive" (preset:"research", "audit" or "redteam") if coverage is what you want.');
+      + 'advance:"archive" if coverage is what you want.');
   }
   for (const { floor, direction } of objective ? floorsOf(objective) : []) {
     const margin = floorMargin(floor, direction);
@@ -886,14 +947,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
         + 'the cost actually measured.');
     }
   }
-  if (models && models.length > 1 && config.decorrelate === 'none') {
-    return badInput('set `decorrelate` — with decorrelate:"none" a model zoo is the run\'s only source of '
-      + 'candidate diversity, and that arm is measured worse: 59.1 for the mixed panel against 65.7 for '
-      + 'repeated sampling from the single best proposer, with the proposal count and topology held '
-      + 'fixed. Keep the models for capability and cost routing, which is what they are good for, and '
-      + 'get diversity from decorrelate:"angles".');
-  }
-  if (config.advance === 'none' && caps.depth && caps.depth.value > 1) {
+  if (advance === 'none' && caps.depth && caps.depth.value > 1) {
     return badInput(`advance:"none" has no selection step, so there is no second level to reach and `
       + `depth ${String(caps.depth.value)} cannot be run — it is refused rather than silently flattened, `
       + 'because a cap accepted and ignored is a lie about what the run did. Pass depth:1, or choose a '
@@ -904,7 +958,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
       ...(config.pruneThreshold !== undefined ? ['`pruneThreshold`'] : []),
       ...(config.minVisitsForPrune !== undefined ? ['`minVisitsForPrune`'] : []),
     ].join(' and ');
-    return badInput(`${named} is pruning policy for a tree selector, and advance:"${config.advance}" does not `
+    return badInput(`${named} is pruning policy for a tree selector, and advance:"${advance}" does not `
       + `prune — it would be accepted and ignored, which is why it is refused. Drop ${named}, or use one of `
       + `${SWARM_TREE_ADVANCES.join('/')}.`);
   }
@@ -1029,11 +1083,11 @@ export interface BranchArbitrationInput {
  * caps are refused rather than defaulted: a search whose depth nothing states
  * cannot grant depth, and saying so is not the same as saying the budget ran out.
  *
- * THE FIFTH ARM MOVED AXIS, and Lean moved with it. It used to read
- * `decorrelate:'blind' && proposal.inherit`, coupling sibling-blindness to
- * parent-inheritance because `inherit` was described as a per-branch `decorrelate`.
- * Those are two questions: `decorrelate` decides what a sibling is SHOWN, and
- * {@link SWARM_CONTEXTS} decides what a child STARTS FROM. §8.4 states the rule over
+ * THE FIFTH ARM MOVED AXIS, and Lean moved with it. It used to be stated over
+ * sibling-blindness coupled to parent-inheritance, on the reading that what a
+ * sibling is SHOWN and what a child STARTS FROM were one question. They are two,
+ * only one of them survived as an axis, and it is the one that was always doing the
+ * work: {@link SWARM_CONTEXTS} decides what a child starts from. §8.4 states the rule over
  * the second one — *"a search resolved to `fresh` refuses a `fork` child"* — so the
  * arm compares `context` with `context`, and the theorem is
  * `accepted_respects_context`. That re-pointing is the cost §6.7's cut list named,
@@ -1046,12 +1100,12 @@ export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitratio
   const refused = (policy: BranchRefusalPolicy, error: string): BranchArbitration =>
     ({ kind: 'refused', policy, error });
 
-  if (!isTreeAdvance(config.advance)) {
+  if (!isTreeAdvance(config.advance.kind)) {
     return refused('does-not-expand-at-node',
-      `advance:"${config.advance}" does not expand at a node, so this branch cannot be granted here: `
-      + `${config.advance === 'none'
+      `advance:"${config.advance.kind}" does not expand at a node, so this branch cannot be granted here: `
+      + `${config.advance.kind === 'none'
         ? 'a flat run has no selection step, so there is no second level for a branch to land on'
-        : `an ${config.advance} run reports a store rather than descending a tree`}`
+        : `an ${config.advance.kind} run reports a store rather than descending a tree`}`
       + `. The request is refused rather than dropped. A branch inside THIS search needs one of `
       + `${SWARM_TREE_ADVANCES.join('/')}; a new search with its own budget and its own objective is `
       + 'a nested `agents.swarm` call, which is a different thing and capped on a different counter.');

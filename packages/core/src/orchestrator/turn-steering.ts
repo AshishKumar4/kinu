@@ -3,10 +3,11 @@
  * can see about the turn that the model cannot.
  *
  * Everything here exists because prose does not work. Proteus's doctrine tells
- * the model to fork on breadth and on doubt, and to stop and re-read when a
- * command keeps failing; across a 10-task Terminal-Bench slice the model forked
- * on 0 tasks with that doctrine written in, and re-ran the same failing command
- * up to 34 times. The same conditions are trivially detectable from the turn's
+ * the model to delegate on breadth and on doubt, and to stop and re-read when a
+ * command keeps failing; across a 10-task Terminal-Bench slice the model
+ * delegated on 0 tasks with that doctrine written in, and re-ran the same
+ * failing command up to 34 times.
+ * The same conditions are trivially detectable from the turn's
  * own tool traffic, so they are detected here and stated to the model at the
  * step boundary where the decision is still open. Measured: doctrine 0%, a
  * mechanical splice 24%.
@@ -73,7 +74,7 @@
  * been told. Whether it converted is the point of the durable `turn_steering`
  * run event ({@link TurnSteering.snapshot}), which the settle spine writes
  * exactly as it writes `context_budget`. What "converted" means is per trigger:
- * the delegation steers ask for a fork, the repeat steer asks for anything
+ * the delegation steers ask for a search, the repeat steer asks for anything
  * other than the call it named, and the progress steer asks for a call the turn
  * has not made before — so whether a trigger EARNS its place is a query over
  * `turn_steering` rows, not an opinion.
@@ -175,13 +176,13 @@ function repeatedCallText(tool: string, args: string, calls: number): string {
   return `\`${tool}\` has run ${calls} times with the same arguments and returned the same output every time — ${args}. `
     + 'Repeating it cannot tell you anything new; the output you already have is everything it has to say. '
     + 'Read that output again for the actual cause, or change the approach: a different command, a different file, '
-    + `or \`${DELEGATION_TOOL}\` action=fork to run competing approaches in parallel. `
+    + `or \`${DELEGATION_TOOL}\` action=swarm to run competing approaches in parallel. `
     + 'This is a hint, not an instruction — push on if you know why the repeat is right.';
 }
 
 function repeatedFailureText(tool: string, failures: number): string {
   return `\`${tool}\` has failed ${failures} times in a row. Running the same approach again is the least likely thing to work: `
-    + `fork now (\`${DELEGATION_TOOL}\` action=fork) to try competing approaches in parallel — put the angles you want tried in \`forks\`, which runs the briefs you supply and infers none — or action=swarm if they have to be measured against an \`objective\` you declare rather than merged. `
+    + `search now (\`${DELEGATION_TOOL}\` action=swarm) to try competing approaches in parallel — say what counts in \`objective\` and each candidate is measured by your own verifier, or take \`preset:'ideate'\` when there is nothing to measure yet. `
     + 'This is a hint, not an instruction — push on alone if you already know the fix.';
 }
 
@@ -190,13 +191,13 @@ function noProgressText(steps: number): string {
     + 'no file was touched for the first time, and no edit landed. '
     + 'Steps that succeed are not the same as steps that get somewhere — this turn is spending and not moving. '
     + 'Stop and say what is actually blocking you, then change something real: a different file, a different command, '
-    + `or \`${DELEGATION_TOOL}\` action=fork to run competing approaches in parallel. `
+    + `or \`${DELEGATION_TOOL}\` action=swarm to run competing approaches in parallel. `
     + 'This is a hint, not an instruction — push on if the ground you are re-covering is the right ground.';
 }
 
 function longTurnText(steps: number): string {
   return `${steps} steps into this turn with no delegation. Work this long is work that splits: `
-    + `fork now (\`${DELEGATION_TOOL}\` action=fork) to run the independent parts in parallel instead of grinding them one at a time. `
+    + `search now (\`${DELEGATION_TOOL}\` action=swarm) to run the independent parts in parallel instead of grinding them one at a time. `
     + 'This is a hint, not an instruction — push on alone if the rest is genuinely sequential.';
 }
 
@@ -211,7 +212,7 @@ function longTurnText(steps: number): string {
  */
 function turnStartDelegationText(): string {
   return 'Settle the shape first: what the parts are, and what each one owes the others. That decision is yours. '
-    + `Then run the independent parts as forks (\`${DELEGATION_TOOL}\` action=fork) in one call, and carry on with what is left. `
+    + `Then run the independent parts as one search (\`${DELEGATION_TOOL}\` action=swarm) in one call, and carry on with what is left. `
     + 'This is a hint, not an instruction — work alone if the whole thing is one coherent change.';
 }
 
@@ -533,7 +534,7 @@ export class TurnSteering {
   /** Did this call do the thing the fired steer asked for? Per trigger,
    *  because the steers ask for different things: the repeat steer asks for
    *  anything but the call it named, the progress steer asks for ground the
-   *  turn has not covered, and the delegation steers ask for a fork. */
+   *  turn has not covered, and the delegation steers ask for a search. */
   private answersTheSteer(ctx: ToolCallContext): boolean {
     const signature = callSignature(ctx.toolName, ctx.args);
     if (this.fired?.trigger === 'repeated_call') return signature !== this.repeating;

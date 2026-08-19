@@ -24,7 +24,7 @@ import * as v from 'valibot';
 import { createTestRuntime } from '@proteus/test-utils';
 import { SwarmConfigSchema } from '../src/tools/swarm-input';
 import {
-  resolveSwarm, SWARM_CONTEXTS, SWARM_UNITS,
+  resolveSwarm, swarmValidity, SWARM_CONTEXTS, SWARM_UNITS,
   type BranchContext, type SwarmUnitSetting,
 } from '../src/strategy/swarm';
 import { runSwarm } from '../src/strategy/swarm-run';
@@ -40,11 +40,9 @@ function unitCall(over: { unit: SwarmUnitSetting; context: BranchContext }) {
     config: {
       unit: over.unit,
       context: over.context,
-      observe: 'none' as const,
       expand: 'sample' as const,
-      decorrelate: 'angles' as const,
       score: { kind: 'none' as const },
-      advance: 'none' as const,
+      advance: { kind: 'none' as const },
       carry: { kind: 'none' as const },
     },
     depth: 1,
@@ -81,6 +79,123 @@ describe('the unit axis names what a node produces, and nothing else', () => {
   });
 });
 
+describe('the surface has SIX axes, and each cut value is refused by its own name', () => {
+  /** A config as a caller might still spell it, INCLUDING the axes and values the
+   *  surface no longer has. Named rather than `object`, because the shape these
+   *  tests send is exactly the thing under test. */
+  interface CutSpelling {
+    readonly observe?: string;
+    readonly decorrelate?: string;
+    readonly expand?: string;
+    readonly score?: { readonly kind: string };
+    readonly advance?: { readonly kind: string; readonly novelty?: number };
+  }
+
+  /** The message a composition comes back with, or '' when it was accepted. */
+  function refusal(config: CutSpelling): string {
+    const parsed = v.safeParse(SwarmConfigSchema, config);
+    return parsed.success ? '' : parsed.issues.map((issue) => issue.message).join(' ');
+  }
+
+  test('a `custom` call with an empty config is refused naming all six and no more', () => {
+    const resolved = resolveSwarm({ preset: 'custom', task: 't', label: 'six', config: {} });
+    if (!('reason' in resolved)) throw new Error('an empty composition must be refused');
+    for (const axis of ['unit', 'context', 'expand', 'score', 'advance', 'carry']) {
+      expect(resolved.error).toContain(axis);
+    }
+    expect(resolved.error).not.toContain('observe');
+    expect(resolved.error).not.toContain('decorrelate');
+  });
+
+  test('`observe` is refused by name, and told where each of its values went', () => {
+    const error = refusal({ observe: 'ancestors' });
+    expect(error).toContain('`observe` was cut entirely');
+    expect(error).toContain('context:"fork"');
+  });
+
+  test('`decorrelate` is refused by name, and says what turning angles off cost', () => {
+    const error = refusal({ decorrelate: 'blind' });
+    expect(error).toContain('`decorrelate` was cut entirely');
+    // The honest half: all three values behaved identically, AND something was lost.
+    expect(error).toContain('behaving identically');
+    expect(error).toContain('can no longer be turned OFF');
+  });
+
+  test('expand:"mutate" is refused by name and points at the axis that took its question', () => {
+    const error = refusal({ expand: 'mutate' });
+    expect(error).toContain('expand:"mutate" was cut');
+    expect(error).toContain('`context`');
+    // The survivors still parse.
+    expect(v.parse(SwarmConfigSchema, { expand: 'sample' })).toMatchObject({ expand: 'sample' });
+    expect(v.parse(SwarmConfigSchema, { expand: 'aggregate' })).toMatchObject({ expand: 'aggregate' });
+  });
+
+  test('score:"agree" is refused by name as the judge it always was', () => {
+    const error = refusal({ score: { kind: 'agree' } });
+    expect(error).toContain('score:"agree" was cut');
+    expect(error).toContain('samples');
+  });
+
+  test('score:"novelty" is refused by name and says it MOVED rather than went', () => {
+    const error = refusal({ score: { kind: 'novelty' } });
+    expect(error).toContain('score:"novelty" was cut');
+    expect(error).toContain('advance:{kind:"archive", novelty:');
+  });
+
+  test('advance:"beam" is refused by name and does NOT claim an equivalent', () => {
+    const error = refusal({ advance: { kind: 'beam' } });
+    expect(error).toContain('advance:"beam" was cut');
+    expect(error).toContain('COSTS SOMETHING');
+    expect(error).toContain('LEVEL-SYNCHRONISED ORDER');
+  });
+
+  test("an archive with no rejection test is UNCONSTRUCTIBLE, not refused", () => {
+    // The load-bearing half of the re-homing. There is no longer a validity rule to
+    // fail: the parse itself has nowhere to put an archive without its novelty test.
+    expect(() => v.parse(SwarmConfigSchema, { advance: { kind: 'archive' } })).toThrow();
+    expect(v.parse(SwarmConfigSchema, { advance: { kind: 'archive', novelty: 0.6 } }))
+      .toMatchObject({ advance: { kind: 'archive', novelty: 0.6 } });
+  });
+
+  test('the three archive presets stopped resolving, and say why rather than guessing', () => {
+    // The cost stated plainly: `redteam` USED to resolve and now does not, because
+    // §6.3 never declared the threshold its archive arm now requires.
+    for (const preset of ['research', 'audit', 'redteam'] as const) {
+      const resolved = resolveSwarm({ preset, task: 'probe it', key: 'behaviour' });
+      if (!('reason' in resolved)) throw new Error(`${preset} must be refused as undeclared`);
+      expect(resolved.error).toContain(preset);
+    }
+  });
+
+  test('`prove` is constructible, and it is a checker preset', () => {
+    const resolved = resolveSwarm({
+      preset: 'prove',
+      task: 'show every reachable state is safe',
+      objective: {
+        kind: 'scalar', metric: 'obligations discharged', unit: 'count', direction: 'maximise',
+        scale: 'linear', target: 12, verify: { kind: 'exec-ratio', spec: {} },
+      },
+    });
+    if ('reason' in resolved) throw new Error(`prove did not resolve: ${resolved.error}`);
+    expect(resolved.config.unit).toEqual({ kind: 'generator' });
+    expect(resolved.config.score).toEqual({ kind: 'verify' });
+    expect(resolved.config.advance).toEqual({ kind: 'best-first' });
+    expect(resolved.config.carry).toEqual({ kind: 'artifacts', threshold: 1 });
+    expect(resolved.caps.depth?.value).toBe(7);
+    expect(resolved.settle).toBe('best');
+  });
+
+  test('`prove` without a checker is refused — the objective IS the checker', () => {
+    // Two steps, as shipped: §6.3 resolves the row, §6.5 checks the resolved tuple.
+    // `prove` scores by `verify`, and `verify` with nothing to measure is the refusal.
+    const resolved = resolveSwarm({ preset: 'prove', task: 'show it' });
+    if ('reason' in resolved) throw new Error(`prove must RESOLVE: ${resolved.error}`);
+    const illegal = swarmValidity(resolved);
+    if (!illegal) throw new Error('a prove call with no objective must be refused');
+    expect(illegal.error).toContain('objective');
+  });
+});
+
 describe('the context axis carries the inheritance question, at one spelling', () => {
   test('both values parse, and the axis is a bare picklist rather than a tagged value', () => {
     for (const context of SWARM_CONTEXTS) {
@@ -102,10 +217,11 @@ describe('the context axis carries the inheritance question, at one spelling', (
     expect(resolved.error).toContain('context');
   });
 
-  test('a named preset supplies it from §6.3s row, verifier presets forking', () => {
-    // The two verifier presets take `fork` because a fork IS the cut
-    // `observe:'ancestors'` by construction; the archive presets take `fresh` because a
-    // probe of a new coverage cell wants the parent's RESULTS, not its transcript.
+  test('a named preset supplies it from §6.3s row, the verifier presets inheriting', () => {
+    // The verifier presets take `fork` because that is what the cut
+    // `observe:'ancestors'` WAS: a continued conversation carries the ancestor
+    // chain's measurements transitively. `ideate` takes `fresh` — it has no branch
+    // edge at all.
     const optimise = resolveSwarm({
       preset: 'optimise',
       task: 'make it faster',

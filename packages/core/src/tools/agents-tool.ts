@@ -2,9 +2,9 @@
  * `agents` — the ONE delegation tool. Every helper an actor can spawn or talk
  * to lives behind a single surface where the KIND of helper is a parameter:
  *
- *   fork    — 2–6 ephemeral forks of the calling agent (the heads runtime),
+ *   swarm   — a configured search over ephemeral nodes of the calling agent,
  *             each a full multi-step tool loop on the same workspace, whose
- *             findings are settled back into this turn by a merge.
+ *             candidates are MEASURED against the caller's own objective.
  *   hire    — a persistent named subordinate that keeps its own context
  *             across turns and stays in the roster until dismissed;
  *             scope=workspace creates a specialist peer workspace instead.
@@ -15,12 +15,11 @@
  *   list    — the unified roster: subordinates + peer workspaces.
  *   dismiss — retire a subordinate (archived by default; context kept).
  *
- * The machinery underneath is unchanged surface-for-surface from the former
- * think/team/peers tools: fork dispatches through the StrategyRegistry
- * (heads / mcts strategies untouched), hire/ask/send ride TeamToolDeps'
- * facet substrate, and peer messaging rides PeersToolDeps' EventsHub
- * transport. Which actions exist is decided structurally by which deps the
- * backend wires — see agentsActionsFor.
+ * The machinery underneath: swarm dispatches through `strategy/swarm-run.ts`,
+ * whose nodes are real tool-using agents on the heads runtime; hire/ask/send
+ * ride TeamToolDeps' facet substrate, and peer messaging rides PeersToolDeps'
+ * EventsHub transport. Which actions exist is decided structurally by which
+ * deps the backend wires — see agentsActionsFor.
  */
 import { tool, jsonSchema } from 'ai';
 import type { LanguageModel, ToolSet } from 'ai';
@@ -34,20 +33,16 @@ import {
   DELEGATION_RUNGS,
   type AgentsToolAction,
 } from './registry';
-import { FORK_STRATEGY_ID } from '../strategy/heads';
 import { SwarmConfigSchema, SwarmObjectiveSchema } from './swarm-input';
 import { resolveSwarm, swarmValidity, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../strategy/swarm';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { NamedSwarmPreset, SwarmConfig, SwarmPreset } from '../strategy/swarm';
 import type { Objective } from '../strategy/objective';
 import { readSpawnStarted } from '../jobs/threshold';
-import { localMissionPort, readMissionLimits, type MissionGovernor } from '../mission-budget';
-import type {
-  BuiltinStrategyOptions, StrategyContext, StrategyRegistry,
-} from '../strategy/types';
+import { readMissionLimits, type MissionGovernor } from '../mission-budget';
+import type { BuiltinStrategyOptions, StrategyRegistry } from '../strategy/types';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
-import type { MergeStrategy } from '../heads/types';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics } from '../obs/index';
@@ -58,7 +53,6 @@ import {
   type DelegationDepthRefusal,
 } from '../subordinates/depth';
 import {
-  JsonObjectSchema,
   parseJsonObject,
   type JsonObject,
   type JsonValue,
@@ -232,20 +226,30 @@ const ASSIGN_NOTES = {
   queued: 'Queued behind the subordinate\'s current or already-admitted work as its own turn.',
 } satisfies Record<SubordinateDelivery, string>;
 
-// ── Fork (exploration strategy) deps contract ───────────────────────────────
+// ── Exploration substrate deps contract ─────────────────────────────────────
 
+/**
+ * What an actor needs to run a search of its own: a model to expand with and a
+ * workspace to measure in. Wired under the `fork` key on {@link AgentsToolDeps}
+ * because that is the key both backends already build (`buildStrategyForkDeps`),
+ * and the exploration substrate it names — the heads runtime, the durable MCTS
+ * session — is the same substrate a search's nodes run on.
+ *
+ * `runSwarmAction` reads `rt` and `model`. The other three carry the strategy
+ * plumbing the backends assemble around that substrate; they are declared here
+ * because the backends' one builder produces the whole bag, not because this
+ * module dispatches a strategy.
+ */
 export interface AgentsForkDeps {
   registry: StrategyRegistry;
   rt: AgentRuntime;
   model: LanguageModel;
-  /** What the resolved model charges, for strategies that gate on projected
-   *  spend before starting. Backends wire the ModelCatalogSession they already
-   *  hold; absence makes the gate blend and say so. */
+  /** What the resolved model charges, for gates on projected spend before
+   *  starting. Backends wire the ModelCatalogSession they already hold;
+   *  absence makes the gate blend and say so. */
   costModel?: () => CostModel;
-  /** Build per-strategy infrastructure options the LLM must not set —
-   *  e.g. `{ mcts: { session }, heads: { controller, inheritedContext, onPhase } }`.
-   *  Called once per fork invocation and deep-merged (one level) under the
-   *  caller's options so injected infra survives caller-supplied tuning. */
+  /** Per-strategy infrastructure options the LLM must not set — e.g.
+   *  `{ mcts: { session }, heads: { controller, inheritedContext, onPhase } }`. */
   defaultOptions?: () => BuiltinStrategyOptions;
 }
 
@@ -254,8 +258,9 @@ export interface AgentsToolDeps {
    * never appears in the model schema, so a delegated child cannot opt out of
    * a Plan turn's mutation bar. */
   mode: WorkMode;
-  /** Ephemeral forks (the heads runtime + MCTS settle). Wired wherever the
-   *  backend has an exploration substrate — both backends, subordinates too. */
+  /** The exploration substrate — a model to expand with and a workspace to
+   *  measure in. Wired wherever a backend has one: both backends, subordinates
+   *  too. Its presence is what puts `swarm` in this actor's enum. */
   fork?: AgentsForkDeps;
   /** Persistent subordinates. Wired on every actor that can hold a roster —
    *  the workspace orchestrator and, since a subordinate tree is recursive,
@@ -288,16 +293,15 @@ interface UnifiedRosterResult {
 /** Which actions this deps set structurally supports. The single gating rule
  *  shared by the tool schema, the system prompt's Delegation section and the
  *  `agents.*` codemode namespace.
- *  Presence-typed so prompt assembly can ask without building fork deps. */
+ *  Presence-typed so prompt assembly can ask without building the substrate. */
 export function agentsActionsFor(deps: { fork?: object; team?: object; peers?: object }): AgentsToolAction[] {
   const converse = !!deps.team || !!deps.peers;
   const present = {
-    fork: !!deps.fork,
-    // The same deps as `fork`, and structurally rather than by choice: a swarm needs a
-    // model to expand with and a workspace to measure in, which is exactly what
-    // AgentsForkDeps carries. It is not a separate capability a backend could wire
-    // half of, so it gets no deps group of its own — an actor that can fork can run a
-    // configured search, and one that cannot has neither in its enum.
+    // Structural rather than a choice: a search needs a model to expand with and a
+    // workspace to measure in, which is exactly what AgentsForkDeps carries. It is
+    // not a capability a backend could wire half of, so it gets no deps group of
+    // its own — an actor with the exploration substrate can run a configured
+    // search, and one without it has no search rung at all.
     swarm: !!deps.fork,
     hire: converse,
     ask: converse,
@@ -316,7 +320,7 @@ export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
   const spec = BUILTIN_TOOL_SPECS.agents;
   const use = [
     DELEGATION_FRAME,
-    ...(deps.fork ? [DELEGATION_RUNGS.fork, DELEGATION_RUNGS.swarm] : []),
+    ...(deps.fork ? [DELEGATION_RUNGS.swarm] : []),
     ...(deps.team || deps.peers ? [DELEGATION_RUNGS.hire] : []),
     ...(deps.peers
       ? [DELEGATION_CONVERSE]
@@ -334,27 +338,12 @@ export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
 
 // ── Input shape ─────────────────────────────────────────────────────────────
 
-/** A single fork spec. Mirrors SplitRequest['heads'][number] minus the infra
- *  the host injects. */
-interface ForkSpec {
-  task: string;
-  rationale: string;
-  /** Per-fork model spec (e.g. `codex/gpt-5.5`). Omit to inherit the agent's. */
-  model?: string;
-  allowedTools?: string[];
-}
-
 export interface AgentsToolInput {
   action: AgentsToolAction;
-  // fork
+  // swarm — the configured-search rung. `preset` and `objective` are the two halves
+  // of §6.4's rule: a preset fixes the search, the caller supplies the objective.
+  /** What the search is for, in prose — never the measured quantity. */
   task?: string;
-  forks?: ForkSpec[];
-  /** How the forks are settled is no longer a field: merge is the only settlement
-   *  `fork` has. Tree search is `action:'swarm'` with a `depth`. */
-  merge_strategy?: MergeStrategy;
-  budget?: number;
-  wall_clock_ms?: number;
-  options?: JsonObject;
   /** Cumulative spend cap for everything this helper transitively spawns.
    *  Nests under the caller's mission scope, so an inner cap can only ever be
    *  tighter than the outer one. Omit for the uncapped default. */
@@ -363,8 +352,6 @@ export interface AgentsToolInput {
   /** Name the sub-ledger. Defaults to a generated label under the caller's
    *  mission; naming it lets a run keep one budget across several calls. */
   budget_label?: string;
-  // swarm — the configured-search rung. `preset` and `objective` are the two halves
-  // of §6.4's rule: a preset fixes the search, the caller supplies the objective.
   preset?: SwarmPreset;
   /** What is measured, in what unit, which direction is better. Required for
    *  `optimise`; refused on `ideate`, which has no value signal by design. */
@@ -413,24 +400,17 @@ export type AgentsToolInputField = Exclude<keyof AgentsToolInput, 'action'>;
  * accepted and ignored.
  */
 export const AGENTS_ACTION_FIELDS = {
-  fork: [
-    'task', 'forks', 'merge_strategy', 'budget', 'wall_clock_ms', 'options',
-    'budget_usd', 'budget_tokens', 'budget_label',
-  ],
   // The mission caps sit beside the swarm's own fields because §6.4 puts them there
   // deliberately: `budget_usd`, `budget_tokens` and `budget_label` are PRE-EXISTING
-  // caps on this input and stay there rather than being duplicated onto `SwarmInput`,
-  // which would be the second spelling §6.4's reason 1 exists to prevent. A swarm
-  // reads them through the same seam a fork does, and the governor enforces them.
+  // caps on this input, read through `missionScope` and enforced by the governor.
   //
-  // `budget` and `wall_clock_ms` are DELIBERATELY ABSENT, and that is a disagreement
-  // with §2.5 recorded rather than papered over. The table calls both caps optional on
-  // every preset — but an iteration cap is meaningless at the one depth that runs
-  // today, and nothing here cuts a search off on a wall clock. Declaring them would
-  // make this surface accept a cap nothing applies, which is the precise defect the
-  // specification is written against, so a caller who sends either is TOLD (the field
-  // refusal names the actions that do read them) instead of quietly ignored. They join
-  // this list when something enforces them.
+  // An ITERATION cap and a WALL-CLOCK cap are DELIBERATELY ABSENT, and that is a
+  // disagreement with §2.5 recorded rather than papered over. The table calls both
+  // optional on every preset — but nothing here cuts a search off on either, so
+  // declaring them would make this surface accept a cap nothing applies, which is
+  // the precise defect the specification is written against. A caller who sends one
+  // is TOLD (the field refusal names the actions that read it) instead of quietly
+  // ignored. They join this list when something enforces them.
   swarm: [
     'task', 'preset', 'objective', 'key', 'config', 'from', 'label', 'branches', 'depth',
     'models', 'budget_usd', 'budget_tokens', 'budget_label',
@@ -449,37 +429,6 @@ export const AGENTS_ACTION_FIELDS = {
  *  ordinary string work: membership, and the list a refusal prints. */
 const fieldsOf = (action: AgentsToolAction): readonly string[] => AGENTS_ACTION_FIELDS[action];
 
-interface MergeableOption {
-  [key: string]: BuiltinStrategyOptions[keyof BuiltinStrategyOptions];
-}
-
-const MergeableOptionSchema = v.custom<MergeableOption>(
-  (input) => !Array.isArray(input) && v.is(v.object({}), input),
-);
-
-function mergeableOption(
-  value: BuiltinStrategyOptions[keyof BuiltinStrategyOptions],
-): MergeableOption | undefined {
-  const parsed = v.safeParse(MergeableOptionSchema, value);
-  return parsed.success ? parsed.output : undefined;
-}
-
-interface HeadsOptionOverlay {
-  heads?: ForkSpec[];
-  mergeStrategy?: MergeStrategy;
-}
-
-/** A fork brief's fields, `strictObject` for the same reason the input is: these
- *  are the surface's only camelCase names, so `allowed_tools` beside the tool's
- *  own snake_case is a mistake the shape itself invites. */
-const ForkSpecEntries = {
-  task: v.string(),
-  rationale: v.string(),
-  model: v.optional(v.string()),
-  allowedTools: v.optional(v.array(v.string())),
-};
-const ForkSpecSchema = v.strictObject(ForkSpecEntries);
-
 /** Every input field and its type, declared ONCE. The two policies below read
  *  these same entries — the model-facing parse REFUSES an unrecognised field,
  *  the replay filter DROPS it — so neither can come to declare a field the
@@ -487,11 +436,6 @@ const ForkSpecSchema = v.strictObject(ForkSpecEntries);
 const AgentsInputEntries = {
   action: v.picklist(AGENTS_TOOL_ACTIONS),
   task: v.optional(v.string()),
-  forks: v.optional(v.array(ForkSpecSchema)),
-  merge_strategy: v.optional(v.picklist(['synthesize', 'best_of', 'consensus'])),
-  budget: v.optional(v.number()),
-  wall_clock_ms: v.optional(v.number()),
-  options: v.optional(JsonObjectSchema),
   budget_usd: v.optional(v.number()),
   budget_tokens: v.optional(v.number()),
   budget_label: v.optional(v.string()),
@@ -532,22 +476,27 @@ const AgentsInputEntries = {
  *
  * Both caps gone. A model that spelled a cap camelCase asked for a $5 ceiling,
  * got no ceiling, and nothing in the error, the result or the run record said its
- * request had vanished. camelCase for a snake_case field is the EXPECTED mistake
- * here — the tool's own fork briefs are camelCase one level down — so this is a
- * shape the surface provokes rather than an exotic one.
+ * request had vanished. `fork` has since left the picklist, so that exact call is
+ * refused twice over — but the shape the surface provokes is unchanged, because
+ * every cap on it is still snake_case and camelCase is the expected mistake.
  */
 const AgentsToolInputSchema = v.strictObject(AgentsInputEntries);
 
 /**
  * The REPLAY parse, over a durable job row instead of a model's call. A row is
  * history: no model is listening for a correction, and refusing the row would
- * turn an interrupted fork into a hard failure (JobNotResumable) over a field
+ * turn an interrupted search into a hard failure (JobNotResumable) over a field
  * that was ALREADY dropped when the row was first dispatched. So unknown entries
  * are dropped here — which is what makes the re-drive faithful to the run it
- * resumes — and `resumableForkInput` logs the drop rather than repeating it
+ * resumes — and `resumableAgentsInput` logs the drop rather than repeating it
  * silently.
+ *
+ * `action` is a plain string here and a picklist on the model-facing parse, and
+ * that difference is the whole point: a row can name an action this surface no
+ * longer has, and translating it is exactly the job. Refusing it at the parse
+ * would strand the rows the translation exists for.
  */
-const StoredAgentsInputSchema = v.object(AgentsInputEntries);
+const StoredAgentsInputSchema = v.object({ ...AgentsInputEntries, action: v.string() });
 
 /** Every field name in declaration order — what a refusal suggests from when the
  *  action itself is unreadable, and the set the picklist gate holds the
@@ -676,20 +625,6 @@ function agentsFieldRefusal<T>(input: T): string | undefined {
       : `unknown field "${field}".`);
     listFields = true;
   }
-  // The briefs, whose own fields are the camelCase half of the same collision.
-  const briefs = v.safeParse(v.array(FieldNamesSchema), parsed.output['forks']);
-  if (briefs.success) {
-    for (const [index, brief] of briefs.output.entries()) {
-      for (const field of Object.keys(brief)) {
-        if (Object.hasOwn(ForkSpecEntries, field)) continue;
-        const meant = nearestField(field, Object.keys(ForkSpecEntries));
-        problems.push(`unknown field "forks[${String(index)}].${field}"`
-          + (meant
-            ? ` — did you mean "${meant}"? A brief's fields are camelCase.`
-            : `. A brief takes: ${Object.keys(ForkSpecEntries).join(', ')}.`));
-      }
-    }
-  }
   if (problems.length === 0) return undefined;
   const fields = listFields
     ? action ? ` ${takesSentence(action)}` : ` Fields are: ${AGENTS_INPUT_FIELDS.join(', ')}.`
@@ -708,123 +643,123 @@ export function parseAgentsToolInput<T>(input: T): AgentsToolInput {
   return v.parse(AgentsToolInputSchema, input);
 }
 
+/** A durable job row, at the width the replay parse reads it. */
+type StoredAgentsRow = v.InferOutput<typeof StoredAgentsInputSchema>;
+
+/** The pre-unification tool's row, at the width the translation reads. Its other
+ *  fields are deliberately not parsed: nothing on this surface can carry them, so
+ *  they reach the drop line off the RAW row like every other uncarried field. */
+const LegacyThinkRowSchema = v.object({ task: v.string() });
+
+/** What a TRANSLATED row must not carry, because the translation decides it: the
+ *  `preset` is fixed to `ideate` below, and an `objective` cannot ride a row that
+ *  declared no metric, no unit, no direction and no verifier. */
+const TRANSLATION_DECIDES = { preset: true, objective: true } satisfies Record<string, true>;
+
+/** The `swarm` fields a stored row actually held — derived from the action's own
+ *  field list rather than a second list beside it, so a field that joins `swarm`
+ *  later carries on a re-drive without this function being touched. */
+function swarmFieldsOf(row: StoredAgentsRow, skip: Record<string, true>): Partial<AgentsToolInput> {
+  const carried: Partial<AgentsToolInput> = {};
+  for (const field of AGENTS_ACTION_FIELDS.swarm) {
+    if (Object.hasOwn(skip, field)) continue;
+    const value = row[field];
+    if (value !== undefined) Object.assign(carried, { [field]: value });
+  }
+  return carried;
+}
+
+/** Absent from the re-drive, and present in the record of why. Named rather than
+ *  counted: a resumed search that lost a cap is only diagnosable if the line says
+ *  which cap. `extra` is what no field name covers — the row's SETTLEMENT, which a
+ *  swarm has no equivalent of, so a translated re-drive returns its candidates
+ *  unranked and unsynthesised and says so. */
+function recordDroppedFields<T>(
+  kind: string,
+  input: T,
+  resumed: AgentsToolInput,
+  extra: readonly string[],
+): void {
+  const carried = new Set(Object.keys(resumed));
+  const dropped = fieldNames(input).filter((field) => !carried.has(field));
+  if (dropped.length === 0 && extra.length === 0) return;
+  diagnostics.event('agents.resume.fields_dropped', {
+    kind,
+    fields: [...dropped, ...extra].join(','),
+    count: dropped.length + extra.length,
+  });
+}
+
+/**
+ * A stored row from a surface that no longer exists, re-driven as the one thing that
+ * runs ephemeral nodes today.
+ *
+ * `preset:'ideate'` and not a measured preset, because the row has no `objective` and
+ * none can be invented for it: `optimise` would need a metric, a unit, a direction and
+ * a verifier the original call never supplied. `ideate` is the shape that needs none —
+ * it writes its own competing approaches from `task` alone.
+ *
+ * The SETTLEMENT is the loss and it is a real one: the merge that reconciled a fork's
+ * findings, and the judged ensemble that ordered a settle's, are both deliberately
+ * unreachable from a swarm. So the re-drive hands back candidates nothing combined,
+ * and the drop line says that rather than only counting fields — a resumed search that
+ * quietly stopped settling is worse than one that refused.
+ */
+function searchReplay<T>(kind: string, input: T, task: string | undefined, carry: Partial<AgentsToolInput>): AgentsToolInput | null {
+  if (task === undefined) return null;
+  const resumed: AgentsToolInput = { ...carry, action: 'swarm', preset: 'ideate', task };
+  recordDroppedFields(kind, input, resumed, ['settlement']);
+  return resumed;
+}
+
 /**
  * Background-job resume filter, shared by both backends: durable job rows store the
  * tool KIND + input, and only exploration work is safely re-runnable. Returns the
  * input to re-execute, or null when the job is not resumable.
  *
+ * It is ALSO the DETACH gate (orchestrator/background-tools.ts): the same narrowing
+ * decides which live `agents` call may background in the first place, because a call
+ * that could not be re-driven after an eviction must never be detached into a job.
+ * One predicate at both ends — a detachable call with no resume is how work is lost.
+ *
  * Rows are TRANSLATED rather than validated as a model call would be. A row was
  * recorded verbatim from whatever the model sent (jobs/runner.ts stores the raw
- * input), so rows written before today's surface can carry fields it now refuses —
- * and a row is re-driven, not answered, so a refusal there is work lost to a
- * spelling nobody can correct any more. A stored row is history, not a prompt.
+ * input), so a row written before today's surface can carry fields it now refuses
+ * and can name an ACTION it no longer has — and a row is re-driven, not answered, so
+ * a refusal there is work lost to a spelling nobody can correct any more. A stored
+ * row is history, not a prompt.
  *
- * TWO TRANSLATIONS, and both log what they could not carry:
+ * WHAT TRANSLATES, and every translation names what it could not carry:
  *
- *   `settle` — a row stored under one is a TREE SEARCH, and tree search is now
- *   `action:'swarm'`. Mapped onto `preset:'ideate'`, which is the faithful shape:
- *   it writes its own competing approaches from `task` alone, exactly as the stored
- *   settle did. What it does NOT carry is the RANKING — the judged ensemble that
- *   ordered those approaches is not reachable from a swarm, by design — so the
- *   re-drive returns the candidates unranked and says so.
+ *   `action:'fork'` — the removed ephemeral rung. Its caller supplied the angles
+ *   itself and a merge model synthesised what came back. A search is what spawns
+ *   ephemeral tool-using nodes now, so the row re-drives as one; the briefs and the
+ *   merge are the loss, and the drop line names them.
  *
- *   `kind:'think'` — rows written by the pre-unification tool, whose `heads` are
- *   `forks` and whose `strategy` is the same tree-search signal as `settle`.
+ *   `settle` — an older row still, from when a judged tree was reachable from inside
+ *   that rung. Same translation: the field is not an entry any more, so it arrives as
+ *   an unknown key and is named in the same line.
+ *
+ *   `kind:'think'` — rows written by the pre-unification tool, whose `heads` are the
+ *   same briefs and whose `strategy` named the engine directly.
  */
-const LegacyForkInputSchema = v.object({
-  strategy: v.optional(v.string()),
-  task: v.string(),
-  heads: v.optional(v.array(ForkSpecSchema)),
-  merge_strategy: v.optional(v.picklist(['synthesize', 'best_of', 'consensus'])),
-  budget: v.optional(v.number()),
-  wall_clock_ms: v.optional(v.number()),
-  options: v.optional(JsonObjectSchema),
-});
-
-/** The tree-search signal a stored row may carry, read off the RAW row rather than
- *  the parse: `settle` is no longer an entry, so `StoredAgentsInputSchema`'s
- *  `v.object` excludes it before it could be translated. Returns the stored value,
- *  or null when the row asked for the merge that `fork` still is. */
-function storedTreeSearch<T>(input: T): string | null {
-  const parsed = v.safeParse(v.object({ settle: v.optional(v.string()) }), input);
-  if (!parsed.success) return null;
-  const settle = parsed.output.settle;
-  return settle === undefined || settle === 'merge' ? null : settle;
-}
-
-/**
- * A stored tree search, re-driven as the one thing that runs a tree today.
- *
- * `preset:'ideate'` and not a measured preset, because the row has no `objective`
- * and none can be invented for it: `optimise` would need a metric, a unit, a
- * direction and a verifier that the original call never supplied. `ideate` is the
- * shape that needs none — it writes its own competing approaches from `task` alone,
- * which is what the stored settle did.
- *
- * The RANKING is the loss, and it is a real one: the judged ensemble that ordered
- * those approaches is deliberately unreachable from a swarm. So the re-drive returns
- * the candidates unranked, and the line below says that rather than only counting
- * fields — a resumed search that quietly stopped ranking is worse than one that
- * refused.
- */
-function treeSearchReplay<T>(
-  kind: string,
-  input: T,
-  task: string | undefined,
-  settle: string,
-): AgentsToolInput | null {
-  if (task === undefined) return null;
-  const dropped = fieldNames(input)
-    .filter((field) => field !== 'action' && field !== 'task' && field !== 'settle');
-  diagnostics.event('agents.resume.fields_dropped', {
-    kind,
-    fields: [...dropped, `settle=${settle}->action:swarm/preset:ideate`, 'ranking'].join(','),
-    count: dropped.length + 1,
-  });
-  return { action: 'swarm', preset: 'ideate', task };
-}
-
-export function resumableForkInput<T>(kind: string, input: T): AgentsToolInput | null {
+export function resumableAgentsInput<T>(kind: string, input: T): AgentsToolInput | null {
   if (kind === 'agents') {
     const parsed = v.safeParse(StoredAgentsInputSchema, input);
-    if (!parsed.success || parsed.output.action !== 'fork') return null;
-    const searched = storedTreeSearch(input);
-    if (searched !== null) return treeSearchReplay(kind, input, parsed.output.task, searched);
-    const resumed: AgentsToolInput = { action: 'fork' };
-    for (const field of AGENTS_ACTION_FIELDS.fork) {
-      const value = parsed.output[field];
-      if (value !== undefined) Object.assign(resumed, { [field]: value });
+    if (!parsed.success) return null;
+    const row = parsed.output;
+    if (row.action === 'fork') {
+      return searchReplay(kind, input, row.task, swarmFieldsOf(row, TRANSLATION_DECIDES));
     }
-    const carried = new Set(Object.keys(resumed));
-    const dropped = fieldNames(input).filter((field) => !carried.has(field));
-    if (dropped.length > 0) {
-      // Absent from the re-drive, and present in the record of why. Named
-      // rather than counted: a resumed fork that lost a cap is only diagnosable
-      // if the line says which cap.
-      diagnostics.event('agents.resume.fields_dropped', {
-        kind, fields: dropped.join(','), count: dropped.length,
-      });
-    }
+    if (row.action !== 'swarm') return null;
+    const resumed: AgentsToolInput = { action: 'swarm', ...swarmFieldsOf(row, {}) };
+    recordDroppedFields(kind, input, resumed, []);
     return resumed;
   }
   if (kind !== 'think') return null;
-  const parsed = v.safeParse(LegacyForkInputSchema, input);
+  const parsed = v.safeParse(LegacyThinkRowSchema, input);
   if (!parsed.success) return null;
-  const legacy = parsed.output;
-  const searched = legacy.strategy !== undefined && legacy.strategy !== FORK_STRATEGY_ID
-    ? legacy.strategy
-    : null;
-  if (searched !== null) return treeSearchReplay(kind, input, legacy.task, searched);
-  const resumed: AgentsToolInput = {
-    action: 'fork',
-    task: legacy.task,
-  };
-  if (legacy.heads) Object.assign(resumed, { forks: legacy.heads });
-  if (legacy.merge_strategy) Object.assign(resumed, { merge_strategy: legacy.merge_strategy });
-  if (legacy.budget !== undefined) Object.assign(resumed, { budget: legacy.budget });
-  if (legacy.wall_clock_ms !== undefined) Object.assign(resumed, { wall_clock_ms: legacy.wall_clock_ms });
-  if (legacy.options) Object.assign(resumed, { options: legacy.options });
-  return resumed;
+  return searchReplay(kind, input, parsed.output.task, {});
 }
 
 interface AgentsToolCallOptions {
@@ -835,218 +770,44 @@ function readAbortSignal(options: AgentsToolCallOptions | undefined): AbortSigna
   return options?.abortSignal;
 }
 
-// ── Fork dispatch (the former think tool, verbatim semantics) ───────────────
+// ── Dispatch helpers ────────────────────────────────────────────────────────
 
 /**
- * A fork refusal, reason FIRST — the shape and the vocabulary the `file` tool's
- * refusals already carry (tools/file-tool.ts). `bad_input` is that vocabulary's
- * "the arguments do not describe an operation", which is exactly what a fork
- * with the wrong argument shape is, and it is what makes the refusal land in
+ * A delegation refusal, reason FIRST — the shape and the vocabulary the `file`
+ * tool's refusals already carry (tools/file-tool.ts). `bad_input` is that
+ * vocabulary's "the arguments do not describe an operation", which is exactly what
+ * a call with the wrong argument shape is, and it is what makes the refusal land in
  * `refused` rather than indicting the tool in `broke` when the ledger is read
  * back (read-models/tool-failures.ts). A bare `{error}` envelope classified as
  * `returned_error`: a correct refusal counted as a defect.
  */
-interface ForkRefusal {
+interface BadInputRefusal {
   reason: 'bad_input';
   error: string;
 }
 
-function forkRefusal(error: string): ForkRefusal {
+function badInput(error: string): BadInputRefusal {
   return { reason: 'bad_input', error };
 }
 
 /**
- * `forks` is REQUIRED, enforced before anything spawns.
- *
- * It used to be conditional on a `settle`, and neither half of that relationship
- * was enforced: `settle=merge` WITHOUT briefs got past the spawn announcement
- * below, so the call detached into a background job and the strategy's throw
- * arrived as a wake about spawned work failing — naming `heads`, an option the
- * model has no field for — for a fork that never spawned.
- *
- * With merge the only settlement, the relationship is unconditional: a fork runs
- * the briefs it was given, and a call with none has nothing to run.
+ * The mission scope this call runs under: the caller's, narrowed to a fresh child
+ * label when the call declared its own cap. Returns null when there is no governor
+ * or no scope at all — the uncapped default, where nothing below this point does
+ * any budget work.
  */
-function forkBriefsRefusal(input: AgentsToolInput): ForkRefusal | null {
-  if (input.forks?.length) return null;
-  return forkRefusal(
-    'fork runs the forks you supply and this call supplied none. Pass `forks`: 2-6 briefs, '
-    + 'each with its own `task` and `rationale`. Nothing infers the angles for you. If you wanted '
-    + 'the search to write its own competing approaches and rank them, that is `action:\'swarm\'`, '
-    + 'which measures candidates against an `objective` you declare.',
-  );
-}
-
-/**
- * The mission scope this fork runs under: the caller's, narrowed to a fresh
- * child label when the call declared its own cap. Returns null when there is no
- * governor or no scope at all — the uncapped default, where nothing below this
- * point does any budget work.
- */
-function forkMissionScope(
+function missionScope(
   budget: MissionGovernor | undefined,
   input: AgentsToolInput,
 ): { governor: MissionGovernor; labels: string[] } | null {
   if (!budget) return null;
   const limits = readMissionLimits(input);
   if (limits) {
-    const label = input.budget_label?.trim() || `fork-${nanoid()}`;
+    const label = input.budget_label?.trim() || `swarm-${nanoid()}`;
     budget.declare(label, limits);
     return { governor: budget, labels: [label] };
   }
   return budget.scope.length > 0 ? { governor: budget, labels: [...budget.scope] } : null;
-}
-
-async function runFork(
-  deps: AgentsForkDeps,
-  input: AgentsToolInput,
-  mode: WorkMode,
-  toolOptions: AgentsToolCallOptions | undefined,
-  budget?: MissionGovernor,
-): Promise<object> {
-  if (!input.task) return forkRefusal('fork requires task');
-  // Merge is the only settlement a fork has, so the strategy is not a caller
-  // choice: `settle` left the surface with `settle:'mcts'`, and tree search is
-  // `action:'swarm'` with a `depth`.
-  const strat = deps.registry.get(FORK_STRATEGY_ID);
-  if (!strat) {
-    return forkRefusal('fork needs the heads strategy and this actor has none registered.');
-  }
-  const missing = forkBriefsRefusal(input);
-  if (missing) return missing;
-
-  // One-level deep merge: caller tuning sits alongside injected infra
-  // (session / controller / onPhase) instead of replacing the whole
-  // per-strategy bag.
-  const defaults = deps.defaultOptions?.();
-  const callerOpts = input.options ?? {};
-  const options = defaults instanceof Map
-    ? new Map(defaults)
-    : new Map(Object.entries(defaults ?? {}));
-  for (const [key, value] of Object.entries(callerOpts)) {
-    const existing = options.get(key);
-    const existingObject = mergeableOption(existing);
-    const valueObject = mergeableOption(value);
-    options.set(
-      key,
-      existingObject && valueObject
-        ? Object.assign({}, existingObject, valueObject)
-        : value,
-    );
-  }
-
-  // Ergonomic fork input: fold the typed top-level fields into options.heads,
-  // preserving the injected controller/context/onPhase. Reached only under the
-  // settle that reads them — forkSettleRefusal above is what guarantees it.
-  if (input.forks?.length) {
-    const headsOptions: HeadsOptionOverlay = {};
-    const existingHeads = options.get('heads');
-    const existingHeadsObject = mergeableOption(existingHeads);
-    if (existingHeadsObject) Object.assign(headsOptions, existingHeadsObject);
-    Object.assign(headsOptions, { heads: input.forks });
-    if (input.merge_strategy) Object.assign(headsOptions, { mergeStrategy: input.merge_strategy });
-    options.set('heads', headsOptions);
-  }
-
-  // The fork's mission scope, and with it the model-call seam for everything
-  // the exploration reaches a model through: branch evaluation, the judge
-  // ensemble, convergence. Metering and enforcement ride the same wrapper, so
-  // an exhausted label stops the search mid-flight rather than after it.
-  const mission = forkMissionScope(budget, input);
-  let rt: AgentRuntime = deps.rt;
-  if (mission) {
-    rt = {
-      ...deps.rt,
-      llm: mission.governor.govern(deps.rt.llm, mission.labels),
-    };
-    if (deps.rt.judgeModel) {
-      Object.assign(rt, { judgeModel: mission.governor.govern(deps.rt.judgeModel, mission.labels) });
-    }
-  }
-
-  const ctx: StrategyContext = {
-    task: input.task,
-    mode,
-    rt,
-    model: deps.model,
-    // The governed `rt.llm` above covers everything that reaches a model
-    // through this process. A head does not: it resolves its own model in its
-    // own runtime, so it needs the ledger itself, and that is what this
-    // carries. Only present when a budget was actually declared.
-    budget: {
-      // Unset = strategy default (lets stored agent-config overrides apply).
-      maxIterations: input.budget,
-      // Only set a wall-clock bound when the caller explicitly asks for one.
-      // Every blanket default here has silently killed forks mid-work (a 60s
-      // one that a fork's sub-agent cold-start alone could eat, then a 5-minute
-      // one that killed a codebase audit). Undefined means the forks run to
-      // completion, like the turn that spawned them; spend is the mission
-      // governor's ledger, declared below.
-      wallClockMs: input.wall_clock_ms,
-    },
-    options,
-    // The spend gate's pricing route. Passed through as the thunk the backend
-    // supplied so the catalog rate is read when the gate runs, not when this
-    // context was built — the lookup is usually still in flight at this point.
-    costModel: deps.costModel,
-  };
-  const signal = readAbortSignal(toolOptions);
-  if (signal) Object.assign(ctx, { signal });
-  if (mission) {
-    Object.assign(ctx, {
-      mission: { labels: mission.labels, port: localMissionPort(mission.governor) },
-    });
-  }
-  // The spawn is validated and about to be in flight — tell the background
-  // wrapper, which detaches the call right now instead of racing a threshold
-  // whose wait could only be dead air (withSpawnDetach). Every validation
-  // error above returned before this line, so it still lands inline; a
-  // failure past it is genuinely the spawned work failing, and arrives as
-  // the job's wake. Inline surfaces (codemode `agents.*`, resume re-drives,
-  // the raw eval toolset) arm no announcement and run to completion.
-  readSpawnStarted(toolOptions)?.();
-  try {
-    const result = await strat.explore(ctx);
-    // The spawn always records. The TOKENS record here only when this seam is
-    // the one that has to charge them. Both parallel strategies charge their
-    // own: a heads fork debits every step as it makes it, and MCTS debits every
-    // rollout as it returns — which is what lets an exhausted budget stop
-    // either one mid-flight. Charging their totals again here would
-    // double-count them.
-    //
-    // A fork that reported NO total is charged nothing either, for the opposite
-    // reason: an unmeasured fork is not a free one, and a fabricated zero would
-    // be indistinguishable from a provider that genuinely reported zero. The
-    // spawn row is what says the work happened.
-    const CHARGE_NOTHING = 0;
-    const lump = result.cost.selfMetered ? CHARGE_NOTHING : result.cost.tokens;
-    mission?.governor.debit(lump ?? CHARGE_NOTHING, {
-      labels: mission.labels,
-      spawns: 1,
-    });
-    const cost: JsonObject = { durationMs: result.cost.durationMs };
-    if (result.cost.tokens !== undefined) Object.assign(cost, { tokens: result.cost.tokens });
-    if (result.cost.iterations !== undefined) Object.assign(cost, { iterations: result.cost.iterations });
-    if (result.cost.selfMetered !== undefined) Object.assign(cost, { selfMetered: result.cost.selfMetered });
-    if (result.cost.filesChanged !== undefined) Object.assign(cost, { filesChanged: result.cost.filesChanged });
-    const output: JsonObject = {
-      strategy: result.strategy,
-      text: result.best.text,
-      score: result.best.score,
-      cost,
-    };
-    if (result.trace !== undefined) Object.assign(output, { trace: result.trace });
-    if (mission) {
-      const label = mission.labels[0];
-      const snapshot = label ? mission.governor.snapshot(label)[0] : undefined;
-      if (snapshot) {
-        Object.assign(output, { mission_budget: parseJsonObject(JSON.stringify(snapshot)) });
-      }
-    }
-    return output;
-  } catch (err) {
-    return { error: `Fork failed: ${err instanceof Error ? err.message : String(err)}` };
-  }
 }
 
 // ── Swarm dispatch (the configured-search rung) ──────────────────────────────
@@ -1062,11 +823,11 @@ async function runFork(
  * and "we cannot do that yet" in one bucket, which is the distinction a caller needs
  * most: only one of the three is worth correcting.
  *
- * WHY THIS READS THE CAPS. §6.4 keeps `budget`, `wall_clock_ms` and the mission caps on
- * this input rather than duplicating them onto `SwarmInput`, so a swarm nests under the
- * caller's mission scope through the very same seam a fork does — `forkMissionScope`
- * reads `budget_usd` / `budget_tokens` / `budget_label`, and the governed model is what
- * the expansion runs on.
+ * WHY THIS READS THE CAPS. §6.4 keeps the mission caps on this input rather than
+ * duplicating them onto `SwarmInput`, so a search nests under the caller's mission
+ * scope through the seam every spawn uses — `missionScope` reads `budget_usd` /
+ * `budget_tokens` / `budget_label`, and the governed model is what the expansion
+ * runs on.
  */
 async function runSwarmAction(
   deps: AgentsForkDeps,
@@ -1076,13 +837,13 @@ async function runSwarmAction(
   budget?: MissionGovernor,
 ): Promise<object> {
   if (!input.preset) {
-    return forkRefusal('swarm needs `preset` — the shape of the search. optimise measures a number '
+    return badInput('swarm needs `preset` — the shape of the search. optimise measures a number '
       + 'you declare in `objective`; ideate samples in parallel with no value signal; '
       + 'research/audit/redteam bin findings under a coverage `key`; custom states the axes in '
       + '`config` under a `label`.');
   }
   if (!input.task) {
-    return forkRefusal('swarm needs `task` — what the search is for, in prose. The measured '
+    return badInput('swarm needs `task` — what the search is for, in prose. The measured '
       + 'quantity goes in `objective`, never here.');
   }
   const call = { preset: input.preset, task: input.task };
@@ -1103,9 +864,9 @@ async function runSwarmAction(
   const illegal = swarmValidity(resolved);
   if (illegal) return illegal;
 
-  // The mission scope, and with it the model-call seam: the same one a fork nests
-  // under, so an exhausted label stops a search mid-flight rather than after it.
-  const mission = forkMissionScope(budget, input);
+  // The mission scope, and with it the model-call seam, so an exhausted label stops
+  // a search mid-flight rather than after it.
+  const mission = missionScope(budget, input);
   let rt: AgentRuntime = deps.rt;
   if (mission) {
     rt = { ...deps.rt, llm: mission.governor.govern(deps.rt.llm, mission.labels) };
@@ -1116,11 +877,10 @@ async function runSwarmAction(
   readSpawnStarted(toolOptions)?.();
   const result = await runSwarm(runDeps, resolved);
   if ('reason' in result) return result;
-  // The spawn always records. TOKENS are charged as a lump here because a swarm's
+  // The spawn always records. TOKENS are charged as a lump here because a search's
   // expansions and measurements are made from THIS process through the governed
-  // `rt.llm`, so nothing has debited them yet — the opposite of a heads fork, which
-  // debits every step itself and is charged nothing again. A run that reported no
-  // total is charged nothing rather than billed a fabricated zero.
+  // `rt.llm`, so nothing has debited them yet. A run that reported no total is
+  // charged nothing rather than billed a fabricated zero.
   mission?.governor.debit(result.report.tokens ?? 0, { labels: mission.labels, spawns: 1 });
   const output: JsonObject = parseJsonObject(JSON.stringify(result));
   if (mission) {
@@ -1143,102 +903,12 @@ async function runSwarmAction(
 type SchemaPropertiesFor<Action extends AgentsToolAction> =
   { [Field in (typeof AGENTS_ACTION_FIELDS)[Action][number]]?: JsonObject };
 
-type ForkSchemaProperties = SchemaPropertiesFor<'fork'>;
-
-function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
-  if (!deps.fork) return {};
-  const properties: ForkSchemaProperties = {
-    // Gains the batch-level role the `context` slot of oh-my-pi (can1357/oh-my-pi,
-    // the hard fork — upstream pi has no sub-agents at all) has: shared
-    // background stated ONCE rather than copied into every fork's brief. Still
-    // literally the task — the shared background every brief is read against — so
-    // the wording has to carry both that and the goal, and "the concrete task the
-    // forks explore together" carried neither past the word `task` itself.
-    // Two actions read this ONE property, so it names both. The fork half is
-    // unchanged; the swarm half is here rather than in `swarmProperties` because a
-    // second declaration of the same key would replace this sentence instead of
-    // adding to it, and this is the one that was measured.
-    task: { type: 'string', description: 'For action=fork: the task the forks explore together and the context they share — the goal, the constraints that hold for every fork, and any interface they must agree on. State it here once rather than repeating it in each fork. For action=swarm: what the search is for, in prose — never the measured quantity, which belongs in `objective`.' },
-    forks: {
-      type: 'array',
-      minItems: 2,
-      maxItems: 6,
-      // Required, and stated on the field the model fills: a fork runs the briefs
-      // it is given and a call with none has nothing to run (forkBriefsRefusal).
-      description: 'For action=fork: the parallel forks to spawn, and they are required — each brief becomes a real agent with its own multi-step tool loop over this workspace, and their findings merge back into this turn. If you want the search to write its own competing approaches instead of supplying them, that is action=swarm.',
-      items: {
-        type: 'object',
-        required: ['task', 'rationale'],
-        properties: {
-          // 16 words of guidance ("Be concrete." / "Why this angle matters.")
-          // for the most failure-prone artifact in the system. What a brief
-          // must carry follows from what a fork can SEE, and that sentence now
-          // comes from DELEGATION_INHERITANCE.fork.brief — the same per-action
-          // source the rung composes — because the two disagreed: this field
-          // said a fork "sees this workspace but not this conversation" while
-          // the comment above it said the parent's completed turns ARE its
-          // inherited context, which is what the code does. A fork does not see
-          // this turn as it continues, and never a sibling's work
-          // (heads/controller.ts spawns them with no channel between them), so
-          // the acceptance criterion still has to be in the brief: nothing else
-          // can tell the fork it is done.
-          task: { type: 'string', description: `What this fork explores, complete on its own: the files or surfaces to look at, what to change or find out, and the observable result that means it is done. ${DELEGATION_INHERITANCE.fork.brief}` },
-          rationale: { type: 'string', description: 'Why this angle matters — one line, read at the merge to weigh what came back.' },
-          // The field said how to set it and never what setting it is FOR, so
-          // a first-class capability read as a knob. The caveat belongs on the
-          // parameter rather than in the prompt: mixed panels track their
-          // AVERAGE member, not their spread (Self-MoA, arXiv 2502.00674), so
-          // a weaker model added for variety measurably subtracts — which is
-          // exactly the mistake "put different models on it" invites.
-          model: {
-            type: 'string',
-            description: "Per-fork model spec (e.g. 'codex/gpt-5.5'). Omit to inherit this agent's. Set it to put a different vendor on a genuinely open question — a panel is only as good as its average member, so a weaker model chosen for variety costs more than it buys.",
-          },
-          allowedTools: { type: 'array', items: { type: 'string' }, description: 'Tool names this fork may invoke.' },
-        },
-      },
-    },
-    // Three distinct behaviours whose names alone do not give them away, and
-    // whose semantics lived only in buildMergePrompt (heads/controller.ts) —
-    // instructions addressed to the merge model, not to the caller choosing
-    // between them. Same three behaviours, stated for the audience that picks.
-    merge_strategy: {
-      type: 'string',
-      enum: ['synthesize', 'best_of', 'consensus'],
-      description: 'For action=fork: how the merge reads the forks. Default synthesize — one narrative, disagreements reconciled in favour of the stronger evidence. best_of takes the strongest fork whole. consensus reports what the forks agreed on and hands back each disagreement as an open question, which is what you want when the split itself is the answer you need.',
-    },
-    budget: { type: 'integer', minimum: 1, maximum: 200, description: 'For action=fork: max iterations.' },
-    wall_clock_ms: {
-      type: 'integer', minimum: 1000,
-      description: 'For action=fork: abort the forks after this many ms. Omit unless the work is genuinely time-boxed — forks run to completion by default, and a deadline cuts them off mid-work.',
-    },
-    options: { type: 'object', description: 'For action=fork: advanced tuning of the merge. Most callers leave unset.' },
-    // The opt-in cumulative cap. Offered on fork, where the host genuinely owns
-    // the exploration's model calls and can therefore enforce it; a subordinate
-    // runs on its own storage, so `hire` is gated at the spawn seam instead of
-    // being handed a cap nothing could hold it to.
-    budget_usd: {
-      type: 'number', minimum: 0,
-      description: 'For action=fork: cumulative USD cap for everything this fork transitively spends — its exploration, its judging, and anything it spawns. Enforced by the host, not by the fork. Omit for no cap.',
-    },
-    budget_tokens: {
-      type: 'integer', minimum: 1,
-      description: 'For action=fork: cumulative token cap, same transitive scope as budget_usd.',
-    },
-    budget_label: {
-      type: 'string', maxLength: 120,
-      description: 'For action=fork: name the sub-ledger so several fork calls share one cumulative budget. Omit for a fresh one per call.',
-    },
-  };
-  return properties;
-}
-
 /**
  * What a swarm call is advertised as taking.
  *
- * Gated on the same deps as {@link forkProperties} and for the same reason: the action
- * is in the enum exactly when the substrate is wired, so a property described here
- * cannot be shown for an action that is not offered.
+ * Gated on the exploration substrate, because the action is in the enum exactly when
+ * that substrate is wired, so a property described here cannot be shown for an action
+ * that is not offered.
  *
  * The descriptions carry the SHAPE and not only the meaning — `objective` is nested
  * three deep and `verify` is the field a model reaches for with a script path, twice
@@ -1249,12 +919,15 @@ type SwarmSchemaProperties = SchemaPropertiesFor<'swarm'>;
 
 function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
   if (!deps.fork) return {};
-  // `task` is deliberately NOT here. It is ONE JSON-Schema property read by two
-  // actions, and this function is spread after `forkProperties`, so declaring it again
-  // would silently replace the fork wording — the description measured to matter — with
-  // the swarm one. The shared property carries both readers instead, in forkProperties
-  // where the sentence that must survive already lives.
   return {
+    // Carries the batch-level role the `context` slot of oh-my-pi (can1357/oh-my-pi,
+    // the hard fork — upstream pi has no sub-agents at all) has: the shared background
+    // every candidate is read against, stated ONCE rather than copied per candidate.
+    // The wording has to carry both that and the goal, which is why the inheritance
+    // sentence rides it from DELEGATION_INHERITANCE.swarm.brief — the same per-action
+    // source the rung composes, so the field and the rung cannot come to disagree
+    // about what a node can see.
+    task: { type: 'string', description: `For action=swarm: what the search is for, in prose — never the measured quantity, which belongs in \`objective\`. ${DELEGATION_INHERITANCE.swarm.brief}` },
     preset: {
       type: 'string',
       enum: [...SWARM_PRESETS],
@@ -1265,7 +938,7 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
       description: 'For action=swarm: what is measured. {kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}} and an optional floor:{value, kind:"certificate", proof, best_known_honest}. verify names a REGISTERED instrument and hands it its whole spec — a metric nothing can execute is not an objective, and a script path invented here is refused rather than run. kind:"witness" is a checkable certificate and needs a scalar `proxy` to be searchable; kind:"instanced" (one metric, 2+ instances) and kind:"vector" (2+ metrics) are the two front shapes. Field names are snake_case, like every field on this tool.',
     },
     key: { type: 'string', description: 'For action=swarm with research/audit/redteam: the coverage descriptor elites are binned into. It must name something a tool call can witness — a key that can only say "distinct idea" means the task wants preset:"ideate".' },
-    config: { type: 'object', description: 'For action=swarm with preset:"custom" only: the axes — unit, observe, expand, decorrelate, score, advance, carry — as the OVERRIDE on `from`\'s shape, or all seven when there is no `from`. Prohibited on a named preset, which is a tested path and cannot be refused.' },
+    config: { type: 'object', description: 'For action=swarm with preset:"custom" only: the axes — unit, context, expand, score, advance, carry — as the OVERRIDE on `from`\'s shape, or all six when there is no `from`. Prohibited on a named preset, which is a tested path and cannot be refused.' },
     from: {
       type: 'string',
       enum: [...NAMED_SWARM_PRESETS],
@@ -1274,14 +947,14 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
     label: { type: 'string', maxLength: 120, description: 'For action=swarm with preset:"custom": required provenance. A composed shape recorded repeatedly under one label is the evidence for a new preset.' },
     branches: { type: 'integer', minimum: 1, description: 'For action=swarm: candidates per expansion. Omit to take the preset\'s own width.' },
     depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion; deeper selects down a tree with `advance`, scoring each node against your own `objective`. The literature runs 3-7 (ToT <=3, LATS 7, Koh 5). advance:"none" has no selection step, so it fixes depth at 1 and a deeper cap is refused rather than silently flattened.' },
-    models: { type: 'array', items: { type: 'string' }, description: 'For action=swarm: per-node model routing — a cheap model for recon, a strong one for synthesis. NOT for diversity: a mixed panel tracks its AVERAGE member, so a weaker model added for variety measurably subtracts. Diversity is the `decorrelate` axis.' },
+    models: { type: 'array', items: { type: 'string' }, description: 'For action=swarm: per-node model routing — a cheap model for recon, a strong one for synthesis. NOT for diversity: a mixed panel tracks its AVERAGE member, so a weaker model added for variety measurably subtracts. Diversity is unconditional: every node is already given its own angle.' },
     budget_usd: { type: 'number', minimum: 0, description: 'For action=swarm: cumulative USD cap for the whole search, including its measurements. Omit for no cap.' },
     budget_tokens: { type: 'integer', minimum: 1, description: 'For action=swarm: cumulative token cap, same scope as budget_usd.' },
     budget_label: { type: 'string', maxLength: 120, description: 'For action=swarm: name the sub-ledger so several calls share one cumulative budget.' },
   };
 }
 
-type ConverseSchemaProperties = SchemaPropertiesFor<Exclude<AgentsToolAction, 'fork' | 'swarm'>>;
+type ConverseSchemaProperties = SchemaPropertiesFor<Exclude<AgentsToolAction, 'swarm'>>;
 
 function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   if (!deps.team && !deps.peers) return {};
@@ -1356,7 +1029,7 @@ function requestedTopic(input: AgentsToolInput): { topic: string } | { error: st
  * throwing into the model's script.
  *
  * `toolOptions` is the AI SDK tool-call options bag; only `abortSignal` is
- * read (fork cancellation).
+ * read (search cancellation).
  */
 export async function dispatchAgentsAction(
   deps: AgentsToolDeps,
@@ -1391,9 +1064,9 @@ export async function dispatchAgentsAction(
   }
   // The spawn seam. Launching a helper is what turns one exhausted run into
   // many, so the cap is checked before the launch — for every action that
-  // creates or wakes an agent, not just fork. `list`, `dismiss` and `reply`
-  // spend nothing and stay available so a stopped run can still wind itself up.
-  if (input.action === 'fork' || input.action === 'swarm' || input.action === 'hire'
+  // creates or wakes an agent. `list`, `dismiss` and `reply` spend nothing and
+  // stay available so a stopped run can still wind itself up.
+  if (input.action === 'swarm' || input.action === 'hire'
     || input.action === 'ask' || input.action === 'send') {
     const refusal = deps.budget?.guard('spawn');
     if (refusal) return refusal;
@@ -1410,9 +1083,6 @@ export async function dispatchAgentsAction(
   }
   try {
     switch (input.action) {
-      case 'fork':
-        return await runFork(deps.fork!, input, mode, toolOptions, deps.budget);
-
       case 'swarm':
         return await runSwarmAction(deps.fork!, input, mode, toolOptions, deps.budget);
 
@@ -1426,7 +1096,7 @@ export async function dispatchAgentsAction(
             return {
               reason: 'denied',
               error: 'hire scope=workspace creates a whole workspace, which only the workspace orchestrator may do — '
-                + 'hire a subordinate here instead (omit scope), or fork.',
+                + 'hire a subordinate here instead (omit scope), or run a search.',
             } satisfies DelegationDepthRefusal;
           }
           if (!input.mission || !input.message) return { error: 'hire scope=workspace requires mission and message' };
@@ -1552,11 +1222,10 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
           enum: actions,
           description: [
             ...(deps.fork ? [
-              'fork = spawn 2–6 ephemeral forks of yourself that settle back into this turn. '
-              // The one line that separates the two search rungs, on the field a
-              // model reads FIRST. Without it "spawn several and pick the best"
-              // describes both, and the difference that matters is who decides.
-              + 'swarm = run a configured search whose candidates are measured by your own verifier instead of judged — it takes a preset and an objective, not briefs.',
+              // The line that says what this rung IS, on the field a model reads
+              // FIRST. "Spawn several and pick the best" describes plenty of things;
+              // the difference that matters is who decides, so it says so here.
+              'swarm = run a configured search over ephemeral nodes of yourself, whose candidates are measured by your own verifier instead of judged — it takes a preset and an objective.',
             ] : []),
             ...(team || peers ? [
               'hire = create a persistent named helper. ask = hand an agent work and get its answer back. send = fire-and-forget message. list = the unified roster.'
@@ -1575,7 +1244,6 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
             ...(team ? ['dismiss = retire a subordinate (archived by default — its context is kept).'] : []),
           ].join(' '),
         },
-        ...forkProperties(deps),
         ...swarmProperties(deps),
         ...converseProperties(deps),
       },
@@ -1595,8 +1263,8 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
       try {
         parsed = parseAgentsToolInput(input);
       } catch (error) {
-        // Reason FIRST, the vocabulary a fork refusal already uses: a call the
-        // parse refused is bad input, not a tool that broke.
+        // Reason FIRST, the vocabulary every refusal on this surface uses: a call
+        // the parse refused is bad input, not a tool that broke.
         return { reason: 'bad_input', error: error instanceof Error ? error.message : String(error) };
       }
       return dispatchAgentsAction(deps, parsed, toolOptions);

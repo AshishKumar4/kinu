@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#
+# Commit-message tier: the one hook that can stop a message rather than report
+# it. ~0.1s.
+#
+# It is not a tier of the ladder and it cannot be one. Every tier takes no
+# argument; this hook carries a PAYLOAD — the path of the message git is about
+# to write — and no tier can supply it. So it invokes the SAME program the
+# ladder's `gate:commit-message` runs, handed that path. One program, two entry
+# points, one vocabulary. `scripts/ladder.test.ts` asserts that equality, which
+# is what keeps this from becoming the fifth list.
+#
+# Why here and not only in CI: a commit message is the one artifact that is
+# immutable the instant it exists. A gate that reports it after the fact reports
+# something nobody can fix without rewriting history — which this repository has
+# now had to do once, for 1,898 commits.
+#
+# The ladder tier still runs the same rules over every commit since the
+# convention landed, because git runs NO commit-msg hook during a rebase and
+# none under --no-verify. This hook is the fast path; CI is the enforcement.
+#
+# NEVER --no-verify.
+
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)" || exit 1
+exec bun scripts/commit-hygiene.ts "$1"

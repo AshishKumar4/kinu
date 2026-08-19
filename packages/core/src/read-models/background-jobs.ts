@@ -18,7 +18,7 @@ import type { ToolSet } from 'ai';
 import type { BackgroundJob, BackgroundJobStore } from '../jobs/store';
 import type { WorkMode } from '../prompting/surface';
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
-import { resumableForkInput } from '../tools/agents-tool';
+import { resumableAgentsInput } from '../tools/agents-tool';
 
 /** The four things the control plane asks of a running job registry —
  *  BackgroundJobRunner's public surface, named at the width this plane uses. */
@@ -74,15 +74,15 @@ export function clearBackgroundJobs(jobs: BackgroundJobStore) {
  * job. Detaches immediately — the work already proved slow.
  *
  * The stored row goes through the SAME narrowing the evict-resume path uses
- * (`resumableForkInput`), and that is the point rather than tidiness: a row is
+ * (`resumableAgentsInput`), and that is the point rather than tidiness: a row is
  * recorded verbatim from whatever the model sent, so a row written before today's
- * surface can carry fields the strict parse now refuses, and one carrying a
- * `settle` predates tree search becoming `action:'swarm'`. Replaying it raw would
- * meet the parse instead of the translation — a translate-on-replay convention that
- * held on the resume path and not on this one would be worse than none, because the
- * two paths differ only in who pressed the button.
+ * surface can carry fields the strict parse now refuses, and one carrying
+ * `action:'fork'` or a `settle` names a rung this surface no longer has. Replaying
+ * it raw would meet the parse instead of the translation — a translate-on-replay
+ * convention that held on the resume path and not on this one would be worse than
+ * none, because the two paths differ only in who pressed the button.
  *
- * A kind the narrowing declines (`run`, `execute_tools`, a non-fork `agents` action)
+ * A kind the narrowing declines (`run`, `execute_tools`, a converse `agents` action)
  * is replayed exactly as stored, which is the behaviour this function already had.
  */
 export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string): RetryOutcome {
@@ -95,7 +95,7 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
   if (!tool?.execute) return { ok: false, error: `tool "${job.kind}" unavailable` };
   let input: JsonValue;
   try { input = parseJsonValue(inputJson); } catch { return { ok: false, error: 'stored input is unreadable' }; }
-  const translated = resumableForkInput(job.kind, input);
+  const translated = resumableAgentsInput(job.kind, input);
   if (translated) input = decodeJsonValue({ value: translated });
   const controller = new AbortController();
   const newId = deps.jobRunner.create(job.kind, input, job.workMode, controller);

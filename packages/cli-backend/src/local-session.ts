@@ -40,7 +40,7 @@ import {
   AgentOrchestrator,
   createAgentStores, type AgentStores, collectDynamicContext,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
-  wrapToolsForBackground, resumeForkBackgroundJob, BACKGROUND_POLICY, type BackgroundPolicy,
+  wrapToolsForBackground, resumeBackgroundJob, BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore, createDurableMctsSession,
   EventLog, ReplyChannelStore,
   type RunEventRecorder,
@@ -1361,17 +1361,17 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** Re-drive a background job interrupted by a previous process exit — the
-   *  shared fork-only resume gate (core background-tools) over the RAW
-   *  surface, so a re-drive can't detach a second job. Legacy 'think' jobs
-   *  translate onto the same fork path; the model-bound surface resolves
-   *  inside the thunk, only for a resumable kind. */
+   *  shared resume gate (core background-tools) over the RAW surface, so a
+   *  re-drive can't detach a second job. Rows stored under the removed `fork`
+   *  action, and 'think' rows older still, translate onto the search path; the
+   *  model-bound surface resolves inside the thunk, only for a resumable kind. */
   private resumeBackgroundJob(
     kind: string,
     input: { value: unknown },
     mode: WorkMode,
     signal: AbortSignal,
   ) {
-    return resumeForkBackgroundJob((resumeMode) => {
+    return resumeBackgroundJob((resumeMode) => {
       this.ensureModelState();
       return this.toolSets[resumeMode]?.raw ?? {};
     }, kind, decodeJsonValue({ value: input.value }), mode, signal).then((value) =>

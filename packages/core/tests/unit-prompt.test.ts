@@ -31,9 +31,9 @@ describe('buildSystemPromptSync', () => {
 
   test('renders ONE delegation ladder keyed on lifetime — one tool, exactly two rungs', () => {
     // The duplicate-sounding-tools gap: think/team/peers were three delegation
-    // surfaces, so the model saw `team` and never considered forking. ONE tool
-    // (`agents`) now asks one question — how long does the helper need to live
-    // — indexed here and specified in the tool schema.
+    // surfaces, so the model saw `team` and never considered delegating the
+    // exploration. ONE tool (`agents`) now asks one question — how long does the
+    // helper need to live — indexed here and specified in the tool schema.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toMatch(/## Delegation/);
@@ -50,37 +50,34 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('- Do it yourself');
     // …and the default is read BEFORE any rung, which is the whole point.
     expect(prompt.indexOf('Delegate once the shape'))
-      .toBeLessThan(prompt.indexOf('- Ephemeral fork'));
-    expect(prompt).toMatch(/- Ephemeral fork \(action=fork\) — /);
+      .toBeLessThan(prompt.indexOf('- Ephemeral search'));
+    expect(prompt).toMatch(/- Ephemeral search \(action=swarm\) — /);
     expect(prompt).toMatch(/- Persistent subordinate \(action=hire\) — /);
     // The old split surface is gone entirely.
     expect(prompt).not.toContain('`think`');
     expect(prompt).not.toContain('`team`');
     expect(prompt).not.toContain('`peers`');
-    // The forks' durable artifact trail survives. (The search-then-fetch loop
+    // The nodes' durable artifact trail survives. (The search-then-fetch loop
     // that used to ride this line is `web`'s own whenToUse, restated here in a
     // section about delegation and ungated on `web` actually being present.)
     expect(prompt).not.toMatch(/loop `web` search then fetch/);
-    expect(prompt).toMatch(/split depth 3/);
+    expect(prompt).toMatch(/search depth 3/);
     expect(prompt).toContain('shared/findings/');
     expect(prompt).toMatch(/NOT stateless between turns/);
   });
 
-  test('tree search is action=swarm, named inside the fork rung and never as a ladder bullet', () => {
-    // Preservation contract, inverted by the cutover: the tree search that used
-    // to be a settle policy inside this rung is its own ACTION now, and the fork
-    // rung is where a caller reading about forks is told so. It is still not a
-    // bullet in the prompt's index, which is keyed on lifetime and not on search.
+  test('tree search is action=swarm, and it is a rung rather than a settlement', () => {
+    // Preservation contract, inverted twice by two cutovers: the tree search that
+    // was once a settle policy is its own ACTION, and the ephemeral rung it used
+    // to live inside is gone. What must not come back is a second spelling — so
+    // the docstring names no settle at all, and the prompt's index carries the
+    // rung once.
     const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
     expect(agents).not.toContain('settle=');
-    expect(agents).toMatch(/that is action=swarm, which measures candidates against an `objective` you declare/);
+    expect(agents).toMatch(/Run a search \(action=swarm\)/);
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).not.toMatch(/^- .*\bswarm\b.*\) — /m);
-    // Stated inside the fork rung, after it starts.
-    const forkRung = agents.indexOf('Fork (action=fork)');
-    expect(forkRung).toBeGreaterThan(-1);
-    expect(agents.indexOf('that is action=swarm')).toBeGreaterThan(forkRung);
+    expect(prompt.match(/^- Ephemeral search \(action=swarm\) — /gm)).toHaveLength(1);
   });
 
   test('each rung renders only for the agents actions the backend wires', () => {
@@ -90,22 +87,22 @@ describe('buildSystemPromptSync', () => {
       registeredExecutors: [],
     });
     expect(both).toContain('## Delegation');
-    expect(both).toMatch(/- Ephemeral fork \(action=fork\) — /);
+    expect(both).toMatch(/- Ephemeral search \(action=swarm\) — /);
     expect(both).toMatch(/- Persistent subordinate \(action=hire\) — /);
     expect(both).toMatch(/hire the needed roles.*ask each an independent workstream.*integrate/i);
 
-    // A CLI session gets fork but never hire: one rung, no
+    // A CLI session gets the search rung but never hire: one rung, no
     // staffing loop, no peer converse.
-    const forkOnly = buildSystemPromptSync(rt, {
+    const searchOnly = buildSystemPromptSync(rt, {
       availableTools: ['agents'],
-      agentsActions: ['fork'],
+      agentsActions: ['swarm'],
       registeredExecutors: [],
     });
-    expect(forkOnly).toContain('## Delegation');
-    expect(forkOnly).toMatch(/- Ephemeral fork \(action=fork\) — /);
-    expect(forkOnly).not.toMatch(/- Persistent subordinate/);
-    expect(forkOnly).not.toContain('hire the needed roles');
-    expect(forkOnly).not.toContain('OTHER workspace agents');
+    expect(searchOnly).toContain('## Delegation');
+    expect(searchOnly).toMatch(/- Ephemeral search \(action=swarm\) — /);
+    expect(searchOnly).not.toMatch(/- Persistent subordinate/);
+    expect(searchOnly).not.toContain('hire the needed roles');
+    expect(searchOnly).not.toContain('OTHER workspace agents');
   });
 
   test('the in-sandbox rungs are advertised only where both halves exist', () => {
@@ -114,17 +111,17 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const both = buildSystemPromptSync(rt, {
       availableTools: ['agents', 'execute_tools'],
-      agentsActions: ['fork'],
+      agentsActions: ['swarm'],
       registeredExecutors: [],
     });
     expect(both).toContain('callable inside execute_tools as `agents.<action>`');
-    // The honest cost of forking from inside the sandbox, stated once.
+    // The honest cost of searching from inside the sandbox, stated once.
     expect(both).toContain('does not resume after an eviction');
 
     // No sandbox → no namespace to advertise.
     const noSandbox = buildSystemPromptSync(rt, {
       availableTools: ['agents'],
-      agentsActions: ['fork'],
+      agentsActions: ['swarm'],
       registeredExecutors: [],
     });
     expect(noSandbox).not.toContain('agents.<action>');
@@ -138,15 +135,15 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('the agents schema description leads with positive delegation triggers', () => {
-    // The frame gained a clause when the measured-search rung landed: the ladder's
-    // two SPAWN rungs still differ on lifetime and context, and the third rung is
-    // named as what it is — nodes that are candidate answers rather than helpers —
-    // so the sentence stays true of a surface that now has three.
+    // The ladder lost a rung when `fork` went: the two that remain differ on
+    // lifetime and on who decides the answer, and the frame names both axes
+    // before it names either rung, so the sentence is a trigger rather than a
+    // menu.
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
-      /Use when: One delegation ladder\. Its two spawn rungs differ on two axes at once: how long the helper lives, and what context it starts from/,
+      /Use when: One delegation ladder, two rungs, and they differ on lifetime and on who decides/,
     );
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
-      /candidate answers measured against a number you declare/,
+      /candidates are MEASURED against a number you declare/,
     );
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents.indexOf('one subordinate per independent workstream'))
       .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.agents.indexOf('full turn'));
@@ -161,9 +158,9 @@ describe('buildSystemPromptSync', () => {
     // place they are stated; the prompt names the rungs and nothing more.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_RUNGS.fork);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_RUNGS.swarm);
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_RUNGS.hire);
-    expect(prompt).not.toContain(DELEGATION_RUNGS.fork);
+    expect(prompt).not.toContain(DELEGATION_RUNGS.swarm);
     expect(prompt).not.toContain(DELEGATION_RUNGS.hire);
   });
 
@@ -182,43 +179,42 @@ describe('buildSystemPromptSync', () => {
     expect(buildSystemPromptSync(rt)).not.toContain('A finished subordinate');
   });
 
-  test('the fork rung closes on the fork/swarm boundary, stated as a mechanism and not a preference', () => {
-    // What replaced the settle doctrine. That doctrine contrasted two
-    // settlements; with merge the only one a fork has, the choice a caller
-    // actually faces is fork against swarm, and the line states the fact that
-    // decides it rather than a preference between them.
+  test('the search rung says who decides, stated as a mechanism and not a preference', () => {
+    // What replaced the settle doctrine, and then the fork/swarm boundary after
+    // it: with one ephemeral rung left, the thing a caller has to get right is
+    // that its candidates are MEASURED rather than judged, and the line states
+    // the fact that decides it rather than a preference.
     const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
-    expect(agents).toMatch(/`forks` is required, 2-6 briefs, and nothing infers them for you/);
-    expect(agents).toMatch(/measures candidates against an `objective` you declare/);
-    expect(agents).toMatch(/a merge reconciles what the forks report, a swarm scores what its candidates produced/);
+    expect(agents).toMatch(/scored by your own verifier running in this workspace — not by a model's opinion of it/);
+    expect(agents).toMatch(/a metric nothing can execute is not an objective/);
     // Payoff before limitation, the ordering this test was written for: what a
-    // fork buys the caller comes before what it will not infer for them.
-    expect(agents.indexOf('hands you back only the answer'))
-      .toBeLessThan(agents.indexOf('nothing infers them for you'));
+    // search buys the caller comes before what it refuses to do for them.
+    expect(agents.indexOf('hands you back only what it found'))
+      .toBeLessThan(agents.indexOf('It refuses rather than approximates'));
     // And the deterrent framing the doctrine shed stays shed.
     expect(agents).not.toMatch(/genuinely unclear/);
   });
 
-  test('the fork rung triggers on DOUBT, not only on decomposability', () => {
-    // The benchmark finding: the fork trigger was purely a decomposability
-    // test ("work splits into 2+ independent angles"), which a model applies
-    // only to work it already understands. It said nothing about the case a
-    // weak model most needs a helper for — first attempt failed, two
+  test('the search rung triggers on DOUBT, not only on decomposability', () => {
+    // The benchmark finding: the ephemeral rung's trigger was purely a
+    // decomposability test ("work splits into 2+ independent angles"), which a
+    // model applies only to work it already understands. It said nothing about
+    // the case a weak model most needs a helper for — first attempt failed, two
     // approaches plausible, can't check its own output — so 0/10 tasks ever
     // reached for a lift lever. Both triggers are now named, in the registry
     // single source, so the schema and the prompt carry them together.
     // Opens on the payoff in the caller's own currency — nothing in the
     // delegation surface bought the model anything before, and the section's
     // one use of "cheapest" argued for NOT reaching for the ladder.
-    expect(DELEGATION_RUNGS.fork).toMatch(/^Fork \(action=fork\) to spend someone else's context instead of your own/);
-    expect(DELEGATION_RUNGS.fork).toMatch(/hands you back only the answer/);
+    expect(DELEGATION_RUNGS.swarm).toMatch(/^Run a search \(action=swarm\) to spend someone else's context instead of your own/);
+    expect(DELEGATION_RUNGS.swarm).toMatch(/hands you back only what it found/);
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain('spend someone else\'s context instead of your own');
     expect(buildSystemPromptSync(createTestRuntime().rt)).not.toContain('spend someone else\'s context');
-    expect(DELEGATION_RUNGS.fork).toMatch(/Two triggers\./);
-    expect(DELEGATION_RUNGS.fork).toMatch(/Breadth: work splits into 2\+ independent angles/);
-    expect(DELEGATION_RUNGS.fork).toMatch(/Doubt: your first attempt failed/);
-    expect(DELEGATION_RUNGS.fork).toMatch(/you cannot check your own output/);
-    expect(DELEGATION_RUNGS.fork).toMatch(/being unsure is itself a reason to fork/);
+    expect(DELEGATION_RUNGS.swarm).toMatch(/Two triggers\./);
+    expect(DELEGATION_RUNGS.swarm).toMatch(/Breadth: work splits into 2\+ independent angles/);
+    expect(DELEGATION_RUNGS.swarm).toMatch(/Doubt: your first attempt failed/);
+    expect(DELEGATION_RUNGS.swarm).toMatch(/you cannot check your own output/);
+    expect(DELEGATION_RUNGS.swarm).toMatch(/being unsure is itself a reason to search/);
     // Both triggers reach the model through the schema, which every family
     // reads for selection. The prompt's second copy is gone, and the doubt
     // trigger is additionally mechanised — turn-steering's repeated_failure
@@ -226,7 +222,7 @@ describe('buildSystemPromptSync', () => {
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain('Doubt: your first attempt failed');
   });
 
-  test('the prompt teaches the SHAPE of work that calls for a fork, not just what a fork is', () => {
+  test('the prompt teaches the SHAPE of work that calls for a search, not just what one is', () => {
     // The rung was a definition: "copies of you that run their own tool loops
     // in parallel". A definition answers "what is this" and never "is my work
     // this". The schema owns the selection triggers and keeps them; what the
@@ -235,71 +231,67 @@ describe('buildSystemPromptSync', () => {
     // mechanically, but only at 25 steps — after the shape was chosen wrong.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/Fork when the work already has 2\+ independent angles/);
+    expect(prompt).toMatch(/when the work already has 2\+ independent angles/);
     expect(prompt).toMatch(/uncertain enough to be worth two attempts at once/);
     // A compressed pointer, never the schema's paragraph a second time.
-    expect(prompt).not.toContain(DELEGATION_RUNGS.fork);
+    expect(prompt).not.toContain(DELEGATION_RUNGS.swarm);
   });
 
-  test('the prompt contrasts a fork with a swarm by the shape of work each one is for', () => {
-    // The choice used to be between two settles and is now between two actions,
-    // at the same altitude: pieces you want all of and merged, against candidates
-    // you want written for you and measured. One sentence, where work is shaped.
+  test('the prompt says who writes the candidates and what scores them', () => {
+    // The choice used to be between two settles, then between two actions. With
+    // one ephemeral rung left, the fact a caller must hold is the division of
+    // labour: they supply what counts, the search supplies the angles.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/A fork keeps every piece/);
-    expect(prompt).toMatch(/each brief in `forks` — required, nothing infers the angles for you —/);
-    // The limit is stated as what the other action gives you, so a model does not
-    // reach for a fork when it wants the candidates written and ranked.
-    expect(prompt).toMatch(/candidates written for you and MEASURED against an `objective` you declare/);
-    expect(prompt).toMatch(/that is action=swarm rather than a fork/);
+    expect(prompt).toMatch(/A search writes its own competing candidates from `task`/);
+    expect(prompt).toMatch(/you supply what counts, not the angles/);
+    expect(prompt).toMatch(/scores each one with the verifier you named in `objective`/);
   });
 
-  test('forks cannot see each other, stated where a fork brief is written and nowhere twice', () => {
-    // heads/controller.ts spawns every head concurrently with the SAME
-    // inherited context and no channel between them, so a plan where one fork
-    // consumes another's finding silently gets nothing. `whenNotToUse` already
-    // forbids forks that RACE on a mutable resource; this is the other half —
-    // the visibility fact that makes dependent fork tasks a mistake.
+  test('what a node can lean on is stated where the task is written, and nowhere twice', () => {
+    // Nodes run concurrently with no channel between them, so a task where one
+    // node consumes another's finding silently gets nothing. `whenNotToUse`
+    // already forbids nodes that RACE on a mutable resource; this is the other
+    // half — what a node arrives holding, which is the `context` axis and not
+    // something the task text may assume.
     //
-    // 2026-08-17: it moved from the prompt onto `forks[].task` itself, as half of
-    // DELEGATION_INHERITANCE.fork.brief. Same fact, read at the moment the brief
-    // is being typed instead of thousands of tokens earlier, and now beside the
-    // inheritance fact it is the complement of: a fork sees your turns, and does
-    // not see this turn continuing or its siblings.
-    expect(DELEGATION_INHERITANCE.fork.brief).toMatch(/what its siblings are doing/);
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_INHERITANCE.fork.rung);
+    // It rides `task` itself, as half of DELEGATION_INHERITANCE.swarm.brief:
+    // read at the moment the field is being typed instead of thousands of tokens
+    // earlier, beside the inheritance fact it is the complement of.
+    expect(DELEGATION_INHERITANCE.swarm.brief).toMatch(/the search's `context`/);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_INHERITANCE.swarm.rung);
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).not.toMatch(/Forks cannot see each other's work/);
+    expect(prompt).not.toContain(DELEGATION_INHERITANCE.swarm.brief);
     // What the prompt keeps is the half no schema carries: the artifact trail.
     expect(prompt).toMatch(/leave durable findings under `shared\/findings\/`/);
   });
 
-  test('per-fork models are discoverable, and named as a case rather than a default', () => {
-    // `agents fork` takes a per-fork `model` (heterogeneous fleets — see
-    // heads/types.ts SplitRequest) and nothing told the model what varying it
-    // was FOR. The prompt names the capability at shape time; the Self-MoA
-    // caveat (arXiv 2502.00674 — panel quality tracks the AVERAGE member, so
-    // diversity for its own sake costs) rides the parameter description in
-    // agents-tool.ts, where it is read while the field is being filled.
+  test('per-node model routing is discoverable, and named as a case rather than a default', () => {
+    // A search takes `models` for per-node routing and nothing told the model
+    // what varying it was FOR. The prompt names the capability at shape time;
+    // the Self-MoA caveat (arXiv 2502.00674 — panel quality tracks the AVERAGE
+    // member, so diversity for its own sake costs) rides the parameter
+    // description in agents-tool.ts, read while the field is being filled.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/A fork can take its own `model`/);
-    expect(prompt).toMatch(/a different vendor on a genuinely open question/);
+    expect(prompt).toMatch(/`models` puts a different vendor on a genuinely open question/);
+    expect(prompt).toMatch(/a weaker model added for variety measurably subtracts/);
     // Never phrased as something to do by default.
     expect(prompt).not.toMatch(/vary the models|diversify|always use different models/i);
   });
 
-  test('the agents example shows the nested forks array shape', () => {
-    // The one argument shape on this surface a name does not give away, and
-    // the one the trajectory data shows invented wrong (`fork_specs` for
-    // `forks`). hire's arguments are flat and its `role` property carries its
-    // own example, so the spec's single example slot goes to fork.
+  test('the agents example is the cheapest COMPLETE call', () => {
+    // An example earns its tokens by being copyable. `preset` + `task` is the
+    // whole minimum, and `ideate` is the one preset that legally takes no
+    // `objective` — so the example is a call that would run, not a fragment.
+    // The shape a model gets wrong here is the objective's nesting, and that
+    // rides `objective`'s own property description instead.
     const { rt } = createTestRuntime();
     const example = BUILTIN_TOOL_SPECS.agents.example;
-    expect(example).toContain("action:'fork'");
-    expect(example).toMatch(/forks:\[\{task:.*rationale:.*\}, \{task:.*rationale:.*\}\]/);
+    expect(example).toContain("action:'swarm'");
+    expect(example).toContain("preset:'ideate'");
+    expect(example).toContain('task:');
     expect(buildSystemPromptSync(rt)).toContain(example);
   });
 
@@ -398,9 +390,9 @@ describe('buildSystemPromptSync', () => {
     const withRlm = buildSystemPromptSync(rt, { backend: 'cf', rlmAvailable: true });
     expect(withRlm).toMatch(/Code execution and learned capabilities/);
     expect(withRlm).toMatch(/llm\.query/);
-    // The recipe names the fork rung for deeper decomposition (depth via
+    // The recipe names the search rung for deeper decomposition (depth via
     // agents, not nested sub-calls).
-    expect(withRlm).toContain('action=fork');
+    expect(withRlm).toContain('action=swarm');
     // Regression: we previously had `splitLargeText(input, 4000)` which
     // doesn't exist anywhere in the runtime surface.
     expect(withRlm).not.toContain('splitLargeText');
@@ -1100,10 +1092,10 @@ describe('buildSystemPromptSync', () => {
   test('does NOT promise unimplemented or redundant strategies', () => {
     // Regression: the old think tool description once claimed support for
     // strategies that don't exist. There is no strategy id left for a caller to
-    // type at all — a fork merges and a swarm measures — so naming one would be
-    // that same defect. single-shot stays registered for eval harnesses but is
-    // pure overhead for a chat model, so it is never advertised, and `mcts` is
-    // registered for the durable search store and reaches neither surface.
+    // type at all — a search measures and nothing else spawns — so naming one
+    // would be that same defect. single-shot stays registered for eval harnesses
+    // but is pure overhead for a chat model, so it is never advertised, and
+    // `mcts` is registered for the durable search store and reaches neither surface.
     const { rt } = createTestRuntime();
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toMatch(/\bmcts\b/);
     expect(buildSystemPromptSync(rt)).not.toMatch(/\bmcts\b/);
@@ -1120,9 +1112,9 @@ describe('buildSystemPromptSync', () => {
     for (const id of ['@cf/moonshotai/kimi-k2.6', 'anthropic/claude-sonnet-4.5']) {
       const prompt = buildSystemPromptSync(rt, { model: { id } });
       expect(prompt).toMatch(/## Delegation/);
-      expect(prompt).toMatch(/- Ephemeral fork \(action=fork\) — /);
+      expect(prompt).toMatch(/- Ephemeral search \(action=swarm\) — /);
       expect(prompt).toMatch(/- Persistent subordinate \(action=hire\) — /);
-      expect(prompt).toMatch(/that is action=swarm rather than a fork/);
+      expect(prompt).toMatch(/A search writes its own competing candidates/);
     }
   });
 });

@@ -104,11 +104,19 @@ function summarizeThink(input: JsonObject): string {
 }
 
 /** The unified delegation tool — one line per action, shaped like the
- *  summaries its three predecessors produced. */
+ *  summaries its three predecessors produced. `fork` is kept for the same
+ *  reason `summarizeThink` is: this renders STORED calls, and a timeline written
+ *  before the rung was removed must still read as what it was. */
 function summarizeAgents(input: JsonObject): string {
   const action = str(input, "action");
   const agent = str(input, "agent");
   switch (action) {
+    case "swarm": {
+      const preset = str(input, "preset");
+      const task = quoted(str(input, "task"), 56);
+      const label = preset ? `swarm ${preset}` : "swarm";
+      return task ? `${label}: ${task}` : label;
+    }
     case "fork": {
       const forks = Array.isArray(input.forks) ? input.forks.length : 0;
       const label = forks > 0 ? `${forks} forks` : "fork";
@@ -347,6 +355,11 @@ function describeAgents(input: JsonObject): string {
   const action = str(input, "action");
   const agent = str(input, "agent");
   switch (action) {
+    case "swarm": {
+      const preset = str(input, "preset");
+      return preset ? `Ran a ${preset} search` : "Ran a search";
+    }
+    // Stored history: the removed ephemeral rung still has to render.
     case "fork": {
       const forks = Array.isArray(input.forks) ? input.forks.length : 0;
       return forks > 0 ? `Delegated to ${forks} parallel ${forks === 1 ? "fork" : "forks"}` : "Delegated to a fork";
