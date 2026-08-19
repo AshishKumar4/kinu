@@ -29,7 +29,7 @@ import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from 
 import { nanoid } from '../utils/nanoid';
 import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summary';
 import { HeadFileChanges } from './file-changes';
-import { isJsonObject, projectJsonValue, type JsonObject } from '../utils/json';
+import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { diagnostics, toProteusError } from '../obs/index';
 
 /**
@@ -66,7 +66,16 @@ export class HeadCapture {
   recordEvidence(e: Evidence): void { this.evidence.push(e); }
   recordDecision(d: Decision): void { this.decisions.push(d); }
   recordArtifact(a: ArtifactRef): void { this.artifacts.push(a); }
-  recordToolCall(name: string, args: JsonObject, result: string): void {
+  /** One settled tool call, WITH what it returned.
+   *
+   *  `result` is the projected output rather than a fixed word, because this row is
+   *  the only audit trail a finished head or node has: `HeadReport.toolCalls` is what
+   *  `head_journal.tool_calls_json` stores, and a column reading `ok` for every call
+   *  says a call happened and nothing else — the "paragraph of prose" the wrapper in
+   *  node-agent.ts exists to improve on. The actor kinds' equivalent
+   *  (`TurnAccumulator.recordToolCall`) has always recorded the output; this is the
+   *  same treatment, through the same projection. */
+  recordToolCall(name: string, args: JsonObject, result: JsonValue): void {
     this.toolCalls.push({ name, args, result });
   }
 }
@@ -149,7 +158,7 @@ function recordingTool<Entry extends ToolSet[string]>(
       const args: JsonObject = isJsonObject(value) ? value : { input: value };
       try {
         const result = await execute(input, options);
-        capture.recordToolCall(name, args, 'ok');
+        capture.recordToolCall(name, args, projectJsonValue({ value: result }));
         return result;
       } catch (err) {
         capture.recordToolCall(name, args, `error: ${err instanceof Error ? err.message : String(err)}`);
