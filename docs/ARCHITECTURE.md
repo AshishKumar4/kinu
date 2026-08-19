@@ -105,11 +105,12 @@ head gets the hand-built head surface — evidence, decisions, `execute_tools`,
 `run`, `file`, `web`, and depth-budgeted subheads — over the canonical parent
 workspace. A swarm node arrives as a serialisable `NodeRunSpec` over RPC, and
 `runAsNode` calls the same `runNodeLoop` an in-isolate node runs, so the facet
-is a transport: hosting buys a storage boundary and a teardown verb, never a
-second runtime. In every mode it shares files, processes and ports, while its
-SQL journal, scaffold path, and `shellId` are private. It never inherits the
-full actor tool surface. Recursion is bounded by construction: `split_subheads`
-decrements `maxDepth` on every spawn and refuses once the budget is exhausted.
+is a transport. Hosting buys a storage boundary and a teardown verb, never a
+second runtime. A head and a node share the workspace's files, processes and
+ports, while their SQL journal, scaffold path, and `shellId` are private.
+Neither inherits the full actor tool surface. Recursion is bounded by
+construction: `split_subheads` decrements `maxDepth` on every spawn and refuses
+once the budget is exhausted.
 
 All three share the owner/provider/model/web substrate by **composition**, not
 inheritance: `OwnedModelServices`

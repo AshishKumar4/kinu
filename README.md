@@ -29,15 +29,15 @@ The verifier kind resolves through a closed registry, so a name nobody
 registered refuses the run instead of inventing a score. Under
 `score:'verify'` a candidate's number is the number that instrument reported.
 
-**A `preset` fixes the shape of the search.** `preset` takes one of seven
-values. Six are named searches, `prove` among them, and `custom` composes your
-own. Six axes carry the rest: `unit`, `context`, `expand`, `score`, `advance`
+**A `preset` fixes the shape of the search.** There are seven values. Six are
+named searches, `prove` among them, and `custom` composes your own. Six axes
+carry the rest: `unit`, `context`, `expand`, `score`, `advance`
 and `carry`. `expand:'aggregate'` fans a level in and merges its members in
 dependency order. `advance:'archive'` keeps a grid of cells and one elite per
 coordinate.
 
-**A node is a whole agent, not a prompt.** It runs the same turn loop the
-workspace agent runs (`runChat`), and it takes several turns. Inside the one
+**A node is a whole agent.** It runs the same turn loop the workspace agent
+runs (`runChat`), and it takes several turns. Inside the one
 workspace filesystem it holds its own directory under `/home`, its own
 credential and its own `/tmp`. Work still running at 30 s detaches into a
 background job, and the node wakes when the job settles.
