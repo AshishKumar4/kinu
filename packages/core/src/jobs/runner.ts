@@ -12,7 +12,7 @@
 // dismiss/clear/retry) stay on each backend and call BackgroundJobStore + here.
 
 import type { Schedule } from '../types/primitives';
-import type { SignalDeliverer } from '../types/signals';
+import type { AgentSignal, SignalDeliverer, SignalUndeliveredReason } from '../types/signals';
 import type { EventLog } from '../events/hub/log';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
@@ -110,10 +110,22 @@ export interface BackgroundJobRunnerDeps {
   fiber: Schedule['fiber'];
   /** The one signal-delivery seam — the wake at the end of a settled job. */
   signals: SignalDeliverer;
-  /** Durable retry breadcrumb consumed by the standard event drain. */
-  eventLog: EventLog;
-  /** Existing ingress drain scheduler; called after publishing a retry event. */
-  scheduleDrain(): void;
+  /**
+   * The DURABLE half of the wake: a breadcrumb the standard event drain picks up
+   * when a settle announcement could not be delivered, and the scheduler that
+   * runs that drain.
+   *
+   * Both or neither, and absent is a real wiring rather than a gap. They exist
+   * for an agent that OUTLIVES the activation that queued the wake, which is what
+   * a durable message table buys an actor. A runner whose agent's lifetime is its
+   * spawner's activation — a swarm node, abandoned with the run that spawned it —
+   * has no later activation to hand a breadcrumb to, and its deliverer is an
+   * in-process queue that cannot fail to deliver. So no `compensate` is offered
+   * at all (see {@link BackgroundJobRunner.wake}) and nothing here is reachable
+   * with a promise nobody keeps.
+   */
+  eventLog?: EventLog;
+  scheduleDrain?(): void;
   /** Activity-log sink (optional). */
   logActivity?(event: string, detail?: string): void;
   /** Fires once per job settle (completed/failed), before the wake turn —
@@ -203,6 +215,25 @@ export class BackgroundJobRunner {
    *  grace, read by the backend that owns the session lifecycle. */
   get policy(): BackgroundPolicy {
     return this.deps.policy?.() ?? BACKGROUND_POLICY.interactive;
+  }
+
+  /**
+   * How many jobs THIS RUNNER is driving right now — the ones it detached and has
+   * not yet settled.
+   *
+   * Scoped to the runner and not read off the store, and that is the whole point
+   * of it: one workspace's `background_jobs` table is shared by every runner over
+   * its SQL — an actor's, and now each of its swarm nodes' — so `countRunning()`
+   * answers a question about the WORKSPACE. An agent asking "am I still holding
+   * work, so is my turn unfinished" must not be answered with its parent's jobs,
+   * or it would wait forever on work it cannot see the result of.
+   *
+   * The concurrency cap deliberately keeps reading the store instead: that one IS
+   * a question about the machine, because every detached job is a live process
+   * tree whichever agent launched it.
+   */
+  get inFlight(): number {
+    return this.controllers.size;
   }
 
   /** ThresholdDeps for withBackgroundThreshold: on cross, mint a job and keep
@@ -354,23 +385,42 @@ export class BackgroundJobRunner {
           `continue without it and say what is missing.`
         : `Background ${job.kind} job ${jobId} failed${job.error ? ` (${job.error})` : ''}. ` +
           `Decide whether to retry or report the failure.`;
-    await this.deps.signals.deliver({
+    const base = {
       kind: 'background_job',
       text,
       idempotencyKey: backgroundJobWakeTrigger(jobId),
       metadata: { proteusMode: job.workMode, jobId, kind: job.kind, status: job.status },
-      compensate: (reason) => {
-        if (reason === 'preempted') {
-          this.deps.logActivity?.('bg_job_wake_skipped', `${jobId} (${job.status}) — wake preempted; result retained`);
-        }
-        this.publishWakeRetry(job, text);
-      },
-    });
+    } as const satisfies Omit<AgentSignal, 'compensate'>;
+    // `compensate` is a PROMISE to retry, so it is offered only where one can be
+    // kept: with a durable retry plane behind it. A runner without one serves an
+    // agent whose lifetime is its spawner's activation, over an in-process queue
+    // that cannot fail to deliver — there is nothing to compensate and no later
+    // activation to compensate into, and offering a callback that would silently
+    // drop the wake is worse than not offering one.
+    const retry = this.publishWakeRetryIfDurable(job, text);
+    await this.deps.signals.deliver(retry ? { ...base, compensate: retry } : base);
   }
 
-  private publishWakeRetry(job: BackgroundJob, text: string): void {
+  /** The compensation callback, when this runner has the plane to honour it. */
+  private publishWakeRetryIfDurable(
+    job: BackgroundJob, text: string,
+  ): ((reason: SignalUndeliveredReason) => void) | null {
+    const eventLog = this.deps.eventLog;
+    const scheduleDrain = this.deps.scheduleDrain;
+    if (!eventLog || !scheduleDrain) return null;
+    return (reason) => {
+      if (reason === 'preempted') {
+        this.deps.logActivity?.('bg_job_wake_skipped', `${job.id} (${job.status}) — wake preempted; result retained`);
+      }
+      this.publishWakeRetry(eventLog, scheduleDrain, job, text);
+    };
+  }
+
+  private publishWakeRetry(
+    eventLog: EventLog, scheduleDrain: () => void, job: BackgroundJob, text: string,
+  ): void {
     try {
-      this.deps.eventLog.publish({
+      eventLog.publish({
         descriptor: {
           ingress: 'timer_alarm',
           variant: 'timer',
@@ -395,7 +445,7 @@ export class BackgroundJobRunner {
       );
       throw err;
     }
-    try { this.deps.scheduleDrain(); }
+    try { scheduleDrain(); }
     catch (err) {
       // The retry is already durable; another ingress or activation can drain it.
       diagnostics.failure(
@@ -428,21 +478,29 @@ export class BackgroundJobRunner {
   }
 
   /**
-   * Cancel every currently-running job, newest first — the visible Stop
-   * control.
+   * Cancel every job THIS RUNNER is driving — the visible Stop control, and a
+   * confined agent's teardown when it finishes holding work nobody will read.
    *
-   * Deliberately no wake, and that is the whole difference from
-   * {@link cancel}: Stop stops the AGENT as well as its detached work, so
-   * there is no next step to inform, and a wake here would queue a turn that
-   * restarts the work the operator just stopped. The next turn reads the truth
-   * from the dynamic-context roster instead, which no longer carries a
-   * cancelled job.
+   * Deliberately no wake, and that is the whole difference from {@link cancel}:
+   * Stop stops the AGENT as well as its detached work, so there is no next step to
+   * inform, and a wake here would queue a turn that restarts the work the operator
+   * just stopped. The next turn reads the truth from the dynamic-context roster
+   * instead, which no longer carries a cancelled job.
+   *
+   * Scoped to `controllers` rather than sweeping the store, because the store is
+   * shared by every runner over one workspace's SQL. A store-wide sweep writes
+   * `cancelled` on a row whose abort handle lives in a DIFFERENT runner, so the
+   * work goes on running while the row says it stopped — the absent-versus-broken
+   * confusion, with the store taking the wrong side. A row left `running` by a
+   * dead activation is not Stop's to settle either: `recoverOrphans()` owns that,
+   * and Stop stops what is running NOW.
    */
   cancelRunning(): string[] {
     const cancelled: string[] = [];
-    for (const job of this.deps.store.list(100)) {
-      if (job.status !== 'running') continue;
-      if (this.settleCancelled(job.id)) cancelled.push(job.id);
+    // Iterated in place: `settleCancelled` deletes the key it just handled, and a
+    // Map iterator is specified to tolerate exactly that.
+    for (const jobId of this.controllers.keys()) {
+      if (this.settleCancelled(jobId)) cancelled.push(jobId);
     }
     return cancelled;
   }

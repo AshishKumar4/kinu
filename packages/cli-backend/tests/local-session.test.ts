@@ -101,7 +101,11 @@ function hangingModel(): LanguageModel {
   return new TestLanguageModelV2({
     provider: base.provider,
     modelId: base.modelId,
-    doStream: base.doStream,
+    // The SESSION's own turns still stream normally; what hangs is the completion a
+    // detached job re-drives. Both methods hang, because every agent kind now issues
+    // its request through the streaming path — a fixture that hangs only `doGenerate`
+    // stopped hanging anything at all and let the arm below pass in 6 ms.
+    doStream: () => new Promise<never>(() => { /* never settles */ }),
     doGenerate: () => new Promise<never>(() => { /* never settles */ }),
   });
 }
@@ -2366,11 +2370,38 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
+    /** The LIVE turn's requests only — what "the live turn is never touched" is
+     *  asserted against. A branch head's request is counted separately below, because
+     *  both kinds now arrive through the same method. */
     const streamPrompts: PromptMessage[][] = [];
+    let streams = 0;
     const model = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
+      // THE LIVE TURN IS THE FIRST STREAM, and every later one is a branch head.
+      // The two used to be told apart by METHOD — the live turn streamed, the head
+      // called `doGenerate` — and that stopped being true when every agent kind
+      // started issuing its request through the streaming path. Ordinal, because it
+      // is the one thing the fixture actually knows: `session.send` opens the live
+      // stream and holds the gate before `session.branch` is ever called.
       doStream: async ({ prompt, abortSignal }) => {
+        streams += 1;
+        if (streams > 1) {
+          const text = branchAnswer();
+          return {
+            stream: new ReadableStream({
+              start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({ type: 'text-start', id: 'b' });
+                controller.enqueue({ type: 'text-delta', id: 'b', delta: text });
+                controller.enqueue({ type: 'text-end', id: 'b' });
+                controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+                controller.close();
+              },
+            }),
+            response: { headers: {} },
+          };
+        }
         streamPrompts.push(prompt);
         return {
           stream: new ReadableStream({

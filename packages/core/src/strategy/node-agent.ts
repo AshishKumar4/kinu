@@ -51,6 +51,12 @@ import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../head
 import type { HeadInferenceDeps } from '../heads/head-inference';
 import { buildBuiltinTools } from '../tools/builtins';
 import type { BuiltinToolDeps } from '../tools/builtins';
+import { AgentWakeQueue } from '../jobs/wake-queue';
+import { BackgroundJobRunner } from '../jobs/runner';
+import type { BackgroundJobRunnerDeps } from '../jobs/runner';
+import { BackgroundJobStore, initBackgroundJobsTable } from '../jobs/store';
+import { CONFINED_BACKGROUNDABLE_TOOLS, wrapToolsForBackground } from '../jobs/background-wrap';
+import type { BackgroundPolicy } from '../jobs/threshold';
 import { readProposalCode } from '../execution/code-fence';
 import { nodeWorkspace, isolationDisclosure } from './node-workspace';
 import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
@@ -83,13 +89,55 @@ import type { ModelCallSink } from '../events/model-call';
  * confined surfaces cannot drift — under *A node is an agent* a node's set is a
  * head's plus the report and the proposal, and the proposal is not a builtin.
  *
- * `agents` IS ABSENT AND ITS ABSENCE IS STRUCTURAL. It is not in this list, and it
- * is also not buildable: a node's toolset is assembled with no `agents` dep at all,
- * which is the same mechanism that confines subordinates. *A node is an agent*
- * again: a node's only route to more actors is the proposal, which the engine
- * arbitrates, so a node cannot fund work outside the search's budget.
+ * What a node does NOT get is stated in {@link NODE_WITHHELD_TOOLS}, with the
+ * reason beside each name, and the two together are asserted to be the WHOLE
+ * builtin surface — so a builtin added upstream tomorrow is a failing test rather
+ * than a tool that silently appears on nodes or silently does not.
  */
 export const NODE_BUILTIN_TOOLS = [...HEAD_BUILTIN_TOOLS, 'report'] as const;
+
+/**
+ * THE BUILTINS A NODE IS NOT GIVEN, AND WHY EACH ONE.
+ *
+ * A withheld capability with no argument behind it is not confinement, it is an
+ * omission that nobody has re-examined. So every name here carries the property of
+ * the code that justifies it, and the set is checked against the shipped builtin
+ * surface: absent a reason, a tool goes in.
+ *
+ * Two of the three share one argument, and it is the grading contract this whole
+ * search is built on: {@link nodeSystemPrompt} tells a node that *the search
+ * compares what each of you REPORTS — not the state you leave behind*, and both
+ * `memory` and `tasks` exist to durably store state nothing in the search reads.
+ * Worse than ungraded, they are MISATTRIBUTED: both are unconditional on `rt`
+ * alone and write to per-workspace tables, and a node that runs in this isolate
+ * holds its parent's `rt` — so three siblings interleave into the one
+ * `memory/MEMORY.md` and the one `agent_tasks` list, under the parent's name, in a
+ * store the search grades nobody on. That also contradicts, in the same breath,
+ * the isolation the node was just told it has: `isolationDisclosure` names the
+ * plane a node shares and says it is not attributable to it, and a node under
+ * `private-home` would reach straight through that boundary into the parent's SQL.
+ */
+export const NODE_WITHHELD_TOOLS = {
+  // NOT "unbounded recursion" — that was checked and it is not the reason.
+  // `DELEGATION_MAX_DEPTH` is 4 and already enforced, but it governs the SUBORDINATE
+  // hire ladder through `TeamToolDeps.delegation`, which is a different axis from a
+  // node's search-tree depth; and a node's depth is derived by the engine and known
+  // before its tools are built, so a depth check was available either way.
+  //
+  // The two real reasons. STRUCTURAL: this tool's implementation IS the search
+  // engine (`strategy/swarm-run` → `strategy/node-agent`), so a node's surface
+  // holding it is a runtime import ring — the same ring whose module-scope reader
+  // put six tests in a TDZ, which is why `builtins.ts` does not register it at all.
+  // DOCTRINAL: a node's only route to more actors is `propose_branch`, which the
+  // engine arbitrates against a shared budget the node cannot see, so `agents`
+  // would let a node fund work outside the search's budget.
+  agents: 'the delegation tool IS the search engine (an import ring), and a node funds '
+    + 'more actors only through the arbiter, which holds the budget it cannot see',
+  memory: 'durable notes, facts and past sessions live in per-workspace stores the node '
+    + 'shares with its parent and its siblings; the search grades reports, not state left behind',
+  tasks: 'one `agent_tasks` list per workspace, shared with the parent and every sibling, '
+    + 'and its `mode` action writes the PARENT\'s stance into `agent_config`',
+} as const satisfies Readonly<Record<string, string>>;
 
 /** The node's own branch route. One name, so reading a transcript tells a human
  *  which tool asked for budget. */
@@ -262,6 +310,12 @@ export interface NodeAgentDeps {
    * from {@link nodeWallClockEnvelopeMs} and may declare a tighter one.
    */
   maxWallClockMs: number;
+  /** Stream-inactivity watchdog override, in ms. Passed straight through to the turn
+   *  loop; see {@link NodeLoopDeps.stallTimeoutMs}. */
+  stallTimeoutMs?: number;
+  /** Detach policy override for a node's tools; see
+   *  {@link NodeLoopDeps.backgroundPolicy}. */
+  backgroundPolicy?: () => BackgroundPolicy;
 }
 
 
@@ -288,6 +342,20 @@ export interface NodeLoopDeps {
   arbitrate: NodeArbiter | null;
   executeTool?: unknown;
   webSearch?: WebSearchProvider;
+  /** Stream-inactivity watchdog override, in ms — the turn loop's own bound, whose
+   *  default is five minutes and therefore untestable in a suite that has to finish. */
+  stallTimeoutMs?: number;
+  /**
+   * The detach policy a node's tools run to. Defaults to
+   * `BACKGROUND_POLICY.interactive`, which is the right one: a node is a place a wake
+   * can arrive, and that is exactly what `wakesAfterTurn` names.
+   *
+   * Declared for the reason {@link NodeLoopDeps.stallTimeoutMs} is, and for one more: a
+   * threshold whose only value is 30 s cannot be exercised by a test that has to
+   * finish, so the arm proving a node's turn ENDS with work still running would take
+   * half a minute per assertion. What a caller overrides is the MAGNITUDE.
+   */
+  backgroundPolicy?: () => BackgroundPolicy;
 }
 
 /** Where a node's own report and its granted branch land while it runs. A holder
@@ -395,6 +463,8 @@ function buildNodeToolSet(input: {
   readonly capture: HeadCapture;
   readonly scratch: NodeScratch;
   readonly arbitrate: NodeArbiter | null;
+  readonly jobRunner: BackgroundJobRunner;
+  readonly mode: WorkMode;
 }): ToolSet {
   const { deps, scratch } = input;
   const builtinDeps: BuiltinToolDeps = {
@@ -416,7 +486,18 @@ function buildNodeToolSet(input: {
   if (input.arbitrate) {
     Object.assign(surface, buildProposeTool(input.arbitrate, scratch));
   }
-  return withHeadCaptureRecording(surface, input.capture);
+  // THE BACKGROUND WRAP, inside the capture and not outside it. A call that crosses
+  // the detach threshold returns a handle rather than a result, and the handle is
+  // what the model was TOLD — so the transcript has to record that, not a result
+  // the model never saw. The confined set is named here for the reason
+  // `keepBuiltins` takes a named set: a node has no `agents` tool, so the actor's
+  // third entry cannot apply to it, and naming the set makes that structural.
+  const detachable = wrapToolsForBackground(surface, {
+    jobRunner: input.jobRunner,
+    backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
+    mode: () => input.mode,
+  });
+  return withHeadCaptureRecording(detachable, input.capture);
 }
 
 /**
@@ -506,6 +587,15 @@ export function nodeSystemPrompt(input: {
  * kept in step — they are one function reached by two transports, which is the
  * only arrangement that cannot drift.
  *
+ * IT IS A PLACE A WAKE CAN ARRIVE, and that is what makes a node an actor rather
+ * than a special case. `BACKGROUND_POLICY.interactive` detaches work that crosses
+ * 30 s wherever `wakesAfterTurn` holds, and the rule is that where a wake can
+ * arrive it detaches — so a node gets the same {@link BackgroundJobRunner} an
+ * actor has, its tool surface threads it, and a TURN MAY END WITH WORK STILL
+ * RUNNING. The node then takes another turn when the result lands. The runner's
+ * default policy is the interactive one, which is the correct one here and is why
+ * nothing declares it.
+ *
  * It journals NOTHING. The ledger belongs to the search, which is on the other
  * side of the boundary when a host is in play, and a loop that wrote to its own
  * copy would be the second store the journal rule forbids.
@@ -516,6 +606,32 @@ export async function runNodeLoop(
 ): Promise<NodeLoopResult> {
   const capture = new HeadCapture();
   const scratch: NodeScratch = { reported: null, granted: null, produced: [] };
+  // The node's wake path: the in-process counterpart of the actor's durable
+  // message queue, behind the SAME `SignalDeliverer` seam, so the runner neither
+  // knows nor can tell which kind of agent it is settling a job for.
+  const wakes = new AgentWakeQueue();
+  // The table is reconciled here rather than assumed: this loop runs in the
+  // search's isolate OR in a facet with storage of its own, and only one of those
+  // has already opened a workspace.
+  initBackgroundJobsTable(deps.rt.storage.execRaw, deps.rt.storage.sql);
+  const runnerDeps: BackgroundJobRunnerDeps = {
+    store: new BackgroundJobStore(deps.rt.storage.sql),
+    fiber: deps.rt.schedule.fiber,
+    signals: wakes,
+    logActivity: (event, detail) => {
+      deps.logger.event('swarm.node_job', {
+        nodeId: spec.headInput.id, job: event, detail: detail ?? '',
+      });
+    },
+    // No `eventLog`/`scheduleDrain`: a node is abandoned with the run that spawned
+    // it, so a durable breadcrumb for a later activation would be delivered to a
+    // node that no longer exists — and the queue above cannot fail to deliver, so
+    // there is nothing to compensate. No `resume` for the same reason.
+  };
+  // Assigned rather than spread: an absent policy must be an ABSENT KEY, because the
+  // runner reads presence to decide whether to fall back to the interactive default.
+  if (deps.backgroundPolicy !== undefined) runnerDeps.policy = deps.backgroundPolicy;
+  const jobRunner = new BackgroundJobRunner(runnerDeps);
   // The arbiter is offered only when the search said a branch could be granted.
   // Both halves are required: a host's arbiter is an RPC stub and therefore
   // always non-null, so presence alone cannot answer whether to offer the tool.
@@ -524,6 +640,8 @@ export async function runNodeLoop(
     capture,
     scratch,
     arbitrate: spec.canPropose ? deps.arbitrate : null,
+    jobRunner,
+    mode: spec.headInput.mode,
   });
 
   const inference: HeadInferenceDeps = {
@@ -547,19 +665,38 @@ export async function runNodeLoop(
       messages: spec.messages,
     },
     reportMessages: (messages) => { scratch.produced = messages; },
+    // WHAT MAKES A TURN THAT DID NOT REPORT A NORMAL OUTCOME. A node that has
+    // reported is finished — that is its whole terminal condition. A node that has
+    // not is finished only when it is holding nothing: no job of its own still
+    // running, and no wake already queued. Otherwise it waits, and the wake it
+    // waits for is its next turn's last message.
+    resume: async () => {
+      if (scratch.reported !== null) return null;
+      return wakes.next(() => jobRunner.inFlight > 0);
+    },
   };
   // Assigned rather than spread: an absent seam must be an ABSENT KEY, because
   // `runHeadInference` reads presence to decide whether the behaviour exists.
   if (deps.mission !== undefined) inference.mission = deps.mission;
   if (deps.reportStep !== undefined) inference.reportStep = deps.reportStep;
+  if (deps.signal !== undefined) inference.signal = deps.signal;
+  if (deps.stallTimeoutMs !== undefined) inference.stallTimeoutMs = deps.stallTimeoutMs;
 
-  const report = await runHeadInference(spec.headInput, inference);
-  return {
-    report,
-    reported: scratch.reported,
-    granted: scratch.granted,
-    produced: scratch.produced,
-  };
+  try {
+    const report = await runHeadInference(spec.headInput, inference);
+    return {
+      report,
+      reported: scratch.reported,
+      granted: scratch.granted,
+      produced: scratch.produced,
+    };
+  } finally {
+    // A node reaches here holding work only when it REPORTED while a job was still
+    // running, or when the search cut it. Either way the result has no reader left,
+    // so the live process tree is cancelled rather than left running past the agent
+    // that launched it. Scoped to this runner, so a sibling's jobs are untouched.
+    jobRunner.cancelRunning();
+  }
 }
 
 /**
@@ -712,5 +849,7 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps): NodeLoopDeps 
   if (deps.mission !== undefined) loop.mission = deps.mission;
   if (deps.executeTool !== undefined) loop.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) loop.webSearch = deps.webSearch;
+  if (deps.stallTimeoutMs !== undefined) loop.stallTimeoutMs = deps.stallTimeoutMs;
+  if (deps.backgroundPolicy !== undefined) loop.backgroundPolicy = deps.backgroundPolicy;
   return loop;
 }

@@ -30,13 +30,28 @@
  * response and did not fail trying — it was still inside its first `generateText` call
  * with nothing in this tree able to end it.
  *
- * WHAT IS UNDER TEST IS BOUNDEDNESS AND ATTRIBUTION, never a magnitude. `levelProgressMs`
+ * WHERE THE BOUND LIVES NOW, and it is not this file's and not the barrier's. A node runs
+ * on the shared turn loop, whose stall watchdog cuts a step where NOTHING flows — no
+ * provider chunk, no tool result — so a request that goes silent before its first chunk is
+ * ended from INSIDE the node and arrives at the barrier as a named failure. That is the
+ * capability the node acquired by being put on the shared loop: the actor has had it all
+ * along, and the node lacked it PRECISELY because it ran a loop of its own.
+ *
+ * The level clock that used to sit outside the members is gone. It was never a measured
+ * quantity — reusing a measured constant does not measure a different thing — and its
+ * first live outing gave up on three nodes at 600,002 / 600,028 / 600,029 ms and reported
+ * "a provider or transport that is not answering" while that provider answered a direct
+ * request in 1.5 s. It could not tell a node that never started from one legitimately
+ * waiting, and now that a node can background work and await a wake, no elapsed-time
+ * instrument can.
+ *
+ * WHAT IS UNDER TEST IS BOUNDEDNESS AND ATTRIBUTION, never a magnitude. `stallTimeoutMs`
  * is a fixture value here for the reason the judge-call timeout is one in its own suite: a
- * bound whose only value is one measured turn envelope cannot be exercised by a test that
- * has to finish. The relationship asserted — the barrier ends its wait at the envelope it
- * was given, names the cause, and leaves no row reading `running` — is the same one
- * {@link LEVEL_PROGRESS_ENVELOPE_MS} runs in production. The derivation of that number
- * lives on the constant, where the measurement it comes from is stated.
+ * bound whose only value is five minutes cannot be exercised by a test that has to finish.
+ * The relationship asserted — a step where nothing flows ends, names itself, and leaves no
+ * row reading `running` — is the same one {@link STALL_TIMEOUT_MS} runs in production, and
+ * the derivation of that number lives on the constant beside the 30 s detach threshold it
+ * was reasoned against.
  *
  * THE PROVIDERS ARE FAKE AND EXACT. One raises the upstream authentication error verbatim;
  * one never resolves at all. Both are what the measured run met, and neither costs a
@@ -387,7 +402,7 @@ interface SilentRun {
   readonly elapsedMs: number;
 }
 
-const PROGRESS_MS = 250;
+const STALL_MS = 250;
 
 async function runWith(model: MockLanguageModelV3): Promise<SilentRun> {
   const { rt } = createTestRuntime();
@@ -399,7 +414,7 @@ async function runWith(model: MockLanguageModelV3): Promise<SilentRun> {
   const logger = createRecordingLogger();
   const startedAt = Date.now();
   const result = await runSwarm(
-    { rt, model, mode: 'build', logger, maxSteps: NODE_STEPS, levelProgressMs: PROGRESS_MS },
+    { rt, model, mode: 'build', logger, maxSteps: NODE_STEPS, stallTimeoutMs: STALL_MS },
     resolved(),
   );
   const elapsedMs = Date.now() - startedAt;
@@ -413,55 +428,60 @@ async function runWith(model: MockLanguageModelV3): Promise<SilentRun> {
 }
 
 describe('a level whose nodes never answer', () => {
-  test('ends the run with a refusal naming why, and settles every row', async () => {
+  test('every node ends itself, and the level that produced nothing ends the run by name', async () => {
     const { result, rows, logger, elapsedMs } = await runWith(SILENT_MODEL);
 
-    // A REFUSAL and not a report: a run that crowned nothing over a level it never heard
-    // from has a cause, and `stop:'budget'` would have said it ran out of room instead.
+    // A REFUSAL and not a report: a run that crowned nothing over a level that produced
+    // nothing has a cause, and `stop:'budget'` would have said it ran out of room instead.
     expect('reason' in result).toBe(true);
     const refusal = 'reason' in result ? result : null;
     expect(refusal?.reason).toBe('unavailable');
-    expect(refusal?.error).toContain('recorded nothing');
-    expect(refusal?.error).toContain(String(PROGRESS_MS));
     expect(refusal?.error).toContain('depth 1');
+    expect(refusal?.error).toContain('produced no candidate');
+    // THE CAUSE IS QUOTED, per node. A count alone is what made a dead provider read as
+    // `best: null` with nothing anywhere saying why.
+    expect(refusal?.error).toContain('stalled');
+    for (const row of rows) expect(refusal?.error).toContain(row.id);
 
-    // BOUNDED. The bound is the envelope the run was given, and the barrier waits it once
-    // for a whole concurrent wave rather than once per sibling — so a generous multiple of
-    // one envelope still fails a barrier that waits per node, and any multiple at all
-    // fails one that never stops.
-    expect(elapsedMs).toBeLessThan(PROGRESS_MS * 8);
+    // BOUNDED, and bounded from INSIDE each node: nothing outside the members is watching
+    // a clock any more. A generous multiple of one stall envelope still fails a barrier
+    // that waits forever, which is the defect this replaces.
+    expect(elapsedMs).toBeLessThan(STALL_MS * 20);
 
-    // THE STORE. Every node this run opened is settled, with the cause on the row.
+    // THE STORE. Every node this run opened is settled, with its own cause on its own row
+    // — written by the node's own report rather than by a sweep at the level above.
     expect(rows.length).toBe(BRANCHES);
     for (const row of rows) {
-      expect(row.status).not.toBe('running');
+      expect(row.status).toBe('errored');
       expect(row.completed_at).toBeGreaterThan(0);
-      expect(row.error_message).toContain('recorded nothing');
+      expect(row.error_message).toContain('stalled');
     }
 
-    // And it is attributed per node rather than as one anonymous stop.
-    const silent = logger.emitted.filter((line) => line.event === 'swarm.node_silent');
-    expect(silent.length).toBe(BRANCHES);
-    for (const line of silent) {
-      expect(line.fields.envelope_ms).toBe(PROGRESS_MS);
-      expect(Number(line.fields.idle_ms)).toBeGreaterThanOrEqual(PROGRESS_MS);
-    }
+    // Attributed per node in the stream too, through the ordinary branch-failure event
+    // rather than a second vocabulary only a clock could reach.
+    const failed = logger.emitted.filter((line) => line.event === 'swarm.branch_failed');
+    expect(failed.length).toBe(BRANCHES);
+    for (const line of failed) expect(String(line.fields.error)).toContain('stalled');
+    // THE DELETED PATH, asserted absent: no event of the level clock's vocabulary is
+    // emitted at all, so a re-introduced clock fails here rather than passing quietly.
+    expect(logger.emitted.filter((line) => line.event === 'swarm.node_silent')).toEqual([]);
+    expect(logger.emitted.filter((line) => line.event === 'swarm.level_silent')).toEqual([]);
   });
 
-  test('a level that answered once keeps that answer and settles only the silent', async () => {
-    // The boundary: giving up on a member NARROWS the run, and only a level that produced
-    // nothing at all ends it. A barrier that refused on the first silent sibling would
+  test('a level that answered once keeps that answer and loses only the rest', async () => {
+    // The boundary: losing a member NARROWS the run, and only a level that produced
+    // nothing at all ends it. A barrier that refused on the first failed sibling would
     // throw away work the search had already paid for.
     const { result, rows, elapsedMs } = await runWith(oneAnsweringProvider());
 
     expect('reason' in result).toBe(false);
-    expect(elapsedMs).toBeLessThan(PROGRESS_MS * 40);
+    expect(elapsedMs).toBeLessThan(STALL_MS * 60);
 
     expect(rows.length).toBe(BRANCHES);
     const answered = rows.filter((row) => row.status === 'completed');
-    const silent = rows.filter((row) => row.error_message?.includes('recorded nothing') ?? false);
+    const stalled = rows.filter((row) => row.error_message?.includes('stalled') ?? false);
     expect(answered.length).toBe(1);
-    expect(silent.length).toBe(BRANCHES - 1);
+    expect(stalled.length).toBe(BRANCHES - 1);
     // No row is left mid-flight either way, which is the whole claim.
     for (const row of rows) {
       expect(row.status).not.toBe('running');
@@ -469,12 +489,12 @@ describe('a level whose nodes never answer', () => {
     }
   });
 
-  test('a node slower than the envelope survives it by making progress', async () => {
-    // THE DIFFERENCE BETWEEN THE TWO KINDS OF BOUND, and the reason the barrier reads the
-    // journal instead of a stopwatch. Every node here outlives one envelope and none is
-    // ever silent for one, so a flat deadline would cut all three off mid-work while this
-    // barrier lets them finish. Without this arm a refactor to a runtime bound passes.
-    const pauseMs = Math.floor(PROGRESS_MS / 2);
+  test('a node slower than the envelope survives it, because the bound is FLOW and not time', async () => {
+    // THE DIFFERENCE BETWEEN THE TWO KINDS OF BOUND, and the reason a runtime deadline
+    // cannot be substituted here. Every node outlives one stall envelope in total and none
+    // is ever silent for one, so a flat deadline would cut all three off mid-work while
+    // the watchdog lets them finish. Without this arm a refactor to a runtime bound passes.
+    const pauseMs = Math.floor(STALL_MS / 2);
     const { result, rows } = await runWith(slowSteppingProvider(pauseMs));
 
     expect('reason' in result).toBe(false);
@@ -482,8 +502,8 @@ describe('a level whose nodes never answer', () => {
     for (const row of rows) {
       expect(row.status).toBe('completed');
       // The load-bearing number: the node's own recorded lifetime is past the envelope it
-      // was watched against, and it was not given up on.
-      expect(row.wall_clock_ms).toBeGreaterThan(PROGRESS_MS);
+      // was watched against, and it was not cut off.
+      expect(row.wall_clock_ms).toBeGreaterThan(STALL_MS);
       expect(row.error_message).toBeNull();
     }
   });

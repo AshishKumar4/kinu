@@ -40,7 +40,8 @@ import {
   AgentOrchestrator,
   createAgentStores, type AgentStores, collectDynamicContext,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
-  wrapToolsForBackground, resumeBackgroundJob, BACKGROUND_POLICY, type BackgroundPolicy,
+  wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob,
+  BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore, createDurableMctsSession,
   EventLog, ReplyChannelStore,
   type RunEventRecorder,
@@ -2376,7 +2377,11 @@ export class LocalAgentSession implements BackendHost {
   /** The shared background wrap (core background-tools) — the SAME wrapper
    *  the cf backend applies: shallow clone, 30s threshold, per-call abort. */
   private wrapToolsForBackground(raw: ToolSet): ToolSet {
-    return wrapToolsForBackground(raw, { jobRunner: this.jobRunner, mode: () => this.turnWorkMode });
+    return wrapToolsForBackground(raw, {
+      jobRunner: this.jobRunner,
+      backgroundable: BACKGROUNDABLE_TOOLS,
+      mode: () => this.turnWorkMode,
+    });
   }
 
   /** Persist the exchange (user, any mid-turn steers, assistant); returns the

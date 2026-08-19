@@ -456,6 +456,19 @@ export interface HeadInferenceDeps {
   /** Abort reason, surfaced in errorMessage. */
   abortReason?: () => string | null;
   /**
+   * Stream-inactivity watchdog override, in ms. Default {@link STALL_TIMEOUT_MS}.
+   *
+   * The bound itself is not this module's and is not a new one: it is the turn
+   * loop's, derived there against the 30 s background-detach threshold, and it
+   * fires only when NOTHING flows — no provider chunk, no tool result. This field
+   * exists for the reason the turn loop's own does: a bound whose only value is
+   * five minutes cannot be exercised by a test that has to finish, so the arm
+   * proving a node cuts its own silent step would either not exist or take five
+   * minutes. What a caller overrides is the MAGNITUDE; the relationship is the one
+   * the default runs.
+   */
+  stallTimeoutMs?: number;
+  /**
    * The mission ledger this head charges, when it runs under one.
    *
    * The head's own envelope has no token dimension on purpose — a fork gets its
@@ -701,7 +714,8 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         },
         onStep,
       };
-      if (deps.signal !== undefined) turn.signal = deps.signal;
+        if (deps.signal !== undefined) turn.signal = deps.signal;
+      if (deps.stallTimeoutMs !== undefined) turn.stallTimeoutMs = deps.stallTimeoutMs;
       for await (const event of runChat(turn)) {
         if (event.type !== 'done') continue;
         settled = true;

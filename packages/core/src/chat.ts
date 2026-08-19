@@ -169,6 +169,10 @@ export interface ChatOptions {
  *  under five minutes. */
 export const STALL_TIMEOUT_MS = 300_000;
 
+/** The watchdog's own arrival value, distinguishable from every iterator result
+ *  because it is a unique symbol and an iterator result is an object. */
+const STALLED = Symbol('turn-stalled');
+
 /** What the caller records for a turn its own abort signal ended. Thrown after
  *  the turn's `done` event, so the interrupted turn's history is kept and the
  *  turn is still recorded as unfinished. */
@@ -256,27 +260,42 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // AI_NoOutputGeneratedError that awaiting result.response would raise.
   let streamError: unknown;
 
-  // Stream-inactivity watchdog: a provider stream that goes silent mid-turn
-  // (no chunk, no tool result) is aborted after stallTimeoutMs and surfaced
-  // as a turn failure — otherwise the turn hangs until whatever supervises
-  // the process kills it, with no error recorded anywhere.
+  // Stream-inactivity watchdog: a turn where NOTHING flows — no provider chunk,
+  // no tool result — is ended after stallTimeoutMs and surfaced as a turn
+  // failure. Otherwise the turn hangs until whatever supervises the process
+  // kills it, with no error recorded anywhere; a swarm node had no supervisor at
+  // all and held one measured run for sixty-three minutes.
+  //
+  // IT CANNOT BE THE ABORT SIGNAL ALONE, and that is measured rather than
+  // assumed: the SDK awaits `model.doStream(...)` before it has a stream to
+  // abort, so a request that never answers leaves the signal with nothing to
+  // interrupt — the exact case whose 5,000 ms test timeout proved it. So the
+  // watchdog resolves a SENTINEL that the drain races each iterator step
+  // against, and the abort is what stops the provider afterwards rather than
+  // what ends the wait.
   const stallTimeoutMs = opts.stallTimeoutMs ?? STALL_TIMEOUT_MS;
   const watchdog = new AbortController();
   let stalled = false;
   let stallTimer: ReturnType<typeof setTimeout> | undefined;
+  const { promise: stallReached, resolve: reportStall } = Promise.withResolvers<typeof STALLED>();
   const armStallTimer = () => {
-    if (stallTimer !== undefined) clearTimeout(stallTimer);
+    clearTimeout(stallTimer);
     stallTimer = setTimeout(() => {
       stalled = true;
       watchdog.abort();
+      reportStall(STALLED);
     }, stallTimeoutMs);
   };
   const clearStallTimer = () => {
-    if (stallTimer !== undefined) clearTimeout(stallTimer);
+    clearTimeout(stallTimer);
     stallTimer = undefined;
   };
+  // What the caller records. Names what was MEASURED — nothing flowed — rather
+  // than only the provider, because a tool call that never returns stalls the
+  // same turn through the same silence and used to read as a provider fault.
   const stallError = () => new Error(
-    `Model stream stalled: no data from the provider for ${Math.round(stallTimeoutMs / 1000)}s — the turn was aborted.`,
+    `Turn stalled: nothing flowed for ${Math.round(stallTimeoutMs / 1000)}s — no provider chunk `
+    + 'and no tool result — so the turn was ended.',
   );
 
   // The turn's constants for the per-step breakdown: the cache-eligible system
@@ -363,7 +382,18 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // below reads `recordedSteps`, and a tool result that lands after the
     // abort still reaches the surfaces and the turn's tool ledger instead of
     // leaving the call rendered as never having returned.
-    for await (const chunk of result.fullStream) {
+    //
+    // Stepped by hand rather than `for await`, and RACED against the watchdog,
+    // because the wait this has to bound is a wait the SDK is inside: the first
+    // `next()` does not resolve until `model.doStream(...)` does, and a request
+    // that never answers therefore ignores the abort signal entirely. Racing is
+    // the only place the silence is observable.
+    const arrivals = result.fullStream[Symbol.asyncIterator]();
+    for (;;) {
+      const arrival = await Promise.race([arrivals.next(), stallReached]);
+      if (arrival === STALLED) break;
+      if (arrival.done) break;
+      const chunk = arrival.value;
       armStallTimer();
 
       switch (chunk.type) {
@@ -464,24 +494,28 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   }
 
   // The turn's steps, and the messages they produced. A CUT run — the caller's
-  // abort or the stall watchdog, both of which reach the SDK through the same
-  // combined signal — leaves `result.response`/`result.steps` unsettled; they
-  // resolve only on a natural finish, and a cut before the first step even
-  // rejects them. So a cut turn reads what `onAbort` handed over for its steps.
+  // abort, or the watchdog observing that nothing flowed — leaves
+  // `result.response`/`result.steps` unsettled; they resolve only on a natural
+  // finish, and a cut before the first step never settles them at all. So a cut
+  // turn reads what `onAbort` handed over, and a STALL is cut whether or not
+  // `onAbort` ran: the drain stopped racing a `next()` that the SDK is still
+  // inside, so awaiting `result.steps` here would hang on the very wait the
+  // watchdog just ended.
   //
   // The MESSAGES need no such branch: `responseSoFar` is the cumulative array
   // of the last step that finished, captured as it finished, and that is the
   // whole turn on either path. It is also, message for message, what the per-step
   // durable rows hold — the history the caller persists and the durable record
   // are one construction, so neither can say something the other does not.
-  const steps = interrupted ? recordedSteps : await result.steps;
+  const cut = interrupted || stalled;
+  const steps = cut ? recordedSteps : await result.steps;
   const finished = [...responseSoFar];
   // Then what the cut interrupted: the step the SDK will never report, and the
   // pairing invariant over the whole turn, so the caller persists a history a
   // follow-up turn can be built from. Without it a tool call the caller has
   // already recorded has no result anywhere, and `streamText` refuses to
   // assemble EVERY later request from that history.
-  const produced = interrupted && stepContent.length > 0
+  const produced = cut && stepContent.length > 0
     ? [...finished, { role: 'assistant' as const, content: stepContent }]
     : finished;
   const responseMessages = settleUnpairedToolCalls(produced) ?? produced;

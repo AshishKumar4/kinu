@@ -31,7 +31,7 @@ import {
   type BranchContext, type SwarmUnitSetting,
 } from '../src/strategy/swarm';
 import { runSwarm } from '../src/strategy/swarm-run';
-import { MockLanguageModelV3 } from 'ai/test';
+import { scriptedTurnModel } from '@proteus/test-utils';
 
 /** A composition legal in every respect except the axis under test, so a refusal can
  *  only ever be about `unit` or `context`. */
@@ -253,7 +253,7 @@ describe('the composition that was permanently refused is no longer refused', ()
     const { rt } = createTestRuntime();
     const result = await runSwarm({
       rt,
-      model: new MockLanguageModelV3({
+      model: scriptedTurnModel({
         provider: 'fake',
         modelId: 'fake-unit-axis',
         doGenerate: async () => ({

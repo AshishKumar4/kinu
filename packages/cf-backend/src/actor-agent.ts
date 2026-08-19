@@ -117,7 +117,7 @@ import {
   // Background-job system (#173 — auto-background past the surface threshold)
   BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
   type BackgroundJobStore, type TaskListStore,
-  wrapToolsForBackground, resumeBackgroundJob,
+  wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob,
   // The control plane both roots expose over the same core implementations.
   cancelCurrentWork, getStoredModelSpec, setModel,
   type CancelWorkOutcome,
@@ -3319,14 +3319,16 @@ export abstract class ActorAgent extends Think<Env> {
     });
   }
 
-  /** The shared background wrap (core background-tools): shallow clone, 30s
-   *  threshold on the backgroundable map (with its per-call gate — `agents`
-   *  detaches only action=fork), per-call AbortController merged with the
-   *  turn's signal. The tracking hook keeps foreground cancellation working
-   *  until a call settles or detaches. */
+  /** The shared background wrap (core jobs/background-wrap): shallow clone, 30s
+   *  threshold on the named set (with its per-call gate — `agents` detaches only
+   *  the search rung), per-call AbortController merged with the turn's signal. The
+   *  tracking hook keeps foreground cancellation working until a call settles or
+   *  detaches. An ACTOR names the full set; a confined surface names its own, which
+   *  is what keeps containment structural rather than incidental. */
   private wrapToolsForBackground(raw: ToolSet): ToolSet {
     return wrapToolsForBackground(raw, {
       jobRunner: this.jobRunner,
+      backgroundable: BACKGROUNDABLE_TOOLS,
       mode: () => this.turnWorkMode(),
       trackController: (controller) => {
         this._activeToolControllers.add(controller);

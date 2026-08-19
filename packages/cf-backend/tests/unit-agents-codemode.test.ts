@@ -44,7 +44,7 @@ const codemodeHandoff: SubordinateHandoff = {
   eventId: 'evt-1', delivery: 'starts_now',
   phase: { busy: false, lastActivityAt: null, workingOn: null },
 };
-import { createTestRuntime } from '@proteus/test-utils';
+import { createTestRuntime, scriptedTurnModel } from '@proteus/test-utils';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
@@ -126,7 +126,7 @@ const PER_EXPANSION_TOKENS = 8;
  *  process off `rt` and `model`, so the model is the seam a search's behaviour
  *  is scripted through — there is no strategy in between to script instead. */
 function expandingModel() {
-  return new MockLanguageModelV3({
+  return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-search',
     doGenerate: async () => ({
