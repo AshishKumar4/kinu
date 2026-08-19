@@ -147,7 +147,7 @@ import {
   // Shared catalog view of the resolved model
   ModelCatalogSession,
   // Shared turn-context assembly — the SAME ordering runChat runs on the CLI
-  assembleTurnMessages,
+  assembleTurnMessages, measureCompactionTrigger,
   // The tool-call pairing invariant — applied wherever messages reach the model
   // WITHOUT going through assembleTurnMessages (the scaffold replay below).
   settleUnpairedToolCalls,
@@ -1441,7 +1441,6 @@ export abstract class ActorAgent extends Think<Env> {
   protected get host(): BackendHost {
     if (!this._host) {
       const getHeadRuntime = () => this.getCFHeadRuntime();
-      const getNodeHost = () => this.getCFNodeHost();
       this._host = {
         broadcast: (event) => this.broadcast(JSON.stringify(event)),
         enqueueTurn: async ({ text, metadata, idempotencyKey }) => {
@@ -1520,10 +1519,6 @@ export abstract class ActorAgent extends Think<Env> {
         // heads need the owner for UserDO auth, set by first-turn time. undefined
         // before then ⇒ heads degrade (getHeadController throws the no-owner error).
         get headRuntime() { return getHeadRuntime(); },
-        // Same lazy shape and the same reason: a node facet needs the owner for
-        // UserDO auth, so before first turn there is no host and a node's loop
-        // runs in this isolate.
-        get nodeHost() { return getNodeHost(); },
       };
     }
     return this._host;
@@ -1798,7 +1793,11 @@ export abstract class ActorAgent extends Think<Env> {
    *  when the toolset does. */
   private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
     const actorDeps = this.actorToolDeps();
-    const nodeLoopHost = this.host.nodeHost;
+    // Called directly rather than through the BackendHost seam. That seam is a
+    // TYPES-layer contract, and routing a facet host through it made types/
+    // depend on strategy/ — an inverted edge the layer gate refused, correctly.
+    // Nothing outside this class ever read it, so the indirection bought nothing.
+    const nodeLoopHost = this.getCFNodeHost();
     const deps: AgentsToolDeps = {
       mode: workMode,
       fork: buildStrategyForkDeps({
@@ -2949,22 +2948,18 @@ export abstract class ActorAgent extends Think<Env> {
 
     const cfg: TurnConfig = { system: systemOverride };
 
-    // The measured trigger: the previous turn's final request as the provider
-    // actually priced it, persisted at turn end (onChatResponse). Null until
-    // the session's first turn completes — the engine's char estimate gates
-    // alone until then — and voided by the length guard when the durable
-    // history shrank (undo/restore) since the measurement. Attachment
+    // The measured compaction trigger, read from the durable state by core in
+    // the one correct order (orchestrator/turn-context.ts). Attachment
     // sanitization is per-part in-place replacement, so the raw count IS the
-    // sanitized durable length.
+    // sanitized durable length — and it is stashed because
+    // recordTurnTelemetry writes the next measurement against the same number.
     const rawMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
     this._turnDurableLength = rawMessages.length;
-    const lastPromptTokens = this.compactionState.loadPromptTokens(this.name, rawMessages.length);
     this._turnContextWindow = this.sessionContextWindow();
-    // The forced rebuild, armed either by overflow recovery (onChatResponse, on
-    // a context_length failure) or by the agent itself (agent.compactNow):
-    // consume it — at most one rebuild per arm, never a loop.
-    const trigger = this.compactionState.takeForceCompaction(this.name) ? 'force' as const : 'auto' as const;
-    if (trigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
+    const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
+    // The forced rebuild was armed either by overflow recovery (onChatResponse,
+    // on a context_length failure) or by the agent itself (agent.compactNow).
+    if (measured.trigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
     // The newest MEMORY.md lessons/reflections ride the dynamic block too (the
     // same bounded tail the CLI supplies) — the reflection loop assumes the
     // model sees its latest lessons in-turn. Read once here rather than per
@@ -2988,9 +2983,11 @@ export abstract class ActorAgent extends Think<Env> {
       turnLocal: turnLocal ? [turnLocal] : [],
       sessionKey: this.name,
       contextWindow: this._turnContextWindow,
-      trigger,
+      trigger: measured.trigger,
     };
-    if (lastPromptTokens !== null) assembly.providerReportedTokens = lastPromptTokens;
+    if (measured.providerReportedTokens !== undefined) {
+      assembly.providerReportedTokens = measured.providerReportedTokens;
+    }
     cfg.messages = await assembleTurnMessages(assembly);
 
     // Extension-contributed tools join the turn's ToolSet without ever

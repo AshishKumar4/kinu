@@ -27,7 +27,14 @@
  *     `best-first` takes the best unexpanded node and `none` expands the root once
  *     and stops;
  *   - sibling angles UNCONDITIONALLY: every child is handed its own angle and told
- *     its siblings', because the axis that claimed to gate this never did;
+ *     its siblings', because the axis that claimed to gate this never did. This is
+ *     also the whole of the run's candidate diversity, deliberately: Self-MoA
+ *     (2502.00674) re-ran Mixture-of-Agents' own ablation over the same six models
+ *     and found the HOMOGENEOUS ensemble beat the mixed one 65.7 vs 59.1 with the
+ *     proposer count and topology held fixed, quality dominating diversity by up to
+ *     3.2×. So a model zoo measures WORSE than repeated sampling from the best model
+ *     when the purpose is variety, and prompt angle rather than model identity is
+ *     where diversity is bought here;
  *   - `context:'fork'` by putting the MEASURED BASELINE and the measurements
  *     along this node's own path into the expansion prompt — at depth 1 the only
  *     ancestor is the workspace as found, which is why that arm is unchanged;

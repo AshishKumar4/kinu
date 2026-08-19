@@ -35,12 +35,18 @@
  *    writer returns a verdict the caller can disclose. Since rows are never deleted
  *    and no row's value ever falls, `best(cell)` — a maximum in the objective's
  *    direction over the cell's rows — is monotone as a consequence rather than as a
- *    second rule that could disagree with the first.
+ *    second rule that could disagree with the first. That consequence is proved over
+ *    every finite write sequence, and both of its premises shown load-bearing, in
+ *    `RecordsStore.lean — best_never_falls, an_unguarded_write_lowers_the_best`.
  *
  * 4. `isBetter` IS THE COMPARISON. Not `>`, not `<`, and not a direction-aware
  *    expression written again: that function's own docstring names displacement,
  *    eviction and a cell's best as the three sites that must move in lockstep, and
- *    two of them are here.
+ *    two of them are here. Its STRICTNESS answers to the displacement count below and
+ *    not to rule 3: relaxing it to admit a tie leaves rule 3 true, which is
+ *    `RecordsStore.lean — the_tie_rule_is_not_what_makes_it_monotone`, and the relaxed
+ *    rule is monotone over traces too — `RecordsStore.lean — lenient_best_never_falls`.
+ *    So that comparison's direction is defended by a mutation and not by a proof.
  *
  * WHY A DERIVED `record_key` COLUMN, given that the declared row has no such field.
  * The identity is `(objectiveId, floorDigest, descriptor, artifactDigest)` and two of

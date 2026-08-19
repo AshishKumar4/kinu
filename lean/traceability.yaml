@@ -684,3 +684,150 @@ requirements:
     remainingEvidence:
       - The claim needs a distribution over candidate quality and a discrimination parameter, neither of which the abstract model has
       - The useful half even unproved is that a run must report gain decay rather than imply the surface is exhausted, and nothing reports it yet
+  PR-RECORDS-003:
+    statement: The shipped records store keeps a cell's best from ever falling, as a consequence of never deleting a row and refusing a lowering write rather than as a rule of its own.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.RecordsStore.runOf_nil
+      - Proteus.Exploration.RecordsStore.runOf_cons
+      - Proteus.Exploration.RecordsStore.overwrite_monotone_of_admissible
+      - Proteus.Exploration.RecordsStore.recorded_is_admissible
+      - Proteus.Exploration.RecordsStore.refused_write_changes_nothing
+      - Proteus.Exploration.RecordsStore.step_monotone
+      - Proteus.Exploration.RecordsStore.best_never_falls
+      - Proteus.Exploration.RecordsStore.best_never_falls_below_a_recorded_value
+      - Proteus.Exploration.RecordsStore.step_deletes_no_digest
+      - Proteus.Exploration.RecordsStore.trace_deletes_no_digest
+      - Proteus.Exploration.RecordsStore.write_keeps_one_row_per_digest
+      - Proteus.Exploration.RecordsStore.an_unguarded_write_lowers_the_best
+      - Proteus.Exploration.RecordsStore.removing_a_row_can_lower_the_best
+      - Proteus.Exploration.RecordsStore.stepLenient_monotone
+      - Proteus.Exploration.RecordsStore.lenient_best_never_falls
+      - Proteus.Exploration.RecordsStore.the_tie_rule_is_not_what_makes_it_monotone
+      - Proteus.Exploration.RecordsStore.a_better_write_is_recorded
+      - Proteus.Exploration.RecordsStore.a_worse_new_artifact_joins
+      - Proteus.Exploration.RecordsStore.the_direction_decides
+      - Proteus.Exploration.RecordsStore.a_sealed_store_refuses_by_name
+      - Proteus.Exploration.RecordsStore.a_cleared_seal_records_again
+      - Proteus.Exploration.RecordsStore.a_breach_seals_the_store
+    tsRefs:
+      - packages/core/src/strategy/records.ts:429
+      - packages/core/src/strategy/records.ts:444
+      - packages/core/src/strategy/records.ts:466
+      - packages/core/src/strategy/objective.ts:711
+    remainingEvidence:
+      - The store is a read-modify-write surface and this model is a single sequential fold, so two runs racing on one cell are unmodelled and no strengthening of these theorems reaches it
+      - The strictness of the comparison is proved NOT to be what makes the store monotone, so relaxing it needs a mutation test rather than a theorem here
+  PR-ARCHIVE-002:
+    statement: Archive admission keeps a cell's occupants pairwise at least the novelty floor apart over every finite write sequence, which bounds their similarity and provably does not bound their number.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.ArchiveAdmission.runOf_append
+      - Proteus.Exploration.ArchiveAdmission.belowFloor_foldl
+      - Proteus.Exploration.ArchiveAdmission.tooClose_iff_belowFloor
+      - Proteus.Exploration.ArchiveAdmission.refuses_iff_an_occupant_is_too_close
+      - Proteus.Exploration.ArchiveAdmission.admitted_of_all_far
+      - Proteus.Exploration.ArchiveAdmission.admitted_is_far_from_every_occupant
+      - Proteus.Exploration.ArchiveAdmission.step_preserves_separation
+      - Proteus.Exploration.ArchiveAdmission.separation_is_invariant
+      - Proteus.Exploration.ArchiveAdmission.no_near_copy_is_reachable
+      - Proteus.Exploration.ArchiveAdmission.discreteDist_of_ne
+      - Proteus.Exploration.ArchiveAdmission.discreteDist_symm
+      - Proteus.Exploration.ArchiveAdmission.descending_length
+      - Proteus.Exploration.ArchiveAdmission.lt_of_mem_descending
+      - Proteus.Exploration.ArchiveAdmission.fresh_run
+      - Proteus.Exploration.ArchiveAdmission.separated_cells_are_unboundedly_large
+      - Proteus.Exploration.ArchiveAdmission.a_repeat_does_not_grow_the_population
+      - Proteus.Exploration.ArchiveAdmission.a_near_copy_is_refused_and_names_the_occupant
+      - Proteus.Exploration.ArchiveAdmission.an_empty_cell_admits
+      - Proteus.Exploration.ArchiveAdmission.the_threshold_is_read_as_a_floor
+      - Proteus.Exploration.ArchiveAdmission.an_identical_artifact_is_not_a_near_copy
+      - Proteus.Exploration.ArchiveAdmission.the_refusal_names_the_nearest
+      - Proteus.Exploration.ArchiveAdmission.inverting_the_search_admits_a_near_copy
+    tsRefs:
+      - packages/core/src/strategy/archive.ts:32
+      - packages/core/src/strategy/archive.ts:238
+      - packages/core/src/strategy/archive.ts:240
+      - packages/core/src/strategy/archive.ts:242
+    remainingEvidence:
+      - archive.ts:32-39 states that the admission test bounds a cell's POPULATION; separated_cells_are_unboundedly_large refutes that, so the absence of an eviction rule is unjustified and the cell is unbounded in mutually-novel members
+      - cellOccupants carries no LIMIT, so admission is a linear read of a cell this requirement proves unbounded, and that cost is recorded rather than modelled
+      - The novelty floor is caller-supplied per invocation and no preset declares one, so every theorem here is quantified over a number the specification refuses to invent
+      - The distance function is a parameter, so an inverted noveltyDistance satisfies every theorem here and only a mutation reaches it
+  PR-FANIN-001:
+    statement: The fan-in order is a topological order of the dependency edges the members declare, and a cycle refuses the whole path rather than applying an orderable prefix.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.FanIn.landsCleanly_append
+      - Proteus.Exploration.FanIn.placeStep_preserves
+      - Proteus.Exploration.FanIn.onePass_preserves
+      - Proteus.Exploration.FanIn.sweeps_preserves
+      - Proteus.Exploration.FanIn.placedOf_landsCleanly
+      - Proteus.Exploration.FanIn.ordered_is_placedOf
+      - Proteus.Exploration.FanIn.derived_order_satisfies_rule_one
+      - Proteus.Exploration.FanIn.mem_of_filter_eq_nil
+      - Proteus.Exploration.FanIn.every_member_is_ordered
+      - Proteus.Exploration.FanIn.placeStep_allMembers
+      - Proteus.Exploration.FanIn.onePass_allMembers
+      - Proteus.Exploration.FanIn.sweeps_allMembers
+      - Proteus.Exploration.FanIn.placedOf_allMembers
+      - Proteus.Exploration.FanIn.unique_append_singleton
+      - Proteus.Exploration.FanIn.placeStep_unique
+      - Proteus.Exploration.FanIn.onePass_unique
+      - Proteus.Exploration.FanIn.sweeps_unique
+      - Proteus.Exploration.FanIn.placedOf_unique
+      - Proteus.Exploration.FanIn.a_cycle_applies_nothing
+      - Proteus.Exploration.FanIn.the_sweep_bound_is_tight
+      - Proteus.Exploration.FanIn.a_chain_offered_backwards_still_orders
+      - Proteus.Exploration.FanIn.a_dependent_offered_first_is_applied_last
+      - Proteus.Exploration.FanIn.an_unordered_set_keeps_the_order_it_was_offered_in
+      - Proteus.Exploration.FanIn.a_dependency_outside_the_offered_set_is_not_an_edge
+      - Proteus.Exploration.FanIn.a_settled_dependency_is_not_an_edge
+      - Proteus.Exploration.FanIn.a_cycle_is_refused_by_name
+      - Proteus.Exploration.FanIn.a_self_dependency_is_a_cycle
+      - Proteus.Exploration.FanIn.an_orderable_member_does_not_land_beside_a_cycle
+      - Proteus.Exploration.FanIn.an_orderable_set_applies_every_member
+      - Proteus.Exploration.FanIn.the_offered_order_can_fail_rule_one
+    tsRefs:
+      - packages/core/src/strategy/merge-back.ts:483
+      - packages/core/src/strategy/merge-back.ts:489
+      - packages/core/src/strategy/merge-back.ts:493
+      - packages/core/src/strategy/merge-back.ts:611
+    remainingEvidence:
+      - The ordering is proved over declared edges only; whether a member's declaration matches the files it actually touches is outside the model
+      - The sweep bound's general adequacy is not proved, only shown tight on the worst case, so a bound reduced below the member count would produce a false cycle refusal that no theorem here rules out
+      - Two members sharing a node id collapse in the source's edge Map and are kept first-wins here, so the case is modelled only under distinct ids
+  PR-REBASE-001:
+    statement: A verdict bound to a member digest and a base digest never applies after either moves, which is the whole of sequential rebase's correctness.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Rebase.readAt_writeAt
+      - Proteus.Exploration.Rebase.applied_is_bound_to_the_base_it_lands_on
+      - Proteus.Exploration.Rebase.rebase_applies_only_bound_verdicts
+      - Proteus.Exploration.Rebase.member_only_binding_cannot_see_the_origin
+      - Proteus.Exploration.Rebase.map_eq_pointwise
+      - Proteus.Exploration.Rebase.the_base_key_moves_when_a_touched_path_moves
+      - Proteus.Exploration.Rebase.both_members_are_bound_to_the_initial_base
+      - Proteus.Exploration.Rebase.the_rebase_moves_the_second_members_base
+      - Proteus.Exploration.Rebase.no_reverifier_refuses_the_stale_member
+      - Proteus.Exploration.Rebase.the_member_digest_does_not_move_when_the_origin_does
+      - Proteus.Exploration.Rebase.member_only_binding_applies_the_stale_member
+      - Proteus.Exploration.Rebase.re_verification_against_the_new_base_applies
+      - Proteus.Exploration.Rebase.a_reverification_bound_elsewhere_does_not_revalidate
+      - Proteus.Exploration.Rebase.a_failed_recheck_refuses
+      - Proteus.Exploration.Rebase.an_unresolved_verifier_refuses
+      - Proteus.Exploration.Rebase.an_unclean_verdict_is_refused_by_its_own_cause
+      - Proteus.Exploration.Rebase.removing_the_comparison_applies_the_stale_verdict
+      - Proteus.Exploration.Rebase.an_absent_path_is_not_an_empty_one
+      - Proteus.Exploration.Rebase.the_base_key_ignores_untouched_paths
+      - Proteus.Exploration.Rebase.the_rebase_stops_at_the_stale_member
+      - Proteus.Exploration.Rebase.re_verification_lets_the_whole_rebase_land
+    tsRefs:
+      - packages/core/src/strategy/merge-back.ts:180
+      - packages/core/src/strategy/merge-back.ts:196
+      - packages/core/src/strategy/merge-back.ts:746
+      - packages/core/src/strategy/merge-back.ts:793
+    remainingEvidence:
+      - The digests are modelled as the argument tuples argumentDigest hashes, so every result reads up to a SHA-256 collision rather than ruling one out
+      - Rule 4 is proved to have teeth but its precedence over rule 6 is not modelled, and the source records that the opposite order would leave this comparison as dead code
+      - The re-verifier is a parameter, so a verifier that lies satisfies every theorem here and no gate ordering reaches it

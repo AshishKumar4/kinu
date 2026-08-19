@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { memberBody } from '@proteus/test-utils';
-import { orchestratorHarness } from './helpers/actor-harness';
+import {
+  orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent,
+} from './helpers/actor-harness';
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 
@@ -248,6 +250,62 @@ describe('turn-pipeline correctness wiring', () => {
     expect(rows[1]!.parent_id).toBe('u-live');
     // Flattened for search and the evolution outcome join, not the raw UI JSON.
     expect(rows[1]!.content).toBe('partial answer');
+  });
+
+  // The credit decision, behaviourally, on this backend. Core's
+  // `creditedTurnId` decides it for both; what THIS suite pins is that the
+  // orchestrator asks it and honours the answer.
+  //
+  // The plan case is a BEHAVIOUR CHANGE, recorded as one: a completed plan turn
+  // used to claim its mid-turn takes here, because the only guard was
+  // `status === 'completed'` plus a message id. The CLI already excluded plan
+  // mode; a plan is not an answer the captures competed against.
+  describe('mid-turn captures are credited to the turn only when it answered', () => {
+    /** One take set captured mid-turn: written unclaimed, stamped inside the
+     *  claiming turn's window (the scoped claim drops anything older). The
+     *  workspace schema the harness already ran owns the table. */
+    function settleOneTurn(mode: 'plan' | 'build'): ActorHarness<HarnessOrchestratorAgent> {
+      const harness = orchestratorHarness();
+      harness.db.prepare(
+        `INSERT INTO alternate_takes
+           (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
+            candidates, created_at, picked_at)
+         VALUES ('take-1', NULL, NULL, 'pick a strategy', 'mcts', 'win', NULL, ?, ?, NULL)`,
+      ).run(
+        JSON.stringify([
+          { nodeId: 'win', text: 'go with approach A', score: 0.9, visits: 3, depth: 1 },
+          { nodeId: 'alt', text: 'go with approach B', score: 0.86, visits: 2, depth: 1 },
+        ]),
+        Date.now() + 1_000,
+      );
+      if (!Reflect.set(harness.agent, '_cachedMessages', [{
+        id: 'u-1', role: 'user', parts: [{ type: 'text', text: `${mode} this` }],
+        metadata: { proteusMode: mode },
+      }])) throw new Error('failed to seed the harness message array');
+      return harness;
+    }
+
+    const settled: UIMessage = {
+      id: 'a-1', role: 'assistant', parts: [{ type: 'text', text: 'the answer' }],
+    };
+
+    test('a completed build turn claims them', async () => {
+      const harness = settleOneTurn('build');
+      await harness.agent.onChatResponse({
+        message: settled, requestId: 'req-build', continuation: false, status: 'completed',
+      });
+      expect(harness.db.query('SELECT turn_id, session_id FROM alternate_takes').get())
+        .toMatchObject({ turn_id: 'a-1', session_id: 'default' });
+    });
+
+    test('a completed PLAN turn purges them', async () => {
+      const harness = settleOneTurn('plan');
+      await harness.agent.onChatResponse({
+        message: settled, requestId: 'req-plan', continuation: false, status: 'completed',
+      });
+      expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
+        .toMatchObject({ n: 0 });
+    });
   });
 
   test('programmatic turns succeed only after Think completes the turn and keep their own drain identity', () => {

@@ -8,6 +8,8 @@
  *   persistMeasuredPromptTokens   the NEXT turn's measured compaction trigger
  *   applyOverflowRecovery         the turn-failure policy APPLIED: arm force-
  *                                 compaction + deliver exactly one retry signal
+ *   creditedTurnId                which id, if any, the work captured INSIDE
+ *                                 the turn may be attributed to
  *
  * Each existed twice — cf beforeTurn/recordTurnTelemetry and the CLI
  * processTurn/closeRun — with the payload shapes drifting one field at a time.
@@ -20,6 +22,7 @@ import type {
 } from '../events/types';
 import type { TurnEscalationLedger } from '../execution/escalation';
 import type { CompletedTurn } from '../evolution/types';
+import type { WorkMode } from '../prompting/surface';
 import { usageReported, type Usage } from '../usage';
 import type { TurnAccumulator } from './turn-accumulator';
 import {
@@ -227,4 +230,46 @@ export function applyOverflowRecovery(opts: {
     }
   }
   return recovery;
+}
+
+/** A settled turn, as the credit decision below reads it. */
+export interface SettledTurn {
+  /** The durable assistant message id this turn produced, or null when it
+   *  produced none (no id to attribute anything to). */
+  messageId: string | null;
+  /** Whether the turn reached its own end. A terminal failure — a dead provider
+   *  stream, an abort — is not an answer, whatever partial text preceded it. */
+  completed: boolean;
+  /** The turn's work mode. A plan turn answers with a plan. */
+  workMode: WorkMode;
+}
+
+/**
+ * The id the work captured mid-turn may be credited to, or null.
+ *
+ * Alternate takes (a think-mcts fan-out) and steer branches are both captured
+ * while the turn is still running, BEFORE its assistant message exists, and
+ * both are attributed to that message when the turn settles — a claimed take
+ * enters the preference ledger, an unclaimed one is dropped. Whether they may
+ * be attributed is therefore ONE question with one answer, and it was asked
+ * twice with two:
+ *
+ *   cf   (orchestrator.onChatResponse) `result.status === 'completed'` and a
+ *        message id — so a completed PLAN turn credited its captures.
+ *   CLI  (local-session.runTurn) a message id, not plan mode, and
+ *        `!acc.hadError` — so any turn in which a single tool call came back a
+ *        failure dropped its captures, though the turn finished and answered.
+ *
+ * The surviving policy is the intersection of what each side was reaching for:
+ * an id exists, the turn ended rather than failed, and the answer is an answer
+ * rather than a plan. `hadError` deliberately does NOT appear: the accumulator
+ * raises it from the transport discriminator on any failed tool result, and
+ * evolution/outcomes.ts already records by name that "`hadError` alone is not
+ * the question, and reading only it is what made this a fake reward". A turn
+ * that ran the suite, saw it red, fixed it and answered has an answer for its
+ * captures to have competed against.
+ */
+export function creditedTurnId(turn: SettledTurn): string | null {
+  if (!turn.completed || turn.workMode === 'plan') return null;
+  return turn.messageId;
 }

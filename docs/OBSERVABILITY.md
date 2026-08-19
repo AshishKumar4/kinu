@@ -19,16 +19,33 @@ reading them.
 | Piece | State | Where |
 | --- | --- | --- |
 | `tolerate` / `classify` — the tolerable-failure signatures | built | `obs/expected-failure.ts` |
-| `Tracer` / `ScopedSpan` / `tracer.span(...)` — the span seam | built, **not wired** | `obs/tracer.ts`, `cf-backend/src/obs/cf-tracer.ts` |
+| `Tracer` / `ScopedSpan` / `tracer.span(...)` — the span seam | built, **wired on one path** | `obs/tracer.ts`, `cf-backend/src/obs/cf-tracer.ts` |
 | `ErrorCode` / `ProteusError` / `toProteusError` | built | `obs/error.ts` |
 | `refusalText` — the refusal on the string channel | built, **all five executor tools converted** | `execution/exec-result.ts` |
 | `Logger` / `ReservedLogField` — the typed logger and its ban | built | `obs/log.ts` |
 | `Result<T, ProteusError>` via `neverthrow` | **rejected**, see below | — |
 
-"Not wired" is not a synonym for "not built". `Tracer` exists, has a recording
-fake, and has one caller: a cf-backend test fixture. Opening a span requires
-`SpanOpenAttributes` — `isolateGen` and `selfPath` — which only the CF Agent can
-supply, so wiring it is a cf-backend change and not a core one.
+This row used to read "not wired", and that is no longer true. Measured
+2026-08-19: `this.tracing.` occurs exactly ONCE in `packages/cf-backend/src/` —
+`orchestrator.ts:1574`, which opens `this.tracing.invocation('alarm', 'tick', …)`
+on the live alarm path and takes four sibling spans under one root, so "the alarm
+was slow" becomes "the email reconcile was slow". The handle comes from the
+`tracing` getter at `actor-agent.ts:1980-1988`, which builds
+`createAgentTracing({tracer: createWorkersTracer(), isolateGen, selfPath})`.
+
+So the honest state is one production path, not zero and not all of them. Opening
+a span still requires `SpanOpenAttributes` — `isolateGen` and `selfPath` — which
+only the CF Agent can supply, which is why every further call site is a
+cf-backend change rather than a core one. `selfPath` rather than `ctx.id` because
+two facets with distinct ids both reported under the ROOT's `durableObjectId` on
+the deployed runtime, so an id-keyed trace collapses every head and subordinate
+into one orchestrator.
+
+Across `alarm()` the absence of trace context is ENFORCED rather than merely
+expected: `tracing.invocation` revokes the handle when its method's promise
+settles, so a span opened from anything that escaped the tick throws. The turn
+that armed a trigger finished minutes or days ago, possibly in an isolate since
+reset, and a span covering both would measure an interval nothing observed.
 
 ## The rules
 

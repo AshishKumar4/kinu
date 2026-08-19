@@ -1,7 +1,10 @@
 # Nimbus Integration
 
-> Verify precision against `packages/cf-backend/src/runtime.ts`,
-> `packages/cf-backend/src/nimbus-route.ts`, and the pinned package patches.
+> Verify precision against `packages/cf-backend/src/runtime.ts` and
+> `packages/cf-backend/src/nimbus-route.ts`. There are no longer any Nimbus
+> package patches: every one was upstreamed to `AshishKumar4/Nimbus` and the
+> packages are consumed from the registry at `core@0.5.0` / `sdk@0.3.0` /
+> `worker@0.3.0`.
 
 Nimbus is the hosted backend's one authoritative workspace. It is not an
 optional secondary executor, a staging area, or a filesystem synchronized with

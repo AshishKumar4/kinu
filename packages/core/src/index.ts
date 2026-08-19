@@ -1232,11 +1232,14 @@ export {
   COMPLETION_OBSERVATION_MAX_CHARS, COMPLETION_TASK_ECHO_MAX_CHARS,
   type TurnCompletionFacts,
 } from './orchestrator/completion-gate';
-export { assembleTurnMessages, type TurnContextInput } from './orchestrator/turn-context';
+export {
+  assembleTurnMessages, measureCompactionTrigger,
+  type TurnContextInput, type CompactionTriggerReader, type MeasuredCompactionTrigger,
+} from './orchestrator/turn-context';
 export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
-  persistMeasuredPromptTokens, applyOverflowRecovery,
-  type CompactionTriggerState,
+  persistMeasuredPromptTokens, applyOverflowRecovery, creditedTurnId,
+  type CompactionTriggerState, type SettledTurn,
 } from './orchestrator/turn-lifecycle';
 export {
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
@@ -1384,7 +1387,10 @@ export type {
   DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorWriteResult,
   EnvironmentInfo, MountInfo,
 } from './read-models/files';
-export { readLatestSearchTree, readSearchTree } from './read-models/search-tree';
+export {
+  readLatestSearchTree, readSearchTree, readSearchNodeDetail,
+  type SearchNodeSummary, type SearchNodeDetail,
+} from './read-models/search-tree';
 export { readForkRunParams } from './read-models/fork-params';
 export { readExplorationCanvas } from './read-models/exploration-canvas';
 export type { ExplorationCanvasRun } from './read-models/exploration-canvas';

@@ -315,3 +315,110 @@ import Proteus
 #print axioms Proteus.Exploration.Isolation.agent_node_is_not_a_branch_evaluate
 #print axioms Proteus.Exploration.Isolation.dropping_the_frame_condition_breaks_isolation
 #print axioms Proteus.Exploration.Isolation.agent_node_step_is_representable
+
+/-! ### Proteus/Exploration/RecordsStore.lean -/
+
+#print axioms Proteus.Exploration.RecordsStore.runOf_nil
+#print axioms Proteus.Exploration.RecordsStore.runOf_cons
+#print axioms Proteus.Exploration.RecordsStore.overwrite_monotone_of_admissible
+#print axioms Proteus.Exploration.RecordsStore.recorded_is_admissible
+#print axioms Proteus.Exploration.RecordsStore.refused_write_changes_nothing
+#print axioms Proteus.Exploration.RecordsStore.step_monotone
+#print axioms Proteus.Exploration.RecordsStore.best_never_falls
+#print axioms Proteus.Exploration.RecordsStore.best_never_falls_below_a_recorded_value
+#print axioms Proteus.Exploration.RecordsStore.step_deletes_no_digest
+#print axioms Proteus.Exploration.RecordsStore.trace_deletes_no_digest
+#print axioms Proteus.Exploration.RecordsStore.write_keeps_one_row_per_digest
+#print axioms Proteus.Exploration.RecordsStore.an_unguarded_write_lowers_the_best
+#print axioms Proteus.Exploration.RecordsStore.removing_a_row_can_lower_the_best
+#print axioms Proteus.Exploration.RecordsStore.stepLenient_monotone
+#print axioms Proteus.Exploration.RecordsStore.lenient_best_never_falls
+#print axioms Proteus.Exploration.RecordsStore.the_tie_rule_is_not_what_makes_it_monotone
+#print axioms Proteus.Exploration.RecordsStore.a_better_write_is_recorded
+#print axioms Proteus.Exploration.RecordsStore.a_worse_new_artifact_joins
+#print axioms Proteus.Exploration.RecordsStore.the_direction_decides
+#print axioms Proteus.Exploration.RecordsStore.a_sealed_store_refuses_by_name
+#print axioms Proteus.Exploration.RecordsStore.a_cleared_seal_records_again
+#print axioms Proteus.Exploration.RecordsStore.a_breach_seals_the_store
+
+/-! ### Proteus/Exploration/ArchiveAdmission.lean -/
+
+#print axioms Proteus.Exploration.ArchiveAdmission.runOf_append
+#print axioms Proteus.Exploration.ArchiveAdmission.belowFloor_foldl
+#print axioms Proteus.Exploration.ArchiveAdmission.tooClose_iff_belowFloor
+#print axioms Proteus.Exploration.ArchiveAdmission.refuses_iff_an_occupant_is_too_close
+#print axioms Proteus.Exploration.ArchiveAdmission.admitted_of_all_far
+#print axioms Proteus.Exploration.ArchiveAdmission.admitted_is_far_from_every_occupant
+#print axioms Proteus.Exploration.ArchiveAdmission.step_preserves_separation
+#print axioms Proteus.Exploration.ArchiveAdmission.separation_is_invariant
+#print axioms Proteus.Exploration.ArchiveAdmission.no_near_copy_is_reachable
+#print axioms Proteus.Exploration.ArchiveAdmission.discreteDist_of_ne
+#print axioms Proteus.Exploration.ArchiveAdmission.discreteDist_symm
+#print axioms Proteus.Exploration.ArchiveAdmission.descending_length
+#print axioms Proteus.Exploration.ArchiveAdmission.lt_of_mem_descending
+#print axioms Proteus.Exploration.ArchiveAdmission.fresh_run
+#print axioms Proteus.Exploration.ArchiveAdmission.separated_cells_are_unboundedly_large
+#print axioms Proteus.Exploration.ArchiveAdmission.a_repeat_does_not_grow_the_population
+#print axioms Proteus.Exploration.ArchiveAdmission.a_near_copy_is_refused_and_names_the_occupant
+#print axioms Proteus.Exploration.ArchiveAdmission.an_empty_cell_admits
+#print axioms Proteus.Exploration.ArchiveAdmission.the_threshold_is_read_as_a_floor
+#print axioms Proteus.Exploration.ArchiveAdmission.an_identical_artifact_is_not_a_near_copy
+#print axioms Proteus.Exploration.ArchiveAdmission.the_refusal_names_the_nearest
+#print axioms Proteus.Exploration.ArchiveAdmission.inverting_the_search_admits_a_near_copy
+
+/-! ### Proteus/Exploration/FanIn.lean -/
+
+#print axioms Proteus.Exploration.FanIn.landsCleanly_append
+#print axioms Proteus.Exploration.FanIn.placeStep_preserves
+#print axioms Proteus.Exploration.FanIn.onePass_preserves
+#print axioms Proteus.Exploration.FanIn.sweeps_preserves
+#print axioms Proteus.Exploration.FanIn.placedOf_landsCleanly
+#print axioms Proteus.Exploration.FanIn.ordered_is_placedOf
+#print axioms Proteus.Exploration.FanIn.derived_order_satisfies_rule_one
+#print axioms Proteus.Exploration.FanIn.mem_of_filter_eq_nil
+#print axioms Proteus.Exploration.FanIn.every_member_is_ordered
+#print axioms Proteus.Exploration.FanIn.placeStep_allMembers
+#print axioms Proteus.Exploration.FanIn.onePass_allMembers
+#print axioms Proteus.Exploration.FanIn.sweeps_allMembers
+#print axioms Proteus.Exploration.FanIn.placedOf_allMembers
+#print axioms Proteus.Exploration.FanIn.unique_append_singleton
+#print axioms Proteus.Exploration.FanIn.placeStep_unique
+#print axioms Proteus.Exploration.FanIn.onePass_unique
+#print axioms Proteus.Exploration.FanIn.sweeps_unique
+#print axioms Proteus.Exploration.FanIn.placedOf_unique
+#print axioms Proteus.Exploration.FanIn.a_cycle_applies_nothing
+#print axioms Proteus.Exploration.FanIn.the_sweep_bound_is_tight
+#print axioms Proteus.Exploration.FanIn.a_chain_offered_backwards_still_orders
+#print axioms Proteus.Exploration.FanIn.a_dependent_offered_first_is_applied_last
+#print axioms Proteus.Exploration.FanIn.an_unordered_set_keeps_the_order_it_was_offered_in
+#print axioms Proteus.Exploration.FanIn.a_dependency_outside_the_offered_set_is_not_an_edge
+#print axioms Proteus.Exploration.FanIn.a_settled_dependency_is_not_an_edge
+#print axioms Proteus.Exploration.FanIn.a_cycle_is_refused_by_name
+#print axioms Proteus.Exploration.FanIn.a_self_dependency_is_a_cycle
+#print axioms Proteus.Exploration.FanIn.an_orderable_member_does_not_land_beside_a_cycle
+#print axioms Proteus.Exploration.FanIn.an_orderable_set_applies_every_member
+#print axioms Proteus.Exploration.FanIn.the_offered_order_can_fail_rule_one
+
+/-! ### Proteus/Exploration/Rebase.lean -/
+
+#print axioms Proteus.Exploration.Rebase.readAt_writeAt
+#print axioms Proteus.Exploration.Rebase.applied_is_bound_to_the_base_it_lands_on
+#print axioms Proteus.Exploration.Rebase.rebase_applies_only_bound_verdicts
+#print axioms Proteus.Exploration.Rebase.member_only_binding_cannot_see_the_origin
+#print axioms Proteus.Exploration.Rebase.map_eq_pointwise
+#print axioms Proteus.Exploration.Rebase.the_base_key_moves_when_a_touched_path_moves
+#print axioms Proteus.Exploration.Rebase.both_members_are_bound_to_the_initial_base
+#print axioms Proteus.Exploration.Rebase.the_rebase_moves_the_second_members_base
+#print axioms Proteus.Exploration.Rebase.no_reverifier_refuses_the_stale_member
+#print axioms Proteus.Exploration.Rebase.the_member_digest_does_not_move_when_the_origin_does
+#print axioms Proteus.Exploration.Rebase.member_only_binding_applies_the_stale_member
+#print axioms Proteus.Exploration.Rebase.re_verification_against_the_new_base_applies
+#print axioms Proteus.Exploration.Rebase.a_reverification_bound_elsewhere_does_not_revalidate
+#print axioms Proteus.Exploration.Rebase.a_failed_recheck_refuses
+#print axioms Proteus.Exploration.Rebase.an_unresolved_verifier_refuses
+#print axioms Proteus.Exploration.Rebase.an_unclean_verdict_is_refused_by_its_own_cause
+#print axioms Proteus.Exploration.Rebase.removing_the_comparison_applies_the_stale_verdict
+#print axioms Proteus.Exploration.Rebase.an_absent_path_is_not_an_empty_one
+#print axioms Proteus.Exploration.Rebase.the_base_key_ignores_untouched_paths
+#print axioms Proteus.Exploration.Rebase.the_rebase_stops_at_the_stale_member
+#print axioms Proteus.Exploration.Rebase.re_verification_lets_the_whole_rebase_land

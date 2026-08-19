@@ -492,6 +492,37 @@ export const LADDER: readonly Gate[] = [
       + 'test here mocks the Agent SDK (`tests/helpers/agents-sdk.ts`) and runs under '
       + 'bun, which is why `bun run test:workerd` exists below.',
   },
+  {
+    // THE TIER IS THE BUDGET'S DECISION AND NOT A PREFERENCE. Measured the way this file
+    // measures — `performance.now()` around `Bun.spawnSync(['bun','run','test:mutation'])`,
+    // seven samples, 2026-08-19: 0.178 0.186 0.190 0.197 0.199 0.206 0.207 — so the declared
+    // cost is the MAXIMUM rather than the median, because a ceiling declared from a middle is
+    // exceeded half the time. At `commit` that puts the tier's sum at 15.00s against a
+    // ceiling of `< 15`: it satisfies `toBeLessThan` only by 1.8e-15, which is binary
+    // floating point rather than headroom, so the commit tier is full and this belongs at
+    // push, where the sum is 66.90s against 90.
+    run: 'bun run test:mutation',
+    tier: 'push',
+    seconds: 0.21,
+    catches: 'a policy decision inverted with nothing to notice. Seven of them — the archive '
+      + 'novelty floor and the nearest-occupant search beside it, `isBetter`\'s direction and '
+      + 'its strictness, the publication seal, the merge policy derived from settle, the cycle '
+      + 'scan that makes a refusal all-or-nothing, budget conservation, and the clamp\'s '
+      + 'head/tail split — are each mutated in an isolated copy of the module and the NAMED '
+      + 'test that defends them is required to fail against the mutant. Every one of the nine '
+      + 'mutations typechecks, throws nothing, and changes one comparison: measured 2026-08-19, '
+      + 'admitting a tie reports the re-record as `recorded, displaced: true`, skipping the '
+      + 'cycle scan reports `applied` where a refusal belongs, and giving the tail the whole '
+      + 'cap returns 1796 characters against a budget of 1400. A suite that only ever asserts '
+      + '"something was refused" is green through all nine, which is why this is a tier gate '
+      + 'and not a comment.',
+    blind: 'any decision not on the list, and the list is hand-written — nothing enumerates the '
+      + 'comparisons a policy module contains, so a new threshold arrives uncovered and this '
+      + 'gate stays green over it. It also proves only that ONE named test catches each '
+      + 'mutation, never that the mutation is the worst reading available, and a mutant that '
+      + 'merely crashed would satisfy a weaker harness: the rejection is required to be a '
+      + 'failed `expect` rather than any throw.',
+  },
 
   {
     run: 'bun run gate:dependency-advisories',

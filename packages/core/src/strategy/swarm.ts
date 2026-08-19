@@ -319,17 +319,21 @@ export interface SwarmConfig {
   readonly pruneThreshold?: number;
   readonly minVisitsForPrune?: number;
   /**
-   * NOTE what is deliberately NOT here: `branches`, `depth` and `models`. All three
-   * are per-run choices rather than technique identity — ToT at branches=3 and ToT
-   * at branches=8 are the same TECHNIQUE, and so is ToT routed across a cheap and a
-   * strong model — so none of them spans the coverage matrix. They live on
-   * {@link SwarmInput} where EVERY preset can set them.
+   * NOTE what is deliberately NOT here: `branches` and `depth`. Both are per-run
+   * choices rather than technique identity — ToT at branches=3 and ToT at
+   * branches=8 are the same TECHNIQUE — so neither spans the coverage matrix. They
+   * live on {@link SwarmInput} where EVERY preset can set them.
    *
-   * Each was moved after being measured missing. Width: with `branches` in `config`,
-   * a named preset (which takes no `config`) could not say "eight candidates", and
-   * models reported that absence unprompted. Model routing: with `models` in
-   * `config`, no named preset could do capability-and-cost routing at all — the one
-   * use of model variety that measured correct 3/3.
+   * Each was moved after being measured missing: with `branches` in `config`, a
+   * named preset (which takes no `config`) could not say "eight candidates", and
+   * models reported that absence unprompted.
+   *
+   * A third field, `models`, sat beside them on {@link SwarmInput} for
+   * capability-and-cost routing and is GONE. It was parsed, assigned, and stored on
+   * the resolved tuple, and no runner ever read it: every node is handed the one
+   * `deps.model`. So its own description promised a router that did not exist, which
+   * is *Accepted and ignored* — the same defect as a spend cap this surface takes
+   * and never applies. It comes back when something routes on it, not before.
    */
 }
 
@@ -450,29 +454,6 @@ export interface SwarmInput {
    * above every system in the literature (ToT <=3, LATS 7, Koh 5).
    */
   readonly depth?: number;
-  /**
-   * Per-node model variation, for CAPABILITY AND COST ROUTING — a cheap model for
-   * recon, a strong one for synthesis. Available on EVERY preset.
-   *
-   * NOT for diversity. Self-MoA (2502.00674) re-ran Mixture-of-Agents' own ablation
-   * over the same six models and found the HOMOGENEOUS ensemble beat the mixed one
-   * 65.7 vs 59.1 with the proposer count and topology held fixed (six proposals, one
-   * aggregator; the paper claims no cost parity), quality dominating diversity by up
-   * to 3.2×.
-   * A model zoo is measured WORSE than repeated sampling from the best model when
-   * the purpose is diversity. Diversity is not this field's job and never was.
-   *
-   * Cost routing is understood 3/3 across vendors, so the field earns its place.
-   *
-   * THIS FIELD USED TO CARRY A REFUSAL AND NO LONGER DOES. `models.length > 1` was
-   * refused under `decorrelate:'none'`, on the argument that a zoo was then the
-   * run's only source of candidate diversity. That axis is gone and sibling angles
-   * are unconditional, so the premise cannot hold: a zoo is never the only source
-   * any more. The measurement above still stands and is still the reason to reach
-   * for `models` for routing rather than for variety — it is advice now, which is
-   * what it can honestly be once the composition it warned about is unreachable.
-   */
-  readonly models?: readonly string[];
 }
 
 /**
@@ -716,7 +697,6 @@ export interface ResolvedSwarm {
   readonly task: string;
   readonly objective: Objective | null;
   readonly key: string | null;
-  readonly models: readonly string[] | null;
 }
 
 /** A validity refusal, built through the one projection every other refusal in the
@@ -884,7 +864,6 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
     task: input.task,
     objective: input.objective ?? null,
     key: input.key ?? null,
-    models: input.models ?? null,
   };
 }
 

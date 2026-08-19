@@ -130,6 +130,7 @@ echo -e "${BOLD}Step 1: Required pre-deploy gates${NC}"
 run_required_gate "Strict lint and TypeScript" bun run check
 run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
 run_required_gate "Agent-utils, Core, and compaction suites" bun run test
+run_required_gate "Exploration policy mutations" bun run test:mutation
 run_required_gate "Test-utils suite" bun test packages/test-utils/
 run_required_gate "Cloudflare backend and conformance suite" bun test packages/cf-backend/
 run_required_gate "Durable Object semantics under workerd" bun run test:workerd

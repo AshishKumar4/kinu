@@ -47,6 +47,52 @@ export interface TurnContextInput {
   trigger: 'auto' | 'force';
 }
 
+/** The read half of the durable compaction state — structural, because the
+ *  concrete store lives in @proteus/compaction, which depends on core. */
+export interface CompactionTriggerReader {
+  loadPromptTokens(sessionKey: string, historyLength: number): number | null;
+  takeForceCompaction(sessionKey: string): boolean;
+}
+
+/** The two trigger fields of `TurnContextInput`, measured together. */
+export interface MeasuredCompactionTrigger {
+  /** Absent when no completed turn has reported a prompt size against a
+   *  history at least this long. */
+  providerReportedTokens?: number;
+  trigger: 'auto' | 'force';
+}
+
+/**
+ * Read the turn's compaction trigger out of the durable state.
+ *
+ * Both backends derived this by hand, in the same three steps, with the same
+ * twelve lines of comment explaining why — which is the shape a policy takes
+ * just before the two copies stop agreeing. Three things it owns:
+ *
+ *  • the measurement is bound to `durableLength`, the history length at
+ *    assembly time and BEFORE the turn-local tail is spliced on. A shorter
+ *    history than the one measured means a rewrite (undo, restore truncation)
+ *    happened, so the store reports the signal as absent rather than handing
+ *    over a phantom overhead this history can no longer produce.
+ *  • `takeForceCompaction` CONSUMES: at most one forced rebuild per arm, never
+ *    a loop. Calling it is therefore not a query, and it happens exactly once
+ *    per assembly.
+ *  • a null token signal becomes an ABSENT field rather than a null one, so
+ *    the estimate-only path is a missing measurement and not a zero-token one.
+ */
+export function measureCompactionTrigger(
+  state: CompactionTriggerReader,
+  sessionKey: string,
+  durableLength: number,
+): MeasuredCompactionTrigger {
+  const lastPromptTokens = state.loadPromptTokens(sessionKey, durableLength);
+  const measured: MeasuredCompactionTrigger = {
+    trigger: state.takeForceCompaction(sessionKey) ? 'force' : 'auto',
+  };
+  if (lastPromptTokens !== null) measured.providerReportedTokens = lastPromptTokens;
+  return measured;
+}
+
 export async function assembleTurnMessages(input: TurnContextInput): Promise<ModelMessage[]> {
   const history = input.attachments
     ? await sanitizeAttachmentsForModel(input.history, input.attachments)

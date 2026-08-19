@@ -38,6 +38,7 @@
     "gate:policy-drift": "bun scripts/policy-drift.ts",
     "gate:skip-ratchet": "bun scripts/skip-ratchet.ts",
     "gate:typecheck-coverage": "bun scripts/typecheck-coverage.ts",
+    "test:mutation": "bun test packages/core/tests/mutation-*.test.ts",
     "test:eval": "bash scripts/eval-tier.sh",
     "ladder": "bun scripts/ladder.ts",
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",
@@ -112,9 +113,6 @@
     "wrangler": "^4.95.0"
   },
   "patchedDependencies": {
-    "@nimbus-sh/core@0.4.0": "patches/@nimbus-sh%2Fcore@0.4.0.patch",
-    "@nimbus-sh/sdk@0.2.0": "patches/@nimbus-sh%2Fsdk@0.2.0.patch",
-    "@nimbus-sh/worker@0.2.3": "patches/@nimbus-sh%2Fworker@0.2.3.patch",
     "@plannotator/ui@0.30.0": "patches/@plannotator%2Fui@0.30.0.patch"
   }
 }

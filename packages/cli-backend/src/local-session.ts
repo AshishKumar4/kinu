@@ -64,8 +64,8 @@ import {
   createChatModel, runChat, resolveMaxSteps, estimateTokens,
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT,
-  openTurnRun, closeTurnRun, snapshotCompletedTurn,
-  persistMeasuredPromptTokens, applyOverflowRecovery,
+  openTurnRun, closeTurnRun, snapshotCompletedTurn, creditedTurnId,
+  persistMeasuredPromptTokens, applyOverflowRecovery, measureCompactionTrigger,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   PROGRAMMATIC_MESSAGE_ID_PREFIX,
   ExtensionHost, UserSteerDrain,
@@ -1716,17 +1716,12 @@ export class LocalAgentSession implements BackendHost {
     const cache = this.cacheIdentity();
     const effort = this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat;
     const providerOptions = reasoningEffortOptions(effort, cache.providerId ?? '');
-    // The measured trigger: the previous turn's final request as the provider
-    // actually priced it, persisted at turn end below — voided by the length
-    // guard when the durable history shrank (restart truncation) since the
-    // measurement.
+    // The measured compaction trigger, read from the durable state by core in
+    // the one correct order (orchestrator/turn-context.ts). `historyLength` is
+    // the durable length the measurement is bound to, so it is also what
+    // persistMeasuredPromptTokens writes against at turn end.
     const historyLength = this.history.length;
-    const lastPromptTokens = this.compactionState.loadPromptTokens(cache.sessionKey, historyLength);
-    // Overflow recovery (armed below on a context_length failure): consume
-    // the flag — at most one forced rebuild per arm, never a loop.
-    const transformTrigger = this.compactionState.takeForceCompaction(cache.sessionKey)
-      ? 'force' as const
-      : 'auto' as const;
+    const measured = measureCompactionTrigger(this.compactionState, cache.sessionKey, historyLength);
     // Resolved once for the whole turn so compaction, the step-prune budget,
     // and overflow recovery all budget against the same number.
     const contextWindow = this.sessionContextWindow();
@@ -1752,12 +1747,14 @@ export class LocalAgentSession implements BackendHost {
       dynamicContext,
       turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
       tools: turnTools,
-      transformTrigger,
+      transformTrigger: measured.trigger,
       maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
       cache,
       budget: this.budget,
     };
-    if (lastPromptTokens !== null) liveTurnOpts.providerReportedTokens = lastPromptTokens;
+    if (measured.providerReportedTokens !== undefined) {
+      liveTurnOpts.providerReportedTokens = measured.providerReportedTokens;
+    }
     if (providerOptions) liveTurnOpts.providerOptions = providerOptions;
     // `meter` rides the LIVE turn only, never liveTurnOpts: a shadow-eval
     // replay re-runs those opts off the priced path, and its composition would
@@ -1914,25 +1911,28 @@ export class LocalAgentSession implements BackendHost {
         fullText,
       );
 
-      // Alternate Takes captured during this turn's think-mcts runs get the
-      // turn id they competed for, so a pick can credit the right turn. A turn
-      // that settles without an assistant message id — or that errored, whose
-      // captures competed for an answer that no longer exists — cannot be
-      // credited, so its captures are purged (mirroring the cf backend's
-      // purge-on-error) and the next turn never claims them as its own.
-      if (this.turnWorkMode !== 'plan' && assistantMsgId && !this.orch.acc.hadError) {
+      // Alternate Takes and steer branches were both captured mid-turn, before
+      // this id existed, and both are attributed to it — one decision, made by
+      // core (orchestrator/turn-lifecycle.ts `creditedTurnId`) rather than once
+      // here and again in the cf backend's onChatResponse.
+      const credited = creditedTurnId({
+        messageId: assistantMsgId,
+        completed: runError === null,
+        workMode: this.turnWorkMode,
+      });
+      if (credited !== null) {
         claimAlternateTakesForTurn(this.rt.storage.sql, {
-          turnId: assistantMsgId, sessionId: this.sessionId, startedAt,
+          turnId: credited, sessionId: this.sessionId, startedAt,
         });
       } else {
         purgeUnclaimedAlternateTakes(this.rt.storage.sql);
       }
 
       // Steer-as-Branch redirects launched during this turn settle against its
-      // answer — detached, so a slow branch never delays turn-end.
-      if (this.turnWorkMode !== 'plan') {
-        this.settlePendingBranches(this.orch.acc.hadError ? null : assistantMsgId, fullText);
-      }
+      // answer — detached, so a slow branch never delays turn-end. An
+      // uncreditable turn settles them against nothing, which is what they
+      // report; leaving them pending would strand the surface's live chips.
+      this.settlePendingBranches(credited, fullText);
 
       // The confirming turn is over: what the agent did with its free re-look
       // IS the gate's conversion number, and closeRun writes it.

@@ -89,7 +89,6 @@ const AGENTS_CODEMODE_MEMBERS = {
     label?: string;
     branches?: number;
     depth?: number;
-    models?: string[];
     budget_usd?: number;
     budget_tokens?: number;
     budget_label?: string;

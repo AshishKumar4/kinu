@@ -119,7 +119,7 @@ import {
   type CheckpointAvailability, type FileCheckpointListing,
   type FileRestorePlan, type FileRestoreResult,
   // Shared turn lifecycle
-  snapshotCompletedTurn,
+  snapshotCompletedTurn, creditedTurnId,
   // The session tree — `messages` as a projection of the SDK's message DAG
   reconcileSessionTree,
   type DynamicContext,
@@ -135,6 +135,7 @@ import {
   PeerHub, type PeerMessage, type ReceiveResult,
   // ── Read models: the folds a surface asks for, one implementation each ──
   getAgentStatus, getChatHistoryPage, getToolList, readLatestSearchTree, readSearchTree,
+  readSearchNodeDetail, type SearchNodeDetail,
   listForkRuns, readForkRun, type ForkRunSummary,
   readNodeTranscript, type NodeTranscriptView,
   readExplorationCanvas, type ExplorationCanvasRun,
@@ -877,24 +878,34 @@ export class OrchestratorAgent extends ActorAgent {
       responseMessages: await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true }),
     });
 
+    const msgId = result.message.id;
+    // Alternate Takes and steer branches were both captured mid-turn, before
+    // this id existed, and both are attributed to it — one decision, made by
+    // core (orchestrator/turn-lifecycle.ts `creditedTurnId`) rather than once
+    // here and again in the CLI's runTurn. Reached only on the completed path
+    // (the early return above owns the rest), so what it still decides here is
+    // an unattributable turn and a PLAN turn: a plan is not an answer the
+    // captures competed against.
+    const credited = creditedTurnId({
+      messageId: msgId ?? null,
+      completed: true,
+      workMode: turnMode,
+    });
+    if (credited !== null) {
+      claimAlternateTakesForTurn(this.boundSql, {
+        turnId: credited, sessionId: 'default', startedAt: this.acc.startedAt,
+      });
+    } else {
+      purgeUnclaimedAlternateTakes(this.boundSql);
+    }
+
     // Record which crafted tools this turn used, keyed by the assistant
     // message id, so async thumbs feedback (setTurnFeedback) can re-score
     // exactly those tools. Feedback is inherently asynchronous — it arrives
     // after the turn completes — so turn.feedback is null here; the outcome
     // review (engine.reviewTurn, dispatched when the NEXT user message
     // arrives) populates it from explicit thumbs or the follow-up classifier.
-    const msgId = result.message.id;
-    if (!msgId) {
-      // Completed but unattributable — without a message id the takes cannot
-      // credit this turn, and they must not leak into the next one's claim.
-      purgeUnclaimedAlternateTakes(this.boundSql);
-    }
     if (msgId) {
-      // Alternate Takes captured during this turn's think-mcts runs get the
-      // turn id they competed for, so a pick can credit the right turn.
-      claimAlternateTakesForTurn(this.boundSql, {
-        turnId: msgId, sessionId: 'default', startedAt: this.acc.startedAt,
-      });
       // The crafted tools this turn called, as the in-episode craft clock saw
       // them. Not "every tool name that is not built in": a crafted tool is
       // codemode-only and never appears as a tool-call name, so that filter
@@ -911,7 +922,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     // Steer-as-Branch redirects launched during this turn settle against its
     // answer — detached, so a slow branch never blocks the TurnQueue.
-    this.settlePendingBranches(msgId ?? null, assistantText);
+    this.settlePendingBranches(credited, assistantText);
 
     // Mission Inbox: a turn injected by the event drain carries the synthetic
     // turn id its events were bound to — reply their open email_thread
@@ -1813,62 +1824,11 @@ export class OrchestratorAgent extends ActorAgent {
     return this.mctsSearchStore.list(limit);
   }
 
-  @callable() async getMctsNodeDetail(nodeId: string) {
-    type Row = {
-      id: string; parent_id: string | null; depth: number; visits: number; value: number; status: string;
-      action: string; task: string; observation: string; code_used: string | null;
-      branch_agent_key: string | null; msg_id: string | null; created_at: number;
-    };
-    const readNode = (id: string): Row | null => this.sql<Row>`
-      SELECT id, parent_id, depth, visits, value, status, action, task, observation,
-             code_used, branch_agent_key, msg_id, created_at
-      FROM search_nodes WHERE id = ${id} LIMIT 1`[0] ?? null;
-    const row = readNode(nodeId);
-    if (!row) return null;
-
-    const summarize = (r: Row) => ({
-      id: r.id,
-      parentId: r.parent_id,
-      depth: r.depth,
-      visits: r.visits,
-      value: r.value,
-      status: r.status,
-      action: r.action,
-      createdAt: r.created_at,
-    });
-
-    const path = [];
-    const seen = new Set<string>();
-    let cursor: Row | null = row;
-    while (cursor && !seen.has(cursor.id)) {
-      seen.add(cursor.id);
-      path.unshift(summarize(cursor));
-      cursor = cursor.parent_id ? readNode(cursor.parent_id) : null;
-    }
-
-    const children = this.sql<Row>`
-      SELECT id, parent_id, depth, visits, value, status, action, task, observation,
-             code_used, branch_agent_key, msg_id, created_at
-      FROM search_nodes WHERE parent_id = ${nodeId}
-      ORDER BY value DESC, visits DESC, created_at`;
-
-    return {
-      id: row.id,
-      parentId: row.parent_id,
-      depth: row.depth,
-      visits: row.visits,
-      value: row.value,
-      status: row.status,
-      action: row.action,
-      task: row.task,
-      observation: row.observation,
-      codeUsed: row.code_used,
-      branchAgentKey: row.branch_agent_key,
-      msgId: row.msg_id,
-      createdAt: row.created_at,
-      path,
-      children: children.map(summarize),
-    };
+  /** One node, its ancestry and its children (core read-models/search-tree.ts).
+   *  The CLI serves the same projection over bun:sqlite, so `proteus inspect
+   *  mcts <id>` formats one shape however it reached it. */
+  @callable() async getMctsNodeDetail(nodeId: string): Promise<SearchNodeDetail | null> {
+    return readSearchNodeDetail(this.boundSql, nodeId);
   }
 
   // ── Evolution Changelog — the self-change digest + revert (core builder) ──

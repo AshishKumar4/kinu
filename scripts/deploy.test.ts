@@ -21,6 +21,7 @@ const REQUIRED_GATES = [
   "bun run check",
   "bun test scripts/deploy.test.ts",
   "bun run test",
+  "bun run test:mutation",
   "bun test packages/test-utils/",
   "bun test packages/cf-backend/",
   "bun run test:workerd",
