@@ -36,10 +36,10 @@ const STORAGE = 'MCTS/StorageIsolation.lean';
 const PAST_END = 99_999;
 
 /** A theorem the tree declares, in `ARBITRATION`, at the line the docs cite. */
-const LIVE = `accepted_respects_${'decorrelate'}`;
-const LIVE_LINE = 171;
-/** The rename the exploration spec's own cut list proposes. Nothing declares it. */
-const RENAMED = `accepted_respects_${'context'}`;
+const LIVE = `accepted_respects_${'context'}`;
+const LIVE_LINE = 200;
+/** The pre-rename spelling. The axis cutover replaced it, so nothing declares it. */
+const RENAMED = `accepted_respects_${'decorrelate'}`;
 /** A theorem that exists, but in `STORAGE` rather than in `ARBITRATION`. */
 const ELSEWHERE = `init_${'isolated'}`;
 
