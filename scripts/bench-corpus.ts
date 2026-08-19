@@ -1,12 +1,16 @@
 // Bench corpus loading. Reads tests/bench/tasks.jsonl + tests/bench/patches/,
-// validates every task at load, and hands back the dev/sealed partition.
+// validates every task at load, and hands back the dev/sealed partition. Also
+// answers whether the corpus still APPLIES, which is the one property nothing
+// about the files themselves can tell you.
 //
 // Check suites are named presets rather than per-task copies of the same two
 // commands: the corpus is data about DEFECTS, not a place to restate how this
 // repo is verified.
 import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import * as v from 'valibot';
+import { gitEnv } from '@proteus/test-utils';
+import { isBenchDefectPatch, trackedFiles } from './sources';
 import { partitionCorpus, promptLeaksFix } from '../packages/core/src/index';
 import type { BenchCheck, BenchCorpus, BenchTask, PartitionOptions } from '../packages/core/src/index';
 
@@ -106,4 +110,74 @@ export function loadBenchCorpus(repoRoot: string, opts: PartitionOptions = {}): 
 
   if (tasks.length === 0) throw new Error(`${path}: no tasks — an empty corpus proves nothing`);
   return { corpus: partitionCorpus(tasks, opts), patches, path };
+}
+
+/**
+ * The corpus's patch files, as repo-relative paths.
+ *
+ * ONE enumeration, `trackedFiles()` narrowed by a named predicate, rather than a
+ * `readdirSync` of its own: an untracked `.patch` in that directory is not part of
+ * the corpus, and a private walk could report on one while `tasks.jsonl` and every
+ * scored run ignore it. That is the measured-set-equals-governed-set rule, and
+ * `gate:set-equality` refuses the second walk.
+ */
+export function benchPatchFiles(): readonly string[] {
+  return trackedFiles().filter(isBenchDefectPatch);
+}
+
+/** A patch that no longer applies, and git's own account of why. */
+export interface StalePatch {
+  readonly id: string;
+  readonly path: string;
+  /** git apply's stderr, verbatim. The line and hunk it failed on is the whole
+   *  content of a re-anchor, so summarising it would throw away the fix. */
+  readonly detail: string;
+  /** True when no `tasks.jsonl` line names it — an orphan patch file, which the
+   *  corpus-loaded enumeration cannot see because it never loads it. */
+  readonly orphan: boolean;
+}
+
+/**
+ * Every seeded patch that no longer applies to the tree at `repoRoot`.
+ *
+ * A defect patch is data ABOUT source that keeps moving, so an ordinary refactor
+ * elsewhere silently invalidates a task and its `prepare` throws at attempt time
+ * — long after anyone would connect it to the refactor. 16 patches have been
+ * re-anchored or re-authored this way, each as a follow-up commit after the
+ * breaking change had already landed.
+ *
+ * BOTH ENUMERATIONS, because neither alone governs the corpus: `tasks.jsonl` names
+ * the patches a run will apply, and the directory holds the files that exist. A
+ * patch file with no task line applies to nothing and is measured by nobody, and
+ * that is exactly the state a partly-completed retirement leaves behind.
+ *
+ * The command is the SAME `git apply` the sandbox runs (bench-sandbox.ts), so
+ * nothing can pass here and fail there. `--check` never writes.
+ *
+ * `files` is handed in rather than walked here, and that is what keeps the gate's
+ * population and this function's population the same one: production callers pass
+ * `benchPatchFiles()`, which is `trackedFiles()` narrowed by a named predicate, so
+ * `gate:set-equality` can see the single enumeration. Tests pass a fixture's own
+ * list, which is the only way the red directions below can be driven at all —
+ * a fixture has no git index to be tracked in.
+ */
+export function stalePatches(repoRoot: string, files: readonly string[]): StalePatch[] {
+  const named = new Set(loadBenchCorpus(repoRoot).patches.keys());
+  const stale: StalePatch[] = [];
+  for (const relative of files) {
+    const path = join(repoRoot, relative);
+    const file = basename(relative);
+    const res = Bun.spawnSync(
+      ['git', 'apply', '--check', '--whitespace=nowarn', '-'],
+      // The tree at `repoRoot` IS the subject. GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE
+      // are stripped so nothing ambient can answer for a different repository:
+      // `git apply` resolves its paths against `cwd`, and a stray GIT_INDEX_FILE
+      // has already once made `git status` in this repo describe another tree.
+      { cwd: repoRoot, env: gitEnv(), stdin: Buffer.from(readFileSync(path)), stdout: 'ignore', stderr: 'pipe' },
+    );
+    if (res.exitCode === 0) continue;
+    const id = file.slice(0, -'.patch'.length);
+    stale.push({ id, path, detail: res.stderr.toString().trim(), orphan: !named.has(id) });
+  }
+  return stale;
 }

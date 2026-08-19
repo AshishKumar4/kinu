@@ -175,6 +175,7 @@ run_required_gate "Commit message hygiene" bun run gate:commit-message
 run_required_gate "Dependency install-script policy" bun run gate:install-scripts
 run_required_gate "Dependency advisory policy" bun run gate:dependency-advisories
 run_required_gate "Committed patches reproduce node_modules" bun run gate:patch-parity
+run_required_gate "Seeded bench defects still apply" bun run gate:bench-corpus
 run_required_gate "Local-device daemon suite" bun test packages/pc-agent/
 run_required_gate "Root end-to-end lifecycle suites" bun test ./tests/
 run_required_gate "Behavioural evals" bun run test:eval

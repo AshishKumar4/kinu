@@ -12,7 +12,7 @@ import {
   type AttemptOutcome, type BenchTask, type JsonValue,
 } from '../packages/core/src/index';
 import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, panelArm, panelProviders, parseArgv, parseCommon } from './bench';
-import { BENCH_SUITES, loadBenchCorpus } from './bench-corpus';
+import { BENCH_SUITES, benchPatchFiles, loadBenchCorpus, stalePatches } from './bench-corpus';
 import { loadLongHorizonCorpus, materializeLongHorizon } from './bench-longhorizon';
 import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox';
 import {
@@ -22,7 +22,7 @@ import {
   ARTIFACT_DIRNAME, assertDurableArtifactRoot, openRunRetention, readGitIdentity,
   readRetainedAttempts, resolveArtifactRoot,
 } from './bench-retention';
-import { gitEnv } from '@proteus/test-utils';
+
 import { parseAgentWorkerInput, parseWorkerOutput } from './bench-worker-protocol';
 import { buildPilotReport, validatePilotReport } from './bench-pilot';
 
@@ -708,27 +708,16 @@ describe('loadBenchCorpus', () => {
   // A defect patch is data ABOUT source that keeps moving. When a refactor
   // renames the code a patch anchors on — or deletes it — the patch stops
   // applying and its task silently becomes unrunnable: `prepare` throws at
-  // attempt time, long after anyone would connect it to the refactor. The
-  // check is the same `git apply` the sandbox runs, so nothing can pass here
-  // and fail there.
-  // gitEnv() strips GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE from the child. Measured,
-  // because the obvious claim is wrong: a bare `git apply --check` resolves its
-  // paths against `cwd` and ignores GIT_WORK_TREE, so these two sites were NOT
-  // reachable by the hook-exported GIT_DIR that mis-authored ten commits. The env
-  // is stripped anyway because the ban is a blanket one and the next git verb
-  // added here — anything touching the index — would obey it.
+  // attempt time, long after anyone would connect it to the refactor.
+  //
+  // ONE CENSUS, not two. This property was asserted twice in this file by two
+  // different enumerations — the corpus-loaded patches here and a directory walk
+  // further down — which meant either could pass while the other failed and
+  // neither named which direction it owned. `stalePatches` does both and labels
+  // the difference (`orphan`), and `gate:bench-corpus` holds the same census at
+  // COMMIT tier, so nothing can pass here and fail there either.
   test('every defect patch still applies to the tree it was seeded against', () => {
-    const { patches } = loadBenchCorpus(REPO_ROOT);
-    const stale = [...patches].filter(([, patch]) => Bun.spawnSync(
-      ['git', 'apply', '--check', '--whitespace=nowarn', '-'],
-      // The real checkout at `cwd` IS the subject here — the question is whether
-      // each patch still applies to the tree as it stands. `gitEnv()` names the
-      // env, which `no-ambient-git-in-tests` requires, and strips the three
-      // variables that would let an ambient GIT_DIR/GIT_WORK_TREE answer for a
-      // different repository than the one `cwd` names.
-      { cwd: REPO_ROOT, env: gitEnv(), stdin: Buffer.from(patch), stdout: 'ignore', stderr: 'ignore' },
-    ).exitCode !== 0).map(([id]) => id);
-    expect(stale).toEqual([]);
+    expect(stalePatches(REPO_ROOT, benchPatchFiles())).toEqual([]);
   });
 
   test('every dev task really is dev — the split is derived, not declared', () => {
@@ -905,22 +894,26 @@ describe('the long-horizon check scores what was actually materialized', () => {
 // A defect patch is a context diff against the source it was authored on, so an
 // ordinary refactor elsewhere silently invalidates a task — and a corpus that
 // no longer applies measures nothing. This caught the clade-selection refactor
-// breaking archive-novelty-bonus. It is deliberately a fast `git apply --check`
-// rather than a full `bench validate`: drift must fail on the same push that
-// causes it, not overnight.
+// breaking archive-novelty-bonus, and the census below caught the `--id` change
+// in this very branch breaking sealed-validate-flags-the-good-tasks.
+//
+// Applicability itself is now proved at COMMIT tier by `gate:bench-corpus`, over
+// the same `stalePatches` census — drift fails on the machine that caused it
+// rather than after a push. What is left here is the property that census makes
+// checkable and neither earlier enumeration named: a patch file the corpus does
+// not measure.
 describe('the task corpus stays applicable to HEAD', () => {
-  test('every defect patch applies cleanly to the current source', () => {
-    const repo = join(import.meta.dir, '..');
-    const dir = join(repo, 'tests', 'bench', 'patches');
-    const stale = readdirSync(dir)
+  // An orphan patch is reachable ONLY by the directory walk — the corpus-loaded
+  // enumeration never loads a file no `tasks.jsonl` line names — and it is the
+  // state a half-finished retirement leaves behind. `retired.jsonl`'s own test
+  // below asserts the inverse, where a patch file's ABSENCE is the claim.
+  test('no patch file sits outside the corpus that measures it', () => {
+    expect(stalePatches(REPO_ROOT, benchPatchFiles()).filter((p) => p.orphan)).toEqual([]);
+    const named = new Set(loadBenchCorpus(REPO_ROOT).patches.keys());
+    const files = readdirSync(join(REPO_ROOT, 'tests', 'bench', 'patches'))
       .filter((f) => f.endsWith('.patch'))
-      .filter((f) => Bun.spawnSync(
-        ['git', 'apply', '--check', join(dir, f)],
-        // Same as above: the tree at `cwd` is the subject, and the env is named
-        // so nothing ambient can answer for a different repository.
-        { cwd: repo, env: gitEnv(), stdout: 'pipe', stderr: 'pipe' },
-      ).exitCode !== 0);
-    expect(stale).toEqual([]);
+      .map((f) => f.slice(0, -'.patch'.length));
+    expect(files.filter((id) => !named.has(id))).toEqual([]);
   });
 
   // The only sanctioned answer to a patch that can never apply again: the code

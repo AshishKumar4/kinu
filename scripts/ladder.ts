@@ -295,16 +295,53 @@ export const LADDER: readonly Gate[] = [
       + 'list on the GREEN path, where it is actually needed.',
   },
   {
+    run: 'bun run gate:bench-corpus',
+    // PUSH, not commit, and the reason is the commit budget rather than the gate: at
+    // 15s with a stated purpose (a hook slow enough to tempt `--no-verify` is a design
+    // failure) the commit tier has 0.5s of honest headroom, and a stale patch is fully
+    // recoverable at push — which is still the author's machine, before the code leaves
+    // it. That is what 'drift must fail on the same push that causes it' asked for.
+    tier: 'push',
+    seconds: 0.31,
+    catches: 'a refactor that silently unruns a bench task. Each of the 159 seeded defects is a '
+      + 'context diff against source that keeps moving, so renaming or reflowing the code a '
+      + 'patch anchors on stops it applying — and `prepare` then throws OUTSIDE the '
+      + 'per-attempt catch, killing a whole compare/gain/validate run mid-flight with no '
+      + 'partial report. All 16 re-anchors to date landed as a follow-up commit AFTER the '
+      + 'change that caused them, because the only thing proving applicability was a pair of '
+      + 'near-duplicate assertions at the ci tier. At 0.31s over the whole corpus there was no '
+      + 'reason for that: the breaking change now fails on the machine that made it, while the '
+      + 'person who moved the code is still holding it. It caught the branch that introduced '
+      + 'it breaking sealed-validate-flags-the-good-tasks. Both enumerations, so an ORPHAN '
+      + 'patch file no tasks.jsonl line names is named as one rather than passing as a file '
+      + 'nobody loads.',
+    blind: 'whether a patch that applies still BREAKS anything — a re-anchored hunk can land '
+      + 'somewhere the defect no longer bites, and only `bun scripts/bench.ts validate --id '
+      + '<id>` (one task, 93s, no model) answers that. Also whether the defect is still the '
+      + 'one the task PROMPT describes, which no mechanical check can decide.',
+  },
+  {
     run: 'bun run gate:skip-ratchet',
-    tier: 'commit',
-    seconds: 0.3,
+    // MOVED commit -> push when its measured cost went 0.3s -> 2.9s. The 0.3s was
+    // never right — `bun test ./tests/` alone is 1.2s — and covering the vitest arm
+    // added a vite transform on top, so the commit tier's declared 15s budget was
+    // being met on an understated number. Push rather than a raised budget: the
+    // budget exists so nobody learns to bypass the hook, and a skip set is fully
+    // recoverable at push. Nothing it asserts was narrowed to fit.
+    tier: 'push',
+    seconds: 2.9,
     catches: 'a test that starts skipping, and a declared skip that has started running '
-      + 'without the lock being tightened. `bun test ./tests/` reports 23 skips and exits '
-      + '0, and that exit code is all anyone reads — so the skipped set is locked with a '
-      + 'written reason per entry. Locking the SET rather than a count is what makes it '
-      + 'work: a count of 23 cannot tell you a different 23 are skipping now. It also '
-      + 'asserts every target contributed a test, because `bun test tests` and `bun test '
-      + 'tests/` both match NOTHING here and only `./tests/` selects them.',
+      + 'without the lock being tightened. Credential-free the eval tier reports 60 skips '
+      + 'across its two runners and exits 0, and that exit code is all anyone reads — so the '
+      + 'skipped set is locked with a written reason per entry. Locking the SET rather than a '
+      + 'count is what makes it work: a count of 60 cannot tell you a different 60 are '
+      + 'skipping now. BOTH RUNNERS, which is what the 2.9s buys over the previous 0.3s: this '
+      + 'gate read `bun test ./tests/` alone while the tier also runs vitest over '
+      + '`tests/evals/**/*.eval.ts`, and that arm reported 36 tests of which 35 skipped with '
+      + 'nothing declaring any of them — the same false green, one runner over, inside the '
+      + 'tier built to prevent it. It also asserts every target contributed a test, and a '
+      + 'file satisfies only the NARROWEST target that claims it, so neither arm can answer '
+      + "for the other's.",
     blind: 'whether a running test asserts anything real. A skip is visible now; a '
       + 'vacuous pass is the next tier\'s problem.',
   },
@@ -556,20 +593,32 @@ export const LADDER: readonly Gate[] = [
       + '"0 of 0 searches were unranked" is the shape of a check that cannot fail. It '
       + 'also catches ITSELF running empty: with a target resolved, a run that reports '
       + 'no model call, or calls whose cost it cannot account for, now exits non-zero '
-      + 'rather than printing `TOTAL: 0 model call(s)` and passing. Measured live twice '
-      + 'against @cf/deepseek-ai/deepseek-v4-pro-0813: 2,747s / 48 calls / 602k input '
-      + 'tokens, and 3,228s / 64 calls / 967k, for the bun suites alone — the spread is '
-      + 'the model choosing how many steps to take, which is the thing under test, so '
-      + 'the larger is declared. Add roughly an hour for the vitest behaviour arm. '
-      + 'Credential-free it is 0.3s and everything skips, which is the path that '
-      + 'reproduces anywhere.',
+      + 'rather than printing `TOTAL: 0 model call(s)` and passing. BUN ARM ONLY, from the '
+      + 'two runs whose spend files still exist: 2,745s / 48 calls / 601,582 in, and '
+      + '3,843s / 49 calls / 600,843 in. The declared 3,228s / 64 calls / 967k came from '
+      + 'a THIRD run whose artifact does not survive, and 64 calls / 967k is atypical '
+      + 'against both that do — so it is kept as a CEILING, labelled as one, rather than '
+      + 'cited as a measurement anybody can open. The second surviving run also contains '
+      + '1,200s of tests being KILLED rather than working (a 900s exploration timeout and '
+      + 'a 300s MCTS one, both since fixed, the same steps completing in 437s and 456s '
+      + 'afterwards), so it overstates waste and understates work at once and no '
+      + 'post-fix cost should be derived from it. The VITEST behaviour arm '
+      + 'is 34 full agent episodes (17 corpus tasks x 2 repeats) and dominates the tier; '
+      + 'the tier now reports each arm\'s own seconds and tokens, which is what replaced '
+      + '"add roughly an hour for the vitest behaviour arm" — a sentence that stood in '
+      + 'for a measurement for as long as that arm produced no report at all. '
+      + 'Credential-free the whole tier is 3s across both arms, not the 0.3s once '
+      + 'declared, which timed only the bun half; everything skips, which is the path '
+      + 'that reproduces anywhere.',
     blind: 'the cf runtime, for everything except the Live Smoke hosted arm. The rest '
       + 'drive core and the CLI\'s local session in-process, so a defect that only '
       + 'appears in workerd — a rejected cross-DO RPC inside background work that only '
       + 'console.warns — is invisible to them by construction. That is the workerd '
       + 'layer\'s job. It is also blind to whether an assertion is STRONG: '
       + '`E2E Full Lifecycle` steps 4 and 5 assert only that the reply is non-empty, so '
-      + 'they pass on any prose the model returns.',
+      + 'they pass on any prose the model returns. And it cannot tell contention from a '
+      + 'deployment fault: two live tiers on one account produce the same '
+      + '`detached_work_failed / Request Timeout` signature as an outage.',
   },
   {
     run: 'bun test scripts/eval.test.ts',
@@ -585,8 +634,10 @@ export const LADDER: readonly Gate[] = [
     seconds: 5.2,
     catches: 'the bench harness guarantees — sandbox isolation, the seal, '
       + 'anti-self-scoring, budget enforcement, corpus well-formedness — plus the '
-      + 'assertion that every seeded defect patch still applies to the tree it was '
-      + 'measured against. 68 tests, no model, no credentials.',
+      + 'census `gate:bench-corpus` runs at commit tier proven able to FAIL, which the '
+      + 'committed assertion over a healthy corpus cannot do by itself: a patch whose '
+      + 'anchor moved, and a patch file no tasks.jsonl line names, each driven from a '
+      + 'fixture. No model, no credentials.',
     blind: 'anything about what the bench measures. It only guards the instrument, '
       + 'which is what four independent instrument bugs cost us to learn.',
   },

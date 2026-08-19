@@ -148,7 +148,16 @@ describe('Live Smoke — one real turn per backend', () => {
       console.log(`    hosted turn: ${String(elapsedMs)}ms, ${String(turn.steps)} step(s), `
         + `tools [${turn.toolCalls.map((c) => c.name).join(', ')}]`);
 
-      expect(turn.hadError).toBe(false);
+      // The turn's own state in the message, because `hadError` is a boolean and
+      // `Expected: false, Received: true` is the whole of what this reported when
+      // it fired for real — a failing deploy gate that named nothing. What the
+      // turn DOES carry (steps, tools, whatever text arrived before the error)
+      // separates "the worker refused the turn" from "the turn ran and broke
+      // mid-way", which are different repairs.
+      expect(turn.hadError, `hosted turn errored after ${String(turn.steps)} step(s), tools `
+        + `[${turn.toolCalls.map((c) => c.name).join(', ')}], text ${JSON.stringify(turn.text.slice(0, 300))} `
+        + `— 0 steps with no text is the worker declining the turn, which under a concurrent `
+        + `run against the same account is contention rather than a deployment fault`).toBe(false);
       expect(turn.steps).toBeGreaterThan(0);
       // The agentic loop reached a tool. A single-step answer means the model
       // replied from its own head and the tool surface was never exercised,
