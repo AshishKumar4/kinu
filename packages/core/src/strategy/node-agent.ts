@@ -55,6 +55,7 @@ import { readProposalCode } from '../execution/code-fence';
 import { nodeWorkspace, isolationDisclosure } from './node-workspace';
 import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 import { BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS } from './swarm';
+import { renderCauseChain, toProteusError } from '../obs/error';
 import type { Logger } from '../obs/index';
 import type { Usage } from '../usage';
 import type { BranchContext, SwarmSettle } from './swarm';
@@ -564,10 +565,20 @@ export async function runNodeLoop(
 /**
  * Run one node as an agent, and journal it.
  *
- * Never throws: the loop turns a provider failure into an `errored` report, and a
- * node that errored is a candidate the search could not measure rather than a run
- * that stops. The engine decides what an unmeasurable candidate means; this
- * function's contract is that it always returns one.
+ * THE LOOP's failures are reports: {@link runHeadInference} turns a provider error
+ * into an `errored` report, and a node that errored is a candidate the search could
+ * not measure rather than a run that stops.
+ *
+ * THE TRANSPORT's failures are not, and this function used to claim otherwise. A
+ * {@link NodeAgentDeps.host} is an RPC to another Durable Object; a rejection there
+ * arrives as a thrown error with no report behind it, and there is no report for the
+ * ledger to record. So this DOES throw for that case — wrapped, with the cause
+ * chained — and it journals the node terminal FIRST, because `insertSpawn` below has
+ * already published the row as `running` and `running` means exactly "spawned, and no
+ * report recorded". A throw past that write leaves a row that reads as a node still
+ * working for the life of the store, which is the absent-versus-broken confusion in
+ * its worst form: the engine counted one fewer candidate while the journal said the
+ * node was mid-flight.
  *
  * This function owns everything the loop must not: the home, the ledger, and the
  * decision of WHERE the loop runs. The loop owns the inference and nothing else.
@@ -631,9 +642,38 @@ export async function runNodeAgent(
     canPropose: input.arbitrate !== null,
   };
 
-  const run = deps.host === undefined
-    ? await runNodeLoop(spec, nodeLoopDeps(input, deps))
-    : await deps.host(spec, input.arbitrate);
+  // THE TERMINAL WRITE IS OWED BY WHOEVER OPENED THE ROW, and this is the only place
+  // that holds both the open row and the transport. Rethrown rather than turned into a
+  // report: the search counts a node it could not measure as one fewer candidate, and
+  // that is a different claim from a node that ran and reported nothing.
+  let run: NodeLoopResult;
+  try {
+    run = deps.host === undefined
+      ? await runNodeLoop(spec, nodeLoopDeps(input, deps))
+      : await deps.host(spec, input.arbitrate);
+  } catch (cause) {
+    const failure = toProteusError({
+      doing: `run node ${input.nodeId} of this search`, cause, otherwise: 'unavailable',
+    });
+    const chain = renderCauseChain(failure);
+    deps.journal.recordReport({
+      id: input.nodeId,
+      status: 'errored',
+      summary: `Node ${input.nodeId} produced no report: ${chain}`,
+      evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
+      toolCalls: [],
+      // ZERO AND `{}` ARE READINGS, not defaults. No report came back, so nothing here
+      // can say what the node spent; `recordReport` stores an absent usage field as
+      // NULL, which keeps "the provider never reported" distinguishable from "reported
+      // zero". Whatever steps the node did manage are already in `head_steps` under its
+      // own id, which is the progress record either way.
+      stepCount: 0,
+      usage: {},
+      wallClockMs: Date.now() - nodeBudget.spawnedAt,
+      errorMessage: chain,
+    });
+    throw failure;
+  }
 
   deps.journal.recordReport(run.report);
   deps.reportModelCall?.({ source: 'swarm', usage: run.report.usage });
