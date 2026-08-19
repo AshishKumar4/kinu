@@ -229,27 +229,42 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
   }, 60_000);
 });
 
-describe('spawn seam — spend the ledger sees only once the run returns', () => {
+describe('spawn seam — the run charges its own calls and the spawn charges no tokens', () => {
   const SearchReportSchema = v.object({
     report: v.object({ expansions: v.number(), tokens: v.nullable(v.number()) }),
   });
 
-  test("a search's whole reported total is billed here, as one lump", async () => {
-    // A search expands through its OWN model rather than the governed `rt.llm`
-    // seam, so nothing below this point has debited a token. The lump is not a
-    // convenience: it is the only place the spend is visible.
+  test("a search's tokens land on the ledger exactly once, not once per accounting path", async () => {
+    // THE OVER-CHARGE THIS ASSERTS AGAINST. A search charges the ledger through its
+    // own port, per model call, as the calls happen; the spawn seam then records the
+    // spawn. Both paths see the SAME tokens — `report.tokens` is the sum of the calls
+    // the port already debited — so a seam that also billed the report would double
+    // every search. The failure is silent by construction: a run billed twice looks
+    // exactly like a cap that is working, which is why the total is asserted against
+    // the provider's own arithmetic rather than against the ledger's own claim.
     const governor = newGovernor();
     governor.declare('nightly', {});
     governor.activate(['nightly']);
 
     const deps = searchableDeps({ budget: governor });
-    await sandbox(deps).swarm!({ task: 'explore', ...TWO_BRANCHES });
+    const out = v.parse(
+      SearchReportSchema,
+      await sandbox(deps).swarm!({ task: 'explore', ...TWO_BRANCHES }),
+    );
+
+    // The denominators first: two nodes really ran and really reported tokens, so a
+    // ledger of zero cannot pass this as "nothing was over-charged".
+    expect(out.report.expansions).toBe(2);
+    expect(out.report.tokens).toBe(RUN_TOKENS);
+    expect(RUN_TOKENS).toBeGreaterThan(0);
 
     const [mission] = governor.snapshot('nightly');
     expect(mission?.spent.tokens).toBe(RUN_TOKENS);
-    // Charged as one spawn and no model calls: the calls happened where this
-    // ledger could not see them.
-    expect(mission?.calls).toBe(0);
+    expect(mission?.spent.tokens).not.toBe(2 * RUN_TOKENS);
+    // ONE CALL PER STEP, and the count is what makes the arithmetic checkable: the
+    // ledger holds two calls of eight tokens rather than one opaque total, so a reader
+    // can see WHICH calls the number is made of.
+    expect(mission?.calls).toBe(2);
     expect(mission?.spawns).toBe(1);
   }, 60_000);
 
@@ -269,6 +284,32 @@ describe('spawn seam — spend the ledger sees only once the run returns', () =>
 
     const [mission] = governor.snapshot('nightly');
     expect(mission?.spent.tokens).toBe(0);
+    expect(mission?.spawns).toBe(1);
+  }, 60_000);
+
+  test('a TOOLLESS node charges its one call too, so removing the lump under-charges nothing', async () => {
+    // THE MIRROR DEFECT. A toolless node has no loop to debit between steps: its whole
+    // spend is one `generateText`, made from the search's own model rather than the
+    // governed `rt.llm`. Charging the run through a per-call port and NOT charging that
+    // call would make a thought search free — the under-charge on the other side of the
+    // double bill, and just as silent.
+    const governor = newGovernor();
+    governor.declare('nightly', {});
+    governor.activate(['nightly']);
+
+    const deps = searchableDeps({ budget: governor });
+    const out = v.parse(SearchReportSchema, await sandbox(deps).swarm!({
+      task: 'explore', preset: 'custom', from: 'ideate', label: 'toolless',
+      config: { unit: { kind: 'thought' } }, branches: 2, depth: 1,
+    }));
+
+    // The denominator: two toolless nodes really answered and really reported tokens.
+    expect(out.report.expansions).toBe(2);
+    expect(out.report.tokens).toBe(RUN_TOKENS);
+
+    const [mission] = governor.snapshot('nightly');
+    expect(mission?.spent.tokens).toBe(RUN_TOKENS);
+    expect(mission?.calls).toBe(2);
     expect(mission?.spawns).toBe(1);
   }, 60_000);
 });

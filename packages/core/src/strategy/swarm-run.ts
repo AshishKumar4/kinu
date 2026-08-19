@@ -141,7 +141,7 @@ import { SwarmBudget, type BranchDecision, type BranchGrant } from './swarm-budg
 import { sha256Hex } from '../safety/argument-digest';
 import type { NodeWorkspaceProvisioner } from './node-workspace';
 import type { SerializedMessage } from '../heads/types';
-import type { MissionScope } from '../mission-budget';
+import { missionMeter, type MissionScope } from '../mission-budget';
 import type { WebSearchProvider } from '../web/index';
 import { resolveVerifier, type ResolvedVerifier } from './verifier-registry';
 import {
@@ -236,7 +236,17 @@ export interface SwarmRunDeps {
    * five minutes. What a caller overrides is the MAGNITUDE.
    */
   readonly stallTimeoutMs?: number;
-  /** The mission ledger an agent node's steps charge, when the run has one. */
+  /**
+   * The mission ledger this run charges, per model call, as the calls happen.
+   *
+   * EVERY MODEL CALL THIS RUN MAKES, not some of them: an agent swarm node's steps
+   * debit inside its own loop, and a toolless node's one call debits where it returns.
+   * The caller that spawned the search must therefore charge NO lump for it afterwards
+   * — the two would be the same tokens twice, and a silent double bill is
+   * indistinguishable from the cap working.
+   *
+   * Absent = unbudgeted, the default, and then nothing here queries or writes.
+   */
   readonly mission?: MissionScope;
   /**
    * The origin agent's own conversation, which is what a swarm's ROOT starts from.
@@ -1797,6 +1807,25 @@ export async function runSwarm(
 
   let lost = 0;
   let aborted = false;
+  /**
+   * THE MISSION LEDGER, asked between levels and charged per toolless call.
+   *
+   * An AGENT swarm node needs neither half here: its loop is `runHeadInference`, which
+   * guards before its first call, between its steps and between its turns, and debits
+   * each step off the provider's own report — so wiring {@link SwarmRunDeps.mission}
+   * into `nodeDeps` above is the whole of that path. A THOUGHT node has no loop to put
+   * either question in, and this is where both go.
+   *
+   * THE LEVEL IS GUARDED, NEVER THE CHILD, and that is the same choice `mcts/engine.ts`
+   * makes for the same reason: a child that refused its own call would return empty
+   * text, be measured at whatever the instrument gives an empty candidate, and have
+   * that ranked as an opinion about the search space. Stopping at the level settles the
+   * run on what it actually explored.
+   */
+  const mission = missionMeter(deps.mission);
+  /** True when the ledger, not the expansion budget, ended the run — so `stop` says
+   *  `budget` rather than claiming the space was exhausted. */
+  let missionSpent = false;
 
   /**
    * Expand ONE child: the generation half of an expansion, for a wave's sibling and for
@@ -1849,6 +1878,12 @@ export async function runSwarm(
         prompt: prompt.user,
         abortSignal: deps.signal,
       });
+      const spent = normalizeUsage(result.usage);
+      // CHARGED HERE, where the call returned, so the level guard below reads a
+      // current ledger. A toolless node's whole spend is this one call — the same
+      // quantity `Expansion.usage` carries down to the settle report — and the caller
+      // that spawned this search must therefore charge no lump for it afterwards.
+      await mission.charge(spent);
       const answer = readAnswer(result.text);
       const code = readProposalCode(answer.text, languages);
       return {
@@ -1863,7 +1898,7 @@ export async function runSwarm(
         granted: null,
         conclusion: null,
         transcript: [],
-        usage: normalizeUsage(result.usage),
+        usage: spent,
         modelId: result.response.modelId,
       };
     }
@@ -2258,6 +2293,14 @@ export async function runSwarm(
   while (budget.remaining > 0 || reservedChildren()) {
     if (deps.signal?.aborted) {
       aborted = true;
+      break;
+    }
+    // THE CAP, ENFORCED MID-RUN. A declared mission budget that ran out stops the next
+    // level from opening, so the money left is what the caller still has rather than
+    // what a lump after the run reports it no longer had. A run nobody labelled asks
+    // nothing and reaches no storage.
+    if (await mission.outOfBudget()) {
+      missionSpent = true;
       break;
     }
     // A PAID GRANT IS EXPANDED FIRST, and that is not a bypass of the scheduler: the
@@ -2898,10 +2941,13 @@ export async function runSwarm(
     // Why the run ended, from what the loop observed rather than from the count. A
     // budget spent with nothing left to select is a SETTLED search; a budget spent
     // with a frontier still open is a truncated one, and a search narrower than its
-    // configured width is truncated too even if it stopped for another reason.
+    // configured width is truncated too even if it stopped for another reason. A
+    // mission cap that ran out is `budget` with expansions still unspent — the one
+    // case where the two budgets disagree, and the ledger's is the one that stopped
+    // the run.
     stop: aborted
       ? 'aborted'
-      : lost > 0 || (budget.remaining <= 0 && selectFrontierNode(sql, {
+      : missionSpent || lost > 0 || (budget.remaining <= 0 && selectFrontierNode(sql, {
         rootId, policy, maxDepth,
         explorationWeight: resolved.config.explorationWeight
           ?? DEFAULT_CONFIG.mcts.explorationWeight,
