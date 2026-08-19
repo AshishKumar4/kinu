@@ -12,17 +12,18 @@
  *
  * It is a PROJECTION, not a second implementation: every member funnels into
  * `dispatchAgentsAction` over the very same `AgentsToolDeps` the top-level
- * `agents` tool holds, so fork depth, budgets, roster addressing and the sole
- * sub-agent path are shared, not mirrored. Which members exist is decided by
+ * `agents` tool holds, so delegation depth, budgets, roster addressing and the
+ * sole sub-agent path are shared, not mirrored. Which members exist is decided by
  * `agentsActionsFor(deps)` — the identical structural gate the tool's action
  * enum and the prompt's Delegation ladder read. An actor with no team deps has
  * no `agents.hire` in its sandbox because the member is never created.
  *
- * Deliberately NOT projected: the workspace-clone `forkAgent` RPC (fork the
- * whole agent DO at a message — the UI's fork-chat). It rejects while a turn is
- * in flight and cloning the actor mid-script is not delegation.
+ * Deliberately NOT projected: the workspace-clone `forkAgent` RPC (clone the
+ * whole agent DO at a message — the UI's fork-chat, a workspace operation and
+ * not a delegation). It rejects while a turn is in flight and cloning the actor
+ * mid-script is not delegation either.
  *
- * One honest limitation, stated in the fork docstring the model reads: a fork
+ * One honest limitation, stated in the swarm docstring the model reads: a search
  * started in here rides the enclosing `execute_tools` call, and that job kind
  * declines background resume (side effects can't be re-run). Quick orchestration
  * belongs in the sandbox; one long expensive search that must survive an
@@ -46,44 +47,16 @@ import {
  * The sandbox-visible declaration of each action, one block per member.
  *
  * Gating is per ACTION, not per field: the only deps shapes any backend wires
- * are `{fork}` (subordinates, CLI local sessions, forks-of-forks) and
- * `{fork, team, peers}` (the workspace orchestrator), so a field that would
- * need finer gating cannot occur. If one ever did, `dispatchAgentsAction`
- * already answers it with a sharp error naming the missing transport.
+ * are `{fork}` (subordinates, CLI local sessions, nodes) and `{fork, team,
+ * peers}` (the workspace orchestrator), so a field that would need finer gating
+ * cannot occur. If one ever did, `dispatchAgentsAction` already answers it with
+ * a sharp error naming the missing transport.
  *
  * Because these are literals rather than deps-derived text, the same action set
  * renders byte-identically on every backend — the sandbox contract does not
  * change shape depending on where the agent happens to be running.
  */
 const AGENTS_CODEMODE_MEMBERS = {
-  fork: `  /** Spawn 2-6 ephemeral forks of yourself on this same workspace and merge
-   *  them into one answer. The briefs in \`forks\` are REQUIRED: each becomes a
-   *  real agent with its own multi-step tool loop (execute_tools/run/file/web,
-   *  narrowed by its own allowedTools) over this workspace, and what they found
-   *  merges back. Nothing infers the angles for you — if you want the search to
-   *  write its own competing candidates from the task alone and measure them,
-   *  that is \`agents.swarm\`.
-   *  NOT resumable from here: a fork started inside execute_tools rides this
-   *  sandbox call, and execute_tools declines background resume because its
-   *  side effects cannot be safely re-run. Script quick fan-out here; call the
-   *  top-level \`agents\` tool for one long search that must survive an
-   *  eviction, which resumes from its search checkpoint. */
-  fork(input: {
-    task: string;
-    forks: Array<{ task: string; rationale: string; model?: string; allowedTools?: string[] }>;
-    merge_strategy?: "synthesize" | "best_of" | "consensus";
-    budget?: number;
-    wall_clock_ms?: number;
-    options?: object;
-    /** Cumulative host-enforced spend cap for this fork and everything it
-     *  spawns, nested under whatever mission this run already spends against.
-     *  Omit for no cap. Name it with budget_label to share one cumulative
-     *  ledger across several fork calls in the same script. */
-    budget_usd?: number;
-    budget_tokens?: number;
-    budget_label?: string;
-  }): Promise<{ strategy: string; text: string; score: number; trace: unknown; cost: unknown; mission_budget?: unknown } | { error: string; reason?: "bad_input" }>;`,
-
   swarm: `  /** Run a configured search whose candidates are MEASURED rather than judged.
    *  You name the shape with \`preset\` and what counts with \`objective\`, and
    *  every candidate is scored by your own verifier running in this workspace.
@@ -100,7 +73,12 @@ const AGENTS_CODEMODE_MEMBERS = {
    *  measurement kept and no score, because the bound may be what is wrong.
    *  It refuses rather than approximates: an illegal composition names the axis
    *  to change, and a shape no engine here runs faithfully says so instead of
-   *  returning a number from a different mechanism. */
+   *  returning a number from a different mechanism.
+   *  NOT resumable from here: a search started inside execute_tools rides this
+   *  sandbox call, and execute_tools declines background resume because its
+   *  side effects cannot be safely re-run. Script quick fan-out here; call the
+   *  top-level \`agents\` tool for one long search that must survive an
+   *  eviction, which resumes from its search checkpoint. */
   swarm(input: {
     preset: "ideate" | "research" | "audit" | "redteam" | "optimise" | "custom";
     task: string;
@@ -161,8 +139,7 @@ const AGENTS_CODEMODE_MEMBERS = {
 
 /** One-line member descriptions for the provider record. */
 const AGENTS_CODEMODE_DESCRIPTIONS = {
-  fork: 'Spawn 2-6 ephemeral forks of yourself that settle into one answer. Not resumable from inside the sandbox.',
-  swarm: 'Run a configured search whose candidates are measured by your own verifier rather than judged: name the shape with preset and what counts with objective. Refuses an illegal composition by naming the axis, and a shape no engine runs faithfully rather than substituting one.',
+  swarm: 'Run a configured search over ephemeral nodes of yourself whose candidates are measured by your own verifier rather than judged: name the shape with preset and what counts with objective. Refuses an illegal composition by naming the axis, and a shape no engine runs faithfully rather than substituting one. Not resumable from inside the sandbox.',
   hire: 'Create a persistent named helper that starts with a blank context: a subordinate here, or scope:"workspace" for a specialist workspace of its own.',
   ask: 'Hand an agent work and expect the answer back (a subordinate reports later as an event; a peer reply is awaited).',
   send: 'Fire-and-forget message to any agent by name.',
@@ -185,7 +162,7 @@ function renderTypes(actions: readonly AgentsToolAction[]): string {
 /**
  * Build the codemode provider that exposes `agents.*` to the sandbox.
  *
- * `deps` is a thunk, read per call: the fork substrate binds the actor's
+ * `deps` is a thunk, read per call: the exploration substrate binds the actor's
  * CURRENT model and MCTS session, and the provider outlives them (it is built
  * once with the sandbox tool). Its ACTION set is read once, at construction,
  * because which transports an actor wires is structural and fixed for its

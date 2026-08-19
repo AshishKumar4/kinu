@@ -45,7 +45,7 @@ describe('delegationFeatures', () => {
       toolCalls: [], steps: 41, durationMs: 372_000,
     }));
     expect(line).toBe(
-      'Turn process: 41 sequential steps, 0 hiring, 0 fork, 0 messaging, 0 execute_tools, 6.2min wall clock',
+      'Turn process: 41 sequential steps, 0 hiring, 0 exploration, 0 messaging, 0 execute_tools, 6.2min wall clock',
     );
   });
 

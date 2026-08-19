@@ -125,30 +125,22 @@ export interface BuiltinToolSpec {
 }
 
 // ── Delegation doctrine (single source) ─────────────────────────────────────
-// The `agents` tool is ONE ladder whose rungs differ on TWO axes at once:
-// lifetime and CONTEXT. fork = an ephemeral copy of the caller that merges back
-// this turn and runs on the caller's own recent conversation; hire = a
-// persistent subordinate that outlives the turn and starts from a blank
+// The `agents` tool is ONE ladder with TWO rungs, and they differ on lifetime
+// and on who decides: swarm = an ephemeral search whose candidates are MEASURED
+// against a number the caller declares and which settles into this turn; hire =
+// a persistent subordinate that outlives the turn and starts from a blank
 // context; ask/send = talking to what already exists. The tool docstring
 // renders these rungs verbatim and the prompt's Delegation section indexes
 // them, so editing them here is the only place delegation doctrine changes.
 //
-// TREE SEARCH IS `swarm`, AND IT HAS EXACTLY ONE SPELLING. `fork` briefly carried
-// a second one as `settle:'mcts'`, a judged tree reachable from inside the fork
-// rung. It is gone: a configured search of any depth is `action:'swarm'`, which
-// scores every node against the caller's own `objective` through the verifier
-// registry. `fork` has one settlement, a merge, and requires the briefs it runs.
-//
-// WHY THERE ARE STILL THREE RUNGS AND NOT TWO, since `swarm` also spawns several
-// things and picks between them. A swarm node is GRADED, and you cannot grade a
-// node on what it changed when every node changed the same tree: the nodes share
-// one workspace, and `HEAD_FILE_CHANGE_PROVENANCE` already records that
-// shell-command changes are unattributed. So a swarm node is a toolless candidate
-// measured as a whole, while a fork is a real agent holding HEAD_BUILTIN_TOOLS
-// whose findings are SYNTHESISED rather than scored. That is the one capability
-// `swarm` provably cannot host, it is blocked by per-node workspace isolation and
-// by nothing else (EXPLORATION-SPEC §8.6), and when that isolation exists `fork`
-// becomes a swarm configuration and this rung goes.
+// TREE SEARCH IS `swarm`, AND IT HAS EXACTLY ONE SPELLING. Every configured
+// search of any depth is `action:'swarm'`, whose candidates are scored against
+// the caller's own `objective` through the verifier registry. A node is a real
+// tool-using agent holding the same builtins a head does, and whether it starts
+// from the caller's conversation is the `context` axis (strategy/swarm.ts,
+// SWARM_CONTEXTS) rather than a rung of its own — which is what makes a second
+// spelling unnecessary rather than merely discouraged. Nothing on this surface
+// spawns an ephemeral helper whose result is not measured.
 //
 // NAMING, settled 2026-08-17 so it is not re-opened: the persistent rung is
 // `hire`, not `staff` and not `spawn`.
@@ -174,24 +166,25 @@ export interface BuiltinToolSpec {
  *  actually gets is decided by the deps its backend wires — see
  *  agentsActionsFor in tools/agents-tool.ts. */
 export const AGENTS_TOOL_ACTIONS = [
-  'fork', 'swarm', 'hire', 'ask', 'send', 'reply', 'list', 'dismiss',
+  'swarm', 'hire', 'ask', 'send', 'reply', 'list', 'dismiss',
 ] as const;
 
 export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 
 /** The one question the ladder asks. Prefixes the doctrine in both surfaces. */
 export const DELEGATION_FRAME =
-  'One delegation ladder. Its two spawn rungs differ on two axes at once: how long the helper lives, and what context it starts from — and beside them sits one rung whose nodes are not helpers at all, but candidate answers measured against a number you declare.';
+  'One delegation ladder, two rungs, and they differ on lifetime and on who decides: a search is ephemeral and its candidates are MEASURED against a number you declare, settling into this turn; a subordinate is persistent, starts from a blank context, and answers in its own words.';
 
 /**
- * The CONTEXT axis, one entry per spawn rung — the half of the ladder that
- * decides which rung a task wants, and the half neither rung used to state.
+ * The CONTEXT axis, one entry per rung — the half of the ladder that decides
+ * which rung a task wants, and the half neither rung used to state.
  *
  * Keyed by ACTION rather than written as one paragraph covering both, because
  * the two rungs need OPPOSITE instructions and a rule the model has to apply
  * itself gets applied to the wrong one. "You did not see this conversation, so
- * restate everything" is true of a hire and FALSE of a fork; "build on what you
- * already know" is true of a fork and false of a hire. The shape is the deepseek
+ * restate everything" is true of a hire and FALSE of a search node running under
+ * `context:'fork'`; "build on what you already know" is true of that node and
+ * false of a hire. The shape is the deepseek
  * harness's (deepseek-ai/deepseek-harness 0.1.0-rc.7, tool-subagent/src/index.ts
  * :213-243), where a single provider-declared `inheritsParentContext` boolean
  * selects between two tool descriptions AND two prompt-parameter descriptions,
@@ -199,28 +192,30 @@ export const DELEGATION_FRAME =
  * "would be false for a fork".
  *
  * `rung` goes into the rung's doctrine (selection: which helper do I want).
- * `brief` goes onto the field that carries the helper's instructions — a fork's
- * `forks[].task`, a hire's `mission` — because that is where the fact changes
- * what gets TYPED, and a field description is read at the moment it is filled.
- * Both halves read from here so the two surfaces cannot drift into disagreeing
- * about what a helper can see, which is exactly what they did: `forks[].task`
- * said a fork "sees this workspace but not this conversation" three lines under
- * a comment stating it inherits the parent's completed turns.
+ * `brief` goes onto the field that carries the helper's instructions — a swarm's
+ * `task`, a hire's `mission` — because that is where the fact changes what gets
+ * TYPED, and a field description is read at the moment it is filled. Both halves
+ * read from here so the two surfaces cannot drift into disagreeing about what a
+ * helper can see, which is exactly what they did once: a brief field said its
+ * helper "sees this workspace but not this conversation" three lines under a
+ * comment stating it inherits the parent's completed turns.
  *
- * Measured, not asserted. A fork is spawned with up to INHERITED_CONTEXT_CAP =
- * 50 of the parent's stored messages as its own conversation
- * (orchestrator/heads-support.ts; cf-backend actor-agent.ts readInheritedContext).
- * A hire gets renderSubordinateInheritedContext's bounded digest — 8 messages,
- * 9600 chars, per-message cuts disclosed (subordinates/support.ts) — plus its
- * role and mission. So the difference is real and it is a RATIO, not zero
- * against everything: "it cannot see anything you saw" would be false too.
+ * Measured, not asserted. What a search node starts from is the `context` axis
+ * (strategy/swarm.ts, SWARM_CONTEXTS): `fork` hands it the parent's conversation
+ * VERBATIM as one cacheable prefix per branch point, `fresh` hands it the
+ * engine-authored seed and its focus and nothing else, and each preset takes the
+ * value its search needs. A hire gets renderSubordinateInheritedContext's
+ * bounded digest — 8 messages, 9600 chars, per-message cuts disclosed
+ * (subordinates/support.ts) — plus its role and mission. So the difference is
+ * real and it is a RATIO, not zero against everything: "it cannot see anything
+ * you saw" would be false too.
  */
 export const DELEGATION_INHERITANCE = {
-  fork: {
+  swarm: {
     rung:
-      'Each fork is you, and it starts from YOUR context: your recent turns arrive as its conversation, so it already knows what you know and the brief only has to say which angle it takes.',
+      'What a node starts from is the search\'s own `context`: under `fork` your recent turns arrive as its conversation, so it already knows what you know and the task only has to say what is being measured; under `fresh` it starts from the task and the objective alone, which is what you want when your own framing is the thing in question. Each preset takes the value its search needs.',
     brief:
-      'It starts from your context — your recent turns arrive as its conversation — so build on what you already established rather than restating it; what it cannot see is this turn as it continues and what its siblings are doing.',
+      'State the goal, the constraints that hold for every candidate, and any interface they must agree on — once, here, rather than per candidate; and remember that whether a node also arrives holding your recent turns is the search\'s `context`, so do not lean on shared ground the preset may not grant.',
   },
   hire: {
     rung:
@@ -230,46 +225,36 @@ export const DELEGATION_INHERITANCE = {
   },
 } as const;
 
-/** The spawn rungs of the delegation ladder, plus the measured-search rung beside
- *  them. Rendered verbatim into the `agents` schema description, which every family
- *  reads for SELECTION; the prompt's Delegation section indexes the same rungs in its
- *  own words and carries only the operational doctrine no schema does (prompt.ts). */
+/** The rungs of the delegation ladder. Rendered verbatim into the `agents` schema
+ *  description, which every family reads for SELECTION; the prompt's Delegation
+ *  section indexes the same rungs in its own words and carries only the operational
+ *  doctrine no schema does (prompt.ts). */
 export const DELEGATION_RUNGS = {
-  fork:
-    // Opens on the payoff in the CALLER'S currency, which nothing in the
-    // delegation surface said before: the section's only use of "cheapest"
-    // argued for NOT reaching for the ladder. Literally true of a head — it
-    // runs on its own inherited window and only its settled result comes back
-    // into this one (heads/controller.ts) — so it is a fact about the mechanism
-    // and not a sales line, which is the one idea worth taking from the
-    // deepseek harness's `so it does not consume this conversation's context`.
-    'Fork (action=fork) to spend someone else\'s context instead of your own — each fork reads, searches and runs in its own window and hands you back only the answer. Two triggers. Breadth: work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
-    'Doubt: your first attempt failed, two approaches are both plausible, the step ahead is expensive to undo, or you cannot check your own output — being unsure is itself a reason to fork. ' +
-    // The CONTEXT axis reads from DELEGATION_INHERITANCE.fork above, which the
-    // fork BRIEF field also composes, so the rung and the field cannot disagree
-    // about what a fork can see.
-    `${DELEGATION_INHERITANCE.fork.rung} It runs on the same workspace, files and sandbox, its own multi-step tool loop concurrently (web search/fetch, exec), then merges back and disappears; takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you. ` +
-    // The payoff-before-limitation ORDER is deliberate and preserved: opening
-    // on deterrents ("only… do NOT…") drew 0/10 uses in a shell corpus.
-    //
-    // The two-settles sentence that used to close this rung is gone with
-    // `settle:'mcts'`. What replaces it is the fork/swarm boundary, because that
-    // is the choice a caller actually faces now, and it is a fact about the
-    // mechanism rather than a preference: a fork's findings are SYNTHESISED by a
-    // merge model, a swarm's candidates are MEASURED by the caller's verifier.
-    'You supply the angles: `forks` is required, 2-6 briefs, and nothing infers them for you — a fork runs the brief it was given and their findings merge back into this turn. ' +
-    'If instead you want the search to write its own competing approaches and RANK them, that is action=swarm, which measures candidates against an `objective` you declare. The line between them is who decides: a merge reconciles what the forks report, a swarm scores what its candidates produced.',
-  // The third rung, and it is NOT a third kind of helper — which is the one thing a
-  // reader has to get right, because "spawn several and pick the best" describes a
-  // fork too. What differs is WHO DECIDES: a fork's findings are SYNTHESISED by a
-  // merge model, and a swarm's candidates are SCORED by the caller's own verifier
-  // running in the workspace. That is why it needs an `objective` and a fork does
-  // not, and why its refusals are about measurement rather than about briefs.
+  // Opens on the payoff in the CALLER'S currency, which nothing in the delegation
+  // surface said before: the section's only use of "cheapest" argued for NOT
+  // reaching for the ladder. Literally true of a node — it runs on its own window
+  // and only its settled report comes back into this one (strategy/node-agent.ts) —
+  // so it is a fact about the mechanism and not a sales line, which is the one idea
+  // worth taking from the deepseek harness's `so it does not consume this
+  // conversation's context`.
+  //
+  // The payoff-before-limitation ORDER is deliberate and preserved: opening on
+  // deterrents ("only… do NOT…") drew 0/10 uses in a shell corpus.
   swarm:
-    'Run a configured search (action=swarm) when the answer can be MEASURED rather than judged: you name the shape with `preset` and what counts with `objective`, and every candidate is scored by your own verifier running in this workspace — not by a model\'s opinion of it. '
+    'Run a search (action=swarm) to spend someone else\'s context instead of your own — each node reads, searches and runs its own multi-step tool loop in its own window over this same workspace, and hands you back only what it found. Two triggers. Breadth: work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. '
+    + 'Doubt: your first attempt failed, two approaches are both plausible, the step ahead is expensive to undo, or you cannot check your own output — being unsure is itself a reason to search. '
+    // The CONTEXT axis reads from DELEGATION_INHERITANCE.swarm above, which the
+    // `task` field also composes, so the rung and the field cannot disagree about
+    // what a node can see.
+    + `${DELEGATION_INHERITANCE.swarm.rung} `
+    // What separates this from every other way of spawning several things and
+    // picking one: WHO DECIDES. A judge has an opinion; a verifier runs.
+    + 'You name the shape with `preset` and what counts with `objective`, and every candidate is scored by your own verifier running in this workspace — not by a model\'s opinion of it. '
     + 'preset=optimise beats a number you can measure (a cost, a runtime, a count) and requires `objective`; preset=ideate is deliberately flat and takes none, so it returns a set of distinct approaches with no ranking; research/audit/redteam bin findings into an archive under a coverage `key`. '
     + '`objective` states what is measured, in what unit, which direction is better, the target that counts as done, and `verify` as {kind, spec} naming a registered instrument — a verifier is CODE that runs, so a metric nothing can execute is not an objective. '
     + 'A floor is optional and is a PROOF: declare one and a candidate that measures past it is reported as a breach with the measurement kept, never as a score, because the bound may be what is wrong. '
+    // The delivery contract, stated because it changes how a caller plans the turn.
+    + 'It takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you. '
     + 'It refuses rather than approximates: an illegal composition comes back naming the axis and what to change, and a shape no engine here can run faithfully says so instead of returning a number from a different mechanism.',
   hire:
     'Hire a subordinate (action=hire) whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
@@ -605,34 +590,35 @@ export const BUILTIN_TOOL_SPECS = {
   agents: {
     name: 'agents',
     summary:
-      "Spawn and talk to helper agents — ephemeral forks of yourself, persistent subordinates in this workspace, and the owner's other workspace agents — or run a configured search whose candidates are measured against an objective you declare.",
+      "Spawn and talk to helper agents — a measured search over ephemeral nodes of your own, persistent subordinates in this workspace, and the owner's other workspace agents.",
     whenToUse:
-      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.fork} ${DELEGATION_RUNGS.swarm} ${DELEGATION_RUNGS.hire} ${DELEGATION_CONVERSE}`,
+      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.swarm} ${DELEGATION_RUNGS.hire} ${DELEGATION_CONVERSE}`,
     // The same three facts as positives. This field's LABEL still frames them
     // ("Avoid when: …", renderToolSchemaDescription below), which is the honest
     // place for the framing; the sentences inside it do not have to be
     // prohibitions, and this was the one delegation surface that read as one.
-    // The race half gained the remedy it was missing — the fix for two forks
-    // over one resource is one fork that owns it, which is what the head's own
-    // prompt already tells the child to do (heads/head-inference.ts).
+    // The race half gained the remedy it was missing — the fix for two nodes
+    // over one resource is one node that owns it, which is what a node's own
+    // prompt already tells it to do (heads/head-inference.ts).
     whenNotToUse:
-      'A single short coherent change is yours to make directly. Forks that would write the same mutable resource belong in one fork that owns it. Every subordinate or peer message wakes that agent for a full turn, so each one carries real work.',
+      'A single short coherent change is yours to make directly. Nodes that would write the same mutable resource belong in one node that owns it. Every subordinate or peer message wakes that agent for a full turn, so each one carries real work.',
     result:
-      'fork produces the merged answer with per-fork outputs — on a live session the call hands back a background job at spawn and that answer arrives as the wake when it settles; hire/dismiss return roster state. '
+      'hire/dismiss return roster state. '
       + 'ask/send return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id. '
       // The result half is stated because a swarm's answer is not the only thing it
       // carries, and the two extra fields are the ones a caller must not skip: the
       // margin is the check §4.5 requires be LOOKED at, and the caveat is the one
       // sentence that stops a suspect number being quoted as a result.
-      + 'swarm returns the axes actually in force, the caps and where each came from, `best` with its RAW measured value in your unit beside the normalised score, every candidate including the ones that produced no usable answer and why, and a settle report carrying the measured baseline and the floor margin. '
+      + 'swarm returns the axes actually in force, the caps and where each came from, `best` with its RAW measured value in your unit beside the normalised score, every candidate including the ones that produced no usable answer and why, and a settle report carrying the measured baseline and the floor margin — and on a live session the call hands back a background job at spawn, with that report arriving as the wake when it settles. '
       + 'A run that measured past its floor comes back with a publication caveat and no score on that candidate: the answer is still yours to read and is NOT publishable until the bound is re-derived.',
-    // The fork call, because it is the one shape here a model gets wrong: the
-    // trajectory data has `agents` called with an invented `fork_specs` for
-    // `forks`, and the nested {task, rationale} objects are the only argument
-    // shape in the whole surface that a name alone does not give away. hire's
-    // arguments are flat and its `role` property carries its own example.
-    example: "agents({action:'fork', task:'Why staging 502s under load', forks:[{task:'Read the gateway logs', rationale:'where the failure shows'}, {task:'Diff the last deploy', rationale:'timing points at the release'}]})",
+    // The cheapest COMPLETE call, which is what an example is for: `preset` and
+    // `task` are the whole minimum, and `ideate` is the one preset that legally
+    // takes no `objective`. The shape a model gets wrong here is the objective's
+    // three-deep nesting, and that rides `objective`'s own property description
+    // instead — read at the moment the field is being filled, which is where a
+    // schema beats an example.
+    example: "agents({action:'swarm', preset:'ideate', task:'Three ways to stop staging 502ing under load'})",
   },
   memory: memoryToolSpec(true),
   tasks: {

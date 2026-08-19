@@ -70,7 +70,7 @@ const SUBORDINATE_SCOPED = (what: string): string =>
 const NO_USER_PLANE = (what: string): string =>
   `${what} rides the owner's UserDO; a local session has no user plane to serve it`;
 const ORCHESTRATOR_IS_SINK = 'the orchestrator IS the report sink; only subordinate actors report upward';
-const CLI_HAS_NO_ROSTER = 'local sessions have no subordinate roster; the fork rung is the whole local ladder';
+const CLI_HAS_NO_ROSTER = 'local sessions have no subordinate roster; the search rung is the whole local ladder';
 /** A subordinate tree is recursive: a subordinate holds the same roster surface
  *  its parent does, bounded by DELEGATION_MAX_DEPTH rather than by absence. The
  *  bound is a DERIVED budget — at the cap the team deps are not wired and these
@@ -113,10 +113,10 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
   },
 
   'agents-action': {
-    fork: EVERYWHERE,
-    // Wherever `fork` is, and by construction rather than by wiring: a swarm needs a
-    // model to expand with and a workspace to measure in, which is exactly the fork
-    // substrate, so it has no deps group of its own to under-wire.
+    // Wherever the exploration substrate is, and by construction rather than by
+    // wiring: a search needs a model to expand with and a workspace to measure in,
+    // which is exactly what that substrate carries, so it has no deps group of its
+    // own to under-wire.
     swarm: EVERYWHERE,
     hire: TEAM_RECURSES,
     ask: TEAM_RECURSES,

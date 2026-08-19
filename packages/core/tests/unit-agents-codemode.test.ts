@@ -10,7 +10,7 @@
 //     malformed field is a value the script can read rather than a throw —
 //     nothing here has the AI SDK's schema validation behind it;
 //   - the declaration the model reads, including the non-resumable warning
-//     that is the honest cost of forking from inside execute_tools.
+//     that is the honest cost of searching from inside execute_tools.
 //
 // Real sandbox execution (node `new Function`, cf `createCodeTool`) is covered
 // in the two backend suites; here the surface itself is the subject.
@@ -25,14 +25,12 @@ import {
   createAgentsCodemodeProvider,
   createAgentsTool,
   createStrategyRegistry,
-  strategyOption,
   decodeJsonValue,
   type CodemodeProvider,
   type JsonValue,
   type AgentsForkDeps,
   type AgentsToolDeps,
   type PeersToolDeps,
-  type StrategyContext,
   type SubordinateRosterEntry,
   type TeamToolDeps,
   type SubordinateDelivery, type SubordinateHandoff,
@@ -82,12 +80,6 @@ function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
   const { rt } = createTestRuntime();
   return { registry, rt, model: new MockLanguageModelV3(), ...overrides };
 }
-
-/** The minimum a fork takes — `forks` is required and a call with none is refused. */
-const twoForks = [
-  { task: 'survey prior art', rationale: 'establish baseline' },
-  { task: 'sketch a design', rationale: 'exercise constraints' },
-];
 
 const rosterEntry: SubordinateRosterEntry = {
   name: 'researcher', displayName: 'Researcher', role: 'competitive research',
@@ -166,12 +158,12 @@ function actionEnumOf(deps: TestAgentsToolDeps): string[] {
 // ── Structural gating: one gate, two surfaces ───────────────────────────────
 
 describe('agents.* codemode namespace — dep gating', () => {
-  test('fork-substrate deps (CLI / subordinate) expose the two search members', () => {
+  test('the exploration substrate (CLI / subordinate) exposes the search member alone', () => {
     const deps = withBuildMode({ fork: forkDeps() });
-    // `swarm` rides the same substrate as `fork` — a model to expand with and a
-    // workspace to measure in — so a sandbox that can fan out can also run a
-    // configured search, and the namespace says so structurally.
-    expect(Object.keys(namespaceOf(() => deps))).toEqual(['fork', 'swarm']);
+    // `swarm` rides that substrate — a model to expand with and a workspace to
+    // measure in — so a sandbox with it can run a configured search, and the
+    // namespace says so structurally.
+    expect(Object.keys(namespaceOf(() => deps))).toEqual(['swarm']);
   });
 
   test('full deps (the workspace orchestrator) expose every action', () => {
@@ -215,61 +207,52 @@ describe('agents.* codemode namespace — dispatch', () => {
     });
   });
 
-  test('Plan mode does not narrow the fork surface', async () => {
+  test('Plan mode does not narrow the search surface', async () => {
     // What the old settle-availability test was really guarding. Plan mode
     // constrains what a helper may DO, never which rungs exist: a planning turn
-    // forks to investigate exactly as a build turn does, over the same members.
+    // searches to investigate exactly as a build turn does, over the same members.
     const provider = createAgentsCodemodeProvider(() => ({ mode: 'plan', fork: forkDeps() }));
-    expect(await member(provider.tools, 'fork').execute({ task: 'research', forks: twoForks }))
-      .toMatchObject({ strategy: FORK_STRATEGY_ID, text: 'forked' });
+    expect(await member(provider.tools, 'swarm').execute({ task: 'research' }))
+      .toMatchObject({ reason: 'bad_input' });
     expect(Object.keys(provider.tools))
       .toEqual(Object.keys(createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).tools));
   });
 
-  test('fork routes through the strategy registry and returns the settled answer', async () => {
-    const ns = namespaceOf(() => ({ fork: forkDeps() }));
-    expect(await member(ns, 'fork').execute({ task: 'map the options', forks: twoForks })).toMatchObject({
-      strategy: FORK_STRATEGY_ID, text: 'forked',
-    });
-  });
-
-  test('the forks contract is the tool\'s, not re-implemented here', async () => {
+  test('the search contract is the tool\'s, not re-implemented here', async () => {
     // The projection funnels into the same dispatch, so the sandbox gets the
-    // same classified refusals a tool call does: a fork with no briefs is
+    // same classified refusals a tool call does: a search with no preset is
     // refused, and `settle` — which left the surface with the judged tree — is
-    // refused as the unknown field it now is, naming what fork does take.
+    // refused as the unknown field it now is, naming what swarm does take.
     const ns = namespaceOf(() => ({ fork: forkDeps() }));
-    expect(await member(ns, 'fork').execute({ task: 't' })).toMatchObject({ reason: 'bad_input' });
-    const stale = v.parse(ErrorResultSchema, await member(ns, 'fork').execute({
-      task: 't', settle: 'mcts', forks: twoForks,
+    expect(await member(ns, 'swarm').execute({ task: 't' })).toMatchObject({ reason: 'bad_input' });
+    const stale = v.parse(ErrorResultSchema, await member(ns, 'swarm').execute({
+      task: 't', settle: 'mcts', preset: 'ideate',
     }));
     expect(stale.error).toContain('unknown field "settle"');
     expect(stale.error).toContain(
-      'action "fork" takes: task, forks, merge_strategy, budget, wall_clock_ms, options, '
-      + 'budget_usd, budget_tokens, budget_label',
+      'action "swarm" takes: task, preset, objective, key, config, from, label, branches, depth, '
+      + 'models, budget_usd, budget_tokens, budget_label',
     );
   });
 
-  test('typed fork fields reach the strategy context exactly as the tool sends them', async () => {
-    const registry = createStrategyRegistry();
-    let observed: StrategyContext | undefined;
-    registry.register({
-      id: FORK_STRATEGY_ID,
-      async explore(ctx) {
-        observed = ctx;
-        return { strategy: FORK_STRATEGY_ID, best: { text: 'ok', score: 1, source: '' }, all: [], cost: { durationMs: 0 } };
+  test('typed search fields reach the dispatch exactly as the tool sends them', async () => {
+    // The projection hands the SAME parsed input to the SAME dispatcher, so a
+    // legal call is answered by the engine and an illegal composition by the
+    // axis refusal — never by a second parse living in the sandbox bridge.
+    const ns = namespaceOf(() => ({ fork: forkDeps() }));
+    const refused = v.parse(v.object({ reason: v.string(), error: v.string() }), await member(ns, 'swarm').execute({
+      task: 'ship it',
+      preset: 'ideate',
+      objective: {
+        kind: 'scalar', metric: 'ms', unit: 'ms', direction: 'minimise', scale: 'linear',
+        target: 1, verify: { kind: 'exec-ratio', spec: {} },
       },
-    });
-    const { rt } = createTestRuntime();
-    const controller = { __infra: true };
-    const ns = namespaceOf(() => ({
-      fork: { registry, rt, model: new MockLanguageModelV3(), defaultOptions: () => ({ heads: { controller } }) },
     }));
-    await member(ns, 'fork').execute({ task: 'ship it', forks: twoForks, merge_strategy: 'consensus', budget: 9, wall_clock_ms: 4321 });
-    expect(observed?.task).toBe('ship it');
-    expect(observed?.budget).toEqual({ maxIterations: 9, wallClockMs: 4321 });
-    // Host-injected infra survives the caller's fields, same deep merge as the tool.
-    expect(strategyOption(observed?.options, 'heads')).toEqual({ controller, heads: twoForks, mergeStrategy: 'consensus' });
+    expect(refused.reason).toBe('bad_input');
+    // The nested objective arrived whole — the refusal is the AXIS one about a
+    // flat preset carrying a value signal, not a parse complaint about a field
+    // the bridge mangled on the way through.
+    expect(refused.error).toMatch(/`ideate` is flat and has no value signal/);
   });
 
   test('hire / ask / send / reply / list / dismiss reach the same transports', async () => {
@@ -310,17 +293,21 @@ describe('agents.* codemode namespace — dispatch', () => {
       const { rt } = createTestRuntime();
       return { fork: { registry, rt, model: new MockLanguageModelV3() } };
     });
-    expect(await member(ns, 'fork').execute({ task: 'a', forks: twoForks })).toMatchObject({ text: 'generation 2' });
-    expect(await member(ns, 'fork').execute({ task: 'b', forks: twoForks })).toMatchObject({ text: 'generation 3' });
+    // Each call rebuilds the deps, which is what the generation counter proves:
+    // two calls, two reads, and the second sees the later binding.
+    await member(ns, 'swarm').execute({ task: 'a' });
+    await member(ns, 'swarm').execute({ task: 'b' });
+    expect(generation).toBe(3);
   });
 
   test('deps failures come back as inspectable values, never thrown into the script', async () => {
-    const registry = createStrategyRegistry();
-    registry.register(createTestStrategy({ id: FORK_STRATEGY_ID, throwError: 'kaboom' }));
-    const { rt } = createTestRuntime();
-    const ns = namespaceOf(() => ({ fork: { registry, rt, model: new MockLanguageModelV3() } }));
-    const result = v.parse(ErrorResultSchema, await member(ns, 'fork').execute({ task: 't', forks: twoForks }));
-    expect(result.error).toMatch(/Fork failed.*kaboom/);
+    const team = makeTeam();
+    team.deps.spawn = async () => { throw new Error('kaboom'); };
+    const ns = namespaceOf(() => ({ team: team.deps }));
+    const result = v.parse(ErrorResultSchema, await member(ns, 'hire').execute({
+      role: 'researcher', mission: 'map the landscape',
+    }));
+    expect(result.error).toMatch(/kaboom/);
   });
 });
 
@@ -383,21 +370,20 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     expect(peers.calls).toEqual([]);
   });
 
-  test('the trailing exec context carries cancellation into the fork', async () => {
-    const registry = createStrategyRegistry();
-    let observed: AbortSignal | undefined;
-    registry.register({
-      id: FORK_STRATEGY_ID,
-      async explore(ctx) {
-        observed = ctx.signal;
-        return { strategy: FORK_STRATEGY_ID, best: { text: '', score: 1, source: '' }, all: [], cost: { durationMs: 0 } };
-      },
-    });
-    const { rt } = createTestRuntime();
-    const ns = namespaceOf(() => ({ fork: { registry, rt, model: new MockLanguageModelV3() } }));
+  test('the trailing exec context carries cancellation into the search', async () => {
+    // The node sandbox appends `{ signal }` as a trailing argument. It is the
+    // HOST's object, found by the signal it carries and taken OUT of the input —
+    // so a search called with it is answered by the dispatcher's own refusal and
+    // never by "unknown field \"signal\"", which is what would happen the moment
+    // the bridge stopped recognising it. From there `runSwarmAction`'s
+    // readAbortSignal is what hands it to the run.
+    const ns = namespaceOf(() => ({ fork: forkDeps() }));
     const controller = new AbortController();
-    await member(ns, 'fork').execute({ task: 't', forks: twoForks }, { signal: controller.signal });
-    expect(observed).toBe(controller.signal);
+    const result = v.parse(ErrorResultSchema, await member(ns, 'swarm').execute(
+      { task: 't' }, { signal: controller.signal },
+    ));
+    expect(result.error).toContain('swarm needs `preset`');
+    expect(result.error).not.toContain('unknown field "signal"');
   });
 
   test('a non-object argument is a sharp error, not a deps call', async () => {
@@ -412,7 +398,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     const ns = namespaceOf(() => fullDeps());
     expect(await member(ns, 'ask').execute({ agent: 'researcher' })).toEqual({ error: 'ask requires agent and message' });
     // The refusal carries its classification, exactly as the declared type promises.
-    expect(await member(ns, 'fork').execute({})).toEqual({ reason: 'bad_input', error: 'fork requires task' });
+    expect(await member(ns, 'swarm').execute({})).toEqual({ reason: 'bad_input', error: expect.stringContaining('swarm needs `preset`') });
   });
 });
 
@@ -420,42 +406,35 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
 
 describe('agents.* codemode namespace — declared types', () => {
   test('declares exactly the gated members', () => {
-    const forkOnly = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
-    expect(forkOnly).toContain('fork(input: {');
-    expect(forkOnly).not.toContain('hire(input: {');
-    expect(forkOnly).not.toContain('dismiss(input: {');
+    const searchOnly = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
+    expect(searchOnly).toContain('swarm(input: {');
+    expect(searchOnly).not.toContain('hire(input: {');
+    expect(searchOnly).not.toContain('dismiss(input: {');
 
     const full = createAgentsCodemodeProvider(fullDeps).types ?? '';
     for (const action of AGENTS_TOOL_ACTIONS) expect(full).toContain(`${action}(input`);
   });
 
-  test('the fork docstring states the non-resumable cost of forking in-sandbox', () => {
+  test('the search docstring states the non-resumable cost of searching in-sandbox', () => {
     const types = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
     expect(types).toContain('NOT resumable from here');
     expect(types).toContain('execute_tools declines background resume');
     expect(types).toContain('top-level `agents` tool');
   });
 
-  test('the fork docstring says the briefs are required, and where a self-authored search goes', () => {
-    // It used to read "each runs its own multi-step tool loop, then they settle
-    // into one answer: merged by default, or scored ... with settle:mcts", which
-    // attaches the tool loop to both settlements, and "Omit `forks` to let the
-    // strategy pick the angles", which nothing implements. A fork has one
-    // settlement and runs the briefs it was handed: `forks` is required in the
-    // prose AND non-optional in the signature, and the search that writes its own
-    // candidates is a different member.
+  test('the search docstring says what is measured and what a refusal names', () => {
+    // The declaration a script reads has to carry the two facts a caller gets
+    // wrong: that `verify` names a REGISTERED instrument rather than a path it
+    // invents, and that an illegal composition is refused by NAME rather than
+    // silently run under a different shape.
     const types = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
-    expect(types).toContain('The briefs in `forks` are REQUIRED');
-    expect(types).toMatch(/^ {4}forks: Array<\{ task: string; rationale: string;/m);
-    // Measured truth about what a brief buys: a fork holds HEAD_BUILTIN_TOOLS
-    // (heads/head-tools.ts) filtered by allowedTools, and a swarm candidate is
-    // scored toolless as a whole.
-    expect(types).toContain('execute_tools/run/file/web');
-    expect(types).toContain('that is `agents.swarm`');
-    expect(types).not.toContain('Omit `forks`');
+    expect(types).toContain('MEASURED rather than judged');
+    expect(types).toContain('names a REGISTERED instrument');
+    expect(types).toContain('names the axis');
+    expect(types).toMatch(/^ {4}preset: "ideate" \| "research"/m);
     expect(types).not.toContain('settle');
     // The refusal's classification is declared, like the file dispatcher's.
-    expect(types).toContain('reason?: "bad_input"');
+    expect(types).toContain('{ reason: string; error: string }');
   });
 
   test('the same action set renders byte-identically whatever built the deps', () => {

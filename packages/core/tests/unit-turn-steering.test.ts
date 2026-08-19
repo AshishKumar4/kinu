@@ -182,11 +182,12 @@ describe('repeated-failure trigger', () => {
     expect(injected(nudged)).toHaveLength(1);
     const text = injected(nudged)[0]!;
     expect(text).toContain('`run` has failed 3 times in a row');
-    expect(text).toContain('agents` action=fork');
-    expect(text).toContain('action=swarm');
-    // Both halves the steer always offered, spelled with the two verbs that
-    // carry them now: merge several angles, or have candidates measured.
-    expect(text).toContain('`forks`');
+    expect(text).toContain('agents` action=swarm');
+    // Both halves the steer always offered, spelled with the one verb that
+    // carries them now: measure the candidates, or sample when there is nothing
+    // to measure yet.
+    expect(text).toContain('`objective`');
+    expect(text).toContain("preset:'ideate'");
     expectOnlyRealActions(text);
     expect(text).toContain('hint, not an instruction');
     expect(lastSteer(orch)).toEqual({ trigger: 'repeated_failure', step: 2, tool: 'run', converted: false });
@@ -309,7 +310,7 @@ describe('repeated-call trigger', () => {
     expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });
 
-  test('converted means the model did something ELSE, not that it forked', () => {
+  test('converted means the model did something ELSE, not that it delegated', () => {
     const orch = newTurn();
     repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
     step(orch, 1, [user('q')]);
@@ -493,13 +494,13 @@ describe('no-progress trigger', () => {
 });
 
 describe('long-turn trigger', () => {
-  test('a long turn with no delegation is nudged once, naming fork', () => {
+  test('a long turn with no delegation is nudged once, naming the search rung', () => {
     const orch = newTurn();
     expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER - 1, [user('q')]))).toEqual([]);
     const nudged = step(orch, LONG_TURN_STEPS_BEFORE_STEER, [user('q')]);
     expect(injected(nudged)).toHaveLength(1);
     expect(injected(nudged)[0]).toContain('25 steps into this turn with no delegation');
-    expect(injected(nudged)[0]).toContain('agents` action=fork');
+    expect(injected(nudged)[0]).toContain('agents` action=swarm');
     expect(lastSteer(orch)).toEqual({
       trigger: 'long_turn_no_delegation', step: LONG_TURN_STEPS_BEFORE_STEER, converted: false,
     });
@@ -512,7 +513,7 @@ describe('long-turn trigger', () => {
 
   test('a turn that already delegated is never nudged for length', () => {
     const orch = newTurn();
-    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'fork' } });
+    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
     expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER + 5, [user('q')]))).toEqual([]);
     expect(lastSteer(orch)).toBeNull();
   });
@@ -535,13 +536,13 @@ describe('long-turn trigger', () => {
 describe('turn-start trigger', () => {
   const fresh = 'add caching to the api and update the docs';
 
-  test('a fresh ask is nudged at step 0, naming fork, as a hint', () => {
+  test('a fresh ask is nudged at step 0, naming the search rung, as a hint', () => {
     const orch = newTurn();
     const nudged = step(orch, 0, [user(fresh)]);
     expect(injected(nudged)).toHaveLength(1);
     const text = injected(nudged)[0]!;
     expect(text).toContain('Settle the shape first');
-    expect(text).toContain('agents` action=fork');
+    expect(text).toContain('agents` action=swarm');
     expectOnlyRealActions(text);
     expect(text).toContain('hint, not an instruction');
     expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: false }]);
@@ -581,11 +582,11 @@ describe('turn-start trigger', () => {
     ]);
   });
 
-  test('a fork after the hint converts it, and leaves the length steer nothing to say', () => {
+  test('a search after the hint converts it, and leaves the length steer nothing to say', () => {
     const orch = newTurn();
     step(orch, 0, [user(fresh)]);
     expect(rows(orch)[0]?.converted).toBe(false);
-    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'fork' } });
+    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
     expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: true }]);
     expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER, [user(fresh)]))).toHaveLength(1);
   });
@@ -653,14 +654,14 @@ describe('execution-recovery detection (the failure ledger\'s second reader)', (
 describe('conversion + turn boundaries', () => {
   test('converted counts delegation AFTER the nudge, not before it', () => {
     const before = newTurn();
-    before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'fork' } });
+    before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
     fail(before, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
     step(before, 1, [user('q')]);
     expect(lastSteer(before)).toEqual({
       trigger: 'repeated_failure', step: 1, tool: 'run', converted: false,
     });
 
-    before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'fork' } });
+    before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
     expect(lastSteer(before)?.converted).toBe(true);
   });
 
@@ -870,7 +871,7 @@ describe('through a real runChat turn', () => {
     const first = promptText(prompts[0] ?? []);
     expect(first).toContain(TURN_STEERING_HEADER);
     expect(first).toContain('Settle the shape first');
-    expect(first).toContain('agents` action=fork');
+    expect(first).toContain('agents` action=swarm');
     expectOnlyRealActions(first);
     expect(first).toContain('hint, not an instruction');
     // Once, however long the turn then runs.

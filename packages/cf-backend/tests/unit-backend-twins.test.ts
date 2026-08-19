@@ -164,7 +164,7 @@ const SHARED_TRANSPORTS = {
   proposeScaffold: 'proposeScaffold',
   recordHeadsTake: 'recordGroundedHeadsTake',
   recordSystemPromptHash: 'observeSystemPromptHash',
-  resumeBackgroundJob: 'resumeForkBackgroundJob',
+  resumeBackgroundJob: 'resumeBackgroundJob',
   revertChangelogEntry: 'revertChangelogEntryById',
   revokeShellApprovalGrants: 'revokeShellApprovalGrants',
   runScaffoldGepaOptimization: 'runScaffoldGepaOptimization',

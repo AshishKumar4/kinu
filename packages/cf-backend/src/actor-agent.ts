@@ -115,7 +115,7 @@ import {
   // Background-job system (#173 — auto-background past the surface threshold)
   BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
   type BackgroundJobStore, type TaskListStore,
-  wrapToolsForBackground, resumeForkBackgroundJob,
+  wrapToolsForBackground, resumeBackgroundJob,
   type MctsSearchStore, readSearchTree, type MCTSProgressEvent,
   // EventsHub primitives (spec §1)
   EventLog,
@@ -3239,16 +3239,16 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** Re-drive an evicted background job from its durable checkpoint (B6) —
-   *  the shared fork-only resume gate (core background-tools) over the RAW
-   *  surface, so a re-drive can't detach a second job. Legacy 'think' jobs
-   *  translate onto the same fork path. */
+   *  the shared resume gate (core background-tools) over the RAW surface, so a
+   *  re-drive can't detach a second job. Rows stored under the removed `fork`
+   *  action, and 'think' rows older still, translate onto the search path. */
   protected resumeBackgroundJob(
     kind: string,
     input: JsonValue,
     mode: WorkMode,
     signal: AbortSignal,
   ): Promise<JsonValue | undefined> {
-    return resumeForkBackgroundJob(
+    return resumeBackgroundJob(
       (resumeMode) => this.getRawToolsForWorkMode(resumeMode),
       kind,
       input,

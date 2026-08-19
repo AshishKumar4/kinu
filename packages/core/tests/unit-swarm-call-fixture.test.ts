@@ -369,35 +369,34 @@ describe('what the live tool surface does with entry zero', () => {
   });
 
   test('a field is refused for the action that does not read it, and the refusal names the one that does', () => {
-    // FLIPPED TWICE, and the history is the point. First it pinned the silent drop:
-    // `AgentsToolInputSchema` was one flat `v.object`, valibot's `object` EXCLUDES
-    // unknown entries rather than rejecting them, so `preset`, `objective`,
-    // `branches` and `depth` reached the dispatcher as ABSENT — indistinguishable
-    // from a caller who never sent them. Then `v.strictObject` made them "unknown
-    // field" refusals. Now they are REAL fields of a REAL action, so the same call
-    // is refused for the sharper reason: they belong to `swarm`, and `fork` would
-    // ignore them. Still through an action that IS on the picklist, so it remains a
-    // property of the schema rather than of a missing action.
+    // FLIPPED THREE TIMES, and the history is the point. First it pinned the
+    // silent drop: `AgentsToolInputSchema` was one flat `v.object`, valibot's
+    // `object` EXCLUDES unknown entries rather than rejecting them, so `preset`,
+    // `objective`, `branches` and `depth` reached the dispatcher as ABSENT —
+    // indistinguishable from a caller who never sent them. Then `v.strictObject`
+    // made them "unknown field" refusals. Then they became REAL fields of a REAL
+    // action and the smuggling vehicle was `fork`, which has since left the
+    // picklist — so the property is asserted through `hire`, an action that IS on
+    // the picklist and reads none of them.
     const smuggle = () => parseAgentsToolInput({
-      action: 'fork',
-      task: CALL.task,
+      action: 'hire',
+      role: 'researcher',
+      mission: CALL.task,
       preset: CALL.preset,
       objective: CALL.objective,
       branches: 8,
       depth: 4,
     });
-    expect(smuggle).toThrow(/field "preset" does not apply to action "fork"/);
+    expect(smuggle).toThrow(/field "preset" does not apply to action "hire"/);
     expect(smuggle).toThrow(/it is read by swarm/);
     // Every one of them, not just the first: a refusal that named one field at a
     // time would cost a round trip per field of the call entry zero writes.
     for (const field of ['objective', 'branches', 'depth']) {
-      expect(smuggle).toThrow(new RegExp(`field "${field}" does not apply to action "fork"`));
+      expect(smuggle).toThrow(new RegExp(`field "${field}" does not apply to action "hire"`));
     }
-    // And the correction: what `fork` does take, so a caller can fix the call
-    // from the message alone rather than guessing again. `settle` is absent
-    // because tree search is `action:'swarm'` with a `depth` — a fork has one
-    // settlement and nothing to choose between.
-    expect(smuggle).toThrow(/action "fork" takes: task, forks, merge_strategy/);
+    // And the correction: what `hire` does take, so a caller can fix the call
+    // from the message alone rather than guessing again.
+    expect(smuggle).toThrow(/action "hire" takes: agent, role, mission/);
   });
 
   test('and the money case is refused by the spelling it got wrong', () => {
@@ -412,16 +411,16 @@ describe('what the live tool surface does with entry zero', () => {
     // this surface, not an exotic one — which is why the refusal has to name the
     // snake_case spelling and not merely reject the key.
     const camelCase = () => parseAgentsToolInput({
-      action: 'fork', task: CALL.task, budgetUsd: 5, wallClockMs: 1_000,
+      action: 'swarm', preset: PARSED.preset, task: CALL.task, budgetUsd: 5, budgetLabel: 'zero',
     });
     expect(camelCase).toThrow(/unknown field "budgetUsd" — did you mean "budget_usd"\?/);
-    expect(camelCase).toThrow(/unknown field "wallClockMs" — did you mean "wall_clock_ms"\?/);
+    expect(camelCase).toThrow(/unknown field "budgetLabel" — did you mean "budget_label"\?/);
 
     // Both spellings of the same request: one is heard, and the other is now
     // TOLD, where before it was dropped and the two were indistinguishable.
     expect(parseAgentsToolInput({
-      action: 'fork', task: CALL.task, budget_usd: 5,
-    })).toEqual({ action: 'fork', task: CALL.task, budget_usd: 5 });
+      action: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5,
+    })).toEqual({ action: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5 });
   });
 });
 

@@ -1,15 +1,14 @@
 // The unified `agents` delegation tool — one surface where the KIND of helper
 // is a parameter. Pins the whole tool-side contract:
-//   fork    — dispatch through the StrategyRegistry (the heads strategy, the
-//             one settlement a fork has), defaultOptions deep-merge,
-//             budget passthrough, error envelopes.
+//   swarm   — the configured-search rung: preset/objective refusals, mission
+//             caps, and the background spawn announcement.
 //   hire    — subordinate spawn (and scope=workspace → peer spawnWorkspace).
 //   ask/send/reply/list/dismiss — one addressing scheme across subordinates
 //             and peer workspace agents, timeout clamping, the reserved
 //             reply topic, and the PERSISTENCE semantic (dismiss archives by
 //             default; completion never evicts).
 // The transports themselves (facet substrate, peer outbox, waiters, reply
-// channels, head runtime) are exercised in cf-backend tests against the real
+// channels, node runtime) are exercised in cf-backend tests against the real
 // hubs; deps here are recorders.
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, createTestStrategy, toolExecute } from '@proteus/test-utils';
@@ -18,14 +17,14 @@ import * as v from 'valibot';
 import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
 import {
   agentsActionsFor, buildBuiltinTools, createAgentsTool, createStrategyRegistry,
-  renderAgentsToolDescription, resumableForkInput, strategyOption,
+  renderAgentsToolDescription, resumableAgentsInput,
   AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS, DELEGATION_INHERITANCE, DELEGATION_RUNGS,
   delegationBudgetAtDepth, ROOT_DELEGATION_BUDGET,
   FORK_STRATEGY_ID, PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
   classifyToolFailure, JsonObjectSchema,
   type AgentsToolInput,
   type AgentsForkDeps, type AgentsToolDeps, type PeersToolDeps,
-  type StrategyContext, type SubordinateRosterEntry, type TeamToolDeps,
+  type SubordinateRosterEntry, type TeamToolDeps,
   type SubordinateDelivery, type SubordinateHandoff,
 } from '../src/index';
 import { CODE_IS_REFUSAL, ERROR_CODES } from '../src/obs/index';
@@ -46,10 +45,9 @@ function agentsTool(deps: TestAgentsToolDeps) {
 }
 
 const testModel = new MockLanguageModelV3();
-const StrategyResultSchema = v.object({ strategy: v.string(), text: v.string() });
 const ErrorResultSchema = v.object({ error: v.string() });
-/** The minimum a fork takes. `forks` is required, so every fork-path test
- *  states them. */
+/** The briefs a STORED `fork` row carried. Kept as a fixture because the resume
+ *  translation has to name them as dropped; no live call takes them. */
 const twoForks = [
   { task: 'survey prior art', rationale: 'establish baseline' },
   { task: 'sketch design', rationale: 'exercise constraints' },
@@ -68,9 +66,6 @@ const HandoffResultSchema = v.object({
 function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
   const reg = createStrategyRegistry();
   reg.register(createTestStrategy({ id: FORK_STRATEGY_ID, answer: 'forked' }));
-  // Registered and unreachable from this surface: fork-deps.ts still registers
-  // mcts for the durable search store and the eval harness, so a fork that
-  // routed to it would be a silent misdispatch, not a missing-strategy error.
   reg.register(createTestStrategy({ id: 'mcts', answer: 'searched' }));
   const { rt } = createTestRuntime();
   return { registry: reg, rt, model: testModel, ...overrides };
@@ -172,16 +167,15 @@ describe('agents tool — registration and dep-gating', () => {
     expect(Object.keys(tools)).not.toContain('peers');
   });
 
-  test('fork-substrate deps (the CLI / subordinate surface) expose the two search rungs', () => {
+  test('the exploration substrate (the CLI / subordinate surface) exposes the search rung alone', () => {
     const deps = withBuildMode({ fork: forkDeps() });
-    // Both, and by construction rather than by wiring: `swarm` needs a model to expand
-    // with and a workspace to measure in, which is exactly what the fork substrate
-    // carries, so there is no deps group a backend could wire half of.
-    expect(agentsActionsFor(deps)).toEqual(['fork', 'swarm']);
+    // By construction rather than by wiring: `swarm` needs a model to expand with
+    // and a workspace to measure in, which is exactly what that substrate carries,
+    // so there is no deps group a backend could wire half of.
+    expect(agentsActionsFor(deps)).toEqual(['swarm']);
     const t = agentsTool(deps);
-    expect(actionEnum({ value: t.inputSchema })).toEqual(['fork', 'swarm']);
+    expect(actionEnum({ value: t.inputSchema })).toEqual(['swarm']);
     // The docstring drops the hire rung and the converse verbs entirely.
-    expect(t.description).toContain(DELEGATION_RUNGS.fork);
     expect(t.description).toContain(DELEGATION_RUNGS.swarm);
     expect(t.description).not.toContain(DELEGATION_RUNGS.hire);
     expect(t.description).not.toContain('reply answers');
@@ -201,7 +195,7 @@ describe('agents tool — registration and dep-gating', () => {
     expect(agentsActionsFor(deps)).toEqual(['hire', 'ask', 'send', 'list', 'dismiss']);
     const t = agentsTool(deps);
     expect(actionEnum({ value: t.inputSchema })).not.toContain('reply');
-    expect(actionEnum({ value: t.inputSchema })).not.toContain('fork');
+    expect(actionEnum({ value: t.inputSchema })).not.toContain('swarm');
     expect(renderAgentsToolDescription(deps)).not.toContain('scope=workspace');
   });
 
@@ -210,7 +204,7 @@ describe('agents tool — registration and dep-gating', () => {
     expect(await t.execute({ action: 'hire', role: 'r', mission: 'm' }))
       .toEqual({
         reason: 'unsupported',
-        error: 'action "hire" is not available here. Available: fork, swarm',
+        error: 'action "hire" is not available here. Available: swarm',
       });
   });
 });
@@ -237,11 +231,11 @@ describe('agents tool — the field contract', () => {
        reaches `execute` in production — the AI SDK validates a tool call's TYPES
        against the JSON Schema and never its field NAMES. */
     const refusal = v.parse(v.object({ reason: v.string(), error: v.string() }), await t.execute({
-      action: 'fork', task: 'explore', budgetUsd: 5, wallClockMs: 1_000,
+      action: 'swarm', task: 'explore', budgetUsd: 5, budgetLabel: 'audit',
     } as AgentsToolInput));
     expect(refusal.reason).toBe('bad_input');
     expect(refusal.error).toContain('unknown field "budgetUsd" — did you mean "budget_usd"?');
-    expect(refusal.error).toContain('unknown field "wallClockMs" — did you mean "wall_clock_ms"?');
+    expect(refusal.error).toContain('unknown field "budgetLabel" — did you mean "budget_label"?');
   });
 
   test('the refusal counts as the tool DECLINING, not as the tool breaking', async () => {
@@ -249,7 +243,7 @@ describe('agents tool — the field contract', () => {
     // is the caller's spelling, so it must land in `refused` rather than
     // indicting the tool in `broke` — otherwise closing one silence buys a
     // false defect rate in the ledger.
-    const args = { action: 'fork', task: 'explore', budgetUsd: 5 };
+    const args = { action: 'swarm', task: 'explore', budgetUsd: 5 };
     /* SAFETY: the mis-spelled field is the subject of the test. Every field name
        is validated by `execute` before any field is read, so this object is
        refused rather than acted on. */
@@ -259,53 +253,39 @@ describe('agents tool — the field contract', () => {
       timestamp: new Date().toISOString(), name: 'agents', toolCallId: 'tc-1',
       args: v.parse(JsonObjectSchema, args), result: v.parse(JsonObjectSchema, result),
     })).toEqual({
-      tool: 'agents', action: 'fork', reason: 'bad_input',
+      tool: 'agents', action: 'swarm', reason: 'bad_input',
       refused: true, workFailed: false, runtimeMissing: false,
     });
   });
 
-  test('the correctly spelled call still runs — the refusal is about names, not caps', async () => {
-    // The control. Without it the refusal above could be a tool that refuses
-    // every fork with a budget.
+  test('the correctly spelled call reaches the handler — the refusal is about names, not caps', async () => {
+    // The control. Without it the refusal above could be a tool that refuses every
+    // call carrying a budget. The snake_case call gets PAST the name check and is
+    // answered by the handler's own missing-`preset` refusal, which is how we know
+    // the caps were accepted rather than rejected under another name.
     const t = agentsTool({ fork: forkDeps() });
-    const result = v.parse(StrategyResultSchema, await t.execute({
-      action: 'fork', task: 'explore', forks: twoForks, budget_usd: 5, wall_clock_ms: 1_000,
+    const refusal = v.parse(ErrorResultSchema, await t.execute({
+      action: 'swarm', task: 'explore', budget_usd: 5, budget_label: 'audit',
     }));
-    expect(result.strategy).toBe(FORK_STRATEGY_ID);
+    expect(refusal.error).toContain('swarm needs `preset`');
+    expect(refusal.error).not.toContain('unknown field');
   });
 
   test('a cap on an action that cannot spend it is refused, not accepted and ignored', async () => {
-    // `budget_usd` is real, and only `fork` reads it: the host meters an
-    // exploration it owns, while a subordinate runs on its own storage and is
-    // gated at the spawn seam instead. Sent to `hire` it parsed cleanly and was
-    // then read by nothing at all, which is the same silence one layer in.
+    // `budget_usd` is real, and only `swarm` reads it: the host meters a search it
+    // owns, while a subordinate runs on its own storage and is gated at the spawn
+    // seam instead. Sent to `hire` it parsed cleanly and was then read by nothing
+    // at all, which is the same silence one layer in.
     const team = makeTeam();
     const t = agentsTool({ team: team.deps });
     const refusal = v.parse(ErrorResultSchema, await t.execute({
       action: 'hire', role: 'researcher', mission: 'survey the landscape', budget_usd: 5,
     }));
     expect(refusal.error).toContain('field "budget_usd" does not apply to action "hire"');
-    expect(refusal.error).toContain('it is read by fork');
+    expect(refusal.error).toContain('it is read by swarm');
     expect(refusal.error).toContain('action "hire" takes: agent, role, mission');
     // Refused BEFORE the spawn, so nothing was hired under a cap nothing holds.
     expect(team.calls).toEqual([]);
-  });
-
-  test('a misspelled field inside a fork brief is refused too, in the brief\'s own convention', async () => {
-    // The one place this surface is camelCase, and therefore the one place the
-    // collision is native rather than imported.
-    const t = agentsTool({ fork: forkDeps() });
-    const call = {
-      action: 'fork',
-      task: 'explore',
-      forks: [{ task: 'a', rationale: 'b', allowed_tools: ['run'] }],
-    };
-    /* SAFETY: a deliberately mis-shaped input one level down — a brief's fields
-       are camelCase and `allowed_tools` is not one of them. Every field name is
-       validated by `execute` before any field is read, so this object is refused
-       rather than acted on. */
-    const refusal = v.parse(ErrorResultSchema, await t.execute(call as AgentsToolInput));
-    expect(refusal.error).toContain('unknown field "forks[0].allowed_tools" — did you mean "allowedTools"?');
   });
 
   test('every advertised property is a field some action reads, and every field is advertised', () => {
@@ -320,16 +300,13 @@ describe('agents tool — the field contract', () => {
 
   test('a dep-gated actor advertises a subset, and never a field no action of its own reads', () => {
     // Non-vacuity for the assertion above: it must be comparing something that
-    // can differ. A fork-substrate actor is offered the fields of the two actions that
-    // substrate carries — fork and swarm — and nothing from the converse half.
-    const forkOnly = propertyNames({ value: agentsTool({ fork: forkDeps() }).inputSchema }).sort();
-    const searchFields = [...new Set([
-      ...AGENTS_ACTION_FIELDS.fork, ...AGENTS_ACTION_FIELDS.swarm,
-    ])];
-    expect(forkOnly).toEqual(['action', ...searchFields].sort());
+    // can differ. An actor holding only the exploration substrate is offered the
+    // search rung's fields and nothing from the converse half.
+    const searchOnly = propertyNames({ value: agentsTool({ fork: forkDeps() }).inputSchema }).sort();
+    expect(searchOnly).toEqual(['action', ...AGENTS_ACTION_FIELDS.swarm].sort());
     // And the converse half really is absent, so the subset is a subset.
-    expect(forkOnly).not.toContain('agent');
-    expect(forkOnly).not.toContain('mission');
+    expect(searchOnly).not.toContain('agent');
+    expect(searchOnly).not.toContain('mission');
   });
 });
 
@@ -401,338 +378,83 @@ describe('agents tool — delegation depth', () => {
   });
 });
 
-// ── fork — strategy dispatch (the former think tool, semantics preserved) ───
-
-describe('agents tool — fork dispatch', () => {
-  test('fork routes to the heads strategy — merge is the only settlement it has', async () => {
-    const t = agentsTool({ fork: forkDeps() });
-    const result = v.parse(StrategyResultSchema, await t.execute({ action: 'fork', task: 'x', forks: twoForks }));
-    expect(result.strategy).toBe(FORK_STRATEGY_ID);
-    expect(result.text).toBe('forked');
-  });
-
-  test('a registered tree-search strategy is not reachable from the fork action', async () => {
-    // The preservation half of the cutover: `mcts` stays in the registry — the
-    // durable search store and the eval harness still reach it — and leaves the
-    // model-facing surface entirely. Tree search is action=swarm with a `depth`.
-    const t = agentsTool({ fork: forkDeps() });
-    const schema = v.parse(v.object({ jsonSchema: v.object({
-      properties: v.record(v.string(), v.unknown()),
-      required: v.array(v.string()),
-    }) }), t.inputSchema);
-    expect(Object.keys(schema.jsonSchema.properties)).not.toContain('settle');
-    expect([...AGENTS_ACTION_FIELDS.fork]).not.toContain('settle');
-    expect(schema.jsonSchema.required).toEqual(['action']);
-    // Nothing the model can fill names a strategy, so the dispatch cannot be
-    // redirected — neither through a property nor through the docstring.
-    expect(JSON.stringify(schema.jsonSchema.properties)).not.toContain('mcts');
-    expect(t.description).not.toContain('mcts');
-    // Registered all the same, and the rung the search moved to is offered by
-    // the very deps that register it.
-    const result = v.parse(StrategyResultSchema, await t.execute({ action: 'fork', task: 'x', forks: twoForks }));
-    expect(result.strategy).toBe(FORK_STRATEGY_ID);
-    expect(actionEnum({ value: t.inputSchema })).toContain('swarm');
-  });
-
-  test('the per-fork model field says what varying it is FOR, and states its cost', async () => {
-    // Heterogeneous fleets are first-class (heads/controller.ts threads the
-    // per-head model over the parent default), but the field only documented
-    // its syntax, so a real capability read as a knob. The purpose belongs
-    // here rather than in the prompt — it is a fill-time decision — and it
-    // carries the Self-MoA result (arXiv 2502.00674: panel quality tracks the
-    // AVERAGE member) so "put different models on it" does not read as free.
-    const schema = v.parse(v.object({ jsonSchema: v.object({ properties: v.object({
-      forks: v.object({ items: v.object({ properties: v.object({
-        model: v.object({ description: v.string() }),
-      }) }) }),
-    }) }) }), agentsTool({ fork: forkDeps() }).inputSchema);
-    const model = schema.jsonSchema.properties.forks.items.properties.model.description;
-    expect(model).toContain('Omit to inherit');
-    expect(model).toMatch(/different vendor on a genuinely open question/);
-    expect(model).toMatch(/only as good as its average member/);
-  });
-
-  test('each merge_strategy says what it DOES, not just that it exists', async () => {
-    // The enum offered three names and one word of guidance ("Default
-    // synthesize"), so picking between them was a guess. What each one does
-    // was written down only in buildMergePrompt, addressed to the merge model
-    // rather than to the caller choosing.
-    const schema = v.parse(v.object({ jsonSchema: v.object({ properties: v.object({
-      merge_strategy: v.object({ description: v.string() }),
-    }) }) }), agentsTool({ fork: forkDeps() }).inputSchema);
-    const merge = schema.jsonSchema.properties.merge_strategy.description;
-    expect(merge).toMatch(/Default synthesize/);
-    expect(merge).toMatch(/best_of takes the strongest fork whole/);
-    expect(merge).toMatch(/consensus reports what the forks agreed on/);
-    expect(merge).toMatch(/hands back each disagreement as an open question/);
-  });
-
-  test('the fork brief says what a brief must carry, and what a fork can see', async () => {
-    // The most failure-prone artifact in the system had 16 words of guidance:
-    // "What this fork explores. Be concrete." / "Why this angle matters." What
-    // must be in a brief follows from what a fork can SEE — the workspace and
-    // the parent's completed turns, never this conversation as it continues and
-    // never a sibling — so the acceptance criterion has to be in the brief
-    // because nothing else can tell the fork it is done.
-    const schema = v.parse(v.object({ jsonSchema: v.object({ properties: v.object({
-      task: v.object({ description: v.string() }),
-      forks: v.object({ items: v.object({ properties: v.object({
-        task: v.object({ description: v.string() }),
-        rationale: v.object({ description: v.string() }),
-      }) }) }),
-    }) }) }), agentsTool({ fork: forkDeps() }).inputSchema);
-    const { task, forks } = schema.jsonSchema.properties;
-    const brief = forks.items.properties.task.description;
-    expect(brief).toMatch(/complete on its own/);
-    expect(brief).toMatch(/the observable result that means it is done/);
-    // The inheritance half is DELEGATION_INHERITANCE.fork.brief, byte-for-byte —
-    // the same per-action source the fork RUNG composes, so the two surfaces
-    // cannot disagree about what a fork can see. They did: this field used to say
-    // a fork "sees this workspace but not this conversation", which is false —
-    // heads are spawned with up to 50 of the parent's stored messages AS their
-    // conversation. What a fork actually cannot see is this turn continuing and
-    // its siblings, and that is what it says now.
-    expect(brief).toContain(DELEGATION_INHERITANCE.fork.brief);
-    expect(brief).toMatch(/build on what you already established rather than restating it/);
-    expect(brief).not.toMatch(/not this conversation/);
-    // …and the hire brief is its OPPOSITE, from the same record: neither field
-    // can be handed the other's rule, which is the whole point of keying it on
-    // the action instead of writing one paragraph for both.
-    expect(DELEGATION_INHERITANCE.hire.brief).toMatch(/did not watch this conversation/);
-    expect(DELEGATION_INHERITANCE.hire.brief).toMatch(/rather than assuming shared ground/);
-    expect(forks.items.properties.rationale.description).toMatch(/read at the merge to weigh what came back/);
-    // The batch slot carries the shared background ONCE — oh-my-pi's `context`
-    // role — while staying literally the task, because action=swarm reads this
-    // same field alone and never looks at `forks`.
-    expect(task.description).toMatch(/the task the forks explore together and the context they share/);
-    expect(task.description).toMatch(/State it here once rather than repeating it in each fork/);
-  });
-
-  test('strategy throws surface as {error}, never into the turn', async () => {
-    const reg = createStrategyRegistry();
-    reg.register(createTestStrategy({ id: FORK_STRATEGY_ID, throwError: 'kaboom' }));
-    const { rt } = createTestRuntime();
-    const t = agentsTool({ fork: { registry: reg, rt, model: testModel } });
-    const result = v.parse(ErrorResultSchema, await t.execute({ action: 'fork', task: 't', forks: twoForks }));
-    expect(result.error).toMatch(/Fork failed/);
-    expect(result.error).toMatch(/kaboom/);
-  });
-
-  test('deep-merges caller options under injected infra (host deps survive)', async () => {
-    const reg = createStrategyRegistry();
-    let observedOpts: StrategyContext['options'] | undefined;
-    reg.register({
-      id: FORK_STRATEGY_ID,
-      async explore(ctx) {
-        observedOpts = ctx.options;
-        return { strategy: FORK_STRATEGY_ID, best: { text: '', score: 1, source: '' }, all: [], cost: { durationMs: 0 } };
-      },
-    });
-    const { rt } = createTestRuntime();
-    const controller = { __infra: true };
-    const t = agentsTool({
-      fork: {
-        registry: reg, rt, model: testModel,
-        defaultOptions: () => ({ mcts: { iterations: 7 }, heads: { controller, count: 3 } }),
-      },
-    });
-    await t.execute({ action: 'fork', task: 't', forks: twoForks, options: { heads: { count: 5 } } });
-    // Untouched strategy bag passes through verbatim.
-    expect(strategyOption(observedOpts, 'mcts')).toEqual({ iterations: 7 });
-    // One-level deep merge: caller's `count` overrides, but the host-injected
-    // `controller` is NOT clobbered. This is the bug the shallow spread had.
-    expect(strategyOption(observedOpts, 'heads')).toEqual({ controller, count: 5, heads: twoForks });
-  });
-
-  test('an array option replaces a strategy bag instead of becoming numeric object keys', async () => {
-    const reg = createStrategyRegistry();
-    let observedOpts: StrategyContext['options'] | undefined;
-    reg.register({
-      id: FORK_STRATEGY_ID,
-      async explore(ctx) {
-        observedOpts = ctx.options;
-        return { strategy: FORK_STRATEGY_ID, best: { text: '', score: 1, source: '' }, all: [], cost: { durationMs: 0 } };
-      },
-    });
-    const { rt } = createTestRuntime();
-    const t = agentsTool({
-      fork: {
-        registry: reg, rt, model: testModel,
-        defaultOptions: () => ({ mcts: { session: { __infra: true } } }),
-      },
-    });
-
-    // Any strategy bag: the merge path's own `heads` bag is written by the
-    // forks fold, so the array-replacement rule is pinned on another key.
-    await t.execute({ action: 'fork', task: 't', forks: twoForks, options: { mcts: ['one', 'two'] } });
-
-    expect(strategyOption(observedOpts, 'mcts')).toEqual(['one', 'two']);
-  });
-
-  test('folds typed forks / merge_strategy input into options.heads', async () => {
-    const reg = createStrategyRegistry();
-    let observedOpts: StrategyContext['options'] | undefined;
-    reg.register({
-      id: FORK_STRATEGY_ID,
-      async explore(ctx) {
-        observedOpts = ctx.options;
-        return { strategy: FORK_STRATEGY_ID, best: { text: '', score: 1, source: '' }, all: [], cost: { durationMs: 0 } };
-      },
-    });
-    const { rt } = createTestRuntime();
-    const controller = { __infra: true };
-    const t = agentsTool({
-      fork: { registry: reg, rt, model: testModel, defaultOptions: () => ({ heads: { controller } }) },
-    });
-    await t.execute({ action: 'fork', task: 't', forks: twoForks, merge_strategy: 'consensus' });
-    // Injected controller + LLM-supplied specs coexist under options.heads.
-    expect(strategyOption(observedOpts, 'heads')).toEqual({ controller, heads: twoForks, mergeStrategy: 'consensus' });
-  });
-
-  test('passes through budget to strategy context', async () => {
-    const reg = createStrategyRegistry();
-    let observedBudget: StrategyContext['budget'] | undefined;
-    reg.register({
-      id: FORK_STRATEGY_ID,
-      async explore(ctx) {
-        observedBudget = ctx.budget;
-        return { strategy: FORK_STRATEGY_ID, best: { text: '', score: 1, source: '' }, all: [], cost: { durationMs: 0 } };
-      },
-    });
-    const { rt } = createTestRuntime();
-    const t = agentsTool({ fork: { registry: reg, rt, model: testModel } });
-    await t.execute({ action: 'fork', task: 't', forks: twoForks, budget: 42, wall_clock_ms: 999 });
-    expect(observedBudget?.maxIterations).toBe(42);
-    expect(observedBudget?.wallClockMs).toBe(999);
-  });
-});
-
-// ── fork — the forks contract ───────────────────────────────────────────────
+// ── swarm — the refusal seam, before anything spawns ────────────────────────
 
 /**
- * `forks` is REQUIRED, and that used to be documentation alone.
+ * A call that cannot run must be refused BEFORE the spawn is announced.
  *
- * The schema said "Required when settling by merge" and nothing enforced it, so a
- * fork with no briefs degraded past the spawn announcement (agents-tool.ts,
- * readSpawnStarted), detached into a background job, and the heads strategy's
- * throw came back as a wake claiming the spawned work failed — for a fork that
- * never spawned.
- *
- * With merge the only settlement a fork has, the requirement is unconditional: a
- * fork runs the briefs it was given and a call with none has nothing to run. It is
- * a refusal at the seam, classified `bad_input` like every other
- * arguments-do-not-describe-an-operation refusal in this codebase.
+ * The shape this defends against is measured: a call whose required field was
+ * only documented degraded past the spawn announcement (agents-tool.ts,
+ * readSpawnStarted), detached into a background job, and the engine's throw came
+ * back as a wake claiming the spawned work had failed — for work that never
+ * started. Every validation refusal therefore returns above that line, and it is
+ * classified `bad_input` like every other arguments-do-not-describe-an-operation
+ * refusal in this codebase.
  */
-describe('agents tool — the forks contract', () => {
+describe('agents tool — the swarm refusal seam', () => {
   const RefusalSchema = v.object({ reason: v.string(), error: v.string() });
-
-  const briefs = [
-    { task: 'read the gateway logs', rationale: 'where the failure shows', model: 'codex/gpt-5.5', allowedTools: ['file'] },
-    { task: 'diff the last deploy', rationale: 'timing points at the release' },
-  ];
-
-  /** A fork surface whose strategies RECORD their dispatch, so a refusal is
-   *  distinguishable from a call that ran and threw the briefs away. */
-  function recordingFork() {
-    const dispatched: string[] = [];
-    const reg = createStrategyRegistry();
-    for (const id of [FORK_STRATEGY_ID, 'mcts']) {
-      reg.register({
-        id,
-        async explore() {
-          dispatched.push(id);
-          return { strategy: id, best: { text: 'ran', score: 1, source: id }, all: [], cost: { durationMs: 0 } };
-        },
-      });
-    }
-    const { rt } = createTestRuntime();
-    return { dispatched, tool: agentsTool({ fork: { registry: reg, rt, model: testModel } }) };
-  }
 
   /** The options bag the background wrapper arms on a spawn-shaped call. Built
    *  here rather than inline so the extra key is not an excess property on a
    *  fresh `ToolExecutionOptions` literal. */
   function spawnAnnouncing(announce: () => void) {
-    return { toolCallId: 'tc-merge', messages: [], [SPAWN_STARTED_OPTION]: announce };
+    return { toolCallId: 'tc-swarm', messages: [], [SPAWN_STARTED_OPTION]: announce };
   }
 
-  test('a fork with no forks is refused at the seam — before the spawn is announced', async () => {
-    const { dispatched, tool } = recordingFork();
+  test('a swarm with no preset is refused at the seam — before the spawn is announced', async () => {
+    const tool = agentsTool({ fork: forkDeps() });
     let announced = 0;
     const result = v.parse(RefusalSchema, await tool.execute(
-      { action: 'fork', task: 'split the work' },
+      { action: 'swarm', task: 'split the work' },
       spawnAnnouncing(() => { announced += 1; }),
     ));
-    expect(dispatched).toEqual([]);
-    // The whole point of enforcing here: an unspawnable fork must not detach
+    // The whole point of enforcing here: an unrunnable search must not detach
     // and come back as a wake about work that never started.
     expect(announced).toBe(0);
     expect(result.reason).toBe('bad_input');
-    expect(result.error).toMatch(/\bforks\b/);
+    expect(result.error).toMatch(/\bpreset\b/);
   });
 
-  test('an empty forks array is the same refusal as none at all', async () => {
-    const { dispatched, tool } = recordingFork();
-    const result = v.parse(RefusalSchema, await tool.execute({ action: 'fork', task: 't', forks: [] }));
-    expect(dispatched).toEqual([]);
+  test('a swarm with no task is the same refusal, and names where the metric goes', async () => {
+    const tool = agentsTool({ fork: forkDeps() });
+    let announced = 0;
+    const result = v.parse(RefusalSchema, await tool.execute(
+      { action: 'swarm', preset: 'ideate' },
+      spawnAnnouncing(() => { announced += 1; }),
+    ));
+    expect(announced).toBe(0);
     expect(result.reason).toBe('bad_input');
+    expect(result.error).toContain('`objective`');
   });
 
-  test('the refusal points at the action that writes its own candidates', async () => {
-    // The remedy used to be conditional on `mcts` being registered, because the
-    // alternative settlement was a strategy id. Tree search is an ACTION now, so
-    // the refusal names it unconditionally: this surface has no mcts registered
-    // and still says where a search that writes its own approaches belongs.
-    const reg = createStrategyRegistry();
-    reg.register(createTestStrategy({ id: FORK_STRATEGY_ID, answer: 'forked' }));
-    const { rt } = createTestRuntime();
-    const tool = agentsTool({ fork: { registry: reg, rt, model: testModel } });
-    const result = v.parse(RefusalSchema, await tool.execute({ action: 'fork', task: 't' }));
-    expect(result.reason).toBe('bad_input');
-    expect(result.error).toContain('action:\'swarm\'');
-    expect(result.error).toMatch(/2-6 briefs/);
-    expect(result.error).not.toContain('mcts');
-  });
-
-  test('a fork WITH forks folds them into options.heads and runs', async () => {
-    const { dispatched, tool } = recordingFork();
-    const result = v.parse(StrategyResultSchema, await tool.execute({
-      action: 'fork', task: 'why staging 502s under load', forks: briefs,
-    }));
-    expect(dispatched).toEqual([FORK_STRATEGY_ID]);
-    expect(result.strategy).toBe(FORK_STRATEGY_ID);
-  });
-
-  test('a fork refusal counts as the tool DECLINING, not as the tool breaking', async () => {
+  test('a swarm refusal counts as the tool DECLINING, not as the tool breaking', async () => {
     // The refusal reason is the vocabulary read-models/tool-failures.ts
     // classifies, so a correct refusal lands in `refused` instead of indicting
     // the tool in `broke` — which is where the old bare `{error}` envelopes went.
-    const { tool } = recordingFork();
-    const args: AgentsToolInput = { action: 'fork', task: 't' };
+    const tool = agentsTool({ fork: forkDeps() });
+    const args: AgentsToolInput = { action: 'swarm', task: 't' };
     const result = await tool.execute(args);
-    const failure = classifyToolFailure({
+    expect(classifyToolFailure({
       type: 'tool_call_end', eventIndex: 0, runId: 'run-1',
       timestamp: new Date().toISOString(), name: 'agents', toolCallId: 'tc-1',
       args: v.parse(JsonObjectSchema, args), result: v.parse(JsonObjectSchema, result),
-    });
-    expect(failure).toEqual({
-      tool: 'agents', action: 'fork', reason: 'bad_input',
+    })).toEqual({
+      tool: 'agents', action: 'swarm', reason: 'bad_input',
       refused: true, workFailed: false, runtimeMissing: false,
     });
   });
 
-  test('the forks field states its own requirement, and where a self-authored search goes', () => {
+  test('the task field states what it is for, and what a node can lean on', () => {
     const schema = v.parse(v.object({ jsonSchema: v.object({ properties: v.object({
-      forks: v.object({ description: v.string() }),
+      task: v.object({ description: v.string() }),
     }) }) }), agentsTool({ fork: forkDeps() }).inputSchema);
-    const { forks } = schema.jsonSchema.properties;
-    // Unconditional now that merge is the only settlement, and stated on the field
-    // the model fills rather than only enforced at the seam.
-    expect(forks.description).toMatch(/they are required/);
-    // The tool-loop distinction survives the settle it used to be stated against:
-    // a fork is a real agent, and a swarm candidate is not.
-    expect(forks.description).toMatch(/multi-step tool loop/);
-    expect(forks.description).toMatch(/that is action=swarm/);
+    const { task } = schema.jsonSchema.properties;
+    expect(task.description).toMatch(/what the search is for, in prose/);
+    expect(task.description).toMatch(/never the measured quantity/);
+    // The inheritance half is DELEGATION_INHERITANCE.swarm.brief, byte-for-byte —
+    // the same per-action source the rung composes, so the field and the rung
+    // cannot come to disagree about what a node can see.
+    expect(task.description).toContain(DELEGATION_INHERITANCE.swarm.brief);
   });
 });
 
@@ -1013,15 +735,18 @@ describe('agents tool — peer workspace actions', () => {
   });
 });
 
-// ── replaying a stored fork row ─────────────────────────────────────────────
+// ── replaying a stored delegation row ───────────────────────────────────────
 // A durable job row holds whatever the model sent, verbatim (jobs/runner.ts
 // stores the raw tool input), so rows written before today's surface can carry
-// fields it now refuses — `settle` among them. A row is RE-DRIVEN, not answered:
-// there is no model listening for a correction, and a refusal here is an
-// interrupted fork lost to a spelling nobody can fix any more. So the filter
-// TRANSLATES, and says what it could not carry.
+// fields it now refuses — and can name an ACTION it no longer has. A row is
+// RE-DRIVEN, not answered: there is no model listening for a correction, and a
+// refusal here is interrupted work lost to a spelling nobody can fix any more.
+// So the filter TRANSLATES, and says what it could not carry.
+//
+// The same predicate is the DETACH gate (orchestrator/background-tools.ts), so
+// these tests also pin what `agents` may background at all.
 
-describe('agents tool — resuming a stored fork row', () => {
+describe('agents tool — resuming a stored delegation row', () => {
   /** `diagnostics` writes one JSON line per event to console.error, and has no
    *  injection seam this far inside core — so the line is read where it lands.
    *  Reassignment rather than spyOn: the same reason unit-mcts-resume.test.ts
@@ -1037,89 +762,114 @@ describe('agents tool — resuming a stored fork row', () => {
     }
   }
 
-  test('a row of fork fields resumes exactly as it was stored', () => {
-    expect(resumableForkInput('agents', {
-      action: 'fork', task: 'search', forks: twoForks, budget_usd: 5,
-    })).toEqual({ action: 'fork', task: 'search', forks: twoForks, budget_usd: 5 });
+  test('a row of swarm fields resumes exactly as it was stored', () => {
+    // And this is what keeps `agents` backgroundable: the detach gate is this
+    // same call, so a non-null answer here is what lets a live search detach.
+    expect(resumableAgentsInput('agents', {
+      action: 'swarm', preset: 'optimise', task: 'search', depth: 3, budget_usd: 5,
+    })).toEqual({ action: 'swarm', preset: 'optimise', task: 'search', depth: 3, budget_usd: 5 });
   });
 
-  test('a stored settle row is re-driven as the action that runs a tree today', () => {
-    // The contract inverted with the cutover: `settle` no longer round-trips,
-    // because nothing on this surface reads it any more. A row stored under one
-    // WAS a tree search, and tree search is `action:'swarm'` — mapped onto
-    // `preset:'ideate'`, the one preset that writes its own competing approaches
-    // from `task` alone, because the row carries no `objective` and none can be
-    // invented for it.
-    const { result: resumed, lines } = captureEvents(() => resumableForkInput('agents', {
-      action: 'fork', task: 'search', settle: 'mcts', budget_usd: 5,
+  test('a stored fork row is re-driven as the action that spawns nodes today', () => {
+    // The rung is gone and the row is history. A stored fork WAS ephemeral
+    // tool-using children on inherited context, which is what a search is now —
+    // mapped onto `preset:'ideate'`, the one preset that writes its own competing
+    // approaches from `task` alone, because the row carries no `objective` and
+    // none can be invented for it. The caps carry, because dropping a cap is the
+    // one loss that would make the re-drive cost MORE than the run it resumes.
+    const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
+      action: 'fork', task: 'search', forks: twoForks, merge_strategy: 'consensus', budget_usd: 5,
     }));
-    expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
+    expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search', budget_usd: 5 });
     const dropped = lines.filter((line) => line.includes('agents.resume.fields_dropped'));
     expect(dropped).toHaveLength(1);
-    expect(dropped[0]).toContain('budget_usd');
-    expect(dropped[0]).toContain('settle=mcts->action:swarm/preset:ideate');
-    // The RANKING is the loss, and it is named rather than counted: `ideate`
-    // returns the candidates unranked, and the judged ensemble that ordered them
-    // is deliberately unreachable from a swarm.
-    expect(dropped[0]).toContain('ranking');
+    // Named, not counted: the briefs and the merge are the loss, and a re-drive
+    // that lost them is only diagnosable if the line says so.
+    expect(dropped[0]).toContain('forks');
+    expect(dropped[0]).toContain('merge_strategy');
+    expect(dropped[0]).toContain('settlement');
+    expect(dropped[0]).not.toContain('budget_usd');
+  });
+
+  test('a stored settle row takes the same translation, from one era further back', () => {
+    // `settle` stopped being an entry when tree search became an action, so it
+    // arrives as an unknown key on the raw row and is named in the same line.
+    const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
+      action: 'fork', task: 'search', settle: 'mcts', budget_tokens: 900,
+    }));
+    expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search', budget_tokens: 900 });
+    const dropped = lines.filter((line) => line.includes('agents.resume.fields_dropped'));
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toContain('settle');
+    expect(dropped[0]).toContain('settlement');
   });
 
   test('a row carrying a field the parse now refuses still resumes, and the drop is logged', () => {
-    const { result: resumed, lines } = captureEvents(() => resumableForkInput('agents', {
-      action: 'fork', task: 'search', forks: twoForks, budgetUsd: 5,
+    const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
+      action: 'swarm', preset: 'ideate', task: 'search', budgetUsd: 5,
     }));
     // Translated, not refused: `budgetUsd` never applied on the original
     // dispatch either, so the re-drive reproduces that run rather than failing.
-    expect(resumed).toEqual({ action: 'fork', task: 'search', forks: twoForks });
+    expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
     const dropped = lines.filter((line) => line.includes('agents.resume.fields_dropped'));
     expect(dropped).toHaveLength(1);
-    // Named, not counted: a resumed fork that lost a cap is only diagnosable if
+    // Named, not counted: a resumed search that lost a cap is only diagnosable if
     // the line says which field went.
     expect(dropped[0]).toContain('budgetUsd');
   });
 
-  test('a stored non-fork field is narrowed away, so the re-drive is not refused', async () => {
-    // The trap one layer deeper than the parse: `topic` is a DECLARED field, so
-    // a lenient parse would keep it, and the strict parse at the tool would then
-    // refuse the whole re-drive because `fork` does not read it. The filter
-    // builds the call out of fork's fields alone, which is what makes the row
-    // replayable at all.
-    const { result: resumed, lines } = captureEvents(() => resumableForkInput('agents', {
-      action: 'fork', task: 'search', forks: twoForks, topic: 'stale',
+  test('a stored field the target action does not read is narrowed away, so the re-drive is not refused', async () => {
+    // The trap one layer deeper than the parse: `topic` is a DECLARED field, so a
+    // lenient parse would keep it, and the strict parse at the tool would then
+    // refuse the whole re-drive because `swarm` does not read it. The filter
+    // builds the call out of the target action's fields alone, which is what
+    // makes the row replayable at all — proved by driving the tool with it.
+    const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
+      action: 'swarm', preset: 'ideate', task: 'search', topic: 'stale',
     }));
-    expect(resumed).toEqual({ action: 'fork', task: 'search', forks: twoForks });
+    expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
     expect(lines.filter((line) => line.includes('agents.resume.fields_dropped'))).toHaveLength(1);
-    if (!resumed) throw new Error('expected a resumable fork input');
-    const result = v.parse(StrategyResultSchema, await agentsTool({ fork: forkDeps() }).execute(resumed));
-    expect(result.strategy).toBe(FORK_STRATEGY_ID);
+    if (!resumed) throw new Error('expected a resumable agents input');
+    const replayed = v.parse(v.record(v.string(), v.unknown()), await agentsTool({ fork: forkDeps() }).execute(resumed));
+    // Not refused, and positively so: the re-drive reached the engine and came
+    // back with a run report, which it could not have if `topic` had survived
+    // into the strict parse.
+    expect(replayed['reason']).toBeUndefined();
+    expect(replayed['error']).toBeUndefined();
+    expect(replayed['report']).toBeDefined();
   });
 
-  test('a stored row for any other action is not resumable', () => {
-    expect(resumableForkInput('agents', { action: 'hire', role: 'r', mission: 'm' })).toBeNull();
-    expect(resumableForkInput('run', { command: 'ls' })).toBeNull();
+  test('a stored row for a converse action is not resumable, and neither is another tool', () => {
+    // This is also the detach gate saying no: an `agents` call that cannot be
+    // re-driven must never detach into a job in the first place.
+    expect(resumableAgentsInput('agents', { action: 'hire', role: 'r', mission: 'm' })).toBeNull();
+    expect(resumableAgentsInput('agents', { action: 'ask', agent: 'a', message: 'm' })).toBeNull();
+    expect(resumableAgentsInput('run', { command: 'ls' })).toBeNull();
   });
 
-  test('a pre-unification `think` row is translated onto the fork fields', () => {
-    // Rows stored before the agents unification carry kind 'think' and `heads`
-    // instead of `forks`. Their extra fields are dropped by the same rule, and
-    // the result must be a call the strict parse accepts.
-    expect(resumableForkInput('think', {
+  test('a pre-unification `think` row is translated onto the search action', () => {
+    // Rows stored before the agents unification carry kind 'think', `heads`
+    // instead of briefs, and a `strategy` naming the engine directly. Every one
+    // of those is dropped by the same rule, and the result must be a call the
+    // strict parse accepts.
+    const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('think', {
       strategy: FORK_STRATEGY_ID, task: 'search', heads: twoForks, budget: 4, unknown_since: 'ever',
-    })).toEqual({ action: 'fork', task: 'search', forks: twoForks, budget: 4 });
-  });
-
-  test('a legacy `think` row whose strategy was a tree search replays as a swarm', () => {
-    // `strategy` is the pre-unification spelling of the signal `settle` carried,
-    // so it takes the same translation: a row from either era that asked for a
-    // tree gets the one action that runs one, and loses the same ranking.
-    const { result: resumed, lines } = captureEvents(() => resumableForkInput('think', {
-      strategy: 'mcts', task: 'search', heads: twoForks, budget: 4, unknown_since: 'ever',
     }));
     expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
     const dropped = lines.filter((line) => line.includes('agents.resume.fields_dropped'));
     expect(dropped).toHaveLength(1);
     expect(dropped[0]).toContain('heads');
     expect(dropped[0]).toContain('unknown_since');
-    expect(dropped[0]).toContain('ranking');
+    expect(dropped[0]).toContain('settlement');
+  });
+
+  test('a legacy `think` row whose strategy was a tree search replays the same way', () => {
+    // A row from either era that asked for several attempts gets the one action
+    // that runs them, and loses the same settlement — so the translation does not
+    // depend on which engine the row happened to name.
+    const { result: resumed } = captureEvents(() => resumableAgentsInput('think', {
+      strategy: 'mcts', task: 'search', heads: twoForks, budget: 4,
+    }));
+    expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
   });
 });

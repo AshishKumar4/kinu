@@ -439,7 +439,7 @@ export {
 } from './tools/registry';
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export {
-  createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableForkInput,
+  createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
   type AgentsToolInput,
 } from './tools/agents-tool';
 // The same delegation dispatch, projected into the codemode sandbox.
@@ -1239,7 +1239,7 @@ export {
   type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
 } from './orchestrator/scaffold-host';
 export {
-  BACKGROUNDABLE_TOOLS, wrapToolsForBackground, resumeForkBackgroundJob,
+  BACKGROUNDABLE_TOOLS, wrapToolsForBackground, resumeBackgroundJob,
 } from './orchestrator/background-tools';
 export { buildStrategyForkDeps, type ForkDepsWiring } from './orchestrator/fork-deps';
 export { createDurableMctsSession } from './orchestrator/mcts-session';

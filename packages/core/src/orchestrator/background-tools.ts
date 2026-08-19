@@ -1,6 +1,6 @@
 /**
  * Background-tool policy — which tool calls may auto-detach to the background
- * (with the per-call gate: `agents` detaches only its fork action — the
+ * (with the per-call gate: `agents` detaches only the search rung — the
  * converse actions keep their inline semantics), the wrapper that arms it,
  * and the evict/exit resume policy. One implementation for both backends
  * (each previously carried its own copy of the map AND the wrapper AND the
@@ -11,7 +11,7 @@
  *              unknown (`run`, `execute_tools`), so it races the surface's
  *              detach threshold and only work that proved slow crosses.
  *   'spawn'  — the call launches a process whose completion arrives as a wake
- *              event (`agents` fork). Where a wake can arrive it detaches the
+ *              event (`agents` swarm). Where a wake can arrive it detaches the
  *              moment the spawn is confirmed started (the threshold wait could
  *              only ever be dead air); where none can, it runs inline to
  *              completion, because a detached result there has no reader.
@@ -23,7 +23,7 @@ import { SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from '
 import { JobNotResumable } from '../jobs/runner';
 import type { BackgroundJobRunner } from '../jobs/runner';
 import type { WorkMode } from '../prompting/surface';
-import { resumableForkInput } from '../tools/agents-tool';
+import { resumableAgentsInput } from '../tools/agents-tool';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 
@@ -35,13 +35,16 @@ export interface BackgroundableTool {
   readonly detachable: (input: JsonValue) => boolean;
 }
 
-function isForkInput(input: JsonValue): boolean {
-  return resumableForkInput('agents', input) !== null;
+/** The detach gate and the resume gate are ONE predicate, deliberately: a call
+ *  that could not be re-driven after an eviction must never be detached into a
+ *  job in the first place, and two predicates would drift into exactly that. */
+function isResumableSpawn(input: JsonValue): boolean {
+  return resumableAgentsInput('agents', input) !== null;
 }
 
 /** Tools whose work can be long enough to auto-detach to the background. */
 export const BACKGROUNDABLE_TOOLS: ReadonlyMap<string, BackgroundableTool> = new Map([
-  ['agents', { completion: 'spawn', detachable: isForkInput }],
+  ['agents', { completion: 'spawn', detachable: isResumableSpawn }],
   ['execute_tools', { completion: 'result', detachable: () => true }],
   ['run', { completion: 'result', detachable: () => true }],
 ]);
@@ -116,29 +119,30 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
 
 /**
  * Re-drive a background job interrupted by a DO eviction / CLI process exit
- * (B6). Only a FORK is resumable: re-running the RAW agents tool (no 30s
- * re-detach) continues an interrupted MCTS from its durable search checkpoint
- * (runMCTS.findResumable matches the unfinished run by task) and re-runs
- * heads. Jobs stored before the agents unification carry kind 'think';
- * resumableForkInput translates them onto the same path. Side-effecting kinds
+ * (B6). Only a SEARCH is resumable: re-running the RAW agents tool (no 30s
+ * re-detach) continues an interrupted search from its durable checkpoint.
+ * Rows stored before today's surface — the pre-unification `think` kind, and
+ * the removed `fork` action — are TRANSLATED onto the same path by
+ * `resumableAgentsInput` rather than refused, because a durable row is history
+ * and nobody is left to correct its spelling. Side-effecting kinds
  * (execute_tools / run) can't be safely re-executed, so they decline.
  *
  * `rawTools` is a thunk: the gate runs first, so a non-resumable kind never
  * pays for (or fails on) tool construction — the CLI resolves its model-bound
  * surface inside it.
  */
-export async function resumeForkBackgroundJob(
+export async function resumeBackgroundJob(
   rawTools: (mode: WorkMode) => ToolSet,
   kind: string,
   input: JsonValue,
   mode: WorkMode,
   signal: AbortSignal,
 ): Promise<JsonValue | undefined> {
-  const forkInput = resumableForkInput(kind, input);
-  if (!forkInput) throw new JobNotResumable(kind);
+  const resumed = resumableAgentsInput(kind, input);
+  if (!resumed) throw new JobNotResumable(kind);
   const exec = rawTools(mode).agents?.execute;
   if (!exec) throw new JobNotResumable(kind);
-  const result = await exec(forkInput, {
+  const result = await exec(resumed, {
     abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
   });
   return result === undefined ? undefined : decodeJsonValue({ value: result });
