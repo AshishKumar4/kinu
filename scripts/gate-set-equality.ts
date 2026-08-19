@@ -139,6 +139,14 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + "bun's built-in trusted list is compiled into bun rather than declared here — so the set "
     + 'that EXECUTES is exactly the set no repository enumerator can produce.',
   ],
+  [
+    'scripts/patch-parity.ts',
+    "enumerates bun's install cache to find the PRISTINE extraction of each patched dependency "
+    + '(`<cache>/<name>@<version>@@@N`, selected by prefix so the `_patch_hash=` sibling can never '
+    + 'be mistaken for it). The cache lives outside the repository, its entry names are bun\'s to '
+    + 'choose, and `git ls-files` has never listed one — so the set is exactly what no repository '
+    + 'enumerator can produce.',
+  ],
 ]);
 
 export type Kind = 'private-enumeration' | 'private-pattern' | 'unmeasured-publication'

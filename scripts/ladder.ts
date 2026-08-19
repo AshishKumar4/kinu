@@ -276,6 +276,25 @@ export const LADDER: readonly Gate[] = [
       + 'is the gate for the last, and shares the reviewed-set shape with this one.',
   },
   {
+    run: 'bun run gate:patch-parity',
+    tier: 'commit',
+    seconds: 0.16,
+    catches: 'a committed patch that does not reproduce the `node_modules` the suites ran '
+      + 'against. Four dependencies are patched, so every green result in this repository stands '
+      + 'on that equality, and nothing checked it. The incident: a core patch regenerated BEFORE '
+      + 'its `.d.ts` hunks were written restored undeclared type files on a fresh install and '
+      + 'failed `bun run check` — while `check` and the runtime parity test both read green, '
+      + 'because one typechecked a tree that already held the edits and the other reads only '
+      + '`dist/*.js`. Both directions are covered: a patch missing a hunk the tree has, and a '
+      + 'patch carrying one it does not. The corpus is `patchedDependencies` itself, never a '
+      + 'second list — a hand-maintained mirror is the defect class this closes.',
+    blind: 'files the patch does NOT touch; whether the patch is a good idea; and WHICH CHECKOUT '
+      + 'it answers for — `setup-worktree.sh` symlinks each node_modules entry to the main '
+      + "checkout's, so one shared directory serves every worktree while `patches/` is per-commit, "
+      + 'and at most one checkout can be truthful at a time. The gate prints its full blind-spot '
+      + 'list on the GREEN path, where it is actually needed.',
+  },
+  {
     run: 'bun run gate:skip-ratchet',
     tier: 'commit',
     seconds: 0.3,
@@ -315,7 +334,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/infra.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts',
     tier: 'push',
     seconds: 1.7,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
