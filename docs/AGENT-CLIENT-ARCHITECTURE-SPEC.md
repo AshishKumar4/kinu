@@ -1,698 +1,388 @@
-# Agent Client Architecture Specification
+# Agent Client Architecture
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-> Version 0.1 - June 2026
-> Status: proposed implementation spec
-> Theme: one cloud agent, many clients; one presentation contract, multiple adapters.
+> Written June 2026 as a proposed implementation spec. Every numbered item it
+> proposed has shipped. Nothing in it was abandoned and nothing is still open.
+> Re-checked against the code on 2026-08-19. This file now records what runs.
+> The file asks for no work.
+>
+> **Spec §N** marks an item from the June 2026 draft and gives its verdict. A
+> bare **§N** points at a section of this file.
 
----
+## 1. What runs
 
-## 1. Purpose
+Proteus has two agent backends.
 
-Proteus has two real agent backends:
+- A cloud workspace is an `OrchestratorAgent` Durable Object on Cloudflare. It
+  owns Think / Agents SDK chat, storage, callable RPC, tools, background jobs,
+  memory, exploration, release changes, device consent and execution providers.
+- A local workspace is a `LocalAgentSession` over `bun:sqlite` and a local
+  runtime (`packages/cli-backend/src/local-session.ts`).
 
-- Cloud agents: `OrchestratorAgent` Durable Objects on Cloudflare, built on
-  Think / Agents SDK chat, storage, callable RPC, tools, background jobs,
-  memory, MCTS, release changes, device consent, and execution providers.
-- Local agents: `LocalAgentSession` plus local SQLite/runtime adapters.
+One contract covers both. `AgentClient` in `packages/cli/src/agent-client.ts` is
+what every chat surface talks to. `createAgentClient` in
+`packages/cli/src/client-factory.ts` resolves a target to `CloudAgentClient`
+(`packages/cli/src/cloud-agent-client.ts`) or to the client
+`openLocalAgentClient` opens (`packages/cli/src/local-agent-client.ts`).
 
-The current CLI cloud path is not clean enough. It can run a local model loop,
-proxy tool calls into the cloud DO, and then commit the final result back to the
-DO. That creates a second cloud-agent execution model and invites mirrored
-state, stale transcripts, duplicate naming, and divergent behavior.
+A cloud turn runs in the Durable Object. The CLI keeps no model loop for it.
+`createAgentClient` refuses `--model`, `--base-url`, `--auth` and
+`--no-auto-evolve` on a cloud target and names the durable command instead
+(`client-factory.ts:60-73`).
 
-This spec defines the target architecture:
+**Spec §1 Purpose: SHIPPED.** The second cloud-turn execution model is gone.
 
-- Web, CLI, and TUI cloud mode are clients of the same `OrchestratorAgent` DO.
-- Cloud turns execute in the DO through the same Agents / Think chat path used
-  by the web UI.
-- Local mode shares the same client-facing abstractions through a local adapter.
-- The implementation removes stale, redundant, and fallback paths instead of
-  preserving them.
+## 2. The original evidence table, re-checked
 
----
+The original table held eight facts. Six hold as written. Two named files that no
+longer exist.
 
-## 2. Evidence From Current Code
-
-These are the important current facts this spec is based on.
-
-| Area | Current fact | Source |
+| Original claim | Verdict | Where it is now |
 |---|---|---|
-| Web cloud chat | Web connects to the real agent using `useAgent({ agent: "orchestrator-agent", name })` and `useAgentChat({ agent })`. | `packages/cf-backend/src/hooks/use-proteus.ts` |
-| Worker agent route | `/agents/*` is routed through `routeAgentRequest()` after auth and ownership checks. | `packages/cf-backend/src/server.ts` |
-| CLI auth scope | CLI bearer auth is currently handled under `/api/cli/*`, not the framework `/agents/*` websocket route. | `packages/cf-backend/src/cli/routes.ts` |
-| Current cloud CLI turn | `cloud-local-turn.ts` prepares a cloud turn, runs `runChat()` locally, proxies tools to the DO, then commits the answer. | `packages/cli/src/cloud-local-turn.ts` |
-| Active stale call sites | `run.ts` and `cloud-chat-loop.ts` import `runCloudTurnWithLocalModel`. | `packages/cli/src/commands/run.ts`, `packages/cli/src/cloud-chat-loop.ts` |
-| Local backend | `LocalAgentSession` is already a capable local turn engine with local storage/runtime. | `packages/cli-backend/src/local-session.ts` |
-| Ticket precedent | `UserDO` already has one-use, short-lived device websocket ticket patterns. | `packages/cf-backend/src/user/user-do.ts`, `packages/cf-backend/src/user/schema.ts` |
-| Chat protocol docs | Existing architecture docs describe the web frame path as `cf_agent_use_chat_request` over websocket, but implementation must validate against the installed package/source before hardcoding frames. | `docs/ARCHITECTURE.md` |
+| Web connects with `useAgent` / `useAgentChat` | SHIPPED | `packages/cf-backend/src/hooks/use-proteus.ts:409,592,602`. `useAgentChat` imports from `@cloudflare/ai-chat/react`. |
+| `/agents/*` routes through `routeAgentRequest()` after auth and ownership | SHIPPED | `packages/cf-backend/src/server.ts:461-485` |
+| CLI bearer auth sits under `/api/cli/*` | SHIPPED | `packages/cf-backend/src/cli/routes.ts` |
+| `cloud-local-turn.ts` prepares a cloud turn and runs `runChat()` locally | REMOVED | The file is deleted. `packages/cli/src/cloud-agent-client.ts` replaced it. |
+| `run.ts` and `cloud-chat-loop.ts` import `runCloudTurnWithLocalModel` | REMOVED | No file was ever named `cloud-chat-loop.ts`. The one classic surface is `packages/cli/src/chat-loop.ts`, and the symbol is deleted from the tree. |
+| `LocalAgentSession` is a capable local turn engine | SHIPPED | `packages/cli-backend/src/local-session.ts` |
+| `UserDO` has one-use, short-lived device websocket tickets | SHIPPED, and the CLI ticket copies the pattern | `packages/cf-backend/src/user/user-do.ts:713-820`, `user/schema.ts:227-240` |
+| Docs describe the web frame as `cf_agent_use_chat_request`, but the implementation must validate against the installed package | SHIPPED | `CHAT_MESSAGE_TYPES` from `agents/chat`, imported at `cloud-agent-client.ts:1`. The [ARCHITECTURE.md](ARCHITECTURE.md) turn sequence still shows the frame correctly. |
 
----
+## 3. The ten invariants
 
-## 3. Non-Negotiable Invariants
+All ten hold, and each is behaviour now.
 
-1. Cloud-mode CLI/TUI sends chat turns only through the real
-   `/agents/orchestrator-agent/:name` agent endpoint.
-2. Cloud turn execution, model selection, prompt building, tools, memory,
-   evolution, MCTS, run timeline, cancellation, and persistence happen in the
-   target `OrchestratorAgent` DO.
-3. Cloud-mode CLI/TUI must not import or call local `runChat()`, local model
-   resolvers, local tool execution, or prepare/tool/commit cloud-turn APIs.
-4. CLI local config may cache auth, origin, aliases, and non-authoritative UX
-   records. It must not be cloud prompt context or cloud state.
-5. CLI session JSONL files may exist as local terminal logs. They are never the
-   source of cloud chat history.
-6. Cloud chat history is the Think / Agents session history inside the DO
-   currently surfaced through `assistant_messages`-style storage and framework
-   APIs. Raw table names should be hidden behind server methods.
-7. Local mode remains explicitly local and may use local models, local tools,
-   local SQLite, and local session files. It must implement the same client
-   contract as cloud mode through a local adapter.
-8. Since Proteus has not gone public, do not add permanent legacy fallbacks or
-   compatibility layers. If existing pre-release data needs preserving, use a
-   one-time migration, not a permanent alternate read/write path.
-9. No client-provided `userId` is trusted as authority. Identity must come from
-   browser session auth, verified CLI token auth, or a verified short-lived
-   websocket ticket.
-10. Abstractions are allowed only where they own a real boundary: transport,
-    auth, storage backend, runtime lifecycle, or presentation normalization.
+1. **SHIPPED.** A cloud chat turn goes to
+   `/agents/orchestrator-agent/:name` over the framework websocket
+   (`cloud-agent-client.ts:637-644`).
+2. **SHIPPED.** The Durable Object owns turn execution, model selection, prompt
+   building, tools, memory, evolution, exploration, run timeline, cancellation
+   and persistence.
+3. **SHIPPED.** `CloudAgentClient` calls no local `runChat()`, no local model
+   resolver and no prepare/tool/commit API. None of those APIs exist.
+4. **SHIPPED.** CLI local config caches auth, origin and aliases. It is never
+   cloud prompt context.
+5. **SHIPPED.** A CLI session JSONL file is a terminal log. `AgentClient.cliSession`
+   says so in its own doc comment.
+6. **SHIPPED.** Cloud chat history is the Think session store. Callers read it
+   through `getChatHistoryPage`, never by naming a table.
+7. **SHIPPED.** Local mode stays local and implements the same contract through
+   `LocalAgentClient`.
+8. **SHIPPED.** Nothing here carries a permanent legacy fallback. The cloud
+   mirror turn paths were deleted rather than deprecated.
+9. **SHIPPED.** No client-supplied `userId` is trusted. Identity comes from
+   browser session auth, a verified CLI token, or a verified connect ticket.
+10. **SHIPPED.** The abstractions that exist own transport, auth, storage
+    backend, runtime lifecycle or event normalization.
 
----
+## 4. Who owns which state
 
-## 4. State Ownership Matrix
+**Spec §4 State ownership matrix: SHIPPED.** The rule per row is unchanged.
 
-| State | Cloud source of truth | Local source of truth | Client rule |
+| State | Cloud authority | Local authority | Client rule |
 |---|---|---|---|
-| User identity | D1 auth store plus `UserDO` | local config for local-only user prefs | Cloud identity never comes from local config. |
-| Agent roster | `UserDO.user_workspaces` | local config plus local DB discovery | CLI may cache aliases, not authoritative cloud roster. |
-| Agent identity / soul | `SOUL.md` in the agent DO VFS | local VFS / SQLite | Keep one `SOUL.md` source per backend. |
-| Chat history | Think / Agents session store in `OrchestratorAgent` | local SQLite / local session store | Cloud TUI reads DO history, never JSONL. |
-| Model selection | DO `agent_config` and user provider catalogs | local `agent_config` and local provider resolver | Cloud model changes go to DO only. |
-| Memory / VFS / craft / scaffold | DO SQLite/VFS | local SQLite/VFS | Client subscribes/fetches, never mirrors. |
-| MCTS / heads / GEPA | DO tables | local tables | Adapter projects the same logical surfaces. |
-| Run events / timeline / jobs | DO event/job tables | local event/job tables | One presentation contract, backend adapters. |
-| Credentials | `UserDO` | local config/key files | Cloud secrets never move into agent clients. |
-| Devices / PC tunnel | `UserDO` device hub plus consent policy | local daemon config | Cloud agent requests device access through consent. |
-| CLI JSONL transcript | optional local audit log | optional local audit log | Never prompt source for cloud mode. |
+| User identity | D1 auth store plus `UserDO` | local config, local prefs only | Cloud identity never comes from local config. |
+| Workspace roster | `UserDO.user_workspaces` | local config plus local DB discovery | The CLI caches aliases, not the roster. |
+| Identity and soul | `SOUL.md` in the workspace VFS | local VFS / SQLite | One `SOUL.md` per backend. |
+| Chat history | Think session store in `OrchestratorAgent` | recorded terminal transcript | The cloud TUI reads Durable Object history. |
+| Model selection | `agent_config` in the Durable Object | local `agent_config` | A cloud model change goes to the Durable Object. |
+| Memory, VFS, craft, scaffold | Durable Object SQLite and VFS | local SQLite and VFS | The client fetches. It never mirrors. |
+| Exploration, heads, GEPA | Durable Object tables | local tables | The adapter projects the same surfaces. |
+| Run events, timeline, jobs | Durable Object event and job tables | local event and job tables | One presentation contract, two adapters. |
+| Credentials | `UserDO` | local config and key files | Cloud secrets never move into a client. |
+| Devices and PC tunnel | `UserDO` device hub plus consent policy | local daemon config | Device access goes through consent. |
+| CLI JSONL transcript | local audit log | local audit log | Never a prompt source for cloud mode. |
 
----
-
-## 5. Target Architecture
+## 5. Shape
 
 ```text
-                    +-----------------------------+
-                    |      TUI / CLI commands      |
-                    | chat, run, rpc, inspect, UI  |
-                    +--------------+--------------+
-                                   |
-                                   v
-                    +-----------------------------+
-                    |         AgentClient          |
-                    | presentation-facing contract |
-                    +--------------+--------------+
-                                   |
-                    +--------------+--------------+
-                    |                             |
-                    v                             v
-       +--------------------------+   +---------------------------+
-       |     CloudAgentClient     |   |      LocalAgentClient     |
-       | websocket to real DO     |   | wraps LocalAgentSession   |
-       +------------+-------------+   +-------------+-------------+
-                    |                               |
-                    v                               v
-       +--------------------------+   +---------------------------+
-       | OrchestratorAgent DO     |   | local SQLite/runtime      |
-       | Think / Agents SDK chat  |   | local model/tools/events  |
-       +--------------------------+   +---------------------------+
+        TUI / CLI commands (chat, run, rpc, inspect, acp)
+                            |
+                       AgentClient
+                            |
+              +-------------+-------------+
+              |                           |
+       CloudAgentClient            LocalAgentClient
+       agent websocket +           wraps LocalAgentSession
+       generic RPC transport               |
+              |                            |
+     OrchestratorAgent DO          bun:sqlite + local runtime
+     Think / Agents SDK chat       local model, tools, events
 ```
 
-The TUI and CLI should not know whether a turn is cloud or local except through
-capabilities and labels. The backend adapters own the real boundary:
+**Spec §5 Target architecture: SHIPPED.** Both chat surfaces take an `AgentClient`
+and branch on capability rather than on backend. `chat-loop.ts` is the classic
+readline surface. `tui/chat-app.tsx` is the TUI. Neither has a cloud twin.
 
-- `CloudAgentClient`: Cloudflare websocket transport, CLI websocket ticket,
-  agent RPC, cloud device consent polling, cloud model catalog, cloud status.
-- `LocalAgentClient`: `LocalAgentSession` lifecycle, local SQLite/runtime,
-  local model resolver, local MCP, local stop/cancel, local history.
+The web UI still uses `useAgent()` and `useAgentChat()` directly, which the
+spec allowed and which no later change disturbed.
 
-The web UI may continue using `useAgent()` and `useAgentChat()` directly because
-that is already the canonical React adapter for the cloud DO. Do not force a web
-rewrite unless it removes real duplication.
+## 6. The contract
 
----
+**Spec §6 Recommended shape: SUPERSEDED by a wider one.** The sketch in the spec had
+`messages(limit)` and a generic `rpc<T>()` on the client. The shipped interface
+carries neither. It grew the surfaces the chat work actually needed. Read
+`packages/cli/src/agent-client.ts` for the current definition; the groups are:
 
-## 6. AgentClient Contract
+- Lifecycle. `connect()`, `close()`, `subscribe()`.
+- Turns. `send()`, `steer()`, `branch()`, `stop()`, `settleBackgroundWork?()`.
+- Walk-back. `fork(point)` plus `findForkPivot` and `forkCandidates`.
+- History. `history()`, `listSessions()`, `resumeConversation()`.
+- Reads. `status()`, `describeTools()`, `changelog()`, `readMemory()`,
+  `searchNodes()`, `listJobs()`, `latestTakes()`.
+- Model. `getModelSpec()`, `setModel()`, `getReasoningEffort()`,
+  `setReasoningEffort()`, `listModels()`.
+- Capability surfaces, nullable per backend. `consents`, `localControls`,
+  `checkpoints`.
 
-The shared contract is for presentation and CLI command code. It is not a new
-agent runtime and must not own prompts, tools, memory, model inference, or
-storage policy.
+`AgentClientEvent` is the one event stream. Both adapters normalize into it:
+`turn-start`, `text-delta`, `tool-call`, `tool-result`, `step-finish`,
+`turn-end`, `evolution`, `broadcast`, `run-event`, `error`.
 
-Recommended shape:
+The contract rules survived. A method on `AgentClient` names a real resource or
+action. A backend-specific surface is a nullable capability object, so a chat
+surface asks instead of branching on `mode`.
 
-```ts
-export type AgentClientMode = 'cloud' | 'local';
+## 7. Cloud transport and auth
 
-export interface AgentClient {
-  readonly mode: AgentClientMode;
-  readonly name: string;
-  readonly displayName: string;
+**Spec §7.1 Browser auth unchanged: SHIPPED.** Browser sessions keep the app-session
+gate.
 
-  connect(): Promise<AgentClientSnapshot>;
-  messages(limit?: number): Promise<AgentChatMessage[]>;
-  sendMessage(input: AgentSendInput): Promise<void>;
-  stop(): Promise<void>;
-  rpc<T>(method: string, args?: unknown[]): Promise<T>;
-  subscribe(listener: (event: AgentClientEvent) => void): () => void;
-  close(): Promise<void>;
-}
-
-export interface AgentSendInput {
-  text: string;
-  cwd?: string;
-  deviceId?: string;
-}
-
-export type AgentClientEvent =
-  | { type: 'connected'; snapshot: AgentClientSnapshot }
-  | { type: 'message'; message: AgentChatMessage }
-  | { type: 'text-delta'; id: string; delta: string }
-  | { type: 'tool-call'; id: string; toolName: string; args: unknown }
-  | { type: 'tool-result'; id: string; toolName: string; result: unknown }
-  | { type: 'turn-finished'; id: string }
-  | { type: 'status'; status: AgentStatusSnapshot }
-  | { type: 'device-consent'; request: PendingDeviceConsent }
-  | { type: 'error'; error: string };
-```
-
-Contract rules:
-
-- `AgentClient` methods represent real agent resources and actions.
-- Do not add methods that only map to one UI string.
-- Use capability flags for backend-specific surfaces instead of branching in UI.
-- `CloudAgentClient` must not call local model code.
-- `LocalAgentClient` must not import cloud transport or cloud auth.
-- Both adapters normalize events into the same `AgentClientEvent` stream.
-
----
-
-## 7. Cloud Transport And Auth
-
-### 7.1 Browser Auth Remains Unchanged
-
-Browser sessions keep using the current app-session auth gate and the existing
-web `useAgent` / `useAgentChat` path.
-
-### 7.2 CLI WebSocket Ticket
-
-CLI bearer tokens must not be placed in websocket URLs. Add a narrow ticket
-exchange:
+**Spec §7.2 CLI websocket ticket: SHIPPED.** A CLI bearer token never enters a
+websocket URL. The exchange is two steps.
 
 ```text
 POST /api/cli/workspaces/:name/connect-ticket
-Authorization: Bearer ptc_...
+Authorization: Bearer <cli token>
 
--> { ticket: "pat_...", expiresAt: 1780970000000 }
+-> { ticket: "pat_<userId>_<random>", expiresAt: <epoch ms> }
 
 wss://origin/agents/orchestrator-agent/:name?ticket=pat_...
 ```
 
-Ticket properties:
+`UserDO.issueCliAgentConnectTicket` mints it and
+`UserDO.verifyCliAgentConnectTicket` consumes it (`user-do.ts:713-806`). The
+ticket is stored as a SHA-256 hash in `cli_agent_connect_tickets`, lives 60
+seconds, is single use, and is scoped to a user id, an agent class, an agent
+name and the `agent.websocket` capability. Reuse, a wrong user and a wrong agent
+all fail. Minting needs `workspace.exec` and `UserDO.hasWorkspace(name)`.
 
-- Stored hashed in `UserDO`.
-- Short lived, single use.
-- Scoped to user id, agent name, agent class, and capabilities.
-- Minting verifies the CLI token and `UserDO.hasWorkspace(name)`.
-- Consumption verifies expiry, use status, user, agent, and ownership.
-- Reuse fails.
-- Wrong-agent and wrong-user use fails.
-- Revoked or expired CLI tokens cannot mint new tickets.
+**Spec §7.2 open point on revocation: RESOLVED the strict way.** The ticket row keeps
+the bearer's token hash, and `cliBearerScopes` resolves scopes at consumption
+(`user-do.ts:808-820`). A token revoked after minting cannot ride its own
+pre-minted ticket. The short TTL is not the revocation window.
 
-If ticket consumption must reject tokens revoked after minting, store token hash
-metadata and verify current token state at consumption. If short TTL is accepted
-as the revocation window, the spec implementation must document that decision
-and test it explicitly.
+**Spec §7.3 Worker route gate: SHIPPED.** `authenticateCliAgentTicketRequest`
+(`server.ts:174-229`) accepts a ticket only
+on a websocket upgrade for the scoped agent, verifies it against `UserDO`,
+deletes the `ticket` query parameter, then builds the identity that ownership and
+`claimOwner()` run on. An unknown workspace fails. Nothing auto-registers on
+first touch.
 
-### 7.3 Worker Route Gate
+**Spec §7.4 Protocol handling: SHIPPED, by reuse.** The client imports
+`CHAT_MESSAGE_TYPES` from `agents/chat` rather than hardcoding frame strings, so
+`USE_CHAT_REQUEST`, `USE_CHAT_RESPONSE`, `CHAT_REQUEST_CANCEL`,
+`STREAM_RESUMING` and `STREAM_RESUME_ACK` come from the installed package.
+`packages/cli/tests/cloud-agent-client.test.ts` drives a mock agent server and
+pins the frames both ways, including stream resume and cancel.
 
-For `/agents/orchestrator-agent/:name`:
+## 8. API surface
 
-- Browser session auth remains accepted.
-- CLI ticket auth is accepted only for this framework route and only for the
-  scoped agent.
-- The route still calls ownership checks and `claimOwner()` using server-derived
-  identity.
-- Ticket query parameters are stripped before calling `routeAgentRequest()`.
-- Unknown agents return a clear failure. Do not auto-register on websocket
-  first touch.
+**Spec §8.1 Account APIs: SHIPPED as listed.** `POST /api/cli/auth/start`,
+`/auth/poll` and `/auth/approve`; `POST /api/cli/logout`; `GET /api/cli/me`;
+`GET` and `POST /api/cli/workspaces`; `GET /api/cli/models`;
+`POST /api/cli/workspaces/:name/connect-ticket`; `GET` and
+`POST /api/cli/devices` plus the device ticket routes. A scoped access token
+reaches only `/me`, the two `workspace.read` reads and the connect ticket
+(`cli/routes.ts:350-366`). Everything else needs an interactive session.
 
-### 7.4 Protocol Handling
+**Spec §8.2 One generic agent transport: SHIPPED.** Chat rides the agent websocket.
+Every method-shaped agent call goes through
+`POST /api/cli/workspaces/:name/rpc` with `{ method, args }`, gated by the
+`AGENT_RPC_ACCESS` table in `packages/cf-backend/src/cli/rpc-gate.ts`. That
+table is the single scope policy for the HTTP dispatcher and the websocket frame
+gate, and membership is the dispatch allowlist. An off-table name is never
+invoked. Each entry carries `workspace.read`, `workspace.exec` or `interactive`,
+and a compile-time check proves every key is a real public method.
 
-Implementation must validate the exact Agents / Think chat websocket protocol
-against the installed package or upstream source before coding the client.
+Per-operation HTTP routes for status, tools, messages, model, triggers, jobs,
+memory, timeline, exploration, executors and product surfaces are gone. A
+dedicated path is left only where the resource shape needs one: streams,
+downloads, webhooks, step-up gated creation and capability minting.
 
-The existing architecture doc describes web frames such as
-`cf_agent_use_chat_request` and streamed `cf_agent_use_chat_response`. Treat
-that as a starting point, not the only source of truth.
+**Spec §8.3 Forbidden cloud APIs: REMOVED, and the removal is pinned.**
+`/api/cli/workspaces/:name/turn`, the three `/local-turn/*` routes, `cliTurn`,
+`cliPrepareLocalTurn`, `cliInvokeLocalTool` and `cliCommitLocalTurn` are absent
+from the tree. `packages/cf-backend/tests/unit-auth-security.test.ts:60-78`
+fails if any of them returns.
 
-Preferred implementation order:
+## 9. Chat surfaces
 
-1. Reuse an official non-React transport if available.
-2. Otherwise implement the smallest CLI transport that speaks the exact same
-   websocket envelopes used by `useAgentChat`.
-3. Add contract tests around the frames sent and received.
+**Spec §9 One TUI over `AgentClient`: SHIPPED.** `tui/chat-app.tsx` is the only TUI
+chat app, and it serves both modes. The shared pieces are `tui/messages.tsx`
+(`MessageList`), `tui/streaming-buffer.ts` (`useStreamingBuffer`),
+`tui/overlays.tsx`, `tui/status-bar.tsx`, `tui/session-browser.ts`,
+`tui/format.ts` and `slash-commands.ts`.
 
-Do not invent a new cloud chat protocol.
+Backend-specific work sits in the adapter. The local client owns session resume
+and transcript hydration. The cloud client owns Durable Object history hydration
+and socket reconnect. Slash commands are capability-gated: `/approval` and
+`/always` need `localControls`, `/undo` needs `checkpoints`
+(`slash-commands.ts:37-41,259`).
 
----
+The correctness requirements are now tests. `packages/cli/tests/tui.test.tsx`
+renders real frames and asserts user bubbles against assistant markdown,
+chronological text and tool interleaving, a live streaming segment in place, the
+steer marker, the walk-back overlay order, the device-connect overlay, palette
+clipping at width 58 and height 18, status-bar clipping at width 52, and that
+opening the model picker does not move the input area.
+`streaming-buffer.test.ts`, `walkback.test.ts`, `undo.test.ts` and
+`input-state.test.ts` cover the buffer, the picker, `/undo` and the input
+machine.
 
-## 8. API Surface
+## 10. Creation and naming
 
-### 8.1 Account APIs
-
-The following `/api/cli/*` APIs are still appropriate because they are account
-or bootstrap APIs, not agent turn execution:
-
-- Auth start / poll / approve / logout.
-- `GET /api/cli/me`.
-- `GET /api/cli/workspaces` for cloud roster.
-- `POST /api/cli/workspaces` for explicit cloud agent creation.
-- `GET /api/cli/models` for user/account model catalog.
-- `POST /api/cli/workspaces/:name/connect-ticket`.
-- Device registration and device websocket ticket APIs.
-
-### 8.2 Agent APIs
-
-Agent-scoped chat goes through the agent websocket; live-session control uses
-`@callable` RPC on that socket.
-
-Method-shaped agent operations that need HTTP (inspection commands, consent
-polling before a socket exists, CI tokens) go through the ONE generic
-transport — `POST /api/cli/workspaces/:name/rpc` with `{ method, args }` —
-gated by the `AGENT_RPC_ACCESS` table in `cf-backend/src/cli/rpc-gate.ts`.
-That table is the single scope policy for both the HTTP dispatcher and the
-websocket frame gate; table membership is the dispatch allowlist.
-
-Do not add per-method HTTP routes for status, tools, messages, model,
-triggers, jobs, memory, timeline, MCTS, executors, or product surfaces —
-those N-per-operation duplicates were deleted when the generic transport
-landed. Only resource-shaped routes (streams, downloads, webhooks, step-up
-gated creation, capability minting) may exist as dedicated paths.
-
-### 8.3 Forbidden Cloud APIs
-
-These are incompatible with the target architecture:
-
-- `/api/cli/workspaces/:name/turn`
-- `/api/cli/workspaces/:name/local-turn/prepare`
-- `/api/cli/workspaces/:name/local-turn/tool`
-- `/api/cli/workspaces/:name/local-turn/commit`
-- `cliTurn`
-- `cliPrepareLocalTurn`
-- `cliInvokeLocalTool`
-- `cliCommitLocalTurn`
-- Any cloud path that calls local `runChat()` or local model resolution.
-
----
-
-## 9. TUI Architecture
-
-There should be one TUI chat experience over `AgentClient`.
-
-Shared TUI pieces:
-
-- `MessageList`
-- `useStreamingBuffer`
-- command palette / slash hints
-- model picker
-- session/history browser where applicable
-- device consent overlay
-- status/model/header rendering
-- terminal size and clipping helpers
-
-Backend-specific logic belongs in adapters:
-
-- Local adapter owns local session resume and local transcript hydration.
-- Cloud adapter owns DO history hydration and websocket reconnect/resume.
-- TUI commands are capability-gated and call `AgentClient` methods.
-
-TUI correctness requirements:
-
-- Assistant markdown must render headings, lists, bold, code blocks, and tables.
-- Streaming must not publish an empty assistant bubble before first content.
-- Streaming finalization must not show a blank frame or duplicate final answer.
-- User and assistant messages must be visually distinct.
-- Overlay dimensions must clamp to terminal width and height.
-- The input row must not move or become hidden when overlays open.
-- Cloud history must hydrate from DO history before sending any initial prompt.
-
----
-
-## 10. Creation And Naming
-
-Cloud creation has one canonical server path:
+**Spec §10 One canonical server path: SHIPPED**, under different names than the spec
+guessed.
 
 ```text
 POST /api/cli/workspaces
 POST /api/user/workspaces
-        -> createCloudAgentForUser()
-        -> UserDO.registerAgent()
-        -> OrchestratorAgent.claimOwner()
-        -> write SOUL.md
+        -> createCloudWorkspaceForUser()      (user/workspace-create.ts:47)
+        -> UserDO.registerWorkspace()         (user/user-do.ts:456)
+        -> OrchestratorAgent.claimOwner()     (orchestrator.ts:789)
+        -> setSoul(renderSoulMarkdown(...))   (workspace-create.ts:227)
 ```
 
-Rules:
+The spec called these `createCloudAgentForUser()` and `UserDO.registerAgent()`.
+Neither name exists. The workspace noun replaced the agent noun on this path;
+see [WORKSPACES.md](WORKSPACES.md).
+
+Naming happens on the server. A user-supplied name is kept as given. Otherwise
+`fallbackWorkspaceIdentity` produces the slug, and a display name is generated
+after the workspace exists (`workspace-create.ts:65-77`). The CLI runs
+`suggestAgentIdentityFromMission` for a **local** workspace only
+(`tui/home-app.tsx:177`), which is what Spec §11.5 asked for.
+
+## 11. What the migration removed
+
+**Spec §11.1 Cloud mirror turn paths: SHIPPED.** `cloud-local-turn.ts`,
+`runCloudTurnWithLocalModel`, `runCloudTurn()`, `/turn`, `/local-turn/*` and the
+matching Durable Object callables are all deleted.
+
+**Spec §11.2 Cloud JSONL as state: SHIPPED.** `hydrateTranscript` and
+`transcriptToMessages` are gone. `readCliSessionTranscript` and
+`transcriptMessages` remain in `session.ts` and are read only by
+`local-agent-client.ts:412-415`. On the cloud client `history()` walks
+`getChatHistoryPage` to the end, and `resumeConversation()` re-points the
+terminal log only (`cloud-agent-client.ts:465-499`).
+
+**Spec §11.3 Message mirrors and fallbacks: SHIPPED, by a different mechanism.** The
+spec wanted the mirror writes redirected. What landed makes
+`messages` a projection of the SDK message DAG instead.
+`reconcileSessionTree(this.boundSql)` runs in `onChatResponse` before the
+non-completed early return (`orchestrator.ts:845-854`), so an interrupted turn
+and every mid-turn steer reach the table that the fork pivot, memory search, the
+status read model and the evolution outcome window all read. The projection is
+idempotent and its per-turn statement count is pinned by
+`packages/core/tests/unit-session-tree.test.ts`.
+
+The canonical read is `getChatHistoryPage` in
+`packages/core/src/read-models/status.ts`. It serves the web chat pane
+(`pages/WorkspacePage.tsx:491`), the cloud client, `proteus debug messages`, and
+its local peer `getLocalChatHistory`.
+
+**Spec §11.4 Auto registration: SHIPPED.** No implicit creation remains in the server
+ownership check or in `useProteus()` load time. An unregistered workspace is told
+to create itself through the explicit route, and the message names that route
+(`user/workspace-access.ts:95`).
+
+**Spec §11.5 Duplicate naming paths: SHIPPED.** Covered in §10 above.
+
+## 12. Forks, and which ones are real
+
+The word `fork` in this area means two live features and one deleted one. Both
+live ones are reachable today.
+
+**Walk-back fork.** `/fork [n]` in either chat surface picks an earlier user
+message and restarts the conversation just before it. `forkCandidates` builds
+the picker from rendered user messages, and `findForkPivot` locates the pivot in
+the canonical row list by verbatim text plus occurrence counted from the newest
+(`agent-client.ts:139-192`). A local workspace re-points the same client at a
+forked CLI session. A cloud workspace calls the `forkAgent` RPC
+(`orchestrator.ts:3168`) and hands back a sibling client for the new workspace
+(`cloud-agent-client.ts:391-410`). Forking is refused while a turn is in flight.
+
+**Recorded session fork.** `--fork <idOrPath>` on `proteus chat` and
+`proteus run` forks a recorded CLI session into a new one
+(`packages/cli/src/program.ts:206,221`, and [CLI.md](CLI.md)).
+
+**The delegation action is gone.** `AGENTS_TOOL_ACTIONS` in
+`packages/core/src/tools/registry.ts:168` is `swarm`, `hire`, `ask`, `send`,
+`reply`, `list` and `dismiss`. There is no `fork` action, so nothing in this
+architecture spawns a head by naming one. The parallel-work surface is `swarm`;
+see [EXPLORATION.md](EXPLORATION.md).
+
+**Spec §11.3 fork cut-points item: SHIPPED.** The cut point is a canonical chat
+message id, resolved through the projection above.
+
+## 13. Sequence, proof searches and gates
+
+**Spec §12 Proof searches: SHIPPED, and the ones worth keeping became tests.** The
+one-time searches ran and every hit was classified. What guards the result now
+is `packages/cf-backend/tests/unit-auth-security.test.ts` for the absent
+local-turn bridge and absent auto-registration,
+`packages/cf-backend/tests/unit-rpc-gate.test.ts` for the scope table,
+`packages/cf-backend/tests/unit-cli-access-token-routes.test.ts` and
+`unit-cli-control-routes.test.ts` for both transports, and
+`packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts` for the
+session-tree projection. Prefer running those over re-running a text search.
+
+**Spec §13 Implementation sequence: SHIPPED.** All fifteen steps completed. The
+deploy boundary warning it carried has no subject left.
+
+**Spec §14 Verification gates: SHIPPED, and now ordinary suites.** The worktree gate,
+ticket and auth cases, cloud/web/CLI parity smoke, local adapter smoke, TUI
+automated coverage and the deployment checklist all ran for this migration.
+[TESTING.md](TESTING.md) is the standing description of how the suites are run
+and what each package covers. One rule from Spec §14 still binds any change
+here. If authenticated production behaviour was not exercised, say which part
+was not verified rather than claiming readiness.
+
+**Spec §17 Definition of done: MET.** Its fourteen bullets restate Spec §3 and
+Spec §11, so they are not repeated.
+
+## 14. Designs that were rejected, and why
+
+These reasons still hold, so a future change that proposes one of them is
+proposing a known regression.
 
-- Cloud agent auto-naming happens server-side.
-- Shared prompt/parser/error handling lives in `@proteus/core`.
-- CLI local creation may use local naming because it is local mode.
-- CLI cloud UI may pass only mission/purpose unless the user explicitly typed a
-  name.
-- User-supplied names are preserved only when explicitly provided.
-- Cloud auto-naming must not silently fall back to prompt-first-word slugging.
-  If the server cannot generate a useful identity, creation should fail with a
-  clear provider/configuration error unless the user explicitly provided a name.
-- Auto-registration by browsing or websocket first-touch must be removed.
-
----
-
-## 11. Cleanup And Removal Plan
-
-### 11.1 Remove Cloud Mirror Turn Paths
-
-Delete or fully retire:
-
-- `packages/cli/src/cloud-local-turn.ts`
-- `runCloudTurnWithLocalModel` imports and call sites
-- `runCloudTurn()` in `cloud-api.ts`
-- `/api/cli/workspaces/:name/turn`
-- `/api/cli/workspaces/:name/local-turn/*`
-- Orchestrator local-turn callables and helper types
-- Cloud tests that assert prepare/tool/commit behavior
-
-Replacement: `CloudAgentClient` over the real agent websocket and agent RPC.
-
-### 11.2 Remove Cloud JSONL As State
-
-Cloud JSONL session files may remain only as local audit/export logs.
-
-Remove from cloud state paths:
-
-- `hydrateTranscript` in cloud TUI.
-- `readCliSessionTranscript` and `transcriptToMessages` use in cloud TUI.
-- Cloud `/resume` semantics that imply local JSONL is cloud conversation.
-
-If cloud `/sessions` remains, label it as local terminal logs and keep it out of
-cloud prompt/history paths.
-
-### 11.3 Remove Message Mirrors And Fallbacks
-
-Cloud default chat should read and write the canonical Think chat/session store.
-
-Required migration work:
-
-- Change status message counts to the canonical cloud chat projection.
-- Change fork cut-points to canonical cloud chat messages.
-- Change GEPA/eval/default-chat consumers away from raw mirror `messages` rows.
-- Remove writes that mirror browser turns into core `messages` for cloud chat.
-
-Do not delete the core/local `messages` table globally. Local mode and other
-core systems may still own that schema. The cleanup target is cloud default-chat
-mirroring and fallback reads.
-
-### 11.4 Remove Auto Registration
-
-Remove implicit agent creation from:
-
-- `server.ts` ownership check.
-- `useProteus()` load-time registration.
-
-Unknown direct agent URLs should fail clearly or route to a create CTA. Creation
-must happen through explicit create APIs.
-
-### 11.5 Remove Duplicate Naming Paths
-
-Cloud mode must not run CLI local identity generation before server creation.
-The server creates the cloud identity. CLI local creation remains local.
-
----
-
-## 12. Proof Searches
-
-After implementation, run these searches and classify every remaining hit.
-
-Expected zero matches outside this spec and intentionally retained tests:
-
-```bash
-rg -n "runCloudTurnWithLocalModel|cloud-local-turn|runCloudTurn\(|cliTurn\(" packages docs tests
-rg -n "/local-turn/prepare|/local-turn/tool|/local-turn/commit|local-turn" packages docs tests
-rg -n "cliPrepareLocalTurn|cliInvokeLocalTool|cliCommitLocalTurn" packages docs tests
-rg -n "hydrateTranscript|readCliSessionTranscript|transcriptToMessages" packages/cli/src/tui packages/cli/src/commands
-```
-
-Expected no cloud default-chat mirror dependencies:
-
-```bash
-rg -n "FROM messages|INTO messages|persistCliVisibleTurn|readCliConversationHistory" packages/cf-backend/src/orchestrator.ts
-```
-
-Allowed remaining uses must be local/core storage or explicitly non-chat.
-
-Expected no implicit registration outside explicit create flows:
-
-```bash
-rg -n "registerAgent\(|auto-register|Auto-register|touchAgent\(" packages/cf-backend/src
-```
-
-Expected no local naming in cloud creation UI:
-
-```bash
-rg -n "suggestAgentIdentityFromMission|agentIdentityPrompt|fallbackAgentIdentity|parseAgentIdentityOutput" packages/cli/src packages/cf-backend/src packages/core/src
-```
-
-Classification rule:
-
-- A hit is acceptable only if it is the source of truth, an adapter boundary, a
-  test asserting absence, or this spec.
-- Do not leave hits because they are "unused". Delete unused code.
-
----
-
-## 13. Implementation Sequence
-
-1. Stabilize and classify the dirty worktree.
-   - Record `git status --short --branch` and `git diff --stat`.
-   - Classify existing partial files as keep, replace, or delete.
-2. Add failing/guard tests and proof-search expectations for current issues.
-3. Add CLI websocket ticket schema and `UserDO` issue/verify methods.
-4. Add `/api/cli/workspaces/:name/connect-ticket`.
-5. Extend `/agents/orchestrator-agent/:name` auth to accept browser session or
-   scoped CLI ticket.
-6. Validate the Agents / Think chat websocket protocol from installed package or
-   source.
-7. Implement `CloudAgentClient` over the real agent websocket.
-8. Implement `LocalAgentClient` over `LocalAgentSession`.
-9. Refactor TUI/classic chat/one-shot run/RPC dispatch onto `AgentClient`.
-10. Delete `cloud-local-turn`, `/turn`, `/local-turn/*`, and associated DO
-    callables.
-11. Move cloud status/history/fork/eval consumers to canonical chat projection.
-12. Remove cloud JSONL state usage and implicit registration.
-13. Consolidate cloud creation/naming server-side.
-14. Fix TUI markdown, streaming, bubbles, and overlay clipping.
-15. Run proof searches, automated tests, manual checks, and deploy gates.
-
-Do not deploy between steps 3 and 15 unless there is a deliberate checkpoint and
-the old cloud mirror path is either fully untouched or fully removed. A partial
-transport migration is a high-risk release boundary.
-
----
-
-## 14. Verification Gates
-
-### 14.1 Worktree Gate
-
-Before claiming completion:
-
-- `git status --short --branch`
-- `git diff --stat`
-- no accidental untracked source/test files
-- every changed file mapped to a requirement, cleanup, or test
-
-### 14.2 No-Credential Automated Gate
-
-Run with real provider credentials unset:
-
-```bash
-env -u PROTEUS_AUTH -u PROTEUS_TOKEN -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u OPENROUTER_API_KEY -u CLOUDFLARE_API_TOKEN -u CF_API_TOKEN -u AI_GATEWAY_AUTH -u CODEX_ACCESS_TOKEN bun run check
-env -u PROTEUS_AUTH -u PROTEUS_TOKEN -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u OPENROUTER_API_KEY -u CLOUDFLARE_API_TOKEN -u CF_API_TOKEN -u AI_GATEWAY_AUTH -u CODEX_ACCESS_TOKEN bun test --cwd packages/core
-env -u PROTEUS_AUTH -u PROTEUS_TOKEN -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u OPENROUTER_API_KEY -u CLOUDFLARE_API_TOKEN -u CF_API_TOKEN -u AI_GATEWAY_AUTH -u CODEX_ACCESS_TOKEN bun test packages/cf-backend/tests packages/cli-backend/tests packages/cli/tests
-```
-
-Success criteria:
-
-- all commands exit 0
-- no required test silently skips
-- no real network/provider credentials required
-
-### 14.3 Ticket/Auth Tests
-
-Required cases:
-
-- valid CLI token mints ticket
-- revoked/expired CLI token cannot mint ticket
-- ticket is hashed at rest
-- ticket expires
-- ticket is single use
-- ticket scoped to user and agent
-- wrong user rejected
-- wrong agent rejected
-- unauthenticated `/agents/*` websocket rejected
-- browser auth route still works
-- ticket query stripped before route handoff
-
-### 14.4 Cloud/Web/CLI Parity Smoke
-
-No-LLM RPC-level smoke:
-
-- create a cloud agent through explicit API
-- connect web-style websocket to the DO
-- connect CLI websocket ticket to the same DO
-- call `getWorkspaceSnapshot` from both
-- write a durable marker through DO RPC
-- read it from CLI and web projections
-- verify names, soul/purpose, tools, executors, and memory agree
-
-LLM-backed smoke when credentials are available:
-
-- send a message from CLI cloud TUI/run
-- verify web sees the same user/assistant pair without import/sync
-- send a message from web
-- verify CLI sees it from DO history, not local JSONL
-- stop/cancel a streaming turn from CLI and web
-
-If credentials are unavailable, report that LLM-backed parity was not verified.
-
-### 14.5 Local Adapter Smoke
-
-Required cases without provider credentials:
-
-- local adapter opens a fake/scripted model session
-- sends a turn and streams events through `AgentClientEvent`
-- local status/tools/model/memory/jobs methods work
-- local stop/cancel reaches `LocalAgentSession`
-- local transcript resume works only for local mode
-
-### 14.6 TUI Automated Tests
-
-Required coverage:
-
-- markdown renders headings, bold, lists, code blocks, tables
-- raw markdown markers are absent except inside code blocks
-- streaming emits one assistant block and no empty initial block
-- finalization does not duplicate answer or show blank frame
-- user and assistant bubbles are visually distinct
-- overlays fit at widths 40, 58, 80, 120 and heights 12, 18, 24, 32
-- input row remains visible and stable
-- local and cloud use the same `MessageList`
-
-### 14.7 Manual TUI Checks
-
-Capture frames or screenshots for:
-
-- local TUI idle and after one response
-- cloud TUI idle after DO history hydration
-- slash command palette
-- model picker
-- status/tools/jobs surfaces
-- device consent overlay
-- narrow terminal behavior
-- long markdown streaming response
-
-Success criteria:
-
-- no horizontal overflow
-- no flicker that moves input
-- no raw markdown leakage in normal prose
-- escape closes overlays before exiting
-- cloud history matches web history
-
-### 14.8 Deployment Gate
-
-Pre-deploy:
-
-- all no-credential tests
-- ticket/auth tests
-- parity smoke
-- local adapter smoke
-- TUI automated and manual checks
-- proof searches classified
-- production build
-
-Post-deploy:
-
-- `/install`, `/install.sh`, `/downloads/proteus`, source archive checksum
-- CLI auth against deployed origin
-- cloud create against deployed origin
-- cloud websocket ticket connect against deployed origin
-- web/CLI transcript parity against deployed origin
-- PC device connect ticket and consent flow if credentials/session available
-
-Do not claim production readiness if authenticated production cloud behavior was
-not verified. Say exactly what was not verified and why.
-
----
-
-## 15. Rejected Designs
-
-| Design | Reason rejected |
+| Design | Reason |
 |---|---|
-| Keep `/api/cli/workspaces/:name/turn` as cloud mode | Creates a second agent turn path. |
-| Keep local model prepare/tool/commit for cloud agents | Violates actual DO-agent invariant. |
-| Commit local answer back to DO | Synchronization is not source-of-truth. |
-| Read cloud history from local JSONL | Hides DO bugs and causes web/TUI divergence. |
-| Permanent fallback from `assistant_messages` to `messages` | Preserves pre-public legacy instead of fixing source. |
-| Auto-register unknown agent on websocket/browser touch | Creates accidental registry rows and bypasses explicit creation. |
-| Trust `userId` in request bodies | Auth hole. |
-| Put CLI bearer token in websocket URL | Secret leakage through logs/history. |
-| Broad REST facade duplicating every agent RPC | Shallow parallel API surface. |
-| Rewrite web away from `useAgentChat` immediately | No current need; web is already canonical cloud client. |
+| Keep `/api/cli/workspaces/:name/turn` as cloud mode | A second agent turn path. |
+| Local prepare/tool/commit for cloud workspaces | Breaks the Durable Object turn invariant. |
+| Commit a locally computed answer back to the Durable Object | Synchronization is not a source of truth. |
+| Read cloud history from local JSONL | Hides Durable Object bugs and lets web and TUI diverge. |
+| Permanent fallback from the session store to `messages` | Preserves pre-release data instead of fixing the source. |
+| Auto-register an unknown workspace on first touch | Creates accidental registry rows and bypasses explicit creation. |
+| Trust `userId` in a request body | An auth hole. |
+| Put a CLI bearer token in a websocket URL | Leaks the secret through logs and shell history. |
+| A REST facade per agent RPC | A shallow parallel API surface. |
+| Rewrite the web away from `useAgentChat` | No need. The web is already the canonical cloud client. |
 
----
+## 15. The four open questions
 
-## 16. Open Questions
+All four are answered in code.
 
-1. Exact Agents / Think websocket envelope.
-   - Recommendation: validate from installed package/source and add contract tests
-     before implementing `CloudAgentClient`.
-2. Ticket revocation semantics after mint.
-   - Recommendation: store token hash metadata and reject if the backing CLI
-     token was revoked before ticket consumption, unless the implementation
-     deliberately accepts a short TTL revocation window and documents it.
-3. Cloud fork cut-point migration.
-   - Recommendation: migrate fork/status/eval consumers to a server-side chat
-     projection that hides Think storage details, then remove cloud `messages`
-     mirrors.
-4. Cloud `/sessions` command semantics.
-   - Recommendation: remove from cloud mode unless renamed as local terminal log
-     browsing. It must not imply cloud conversation resume.
-
----
-
-## 17. Definition Of Done
-
-The implementation is complete only when all are true:
-
-- Cloud CLI/TUI chat uses the real `OrchestratorAgent` DO websocket path.
-- No cloud CLI/TUI path imports local `runChat()` or `runCloudTurnWithLocalModel`.
-- `/turn` and `/local-turn/*` cloud APIs are gone.
-- Cloud chat history is read from the DO canonical chat store.
-- CLI cloud JSONL is not used as cloud prompt/history state.
-- Web-created cloud agents appear in TUI from `UserDO` roster.
-- TUI-created cloud agents appear in web through the same registry.
-- A CLI cloud turn appears in web without sync/import.
-- A web turn appears in CLI cloud history without local transcript replay.
-- Local mode still works through `LocalAgentClient`.
-- TUI markdown, streaming, bubbles, and overlays pass automated and manual checks.
-- All proof searches are clean or classified.
-- Automated tests and smokes pass.
-- Authenticated production cloud behavior is verified after deploy or explicitly
-  reported as unverified.
+1. **The chat websocket envelope: RESOLVED.** `CHAT_MESSAGE_TYPES` from
+   `agents/chat`, with contract tests. See §7 of this file.
+2. **Ticket revocation after minting: RESOLVED.** Scopes are resolved at
+   consumption from the stored bearer hash. See §7 of this file.
+3. **Fork cut-point migration: RESOLVED.** The cut point is a canonical chat
+   message id over the session-tree projection. See §11 and §12 of this file.
+4. **Cloud `/sessions` semantics: RESOLVED.** `proteus sessions` lists recorded
+   terminal logs and nothing else (`packages/cli/src/commands/sessions.ts`). On
+   the cloud client `listSessions()` returns those logs and
+   `resumeConversation()` swaps which log is being written, leaving Durable
+   Object history untouched.
