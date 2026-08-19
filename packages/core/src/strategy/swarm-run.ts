@@ -85,6 +85,8 @@ import { insertSearchNode } from '../mcts/record-node';
 import { backpropagate } from '../mcts/backpropagation';
 import { pruneLowValueBranches } from '../mcts/pruning';
 import { selectFrontierNode, type FrontierPolicy } from '../mcts/frontier';
+import { evaluateWithMultiModelJudging } from '../mcts/evaluation';
+import type { BranchEvaluation } from '../mcts/evaluation';
 import { readProposalCode } from '../execution/code-fence';
 import { extractJsonObject } from '../prompts/structured';
 import { diagnostics, type Logger } from '../obs/index';
@@ -109,19 +111,25 @@ import {
   carrySuppression, floorMargin, isBetter, normalisedScore, PUBLISHING_CARRIES,
 } from './objective';
 import type {
-  Floor, FloorBreach, MeasuredValue, Measurement, MeasurementContext, Objective,
-  ObjectiveDirection, ObjectiveScale, PublicationState, PublishingCarry, VerifierSource,
+  ExplorationRecord, Floor, FloorBreach, MeasuredValue, Measurement, MeasurementContext,
+  Objective, ObjectiveDirection, ObjectiveIdentity, ObjectiveScale, PublicationState,
+  PublishingCarry, VerifierSource,
 } from './objective';
 import {
-  isTreeAdvance, BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS, SWARM_TREE_ADVANCES,
+  configDigestOf, isTreeAdvance, judgeMarginalisationRefusal,
+  BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS, SWARM_TREE_ADVANCES,
 } from './swarm';
+import {
+  initExplorationRecordsTable, recordExploration, recordsFor, verifierDigestOf,
+} from './records';
+import type { ExplorationRecordsReport, ExplorationWrite } from './records';
 import {
   baseDigestOf, memberDigestOf, mergeBack, mergePolicyOf, originReader, settleCarry,
   type MemberApply, type MemberDiff, type MergeMember,
 } from './merge-back';
 import type { VFS } from '../types/primitives';
 import type {
-  BranchContext, BranchProposal, BranchRefusalPolicy, BranchVerdict,
+  BranchContext, BranchProposal, BranchRefusalPolicy, BranchVerdict, JudgeEnsembleReport,
   ResolvedSwarm, SwarmAdvance, SwarmCandidate, SwarmPreset, SwarmResult, SwarmSettleReport,
 } from './swarm';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -276,11 +284,20 @@ function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
       + 'nothing here orders merges. Use expand:"sample" for independent candidates, and `context` to '
       + "say whether a child starts from its parent's conversation or from its results alone.");
   }
-  if (config.score.kind !== 'verify' && config.score.kind !== 'none') {
-    return unsupported(`score:"${config.score.kind}" needs a scorer this run has no engine for: judge `
-      + 'needs the marginalised ensemble the shipped tree owns. Use score:"verify" with an `objective` '
-      + 'to measure candidates, or score:"none" for a flat run that returns them unranked.');
-  }
+  // NO `score` ARM REFUSES `judge` ANY MORE, and this is the second time the absence is
+  // the ticket. It was refused because "judge needs the marginalised ensemble the
+  // shipped tree owns" — and the tree DOES own one: `mcts/evaluation.ts` marginalises a
+  // judge over samples, clamps the ensemble against the per-evaluation call budget and
+  // reports the size it actually ran. Nothing about it is tree-shaped; it takes a task,
+  // a candidate's text, an executor and two LLMs. So the ensemble is REACHED below
+  // rather than reimplemented, which is what the refusal was pointing at all along.
+  //
+  // What survives is the one refusal that is about the measurement rather than about
+  // the wiring: a judged TREE below the marginalisation floor runs a scorer the
+  // literature says is not worth building, and it is refused here as well as in
+  // `swarmValidity` because this function is also the in-process entry point.
+  const marginalisation = judgeMarginalisationRefusal(config);
+  if (marginalisation) return marginalisation;
   if (isTreeAdvance(config.advance.kind) && config.score.kind === 'none') {
     // Unreachable through `swarmValidity`, which refuses this composition outright.
     // Kept because this function is also the in-process entry point.
@@ -512,6 +529,29 @@ function pathFeedback(input: {
 }
 
 /**
+ * What a node is told about the best any EARLIER run of this objective reached.
+ *
+ * This is FunSearch's programs database sampled into the prompt, which is the mechanism
+ * `ExplorationRecord`'s own docstring names — the store is "FunSearch's program database
+ * and MAP-Elites' grid", and a database is read by putting its members in front of the
+ * model. It is deliberately NOT placed at the verifier's path: a run whose baseline was
+ * measured on a file this engine had just overwritten would have a baseline that is not
+ * "the workspace as found" (§2.3), and a better one at that, so the target-already-met
+ * refusal would kill exactly the runs that had the most to inherit.
+ *
+ * The VALUE and the ARTIFACT together. The number alone is a bar with no way to clear
+ * it, and the artifact alone is a program with no reason to believe it is good.
+ */
+function carriedFeedback(
+  measured: MeasuredObjective | null, carried: ExplorationRecord | null,
+): string {
+  if (!measured || !carried) return '';
+  return `\n\nAn earlier run of this same objective reached ${String(carried.value)} `
+    + `${measured.unit} on ${measured.metric}. That is the number to beat, and this is what `
+    + `reached it:\n${carried.artifact}`;
+}
+
+/**
  * The expansion prompt for one child: what it is asked, the angle its siblings do
  * not have, what this path has measured, and the branch it may propose.
  *
@@ -540,6 +580,9 @@ function branchPrompt(input: {
   readonly ancestors: readonly TreeNode[];
   readonly atDepth: number;
   readonly maxDepth: number;
+  /** The best record an earlier run of this objective left behind, or null when the
+   *  store held none — which for the first run of an objective is every time. */
+  readonly carried: ExplorationRecord | null;
   /** Whether to append the marker-line invitation. False for an agent node, which is
    *  invited by `propose_branch` being on its surface instead — two invitations for
    *  one capability would teach the model a protocol the engine does not read. */
@@ -560,9 +603,10 @@ function branchPrompt(input: {
   const feedback = pathFeedback({
     context, measured: input.measured, baseline: input.baseline, ancestors: input.ancestors,
   });
+  const carried = carriedFeedback(input.measured, input.carried);
   return explorePrompt({
     mode: input.mode,
-    context: `${input.task}${feedback}${inherited}${angle}${instruction}`
+    context: `${input.task}${feedback}${carried}${inherited}${angle}${instruction}`
       + (input.invite
         ? proposalInvitation({ advance, atDepth: input.atDepth, maxDepth: input.maxDepth })
         : ''),
@@ -735,6 +779,16 @@ interface Expansion {
   /** What the instrument will measure: the reported candidate for an agent node, the
    *  answer text for a thought node. */
   readonly artifact: string;
+  /**
+   * The node's output AS WRITTEN, code fences intact — what a JUDGE grades.
+   *
+   * It differs from {@link artifact} for a thought node and only there: the artifact is
+   * the extracted program, because that is what the instrument is handed, while the
+   * ensemble is asked about the answer the model actually gave. Judging the extraction
+   * would hide the reasoning and would also cost the judge its own code detection, so
+   * the run would score a code candidate as prose.
+   */
+  readonly answer: string;
   /** A THOUGHT node's marker-line request, still unanswered. Always null for an agent
    *  node, which was answered by the tool while it ran. */
   readonly proposal: BranchProposal | null;
@@ -878,7 +932,7 @@ function answerProposal(input: {
   return decision;
 }
 
-/** What measuring one child produced, and what the tree must do about it. */
+/** What scoring one child produced, and what the tree must do about it. */
 type ChildOutcome =
   | { readonly kind: 'instrument-faulted'; readonly error: string }
   | { readonly kind: 'unmeasurable'; readonly detail: string }
@@ -892,6 +946,25 @@ type ChildOutcome =
     readonly measurement: MeasuredValue;
     /** Null where the objective's own range admits no score for this value. */
     readonly score: number | null;
+  }
+  | {
+    /**
+     * Scored by the marginalised judge ensemble rather than by an instrument.
+     *
+     * A SEPARATE ARM and not a `scored` with a synthesised `MeasuredValue`, because a
+     * judged node has no raw value in any objective's unit — the ensemble's [0,1]
+     * median IS the number, and manufacturing a `measurement` around it would put a
+     * judge's opinion into the field the records store keeps raw measurements in.
+     * There is no `sealed` counterpart for the same reason: a floor is a bound on a
+     * measured quantity and nothing here measured one.
+     */
+    readonly kind: 'judged';
+    readonly score: number;
+    /** The ensemble this candidate ACTUALLY sampled, which is the request after the
+     *  per-evaluation call budget clamped it. Zero when the cascade short-circuited
+     *  before the ensemble was reached — never asked, not asked and answered. */
+    readonly ensemble: number;
+    readonly grounding: string;
   };
 
 /**
@@ -950,6 +1023,77 @@ async function measureChild(input: {
 }
 
 /**
+ * Score one child by the MARGINALISED JUDGE ENSEMBLE the shipped tree already owns.
+ *
+ * REACHED, not reimplemented. `mcts/evaluation.ts` runs `samples` independent judge
+ * calls over one prompt, takes their MEDIAN, drops the ones that timed out or would not
+ * parse, and clamps the ensemble against the per-evaluation call budget — and it is
+ * objective-agnostic, taking a task, a candidate's text, an executor and two LLMs. A
+ * second ensemble written here would be the drifting second spelling this file refuses
+ * everywhere else, and it would also lose the clamp disclosure, which is the one thing
+ * about this scorer that was measured going silent.
+ *
+ * The BUDGET is the operator's shipped dial and not a new swarm axis. `maxEvalLLMCalls`
+ * is the whole per-evaluation call pool that check generation and the ensemble share,
+ * so `samples` is a REQUEST and the pool is its ceiling: on shipped defaults a
+ * code-bearing candidate realises `min(samples, 4 − 1) = 3`, which is why a judged tree
+ * asking for the marginalisation floor of 20 is answered by 3 and why that number is
+ * reported rather than assumed.
+ *
+ * A THROWN judge is the instrument breaking and takes the run down through the same arm
+ * a thrown verifier does (§3.4). It is NOT converted into a badly-scored candidate: a
+ * judge that failed produced no opinion, and scoring the candidate on the absence of
+ * one is the accepted-and-ignored lie in its purest form.
+ */
+async function judgeChild(input: {
+  readonly rt: AgentRuntime;
+  readonly mode: WorkMode;
+  readonly samples: number;
+  readonly task: string;
+  /** The node's output AS WRITTEN — fences intact. Not the extracted artifact: the
+   *  judge grades the answer, and stripping it to its code hides the reasoning the
+   *  ensemble is being asked about. */
+  readonly answer: string;
+  readonly siblings: readonly string[];
+  readonly siblingsProducedCode: boolean;
+}): Promise<ChildOutcome> {
+  const { rt } = input;
+  const options = {
+    task: input.task,
+    trajectory: input.answer,
+    siblings: input.siblings,
+    siblingsProducedCode: input.siblingsProducedCode,
+    // Plan mode never invokes the executor, so its evaluation is judge-only and spends
+    // no call on a check suite — the same gate `mcts/engine.ts` applies.
+    executionPolicy: input.mode === 'plan' ? ('judge-only' as const) : ('grounded' as const),
+    executor: rt.executor,
+    explorer: rt.llm,
+    judgeSamples: input.samples,
+    maxLLMCalls: DEFAULT_CONFIG.mcts.maxEvalLLMCalls,
+  };
+  let evaluation: BranchEvaluation;
+  try {
+    // A cross-model judge where the runtime holds one, and the explorer where it does
+    // not — the documented fallback, spelled as an ABSENT KEY rather than an explicit
+    // `undefined` for `nodeDeps`' reason.
+    evaluation = rt.judgeModel === undefined
+      ? await evaluateWithMultiModelJudging(options)
+      : await evaluateWithMultiModelJudging({ ...options, judge: rt.judgeModel });
+  } catch (error) {
+    return {
+      kind: 'instrument-faulted',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return {
+    kind: 'judged',
+    score: evaluation.score,
+    ensemble: evaluation.judgeSamplesAttempted,
+    grounding: evaluation.grounding,
+  };
+}
+
+/**
  * Run a resolved swarm, or refuse.
  *
  * The refusals are ordered by what they cost: shape first (free), then the caps, then
@@ -967,6 +1111,17 @@ export async function runSwarm(
   const branches = resolved.caps.branches?.value ?? 0;
   const maxDepth = resolved.caps.depth?.value ?? 0;
   const measures = resolved.config.score.kind === 'verify';
+  // The judge ensemble's request, or null for a run that scores by anything else. The
+  // number is on the axis VALUE — `samples` is tagged onto `score:'judge'` — so a
+  // judged run always states it and there is no default to inherit here.
+  const judgeSamples = resolved.config.score.kind === 'judge' ? resolved.config.score.samples : null;
+  // The `carry` values whose whole purpose is publication. A run under one of them is
+  // part of a CUMULATIVE sequence: it reads what earlier runs reached and writes what it
+  // reached. `none` and `reflections` write nothing a later run reads, and seeding one
+  // from the store would make the axis a lie in the other direction.
+  const publishing = PUBLISHING_CARRIES.find(
+    (carry): carry is PublishingCarry => carry === resolved.config.carry.kind,
+  ) ?? null;
   const log = deps.logger ?? diagnostics;
 
   let measured: MeasuredObjective | null = null;
@@ -974,6 +1129,10 @@ export async function runSwarm(
   let ctx: MeasurementContext | null = null;
   let baseline: number | null = null;
   let publication: PublicationState = { kind: 'open' };
+  // What makes two runs comparable: the metric and the instrument, and nothing about
+  // the artifact under work. Null for a run that measured no objective — a judged or
+  // unscored run has no identity, so it has no records to read and none to write.
+  let identity: ObjectiveIdentity | null = null;
 
   if (measures) {
     const objective = resolved.objective;
@@ -998,6 +1157,18 @@ export async function runSwarm(
     const resolvedVerifier = resolveVerifier(measured.verify);
     if ('reason' in resolvedVerifier) return resolvedVerifier;
     verifier = resolvedVerifier;
+    // §5.1's identity, COMPLETE: the spec the caller named and the code that name
+    // resolved to. `argumentDigest({kind, spec})` alone cannot tell two runs whose kind
+    // resolved to different implementations apart, and pooling those as comparable is
+    // what `ResolvedVerifier.implementation` exists to prevent. Built here because this
+    // is the one place both halves are in hand.
+    identity = {
+      metric: measured.metric,
+      unit: measured.unit,
+      direction: measured.direction,
+      scale: measured.scale,
+      verifierDigest: verifierDigestOf(measured.verify, resolvedVerifier.implementation),
+    };
     ctx = measurementContext(deps.rt);
     if (!ctx) {
       return unavailable('this workspace has no shell, so nothing can run a measurement in it — a '
@@ -1061,6 +1232,37 @@ export async function runSwarm(
   // `initSearchTables` is: a workspace that has never run a fork has no `head_journal`.
   initHeadsTables(deps.rt.storage.execRaw, sql);
   const journal = new HeadJournal(sql);
+  // §5.2's leaderboard, initialised for the same reason the two above are: a workspace
+  // that has never run a search has no `exploration_records`, and the carry-in read
+  // immediately below would be a query against a table that does not exist.
+  initExplorationRecordsTable(deps.rt.storage.execRaw);
+
+  // CARRY-IN. What earlier runs of THIS objective, under THIS floor, already reached —
+  // read before anything is expanded, so the search starts from it rather than
+  // rediscovering it. This is the half that makes the store a store: a writer with no
+  // reader persists rows nothing ever starts from, which is the same per-invocation
+  // search with a table beside it.
+  //
+  // Gated on a PUBLISHING carry rather than run unconditionally. `carry` is the axis
+  // that says whether a run belongs to a cumulative sequence, and seeding a
+  // `carry:'none'` run out of the store would break that axis in the direction nobody
+  // is watching — the run would silently inherit a starting point its configuration
+  // says it has none of.
+  const carriedIn = identity !== null && publishing !== null
+    ? recordsFor(sql, { identity, floor: measured?.floor ?? null })
+    : [];
+  // Best FIRST, by `recordsFor`'s own ordering in the objective's direction.
+  const carriedBest = carriedIn[0] ?? null;
+  if (carriedBest) {
+    log.event('swarm.records_carried_in', {
+      preset: resolved.preset,
+      carry: resolved.config.carry.kind,
+      metric: measured?.metric ?? '',
+      rows: carriedIn.length,
+      best: carriedBest.value,
+      displacements: carriedBest.displacements,
+    });
+  }
   // Whether a node is an agent at all. `thought` is §8.9's degenerate point and takes
   // the toolless path below unchanged; the other two run `node-agent.ts`.
   const agentNodes = resolved.config.unit.kind !== 'thought';
@@ -1105,6 +1307,25 @@ export async function runSwarm(
   let best: SwarmCandidate | null = null;
   let bestValue: number | null = null;
   let usage: Usage = {};
+  /**
+   * The direction `best` is chosen in — the objective's own where one was measured, and
+   * `maximise` for a judged run, where the ensemble's [0,1] median is better when it is
+   * higher by construction.
+   *
+   * Resolved ONCE rather than per candidate: a comparison whose direction is recomputed
+   * in a loop is a comparison that can be recomputed differently, and getting this
+   * backwards silently reverses the search.
+   */
+  const rankDirection: ObjectiveDirection = measured?.direction ?? 'maximise';
+  /** Per-candidate spend, for that candidate's own record. Keyed by node id because the
+   *  settle barrier is past the loop that observed it. */
+  const spentBy = new Map<string, number | null>();
+  /** Every ensemble size a candidate actually sampled, for the report's binding
+   *  realisation. Empty for a run that scored by anything other than a judge. */
+  const ensembles: number[] = [];
+  /** Realised sizes whose clamp has already been disclosed, so one run reports one event
+   *  per distinct size rather than one per candidate. */
+  const clampsReported = new Set<number>();
   // THE EXPANSION BUDGET, in units of one child: `depth` waves of `branches`, DERIVED
   // from the two caps the call resolved because there is no third cap to read. §6.1's
   // table files `budget` (iterations) as a cap on `SwarmInput`, but `SwarmInput`
@@ -1243,6 +1464,7 @@ export async function runSwarm(
           index, branches: width,
           task: branch?.task ?? resolved.task,
           inherited: inheritedArtifact, ancestors, atDepth: childDepth, maxDepth,
+          carried: carriedBest,
           // A thought node's whole request is one prompt, so its invitation is part of
           // it. An agent node is invited by the tool being present instead.
           invite: !agentNodes,
@@ -1260,6 +1482,7 @@ export async function runSwarm(
           return {
             id,
             artifact: code?.kind === 'runnable' ? code.code : answer.text,
+            answer: answer.text,
             proposal: answer.proposal,
             proposalError: answer.proposalError,
             granted: null,
@@ -1304,6 +1527,9 @@ export async function runSwarm(
         return {
           id,
           artifact: run.candidate,
+          // An agent node REPORTS its candidate, so what it wrote and what the
+          // instrument measures are the same string and there is nothing to strip.
+          answer: run.candidate,
           proposal: null,
           proposalError: null,
           granted: run.granted?.kind === 'granted' ? run.granted : null,
@@ -1332,6 +1558,11 @@ export async function runSwarm(
         continue;
       }
       usage = addUsage(usage, settled.value.usage);
+      // THIS CANDIDATE's spend, retained for its own record. The run's total would
+      // attribute every node's tokens to every row, which is a number a leaderboard
+      // would quote and be wrong about; null where the provider reported nothing,
+      // because an unmeasured spend is not a free one.
+      spentBy.set(settled.value.id, usageTotal(settled.value.usage) ?? null);
       if (settled.value.modelId !== null) {
         deps.reportModelCall?.({
           source: 'swarm', usage: settled.value.usage, modelId: settled.value.modelId,
@@ -1349,22 +1580,53 @@ export async function runSwarm(
     // SCORE, then RECORD, then BACKPROPAGATE. One candidate at a time, into the one
     // path the instrument reads.
     for (const expansion of expansions) {
+      // ONE SCORER PER RUN, chosen by the axis. `verify` runs the registry's instrument
+      // against the objective; `judge` runs the marginalised ensemble. Neither is a
+      // fallback for the other — a judged run has no objective to measure and a verified
+      // run must never report a judge's number under the objective's name.
+      const siblings = expansions.filter((other) => other.id !== expansion.id);
       const outcome = measures && verifier && ctx && measured && baseline !== null
         ? await measureChild({ ctx, verifier, measured, baseline, artifact: expansion.artifact })
-        : null;
+        : judgeSamples !== null
+          ? await judgeChild({
+            rt: deps.rt, mode: deps.mode, samples: judgeSamples, task: resolved.task,
+            answer: expansion.answer,
+            siblings: siblings.map((other) => other.answer),
+            // WP-A5's band loophole: a prose-only candidate is capped at the fail
+            // ceiling where a sibling actually attempted code, so declining to attempt
+            // it cannot beat attempting and failing.
+            siblingsProducedCode: siblings.some(
+              (other) => readProposalCode(other.answer, languages)?.kind === 'runnable',
+            ),
+          })
+          : null;
       if (outcome?.kind === 'instrument-faulted') {
         // §3.4: a throw is the INSTRUMENT breaking and is never converted into an
         // unmeasurable candidate. It fails the run: no node is scored, nothing is
         // published, and the reason reaches the caller intact.
-        return unavailable(`the verifier faulted while measuring ${expansion.id}, so no number this `
-          + `run produced can be trusted: ${outcome.error}`);
+        // NAMED, because there are two scorers now and "the verifier faulted" on a judged
+        // run sends a reader to an instrument the run never ran.
+        return unavailable(`the ${measures ? 'verifier' : 'judge'} faulted while scoring `
+          + `${expansion.id}, so no number this run produced can be trusted: ${outcome.error}`);
       }
+      // A MEASUREMENT exists only where an instrument produced one. A judged candidate
+      // has none: the ensemble's median is a score and not a value in any objective's
+      // unit, and putting it here would place a judge's opinion in the field the records
+      // store keeps raw measurements in.
+      const measurement = outcome?.kind === 'sealed' || outcome?.kind === 'scored'
+        ? outcome.measurement
+        : null;
+      // The [0,1] the tree climbs, from whichever scorer this run has. Null where the
+      // objective's own range admits none, and null for an unmeasurable candidate.
+      const score = outcome?.kind === 'scored' || outcome?.kind === 'judged'
+        ? outcome.score
+        : null;
       const candidate: SwarmCandidate = {
         id: expansion.id,
         artifact: expansion.artifact,
-        measured: outcome && outcome.kind !== 'unmeasurable' ? outcome.measurement : null,
+        measured: measurement,
         unmeasurable: outcome?.kind === 'unmeasurable' ? outcome.detail : null,
-        score: outcome?.kind === 'scored' ? outcome.score : null,
+        score,
       };
       candidates.push(candidate);
       // DEPTH IS DERIVED: the parent's row plus one, computed here and written by the
@@ -1377,8 +1639,8 @@ export async function runSwarm(
       nodes.set(expansion.id, {
         id: expansion.id, parentId: parent.id, depth: childDepth,
         artifact: expansion.artifact,
-        measurement: outcome && outcome.kind !== 'unmeasurable' ? outcome.measurement : null,
-        score: outcome?.kind === 'scored' ? outcome.score : null,
+        measurement,
+        score,
         proposal: expansion.proposal,
         proposalError: expansion.proposalError,
         granted: expansion.granted,
@@ -1411,8 +1673,31 @@ export async function runSwarm(
           hypotheses: outcome.breach.hypotheses.join(','),
         });
       }
-      if (outcome?.kind === 'scored' && outcome.score !== null) {
-        backpropagate(sql, expansion.id, outcome.score);
+      if (outcome?.kind === 'judged' && outcome.ensemble > 0) {
+        // The ensemble this candidate ACTUALLY sampled. Collected rather than
+        // recomputed from the knobs, and the clamp is disclosed the moment it binds —
+        // once per distinct realised size, which is the discipline the engine's own
+        // seam and the heads controller's both follow. Zero attempts is excluded here
+        // and not counted as a clamp of zero: an evaluation that short-circuited before
+        // the ensemble never asked.
+        ensembles.push(outcome.ensemble);
+        if (judgeSamples !== null
+          && outcome.ensemble < judgeSamples
+          && !clampsReported.has(outcome.ensemble)) {
+          clampsReported.add(outcome.ensemble);
+          log.event('swarm.judge_ensemble_clamped', {
+            preset: resolved.preset,
+            root_id: rootId,
+            depth: childDepth,
+            grounding: outcome.grounding,
+            judge_samples_requested: judgeSamples,
+            judge_samples_realised: outcome.ensemble,
+            max_eval_llm_calls: DEFAULT_CONFIG.mcts.maxEvalLLMCalls,
+          });
+        }
+      }
+      if (score !== null) {
+        backpropagate(sql, expansion.id, score);
       } else if (outcome) {
         // TAKEN OUT OF SELECTION WITHOUT PRETENDING IT SCORED: `terminal` for a node
         // sealed past its floor, `failed` for one the instrument could not measure.
@@ -1424,11 +1709,17 @@ export async function runSwarm(
         const status = outcome.kind === 'sealed' ? 'terminal' : 'failed';
         void sql`UPDATE search_nodes SET status = ${status} WHERE id = ${expansion.id}`;
       }
-      if (outcome?.kind === 'scored'
-        && measured
-        && (bestValue === null || isBetter(outcome.measurement.value, bestValue, measured.direction))) {
+      // THE WINNER, in the quantity this run's own scorer produced. A verified run ranks
+      // on the RAW measurement in the objective's direction — `normalisedScore` clamps
+      // at 1, so two candidates that both reached the target would tie on the score and
+      // not on the value — and a judged run ranks on the ensemble's median, where higher
+      // is better by construction.
+      const rank = outcome?.kind === 'scored'
+        ? outcome.measurement.value
+        : outcome?.kind === 'judged' ? outcome.score : null;
+      if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
         best = candidate;
-        bestValue = outcome.measurement.value;
+        bestValue = rank;
       }
     }
 
@@ -1516,11 +1807,7 @@ export async function runSwarm(
   }, { log, preset: resolved.preset });
 
   // The aggregate beside the per-candidate events, because "how many survived this
-  // run" is a question a reader should not have to answer by counting N lines. Nothing
-  // downstream can act on the verdicts yet: `records` has no writer and
-  // `experience_library`'s is not called from here, so admission is DECIDED and
-  // RECORDED at the one place that knows both the score and the seal, and the write it
-  // will gate is wired when that writer arrives.
+  // run" is a question a reader should not have to answer by counting N lines.
   log.event('swarm.carry_settled', {
     preset: resolved.preset,
     carry: resolved.config.carry.kind,
@@ -1528,8 +1815,101 @@ export async function runSwarm(
     refused: carried.filter((entry) => entry.verdict.kind === 'refused').length,
   });
 
+  // AND THE ADMISSIONS REACH PERSISTENCE. This is what the barrier was deciding for:
+  // admission was computed at the one place that knows both the score and the seal, and
+  // the write it gates now exists. `elites` and `artifacts` BOTH land here — the records
+  // store is where that axis lands — and the seal is checked a second time inside the
+  // writer, over the `records` surface, rather than assumed from the barrier's verdict.
+  //
+  // A run with no OBJECTIVE IDENTITY records nothing and says so: a record is keyed by
+  // the metric and the instrument, and a judged or unscored run measured neither. That
+  // is `records: null` on the report, which is a different claim from zero rows written.
+  const records: ExplorationRecordsReport | null = identity === null ? null : (() => {
+    const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+    const configDigest = configDigestOf(resolved);
+    let written = 0;
+    let notBetter = 0;
+    // KEYED OFF THE AXIS AND NOT OFF THE VERDICT. `admitCarry` returns `admitted` for
+    // `none` and `reflections` because the gate is not those values' business — neither
+    // reaches a publication surface — so a loop that read the verdict alone would make
+    // `carry:'none'` publish, which is the axis accepted and ignored. The barrier's
+    // verdict decides which of a PUBLISHING carry's candidates survive; whether the run
+    // publishes at all is this axis.
+    for (const entry of publishing === null ? [] : carried) {
+      if (entry.verdict.kind !== 'admitted') continue;
+      const candidate = byId.get(entry.nodeId);
+      // An admitted candidate under a publishing carry always carries a score, and a
+      // score on a verified run always comes from a measurement — but the record keeps
+      // the RAW value, so the measurement is what it is read from and its absence skips
+      // the row rather than fabricating one.
+      if (!candidate || candidate.measured === null) continue;
+      const write: ExplorationWrite = {
+        identity,
+        // Always null today: `regionRefusal` refuses `advance:'archive'`, which is the
+        // one value that bins by a descriptor, so no composition that reaches this
+        // barrier has a partition. Null is the honest value — this objective has NO
+        // descriptor partition, which is not "the unnamed cell".
+        descriptor: null,
+        artifact: candidate.artifact,
+        value: candidate.measured.value,
+        detail: candidate.measured.detail,
+        measured: candidate.measured.measured ?? null,
+        preset: resolved.preset,
+        label: resolved.label,
+        rootId,
+        configDigest,
+        depth: maxDepth,
+        branches,
+        floor: measured?.floor ?? null,
+        // NULL and not zero. Nothing here prices tokens — no cost model reaches this
+        // runner — and a record claiming a run cost nothing is worse than one admitting
+        // the spend was never converted.
+        costUsd: null,
+        costTokens: spentBy.get(candidate.id) ?? null,
+        at: Date.now(),
+      };
+      const verdict = recordExploration(sql, { publication, write });
+      if (verdict.kind === 'recorded') {
+        written += 1;
+        log.event('swarm.record_written', {
+          preset: resolved.preset,
+          carry: resolved.config.carry.kind,
+          node: candidate.id,
+          metric: identity.metric,
+          value: candidate.measured.value,
+          record: verdict.recordKey,
+          displaced: verdict.displaced ? 1 : 0,
+        });
+      } else {
+        if (verdict.cause === 'not-better') notBetter += 1;
+        log.event('swarm.record_refused', {
+          preset: resolved.preset,
+          carry: resolved.config.carry.kind,
+          node: candidate.id,
+          metric: identity.metric,
+          value: candidate.measured.value,
+          cause: verdict.cause,
+        });
+      }
+    }
+    return {
+      carriedIn: carriedIn.length,
+      carriedInBest: carriedBest?.value ?? null,
+      written,
+      notBetter,
+    };
+  })();
+
+  // The BINDING realisation: the smallest ensemble any candidate actually sampled. Null
+  // where none reached the ensemble, which for a judged run means every candidate
+  // short-circuited before a judge was asked.
+  const judgeEnsemble: JudgeEnsembleReport | null = judgeSamples === null
+    ? null
+    : { requested: judgeSamples, realised: ensembles.length > 0 ? Math.min(...ensembles) : null };
+
   const report = settleReport({
-    resolved, measured, baseline, publication, candidates, best,
+    resolved, measured, baseline, publication, candidates, best, carry: publishing,
+    records, judgeEnsemble,
     // Every child this run actually created and measured — the candidate list IS the
     // count, rather than a second tally beside it that could disagree.
     expansions: candidates.length, usage, durationMs: Date.now() - started,
@@ -1639,6 +2019,13 @@ function settleReport(input: {
   readonly publication: PublicationState;
   readonly candidates: readonly SwarmCandidate[];
   readonly best: SwarmCandidate | null;
+  /** The publishing `carry` in force, or null when this run's carry writes nothing a
+   *  later run reads. Derived once by the caller and passed rather than re-derived here:
+   *  the same predicate decides whether the run reads the store at all, and two
+   *  derivations of one fact are two things that can disagree. */
+  readonly carry: PublishingCarry | null;
+  readonly records: ExplorationRecordsReport | null;
+  readonly judgeEnsemble: JudgeEnsembleReport | null;
   readonly expansions: number;
   /** Why the run ended, as the LOOP observed it. Derived there rather than inferred
    *  from the candidate count, because a tree's count carries no information about
@@ -1647,10 +2034,7 @@ function settleReport(input: {
   readonly usage: Usage;
   readonly durationMs: number;
 }): SwarmSettleReport {
-  const { resolved, measured, best } = input;
-  const carry = PUBLISHING_CARRIES.find(
-    (publishing): publishing is PublishingCarry => publishing === resolved.config.carry.kind,
-  );
+  const { resolved, measured, best, carry } = input;
   return {
     settle: resolved.settle,
     floorMargin: measured?.floor ? floorMargin(measured.floor, measured.direction) : null,
@@ -1664,6 +2048,8 @@ function settleReport(input: {
     carrySuppressed: carry
       ? carrySuppression(input.publication, carry, best ? 1 : 0)
       : null,
+    records: input.records,
+    judgeEnsemble: input.judgeEnsemble,
     stop: input.stop,
     expansions: input.expansions,
     tokens: usageTotal(input.usage) ?? null,

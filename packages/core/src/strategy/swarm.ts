@@ -23,10 +23,12 @@
  */
 
 import { ProteusError, refusalOf } from '../obs/error';
+import { argumentDigest } from '../safety/argument-digest';
 import { floorMargin } from './objective';
 import type {
   CarrySuppression, Floor, MeasuredValue, Objective, ObjectiveDirection, PublicationState,
 } from './objective';
+import type { ExplorationRecordsReport } from './records';
 
 /**
  * What one node PRODUCES.
@@ -860,6 +862,53 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
   };
 }
 
+/**
+ * The digest a record carries in place of a column per axis — {@link
+ * ExplorationRecord}'s `configDigest`, and the one definition of it.
+ *
+ * ONE column rather than one per field, so it cannot go stale as axes are added; and
+ * computed HERE, beside the resolution, because the thing being digested is what the
+ * resolution produced. Its reason for existing is the absent-default defect: an
+ * un-parameterised run otherwise leaves no record of the shape it got, and an ABSENT
+ * default is worse than a wrong one — a wrong default is visible in the record and
+ * arguable, whereas an absent one means the shape was decided by whatever the
+ * implementation happened to do and the record cannot report a number the
+ * specification never named.
+ *
+ * EVERY TAGGED PARAMETER IS IN IT, spelled out per arm rather than spread. A digest
+ * over the axis names alone would make a judged run at 3 samples and one at 20
+ * indistinguishable in the record, which is precisely the shape those parameters were
+ * tagged onto their values to prevent. The optional region parameters are digested as
+ * `null` when unset, because absent and zero are different configurations.
+ *
+ * The caps are digested by VALUE and not by origin: a cap the caller set and a cap
+ * inherited from a preset row are the same shape in force, and folding the provenance
+ * in would make two identically-shaped runs incomparable.
+ */
+export function configDigestOf(resolved: ResolvedSwarm): string {
+  const { config, caps } = resolved;
+  return argumentDigest({
+    unit: config.unit.kind,
+    context: config.context,
+    expand: config.expand,
+    score: config.score.kind === 'judge'
+      ? { kind: config.score.kind, samples: config.score.samples }
+      : { kind: config.score.kind },
+    advance: config.advance.kind === 'archive'
+      ? { kind: config.advance.kind, novelty: config.advance.novelty }
+      : { kind: config.advance.kind },
+    carry: config.carry.kind === 'reflections' || config.carry.kind === 'artifacts'
+      ? { kind: config.carry.kind, threshold: config.carry.threshold }
+      : { kind: config.carry.kind },
+    explorationWeight: config.explorationWeight ?? null,
+    pruneThreshold: config.pruneThreshold ?? null,
+    minVisitsForPrune: config.minVisitsForPrune ?? null,
+    settle: resolved.settle,
+    depth: caps.depth?.value ?? null,
+    branches: caps.branches?.value ?? null,
+  });
+}
+
 /* ── Validity, over the resolved configuration (§6.5) ─────────────────────── */
 
 /** Every floor a resolved objective declares, with the direction it is stated
@@ -869,6 +918,32 @@ function floorsOf(objective: Objective): readonly { floor: Floor; direction: Obj
   if (objective.kind === 'vector') return objective.components.flatMap(floorsOf);
   if (objective.kind === 'witness') return objective.proxy ? floorsOf(objective.proxy) : [];
   return objective.floor ? [{ floor: objective.floor, direction: objective.direction }] : [];
+}
+
+/**
+ * §6.5's marginalisation floor, as ONE refusal two entry points share.
+ *
+ * It was stated only inside {@link swarmValidity}, which the tool surface calls and
+ * `runSwarm` does not — `swarm-run.ts`'s own region check is *"also the in-process
+ * entry point"*. So an in-process caller could run a judged tree below the floor and
+ * get a search whose scorer the measurement says is not worth building: at fixed node
+ * expansions a marginalised weaker judge beats an unmarginalised stronger one, 30.0%
+ * against 28.5%. Extracted rather than copied, because a refusal written twice is a
+ * refusal that will be raised in one place and relaxed in the other.
+ *
+ * Stated over the CONFIG rather than the resolution, which is all it reads — the two
+ * callers hold different shapes and neither has to build the other's.
+ */
+export function judgeMarginalisationRefusal(config: SwarmConfig): SwarmRefusal | null {
+  if (!isTreeAdvance(config.advance.kind)) return null;
+  if (config.score.kind !== 'judge') return null;
+  if (config.score.samples >= JUDGE_MARGINALISATION_MIN) return null;
+  return badInput(`a judged scalar is a noisy scorer and a tree amplifies scorer noise, so score:"judge" `
+    + `down a tree needs samples ≥ ${String(JUDGE_MARGINALISATION_MIN)} and this composition has `
+    + `${String(config.score.samples)}: at fixed node expansions a marginalised WEAKER judge beats an `
+    + 'unmarginalised stronger one, 30.0% against 28.5%. Raise `samples`, and note the binding cap is '
+    + '`maxEvalLLMCalls` rather than the request — a code-bearing branch realises '
+    + 'min(samples, maxEvalLLMCalls − 1), so raising this alone silently does nothing.');
 }
 
 /**
@@ -891,14 +966,8 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
       + 'an `objective`, or score:"judge" with enough `samples` — or use advance:"none" and get honest '
       + 'parallel sampling.');
   }
-  if (tree && config.score.kind === 'judge' && config.score.samples < JUDGE_MARGINALISATION_MIN) {
-    return badInput(`a judged scalar is a noisy scorer and a tree amplifies scorer noise, so score:"judge" `
-      + `down a tree needs samples ≥ ${String(JUDGE_MARGINALISATION_MIN)} and this composition has `
-      + `${String(config.score.samples)}: at fixed node expansions a marginalised WEAKER judge beats an `
-      + 'unmarginalised stronger one, 30.0% against 28.5%. Raise `samples`, and note the binding cap is '
-      + '`maxEvalLLMCalls` rather than the request — a code-bearing branch realises '
-      + 'min(samples, maxEvalLLMCalls − 1), so raising this alone silently does nothing.');
-  }
+  const marginalisation = judgeMarginalisationRefusal(config);
+  if (marginalisation) return marginalisation;
   // A witness with no proxy scores 1 for a solution and 0 for everything else, so
   // until the first success the value signal is constant.
   if (tree && objective?.kind === 'witness' && objective.proxy === undefined) {
@@ -1203,6 +1272,38 @@ export interface SwarmCandidate {
 }
 
 /**
+ * The ensemble a judged run REQUESTED and the one it ran.
+ *
+ * Two numbers because they differ on shipped defaults and the difference is the whole
+ * point: `maxEvalLLMCalls` is the WHOLE per-evaluation call budget and a code-bearing
+ * branch spends one of those calls on its generated check suite, so the ensemble is
+ * `min(samples, maxEvalLLMCalls − 1)` and a caller asking for 20 is answered by 3.
+ * That used to happen with no field anywhere carrying the 3.
+ */
+export interface JudgeEnsembleReport {
+  /** What `score:'judge'` asked for. Never a default: `samples` is tagged onto the
+   *  judge arm, so a judged run always states it. */
+  readonly requested: number;
+  /**
+   * The BINDING realisation — the smallest ensemble any candidate of this run
+   * actually sampled.
+   *
+   * The smallest rather than the largest, and rather than a recomputation of the
+   * clamp. Every code-bearing candidate in one run shares one call budget and so
+   * realises the same number, while a prose candidate spends no call on a check suite
+   * and realises one more; the smaller is therefore the clamp as it bound, which is
+   * the quantity a reader asking "did I get what I asked for" wants. Recomputing it
+   * from the knobs is what `read-models/fork-params.ts` must do for a persisted run it
+   * cannot observe — this run can observe it, and an observation beats a re-derivation.
+   *
+   * NULL when no candidate reached the ensemble at all: an evaluation that
+   * short-circuited on source that never parsed spent zero judge calls, and "never
+   * asked" is not the same fact as "asked for fewer than requested".
+   */
+  readonly realised: number | null;
+}
+
+/**
  * §2.4(c)'s mandated settle report: what the run REACHED, what it spent, and what it
  * did not find — with the last one stated as a fact about the search rather than
  * about the world.
@@ -1239,6 +1340,28 @@ export interface SwarmSettleReport {
    * suppression of zero cells.
    */
   readonly carrySuppressed: CarrySuppression | null;
+  /**
+   * §5.2's records store, as this run touched it, or null when the run had no
+   * OBJECTIVE IDENTITY to key a record by.
+   *
+   * Null is a claim about comparability and not about the store: a record is keyed by
+   * {@link ObjectiveIdentity} together with the floor digest, and a run that measured
+   * no objective — `score:'judge'`, `score:'none'` — has no identity, so there is
+   * nothing it could have written and nothing it could have read. That is a different
+   * fact from a measured run that wrote zero rows, which reports zeroes.
+   */
+  readonly records: ExplorationRecordsReport | null;
+  /**
+   * What the judge ensemble was ASKED for and what it actually ran, or null for a run
+   * that scored by anything other than a judge.
+   *
+   * On the surface's own defaults the request is answered by three, and this field
+   * exists so that stays SAID. `judgeSamples` and `maxEvalLLMCalls` are not
+   * independent knobs — a code-bearing branch realises min(samples, maxEvalLLMCalls −
+   * 1) — and the clamp binding in silence is the defect `judgeCallBudget` was
+   * extracted to end.
+   */
+  readonly judgeEnsemble: JudgeEnsembleReport | null;
   /** Why the run ended. `budget` is the honest answer where a marginal-gain
    *  threshold trips early — the report says the gain decayed rather than implying
    *  the space is exhausted. */

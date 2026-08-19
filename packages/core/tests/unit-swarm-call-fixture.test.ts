@@ -477,13 +477,20 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // `every_refusal_is_reachable` proves none of is unreachable. `SWARM_CONTEXTS` is
     // §8.4's axis, which arrived with agent nodes and is the trigger of the fifth
     // refusal. Named here because that is what this pin is for: growth stays a decision.
+    //
+    // GROWN BY TWO AGAIN, and both came from the records store landing.
+    // `configDigestOf` is `ExplorationRecord.configDigest`, computed beside the
+    // resolution because what it digests is what the resolution produced.
+    // `judgeMarginalisationRefusal` is §6.5's marginalisation floor extracted out of
+    // `swarmValidity` so that `runSwarm` — which the tool surface does not route
+    // through — enforces the same bound rather than a second copy of it.
     expect(Object.keys(swarmModule).sort()).toEqual([
       'BRANCH_PROPOSAL_WIDTH', 'BRANCH_REFUSAL_POLICIES',
       'JUDGE_MARGINALISATION_MIN', 'NAMED_SWARM_PRESETS', 'SWARM_ADVANCES', 'SWARM_CARRIES',
       'SWARM_CONTEXTS', 'SWARM_EXPANDS',
       'SWARM_PRESETS', 'SWARM_PRESET_POINTS', 'SWARM_SCORES', 'SWARM_TREE_ADVANCES',
-      'SWARM_UNITS', 'arbitrateBranch', 'isPresetPoint', 'isTreeAdvance', 'resolveSwarm',
-      'settleOf', 'swarmValidity',
+      'SWARM_UNITS', 'arbitrateBranch', 'configDigestOf', 'isPresetPoint', 'isTreeAdvance',
+      'judgeMarginalisationRefusal', 'resolveSwarm', 'settleOf', 'swarmValidity',
     ]);
   });
 
