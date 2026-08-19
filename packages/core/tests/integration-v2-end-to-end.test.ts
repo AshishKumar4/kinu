@@ -30,7 +30,7 @@ import {
   type HeadInput, type HeadReport, type HeadRuntime, type SpawnedHead,
   type SerializedMessage, type SplitRequest, type MergeOutput,
   // Scaffold
-  initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
+  initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision, readScaffoldVersion,
   DEFAULT_SHADOW_CONFIG, recordShadowEvaluation,
   initScaffoldTables, modifyScaffold,
   // Events
@@ -214,6 +214,19 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (1, ${Date.now()}, 'try alternate loop with retry', 'pending')`;
 
+    // The files those rows are rows ABOUT. `modifyScaffold` gate 4 archives the
+    // outgoing current at `.v0` and writes the proposal at `.v1`, never into the
+    // live file — so a fixture with rows and no files is a state the pipeline
+    // cannot produce. This test used to be exactly that, and it passed: promotion
+    // fell through to reading the LIVE file, copied v0's bytes back over itself,
+    // and the assertions below (statuses, action, newCurrentVersion) were all
+    // still true of a promotion that moved no code.
+    const V0 = 'async function* run(rt, task) { yield { type: "chunk", data: "v0" }; }';
+    const V1 = 'async function* run(rt, task) { yield { type: "chunk", data: "v1-retry" }; }';
+    await rt.identity.scaffold.write(V0);
+    await rt.storage.vfs.writeFile(`${rt.identity.scaffold.path}.v0`, V0);
+    await rt.storage.vfs.writeFile(`${rt.identity.scaffold.path}.v1`, V1);
+
     const judge = (winner: 'pending' | 'current') => ({
       winner, rationale: 'mock',
       currentScore: winner === 'current' ? 0.8 : 0.5,
@@ -248,6 +261,14 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     const byVersion = new Map(statuses.map((s) => [s.version, s.status]));
     expect(byVersion.get(1)).toBe('current');
     expect(byVersion.get(0)).toBe('historical');
+
+    // A promotion that flips statuses without swapping the source is the failure
+    // this whole shadow machinery exists to avoid — the agent would keep running
+    // v0 while every read-model called it v1.
+    expect(await rt.identity.scaffold.read()).toBe(V1);
+    expect(await rt.identity.scaffold.version()).toBe(1);
+    // v0 stays recoverable, so the promotion is revertable.
+    expect(await readScaffoldVersion(rt, 0)).toBe(V0);
   });
 });
 

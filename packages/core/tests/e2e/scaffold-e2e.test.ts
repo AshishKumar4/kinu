@@ -70,8 +70,37 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
       generated,
     );
 
-    console.log(`4-gate result: ${result.ok ? 'ACCEPTED' : 'REJECTED'} (stage=${result.stage ?? 'n/a'})`);
-    expect([true, false]).toContain(result.ok);
+    // What a live model writes is not a contract, so the verdict is: the pipeline
+    // never half-applies, and either way the LIVE scaffold is untouched — gate 4
+    // writes a proposal to `<path>.v<n>` precisely so shadow eval has two
+    // different files to compare. The assertion that stood here was
+    // `expect([true, false]).toContain(result.ok)` over a `boolean`, which no
+    // behaviour of the four gates could falsify.
+    expect(await rt.identity.scaffold.read()).toBe(INITIAL_SCAFFOLD_SOURCE);
+
+    if (result.ok) {
+      const { version } = result;
+      // An accept with no version is a promotion nothing can address.
+      if (version === undefined) throw new Error(`accepted with no version: ${JSON.stringify(result)}`);
+      expect(version).toBeGreaterThan(0);
+      expect(result.error).toBeUndefined();
+      expect(await rt.identity.scaffold.version()).toBe(version);
+      // The proposal is on disk as a pending version, and it is the model's text.
+      const pending = await rt.storage.vfs.readFile(
+        `${rt.identity.scaffold.path}.v${String(version)}`, { encoding: 'utf8' },
+      );
+      expect(pending).toBe(generated);
+      expect(pending).not.toBe(INITIAL_SCAFFOLD_SOURCE);
+    } else {
+      const { stage } = result;
+      // A refusal that names no gate is a verdict the pipeline cannot explain.
+      if (stage === undefined) throw new Error(`refused with no stage: ${JSON.stringify(result)}`);
+      expect([1, 2, 3]).toContain(stage);
+      expect(result.error?.length ?? 0).toBeGreaterThan(0);
+      expect(result.version).toBeUndefined();
+      // A refused proposal mints no version at all.
+      expect(await rt.identity.scaffold.version()).toBe(0);
+    }
   }, 60_000);
 
   test('full scaffold lifecycle: bootstrap -> modify -> rollback', async () => {
@@ -92,12 +121,28 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
       validCode,
     );
     expect(modResult.ok).toBe(true);
+    expect(modResult.version).toBe(1);
 
-    const current = await rt.identity.scaffold.read();
-    expect(current).toBe(validCode);
+    // The live file does NOT move on accept. This test used to assert
+    // `read() === validCode`, which was the behaviour before gate 4 started
+    // writing proposals to the versioned path — modify.ts states the reason: a
+    // live file equal to the pending one makes shadow eval compare the new code
+    // to itself, and promotion a flag flip with no on-disk consequence. Because
+    // the whole describe is skipIf(!isE2EConfigured()), nothing ever ran the
+    // stale assertion to say so.
+    expect(await rt.identity.scaffold.read()).toBe(INITIAL_SCAFFOLD_SOURCE);
+    expect(await rt.storage.vfs.readFile(
+      `${rt.identity.scaffold.path}.v1`, { encoding: 'utf8' },
+    )).toBe(validCode);
 
+    // v0 was backed up on the way in, so rollback has somewhere to go.
     const rbResult = await rollbackScaffold(rt, 0);
     expect(rbResult.ok).toBe(true);
     expect(await rt.identity.scaffold.read()).toBe(INITIAL_SCAFFOLD_SOURCE);
+
+    // Rolling back to a version nobody wrote is refused, with a reason.
+    const missing = await rollbackScaffold(rt, 99);
+    expect(missing.ok).toBe(false);
+    expect(missing.error).toContain('99');
   }, 60_000);
 });

@@ -475,12 +475,21 @@ export async function readScaffoldVersion(
     return v.parse(v.string(), await rt.storage.vfs.readFile(versioned, { encoding: 'utf8' }));
   }
   // No versioned backup — happens for v0 (the bootstrap writes the live file
-  // but not a versioned backup). Fall back to live ONLY when the requested
-  // version matches what `rt.identity.scaffold.version()` reports. Asked
-  // (`exists`) rather than discovered by catching, because this function picks
-  // which of its own bodies the agent is about to run: a read that fails for
-  // any other reason must not come back as "there is no such version".
-  if (version !== await rt.identity.scaffold.version()) return null;
+  // but not a versioned backup). Fall back to live ONLY for the version the
+  // live file actually IS, which is the status='current' row. Asked (`exists`)
+  // rather than discovered by catching, because this function picks which of its
+  // own bodies the agent is about to run: a read that fails for any other reason
+  // must not come back as "there is no such version".
+  //
+  // This guard used to read `rt.identity.scaffold.version()`, which is
+  // MAX(version) and therefore counts the PENDING row. So asking for a pending
+  // version whose backup file was missing compared equal, fell through, and
+  // handed back the CURRENT code as if it were the pending candidate: shadow eval
+  // then judged current against current, could declare "pending" the winner on
+  // judge noise, and with autoApply promote a version whose source does not
+  // exist. That is the same defect modify.ts's gate 4 is written to avoid, and
+  // the only test over the path accepted both outcomes so it never fired.
+  if (version !== getCurrentScaffoldVersion(rt.storage.sql)) return null;
   return await rt.identity.scaffold.read();
 }
 
