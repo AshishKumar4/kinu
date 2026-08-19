@@ -1441,7 +1441,6 @@ export abstract class ActorAgent extends Think<Env> {
   protected get host(): BackendHost {
     if (!this._host) {
       const getHeadRuntime = () => this.getCFHeadRuntime();
-      const getNodeHost = () => this.getCFNodeHost();
       this._host = {
         broadcast: (event) => this.broadcast(JSON.stringify(event)),
         enqueueTurn: async ({ text, metadata, idempotencyKey }) => {
@@ -1520,10 +1519,6 @@ export abstract class ActorAgent extends Think<Env> {
         // heads need the owner for UserDO auth, set by first-turn time. undefined
         // before then ⇒ heads degrade (getHeadController throws the no-owner error).
         get headRuntime() { return getHeadRuntime(); },
-        // Same lazy shape and the same reason: a node facet needs the owner for
-        // UserDO auth, so before first turn there is no host and a node's loop
-        // runs in this isolate.
-        get nodeHost() { return getNodeHost(); },
       };
     }
     return this._host;
@@ -1798,7 +1793,11 @@ export abstract class ActorAgent extends Think<Env> {
    *  when the toolset does. */
   private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
     const actorDeps = this.actorToolDeps();
-    const nodeLoopHost = this.host.nodeHost;
+    // Called directly rather than through the BackendHost seam. That seam is a
+    // TYPES-layer contract, and routing a facet host through it made types/
+    // depend on strategy/ — an inverted edge the layer gate refused, correctly.
+    // Nothing outside this class ever read it, so the indirection bought nothing.
+    const nodeLoopHost = this.getCFNodeHost();
     const deps: AgentsToolDeps = {
       mode: workMode,
       fork: buildStrategyForkDeps({
