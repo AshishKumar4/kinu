@@ -206,7 +206,7 @@ const SEAL_WRITES_NOTHING: Defended = {
 };
 const POLICY_FROM_SETTLE: Defended = {
   file: MERGE_SUITE,
-  name: 'each settle shape maps to its §8.5 policy',
+  name: 'each settle shape maps to the policy *Merge-back* derives',
 };
 const CYCLE_WHATEVER_THE_ORDER: Defended = {
   file: MERGE_SUITE,
