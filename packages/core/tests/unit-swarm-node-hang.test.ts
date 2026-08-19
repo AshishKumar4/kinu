@@ -16,6 +16,20 @@
  *   - THE BARRIER COULD NOT STOP. The wave was awaited with `Promise.allSettled`, and
  *     `allSettled` over a promise nothing can settle waits for the life of the process.
  *
+ * THE WRITE SEQUENCE ONE NODE PRODUCES, since the defect is a gap in it. `runNodeAgent`
+ * provisions the home, then `insertSpawn` writes the `head_journal` row as `running` with
+ * `completed_at` NULL and no usage columns; then the loop runs and each finished step
+ * INSERTs a `head_steps` row through `appendStep`, which is the only progress record there
+ * is; then `recordReport` replaces the status with the report's own — `completed`,
+ * `errored`, `aborted` or `budget_exceeded` — and stamps `completed_at`, the usage columns
+ * and `error_message`. `abandonRunning` is the only other writer of that status.
+ *
+ * WHICH OF THOSE THE HUNG NODES REACHED: the first and nothing after it. Zero `head_steps`
+ * rows means no step ever FINISHED, and `runHeadInference` catches every throw into an
+ * `errored` report, so a node that neither stepped nor errored did not receive a model
+ * response and did not fail trying — it was still inside its first `generateText` call
+ * with nothing in this tree able to end it.
+ *
  * WHAT IS UNDER TEST IS BOUNDEDNESS AND ATTRIBUTION, never a magnitude. `levelProgressMs`
  * is a fixture value here for the reason the judge-call timeout is one in its own suite: a
  * bound whose only value is one measured turn envelope cannot be exercised by a test that
@@ -111,6 +125,10 @@ function objective(): Objective {
 }
 
 const BRANCHES = 3;
+
+/** A tiny step envelope: every arm here is decided on a node's FIRST call, so a larger
+ *  one would only buy the fixture room it never uses. */
+const NODE_STEPS = 4;
 
 function config(): SwarmConfig {
   return {
@@ -292,11 +310,13 @@ function nodeFixture(over?: { readonly host?: NodeAgentDeps['host'] }): NodeFixt
     rt,
     model: RAISING_MODEL,
     journal,
-    maxSteps: 4,
-    // Required, not optional: an absent node deadline is what let a node run to the
-    // run's own abort instead of its own. Derived from this fixture's step cap by the
-    // same function production uses, so the fixture cannot drift from the derivation.
-    maxWallClockMs: nodeWallClockEnvelopeMs(4),
+    maxSteps: NODE_STEPS,
+    // The node's own deadline, which neither arm here reaches: both providers fail or
+    // stall on the first call, so nothing gets far enough to run a clock down. Declared
+    // rather than omitted because a node with no deadline has no clock at all. Taken
+    // from the shared derivation rather than re-multiplied here, so a change to how a
+    // node's envelope is derived reaches this fixture instead of passing it by.
+    maxWallClockMs: nodeWallClockEnvelopeMs(NODE_STEPS),
     logger: createRecordingLogger(),
   };
   if (over?.host !== undefined) deps.host = over.host;
@@ -378,7 +398,7 @@ async function runWith(model: MockLanguageModelV3): Promise<SilentRun> {
   const logger = createRecordingLogger();
   const startedAt = Date.now();
   const result = await runSwarm(
-    { rt, model, mode: 'build', logger, maxSteps: 4, levelProgressMs: PROGRESS_MS },
+    { rt, model, mode: 'build', logger, maxSteps: NODE_STEPS, levelProgressMs: PROGRESS_MS },
     resolved(),
   );
   const elapsedMs = Date.now() - startedAt;
