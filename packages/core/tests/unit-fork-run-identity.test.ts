@@ -131,7 +131,7 @@ describe('a re-driven fork job stays one run', () => {
 
     const runs = listForkRuns(sql, null, 30).items;
     expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({ task: TASK, settle: 'merged', status: 'completed' });
+    expect(runs[0]).toMatchObject({ task: TASK, hasSearchTree: false, hasNodeTranscripts: true, status: 'completed' });
 
     // All four attempts' heads live under that one root.
     expect(new Set(spawned.map((head) => head.rootId)).size).toBe(1);
@@ -205,7 +205,7 @@ describe('a re-driven fork job stays one run', () => {
     journal.abandonRunning('no executor: outlived the activation that spawned it');
 
     const [run] = listForkRuns(sql, null, 30).items;
-    expect(run).toMatchObject({ task: TASK, settle: 'merged', status: 'partial' });
+    expect(run).toMatchObject({ task: TASK, hasSearchTree: false, hasNodeTranscripts: true, status: 'partial' });
     expect(run!.winnerScore).toBeNull();
   });
 
