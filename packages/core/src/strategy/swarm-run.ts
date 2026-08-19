@@ -658,6 +658,16 @@ function readAnswer(text: string): ReadAnswer {
  * The runtime refusal stays anyway — the budget can empty between the invitation and
  * the answer.
  *
+ * WHICH DEPTH IS "AT THE CAP" IS THE ARBITER'S ANSWER, NOT A SECOND OPINION.
+ * `arbitrateBranch` refuses `caps.depth.value <= atDepth`, so a grant is legal exactly
+ * while `atDepth + 1 <= maxDepth`; the tool gate for an agent node and the fan-in skip
+ * both spell it that way. This line read `>=` until 2026-08-19, one level tighter than
+ * all three, which suppressed the invitation on the DEEPEST level a proposal could
+ * still be granted from — and in a depth-2 thought search that is every level, so no
+ * node was ever asked to propose and `expand` was unreachable through a proposal. The
+ * mutation sweep found it: the two readings differ only at that one depth, and nothing
+ * asserted the boundary.
+ *
  * A MARKER RATHER THAN A TOOL, because this is the degenerate point: a thought node
  * has no tool call to be answered through, so its request is text the engine reads
  * and its verdict is a typed diagnostic event (*Arbitration*). An agent node gets the
@@ -668,7 +678,7 @@ function proposalInvitation(input: {
   readonly atDepth: number;
   readonly maxDepth: number;
 }): string {
-  if (!isTreeAdvance(input.advance.kind) || input.atDepth + 1 >= input.maxDepth) return '';
+  if (!isTreeAdvance(input.advance.kind) || input.atDepth + 1 > input.maxDepth) return '';
   return `\n\nIf one thread of this task deserves its own branch of the search, end your answer with `
     + `a line reading ${PROPOSAL_MARKER} followed by a JSON object: `
     + `{"rationale": why this thread deserves the budget, "branches": [{"task", "rationale", `
