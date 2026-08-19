@@ -54,6 +54,7 @@ export default defineConfig({
           GATED: { className: 'GatedDO', useSQLite: true },
           TRANSACTION: { className: 'TransactionDO', useSQLite: true },
           SOCKET: { className: 'SocketDO', useSQLite: true },
+          ALARMED: { className: 'AlarmDO', useSQLite: true },
         },
       },
     }),

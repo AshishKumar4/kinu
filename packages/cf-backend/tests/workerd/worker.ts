@@ -347,6 +347,92 @@ export class SocketDO extends DurableObject<Cloudflare.Env> {
   }
 }
 
+/** What one object's alarm slot has done so far. Named here, at the object that
+ *  owns it, so the test reads the contract rather than deriving it. */
+export interface AlarmReport {
+  /** Deliveries of `alarm()` counted by the handler itself. */
+  readonly fires: number;
+  /** The handler reached its end without throwing at least once. */
+  readonly completed: boolean;
+  /** The pending alarm time, or null when the runtime has cleared the slot. */
+  readonly next: number | null;
+}
+
+/**
+ * Defect surface 5 — the Durable Object alarm, actually fired.
+ *
+ * WHAT PRODUCTION STAKES ON IT. Proteus owns no `alarm()` of its own: there are
+ * zero `setAlarm`/`deleteAlarm` calls and zero `alarm()` overrides in
+ * `packages/cf-backend/src`. Every wake rides the installed SDK's
+ * `cf_agents_schedules` table through `this.schedule(...)`, and `armTimer`
+ * collapses them onto ONE row with a soonest-wins dedup, because the object has
+ * exactly one alarm slot and the SDK owns it — `_scheduleNextAlarm` deletes any
+ * alarm it does not recognise, "so this must never call `setAlarm` itself"
+ * (`orchestrator.ts:484-485`). That dedup is only correct if a second
+ * `setAlarm` REPLACES the first rather than queueing beside it.
+ *
+ * The SDK also leans on the platform's retry: `_executeScheduleCallback` retries
+ * in-process, and on a code-update reset, a transient platform error or a memory
+ * kill it deliberately RETHROWS so the schedule row survives and the runtime's
+ * own alarm retry picks it up on the next invocation. That backstop is a
+ * platform behaviour, not a library one.
+ *
+ * WHY `bun test` CANNOT HOST IT. Nothing outside workerd invokes `alarm()` at
+ * all. The bun fake for the Agent SDK has no reference to alarm, schedule or
+ * setAlarm, and `unit-alarm-tracing.test.ts` reaches the tick by calling
+ * `_proteusTimerTick()` directly — which is the body, never the dispatch. The
+ * two guards over the dispatch itself are a regex for a shadowed `alarm()`
+ * missing `super.alarm()` and an AST walk; both read TEXT. Until this file
+ * nothing in CI had ever observed an alarm fire.
+ */
+export class AlarmDO extends DurableObject<Cloudflare.Env> {
+  /** Arm once. `armTimer`'s single durable wake, reduced to the platform call
+   *  the SDK makes on its behalf. */
+  async arm(delayMs: number): Promise<void> {
+    await this.ctx.storage.put('fires', 0);
+    await this.ctx.storage.setAlarm(Date.now() + delayMs);
+  }
+
+  /** Arm twice, later first, so a slot that QUEUED would fire twice and a slot
+   *  that REPLACES fires once. Mirrors two schedules colliding on one object. */
+  async armTwice(firstDelayMs: number, secondDelayMs: number): Promise<void> {
+    await this.ctx.storage.put('fires', 0);
+    await this.ctx.storage.setAlarm(Date.now() + firstDelayMs);
+    await this.ctx.storage.setAlarm(Date.now() + secondDelayMs);
+  }
+
+  /** Fail the first `failTimes` deliveries, then succeed — a transient failure,
+   *  which is the only kind the SDK rethrows to the platform for. */
+  async armFlaky(delayMs: number, failTimes: number): Promise<void> {
+    await this.ctx.storage.put('fires', 0);
+    await this.ctx.storage.put('failuresLeft', failTimes);
+    await this.ctx.storage.setAlarm(Date.now() + delayMs);
+  }
+
+  override async alarm(): Promise<void> {
+    const fires = (await this.ctx.storage.get<number>('fires')) ?? 0;
+    await this.ctx.storage.put('fires', fires + 1);
+    const failuresLeft = (await this.ctx.storage.get<number>('failuresLeft')) ?? 0;
+    if (failuresLeft > 0) {
+      await this.ctx.storage.put('failuresLeft', failuresLeft - 1);
+      // Uncaught out of `alarm()` is the whole point: it is what hands the retry
+      // decision to the runtime instead of keeping it in the library.
+      throw new Error('alarm-body-failed');
+    }
+    await this.ctx.storage.put('completedAt', Date.now());
+  }
+
+  /** `fires` counts deliveries; `next` is the slot itself, which the runtime
+   *  clears on a delivery it considers final. */
+  async report(): Promise<AlarmReport> {
+    return {
+      fires: (await this.ctx.storage.get<number>('fires')) ?? 0,
+      completed: (await this.ctx.storage.get<number>('completedAt')) !== undefined,
+      next: await this.ctx.storage.getAlarm(),
+    };
+  }
+}
+
 /** The pool requires a default export from `main`. Nothing routes to it: every
  *  test addresses a Durable Object stub directly. */
 export default {
