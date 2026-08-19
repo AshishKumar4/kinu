@@ -480,8 +480,11 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run test',
     tier: 'push',
     seconds: 24,
-    catches: 'behavioural regressions in agent-utils, core and compaction: 3,105 tests, '
-      + 'the whole shared spine both backends run on. Every gate on this list spells '
+    catches: 'behavioural regressions in agent-utils, core and compaction — the whole '
+      + 'shared spine both backends run on. No test COUNT is quoted here: this entry '
+      + 'carried 3,105 against a measured 3,917, and forty lines below it this same '
+      + 'file records the CLI count being 17 tests out of date for months. A number '
+      + 'copied into prose has nothing that re-runs it. Every gate on this list spells '
       + 'its suite ROOT-RELATIVE (`bun test packages/x/`) rather than `--cwd packages/x`: '
       + 'measured 2026-08-17, `--cwd` makes bun read a bunfig.toml from THAT directory, '
       + 'so the root one is not loaded and both `preload` and `pathIgnorePatterns` are '
@@ -595,8 +598,10 @@ export const LADDER: readonly Gate[] = [
     run: 'bun test packages/pc-agent/',
     tier: 'ci',
     seconds: 0.3,
-    catches: 'the local-device daemon, 6 tests. Runs in no tier today — `bun run check` '
-      + 'only `node --check`s its syntax.',
+    catches: 'the local-device daemon. No count quoted, for the reason `bun run test` '
+      + 'states: this entry said 6 against a measured 11. `bun run check` only '
+      + '`node --check`s this package\'s syntax, so the suite is the only thing that '
+      + 'reads it.',
     blind: 'the pairing and transport it talks to.',
   },
   {
