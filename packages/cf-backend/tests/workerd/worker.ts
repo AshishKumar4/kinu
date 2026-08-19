@@ -126,6 +126,105 @@ export class GatedDO extends DurableObject<Cloudflare.Env> {
   }
 }
 
+/**
+ * Defect surface 3 — `ctx.storage.transactionSync` atomicity.
+ *
+ * WHAT PRODUCTION STAKES ON IT. Core declares a `transaction` seam and states
+ * what it is for — "Run the admit + roster write atomically"
+ * (`events/ingress/subordinate.ts:45-46`). `receiveSubordinateEvent` puts the
+ * event-log insert and the roster update inside it
+ * (`events/ingress/subordinate.ts:71-85`), and the CF backend satisfies it with
+ * `(body) => this.ctx.storage.transactionSync(body)` (`actor-agent.ts:765`).
+ * `writeForkSnapshot` shares the same primitive for a whole workspace snapshot
+ * (`orchestrator.ts:3280`, `identity/fork.ts:211-213`).
+ *
+ * The second write throws on a LIVE path, which is what makes this load-bearing
+ * rather than theoretical: `SubordinateRosterStore.applyReport` opens with
+ * `requireActive(name)` (`subordinates/support.ts:393-394`), and by then the
+ * event row is already inserted.
+ *
+ * WHY `bun test` CANNOT HOST IT. Core's seam comment gives the non-CF fallback
+ * in its own words — "a backend without one runs the body directly"
+ * (`events/ingress/subordinate.ts:7-8`) — and `identity/fork.ts:212-213` says
+ * the bun path execs each statement separately, "where per-statement failure is
+ * acceptable". The bun arm is therefore not a weaker transaction but NO
+ * transaction, so every assertion here about a write failing to land is false
+ * there. `runDirectly` below is that exact arm, kept as the control group.
+ */
+export class TransactionDO extends DurableObject<Cloudflare.Env> {
+  /** Named after the two tables the production body writes. */
+  private ensureSchema(): void {
+    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS event_log (id TEXT PRIMARY KEY)');
+    this.ctx.storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS workspace_subordinates (
+         name TEXT PRIMARY KEY, status TEXT NOT NULL
+       )`,
+    );
+    this.ctx.storage.sql.exec(
+      "INSERT OR IGNORE INTO workspace_subordinates (name, status) VALUES ('relay', 'working')",
+    );
+  }
+
+  /**
+   * The write set that must be all-or-nothing, in production's order: publish
+   * the event the parent will drain, then advance the roster that says the
+   * subordinate reported.
+   *
+   * `failRoster` models `requireActive` throwing at the top of `applyReport` —
+   * after the event row has landed, which is the only ordering that can leave
+   * an orphan.
+   */
+  private admitBody(id: string, failRoster: boolean): void {
+    this.ctx.storage.sql.exec('INSERT INTO event_log (id) VALUES (?)', id);
+    if (failRoster) throw new Error('unknown subordinate "relay"');
+    this.ctx.storage.sql.exec(
+      "UPDATE workspace_subordinates SET status = 'idle' WHERE name = 'relay'",
+    );
+  }
+
+  /** The shipped shape (`actor-agent.ts:765`). */
+  admitAtomically(id: string, failRoster: boolean): void {
+    this.ensureSchema();
+    this.ctx.storage.transactionSync(() => { this.admitBody(id, failRoster); });
+  }
+
+  /** The seam core runs on a backend that has no transaction — the bun arm,
+   *  verbatim. Same body, same failure, no atomicity. */
+  runDirectly(id: string, failRoster: boolean): void {
+    this.ensureSchema();
+    this.admitBody(id, failRoster);
+  }
+
+  /**
+   * Why the seam's type is `transaction<T>(body: () => T): T` and not a
+   * promise-returning one. `transactionSync` runs its callback to completion
+   * SYNCHRONOUSLY and commits when it returns; an `async` callback returns at
+   * its first `await`, so the commit happens while the body is still running and
+   * a later throw has nothing left to roll back.
+   */
+  async admitViaAsyncBody(id: string): Promise<void> {
+    this.ensureSchema();
+    await this.ctx.storage.transactionSync(async () => {
+      this.ctx.storage.sql.exec('INSERT INTO event_log (id) VALUES (?)', id);
+      await scheduler.wait(1);
+      throw new Error('unknown subordinate "relay"');
+    });
+  }
+
+  /** What a parent would drain, and what its roster would say. */
+  async admitted(): Promise<{ events: number; rosterStatus: string }> {
+    this.ensureSchema();
+    return {
+      events: this.ctx.storage.sql.exec<{ n: number }>(
+        'SELECT COUNT(*) AS n FROM event_log',
+      ).one().n,
+      rosterStatus: this.ctx.storage.sql.exec<{ status: string }>(
+        "SELECT status FROM workspace_subordinates WHERE name = 'relay'",
+      ).one().status,
+    };
+  }
+}
+
 /** The pool requires a default export from `main`. Nothing routes to it: every
  *  test addresses a Durable Object stub directly. */
 export default {

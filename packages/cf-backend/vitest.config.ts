@@ -52,6 +52,7 @@ export default defineConfig({
           RETENTION: { className: 'RetentionDO', useSQLite: true },
           NEIGHBOUR: { className: 'NeighbourDO', useSQLite: true },
           GATED: { className: 'GatedDO', useSQLite: true },
+          TRANSACTION: { className: 'TransactionDO', useSQLite: true },
         },
       },
     }),
