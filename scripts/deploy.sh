@@ -153,7 +153,7 @@ run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
 # Its DECISION LOGIC is guarded below, though — a gate kept off the path for its
 # cost still needs its own reasoning tested, or the thing that would have caught
 # `--radius` undefined at `:root` is itself unguarded.
-run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts
+run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts
 run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts
 run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
 run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts
@@ -173,6 +173,7 @@ run_required_gate "Typecheck coverage" bun run gate:typecheck-coverage
 run_required_gate "Declared skip ratchet" bun run gate:skip-ratchet
 run_required_gate "Measured set equals governed set" bun run gate:set-equality
 run_required_gate "External citation register" bun run gate:literature-citations
+run_required_gate "Doc claims against the code" bun run gate:doc-claims
 run_required_gate "Commit message hygiene" bun run gate:commit-message
 run_required_gate "Dependency install-script policy" bun run gate:install-scripts
 run_required_gate "Dependency advisory policy" bun run gate:dependency-advisories

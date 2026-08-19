@@ -218,6 +218,47 @@ export const LADDER: readonly Gate[] = [
       + 'spot visible only in red output is invisible exactly when the tree is clean.',
   },
   {
+    run: 'bun run gate:doc-claims',
+    // `push`, not `commit`, and the reason is the index rather than the check: the
+    // symbol arm needs an AST pass over every parseable file (1,372 at 0fff343e,
+    // 1.2 s of the 2.1 s), and the commit tier has 2.5 s left inside a budget that
+    // is a contract rather than an aspiration. Raising that budget to fit a new
+    // gate is how a hook becomes slow enough to tempt `--no-verify`.
+    tier: 'push',
+    seconds: 2.1,
+    catches: 'a DOCUMENT contradicting the code. Every other gate here compares code to code, '
+      + 'which is how four features were designed, built, tested and never wired with nothing '
+      + 'red — and the documents drifted the same way with nothing measuring them at all. '
+      + '`FORMAL-SPEC.md` claimed 84 theorems against a measured 330; `TOOLS.md` claimed a '
+      + '9,034-character tool schema against a measured 11,823, and called it a reduction from '
+      + '10,201 when the surface had GROWN past both; `tasks` has four actions and two tables '
+      + 'said three; a brief saying "seven named presets" reached three documents before anyone '
+      + 'counted `NAMED_SWARM_PRESETS`, which is six. Three shapes are mechanically decidable '
+      + 'and it governs exactly those: a named SYMBOL resolves against an identifier index '
+      + 'built from the AST of every parseable file, a named PATH resolves against the one '
+      + 'enumeration in the tree\'s own shorthands, and a stated COUNT matches an enumeration '
+      + 'IMPORTED from the module that declares it — so this gate holds no number of its own '
+      + 'and cannot be the thing that goes stale. Measured 2026-08-19 at 0fff343e over 31 '
+      + 'documents: 378 path claims, 1,125 symbol claims and 15 count claims, with 36 false '
+      + 'claims locked as recorded debt.',
+    blind: 'every figure source does not enumerate, which is the boundary it is built around. A '
+      + 'wall clock, a token count and a byte budget are the same token to a scanner as a '
+      + 'configured limit, so the house rule that a figure carries its date is NOT enforced: '
+      + 'measured 2026-08-19, the cheapest sound form of that rule produced 22 findings whose '
+      + 'majority name no measurement at all — a heading\'s `5.1`, the `3` in `--3way`, a '
+      + 'citation year — and it cannot tell WHICH number in a sentence was measured without '
+      + 'guessing. Line numbers are ignored: 79 `path:line` locators landed in three documents '
+      + 'on one day, and a line rots on the next insertion above it, so checking one fires on '
+      + 'refactors that changed nothing. It checks EXISTENCE, never truth — `strategy/swarm.ts` '
+      + 'lists six tested paths of which three refuse to resolve, and this gate passes that '
+      + 'list. Model-facing strings in source are out of corpus, which is where '
+      + '`tools/clamp.ts` told the model to hand work to a fork on a surface with no fork '
+      + 'action. No vocabulary list: every verdict here is derived from code, so a banned '
+      + 'phrase has no home in it. A string literal is deliberately not a resolution set — '
+      + 'admitting one laundered five claims, four of them kept alive by a test asserting they '
+      + 'are ABSENT. All of it prints on the GREEN path.',
+  },
+  {
     run: 'bun run gate:commit-message',
     tier: 'commit',
     seconds: 0.1,
@@ -386,7 +427,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts',
     tier: 'push',
     seconds: 1.7,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
