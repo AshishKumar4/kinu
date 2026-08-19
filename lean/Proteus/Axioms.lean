@@ -315,3 +315,19 @@ import Proteus
 #print axioms Proteus.Exploration.Isolation.agent_node_is_not_a_branch_evaluate
 #print axioms Proteus.Exploration.Isolation.dropping_the_frame_condition_breaks_isolation
 #print axioms Proteus.Exploration.Isolation.agent_node_step_is_representable
+
+/-! ### Proteus/Exploration/RecordsStore.lean -/
+
+#print axioms Proteus.Exploration.RecordsStore.outcome_admitted_ne_refused
+
+/-! ### Proteus/Exploration/ArchiveAdmission.lean -/
+
+#print axioms Proteus.Exploration.ArchiveAdmission.entry_behaviour_is_readable
+
+/-! ### Proteus/Exploration/FanIn.lean -/
+
+#print axioms Proteus.Exploration.FanIn.member_dependsOn_is_readable
+
+/-! ### Proteus/Exploration/Rebase.lean -/
+
+#print axioms Proteus.Exploration.Rebase.key_is_the_pair

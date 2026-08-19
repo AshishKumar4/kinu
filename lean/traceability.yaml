@@ -684,3 +684,40 @@ requirements:
     remainingEvidence:
       - The claim needs a distribution over candidate quality and a discrimination parameter, neither of which the abstract model has
       - The useful half even unproved is that a run must report gain decay rather than imply the surface is exhausted, and nothing reports it yet
+  PR-RECORDS-003:
+    statement: The shipped records store keeps a cell's best from ever falling, as a consequence of never deleting a row and refusing a lowering write rather than as a rule of its own.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.RecordsStore.outcome_admitted_ne_refused
+    tsRefs:
+      - packages/core/src/strategy/records.ts:423
+      - packages/core/src/strategy/objective.ts:711
+    remainingEvidence:
+      - The store is a read-modify-write surface and this model is a single sequential fold, so two runs racing on one cell are unmodelled
+  PR-ARCHIVE-002:
+    statement: Archive admission bounds a cell's population without an eviction rule, because a candidate too close to an occupant never lands.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.ArchiveAdmission.entry_behaviour_is_readable
+    tsRefs:
+      - packages/core/src/strategy/archive.ts:227
+    remainingEvidence:
+      - The novelty floor is caller-supplied per invocation and no preset declares one, so the bound this file proves is parametric in a number the specification refuses to invent
+  PR-FANIN-001:
+    statement: The fan-in order is a topological order of the dependency edges the members declare, and a cycle refuses the whole path rather than applying an orderable prefix.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.FanIn.member_dependsOn_is_readable
+    tsRefs:
+      - packages/core/src/strategy/swarm.ts:19
+    remainingEvidence:
+      - The ordering is proved over declared edges only; whether a member's declaration matches the files it actually touches is outside the model
+  PR-REBASE-001:
+    statement: A verdict bound to a member digest and a base digest never applies after either moves, which is the whole of sequential rebase's correctness.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Exploration.Rebase.key_is_the_pair
+    tsRefs:
+      - packages/core/src/strategy/merge-back.ts:971
+    remainingEvidence:
+      - Digest injectivity is a hypothesis on the theorems that need it rather than an axiom, so a collision is outside what this model rules out

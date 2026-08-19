@@ -55,3 +55,7 @@ import Proteus.Exploration.Archive
 import Proteus.Exploration.Records
 import Proteus.Exploration.Arbitration
 import Proteus.Exploration.Isolation
+import Proteus.Exploration.RecordsStore
+import Proteus.Exploration.ArchiveAdmission
+import Proteus.Exploration.FanIn
+import Proteus.Exploration.Rebase
