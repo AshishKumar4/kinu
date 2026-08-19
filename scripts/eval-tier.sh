@@ -8,7 +8,7 @@
 # ever needs to do. So they live here, at `ci`, and this script is the whole
 # tier.
 #
-# It does four things, in this order, and the order matters:
+# It does five things, in this order, and the order matters:
 #
 #   1. Names the target and the cost basis BEFORE spending anything, so a run
 #      that goes somewhere unexpected is visible at the top of the log rather
@@ -17,6 +17,10 @@
 #   3. Enforces the skip ratchet over that report — the same run, not a second
 #      one. A skipped test is a declared skip or a failure.
 #   4. Reports what the run actually spent, summed from every suite process.
+#   5. HOLDS the run to that report. With a target resolved, a run that reports
+#      no model call, or calls it cannot account for, exits non-zero. Step 4 has
+#      always printed the defect; until step 5 existed it printed it and returned
+#      success, which is how `TOTAL: 0 model call(s)` passed a deploy gate.
 #
 # Credentials, either pair (see packages/test-utils/src/live-model.ts):
 #   PROTEUS_ORIGIN + PROTEUS_TOKEN        deployed/preview worker proxy. The
@@ -38,10 +42,12 @@
 # PROTEUS_TOKEN or AI_GATEWAY_AUTH is never overridden.
 #
 # With no credential ANYWHERE, this script still runs and still passes: every
-# live test skips, the ratchet proves the skips are the declared ones, and the
-# tier reports zero spend. That is deliberate — a tier that cannot run without a
-# secret is a tier nobody can reproduce, and the ratchet is the part that must
-# never be optional.
+# live test skips, the ratchet proves the skips are the declared ones, the tier
+# reports zero spend and step 5 asserts nothing because there is nothing to
+# assert. That is deliberate — a tier that cannot run without a secret is a tier
+# nobody can reproduce, and the ratchet is the part that must never be optional.
+# The liveness assertion is conditional on a target for exactly that reason: it
+# fires on "you had a model and did not call it", never on "you had no model".
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -78,16 +84,26 @@ if [[ ${#RESOLVED[@]} -eq 2 ]]; then
   export PROTEUS_TOKEN="${RESOLVED[1]}"
 fi
 
+# EXPECT_LIVE is this script's answer to the only question `scripts/eval-spend.ts`
+# cannot answer for itself: was a target resolved. It is set beside the banner
+# rather than recomputed later, so the line a reader sees and the assertion the
+# run is held to can never disagree.
+EXPECT_LIVE=0
 echo "── eval tier ─────────────────────────────────────────────"
 if [[ -n "${PROTEUS_TOKEN:-}" && -n "${PROTEUS_ORIGIN:-}" ]]; then
   echo "target:  worker proxy ${PROTEUS_ORIGIN}/api/user/ai/v1"
   echo "cost:    native Workers AI, billed to the token owner's account"
+  echo "assert:  a model call and a token count, or this run FAILS"
+  EXPECT_LIVE=1
 elif [[ -n "${AI_GATEWAY_AUTH:-}${PROTEUS_AUTH:-}" ]]; then
   echo "target:  AI Gateway ${AI_GATEWAY_BASE_URL:-${PROTEUS_BASE_URL:-<unset>}}"
   echo "cost:    per the gateway's upstream provider"
+  echo "assert:  a model call and a token count, or this run FAILS"
+  EXPECT_LIVE=1
 else
   echo "target:  none — every live test will skip, and the ratchet will say so"
   echo "cost:    zero"
+  echo "assert:  nothing — with no target there is no liveness to prove"
 fi
 echo "──────────────────────────────────────────────────────────"
 
@@ -122,10 +138,25 @@ bun scripts/skip-ratchet.ts --junit "$JUNIT"
 RATCHET_STATUS=$?
 
 echo
-bun scripts/eval-spend.ts "$SPEND"
+# `--expect-live` turns a resolved target into an obligation: the tier must show
+# a model call and a token count or exit non-zero. Without it, this reports and
+# returns 0 — which is what let `TOTAL: 0 model call(s)` pass a deploy gate.
+SPEND_ARGS=("$SPEND")
+if [[ $EXPECT_LIVE -eq 1 ]]; then SPEND_ARGS+=(--expect-live); fi
+bun scripts/eval-spend.ts "${SPEND_ARGS[@]}"
+SPEND_STATUS=$?
 
+# Precedence, most informative first. A suite failure names a behaviour or an
+# outage and is what a reader should see; an undeclared skip is next; a tier that
+# passed every assertion it made without reaching a model is last only because
+# the two above already explain themselves.
 if [[ $TEST_STATUS -ne 0 ]]; then
   echo "eval-tier: suites failed (exit $TEST_STATUS)" >&2
   exit "$TEST_STATUS"
 fi
-exit "$RATCHET_STATUS"
+if [[ $RATCHET_STATUS -ne 0 ]]; then exit "$RATCHET_STATUS"; fi
+if [[ $SPEND_STATUS -ne 0 ]]; then
+  echo "eval-tier: the run proved no liveness (exit $SPEND_STATUS)" >&2
+  exit "$SPEND_STATUS"
+fi
+exit 0

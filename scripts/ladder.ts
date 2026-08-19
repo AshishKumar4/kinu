@@ -539,20 +539,37 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run test:eval',
     tier: 'ci',
-    seconds: 0.3,
+    // The CREDENTIALED cost, because that is the cost this gate actually incurs
+    // where it runs. `scripts/eval-tier.sh` borrows the signed-in CLI session
+    // when the environment names no target, so a deploy from a machine that has
+    // run `proteus auth` pays this — and it was declared at 0.3s, the
+    // credential-free path where every live test skips. A deploy gate whose
+    // declared cost is four orders of magnitude under its measured one makes the
+    // tier-cost line below fiction, and the push budget above it unenforceable.
+    seconds: 3228,
     catches: 'the behavioural evidence nothing else in this ladder can produce: whether '
       + 'the agent reaches for MCTS on a task that warrants it, whether a search opens '
       + 'more than one branch and leaves a DURABLY ranked winner, whether every settle '
       + 'mode writes where the Exploration reader reads, and what fraction of eligible '
       + 'turns convert to a delegation. Each score reports its denominator, and each '
       + 'assertion checks that denominator is non-zero BEFORE anything else, because '
-      + '"0 of 0 searches were unranked" is the shape of a check that cannot fail. The '
-      + '0.3s figure is the credential-free path where everything skips; with a target '
-      + 'set it is minutes and the script prints the measured token cost.',
-    blind: 'the cf runtime. These drive core and the CLI\'s local session in-process, so '
-      + 'a defect that only appears in workerd — a rejected cross-DO RPC inside '
-      + 'background work that only console.warns — is invisible here by construction. '
-      + 'That is the workerd layer\'s job, not this one\'s.',
+      + '"0 of 0 searches were unranked" is the shape of a check that cannot fail. It '
+      + 'also catches ITSELF running empty: with a target resolved, a run that reports '
+      + 'no model call, or calls whose cost it cannot account for, now exits non-zero '
+      + 'rather than printing `TOTAL: 0 model call(s)` and passing. Measured live twice '
+      + 'against @cf/deepseek-ai/deepseek-v4-pro-0813: 2,747s / 48 calls / 602k input '
+      + 'tokens, and 3,228s / 64 calls / 967k, for the bun suites alone — the spread is '
+      + 'the model choosing how many steps to take, which is the thing under test, so '
+      + 'the larger is declared. Add roughly an hour for the vitest behaviour arm. '
+      + 'Credential-free it is 0.3s and everything skips, which is the path that '
+      + 'reproduces anywhere.',
+    blind: 'the cf runtime, for everything except the Live Smoke hosted arm. The rest '
+      + 'drive core and the CLI\'s local session in-process, so a defect that only '
+      + 'appears in workerd — a rejected cross-DO RPC inside background work that only '
+      + 'console.warns — is invisible to them by construction. That is the workerd '
+      + 'layer\'s job. It is also blind to whether an assertion is STRONG: '
+      + '`E2E Full Lifecycle` steps 4 and 5 assert only that the reply is non-empty, so '
+      + 'they pass on any prose the model returns.',
   },
   {
     run: 'bun test scripts/eval.test.ts',

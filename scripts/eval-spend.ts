@@ -21,7 +21,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import * as v from 'valibot';
-import { addUsage, UsageSchema } from '../packages/core/src/index';
+import { addUsage, usageReported, UsageSchema } from '../packages/core/src/index';
 import type { Usage } from '../packages/core/src/index';
 
 /** One suite process's line. `usage` is the same `Usage` the meter accumulates
@@ -107,12 +107,123 @@ export function renderSpend(lines: readonly SpendLine[]): string {
   ].join('\n');
 }
 
+/**
+ * Whether a run PROVED it exercised a model — the assertion this file exists to
+ * carry, and the one it used to lack.
+ *
+ * WHY. `renderSpend` above already prints the difference between a tier that
+ * spent nothing and a tier that measured nothing. It printed
+ * `TOTAL: 0 model call(s)` for a run of six live suites, over a credential that
+ * was present, and the script exited 0 — so `run_required_gate "Behavioural
+ * evals"` in scripts/deploy.sh passed a deploy over a tier that had called no
+ * model at all. A gate that renders the defect and returns success is the
+ * "green over the empty set" shape AGENTS.md § Build & Check records; the render
+ * was never the missing half, the exit code was.
+ *
+ * `expected` is whether the tier RESOLVED a target, decided by
+ * scripts/eval-tier.sh which is the one place that knows. It is not the same
+ * question as "did anything run": with no credential anywhere the tier is
+ * deliberately allowed to skip everything and pass, because a tier that cannot
+ * run without a secret reproduces nowhere and the skip-ratchet is what keeps
+ * those skips declared. So the rule is conditional and states which condition it
+ * is under, rather than banning a zero outright.
+ */
+export type LivenessVerdict =
+  /** A target was resolved and the run measured real calls against it. */
+  | { readonly kind: 'proven'; readonly calls: number; readonly detail: string }
+  /** A target was resolved and the run cannot show it reached a model. */
+  | { readonly kind: 'unproven'; readonly reason: string }
+  /** No target — nothing to prove, and saying so is not the same as passing. */
+  | { readonly kind: 'unconfigured' };
+
+/**
+ * The three ways a resolved target still fails to produce evidence, in the order
+ * a reader needs them: nothing reported at all, nothing called, or called and
+ * unaccounted. Each is a different repair, so each is a different sentence.
+ */
+export function livenessVerdict(
+  lines: readonly SpendLine[],
+  expected: boolean,
+): LivenessVerdict {
+  if (!expected) return { kind: 'unconfigured' };
+  const total = totalSpend(lines);
+
+  if (total.suites === 0) {
+    return {
+      kind: 'unproven',
+      reason: 'a live-model target was resolved and NO suite reported spend. Either every '
+        + 'suite skipped despite the target, or no suite reached the '
+        + '`reportLiveModelSpend` call in its teardown — both are a tier measuring nothing '
+        + 'while exiting 0.',
+    };
+  }
+  if (total.calls === 0) {
+    return {
+      kind: 'unproven',
+      reason: `a live-model target was resolved and ${String(total.suites)} suite(s) reported `
+        + '0 model calls between them. The tier ran without reaching a model, so every '
+        + 'behavioural assertion it made was vacuous.',
+    };
+  }
+  // Checked AFTER the call count, because a run with calls AND a hole did reach a
+  // model — it just cannot bound what that cost. Different defect, so it is not
+  // allowed to borrow the sentence above.
+  if (total.episodesUnmeasured > 0) {
+    return {
+      kind: 'unproven',
+      reason: `${String(total.episodesUnmeasured)} episode(s) ran whose spend no suite could `
+        + `account for, alongside ${String(total.calls)} measured call(s). The reported total is `
+        + 'a floor of unknown distance from the bill, which is the shape that reported '
+        + '`0 model call(s)` over ~584,751 real neurons.',
+    };
+  }
+  if (!usageReported(total.usage)) {
+    return {
+      kind: 'unproven',
+      reason: `${String(total.calls)} call(s) were made and NOT ONE reported token usage, so the `
+        + 'tier can show it reached a model but cannot say what it spent. A call count '
+        + 'without a token count is half a measurement.',
+    };
+  }
+  return {
+    kind: 'proven',
+    calls: total.calls,
+    detail: `${String(total.calls)} model call(s) over ${String(total.suites)} suite(s), `
+      + `${String(total.usage.input ?? 0)} input + ${String(total.usage.output ?? 0)} output tokens`,
+  };
+}
+
+/** One line stating the verdict, in the same register as the report above it. */
+export function renderLiveness(verdict: LivenessVerdict): string {
+  switch (verdict.kind) {
+    case 'proven':
+      return `eval-tier liveness: PROVEN — ${verdict.detail}`;
+    case 'unproven':
+      return `eval-tier liveness: UNPROVEN — ${verdict.reason}`;
+    case 'unconfigured':
+      return 'eval-tier liveness: not asserted — no live-model target was resolved, so this '
+        + 'run had nothing to prove. The skip-ratchet is what holds the skips accountable.';
+  }
+}
+
 if (import.meta.main) {
-  const path = process.argv[2];
+  // `--expect-live` is scripts/eval-tier.sh saying it resolved a target. Passed
+  // in rather than re-derived from the environment here, because this process
+  // does not see the credential the tier borrowed from the signed-in CLI
+  // session, and a second resolver would be a second answer to the one question
+  // the banner already printed.
+  const args = process.argv.slice(2);
+  const expectLive = args.includes('--expect-live');
+  const path = args.find((arg) => !arg.startsWith('--'));
   if (path === undefined) {
-    console.error('usage: bun scripts/eval-spend.ts <spend.jsonl>');
+    console.error('usage: bun scripts/eval-spend.ts <spend.jsonl> [--expect-live]');
     process.exit(1);
   }
   const text = existsSync(path) ? readFileSync(path, 'utf8') : '';
-  console.log(renderSpend(parseSpend(text)));
+  const lines = parseSpend(text);
+  console.log(renderSpend(lines));
+
+  const verdict = livenessVerdict(lines, expectLive);
+  console.log(renderLiveness(verdict));
+  if (verdict.kind === 'unproven') process.exit(1);
 }

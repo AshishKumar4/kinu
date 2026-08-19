@@ -2,7 +2,9 @@ import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs, partitionRunnable, runBenchmark } from './eval';
-import { parseSpend, renderSpend, totalSpend, type SpendLine } from './eval-spend';
+import {
+  livenessVerdict, parseSpend, renderLiveness, renderSpend, totalSpend, type SpendLine,
+} from './eval-spend';
 import { parseCorpus } from '../packages/core/src/index';
 import type { EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn } from '../packages/core/src/index';
 import { createTestRuntime } from '@proteus/test-utils';
@@ -215,5 +217,101 @@ describe('eval-tier cost report — a zero says which kind of zero it is', () =>
   test('the parsed line carries the field, so the aggregate cannot drop the label', () => {
     const [line] = parseSpend(`${JSON.stringify(hole)}\n`);
     expect(line?.episodesUnmeasured).toBe(20);
+  });
+});
+
+/**
+ * The tier's LIVENESS VERDICT — the exit code, not the prose.
+ *
+ * The block above proves the report can describe a hole. It does not prove
+ * anything ACTS on it, and for the whole life of this tier nothing did:
+ * `bun scripts/eval-spend.ts` printed `TOTAL: 0 model call(s)` over a run of six
+ * live suites and exited 0, so `run_required_gate "Behavioural evals"` in
+ * scripts/deploy.sh passed a deploy over a tier that had called no model. These
+ * tests are the red proof of the exit code: each `unproven` case here is a case
+ * that used to be a green deploy.
+ *
+ * The conditional is load-bearing and gets its own case. Refusing every zero
+ * would break the credential-free path the tier deliberately supports, so the
+ * assertion fires on "a target was resolved and nothing was called", never on
+ * "there was no target".
+ */
+describe('eval-tier liveness — a resolved target that called nothing FAILS', () => {
+  const measured: SpendLine = {
+    suite: 'Live Smoke', calls: 6, callsWithoutUsage: 2,
+    usage: { input: 73_766, output: 470 }, episodesUnmeasured: 0,
+  };
+
+  test('a measured run against a resolved target is proven', () => {
+    const verdict = livenessVerdict([measured], true);
+    expect(verdict.kind).toBe('proven');
+    expect(renderLiveness(verdict)).toContain('PROVEN');
+    // The numbers a reader quotes are in the verdict line itself, so a green
+    // liveness result is checkable without scrolling to the cost block.
+    expect(renderLiveness(verdict)).toContain('6 model call(s)');
+    expect(renderLiveness(verdict)).toContain('73766 input + 470 output tokens');
+  });
+
+  // THE REGRESSION. Six suites, a credential present, every one skipped: suites
+  // reported lines, the lines summed to nothing, and the tier exited 0.
+  test('a resolved target with zero calls is UNPROVEN, not a free tier', () => {
+    const verdict = livenessVerdict([
+      { suite: 'E2E Lifecycle', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0 },
+      { suite: 'Deep Evolution', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0 },
+    ], true);
+    expect(verdict.kind).toBe('unproven');
+    expect(renderLiveness(verdict)).toContain('UNPROVEN');
+    expect(renderLiveness(verdict)).toContain('0 model calls');
+    expect(renderLiveness(verdict)).toContain('vacuous');
+  });
+
+  // The other half of the same green: not even a line was written, which is what
+  // a suite crashing before its teardown looks like.
+  test('a resolved target with no spend lines at all is UNPROVEN', () => {
+    const verdict = livenessVerdict([], true);
+    expect(verdict.kind).toBe('unproven');
+    expect(renderLiveness(verdict)).toContain('NO suite reported spend');
+  });
+
+  // The conditional. Without this the credential-free path — the one that
+  // reproduces on any machine — would go red for doing exactly what it is
+  // designed to do.
+  test('no target means nothing to prove, and the run is not failed for it', () => {
+    const verdict = livenessVerdict([], false);
+    expect(verdict.kind).toBe('unconfigured');
+    expect(renderLiveness(verdict)).toContain('not asserted');
+    expect(renderLiveness(verdict)).not.toContain('UNPROVEN');
+  });
+
+  test('an unaccounted episode fails even alongside measured calls', () => {
+    const verdict = livenessVerdict([
+      measured,
+      { suite: 'Behaviour Evals', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 20 },
+    ], true);
+    expect(verdict.kind).toBe('unproven');
+    // Named as its own defect rather than borrowing the zero-call sentence: this
+    // run DID reach a model, it just cannot bound what that cost.
+    expect(renderLiveness(verdict)).toContain('20 episode(s)');
+    expect(renderLiveness(verdict)).toContain('floor of unknown distance');
+  });
+
+  test('calls with no token report anywhere is half a measurement, so it fails', () => {
+    const verdict = livenessVerdict([{
+      suite: 'Live Smoke', calls: 2, callsWithoutUsage: 2, usage: {}, episodesUnmeasured: 0,
+    }], true);
+    expect(verdict.kind).toBe('unproven');
+    expect(renderLiveness(verdict)).toContain('NOT ONE reported token usage');
+  });
+
+  // A partial report is still a report. The hosted arm's calls carry no usage
+  // because the cloud websocket protocol does not send any, and the run is still
+  // proven by the local arm's tokens — so the rule is "some call reported", not
+  // "every call reported".
+  test('a partly silent provider is still proven when any call reported tokens', () => {
+    const verdict = livenessVerdict([{
+      suite: 'Live Smoke', calls: 6, callsWithoutUsage: 2,
+      usage: { input: 73_766, output: 470 }, episodesUnmeasured: 0,
+    }], true);
+    expect(verdict.kind).toBe('proven');
   });
 });
