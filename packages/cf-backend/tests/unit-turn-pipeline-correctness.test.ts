@@ -5,7 +5,7 @@ import { memberBody } from '@proteus/test-utils';
 import {
   orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
-import type { UIMessage } from 'ai';
+import type { ToolSet, UIMessage } from 'ai';
 import * as v from 'valibot';
 
 const TasksToolProbeSchema = v.object({ execute: v.function() });
@@ -417,6 +417,29 @@ describe('turn-pipeline correctness wiring', () => {
     expect(turnMode).toContain('workModeForTurnMetadata(this.turnDrivingMetadata())');
     expect(turnMode).toContain('turnProvenanceForMetadata(this.turnDrivingMetadata())');
     expect(turnMode).toContain('if (!this._activeProgrammaticUserMessage) return this.turnUserMetadata();');
+  });
+
+  test('BOTH prompt paths advertise the RLM provider the sandbox always wires', async () => {
+    // `createRLMProvider` is unconditional in buildCfExecuteTools, so `llm.query`
+    // is wired on every turn this backend runs — and `rlmAvailable` was set on the
+    // cached base alone. TurnConfig.system overrides that base for every turn, so
+    // the ONE prompt the model actually receives was the one surface that never
+    // said the capability existed: 143 tokens of decomposition doctrine plus the
+    // ladder's zeroth rung, absent from every shipped turn. Both paths, because
+    // one path knowing is exactly the state that shipped.
+    const { agent } = orchestratorHarness();
+    const config = await agent.beforeTurn({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'summarise this file' }],
+      tools: {} satisfies ToolSet,
+      model: 'harness-model',
+      continuation: false,
+      body: {},
+    });
+    for (const prompt of [config?.system ?? '', agent.getSystemPrompt()]) {
+      expect(prompt).toContain('`llm.query(text, { model?, reasoning_effort? })` is available');
+      expect(prompt).toContain('The cheapest helper is not an agent');
+    }
   });
 
   test('the stance the agent set is in the prompt the DO actually builds', async () => {

@@ -2931,6 +2931,13 @@ export abstract class ActorAgent extends Think<Env> {
       executors: execs,
       availableTools: activeTools,
       agentsActions: actorAgentsActions(turnActorDeps),
+      // `createRLMProvider` is unconditional in buildCfExecuteTools, so
+      // `llm.query` is wired on every turn this backend runs. Omitting the flag
+      // here defaulted it false and made the ONE authoritative prompt (this
+      // object; TurnConfig.system overrides getSystemPrompt's cached base) the
+      // only surface that never said so — 143 tokens of decomposition doctrine
+      // and the ladder's zeroth rung, absent from every shipped turn.
+      rlmAvailable: true,
       externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
       workMode,
