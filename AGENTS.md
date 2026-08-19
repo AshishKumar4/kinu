@@ -42,6 +42,26 @@ hand-maintained list beside it; prove it RED in every direction it claims before
 green; and print its own blind spots on the SUCCESS path, because a limitation visible only in
 red output is invisible exactly when the tree is green.
 
+**A red gate is work, never an obstacle. Nothing here is ever made to pass by making it weaker.**
+That means all of: no `--no-verify` and no `core.hooksPath=/dev/null`; no `oxlint-disable` on any
+rule, not only the four catch ones; no ignore-list or allowlist entry added so a check stops seeing
+something; no rule downgraded from error to warning; no assertion narrowed, no failing test deleted
+or skipped, and no timeout raised until a wait succeeds — a longer wait on a selector that will
+never appear takes twice as long to lie. When a gate goes red, exactly one of two things is true:
+the code is wrong, or the gate's own fixture is stale. Find out which and fix that one. If you
+conclude the RULE is wrong, that is a decision to surface with evidence, never to take while
+clearing your own path.
+
+**And a gate that runs but can no longer fail is worse than a red one, because it reads green.**
+Three arrived that way in one day: `unitWords` kept running after every claim that could trigger it
+was deleted; a citation test's live fixture and its absent fixture became the same string once the
+rename it anticipated actually landed, so its stale-citation direction silently could not fire; and
+a bench defect was retired rather than re-pointed at the surviving code that still had the property
+it encoded. Each was recorded honestly and left, which is how a suite keeps its count while losing
+its teeth. So: when a fixture stops being able to fail, restoring its red direction is part of the
+same change, not a follow-up. Retiring a corpus entry is legitimate only after establishing that no
+live code still holds the property — say what you searched.
+
 **A verification claim must match what was exercised.** Beyond the `node_modules` trap below: a
 suite run in a shared checkout proves nothing about your branch (green may be someone else's
 in-flight work, red usually is), a number recalled is not a number measured — a platform limit was

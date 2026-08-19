@@ -9,6 +9,7 @@
  * smears all of their work into one pile.
  */
 
+import * as v from 'valibot';
 import type { VFS } from '../types/primitives';
 import { isVfsError } from './errno';
 
@@ -21,6 +22,27 @@ export interface WriteEvent {
   readonly before?: string | Uint8Array | null;
   /** Content after. null for a delete. */
   readonly after: string | Uint8Array | null;
+}
+
+/**
+ * A write payload AS TEXT, or the fact that it is not text.
+ *
+ * Parsed once, here, because {@link WriteEvent} is what owns the
+ * `string | Uint8Array | null` union and every consumer of it needs the same question
+ * answered before it can do anything else. What each does with a non-text payload
+ * differs and belongs to the consumer: a review renders "(binary)" and a merge-back
+ * refuses the member rather than decoding an image into a patch side. Both of those are
+ * a mapping over this, not a second parse of it.
+ */
+export type TextPayload =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'binary' };
+
+export function textPayload(value: string | Uint8Array | null | undefined): TextPayload {
+  if (value === null || value === undefined) return { kind: 'absent' };
+  const parsed = v.safeParse(v.string(), value);
+  return parsed.success ? { kind: 'text', text: parsed.output } : { kind: 'binary' };
 }
 
 /**

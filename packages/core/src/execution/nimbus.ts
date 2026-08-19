@@ -20,12 +20,24 @@ import { readExecSignal } from './signal';
 import { formatExecResult, refusalText } from './exec-result';
 import { ProteusError, toProteusError } from '../obs/index';
 import type { JsonValue } from '../utils/json';
+import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
 export interface NimbusExecOptions {
   cwd?: string;
   env?: Record<string, string>;
   timeoutMs?: number;
   stdin?: string;
+  /**
+   * Who this command runs as, or absent for the session user.
+   *
+   * HOST-INJECTED, NEVER AGENT-SUPPLIED, and the distinction is the whole
+   * security property: a credential names a uid, so a surface that let an agent
+   * choose one would let it choose uid 0. {@link NimbusExecOptionsSchema}
+   * therefore omits this field deliberately — see the note there — and the only
+   * way a credential reaches `exec` is a host stamping it in, as
+   * {@link nimbusSessionShell} does.
+   */
+  cred?: VfsCred;
 }
 
 type NimbusRunCodeOptions = NimbusExecOptions & {
@@ -183,6 +195,15 @@ function normalizeExec(result: NimbusExecResult): string {
 
 const StringSchema = v.string();
 const OptionalPathSchema = v.optional(v.string());
+/**
+ * The agent-facing option schemas, and both OMIT `cred` on purpose.
+ *
+ * These parse tool arguments, which is to say model output. `v.object` is
+ * non-strict, so a `cred` an agent invents is STRIPPED here rather than
+ * refused — the escalation is dropped before it reaches the substrate, where
+ * `isVfsCred` would otherwise fall through to the session user and say nothing.
+ * Adding `cred` to either schema would hand every agent its own choice of uid.
+ */
 const NimbusExecOptionsSchema: v.GenericSchema<NimbusExecOptions> = v.object({
   cwd: v.optional(v.string()),
   env: v.optional(v.record(v.string(), v.string())),
@@ -709,15 +730,35 @@ export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts)
   };
 }
 
-/** The shell primitive over the exact bytes exposed by nimbusSessionFiles. */
-export function nimbusSessionShell(box: NimbusSandboxHandle): Shell {
+/**
+ * The shell primitive over the exact bytes exposed by nimbusSessionFiles.
+ *
+ * `cred` binds this shell to one identity for its whole lifetime, which is what
+ * makes a node's home mean anything at runtime: the boundary is uid/gid/mode on
+ * real inodes, so it only bites if the commands actually run as the node. It is
+ * a construction argument rather than a per-call one BECAUSE it must not be
+ * chooseable per call — see {@link NimbusExecOptions.cred}. Absent is the
+ * session user, i.e. exactly the origin's own behaviour.
+ */
+export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Shell {
   return {
     async exec(command, stdinOrOptions) {
       const options = v.is(v.string(), stdinOrOptions)
         ? { stdin: stdinOrOptions }
         : stdinOrOptions;
+      // Assigned rather than spread conditionally: an absent option must be an
+      // ABSENT KEY, because the substrate reads `'cred' in options` to decide
+      // whether to inherit — a key holding `undefined` is a different fact from a
+      // key nobody set.
+      const stdin = options?.stdin;
+      let execOptions: NimbusExecOptions | undefined;
+      if (stdin !== undefined || cred !== undefined) {
+        execOptions = {};
+        if (stdin !== undefined) execOptions.stdin = stdin;
+        if (cred !== undefined) execOptions.cred = cred;
+      }
       const result = await raceAbort(
-        () => box.exec(command, options?.stdin === undefined ? undefined : { stdin: options.stdin }),
+        () => box.exec(command, execOptions),
         options?.signal,
         'workspace exec aborted — the command may still finish in the session',
       );

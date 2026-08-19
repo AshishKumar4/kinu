@@ -24,6 +24,7 @@
 // something other than its parent's row — and each has its own test below.
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
+import { MAX_TX_BLOB_BYTES } from '@nimbus-sh/core/constants.js';
 import { Database } from 'bun:sqlite';
 import { createTestRuntime, makeSql, makeExecRaw } from './helpers';
 import { createRecordingLogger, type RecordingLogger } from '../src/obs/index';
@@ -32,6 +33,7 @@ import { insertSearchNode } from '../src/mcts/record-node';
 import { backpropagate } from '../src/mcts/backpropagation';
 import { selectFrontierNode, type FrontierPolicy } from '../src/mcts/frontier';
 import { runSwarm } from '../src/strategy/swarm-run';
+import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 import type { Refusal } from '../src/obs/error';
 import {
   arbitrateBranch, resolveSwarm, swarmValidity,
@@ -462,8 +464,9 @@ function objective(): Objective {
 }
 
 /** A model that answers with the optimal solution, and — when asked to — appends a
- *  branch proposal of `proposeWidth` sub-questions. */
-function answering(proposeWidth: number | null): MockLanguageModelV3 {
+ *  branch proposal of `proposeWidth` sub-questions. `solution` is a parameter so a test
+ *  can vary the ANSWER without a second copy of this model. */
+function answering(proposeWidth: number | null, solution: string = OPTIMAL): MockLanguageModelV3 {
   const branch = proposeWidth === null ? '' : `\n\nPROPOSE-BRANCH\n${JSON.stringify({
     rationale: 'the tail of this task deserves its own thread',
     branches: Array.from({ length: proposeWidth }, (_unused, i) => ({
@@ -476,7 +479,7 @@ function answering(proposeWidth: number | null): MockLanguageModelV3 {
     provider: 'fake',
     modelId: 'fake-swarm',
     doGenerate: async () => ({
-      content: [{ type: 'text', text: `Here is my approach.\n\n\`\`\`javascript\n${OPTIMAL}\`\`\`${branch}` }],
+      content: [{ type: 'text', text: `Here is my approach.\n\n\`\`\`javascript\n${solution}\`\`\`${branch}` }],
       finishReason: { unified: 'stop' as const, raw: undefined },
       usage: {
         inputTokens: { total: 12, noCache: 12, cacheRead: undefined, cacheWrite: undefined },
@@ -676,5 +679,129 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
         throw new Error(`node ${node.parent_id} was refused at the cap and still got a child`);
       }
     }
+  }, 120_000);
+});
+
+/* ── `carry` admission is consulted at the settle barrier ─────────────────── */
+
+// LIVES HERE BECAUSE THE REAL RUN LIVES HERE. `unit-merge-back.test.ts` covers what
+// `admitCarry` decides; this covers whether the decision is REACHED — and the only
+// harness in the suite that drives a genuine settle, with real candidates carrying real
+// normalised scores, is the one above. A second copy of this objective, model and
+// resolver would be eighty duplicated lines defending a one-line call site.
+//
+// The defect being closed: `carry:'artifacts'` declares an admission `threshold` on its
+// own arm and NOTHING read it, so a tagged parameter changed nothing.
+describe('carry admission at the settle barrier', () => {
+  test('the artifacts threshold is read, and a candidate under it is not carried', async () => {
+    // Above any normalised score, so every candidate must fall under it. A wiring that
+    // ignored the threshold would admit them instead, which is the failure this asserts
+    // against rather than around.
+    const { logger, result } = await run({
+      depth: 1, branches: 2, proposeWidth: null,
+      config: { carry: { kind: 'artifacts', threshold: 2 } },
+    });
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    const refused = logger.emitted.filter((line) => line.event === 'swarm.carry_refused');
+    // NOT VACUOUS: a run that produced no candidates would emit no per-candidate events
+    // and every assertion below would hold trivially.
+    expect(refused.length).toBeGreaterThan(0);
+    expect(refused[0]?.fields).toMatchObject({
+      carry: 'artifacts', threshold: 2, cause: 'below-threshold',
+    });
+    expect(logger.emitted.filter((line) => line.event === 'swarm.carry_admitted')).toHaveLength(0);
+
+    // And the aggregate, so "how many survived this run" is one line rather than a count
+    // over N of them.
+    const [settled] = logger.emitted.filter((line) => line.event === 'swarm.carry_settled');
+    expect(settled?.fields).toMatchObject({ carry: 'artifacts', admitted: 0 });
+    expect(settled?.fields.refused).toBe(refused.length);
+  }, 120_000);
+
+  test('a reachable threshold carries the candidates that clear it', async () => {
+    const { logger, result } = await run({
+      depth: 1, branches: 2, proposeWidth: null,
+      config: { carry: { kind: 'artifacts', threshold: 0 } },
+    });
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    const admitted = logger.emitted.filter((line) => line.event === 'swarm.carry_admitted');
+    expect(admitted.length).toBeGreaterThan(0);
+    const [settled] = logger.emitted.filter((line) => line.event === 'swarm.carry_settled');
+    expect(settled?.fields.admitted).toBe(admitted.length);
+  }, 120_000);
+});
+
+/* ── Merge-back is how the answer reaches the origin ──────────────────────── */
+
+// THE MODULE'S EXPORTS EXIST BECAUSE THIS CALLS THEM. Merge-back's own suite proves what
+// each policy decides; these prove a real settle goes THROUGH it, because a merge-back
+// nobody calls leaves a settled swarm's work exactly as stranded as no merge-back at all.
+//
+// Driven through `runSwarm` directly rather than the shared `run` helper, because these
+// assert the WORKSPACE and need the runtime the helper keeps to itself.
+describe('merge-back at the settle barrier', () => {
+  test("the winner's answer reaches the origin through apply-winner", async () => {
+    const { rt } = createTestRuntime();
+    const logger = createRecordingLogger();
+
+    const result = await runSwarm(
+      { rt, model: answering(null), mode: 'build', logger },
+      resolved(1, 2),
+    );
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    // The policy is DERIVED: a scored run settles on one incumbent.
+    const winner = result.best;
+    expect(winner).not.toBeNull();
+    if (!winner) return;
+
+    const [applied] = logger.emitted.filter((line) => line.event === 'swarm.merge_applied');
+    expect(applied?.fields).toMatchObject({ policy: 'apply-winner', files: 1 });
+    expect(applied?.fields.node).toBe(winner.id);
+
+    // And it is the reported winner that is on disk, not whichever candidate happened to
+    // be measured last.
+    const landed = await rt.storage.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' });
+    expect(landed).toBe(winner.artifact);
+
+    const [settled] = logger.emitted.filter((line) => line.event === 'swarm.merge_settled');
+    expect(settled?.fields).toMatchObject({
+      policy: 'apply-winner', applied: 1, refused: 0, merge_nodes: 0, stopped_at: '',
+    });
+  }, 120_000);
+
+  // THE SIZE BOUND, LIVE. The padding is a comment, so the candidate still verifies and
+  // still measures the optimal operation count — the only thing that changes is that it no
+  // longer fits one host transaction. Before this wiring the settle write was handed
+  // straight to the substrate at any size.
+  test('an oversized winner is refused at settle with the bound named', async () => {
+    const { rt } = createTestRuntime();
+    const logger = createRecordingLogger();
+    const padded = `${OPTIMAL}\n// ${'x'.repeat(MAX_TX_BLOB_BYTES + 1)}\n`;
+
+    const result = await runSwarm(
+      { rt, model: answering(null, padded), mode: 'build', logger },
+      resolved(1, 1),
+    );
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+
+    // It still won — the refusal is about the APPLY, not about the measurement.
+    expect(result.best).not.toBeNull();
+
+    const [oversized] = logger.emitted.filter((line) => line.event === 'swarm.merge_oversized');
+    expect(oversized?.fields).toMatchObject({
+      policy: 'apply-winner', bound: 'blobBytes', maximum: MAX_TX_BLOB_BYTES,
+    });
+    expect(String(oversized?.fields.error)).toContain('committed prefix');
+    // Refused rather than applied, and the run still settles rather than throwing.
+    expect(logger.emitted.filter((line) => line.event === 'swarm.merge_applied')).toHaveLength(0);
+    const [settled] = logger.emitted.filter((line) => line.event === 'swarm.merge_settled');
+    expect(settled?.fields).toMatchObject({ applied: 0, refused: 1 });
   }, 120_000);
 });
