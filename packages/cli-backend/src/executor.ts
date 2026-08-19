@@ -243,6 +243,3 @@ async function executeInProcess(
     if (timer) clearTimeout(timer);
   }
 }
-
-// Re-export for backward compatibility
-export { createSandboxedExecutor as createNodeExecutor };
