@@ -18,8 +18,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import type { LanguageModelUsage } from 'ai';
 import {
-  liveModelFallback, liveModelSpend, recordLiveModelSpend, reportLiveModelSpend,
-  resetLiveModelSpend,
+  liveModelSpend, recordLiveModelSpend, reportLiveModelSpend, resetLiveModelSpend,
 } from '../src/live-model';
 
 // Module-level counters, so each case starts from a stated zero rather than from
@@ -143,57 +142,5 @@ describe('resetLiveModelSpend — a scripted suite clears instead of publishing'
     // This is the ONLY state in which a clean zero is the truth, and it is what
     // distinguishes it from a tier that drove episodes it could not account for.
     expect(spend.episodesUnmeasured).toBe(0);
-  });
-});
-
-/**
- * The rule that decides whether the eval tier gets a credential at all.
- *
- * It is the fix for a measured false green: the tier asked for PROTEUS_ORIGIN +
- * PROTEUS_TOKEN, nothing on the owner's own machine ever exported them, so the
- * `Behavioural evals` deploy gate ran to completion with every live suite
- * skipped and reported `TOTAL: 0 model call(s)`. These cases pin both halves —
- * that a blank IS filled, and that a stated choice is NEVER overridden.
- */
-describe('liveModelFallback — the signed-in session fills a blank, never an argument', () => {
-  const SESSION = { origin: 'https://proteus.example.com', token: 'ptc_live' } as const;
-
-  test('an empty environment borrows the session — the case the tier never handled', () => {
-    expect(liveModelFallback(SESSION, {})).toEqual(SESSION);
-  });
-
-  test('no session yields nothing, so a signed-out machine still skips honestly', () => {
-    expect(liveModelFallback(null, {})).toBeNull();
-  });
-
-  test('an explicit PROTEUS_TOKEN wins: the environment already named a target', () => {
-    expect(liveModelFallback(SESSION, { PROTEUS_TOKEN: 'pta_ci' })).toBeNull();
-  });
-
-  // Worker-proxy resolution is tried FIRST in resolveLiveModel, so a session
-  // injected over a deliberate gateway pair would silently bill and measure a
-  // different endpoint than the one the developer chose. Both spellings of the
-  // gateway auth variable have to hold it off.
-  test('a deliberate AI_GATEWAY_AUTH is not overridden', () => {
-    expect(liveModelFallback(SESSION, { AI_GATEWAY_AUTH: 'Bearer gw' })).toBeNull();
-  });
-
-  test("PROTEUS_AUTH, the gateway pair's other spelling, is not overridden either", () => {
-    expect(liveModelFallback(SESSION, { PROTEUS_AUTH: 'Bearer gw' })).toBeNull();
-  });
-
-  // A variable set to whitespace is not a choice. `resolveLiveModel` trims
-  // before testing every credential, so this must agree with it — otherwise an
-  // empty export in a CI shell would block the fallback AND fail to name a
-  // target, and the tier would go back to measuring nothing.
-  test('a blank PROTEUS_TOKEN is not a stated choice', () => {
-    expect(liveModelFallback(SESSION, { PROTEUS_TOKEN: '   ' })).toEqual(SESSION);
-  });
-
-  // A gateway URL alone names no credential, so it cannot hold off the
-  // fallback — resolveLiveModel would call that half-configured and throw.
-  test('a gateway URL without its auth does not hold off the fallback', () => {
-    expect(liveModelFallback(SESSION, { AI_GATEWAY_BASE_URL: 'https://gw.example/v1' }))
-      .toEqual(SESSION);
   });
 });

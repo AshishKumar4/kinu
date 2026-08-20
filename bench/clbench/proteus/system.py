@@ -90,6 +90,7 @@ _MODEL_ENDPOINT_SPEC.loader.exec_module(_model_endpoint)
 DEFAULT_PROTEUS_AI_BASE_URL = _model_endpoint.DEFAULT_PROTEUS_AI_BASE_URL
 DEFAULT_WORKERS_AI_MODEL_ID = _model_endpoint.DEFAULT_WORKERS_AI_MODEL_ID
 resolve_bearer_token = _model_endpoint.resolve_bearer_token
+assert_eval_target = _model_endpoint.assert_eval_target
 
 _WORKSPACE_NAME = "clbench"
 
@@ -121,11 +122,17 @@ def _resolve_repo_root(explicit: Optional[str]) -> Path:
 
 
 def _resolve_api_key(provider: str, base_url: str, api_key_env: Optional[str]) -> str:
-    """Read the provider key from the environment, else the Kinu config.
+    """Read the provider key for *base_url*, having proven the run may use it.
 
     Never accepted as a system param and never passed on argv — a benchmark
     config is a committed file and a command line is world-readable.
+
+    The target is checked HERE because this is the one place every construction
+    of the system passes through, and it runs before the credential is resolved:
+    a run aimed at production must fail before a token is even read, let alone
+    sent.
     """
+    assert_eval_target(base_url)
     return resolve_bearer_token(
         base_url,
         provider,

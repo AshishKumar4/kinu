@@ -50,8 +50,9 @@ import { createCloudAgent, deleteCloudAgent } from '../packages/cli/src/cloud-ap
 import { CloudAgentClient } from '../packages/cli/src/cloud-agent-client';
 import { requireSandboxedExecutors } from './evals/harness';
 import {
-  infraBoundary, liveChatModel, liveModelTarget, recordLiveModelEpisode, recordLiveModelSpend,
-  reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM, type LiveModelSession,
+  evalWorkspaceName, infraBoundary, liveChatModel, liveModelTarget, recordLiveModelEpisode,
+  recordLiveModelSpend, reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM,
+  type LiveModelSession,
 } from '@kinu/test-utils';
 
 const TARGET = liveModelTarget('Live Smoke');
@@ -109,7 +110,11 @@ describe('Live Smoke — one real turn per backend', () => {
     if (!HOSTED) throw new Error('unreachable: hostedTest runs only with a worker target');
     const { origin, token } = workerCredentials(HOSTED.llm);
 
-    const name = `smoke${Math.random().toString(36).slice(2, 10)}`;
+    // `eval-…`, so a row that survives teardown says what made it. The account
+    // this suite ran against once held 22 `drill*` workspaces and a
+    // `settle-probe` that nothing could attribute; `scripts/eval-workspaces.ts`
+    // globs this prefix, so an undeleted agent is now findable by name alone.
+    const name = evalWorkspaceName('live-smoke');
     // Every step below that depends on the DEPLOYMENT rather than on the model's
     // choices is wrapped, so a cold start, a 5xx or a dropped socket is labelled
     // INFRA and never read as "the agent stopped calling tools". The assertions

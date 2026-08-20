@@ -1,4 +1,24 @@
-"""Model endpoint defaults shared by Kinu benchmark adapters."""
+"""Model endpoint defaults shared by Kinu benchmark adapters.
+
+Two rules govern every scored run, and they are the Python half of
+``packages/test-utils/src/eval-identity.ts`` — the same two rules, stated once
+per language because a benchmark adapter is symlinked into checkouts where the
+TypeScript is not importable:
+
+1. IDENTITY. A run authenticates as the ``eval-service`` account, from
+   ``$PROTEUS_EVAL_TOKEN``. It never reads the signed-in session in
+   ``~/.proteus/config.json``. It used to, and that is how twenty-two ``drill*``
+   workspaces and a ``settle-probe`` came to sit on the owner's PRODUCTION
+   account among his own twenty-eight, with nothing on the account able to say
+   which harness made them.
+2. TARGET. A run reaches the staging deployment or a loopback dev server.
+   Production is refused unless ``PROTEUS_EVAL_ALLOW_PROD=1`` names the
+   exception. The default target used to BE production, so a benchmark that
+   named no origin measured the live system by default.
+
+The target rule is an allowlist. A denylist of production hostnames permits
+every origin nobody has thought of yet, which is the mistake being repaired.
+"""
 
 from __future__ import annotations
 
@@ -6,14 +26,42 @@ import json
 import os
 import re
 from collections.abc import Mapping
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 DEFAULT_WORKERS_AI_MODEL_ID = "@cf/deepseek-ai/deepseek-v4-pro-0813"
-DEFAULT_PROTEUS_ORIGIN = "https://kinu.run"
-DEFAULT_PROTEUS_AI_BASE_URL = f"{DEFAULT_PROTEUS_ORIGIN}/api/user/ai/v1"
+
+#: The production deployment. Named here for ONE purpose — deciding that an
+#: origin is a Kinu deployment and may therefore receive a Kinu
+#: credential — and never as a denylist entry. Mirrors the top-level
+#: CLI_PUBLIC_ORIGIN in wrangler.jsonc, pinned by bench/tests/test_model_endpoint.py.
+PRODUCTION_ORIGIN = "https://kinu.run"
+#: The eval target. Mirrors EVAL_STAGING_ORIGIN in eval-identity.ts and
+#: env.staging's CLI_PUBLIC_ORIGIN, pinned by the same test.
+EVAL_STAGING_ORIGIN = "https://staging.kinu.run"
+#: The account every scored run acts as. Mirrors EVAL_SERVICE_ACCOUNT.
+EVAL_SERVICE_ACCOUNT = "eval-service"
+#: The credential variable. Mirrors EVAL_IDENTITY_ENV.token.
+EVAL_TOKEN_ENV = "PROTEUS_EVAL_TOKEN"
+#: The one exception, named explicitly. Mirrors EVAL_IDENTITY_ENV.allowProd.
+EVAL_ALLOW_PROD_ENV = "PROTEUS_EVAL_ALLOW_PROD"
+
+DEFAULT_PROTEUS_AI_BASE_URL = f"{EVAL_STAGING_ORIGIN}/api/user/ai/v1"
+
+#: Hosts that can only be the operator's own machine. ``urlsplit`` strips IPv6
+#: brackets from ``hostname``, unlike the WHATWG parser the TypeScript uses.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+#: Origins that ARE a Kinu deployment, and so may be sent a Kinu bearer.
+#:
+#: A DIFFERENT QUESTION from "may an eval point here", and keeping the two apart
+#: is load-bearing. Conflating them means ``PROTEUS_EVAL_ALLOW_PROD=1`` — a
+#: statement about policy — would also declare every origin on earth a trusted
+#: credential sink, and `https://attacker.example/api/user/ai/v1` would receive
+#: the token. Policy is ``eval_target_allowed``; trust is this set, and no
+#: environment variable widens it.
+_PROTEUS_ORIGINS = frozenset({PRODUCTION_ORIGIN, EVAL_STAGING_ORIGIN})
 
 _PROVIDER_KEY_ENVS = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -21,6 +69,41 @@ _PROVIDER_KEY_ENVS = {
     "openrouter": "OPENROUTER_API_KEY",
 }
 _CLOUDFLARE_AI_PATH = re.compile(r"^/client/v4/accounts/[^/]+/ai/v1/?$")
+
+
+def eval_target_allowed(origin: str, environ: Mapping[str, str] | None = None) -> bool:
+    """Whether a scored run may point at *origin*.
+
+    The override is checked first and is exact: a variable set to ``0``, to the
+    empty string, or to ``false`` is not somebody choosing production.
+    """
+    env = os.environ if environ is None else environ
+    if env.get(EVAL_ALLOW_PROD_ENV, "").strip() == "1":
+        return True
+    parsed = urlsplit(origin.strip().rstrip("/"))
+    if parsed.hostname in _LOOPBACK_HOSTS:
+        return True
+    return f"{parsed.scheme}://{parsed.netloc}" == EVAL_STAGING_ORIGIN
+
+
+def assert_eval_target(base_url: str, environ: Mapping[str, str] | None = None) -> str:
+    """Return *base_url* unchanged, having proven a scored run may use it.
+
+    Called by every adapter before a trial starts, so the refusal arrives before
+    the run rather than in a workspace list afterwards.
+    """
+    raw = (base_url or "").strip()
+    if not raw:
+        raise ValueError("No endpoint: a scored run must name where it goes.")
+    if eval_target_allowed(raw, environ):
+        return raw
+    parsed = urlsplit(raw)
+    raise ValueError(
+        f"{parsed.scheme}://{parsed.netloc} is not an eval target. Benchmarks run "
+        f"against {EVAL_STAGING_ORIGIN}, or a loopback dev server, so they can "
+        f"never write into a deployment that serves real users. To make this run "
+        f"anyway, set {EVAL_ALLOW_PROD_ENV}=1 — which records that somebody chose it."
+    )
 
 
 def provider_for_base_url(base_url: str) -> str:
@@ -47,10 +130,10 @@ def resolve_bearer_token(
 ) -> str:
     """Resolve only the credential belonging to *base_url*.
 
-    The product proxy uses a Kinu session/access token, direct Workers AI
-    uses a Cloudflare API token, and explicitly selected BYO providers use
-    their provider key. Unknown endpoints require ``api_key_env`` so an
-    unrelated ambient credential can never be sent to them by accident.
+    A Kinu proxy uses the eval-service access token, direct Workers AI uses a
+    Cloudflare API token, and explicitly selected BYO providers use their
+    provider key. Unknown endpoints require ``api_key_env`` so an unrelated
+    ambient credential can never be sent to them by accident.
     """
     env = os.environ if environ is None else environ
     config = _read_config(config_path or _default_config_path(env))
@@ -74,21 +157,19 @@ def resolve_bearer_token(
         return _required_env(env, api_key_env, base_url)
 
     if _is_product_proxy(base_url):
-        token = env.get("PROTEUS_TOKEN", "").strip()
-        if not token:
-            token = _string_at(config, "accessToken")
-            expires_at = _string_at(config, "tokenExpiresAt")
-            if token and expires_at and _is_expired(expires_at):
-                raise ValueError(
-                    "The stored Kinu session has expired. Run `kinu auth` "
-                    "again, or set PROTEUS_TOKEN to an access token with ai.proxy."
-                )
+        # $PROTEUS_EVAL_TOKEN and NOTHING ELSE. This branch used to fall back to
+        # ``accessToken`` in ~/.proteus/config.json — the operator's own signed-in
+        # session — which made every scored run act as him on whatever account
+        # that session belonged to. The stored session is not read here at all
+        # now, so there is no path by which a benchmark becomes a person.
+        token = env.get(EVAL_TOKEN_ENV, "").strip()
         if token:
             return token
         raise ValueError(
-            "No Kinu credential for the Workers AI proxy. Set PROTEUS_TOKEN "
-            "(mint one with `kinu tokens create --name bench --scopes ai.proxy`) "
-            "or run `kinu auth` to create a stored session."
+            f"No {EVAL_SERVICE_ACCOUNT} credential for {base_url}. Mint one against "
+            f"{EVAL_STAGING_ORIGIN} (`kinu auth --origin {EVAL_STAGING_ORIGIN}` then "
+            f"`kinu tokens create --name bench --scopes ai.proxy`) and export it as "
+            f"${EVAL_TOKEN_ENV}. A signed-in session is deliberately never borrowed."
         )
 
     if _is_direct_workers_ai(base_url):
@@ -110,13 +191,22 @@ def resolve_bearer_token(
 
 
 def _is_product_proxy(base_url: str) -> bool:
+    """Whether *base_url* is a Kinu deployment's own inference proxy.
+
+    Membership of ``_PROTEUS_ORIGINS`` (or a loopback dev server), never equality
+    with one origin: production, staging and localhost are all Kinu proxies
+    and all must receive the Kinu credential, while
+    ``https://attacker.example/api/user/ai/v1`` must not — and no environment
+    variable can change that, which is why this does not consult
+    ``eval_target_allowed``. The path is checked too, so a trusted origin does
+    not turn every path on it into a credential sink.
+    """
     parsed = urlsplit(base_url)
-    product = urlsplit(DEFAULT_PROTEUS_ORIGIN)
-    return (
-        parsed.scheme == product.scheme
-        and parsed.netloc == product.netloc
-        and parsed.path.rstrip("/") == "/api/user/ai/v1"
-    )
+    if parsed.path.rstrip("/") != "/api/user/ai/v1":
+        return False
+    if parsed.hostname in _LOOPBACK_HOSTS:
+        return True
+    return f"{parsed.scheme}://{parsed.netloc}" in _PROTEUS_ORIGINS
 
 
 def _is_direct_workers_ai(base_url: str) -> bool:
@@ -133,16 +223,6 @@ def _required_env(env: Mapping[str, str], name: str, base_url: str) -> str:
     if value:
         return value
     raise ValueError(f"No credential for {base_url}. Set ${name}.")
-
-
-def _is_expired(value: str) -> bool:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed <= datetime.now(timezone.utc)
 
 
 def _default_config_path(env: Mapping[str, str]) -> Path:

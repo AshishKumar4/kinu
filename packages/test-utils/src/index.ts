@@ -10,6 +10,7 @@ export * from './runtime';
 export * from './provider';
 export * from './credentials';
 export * from './ambient-env';
+export * from './eval-identity';
 export * from './live-model';
 export * from './agent-evals';
 export * from './facts';

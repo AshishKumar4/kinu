@@ -283,16 +283,33 @@
   "vectorize": [
     { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory" }
   ],
-  // ── Staging environment (headless testing) ──────────────────────
-  // A second deployment for testing think/tools directly without production
-  // OAuth secrets in the way, and the ONLY target tests and evals are allowed to
-  // run against. Differences from prod: a distinct worker name
-  // (`kinu-staging`) — which gives it ISOLATED Durable Object namespaces, so
-  // staging never touches prod data — its own hostname, no previews, and
-  // `DEV_USER_EMAIL` set, so authenticateRequest() (auth/session.ts)
-  // synthesizes a fixed eval-service identity and the worker is reachable
-  // headlessly. Fully specified because wrangler does not inherit bindings/vars
-  // into named environments. Deploy: `wrangler deploy --env staging`.
+  // ── Staging environment: where tests and evals run ──────────────
+  //
+  // Nothing that measures this system may point at production. A test run and
+  // the owner working are otherwise the same event on the same account, and on
+  // 2026-08-20 that was not hypothetical: production held 28 workspaces of
+  // which 23 were test debris (22 `drill*` rows and one `settle-probe`), minted
+  // by harnesses driving the owner's signed-in session. So this environment is
+  // the eval plane, and `packages/test-utils/src/eval-identity.ts` refuses any
+  // other target unless PROTEUS_EVAL_ALLOW_PROD=1 names the exception.
+  //
+  // Three things make it that, and each is pinned by a test in
+  // `packages/test-utils/tests/eval-identity.test.ts` so a rename here fails
+  // there rather than silently pointing the evals at a Worker that is gone:
+  //
+  //   * A DISTINCT WORKER NAME (`kinu-staging`), which is what gives it its own
+  //     Durable Object namespaces. Isolation is a consequence of the name, not
+  //     of a setting, so the name is the load-bearing part.
+  //   * ITS OWN STORES. Every stateful binding below differs from production's.
+  //     A shared one is a test writing into real data by another route — see
+  //     the R2 and Vectorize notes.
+  //   * `DEV_USER_EMAIL` set to the eval service account, so
+  //     `authenticateRequest()` (auth/session.ts) synthesizes ONE fixed
+  //     identity for every request. Evals act as `eval-service` and never as a
+  //     person. Production must leave this unset.
+  //
+  // Fully specified because wrangler inherits no bindings or vars into a named
+  // environment. Deploy: `wrangler deploy --env staging`.
   //
   // `staging.kinu.run` is a ROUTE, not a custom domain, and `workers_dev` is off.
   // The route form is what makes precedence unambiguous against production's
@@ -302,7 +319,8 @@
   // the record for us but puts the two claims on different mechanisms whose
   // relative precedence Cloudflare documents only for identical hostnames.
   // workers.dev is off because a second origin on a worker that synthesizes an
-  // identity from DEV_USER_EMAIL is an auth bypass reachable at a guessable name.
+  // identity from DEV_USER_EMAIL is an auth bypass reachable at a guessable
+  // name — and with one origin the eval allowlist needs no workers.dev arm.
   "env": {
     "staging": {
       "name": "kinu-staging",
@@ -364,26 +382,53 @@
       // Inbox stays off (no routing rule points here; outbound sends skip).
       "send_email": [{ "name": "EMAIL" }],
       "ai": { "binding": "AI" },
-      // Same seeded bucket as production: a runtime artifact is content-addressed
-      // and immutable, so there is nothing to keep separate per environment, and
-      // parity here is what makes a staging `python3` prove the hosted path.
+      // BACKUP_BUCKET is staging's OWN bucket. It used to be production's
+      // `proteus-backups`, which meant every /workspace snapshot an eval's
+      // sandbox took was written into the bucket holding real users' archives —
+      // the same class of leak as running the evals against the production
+      // origin, by a route nobody was looking at.
+      //
+      // NIMBUS_RUNTIME_CACHE is deliberately still shared: a runtime artifact
+      // is content-addressed and immutable, so there is nothing to keep apart,
+      // and reading the same seeded blobs is what makes a staging `python3`
+      // prove the hosted path rather than a copy of it.
       "r2_buckets": [
-        { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-backups" },
+        { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-backups-staging" },
         { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" }
+      ],
+      // Staging's own memory index, at the 384 dimensions the Workers AI
+      // embedder produces. Production's index is NOT bound here: a shared one
+      // would put every eval episode's vectors into the corpus real searches
+      // read. Without a binding at all `runtime.ts` degrades to FTS5-only
+      // (buildVectorStore returns the noop), so staging would answer 200 while
+      // measuring a different retrieval path than production — the failure this
+      // environment exists to catch, not to have.
+      //
+      // Both stores are EMPTY AND NEW rather than the pair that predates the
+      // rename. Those held rows keyed to userIds the previous auth store
+      // assigned, and this deployment assigns its own, so every one of them is
+      // an orphan that would skew a staging retrieval measurement.
+      "vectorize": [
+        { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory-staging" }
       ],
       "kv_namespaces": [
         { "binding": "AUTH_KV", "id": "c06cad3d9e2642258e80b4c4700e04be" }
       ],
       "vars": {
         "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway/workers-ai/v1",
-        // Staging is workers.dev only, and workers.dev has no wildcard
-        // subdomains, so it cannot host previews at all — the SDK rejects
-        // `.workers.dev` outright. Previews are off here until staging
-        // gets a zone of its own.
+        // Previews are off: they need a wildcard host per exposed port, and
+        // nothing under this origin serves one yet. `exposePort` tells the agent
+        // so rather than handing back a URL that cannot resolve; neither
+        // executor is disabled by it.
         "PREVIEW_HOST_SUFFIX": "",
-        "CLI_PUBLIC_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",
-        "CLI_APPROVAL_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",
-        "DEV_USER_EMAIL": "staging-tester@proteus.dev",
+        "CLI_PUBLIC_ORIGIN": "https://staging.kinu.run",
+        "CLI_APPROVAL_ORIGIN": "https://staging.kinu.run",
+        // The eval service account. Every request to this deployment resolves
+        // to this one identity, so the workspaces a test run creates land on an
+        // account that holds nothing else — and `eval-service` in a workspace
+        // list is self-explaining. Pinned as EVAL_SERVICE_EMAIL in
+        // packages/test-utils/src/eval-identity.ts.
+        "DEV_USER_EMAIL": "eval-service@kinu.run",
         // Same single choice as production — see the note on the production var.
         "SANDBOX_TRANSPORT": "rpc"
       }

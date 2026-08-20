@@ -4,12 +4,15 @@
         --agent bench.harbor.proteus_agent:ProteusAgent \
         --path ./terminal-bench-2.1 \
         --ak evolve=false \
-        --allow-agent-host kinu.run
+        --allow-agent-host staging.kinu.run
 
-The adapter defaults to native Workers AI DeepSeek V4 Pro 0813 through
-Kinu's signed-in inference proxy. Export ``PROTEUS_TOKEN`` before launching
-Harbor; a long-lived token needs the ``ai.proxy`` scope. ``-m`` and
-``PROTEUS_BASE_URL`` remain explicit override surfaces for comparison runs.
+The adapter defaults to native Workers AI DeepSeek V4 Pro 0813 through the
+STAGING deployment's inference proxy, as the ``eval-service`` account. Export
+``PROTEUS_EVAL_TOKEN`` before launching Harbor; a long-lived token needs the
+``ai.proxy`` scope. No signed-in session is read, and a run aimed at production
+is refused unless ``PROTEUS_EVAL_ALLOW_PROD=1`` names the exception — see
+``bench/model_endpoint.py``. ``-m`` and ``PROTEUS_BASE_URL`` remain explicit
+override surfaces for comparison runs.
 
 ``./terminal-bench-2.1`` is the corpus of record: 2.0 is kept alongside as
 ``./terminal-bench-2.0`` so older scores stay interpretable, but it is not what
@@ -17,7 +20,7 @@ new runs measure. Each corpus carries a ``corpus.json`` and every trial logs and
 records which one it ran (see ``bench/harbor/corpus.py``).
 
 Glue only: the adapter installs the CLI, creates a local workspace, and hands
-the task instruction to ``kinu exec``. It changes nothing about how the
+the task instruction to ``proteus exec``. It changes nothing about how the
 agent reasons — the only knob it exposes is ``evolve``, the switch a paired
 evolving/non-evolving comparison needs.
 
@@ -51,12 +54,13 @@ from bench.isolation import assert_throwaway_home
 from bench.model_endpoint import (
     DEFAULT_PROTEUS_AI_BASE_URL,
     DEFAULT_WORKERS_AI_MODEL_ID,
+    assert_eval_target,
     provider_for_base_url,
     resolve_bearer_token,
 )
 
 INSTALL_ROOT = PurePosixPath("/installed-agent")
-INSTALL_PATH = INSTALL_ROOT / "kinu"
+INSTALL_PATH = INSTALL_ROOT / "proteus"
 #: The trial's PROTEUS_HOME. One per container, and a container is one trial —
 #: fixed rather than randomized so a resumed trial finds the state it left.
 HOME_PATH = INSTALL_ROOT / "proteus-home"
@@ -78,7 +82,7 @@ DEFAULT_MISSION = (
 
 
 class ProteusAgent(BaseInstalledAgent):
-    """Kinu, driven headlessly through ``kinu exec`` in local mode."""
+    """Kinu, driven headlessly through ``proteus exec`` in local mode."""
 
     SUPPORTS_ATIF: bool = True
 
@@ -141,12 +145,21 @@ class ProteusAgent(BaseInstalledAgent):
         """
         env = dict(self._resolved_env_vars)
 
+        # WHERE, before the credential. A scored run against production writes
+        # into the live account: this adapter's own default USED to be the
+        # production origin, so a trial that named no endpoint measured the real
+        # system by default. Refused here, before the trial starts, rather than
+        # discovered in a workspace list afterwards.
+        # The override is read from the LAUNCHING shell (os.environ, the default)
+        # rather than from the trial's rendered vars: consenting to production is
+        # an operator's act, not a per-trial parameter.
+        assert_eval_target(env["PROTEUS_BASE_URL"])
         auth = self._get_env("PROTEUS_AUTH")
         if not auth:
             credential_env = {
                 name: value
                 for name in (
-                    "PROTEUS_TOKEN",
+                    "PROTEUS_EVAL_TOKEN",
                     "PROTEUS_HOME",
                     "CLOUDFLARE_API_TOKEN",
                     "OPENROUTER_API_KEY",
@@ -247,7 +260,7 @@ class ProteusAgent(BaseInstalledAgent):
         )
 
         evolve_flag = "" if self._evolve else "--no-auto-evolve "
-        # `</dev/null` is required, not defensive: `kinu exec` folds piped
+        # `</dev/null` is required, not defensive: `proteus exec` folds piped
         # stdin into the prompt, so an open stdin would block the turn forever.
         # stderr goes to its own file rather than into the pipe: a tool result
         # longer than PIPE_BUF can be interleaved with a diagnostic line, and a

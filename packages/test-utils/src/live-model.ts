@@ -12,11 +12,14 @@
  *
  * Two ways to reach a real model, in preference order:
  *
- *   1. WORKER PROXY — `PROTEUS_ORIGIN` + `PROTEUS_TOKEN`. A deployed or preview
- *      Kinu worker fronts the owner's Cloudflare credential at
- *      `/api/user/ai/v1` (cf-backend/src/user/ai-proxy.ts), so the test needs a
- *      CLI bearer and no Cloudflare token at all. `kinu tokens create
- *      --scope ai.proxy` mints one. This is the cheap path: native Workers AI.
+ *   1. WORKER PROXY — `PROTEUS_ORIGIN` + `PROTEUS_TOKEN`. A Kinu deployment
+ *      fronts a Cloudflare credential at `/api/user/ai/v1`
+ *      (cf-backend/src/user/ai-proxy.ts), so the test needs a CLI bearer and no
+ *      Cloudflare token at all. This is the cheap path: native Workers AI. The
+ *      pair is filled by `scripts/eval-tier.sh` from the eval-service identity
+ *      (`eval-identity.ts`), and the origin is CHECKED against that module's
+ *      allowlist here — this pair reaches a deployment's whole API, not just a
+ *      model, so pointing it at production would let a suite write real data.
  *   2. AI GATEWAY — `AI_GATEWAY_BASE_URL` + `AI_GATEWAY_AUTH`. The pre-existing
  *      path, kept because it reaches models the account proxy does not front.
  *
@@ -28,11 +31,11 @@
  * falls back to a hardcoded account's gateway cannot state which target it
  * measured, and this repo is public.
  *
- * The third outcome is the one that matters: a HALF-set environment is a
- * configuration bug, not a skip. `PROTEUS_TOKEN` with no origin, or an auth
- * token with no base URL, used to resolve to an empty header and a silent skip
- * — a green suite that proved nothing, over a machine whose operator believed
- * it was configured. That returns `misconfigured` and the suites throw.
+ * The third outcome is the one that matters: an environment that is HALF-SET, or
+ * aimed somewhere it may not go, is a configuration bug and not a skip.
+ * `PROTEUS_TOKEN` with no origin used to resolve to an empty header and a silent
+ * skip — a green suite that proved nothing, over a machine whose operator
+ * believed it was configured. Both return `misconfigured` and the suites throw.
  */
 import {
   addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
@@ -42,6 +45,7 @@ import {
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import { appendFileSync } from 'node:fs';
 import { LIVE_MODEL_ENV } from './ambient-env';
+import { EVAL_STAGING_ORIGIN, evalTargetVerdict } from './eval-identity';
 
 /** Which of the two resolution paths produced a target. */
 export type LiveModelPath = 'worker-proxy' | 'ai-gateway';
@@ -92,9 +96,19 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
     return {
       kind: 'misconfigured',
       reason: `${LIVE_MODEL_ENV.token} is set but ${LIVE_MODEL_ENV.origin} is not. `
-        + 'A CLI bearer names no target: set the deployed worker origin '
-        + '(e.g. https://staging.kinu.run).',
+        + `A CLI bearer names no target: set the deployment origin (${EVAL_STAGING_ORIGIN}).`,
     };
+  }
+  // WHERE, before HOW MUCH. This pair reaches a Kinu DEPLOYMENT, not merely
+  // a model: the same origin fronts `/api/cli/workspaces`, so a suite resolved
+  // against production can create and delete real workspaces there — which is
+  // how 23 of the 28 rows on the owner's account got made. One funnel for every
+  // live suite, so no suite has to remember the rule.
+  if (origin) {
+    const verdict = evalTargetVerdict(origin, env);
+    if (verdict.kind === 'refused') {
+      return { kind: 'misconfigured', reason: verdict.reason };
+    }
   }
   if (origin && token) {
     return {
@@ -155,44 +169,11 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
   };
 }
 
-/** A live target the eval tier may borrow when the environment names none. */
+/** A resolved worker-proxy target, decomposed back into the pair that reaches
+ *  the deployment's own API. */
 export interface LiveModelSession {
   readonly origin: string;
   readonly token: string;
-}
-
-/**
- * The signed-in CLI session, promoted to a live target — but ONLY when the
- * environment names none.
- *
- * WHY THIS EXISTS. `resolveLiveModel` reads the environment and nothing else,
- * and nothing ever populated it. So on the one machine that holds a credential —
- * the owner's, signed in with `kinu auth` — `bun run test:eval` printed
- * `target: none`, all six live suites skipped, the ratchet proved the skips were
- * declared, and the tier reported `TOTAL: 0 model call(s)`. A deploy gate
- * (`scripts/deploy.sh`: "Behavioural evals") that has never once called a model
- * is a gate in name only, and `calls: 0` could not distinguish "spent nothing"
- * from "was never wired".
- *
- * WHY IT NEVER OVERRIDES. An explicit `PROTEUS_TOKEN`, or either gateway auth
- * variable, is somebody choosing a target — often a specific gateway model the
- * account proxy does not front. Worker-proxy resolution is tried FIRST in
- * `resolveLiveModel`, so injecting a stored session over a deliberate
- * `AI_GATEWAY_*` pair would silently bill and measure the wrong endpoint. This
- * fills a blank; it never argues.
- *
- * Pure over both inputs, and it takes the session as data rather than importing
- * the CLI's config reader: test-utils sits below the CLI, and the caller that
- * can read a config file is `scripts/eval-credentials.ts`.
- */
-export function liveModelFallback(
-  session: LiveModelSession | null,
-  env: EnvSource = process.env,
-): LiveModelSession | null {
-  if (!session) return null;
-  if (env[LIVE_MODEL_ENV.token]?.trim()) return null;
-  if (first(env, LIVE_MODEL_ENV.gatewayAuth)) return null;
-  return session;
 }
 
 /**
@@ -222,7 +203,7 @@ export function liveModelTarget(suite: string): LiveModelTarget | null {
   }
   const resolved = resolveLiveModel();
   if (resolved.kind === 'misconfigured') {
-    throw new Error(`${suite}: live-model environment is half-configured — ${resolved.reason}`);
+    throw new Error(`${suite}: live-model environment refuses this run — ${resolved.reason}`);
   }
   if (resolved.kind === 'absent') {
     console.warn(`[skip] ${suite} — ${resolved.reason}`);

@@ -43,32 +43,31 @@
 #      always printed the defect; until step 7 existed it printed it and returned
 #      success, which is how `TOTAL: 0 model call(s)` passed a deploy gate.
 #
-# Credentials, either pair (see packages/test-utils/src/live-model.ts):
-#   PROTEUS_ORIGIN + PROTEUS_TOKEN        deployed/preview worker proxy. The
-#                                         cheap path: the worker fronts the
-#                                         owner's own Cloudflare credential, so
-#                                         the model is native Workers AI and no
-#                                         Cloudflare token touches this machine.
-#                                         Mint one with:
-#                                           kinu tokens create --scope ai.proxy
-#   AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH an AI Gateway, for models the account
-#                                         proxy does not front. PROTEUS_BASE_URL
-#                                         + PROTEUS_AUTH are accepted as the same
-#                                         pair — `LIVE_MODEL_ENV` reads both
-#                                         spellings, and .github/workflows/eval.yml
-#                                         sets the second for the OTHER pipeline,
-#                                         so a reader who copied it from there is
-#                                         not silently on a different path.
+# WHO IT RUNS AS, AND WHERE. The tier authenticates as the `eval-service`
+# account and points at the staging deployment. Both are resolved once, by
+# scripts/eval-credentials.ts over packages/test-utils/src/eval-identity.ts:
 #
-# Neither set? This script borrows the SIGNED-IN CLI session — the same
-# `~/.proteus/config.json` credential `kinu chat` uses — via
-# scripts/eval-credentials.ts. That is the fix for a measured defect, not a
-# convenience: the tier asked for two env vars that nothing on the owner's own
-# machine ever exported, so this deploy gate ran to completion reporting
-# `TOTAL: 0 model call(s)` and every live suite skipped. An explicit
-# PROTEUS_TOKEN or AI_GATEWAY_AUTH is never overridden. It follows that on a
-# machine that has run `kinu auth`, `bun run test:eval` SPENDS — see
-# docs/TESTING.md for what that costs.
+#   PROTEUS_EVAL_TOKEN   the eval-service credential. Mint it against staging:
+#                          kinu auth --origin https://staging.kinu.run
+#                          kinu tokens create --name evals --scopes ai.proxy
+#                        Staging synthesizes one fixed identity for every request
+#                        (env.staging's DEV_USER_EMAIL), so that session IS
+#                        eval-service and no person's account is involved.
+#   PROTEUS_EVAL_ORIGIN  optional. Defaults to the staging origin; a loopback dev
+#                        server is the other accepted value.
+#
+# The resolved pair is exported as PROTEUS_ORIGIN + PROTEUS_TOKEN, which is what
+# `resolveLiveModel` reads. An origin outside that allowlist is REFUSED and this
+# script stops — production is reachable only by naming the exception,
+# PROTEUS_EVAL_ALLOW_PROD=1. That guard is not decoration: this pair reaches the
+# deployment's whole API, and until it existed the tier ran against production on
+# the owner's own session, leaving 23 test workspaces on the account among his 28.
+#
+# For models the account proxy does not front, an AI Gateway is still accepted
+# directly: AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH (PROTEUS_BASE_URL +
+# PROTEUS_AUTH are read as the same pair — `LIVE_MODEL_ENV` knows both spellings,
+# and .github/workflows/eval.yml sets the second). A gateway fronts a model and
+# no Kinu deployment, so it creates nothing and is not target-checked.
 #
 # With no credential ANYWHERE, this script still runs and still passes: every
 # live test skips, the ratchet proves the skips are the declared ones, the tier
@@ -149,13 +148,22 @@ trap 'rm -rf "$REPORT_DIR"' EXIT
 # bill the owner's account — being driven by this script is the consent.
 export PROTEUS_EVAL_LIVE=1
 
-# Fill in the credential the tier asks for, from the signed-in CLI session, when
-# the environment names no target. MUST be here rather than inside a suite:
-# `scripts/test-scratch-home.ts` replaces PROTEUS_HOME with a throwaway directory
-# at preload in every test process, so a resolver running under `bun test` reads
-# an empty config and finds nothing. Two lines on stdout or none; the token never
-# reaches argv or the log.
-mapfile -t RESOLVED < <(bun scripts/eval-credentials.ts)
+# Resolve the eval-service identity and put it where `resolveLiveModel` looks.
+# MUST be here rather than inside a suite: `scripts/test-scratch-home.ts` strips
+# the credential variables at preload in every test process, so a resolver
+# running under `bun test` sees an empty environment. Two lines on stdout or
+# none; the token never reaches argv or the log.
+#
+# A NON-ZERO EXIT IS FATAL. It means a credential was aimed at a deployment the
+# allowlist refuses — production, unless PROTEUS_EVAL_ALLOW_PROD=1 names the
+# exception — and continuing would run the whole tier against whatever the
+# environment happened to say. `set -e` is still in force here deliberately:
+# this is the one failure that must abort before anything spends or writes.
+# A COMMAND SUBSTITUTION, not `< <(…)`: `set -e` observes the exit status of an
+# assignment's substitution, but a process substitution's status is discarded —
+# `mapfile` succeeds on an empty stream, so the refusal would have been silent.
+RESOLVED_OUT="$(bun scripts/eval-credentials.ts)"
+mapfile -t RESOLVED <<< "$RESOLVED_OUT"
 if [[ ${#RESOLVED[@]} -eq 2 ]]; then
   export PROTEUS_ORIGIN="${RESOLVED[0]}"
   export PROTEUS_TOKEN="${RESOLVED[1]}"
@@ -169,7 +177,8 @@ EXPECT_LIVE=0
 echo "── eval tier ─────────────────────────────────────────────"
 if [[ -n "${PROTEUS_TOKEN:-}" && -n "${PROTEUS_ORIGIN:-}" ]]; then
   echo "target:  worker proxy ${PROTEUS_ORIGIN}/api/user/ai/v1"
-  echo "cost:    native Workers AI, billed to the token owner's account"
+  echo "identity: eval-service — no person's session is ever borrowed"
+  echo "cost:    native Workers AI, billed to the account behind that deployment"
   echo "assert:  a model call and a token count, or this run FAILS"
   EXPECT_LIVE=1
 elif [[ -n "${AI_GATEWAY_AUTH:-}${PROTEUS_AUTH:-}" ]]; then
