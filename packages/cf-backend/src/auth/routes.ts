@@ -671,7 +671,7 @@ function html(title: string, body: string, init: ResponseInit = {}): Response {
 </head>
 <body>
   <div class="shell">
-    <header><a class="brand" href="/"><span class="mark">P</span><span>Kinu</span></a></header>
+    <header><a class="brand" href="/"><span class="mark">K</span><span>Kinu</span></a></header>
     <main><h1>${escapeHtml(title)}</h1>${body}</main>
   </div>
 </body>

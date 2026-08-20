@@ -657,7 +657,7 @@ function installPageResponse(origin: string): Response {
 <body>
   <div class="shell">
     <header>
-      <a class="brand" href="/" aria-label="Kinu home"><span class="mark">P</span><span>Kinu</span></a>
+      <a class="brand" href="/" aria-label="Kinu home"><span class="mark">K</span><span>Kinu</span></a>
       <nav class="nav">
         <a href="/login">Dashboard</a>
         <a class="button" href="/login">Sign in</a>

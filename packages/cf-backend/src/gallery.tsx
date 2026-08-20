@@ -1899,7 +1899,7 @@ function LandingV2() {
     <div className="p-bg min-h-screen flex flex-col">
       <header className="flex h-16 items-center justify-between px-6 border-b p-border">
         <span className="flex items-center gap-2.5">
-          <span className="flex size-6 items-center justify-center rounded-md p-accent-bg p-accent font-mono text-[13px] font-bold">P</span>
+          <span className="flex size-6 items-center justify-center rounded-md p-accent-bg p-accent font-mono text-[13px] font-bold">K</span>
           <span className="font-mono text-[13px] font-semibold tracking-[0.14em] p-text">PROTEUS</span>
         </span>
         <nav className="flex items-center gap-2">
