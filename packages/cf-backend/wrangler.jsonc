@@ -202,7 +202,7 @@
     "PREVIEW_HOST_SUFFIX": "kinu.run",
     "CLI_PUBLIC_ORIGIN": "https://kinu.run",
     "CLI_APPROVAL_ORIGIN": "https://kinu.run",
-    "CLOUDFLARE_OAUTH_CLIENT_ID": "457ce8fea9fb4e89d4a6df3a71cdf875",
+    "CLOUDFLARE_OAUTH_CLIENT_ID": "edb106782fc08e60480306cf39411d90",
     // Scopes default to CLOUDFLARE_WORKERS_AI_SCOPES (lib/cloudflare-oauth.ts);
     // set CLOUDFLARE_OAUTH_SCOPES here only to override that one source.
     "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
@@ -326,7 +326,7 @@
       "name": "kinu-staging",
       "workers_dev": false,
       "routes": [
-        { "pattern": "staging.kinu.run", "zone_name": "kinu.run" }
+        { "pattern": "staging.kinu.run/*", "zone_name": "kinu.run" }
       ],
       "main": "src/server.ts",
       "compatibility_date": "2025-12-01",
