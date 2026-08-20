@@ -16,6 +16,12 @@ export default defineConfig({
     alias: {
       "@": resolve(__dirname, "src"),
       "node:crypto": resolve(__dirname, "gallery-node-stubs.ts"),
+      // The agent transport. A frame that mounts a PAGE rather than a surface
+      // gets no `Rpc` prop — the page opens its own connection — so without
+      // these two the page opened a WebSocket to a vite server that is not a
+      // Worker and drew nothing. Three fork frames did exactly that.
+      "agents/react": resolve(__dirname, "src/gallery-agent-stub.ts"),
+      "@cloudflare/ai-chat/react": resolve(__dirname, "src/gallery-agent-stub.ts"),
     },
   },
 });

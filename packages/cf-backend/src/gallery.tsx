@@ -92,6 +92,7 @@ import type {
 } from "@proteus/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
 import * as v from "valibot";
+import { serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame");
 const squareButtonVariant = "square";
@@ -475,6 +476,16 @@ const MESSAGES: UIMessage[] = [
 
 
 const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
+  // A read whose answer is a RECORD, where the blanket `[]` below is not a
+  // smaller version of the right answer but a shape the caller dereferences.
+  // `getExposedPorts` is read as `result.ports` inside a `setState` updater, so
+  // `[]` threw during render and took the page with it — which is why every
+  // frame that mounts a PAGE rather than a surface went blank: only a page
+  // opens its own connection, so only a page reaches this read.
+  //
+  // Empty, because the fork frames photograph trees. A fixture port would put a
+  // live-preview chip in the chrome of a screenshot about search.
+  if (method === "getExposedPorts") return rpcResult({ ports: [] }).json<T>();
   if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
   return rpcResult({}).json<T>();
 };
@@ -1188,7 +1199,7 @@ const EXPLORATION_READS = new Set([
 type ExplorationAnswer =
   | Page<ExplorationCanvasRun>
   | Page<ForkRunSummary>
-  | ForkRunSummary
+  | ExplorationCanvasRun
   | readonly MctsRow[]
   | HeadRunView
   | NodeTranscriptView
@@ -1203,7 +1214,12 @@ function explorationRead(
     const page = canvasPage(rows, mutable);
     return { ...page, items: page.items.map((entry) => entry.run) };
   }
-  if (method === "getForkRun") return FORK_RUNS.find((run) => run.id === args[0]) ?? null;
+  // The COMPOSED row, which is what `orchestrator.getForkRun` answers. This
+  // served a bare `ForkRunSummary` — a shape the read model cannot produce —
+  // and the client, reading `entry.run` off it, threw on the first
+  // revalidation. Every frame that opens the full-screen explorer rendered a
+  // blank body because of this one line.
+  if (method === "getForkRun") return rows.find((entry) => entry.run.id === args[0]) ?? null;
   if (method === "getSearchTree") return SEARCH_ROWS_BY_ROOT.get(String(args[0])) ?? [];
   if (method === "getHeadRun") return JOURNAL_BY_ROOT.get(String(args[0])) ?? null;
   // A retired node the server no longer details, and a node NEITHER store holds:
@@ -2870,7 +2886,13 @@ async function mount() {
     // and the whole tree renderer, so every frame that does not open it must not
     // pay for them. Which RUN it opens is the only thing that differs.
     const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
-    entries = [`/mcts/checkout-fixes?run=${frame === "forkswarmfull" ? "sw000" : "n000"}`];
+    const run = frame === "forkswarmfull" ? "sw000" : "n000";
+    // A PAGE owns its own connection, so it takes no `rpc` prop: it reads through
+    // `useProteus`, and in the gallery that resolves to `gallery-agent-stub`.
+    // Installing the fixture there is what makes these three frames render at all
+    // — before it they opened a socket to vite and drew an empty body.
+    serveGalleryRpc(focusRun(run));
+    entries = [`/mcts/checkout-fixes?run=${run}`];
     node = <Routes><Route path="/mcts/:agentId" element={<div className="h-screen p-bg p-text"><MCTSExplorer /></div>} /></Routes>;
   }
   else if (frame === "modal") node = <GalleryModal />;
