@@ -64,9 +64,9 @@ import { makeSql } from '../../packages/cli-backend/src/runtime';
 import { cliWorkspaceDbPath, createCliWorkspace, execCliTask } from './cli-driver';
 import { readLedgerTotals } from './harness';
 import {
-  assembleRunRecord, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE,
-  liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend, subgoalOutcome, outcomeRow,
-  UNCONFIGURED_LLM, writeRunRecord,
+  EVAL_MODELS, FULL_TOOL_SURFACE,
+  liveModelTarget, publishRunRecord, recordLiveModelEpisode, reportLiveModelSpend,
+  subgoalOutcome, outcomeRow, UNCONFIGURED_LLM,
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier,
 } from '@kinu/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
@@ -196,14 +196,11 @@ function jsonCandidates(text: string): unknown[] {
 
 afterAll(() => {
   const spend = reportLiveModelSpend(SUITE);
-  const record = assembleRunRecord({
+  publishRunRecord({
     family: 'research', tier: TIER, modelId: LLM.model, repeats: 1, seed: 1,
     arm: ARM, declaredTasks: [RESEARCH_TASK_ID], observations, spend,
     transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
   });
-  const out = process.env.PROTEUS_EVAL_RECORD ?? join(TRANSCRIPTS, 'run-record.json');
-  writeRunRecord(out, record);
-  console.log(`\n${formatRunRecord(record)}\n\nrecord: ${out}\n`);
   for (const db of opened) db.close();
 });
 

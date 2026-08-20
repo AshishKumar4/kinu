@@ -55,9 +55,9 @@ import {
   readLedgerTotals, requireExecutorSurface, requireSandboxedExecutors, requireVerifierShell,
 } from './harness';
 import {
-  assembleRunRecord, EVAL_MODELS, formatRunRecord, FULL_TOOL_SURFACE, hardTaskCases,
-  hardTaskFor, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend, seedHardTask,
-  TASK_OUTCOME, UNCONFIGURED_LLM, verifyHardTask, writeRunRecord,
+  EVAL_MODELS, FULL_TOOL_SURFACE, hardTaskCases, hardTaskFor,
+  liveModelTarget, publishRunRecord, recordLiveModelEpisode, reportLiveModelSpend, seedHardTask,
+  TASK_OUTCOME, UNCONFIGURED_LLM, verifyHardTask,
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier, type HardTask,
 } from '@kinu/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
@@ -167,14 +167,11 @@ function swarmTelemetry(db: Database, agentsCalls: number): EvalScoreRow {
 
 afterAll(() => {
   const spend = reportLiveModelSpend(SUITE);
-  const record = assembleRunRecord({
+  publishRunRecord({
     family: 'optimization', tier: TIER, modelId: LLM.model, repeats: 1, seed: 1,
     arm: ARM, declaredTasks: [TASK_ID], observations, spend,
     transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
   });
-  const out = process.env.PROTEUS_EVAL_RECORD ?? join(TRANSCRIPTS, 'run-record.json');
-  writeRunRecord(out, record);
-  console.log(`\n${formatRunRecord(record)}\n\nrecord: ${out}\n`);
   for (const db of opened) db.close();
 });
 

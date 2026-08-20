@@ -2,46 +2,25 @@
   "schema": 1,
   "verdicts": [
     {
-      "group": "pre-family/run/the run attempted nothing and still wrote a record/*",
+      "group": "pre-family/pairing/refused on baseline.admissibility/*",
       "verdict": "eval-defect",
       "reviewed": "2026-08-20",
-      "read": "tests/evals/behaviour.eval.ts:360 (skipIf: TARGET === null) and :292-309 (afterAll writes the record with no condition); the 45 records themselves report 0 observations and 0 model calls",
-      "note": "Confirmed. Without a credential every case skips and afterAll still writes a run record. The corpus therefore holds 45 records that no reader can use. bench-artifacts/ is gitignored, so this is local clutter and not repository state. Fix: write the record only when the run attempted something, or write it outside the evidence corpus."
+      "read": "compareRuns(flash-a, flash-b) after both baselines were republished: the comparator refuses on baseline.admissibility and candidate.admissibility, naming the missing task_outcome row; tests/eval-corpus-quality.test.ts:118-125 asserts the refusal and the same 12 unverified attempts and 1 inert one the drops used to report",
+      "note": "Confirmed, and this REPLACES the baseline-unverified and baseline-not-scored groups. Those two counted 13 dropped pairs, which was one root fact counted per pair: neither run checked whether a task was solved. The refusal states that fact once, before any pairing. It is the retirement of both baselines as baselines, and it is enforced by the shipped comparator rather than by a convention."
     },
     {
-      "group": "behaviour/run/the run attempted nothing and still wrote a record/*",
+      "group": "pre-family/pairing/refused on candidate.admissibility/*",
       "verdict": "eval-defect",
       "reviewed": "2026-08-20",
-      "read": "the same two sites in tests/evals/behaviour.eval.ts; the 12 records report 0 observations over 17 declared tasks",
-      "note": "Confirmed, and the same defect as the pre-family group. These 12 carry the family field, so they are the newer runs of the same skipped path."
-    },
-    {
-      "group": "optimization/run/the run attempted nothing and still wrote a record/*",
-      "verdict": "eval-defect",
-      "reviewed": "2026-08-20",
-      "read": "tests/evals/optimization.eval.ts:67 (test.skipIf(!TARGET)) and :168-176 (afterAll writes the record); the 12 records report 0 observations over 1 declared task",
-      "note": "Confirmed. The optimization arm has the same shape as the behaviour arm. One fix covers all three arms because all three write through assembleRunRecord in afterAll."
-    },
-    {
-      "group": "research/run/the run attempted nothing and still wrote a record/*",
-      "verdict": "eval-defect",
-      "reviewed": "2026-08-20",
-      "read": "tests/evals/research.eval.ts:77 (test.skipIf(!TARGET)) and :197-205 (afterAll writes the record); the 12 records report 0 observations over 1 declared task",
-      "note": "Confirmed. Third arm, same defect."
-    },
-    {
-      "group": "pre-family/pairing/baseline-unverified/*",
-      "verdict": "eval-defect",
-      "reviewed": "2026-08-20",
-      "read": "compareRuns(flash-a, flash-b) run by hand: 0 eligible of 13 pairs, 12 dropped as baseline-unverified and 1 as baseline-not-scored; the score names in both records hold no task_outcome row; tests/eval-corpus-quality.test.ts:71-73 asserts the same 12 and 1",
-      "note": "Confirmed, and already owned by tests/eval-corpus-quality.test.ts. Nothing checked whether either run solved a task, so the comparator has nothing to pair. The repair is ground truth in the corpus, not a change in the comparator. This triage adds no new finding here; it reaches the same numbers from the records."
+      "read": "the same refusal, on the candidate side of the same pair",
+      "note": "Confirmed, and the same fact as the baseline-side refusal. Both runs of this arm measured activity only, so either one as a candidate is refused for the reason it is refused as a baseline."
     },
     {
       "group": "pre-family/attempt/inert/tool-001",
       "verdict": "eval-defect",
       "reviewed": "2026-08-20",
       "read": "tests/evals/harness.ts:515-521 (DegenerateRunError when turns === 0 or toolCalls === 0) against both reasons in the records: flash-a 0 turns / 12 tool calls, flash-b 0 turns / 19 tool calls",
-      "note": "Confirmed as an instrument failure at the level of the record: the attempt called tools and the ledger closed no turn, so nothing was gradable. The cause is not decidable from what survives. A turn loop that never wrote turn_end and a run that was cut off produce the same record, and no transcript survives for either baseline. A re-run with retained trajectories settles it. tests/eval-corpus-quality.test.ts:89 already records this task as inert in both runs."
+      "note": "Confirmed as an instrument failure at the level of the record: the attempt called tools and the ledger closed no turn, so nothing was gradable. The cause is not decidable from what survives. A turn loop that never wrote turn_end and a run that was cut off produce the same record, and no transcript survives for either baseline. A re-run with retained trajectories settles it, and no re-run is possible on these two: both are retired. tests/eval-corpus-quality.test.ts:125 records this task as inert in both runs."
     },
     {
       "group": "pre-family/run/no observation carried a task_outcome row/*",
@@ -51,32 +30,18 @@
       "note": "Confirmed. Both baselines measure activity only. They are not evidence about task performance."
     },
     {
-      "group": "pre-family/run/stored admissibility verdict is stale/*",
-      "verdict": "eval-defect",
-      "reviewed": "2026-08-20",
-      "read": "the stored admissibility.admissible field in both records (true) against assessAdmissibility recomputed over their own observations (false); tests/eval-corpus-quality.test.ts:51-58 asserts the same disagreement",
-      "note": "Confirmed. A reader who trusts the stored field reads a clean corpus. Recomputing is the only safe read, and this instrument does that. Fix: republish the two baselines under today's policy, or mark them superseded."
-    },
-    {
       "group": "pre-family/run/the record names no transcripts directory/*",
       "verdict": "eval-defect",
       "reviewed": "2026-08-20",
-      "read": "jq has(\"transcripts\") is false for both baselines; EvalRunRecord declares the field required (packages/test-utils/src/eval-run.ts:244) and readRunRecord validates the envelope only (:459-470)",
-      "note": "Confirmed, and it is why the inert tool-001 attempt cannot be explained. The type says the pointer is required and the loader does not enforce it, so the field is missing exactly where a reader needs it. Fix: keep the field required and validate it on read, which will reject these two records and force a republish."
-    },
-    {
-      "group": "pre-family/pairing/baseline-not-scored/*",
-      "verdict": "eval-defect",
-      "reviewed": "2026-08-20",
-      "read": "the one dropped pair (tool-001#0) against the inert observation in flash-a",
-      "note": "Confirmed, and it is the same fact as the inert attempt above, counted where it costs a pair."
+      "read": "jq has(\"transcripts\") is false for both baselines; EvalRunRecord declares the field required (packages/test-utils/src/eval-run.ts:244) and readRunRecord validates the envelope only (:499-511)",
+      "note": "Confirmed, and it stays open. It is why the inert tool-001 attempt cannot be explained, and it is one of the three reasons no honest upgrade of these two records exists: the tier deleted its stores in teardown at the time, so the directory the field would name is gone. Validating the field on read would reject both records and force a republish that nobody can perform. Both were retired instead — republished under today's admissibility policy, which is a recomputation over their own observations, so the comparator refuses them as baselines. A record written today carries the field, because publishRunRecord is the only writer and RunRecordInputs requires it."
     },
     {
       "group": "pre-family/scorer/tool_outcomes/ws-split-audit",
       "verdict": "flake",
       "reviewed": "2026-08-20",
       "read": "the four tool_outcomes rows for this task: flash-a rep0 7/9 fails, flash-a rep1 6/6 passes, flash-b rep0 7/7 passes, flash-b rep1 16/17 fails; both records carry gitSha f26d3ae8 and the same arm",
-      "note": "Confirmed as dispersion. One commit and one arm produced both verdicts, so this is the corpus's own noise. Size it with scripts/eval-dispersion.ts before reading any movement on this task."
+      "note": "Confirmed as dispersion. One commit and one arm produced both verdicts, so this is the corpus's own noise. It cannot be SIZED from these two records: scripts/eval-dispersion.ts goes through compareRuns, which now refuses both as inadmissible, and psi over zero pairs was never a measurement anyway. Size it on a credentialed same-arm pair that records task_outcome, and read no movement on this task before then."
     },
     {
       "group": "pre-family/scorer/tool_outcomes/ws-fix-broken",

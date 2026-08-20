@@ -270,13 +270,20 @@ spending 12 tool calls.
 
 ### The run records and the reader
 
-Every vitest eval arm writes a `run-record.json` (schema 1, `EvalRunRecord` in
-`packages/test-utils/src/eval-run.ts`) beside its retained transcripts under
-`bench-artifacts/`, carrying the eval family, per-observation verdicts, wall
-`ms`, turns, tool calls and names, tokens, spend, and — for optimization runs —
-the swarm tree shape (`swarm_use.measured`: nodes, depth, records written) and
-`threshold_attained`. `bun scripts/eval-report.ts` renders every accumulated
-record, grouped by family, into one comparison.
+Every vitest eval arm that attempted at least one task writes a `run-record.json`
+(schema 1, `EvalRunRecord` in `packages/test-utils/src/eval-run.ts`) beside its
+retained transcripts under `bench-artifacts/`, carrying the eval family,
+per-observation verdicts, wall `ms`, turns, tool calls and names, tokens, spend,
+and — for optimization runs — the swarm tree shape (`swarm_use.measured`: nodes,
+depth, records written) and `threshold_attained`. `bun scripts/eval-report.ts`
+renders every accumulated record, grouped by family, into one comparison.
+
+`publishRunRecord` is the only path that writes a record, and it writes NOTHING
+for a run with no observations. Without a credential every case skips and each
+arm's `afterAll` used to write the record regardless: 81 of the corpus's first 89
+records reported zero observations, and no reader could use one. The guard lives
+in the writer rather than in the three arms, so a fourth family cannot bring the
+shape back.
 
 What the accumulated data can answer: did task outcomes move between runs of one
 family and arm; did swarm use correlate with attainment on the optimization
@@ -288,8 +295,9 @@ attribution (`swarm_use` is the agent's own choice, not an assigned arm), and
 per-step time (that lives in each record's transcripts directory).
 
 The behaviour arm's own knobs, documented nowhere else
-(`tests/evals/behaviour.eval.ts:81-83,111,303`; the tier and record knobs are
-read the same way by the research and optimization arms):
+(`tests/evals/behaviour.eval.ts:80-82,110`, and `PROTEUS_EVAL_RECORD` in
+`packages/test-utils/src/eval-run.ts:493`; the tier and record knobs are read the
+same way by the research and optimization arms):
 
 | Variable | Effect |
 |---|---|
@@ -332,10 +340,10 @@ The standing process:
 
 Two things to know when reading it. It RECOMPUTES
 admissibility instead of trusting the stored verdict, because a stored verdict is
-the policy the run was written under: both published baselines say
-`admissible: true` and fail today's rule. And it reads a failure key's census
-part through `toolFailurePartOfKey`, the same policy the census wrote, so a
-published mix and a live census cannot disagree.
+the policy the run was written under: both published baselines said
+`admissible: true` and failed today's rule until they were republished under it.
+And it reads a failure key's census part through `toolFailurePartOfKey`, the same
+policy the census wrote, so a published mix and a live census cannot disagree.
 
 It also prints its blind spot on the success path. A record written before the
 failure mix existed names no failing call, so no product defect is findable in it
@@ -344,11 +352,23 @@ clean.
 
 The first triage, on 2026-08-20, read 89 records and produced 24 groups: no
 product defect, 10 eval defects, 2 flakes, and 12 mechanism findings. The largest
-group is 45 records that attempted nothing and wrote a record anyway. Only two of
-the 89 are tracked: `bench-artifacts/` is gitignored and grows with every local
-run, so the record count moves and the group SHAPES are the stable part.
-`scripts/eval-triage.verdicts.json` holds the twelve hand-checked rulings, one of
-which overrides the machine.
+group was 45 records that attempted nothing and wrote a record anyway. The writer
+refuses those now, so that group can only hold records written before the fix.
+Only two of the 89 are tracked: `bench-artifacts/` is gitignored and grows with
+every local run, so the record count moves and the group SHAPES are the stable
+part. Over the two tracked records alone the same triage reads 19 groups.
+
+Those two records — `flash-a` and `flash-b` — are RETIRED as baselines. No task
+either declares is in the hard-task corpus, so no verifier exists to run; no
+score row carries a `measured` payload; and neither names a transcripts
+directory, because the tier deleted its stores in teardown at the time. So no
+`task_outcome` row can be derived from anything they carry, and inventing one
+would be a fact about the agent that nothing measured. Both were republished
+under today's admissibility policy instead, which recomputes over their own
+observations and adds nothing: `compareRuns` refuses them by name rather than
+pairing 13 attempts and dropping all 13. The tier therefore has NO baseline until
+a credentialed run publishes one. `scripts/eval-triage.verdicts.json` holds seven
+hand-checked rulings, one of which overrides the machine.
 
 ### What it costs and how long it takes
 

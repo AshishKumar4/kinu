@@ -961,11 +961,12 @@
     }
   ],
   "admissibility": {
-    "admissible": true,
+    "admissible": false,
     "scored": 12,
     "inert": 1,
     "gradedTurns": 13,
     "toolCalls": 113,
+    "outcomesScored": 0,
     "mechanismsExercised": [
       "delegation_conversion",
       "edit_landing",
@@ -978,7 +979,9 @@
       "completion_honesty",
       "spill_retrieval"
     ],
-    "failures": []
+    "failures": [
+      "no observation carried a task_outcome row — this run measured activity, not whether any task was solved, so it is not evidence about task performance"
+    ]
   },
   "spend": {
     "calls": 132,

@@ -38,9 +38,11 @@
  *
  * ADMISSIBILITY IS RECOMPUTED, never read off the record. `assessAdmissibility`
  * is today's policy; a stored verdict is the policy the run was written under.
- * Both baselines in `tests/eval/runs/` say `admissible: true` and fail today's
- * rule, because the outcome check did not exist when they ran. An instrument that
- * trusted the stored field would report a clean corpus.
+ * Both baselines in `tests/eval/runs/` said `admissible: true` and failed today's
+ * rule, because the outcome check did not exist when they ran, so an instrument
+ * that trusted the stored field read a clean corpus. Both were republished under
+ * today's policy and now agree, which leaves this check with no live
+ * disagreement: it catches the NEXT policy change, not that one.
  *
  * THE VERDICTS FILE is `scripts/eval-triage.verdicts.json`: one hand-checked
  * ruling per group, with what was read to reach it. It ANNOTATES and never
@@ -216,6 +218,12 @@ function signalsOf({ path, record }: Loaded): Signal[] {
     // admissibility rule at once, and 45 such records reported per rule would
     // fill the worklist with one fact repeated. The fact is that the corpus
     // carries records of runs that never ran.
+    //
+    // KEPT after the writer was fixed, not retired with it. `publishRunRecord`
+    // now refuses to write a record for a run with no observations, so no NEW
+    // record can reach this branch — but `bench-artifacts/` still holds the ones
+    // written before, and this is what names them. Removing the branch would
+    // leave those records reporting four admissibility failures each instead.
     push('run', 'the run attempted nothing and still wrote a record', '*', null, 1,
       `${at}: 0 observations over ${String(record.declaredTasks.length)} declared task(s), `
       + `${String(record.spend.calls)} model call(s)`);
