@@ -57,7 +57,7 @@ export function buildProgram(): Command {
   const program = new Command();
 
   program
-    .name('proteus')
+    .name('kinu')
     .description('Create and chat with self-evolving agent workspaces')
     .version(VERSION, '-v, --version')
     .addHelpCommand(false);

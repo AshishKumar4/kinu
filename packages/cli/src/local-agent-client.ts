@@ -79,7 +79,7 @@ export interface LocalAgentClientOptions {
 export async function openLocalAgentClient(name: string, opts: LocalAgentClientOptions = {}): Promise<LocalAgentClient> {
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
-    throw new Error(`Agent "${name}" not found. Create it with: proteus create ${name}`);
+    throw new Error(`Agent "${name}" not found. Create it with: kinu create ${name}`);
   }
   const { llmConfig, resolver } = createConfiguredLocalModelResolver({ ...opts, agentName: name });
   const providerCredentials = resolveProviderCredentials();
@@ -130,7 +130,7 @@ export async function runLocalGepa(
 
 /** Workspaces created before mission-derived titling still show their raw
  *  directory name. Title them from SOUL.md's mission on open, through the same
- *  identity path `proteus create` uses. The deterministic title lands before
+ *  identity path `kinu create` uses. The deterministic title lands before
  *  this returns; the model call runs in the background and never blocks the
  *  CLI, and failing it leaves the title that already landed. */
 export function autoTitleLocalWorkspace(
@@ -186,7 +186,7 @@ export interface LocalAgentClientDeps {
   mcpServers: Record<string, McpServerConfig>;
   noAutoEvolve: boolean;
   sessionOptions: CliSessionOptions;
-  /** Which surface this process is. 'one-shot' (`proteus exec`/`run`) both
+  /** Which surface this process is. 'one-shot' (`kinu exec`/`run`) both
    *  selects the background detach/grace policy AND decides turn continuity
    *  for the outcome ledger, keeping the cadence-heavy evolution pass off the
    *  exit path. One fact, one field. */
@@ -204,7 +204,7 @@ interface PendingLocalTurn {
  * `send()` resolves when the pump lets go of the queued item, which it also
  * does when the turn died in a way that produced no `turn-end` at all. Seeding
  * the pending turn with a zeroed SUCCESS made that indistinguishable from a
- * clean empty answer, and `proteus exec` exited 0 on a turn that never ran —
+ * clean empty answer, and `kinu exec` exited 0 on a turn that never ran —
  * the one thing a CI consumer cannot recover from.
  *
  * The turn lifecycle itself is now total (LocalAgentSession.processTurn), so

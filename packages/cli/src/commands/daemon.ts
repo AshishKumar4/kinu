@@ -87,7 +87,7 @@ export async function daemonCommand(action: string | undefined, workspace?: stri
     }
     return;
   }
-  throw new Error('Usage: proteus daemon [start|stop|restart|status|logs|run|tick [workspace]]');
+  throw new Error('Usage: kinu daemon [start|stop|restart|status|logs|run|tick [workspace]]');
 }
 
 export function ensureLocalDaemonRunning(): void {
@@ -217,7 +217,7 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
   try {
     const nextBefore = nextTriggerAt(db);
     const triggersDue = nextBefore !== null && nextBefore <= now;
-    // The daemon is also the host for the evolution work a one-shot `proteus
+    // The daemon is also the host for the evolution work a one-shot `kinu
     // exec` process cannot afford to finish (see AgentOrchestrator's exit
     // contract): the cadence pass its window is due, and the turn reviews it
     // deferred. Both are checked with plain SQL so a workspace with nothing to
@@ -282,7 +282,7 @@ function sessionEvolutionDue(db: Database): boolean {
  * Whether any one-shot process left a turn review undrained
  * (evolution/review-queue.ts). Read the same way and for the same reason as the
  * window above — and it is a SEPARATE test, because a workspace driven only by
- * `proteus exec` accumulates reviews long before its window reaches the
+ * `kinu exec` accumulates reviews long before its window reaches the
  * reflection interval, and gating the tick on the window alone left exactly
  * those reviews with no host at all.
  */

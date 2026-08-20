@@ -103,7 +103,7 @@ describe('providers command — Claude subscription', () => {
 
     const absent = runProviders(['list'], { home: freshHome() });
     expect(absent.stdout).toContain('Claude subscription');
-    expect(absent.stdout).toContain('proteus provider connect claude');
+    expect(absent.stdout).toContain('kinu provider connect claude');
   });
 });
 
@@ -165,7 +165,7 @@ describe('providers command — disconnect', () => {
 
   test('points the account and subscription bridges at the login that owns them', () => {
     const home = homeWith({});
-    expect(runProviders(['disconnect', 'cloudflare'], { home }).stdout).toContain('proteus logout');
+    expect(runProviders(['disconnect', 'cloudflare'], { home }).stdout).toContain('kinu logout');
     expect(runProviders(['disconnect', 'claude'], { home }).stdout).toContain('claude logout');
     expect(runProviders(['disconnect', 'opencode'], { home }).stdout).toContain('opencode auth logout');
   });

@@ -89,7 +89,7 @@ export interface PromptAttachments {
  *  path they will resolve. A candidate that breaks either cannot name an
  *  existing file, so it is prose that happened to be quoted rather than a
  *  mention — and `stat` answers ENAMETOOLONG, which is not ENOENT and so
- *  escaped this function and killed the turn. Measured: `proteus exec` died on
+ *  escaped this function and killed the turn. Measured: `kinu exec` died on
  *  a 298-byte quoted sentence with
  *  `ENAMETOOLONG, statx '…/work/I am the big blind with J7 offsuit…'`,
  *  which is how a CL-Bench poker rollout ended. */

@@ -1,6 +1,6 @@
 /**
  * CLI configuration. App auth is stored in ~/.proteus/config.json after
- * `proteus setup`; direct LLM env vars remain as explicit local overrides.
+ * `kinu setup`; direct LLM env vars remain as explicit local overrides.
  */
 
 import { existsSync, readFileSync, mkdirSync, readdirSync, statSync, writeFileSync, chmodSync, unlinkSync } from 'node:fs';
@@ -40,7 +40,7 @@ export const BIN_DIR = join(AGENT_HOME, 'bin');
 const AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const ALIAS_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const RESERVED_ALIASES = new Set([
-  'proteus',
+  'kinu',
   'create',
   'auth',
   'whoami',
@@ -70,7 +70,7 @@ const RESERVED_ALIASES = new Set([
   'uninstall',
   'doctor',
 ]);
-const DEFAULT_ORIGIN = 'https://proteus.ashishkumarsingh.com';
+const DEFAULT_ORIGIN = 'https://kinu.run';
 
 export type AgentMode = 'local' | 'cloud';
 
@@ -254,15 +254,15 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
 
 export function requireAuthConfig(): CloudAuthConfig {
   // CI path: a token from the environment (typically a scoped `pta_…` access
-  // token from `proteus tokens create`) wins over the stored interactive
+  // token from `kinu tokens create`) wins over the stored interactive
   // session. Long-lived by design — the server is the validity authority.
   const envToken = process.env.PROTEUS_TOKEN?.trim();
   if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
-  return storedAuthConfig('Not authenticated. Run: proteus auth (or set PROTEUS_TOKEN)');
+  return storedAuthConfig('Not authenticated. Run: kinu auth (or set PROTEUS_TOKEN)');
 }
 
 export function requireStoredAuthConfig(): CloudAuthConfig {
-  return storedAuthConfig('No interactive CLI session found. Run: proteus auth');
+  return storedAuthConfig('No interactive CLI session found. Run: kinu auth');
 }
 
 function storedAuthConfig(missingTokenMessage: string): CloudAuthConfig {
@@ -272,7 +272,7 @@ function storedAuthConfig(missingTokenMessage: string): CloudAuthConfig {
     throw new Error(missingTokenMessage);
   }
   if (sessionExpired(config)) {
-    throw new Error('Your Kinu CLI session has expired. Run: proteus auth');
+    throw new Error('Your Kinu CLI session has expired. Run: kinu auth');
   }
   return { origin: resolveCloudOrigin(), token, user: config.user };
 }
@@ -385,7 +385,7 @@ export function writeAliasShim(agentName: string, alias: string): string {
   const script = `#!/usr/bin/env sh
 set -eu
 bin_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-exec "$bin_dir/proteus" run ${shellQuote(agentName)} "$@"
+exec "$bin_dir/kinu" run ${shellQuote(agentName)} "$@"
 `;
   writeFileSync(path, script, { mode: 0o755 });
   chmodSync(path, 0o755);
@@ -400,7 +400,7 @@ export function deleteAliasShim(alias: string): void {
 }
 
 export function pathHint(): string | null {
-  return (process.env.PATH ?? '').split(':').includes(BIN_DIR) ? null : `Add ${BIN_DIR} to PATH for proteus aliases.`;
+  return (process.env.PATH ?? '').split(':').includes(BIN_DIR) ? null : `Add ${BIN_DIR} to PATH for kinu aliases.`;
 }
 
 function shellQuote(value: string): string {
@@ -479,14 +479,14 @@ export function resolveLLMConfig(opts?: {
   if (!baseURL) {
     throw new Error(
       'No LLM configured.\n' +
-      '  Run proteus auth to use your Cloudflare AI, run proteus setup to configure a local provider,\n' +
+      '  Run kinu auth to use your Cloudflare AI, run kinu setup to configure a local provider,\n' +
       '  or pass --base-url for an advanced override.'
     );
   }
   if (!auth) {
     throw new Error(
       'No LLM auth configured.\n' +
-      '  Run proteus setup and configure a local provider, or pass --auth for an advanced override.'
+      '  Run kinu setup and configure a local provider, or pass --auth for an advanced override.'
     );
   }
 

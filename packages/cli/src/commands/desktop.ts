@@ -52,7 +52,7 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
     console.log(readDaemonLogTail(80));
     return;
   }
-  throw new Error('Usage: proteus desktop [connect|status|logs]');
+  throw new Error('Usage: kinu desktop [connect|status|logs]');
 }
 
 async function requireAuthOrLogin(): Promise<{ origin: string; token: string; user?: { id: string; email: string; displayName?: string | null } }> {

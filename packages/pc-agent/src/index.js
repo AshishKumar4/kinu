@@ -637,7 +637,7 @@ function handle(msg, ws, ctx) {
 function main() {
   const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   const USER = cfg.user, TOKEN = cfg.token;
-  const HTTP_ORIGIN = (cfg.origin || 'https://proteus.ashishkumarsingh.com').replace(/\/+$/, '');
+  const HTTP_ORIGIN = (cfg.origin || 'https://kinu.run').replace(/\/+$/, '');
   const WS_ORIGIN = HTTP_ORIGIN.replace(/^http/, 'ws');
   const ctx = { checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }) };
 

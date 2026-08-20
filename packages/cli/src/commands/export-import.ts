@@ -1,5 +1,5 @@
 /**
- * `proteus export` / `proteus import` — the user-facing half of workspace
+ * `kinu export` / `kinu import` — the user-facing half of workspace
  * backup, for BOTH kinds of workspace.
  *
  * One format (see core `identity/archive.ts`): a local workspace and a cloud
@@ -96,7 +96,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
   let restored: RestoredArchiveCounts;
   try {
     if (legacy) {
-      // A database file from a pre-archive `proteus export`. Copying it is
+      // A database file from a pre-archive `kinu export`. Copying it is
       // still the correct restore for those backups, and they are the kind of
       // file nobody gets to make again.
       copyFileSync(file, partial);
@@ -189,7 +189,7 @@ function* readLines(path: string): Generator<string> {
 }
 
 /** Every SQLite database starts with this 16-byte magic — how a backup made by
- *  the pre-archive `proteus export` is recognized. */
+ *  the pre-archive `kinu export` is recognized. */
 function isSqliteDatabaseFile(path: string): boolean {
   const fd = openSync(path, 'r');
   try {

@@ -198,7 +198,7 @@ describe('a quoted sentence is prose, not a path', () => {
   // Measured on the first CL-Bench rollout Kinu ever ran: TOKEN_RE treats any
   // double-quoted single-line string as a path candidate, and stat() answered
   // ENAMETOOLONG rather than ENOENT, which is not the tolerated failure, so it
-  // escaped resolvePromptAttachments and killed `proteus exec` mid-turn:
+  // escaped resolvePromptAttachments and killed `kinu exec` mid-turn:
   //   ENAMETOOLONG, statx '…/work/I am the big blind with J7 offsuit facing a limp…'
   // The benchmark hits it because a repair prompt embeds the model's own prior
   // answer verbatim; a user pasting a long quoted sentence into the TUI or chat

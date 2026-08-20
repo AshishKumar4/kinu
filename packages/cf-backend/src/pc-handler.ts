@@ -41,7 +41,7 @@ export async function handlePcRequest(request: Request, env: Env): Promise<Respo
 }
 
 function installScriptResponse(origin: string): Response {
-  // `proteus connect` writes ~/.proteus/device.json with the device token over
+  // `kinu connect` writes ~/.proteus/device.json with the device token over
   // an authenticated HTTPS API call. This script only updates/starts the daemon
   // for users who already have that local config.
   const script = `#!/usr/bin/env bash
@@ -53,7 +53,7 @@ mkdir -p "$DIR"
 chmod 700 "$DIR"
 if [ ! -f "$DIR/device.json" ]; then
   echo "No Kinu device config found at $DIR/device.json."
-  echo "Run: proteus auth --origin $PROTEUS_ORIGIN && proteus connect"
+  echo "Run: kinu auth --origin $PROTEUS_ORIGIN && kinu connect"
   exit 1
 fi
 echo "Downloading Kinu device daemon…"

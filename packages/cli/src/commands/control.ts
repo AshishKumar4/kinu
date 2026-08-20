@@ -148,7 +148,7 @@ function validateModelSelection(
   if (validation.status === 'unknown-provider') {
     if (!explicitProvider) {
       console.log(`${WARN('!')} ${resolvedSpec} is not in the model catalog; setting it anyway.`);
-      console.log(`  ${DIM('List models:')} run ${ACCENT(`proteus chat ${workspace}`)}, then enter ${ACCENT('/model')}.`);
+      console.log(`  ${DIM('List models:')} run ${ACCENT(`kinu chat ${workspace}`)}, then enter ${ACCENT('/model')}.`);
       return;
     }
     throw new Error(
@@ -161,7 +161,7 @@ function validateModelSelection(
   if (validation.suggestions.length > 0) {
     console.log(`  ${DIM('Close matches:')} ${validation.suggestions.join(', ')}`);
   }
-  console.log(`  ${DIM('List models:')} run ${ACCENT(`proteus chat ${workspace}`)}, then enter ${ACCENT('/model')}.`);
+  console.log(`  ${DIM('List models:')} run ${ACCENT(`kinu chat ${workspace}`)}, then enter ${ACCENT('/model')}.`);
 }
 
 function providerPrefix(spec: string): string | null {

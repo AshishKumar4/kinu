@@ -305,7 +305,7 @@ export async function createCloudAgentConnectTicket(origin: string, token: strin
 }
 
 /** Webhook creation stays route-shaped: it is step-up gated (fresh
- *  `proteus auth`) server-side, unlike table-gated agent RPCs. */
+ *  `kinu auth`) server-side, unlike table-gated agent RPCs. */
 export async function createCloudWebhookTrigger(
   origin: string,
   token: string,

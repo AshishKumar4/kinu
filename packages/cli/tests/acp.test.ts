@@ -1,5 +1,5 @@
 /**
- * Protocol-level behaviour of `proteus acp`.
+ * Protocol-level behaviour of `kinu acp`.
  *
  * These drive a REAL ACP client over a real newline-delimited JSON stream pair,
  * so the JSON-RPC framing, schema parsing and notification routing are all
@@ -129,7 +129,7 @@ async function withConnection<T>(
   const toClient = new TransformStream<Uint8Array, Uint8Array>();
 
   const agentApp = createAcpAgent({
-    name: 'proteus',
+    name: 'kinu',
     version: '0.0.0-test',
     openClient: async () => fake.client,
   });
@@ -162,7 +162,7 @@ async function newSession(ctx: ClientContext, cwd = '/work'): Promise<string> {
   return session.sessionId;
 }
 
-describe('proteus acp — initialization', () => {
+describe('kinu acp — initialization', () => {
   test('reports the protocol version and the capabilities it actually implements', async () => {
     const fake = fakeClient();
     const result = await withConnection(fake, async (ctx) => ctx.request(AGENT_METHODS.initialize, {
@@ -171,7 +171,7 @@ describe('proteus acp — initialization', () => {
     }));
 
     expect(result.protocolVersion).toBe(PROTOCOL_VERSION);
-    expect(result.agentInfo?.name).toBe('proteus');
+    expect(result.agentInfo?.name).toBe('kinu');
     expect(result.agentCapabilities?.loadSession).toBe(true);
     expect(result.agentCapabilities?.promptCapabilities?.image).toBe(true);
     // session/close is handled, so it must be advertised.
@@ -179,7 +179,7 @@ describe('proteus acp — initialization', () => {
   });
 });
 
-describe('proteus acp — prompt turn', () => {
+describe('kinu acp — prompt turn', () => {
   test('text deltas stream as agent_message_chunk and the turn ends with end_turn', async () => {
     const fake = fakeClient({
       events: [
@@ -294,7 +294,7 @@ describe('proteus acp — prompt turn', () => {
   });
 });
 
-describe('proteus acp — prompt content', () => {
+describe('kinu acp — prompt content', () => {
   test('text, resource context and an image all cross into one Kinu prompt', async () => {
     const fake = fakeClient();
     const prompt: ContentBlock[] = [
@@ -322,7 +322,7 @@ describe('proteus acp — prompt content', () => {
   });
 });
 
-describe('proteus acp — cancellation', () => {
+describe('kinu acp — cancellation', () => {
   test('session/cancel stops the live turn and the prompt reports cancelled', async () => {
     let release = () => {};
     const hold = new Promise<void>((resolve) => { release = resolve; });
@@ -346,7 +346,7 @@ describe('proteus acp — cancellation', () => {
   });
 });
 
-describe('proteus acp — permission', () => {
+describe('kinu acp — permission', () => {
   test('a gated command is put to the client and an allow answer comes back', async () => {
     const fake = fakeClient();
     const outcome = await withConnection(
@@ -401,7 +401,7 @@ describe('proteus acp — permission', () => {
   });
 });
 
-describe('proteus acp — session lifecycle', () => {
+describe('kinu acp — session lifecycle', () => {
   test('session/load replays the conversation as user and agent chunks', async () => {
     const fake = fakeClient({
       history: [

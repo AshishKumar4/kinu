@@ -261,7 +261,7 @@ export function listLocalEvents(name: string, opts: { variant?: string; since?: 
 }
 
 /** Recent runs from the durable run-event log — the local peer of the cloud
- *  `listRuns` RPC. One page; `proteus inspect` prints a window, not a walk. */
+ *  `listRuns` RPC. One page; `kinu inspect` prints a window, not a walk. */
 export function listLocalRuns(name: string, limit = 50): RunListEntry[] {
   return withLocalDb(name, (db) => (
     tableExists(db, 'run_events')
@@ -355,7 +355,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
 }
 
 /** Every search_nodes row this workspace ever wrote, across every search — the
- *  debugging read `proteus inspect mcts` serves with no node id. Core's scoped
+ *  debugging read `kinu inspect mcts` serves with no node id. Core's scoped
  *  projections (readSearchTree, readLatestSearchTree) answer one search; this
  *  deliberately answers all of them. */
 export function listLocalMcts(name: string): SearchNode[] {
@@ -419,7 +419,7 @@ export function readLocalRecordCell(
 }
 
 /** Local peer of the cloud `getMctsNodeDetail` RPC. The projection itself is
- *  core's (read-models/search-tree.ts), so `proteus inspect mcts <id>` formats
+ *  core's (read-models/search-tree.ts), so `kinu inspect mcts <id>` formats
  *  one shape whichever target answered. */
 export function getLocalMctsNode(name: string, nodeId: string): SearchNodeDetail | null {
   return withLocalDb(name, (db) => (
@@ -442,7 +442,7 @@ export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
 }
 
 /** Local peer of the cloud `getChatHistoryPage` RPC — the newest page, which
- *  is what `proteus debug messages --limit` is asking for. The read model
+ *  is what `kinu debug messages --limit` is asking for. The read model
  *  itself (core status.ts) works over any SqlExecutor. */
 export function getLocalChatHistory(name: string, limit = 100): ChatHistoryEntry[] {
   return withLocalDb(name, (db) => [...getChatHistoryPage(makeSql(db), { limit }).items]);
@@ -622,7 +622,7 @@ export function listLocalExecutors(): LocalExecutorInfo[] {
       kind: 'laptop',
       status: 'connected',
       // The same probe the live provider declares from, not a copy of its row:
-      // this listing is what `proteus inspect` shows for the machine it is
+      // this listing is what `kinu inspect` shows for the machine it is
       // running on, so a hardcoded `git`/`npm` here would contradict the row the
       // agent is actually given.
       capabilities: [...hostToolchainCapabilities()],
@@ -778,7 +778,7 @@ export async function markLocalBackgroundJobsCancelled(name: string): Promise<st
 
 function withLocalDb<T>(name: string, fn: (db: SqliteDb) => T): T {
   const dbPath = agentDbPath(name);
-  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found. Create it with: proteus create ${name}`);
+  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found. Create it with: kinu create ${name}`);
   const db = new Database(dbPath, { readonly: true });
   try {
     return fn(db);
@@ -793,7 +793,7 @@ function withLocalDb<T>(name: string, fn: (db: SqliteDb) => T): T {
  *  point would hand the rest of the callback a closed database. */
 async function withLocalWritableDb<T>(name: string, fn: (db: SqliteDb) => T | Promise<T>): Promise<T> {
   const dbPath = agentDbPath(name);
-  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found. Create it with: proteus create ${name}`);
+  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found. Create it with: kinu create ${name}`);
   const db = new Database(dbPath);
   try {
     return await fn(db);
@@ -804,7 +804,7 @@ async function withLocalWritableDb<T>(name: string, fn: (db: SqliteDb) => T | Pr
 
 function ensureLocalAgent(name: string): void {
   const dbPath = agentDbPath(name);
-  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found. Create it with: proteus create ${name}`);
+  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found. Create it with: kinu create ${name}`);
 }
 
 function all<T>(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): T[] {
@@ -856,7 +856,7 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
   // it — but only on the OPEN path, and this inspection is deliberately
   // read-only per the note above, so it can never have run here. Ask, do not
   // assume: three of the owner's real local workspaces reported
-  // `(error reading)` in `proteus list` because this line selected a column
+  // `(error reading)` in `kinu list` because this line selected a column
   // that only a write would have created, and the caller discarded the cause.
   const mission = identityTable && columnSet(db, identityTable).has('mission')
     ? get<{ mission: string | null }>(db, `SELECT mission FROM ${safeIdentifier(identityTable)} LIMIT 1`)?.mission?.trim() || null

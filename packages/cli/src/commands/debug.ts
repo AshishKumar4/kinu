@@ -1,5 +1,5 @@
 /**
- * `proteus debug <name>` — the debugging control plane.
+ * `kinu debug <name>` — the debugging control plane.
  *
  * The gap this closes: every datum a real investigation needs already has a
  * read model (getWorkspaceSnapshot, getRunTimeline, the run_events ledger,
@@ -14,7 +14,7 @@
  * carries `root_id`) for the RPCs this command needed and that did not
  * already exist.
  *
- * `proteus export` already gives a complete, portable, byte-for-byte dump of
+ * `kinu export` already gives a complete, portable, byte-for-byte dump of
  * a workspace (every table, schema + rows) — the right tool for backup and
  * restore. This is deliberately NOT another one: it does not touch the raw
  * archive at all, and instead calls the assembled READ MODELS the rest of
@@ -437,7 +437,7 @@ interface BundleWriter {
 }
 
 /** Appends NDJSON to `path`, one record at a time — never holds the bundle
- *  in memory, matching the append-per-page pattern `proteus export` uses.
+ *  in memory, matching the append-per-page pattern `kinu export` uses.
  *  Owner-only permissions: the bundle carries chat transcripts, tool-call
  *  results and memory content, redacted for known secret shapes but not
  *  guaranteed secret-free (see redactSecrets) — it should not default to

@@ -1,4 +1,4 @@
-// Where a provider secret is written when `proteus provider connect` captures
+// Where a provider secret is written when `kinu provider connect` captures
 // one. The default is the owner's Kinu account — sealed at rest there and
 // reachable from every machine through the provider proxy — so that this disk
 // does not end up holding a second copy of the same key.

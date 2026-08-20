@@ -354,7 +354,7 @@ describe('CLI webhook creation step-up gate', () => {
     body: JSON.stringify({ label: 'github', auth_mode: 'hmac' as const }),
   };
 
-  test('freshly-minted token (recent proteus auth) may create webhooks', async () => {
+  test('freshly-minted token (recent kinu auth) may create webhooks', async () => {
     const { env, calls } = setupEnv({ tokenMintedAt: Date.now() - 60_000 });
     const res = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/triggers/webhook', webhookInit), env);
     expect(res?.status).toBe(201);

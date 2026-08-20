@@ -3,7 +3,7 @@
  * neovim, Marimo and anything else that drives an ACP agent.
  *
  * This is a translation layer and nothing more. An ACP session IS an
- * AgentClient (the same one `proteus chat` drives), so delegation, crafted
+ * AgentClient (the same one `kinu chat` drives), so delegation, crafted
  * tools, checkpoints and evolution all ride the normal turn pipeline; the only
  * thing here is the mapping between ACP's shapes and the client's event
  * stream. There is deliberately no second agent loop.
@@ -222,7 +222,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
         // Closing releases the workspace db handle and the MCP servers.
         sessionCapabilities: { close: {} },
       },
-      // Kinu authenticates through `proteus auth`, not through the editor.
+      // Kinu authenticates through `kinu auth`, not through the editor.
       authMethods: [],
     }))
 

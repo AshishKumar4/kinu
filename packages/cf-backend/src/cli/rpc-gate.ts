@@ -294,6 +294,6 @@ export function rejectOutOfScopeRpc<Message>(tags: Iterable<string>, message: Me
     ? `${method} is not remotely invokable.`
     : required
       ? `This access token does not have the ${required} scope required by ${method}.`
-      : `${method} requires an interactive CLI session token. Sign in with: proteus auth`;
+      : `${method} requires an interactive CLI session token. Sign in with: kinu auth`;
   return JSON.stringify({ type: 'rpc', id, success: false, error });
 }

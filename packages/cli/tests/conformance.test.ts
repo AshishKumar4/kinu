@@ -1,12 +1,12 @@
 // Backend conformance — the CLI composition root, observed for real.
 //
 // This deliberately rides the PRODUCTION chain end to end: the real
-// `createAgent` (what `proteus create` runs), the real `openWorkspaceCLI`,
+// `createAgent` (what `kinu create` runs), the real `openWorkspaceCLI`,
 // and a real `LocalAgentSession` constructed exactly as LocalAgentClient
 // constructs one — then one turn against a capturing model, so the observed
 // tool surface is precisely the tool array the model provider was handed,
 // schemas included. No hand-provisioned tables, no harness shortcuts: the
-// craft_scores defect lived exactly in the gap between `proteus create` and
+// craft_scores defect lived exactly in the gap between `kinu create` and
 // the open path, and only running both closes it.
 //
 // The manifest lives in core/src/conformance/manifest.ts; compareSurface
@@ -64,7 +64,7 @@ const AGENT_NAME = `conformance-${Date.now()}`;
 
 afterAll(() => {
   rmSync(agentDir(AGENT_NAME), { recursive: true, force: true });
-  // The directory was never the whole footprint. `proteus create` also writes an
+  // The directory was never the whole footprint. `kinu create` also writes an
   // `agents` entry, and `workspace delete` REFUSES local workspaces
   // ("deletes cloud workspaces only"), so nothing in the product removes one —
   // which is why the row survived every run while the directory was cleaned.

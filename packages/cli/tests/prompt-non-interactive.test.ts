@@ -70,7 +70,7 @@ describe("setup without any terminal", () => {
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Kinu account was not connected");
-    expect(result.stdout).toContain("proteus auth --origin https://proteus.example.com");
+    expect(result.stdout).toContain("kinu auth --origin https://proteus.example.com");
   }, 30_000);
 
   test("full setup prints provider instructions and exits 0 instead of prompting", async () => {
@@ -81,7 +81,7 @@ describe("setup without any terminal", () => {
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("no interactive terminal");
-    expect(result.stdout).toContain("proteus provider connect");
+    expect(result.stdout).toContain("kinu provider connect");
   }, 30_000);
 });
 

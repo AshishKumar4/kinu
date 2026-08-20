@@ -7,10 +7,10 @@ import { updateConfigFile } from '../config';
 
 export async function updateCommand(target: string | undefined, opts: { origin?: string; force?: boolean }): Promise<void> {
   const what = target ?? 'self';
-  if (what !== 'self' && what !== 'proteus') throw new Error('Usage: proteus update [self] [--origin <url>]');
+  if (what !== 'self' && what !== 'kinu') throw new Error('Usage: kinu update [self] [--origin <url>]');
   const origin = resolveCloudOrigin(opts);
   ensureBinDir();
-  const path = join(BIN_DIR, 'proteus');
+  const path = join(BIN_DIR, 'kinu');
 
   // A null served version means an old server without the endpoint (or an
   // unreachable one): fall back to the unconditional download rather than
@@ -24,7 +24,7 @@ export async function updateCommand(target: string | undefined, opts: { origin?:
     }
   }
 
-  const res = await fetch(`${origin}/downloads/proteus`, { cache: 'no-store' });
+  const res = await fetch(`${origin}/downloads/kinu`, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Update download failed: HTTP ${res.status}`);
   const script = await res.text();
   writeFileSync(path, script, { mode: 0o755 });
@@ -32,11 +32,11 @@ export async function updateCommand(target: string | undefined, opts: { origin?:
     console.log(`${OK('✓')} Updated ${ACCENT(VERSION)} ${DIM('→')} ${ACCENT(served.version)}`);
   }
   chmodSync(path, 0o755);
-  console.log(`${OK('✓')} Updated ${ACCENT('proteus')} ${DIM(path)}`);
+  console.log(`${OK('✓')} Updated ${ACCENT('kinu')} ${DIM(path)}`);
 }
 
 export async function uninstallCommand(opts: { purge?: boolean }): Promise<void> {
-  const path = join(BIN_DIR, 'proteus');
+  const path = join(BIN_DIR, 'kinu');
   if (existsSync(path)) {
     rmSync(path, { force: true });
     console.log(`${OK('✓')} Removed ${DIM(path)}`);
@@ -51,13 +51,13 @@ export async function uninstallCommand(opts: { purge?: boolean }): Promise<void>
     if (cfg.origin) console.log(DIM(`Account token for ${cfg.origin} was removed locally.`));
   } else {
     console.log(DIM(`Kept data in ${AGENT_HOME}`));
-    console.log(DIM(`Remove it with: proteus uninstall --purge`));
+    console.log(DIM(`Remove it with: kinu uninstall --purge`));
   }
 }
 
 export async function doctorCommand(): Promise<void> {
   const origin = resolveCloudOrigin();
-  const installed = join(BIN_DIR, 'proteus');
+  const installed = join(BIN_DIR, 'kinu');
   console.log(`${DIM('Home:')} ${AGENT_HOME}`);
   console.log(`${DIM('Command:')} ${existsSync(installed) ? OK(installed) : WARN(`missing ${installed}`)}`);
   console.log(`${DIM('Origin:')} ${origin}`);
@@ -69,6 +69,6 @@ export async function doctorCommand(): Promise<void> {
   const servedLabel = !served
     ? WARN('unreachable')
     : isSameBuild(VERSION, served.version) ? OK(`${served.version} (current)`)
-    : WARN(`${served.version} — run: proteus update`);
+    : WARN(`${served.version} — run: kinu update`);
   console.log(`${DIM('Version:')} ${VERSION} ${DIM('· served:')} ${servedLabel}`);
 }

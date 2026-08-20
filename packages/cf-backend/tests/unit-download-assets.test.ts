@@ -66,9 +66,9 @@ function envWithAssets(files: ReadonlyMap<string, PublishedAsset>): Env {
 }
 
 const PUBLISHED = new Map<string, PublishedAsset>([
-  ['/downloads/proteus-source.tar.gz', { body: 'TARBALL-BYTES', contentType: 'application/gzip' }],
-  ['/downloads/proteus-source.tar.gz.sha256', { body: 'deadbeef  proteus-source.tar.gz\n', contentType: 'text/plain' }],
-  ['/downloads/proteus-version.json', { body: JSON.stringify(STAMP), contentType: 'application/json' }],
+  ['/downloads/kinu-source.tar.gz', { body: 'TARBALL-BYTES', contentType: 'application/gzip' }],
+  ['/downloads/kinu-source.tar.gz.sha256', { body: 'deadbeef  kinu-source.tar.gz\n', contentType: 'text/plain' }],
+  ['/downloads/kinu-version.json', { body: JSON.stringify(STAMP), contentType: 'application/json' }],
 ]);
 
 const DOWNLOAD_PATHS = [...PUBLISHED.keys()];
@@ -146,7 +146,7 @@ describe('GET /api/health build stamp', () => {
   test('rejects a stamp that is not the expected shape', async () => {
     for (const malformed of ['not json at all', '[]', '{"version":"0.1.0"}', '{"version":"","sha":"a","builtAt":"b"}']) {
       const env = envWithAssets(new Map([
-        ['/downloads/proteus-version.json', { body: malformed, contentType: 'application/json' }],
+        ['/downloads/kinu-version.json', { body: malformed, contentType: 'application/json' }],
       ]));
       const response = requiredResponse(await handleHealthRequest(new Request(`${ORIGIN}/api/health`), env));
       const body = v.parse(HealthResponseSchema, await response.json());

@@ -119,10 +119,10 @@ export async function setupCommand(opts: {
     if (cloudReady) {
       console.log(`${OK('✓')} Kinu account ready.`);
       console.log(DIM('Cloud workspaces can use Workers AI through your Cloudflare account when Cloudflare sign-in granted AI permissions.'));
-      console.log(DIM('Run proteus provider connect codex for local workspaces that should use your ChatGPT Codex subscription.'));
+      console.log(DIM('Run kinu provider connect codex for local workspaces that should use your ChatGPT Codex subscription.'));
     } else {
       console.log(`${WARN('!')} Kinu account was not connected.`);
-      console.log(DIM(`Run proteus auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
+      console.log(DIM(`Run kinu auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
     }
     return;
   }
@@ -133,9 +133,9 @@ export async function setupCommand(opts: {
       console.log(DIM('Workers AI is tied to the Cloudflare account used during browser sign-in.'));
     } else {
       console.log(`${WARN('!')} Kinu account was not connected (no interactive terminal).`);
-      console.log(DIM(`Run proteus auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
+      console.log(DIM(`Run kinu auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
     }
-    console.log(DIM('Run proteus provider connect <provider> to configure local workspace model access.'));
+    console.log(DIM('Run kinu provider connect <provider> to configure local workspace model access.'));
     return;
   }
 
@@ -143,15 +143,15 @@ export async function setupCommand(opts: {
   if (provider === 'skip') {
     console.log(`${WARN('!')} Skipped local model setup.`);
     console.log(DIM(cloudReady
-      ? 'Cloud workspaces remain ready. Run proteus provider connect <provider> later for local workspaces.'
-      : 'Run proteus setup later before creating workspaces.'));
+      ? 'Cloud workspaces remain ready. Run kinu provider connect <provider> later for local workspaces.'
+      : 'Run kinu setup later before creating workspaces.'));
     return;
   }
 
   if (provider === 'workers-ai') {
     if (!cloudReady) {
       console.log(`${WARN('!')} Workers AI needs a signed-in Kinu account.`);
-      console.log(DIM(`Run proteus auth${opts.origin ? ` --origin ${opts.origin}` : ''}, then proteus setup again.`));
+      console.log(DIM(`Run kinu auth${opts.origin ? ` --origin ${opts.origin}` : ''}, then kinu setup again.`));
       return;
     }
     if (opts.model) {
@@ -325,7 +325,7 @@ export async function setupCommand(opts: {
 }
 
 const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
-const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `proteus setup` again.';
+const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `kinu setup` again.';
 
 function withProvider(config: ProteusConfig, patch: Pick<ProteusConfig, 'model' | 'providers'>): ProteusConfig {
   return {
@@ -352,7 +352,7 @@ async function chooseProvider(cloudReady: boolean): Promise<string> {
   console.log(`  ${ACCENT('6')} OpenAI-compatible`);
   console.log(`  ${ACCENT('7')} OpenCode (share your opencode auth & models)`);
   console.log(`  ${ACCENT('8')} Skip`);
-  if (!cloudReady) console.log(DIM('  Option 1 needs a signed-in account — run proteus auth first.'));
+  if (!cloudReady) console.log(DIM('  Option 1 needs a signed-in account — run kinu auth first.'));
   // No-friction discovery: the Claude Code subscription stores no credential
   // here (the binary owns its own login), so mention it inline rather than as a
   // step — only when it is actually usable on this machine.
@@ -401,7 +401,7 @@ async function runCodexDeviceFlow() {
       metadata: accountId ? { accountId } : credential.metadata,
     };
   }
-  throw new Error('Codex login expired. Run proteus setup again.');
+  throw new Error('Codex login expired. Run kinu setup again.');
 }
 
 function stripProviderPrefix(model: string, provider: string): string {

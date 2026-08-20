@@ -1,8 +1,8 @@
 /**
- * "Is there a newer Kinu?" — the shared logic behind `proteus update`,
- * `proteus doctor`, and the once-a-day startup notice.
+ * "Is there a newer Kinu?" — the shared logic behind `kinu update`,
+ * `kinu doctor`, and the once-a-day startup notice.
  *
- * The served build publishes its version at /downloads/proteus-version.json,
+ * The served build publishes its version at /downloads/kinu-version.json,
  * written by scripts/build-cli-source-archive.sh from the same stamped
  * packages/cli/package.json the source archive ships. That stamp is the only
  * version source; nothing here invents one.
@@ -15,7 +15,7 @@ import { loadConfigFile, updateConfigFile, type ProteusConfig } from './config';
 import * as v from 'valibot';
 import { classify, renderThrownChain, tolerateAsync } from '@kinu/core/obs';
 
-export const CLI_VERSION_PATH = '/downloads/proteus-version.json';
+export const CLI_VERSION_PATH = '/downloads/kinu-version.json';
 const FETCH_TIMEOUT_MS = 1_500;
 const CHECK_INTERVAL_MS = 24 * 60 * 60_000;
 const ServedVersionSchema = v.object({
@@ -92,7 +92,7 @@ export function shouldCheckForUpdate(ctx: NoticeContext): boolean {
 /** The one muted line, or null when the installed build is current. */
 export function updateNotice(installed: string, served: ServedVersion | null): string | null {
   if (!served || isSameBuild(installed, served.version)) return null;
-  return `A newer Kinu is available (${served.version}) — run: proteus update`;
+  return `A newer Kinu is available (${served.version}) — run: kinu update`;
 }
 
 /**

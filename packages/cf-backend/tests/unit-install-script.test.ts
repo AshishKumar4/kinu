@@ -47,7 +47,7 @@ async function installScript(): Promise<string> {
 }
 
 /** A sandbox HOME plus stub curl/bun/ln so the script runs without network
- *  or system side effects. The stub curl "downloads" a stub proteus shim. */
+ *  or system side effects. The stub curl "downloads" a stub kinu shim. */
 function makeSandbox(): InstallSandbox {
   const home = mkdtempSync(join(tmpdir(), 'proteus-install-test-'));
   tempDirs.push(home);

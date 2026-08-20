@@ -156,7 +156,7 @@ describe('rpc gate on scoped connections', () => {
       expect(rejection).not.toBeNull();
       const frame = JSON.parse(rejection!);
       expect(frame).toMatchObject({ type: 'rpc', id: 'rpc-9', success: false });
-      expect(frame.error).toContain('proteus auth');
+      expect(frame.error).toContain('kinu auth');
     }
   });
 

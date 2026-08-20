@@ -339,12 +339,12 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefi
  * The natural device-access flow: when a cloud chat opens with no PC
  * connected, offer to connect this one — once per CLI invocation, with a
  * persisted "don't ask again". Reuses the consent-watch ask pattern; a
- * non-interactive stdin gets the `proteus connect` instruction instead.
+ * non-interactive stdin gets the `kinu connect` instruction instead.
  */
 async function maybeOfferDeviceConnect(rl: readline.Interface, tty: boolean): Promise<void> {
   if (!(await shouldOfferDeviceConnect())) return;
   if (!tty) {
-    console.log(MUTED('No PC is connected for device access. Connect one with: proteus connect'));
+    console.log(MUTED('No PC is connected for device access. Connect one with: kinu connect'));
     return;
   }
   console.log(`${WARN('Let this agent use this PC?')}`);
@@ -367,7 +367,7 @@ async function promptDeviceConnect(rl: readline.Interface, opts: { allowDismiss:
     }
     if (opts.allowDismiss && answer === 'd') {
       dismissDeviceConnectPrompt();
-      console.log(DIM(`  Won't ask again. Connect anytime with /connect or: proteus connect`));
+      console.log(DIM(`  Won't ask again. Connect anytime with /connect or: kinu connect`));
       return;
     }
     console.log(DIM(opts.allowDismiss ? '  Please answer c, s, n, or d.' : '  Please answer c, s, or n.'));
@@ -461,7 +461,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
       if (process.stdin.isTTY === true && process.stdout.isTTY === true) {
         await promptDeviceConnect(rl, { allowDismiss: false });
       } else {
-        console.log(MUTED('Connect this PC with: proteus connect'));
+        console.log(MUTED('Connect this PC with: kinu connect'));
       }
       console.log('');
       return 'ok';

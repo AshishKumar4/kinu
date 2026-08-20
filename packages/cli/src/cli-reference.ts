@@ -15,6 +15,7 @@ const DISCLAIMER =
   + 'verify against the code when precision matters.';
 
 export function renderCliReference(program: Command): string {
+  const cli = program.name();
   const entries = commandEntries(program);
   const headings = [...new Set(entries.map((e) => e.heading))];
   const lines: string[] = [
@@ -28,7 +29,7 @@ export function renderCliReference(program: Command): string {
     `${program.description()}.`,
     '',
     '```',
-    'proteus <command> [options]',
+    `${cli} <command> [options]`,
     '```',
     '',
     '## Commands',
@@ -39,18 +40,18 @@ export function renderCliReference(program: Command): string {
     lines.push(`### ${heading.replace(/:$/, '')}`, '');
     lines.push('| Command | What it does |', '| --- | --- |');
     for (const entry of entries.filter((e) => e.heading === heading)) {
-      lines.push(`| [\`proteus ${entry.term}\`](#${anchor(entry.term)}) | ${escapeCell(entry.description)} |`);
+      lines.push(`| [\`${cli} ${entry.term}\`](#${anchor(cli, entry.term)}) | ${escapeCell(entry.description)} |`);
     }
     lines.push('');
   }
 
   lines.push('## Reference', '');
   for (const entry of entries) {
-    lines.push(`### proteus ${entry.term}`, '');
+    lines.push(`### ${cli} ${entry.term}`, '');
     if (entry.description) lines.push(`${entry.description}.`, '');
     const aliases = entry.command.aliases();
     if (aliases.length > 0) {
-      lines.push(`Also: ${aliases.map((a) => `\`proteus ${a}\``).join(', ')}`, '');
+      lines.push(`Also: ${aliases.map((a) => `\`${cli} ${a}\``).join(', ')}`, '');
     }
     const options = visibleOptions(entry.command);
     if (options.length > 0) {
@@ -91,6 +92,6 @@ function escapeCell(text: string): string {
   return text.replace(/\|/g, '\\|');
 }
 
-function anchor(term: string): string {
-  return `proteus-${term}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
+function anchor(cli: string, term: string): string {
+  return `${cli}-${term}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
 }

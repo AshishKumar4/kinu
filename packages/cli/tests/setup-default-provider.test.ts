@@ -1,4 +1,4 @@
-// What `proteus setup` recommends.
+// What `kinu setup` recommends.
 //
 // The default used to be the ChatGPT Codex subscription: menu option 1, and
 // what `--yes` picked. That overrode the native Cloudflare Workers AI model the
@@ -71,7 +71,7 @@ function runSetup(opts: JsonObject, proteusHome: string) {
   };
 }
 
-describe('proteus setup recommends the native Workers AI model', () => {
+describe('kinu setup recommends the native Workers AI model', () => {
   test('--yes takes the native path and stops pinning a BYO model', () => {
     const out = runSetup({ yes: true }, signedInHome());
     expect(out.exitCode).toBe(0);
@@ -112,7 +112,7 @@ describe('proteus setup recommends the native Workers AI model', () => {
     const out = runSetup({ yes: true }, home({}));
     expect(out.exitCode).toBe(0);
     expect(out.config.model).toBeUndefined();
-    expect(out.stdout).toContain('proteus auth');
+    expect(out.stdout).toContain('kinu auth');
     expect(out.stdout).not.toContain(DEFAULT_WORKERS_AI_MODEL_ID);
   });
 });

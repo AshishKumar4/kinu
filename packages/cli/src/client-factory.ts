@@ -11,7 +11,7 @@ export interface AgentClientFlags {
   baseUrl?: string;
   auth?: string;
   noAutoEvolve?: boolean;
-  /** This process runs ONE task turn and exits (`proteus exec`/`proteus run`)
+  /** This process runs ONE task turn and exits (`kinu exec`/`kinu run`)
    *  rather than holding a conversation. Not a capability switch — it is a
    *  statement of fact the outcome ledger needs: the next invocation's prompt
    *  is a fresh task, not a verdict on the previous answer. Applies to both
@@ -61,7 +61,7 @@ function rejectLocalLlmFlags(opts: AgentClientFlags): void {
   if (opts.model) {
     throw new Error(
       '--model is a session-scoped override for local workspaces and does not apply to cloud workspaces.\n' +
-      '  Change the cloud workspace durably with: proteus model <workspace> <spec> (or /model in chat).',
+      '  Change the cloud workspace durably with: kinu model <workspace> <spec> (or /model in chat).',
     );
   }
   if (opts.baseUrl || opts.auth) {

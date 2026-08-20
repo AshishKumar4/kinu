@@ -4,10 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # The deployed asset dir is packages/cf-backend/dist/client, from both configs
 # wrangler can pick: the user config (wrangler.jsonc, "dist/client") and the
-# vite plugin's redirect target (dist/proteus/wrangler.json, "../client").
-# dist/proteus/assets/ is NOT an asset dir — it is the worker bundle's
+# vite plugin's redirect target (dist/kinu/wrangler.json, "../client").
+# dist/kinu/assets/ is NOT an asset dir — it is the worker bundle's
 # code-split chunk output, uploaded as worker modules. See scripts/deploy.sh.
-OUT="${1:-$ROOT/packages/cf-backend/dist/client/downloads/proteus-source.tar.gz}"
+OUT="${1:-$ROOT/packages/cf-backend/dist/client/downloads/kinu-source.tar.gz}"
 
 tmp="$(mktemp -d)"
 cleanup() {
@@ -15,7 +15,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-stage="$tmp/proteus"
+stage="$tmp/kinu"
 mkdir -p "$stage" "$(dirname "$OUT")"
 
 paths=(
@@ -52,8 +52,8 @@ node -e "
   require('fs').writeFileSync('$stage/packages/cli/package.json', JSON.stringify(p, null, 2) + '\n');
 " "$sha"
 
-tar -czf "$tmp/proteus-source.tar.gz" -C "$tmp" proteus
-mv "$tmp/proteus-source.tar.gz" "$OUT"
+tar -czf "$tmp/kinu-source.tar.gz" -C "$tmp" kinu
+mv "$tmp/kinu-source.tar.gz" "$OUT"
 
 # Publish the served build's version alongside the archive so an installed CLI
 # can ask "is there anything newer?" without downloading it. Written from the
@@ -62,7 +62,7 @@ node -e "
   const { version } = require('$stage/packages/cli/package.json');
   const out = JSON.stringify({ version, sha: process.argv[1], builtAt: new Date().toISOString() });
   require('fs').writeFileSync(process.argv[2], out + '\n');
-" "$sha" "$(dirname "$OUT")/proteus-version.json"
+" "$sha" "$(dirname "$OUT")/kinu-version.json"
 
 # The shim verifies this checksum on every install and update; failing to
 # write it is a broken publish, not a soft miss.

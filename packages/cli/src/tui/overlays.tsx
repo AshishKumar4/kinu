@@ -144,7 +144,7 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
             ? `No models match "${filter.trim()}".`
             : failureLines.length > 0
               ? 'Every connected provider failed to list — see below.'
-              : 'No connected model providers. Run proteus provider connect.'}
+              : 'No connected model providers. Run kinu provider connect.'}
           width={innerWidth}
           color={tuiColors.muted}
         />

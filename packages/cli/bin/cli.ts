@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * proteus CLI — create, chat with, and evolve persistent AI agents.
+ * kinu CLI — create, chat with, and evolve persistent AI agents.
  */
 
 import { buildProgram } from '../src/program';

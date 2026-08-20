@@ -1,6 +1,6 @@
 /**
  * Device connect — the single implementation behind every "link this PC"
- * surface (proteus connect/desktop, the chat connect prompts, /connect).
+ * surface (kinu connect/desktop, the chat connect prompts, /connect).
  * Registers the device, installs the daemon script downloaded from
  * /pc/daemon.js (the daemon is the only device-RPC implementation), starts it
  * either persistently (detached + pidfile) or for this CLI session only (a
@@ -186,9 +186,9 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
     case 'already-running':
       return result.connected
         ? { ok: true, message: 'This PC is already connected.' }
-        : { ok: false, message: 'A connect daemon is installed but not connected. Run: proteus connect' };
+        : { ok: false, message: 'A connect daemon is installed but not connected. Run: kinu connect' };
     case 'timeout':
-      return { ok: false, message: `The daemon did not connect within ${DEVICE_CONNECT_DEADLINE_MS / 1000}s. Check: proteus desktop logs` };
+      return { ok: false, message: `The daemon did not connect within ${DEVICE_CONNECT_DEADLINE_MS / 1000}s. Check: kinu desktop logs` };
     case 'connected':
       return {
         ok: true,

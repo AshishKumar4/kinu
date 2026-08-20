@@ -12,9 +12,9 @@ import * as v from 'valibot';
 
 /** CLI source archive + its checksum + the served build stamp. Written into
  *  `dist/client/downloads/` by scripts/build-cli-source-archive.sh. */
-export const CLI_SOURCE_TARBALL_PATH = '/downloads/proteus-source.tar.gz';
+export const CLI_SOURCE_TARBALL_PATH = '/downloads/kinu-source.tar.gz';
 export const CLI_SOURCE_TARBALL_SHA256_PATH = `${CLI_SOURCE_TARBALL_PATH}.sha256`;
-export const CLI_VERSION_PATH = '/downloads/proteus-version.json';
+export const CLI_VERSION_PATH = '/downloads/kinu-version.json';
 
 /** Identity of the build that produced the deployed asset bundle. */
 export interface BuildStamp {

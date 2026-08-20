@@ -42,7 +42,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (url.pathname === '/install.sh' && (method === 'GET' || method === 'HEAD')) {
     return installScriptResponse(url.origin, method === 'HEAD');
   }
-  if (url.pathname === '/downloads/proteus' && (method === 'GET' || method === 'HEAD')) {
+  if (url.pathname === '/downloads/kinu' && (method === 'GET' || method === 'HEAD')) {
     return cliShimResponse(url.origin, method === 'HEAD');
   }
   if (url.pathname === CLI_SOURCE_TARBALL_PATH && (method === 'GET' || method === 'HEAD')) {
@@ -146,9 +146,9 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 
   if (path === '/tokens' && method === 'POST') {
     // Minting a long-lived credential is step-up gated exactly like webhook
-    // creation: the session token itself must come from a fresh `proteus auth`.
+    // creation: the session token itself must come from a fresh `kinu auth`.
     if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
-      return err(401, 'step-up auth required: run `proteus auth` again. Minting access tokens needs a sign-in within the last 5 minutes.');
+      return err(401, 'step-up auth required: run `kinu auth` again. Minting access tokens needs a sign-in within the last 5 minutes.');
     }
     const body = await safeJson(request, v.object({
       name: v.optional(v.string()),
@@ -222,9 +222,9 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     if (agent instanceof Response) return agent;
     // Webhook creation is step-up gated on every path. The CLI's
     // interactive-auth timestamp is its token mint time (minting requires
-    // a live browser approval), so a fresh `proteus auth` satisfies it.
+    // a live browser approval), so a fresh `kinu auth` satisfies it.
     if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
-      return err(401, 'step-up auth required: run `proteus auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
+      return err(401, 'step-up auth required: run `kinu auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
     }
     const body = await safeJson(request, WebhookRequestSchema);
     if (!body?.label || !body.auth_mode) return err(400, 'label and auth_mode required');
@@ -308,7 +308,7 @@ async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity,
   }
   if (cli.kind === 'access') {
     const scope = rpcAccessScope(access);
-    if (!scope) return err(403, `${rpcMethod} requires an interactive CLI session token. Sign in with: proteus auth`);
+    if (!scope) return err(403, `${rpcMethod} requires an interactive CLI session token. Sign in with: kinu auth`);
     if (!tokenAllows(cli, scope)) return err(403, `This access token does not have the ${scope} scope.`);
   }
 
@@ -351,7 +351,7 @@ function accessTokenDenial(cli: CliTokenIdentity, method: string, path: string):
   if (path === '/me' && method === 'GET') return null; // identity introspection works for any valid bearer
   const required = requiredAccessScope(method, path);
   if (!required) {
-    return err(403, 'This operation requires an interactive CLI session token. Sign in with: proteus auth');
+    return err(403, 'This operation requires an interactive CLI session token. Sign in with: kinu auth');
   }
   if (!tokenAllows(cli, required)) {
     return err(403, `This access token does not have the ${required} scope.`);
@@ -399,7 +399,7 @@ async function renderBrowserApproval(request: Request, env: Env): Promise<Respon
     return html('Kinu CLI Auth', '<p>Unknown or expired CLI auth code.</p>', 400);
   }
   if (requestInfo.status === 'expired') {
-    return html('Kinu CLI Auth', '<p>This CLI auth code expired. Run <code>proteus auth</code> again.</p>', 400);
+    return html('Kinu CLI Auth', '<p>This CLI auth code expired. Run <code>kinu auth</code> again.</p>', 400);
   }
   if (requestInfo.status === 'approved' || requestInfo.status === 'consumed') {
     return html('Kinu CLI Auth', '<p>This CLI auth request has already been approved. You can return to your terminal.</p>');
@@ -717,7 +717,7 @@ set -euo pipefail
 PROTEUS_ORIGIN="\${PROTEUS_ORIGIN:-${origin}}"
 PROTEUS_HOME="\${PROTEUS_HOME:-$HOME/.proteus}"
 BIN_DIR="$PROTEUS_HOME/bin"
-BIN_PATH="$BIN_DIR/proteus"
+BIN_PATH="$BIN_DIR/kinu"
 YES=0
 NO_SETUP=0
 CONNECT=0
@@ -760,8 +760,8 @@ case "$(uname -s)" in
 esac
 
 if [ "$UNINSTALL" = "1" ]; then
-  if [ -L /usr/local/bin/proteus ] && [ "$(readlink /usr/local/bin/proteus)" = "$BIN_PATH" ]; then
-    rm -f /usr/local/bin/proteus 2>/dev/null || true
+  if [ -L /usr/local/bin/kinu ] && [ "$(readlink /usr/local/bin/kinu)" = "$BIN_PATH" ]; then
+    rm -f /usr/local/bin/kinu 2>/dev/null || true
   fi
   rm -f "$BIN_PATH"
   if [ "$PURGE" = "1" ]; then rm -rf "$PROTEUS_HOME"; fi
@@ -855,13 +855,13 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 say "Installing Kinu CLI..."
-curl -fsSL "$PROTEUS_ORIGIN/downloads/proteus" -o "$tmp/proteus"
-chmod 755 "$tmp/proteus"
-mv "$tmp/proteus" "$BIN_PATH"
+curl -fsSL "$PROTEUS_ORIGIN/downloads/kinu" -o "$tmp/kinu"
+chmod 755 "$tmp/kinu"
+mv "$tmp/kinu" "$BIN_PATH"
 prepare_cli_source
 
 if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
-  ln -sfn "$BIN_PATH" /usr/local/bin/proteus
+  ln -sfn "$BIN_PATH" /usr/local/bin/kinu
 fi
 
 case ":$PATH:" in
@@ -889,7 +889,7 @@ case ":$PATH:" in
         say "Added $BIN_DIR to $profile."
       fi
     elif [ ! -w "$profile" ]; then
-      say "Add $BIN_DIR to PATH to use proteus and agent aliases from any directory."
+      say "Add $BIN_DIR to PATH to use kinu and agent aliases from any directory."
     fi
     export PATH="$BIN_DIR:$PATH"
     ;;
@@ -901,8 +901,8 @@ run_connect_if_requested
 
 if [ "$NO_SETUP" = "1" ] && [ "$CONNECT" != "1" ]; then
   say "Next:"
-  say "  proteus setup --origin $PROTEUS_ORIGIN"
-  say "  proteus create"
+  say "  kinu setup --origin $PROTEUS_ORIGIN"
+  say "  kinu create"
 else
   say "Kinu CLI is ready."
 fi
@@ -993,10 +993,10 @@ refresh_source() {
   mkdir -p "$SOURCE_ROOT"
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
-  curl -fsSL "$TARBALL_URL" -o "$tmp/proteus.tar.gz"
-  verify_tarball "$tmp/proteus.tar.gz"
+  curl -fsSL "$TARBALL_URL" -o "$tmp/kinu.tar.gz"
+  verify_tarball "$tmp/kinu.tar.gz"
   mkdir -p "$tmp/extract"
-  tar -xzf "$tmp/proteus.tar.gz" -C "$tmp/extract"
+  tar -xzf "$tmp/kinu.tar.gz" -C "$tmp/extract"
   extracted="$(find "$tmp/extract" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
   [ -n "$extracted" ] || die "Source archive did not contain a project directory."
   rm -rf "$SRC_DIR"

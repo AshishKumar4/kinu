@@ -21,11 +21,11 @@ export function buildCliInstallCommand(options: CliInstallCommandOptions): strin
 }
 
 export function buildCliSetupCommand(origin: string): string {
-  return `proteus setup --origin ${shellQuote(normalizeCliOrigin(origin))}`;
+  return `kinu setup --origin ${shellQuote(normalizeCliOrigin(origin))}`;
 }
 
 export function buildCliAuthCommand(origin: string): string {
-  return `proteus auth --origin ${shellQuote(normalizeCliOrigin(origin))}`;
+  return `kinu auth --origin ${shellQuote(normalizeCliOrigin(origin))}`;
 }
 
 export function shellQuote(value: string): string {

@@ -1,5 +1,5 @@
 /**
- * `proteus evolve` progress rendering. An evolution cycle spends minutes inside
+ * `kinu evolve` progress rendering. An evolution cycle spends minutes inside
  * runMCTS, so every search event has to reach the terminal — and a branch that
  * died on a provider error has to say so, since the engine scores it 0 and
  * carries on.
