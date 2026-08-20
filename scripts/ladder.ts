@@ -858,6 +858,31 @@ export const LADDER: readonly Gate[] = [
       + 'green.',
   },
   {
+    run: 'bun test scripts/swarm-tree-geometry.test.ts',
+    tier: 'ci',
+    seconds: 29,
+    catches: 'where the swarm trees LAND, at 640px and 1280px in both palettes — the '
+      + 'class of defect no source-reading instrument in this repository can see. Six '
+      + 'wires, each proven red by reverting it: a node label clipped at a flat 20 '
+      + 'characters beside an empty column, the key floated over the branches it '
+      + 'explains, a card of two short searches reserving a whole column of nothing, an '
+      + 'unselected search receding to half opacity (illegible at 11px, and the '
+      + 'comparison one canvas exists for), the run-count label taking two line boxes, '
+      + 'and — the one that matters most — a FRAME THAT RENDERED NOTHING. `forkbig`, '
+      + '`forkfull` and `forkswarmfull` all mounted the explorer page against a socket '
+      + 'no worker answers and drew an empty body, while `gate:computed-style` lists '
+      + '`forkfull` among its frames and reported clean over the empty document: a gate '
+      + 'green because there was nothing left to find. The first assertion here is that '
+      + 'the scene exists and that the 520-node probe still has 520 nodes.',
+    blind: 'everything the picture MEANS. It measures boxes, not whether the ramp '
+      + 'encodes the score it claims, whether the winning spine is the line the search '
+      + 'paid for, or whether a fan-in vertex is the node that fanned a level in. It '
+      + 'reads three frames of the ~29 gallery.tsx dispatches, so every other fork state '
+      + '— the refused run, the named preset, the fan-in composition — is proven to mount '
+      + 'by `gate:computed-style` and measured by nothing. Chrome cost keeps it out of '
+      + 'the commit tier, so a geometry regression reaches a branch before it is caught.',
+  },
+  {
     run: 'bun run layergate',
     tier: 'ci',
     seconds: 25,
