@@ -49,7 +49,6 @@ export const PREVIEW_SANDBOX = [...PREVIEW_SANDBOX_TOKENS, 'allow-same-origin'].
 interface PreviewHostEnv {
   PREVIEW_HOST_SUFFIX?: string;
   CLI_PUBLIC_ORIGIN?: string;
-  PUBLIC_ORIGINS?: string;
 }
 
 const PREVIEW_SUFFIX_META = 'proteus-preview-host-suffix';
@@ -75,33 +74,6 @@ export function previewHostSuffix(env: PreviewHostEnv): string | null {
   return suffix;
 }
 
-/**
- * Every host this deployment answers on as the APP, lowercased.
- *
- * `CLI_PUBLIC_ORIGIN` is the canonical one and is always a member; it is what
- * links, redirects and the install script are built from, and exactly one
- * origin can hold that job. A deployment can still be reachable on more than
- * one name — a domain migration serves both the old and the new until the
- * owner cuts over — so `PUBLIC_ORIGINS` carries the rest as a comma-separated
- * list. Union, not replacement: a list that forgets the canonical origin
- * cannot unpublish it.
- *
- * This set is what transport security keys on. A custom domain added to
- * `wrangler.jsonc` and NOT named here still serves the app, but over plain
- * HTTP with no upgrade and no HSTS — the precise defect measured against
- * production on 2026-08-16, reintroduced on a second hostname.
- */
-export function publishedHosts(env: PreviewHostEnv): ReadonlySet<string> {
-  const hosts = new Set<string>();
-  const canonical = hostOf(env.CLI_PUBLIC_ORIGIN);
-  if (canonical !== null) hosts.add(canonical);
-  for (const origin of env.PUBLIC_ORIGINS?.split(',') ?? []) {
-    const host = hostOf(origin.trim());
-    if (host !== null) hosts.add(host);
-  }
-  return hosts;
-}
-
 export function previewSuffixMetaName(): string {
   return PREVIEW_SUFFIX_META;
 }
@@ -114,19 +86,15 @@ function browserPreviewHostSuffix(): string | null {
 
 /**
  * True when this request arrived on preview territory: any host under the
- * suffix that the app does not itself publish. The whole subtree is claimed,
- * not just well-formed preview hostnames — a request that lands here and does
- * not resolve to an exposed port gets a 404, never the app.
- *
- * Every published host is excluded, not only the canonical one. During a domain
- * migration a second app origin can sit under the preview suffix, and treating
- * it as preview territory would 404 the app on its own new name.
+ * suffix other than the app's own. The whole subtree is claimed, not just
+ * well-formed preview hostnames — a request that lands here and does not
+ * resolve to an exposed port gets a 404, never the app.
  */
 export function isPreviewHostRequest(url: URL, env: PreviewHostEnv): boolean {
   const suffix = previewHostSuffix(env);
   if (!suffix) return false;
   const host = url.hostname.toLowerCase();
-  if (publishedHosts(env).has(host)) return false;
+  if (host === hostOf(env.CLI_PUBLIC_ORIGIN)) return false;
   return host.endsWith(`.${suffix}`);
 }
 

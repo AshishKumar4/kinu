@@ -186,8 +186,10 @@ describe('preview host resolution', () => {
   test('production records that its current suffix is not a per-preview cookie-site boundary', () => {
     const wrangler = source('wrangler.jsonc');
     const configured = /"PREVIEW_HOST_SUFFIX":\s*"([^"]+)"/.exec(wrangler)?.[1];
-    expect(configured).toBe('proteus.ashishkumarsingh.com');
-    expect(wrangler).toContain('A dedicated PSL-backed suffix is required');
+    expect(configured).toBe('kinu.run');
+    // Comment line wrapping is not the contract; the recorded prerequisite is.
+    const prose = wrangler.replace(/^\s*\/\/ ?/gmu, '').replace(/\s+/gu, ' ');
+    expect(prose).toContain('A PSL-backed suffix is required before this can be claimed');
   });
 
   test('unconfigured or unusable means no preview host at all', () => {
