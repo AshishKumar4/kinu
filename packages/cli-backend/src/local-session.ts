@@ -1216,11 +1216,14 @@ export class LocalAgentSession implements BackendHost {
     const t2 = Date.now();
     await this.mcpClose?.();
     const t3 = Date.now();
-    // The exit tail, attributed: see evolution.settled for WHAT the first
-    // phase waited on.
-    diagnostics.event('session.settle_timings', {
-      evolutionMs: t1 - t0, fibersMs: t2 - t1, mcpMs: t3 - t2,
-    });
+    // The exit tail, attributed — see evolution.settled for WHAT the first
+    // phase waited on. Quiet under 1s: a fast exit stays silent (the --json
+    // contract promises an empty stderr), a slow tail still names itself.
+    if (t3 - t0 > 1_000) {
+      diagnostics.event('session.settle_timings', {
+        evolutionMs: t1 - t0, fibersMs: t2 - t1, mcpMs: t3 - t2,
+      });
+    }
   }
 
   /** Durable fibers detached from a turn — a backgrounded tool call, or an
