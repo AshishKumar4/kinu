@@ -60,8 +60,8 @@ a target, and it names the verifier that measures a candidate. A verifier is cod
 It runs in this workspace and reports a raw number, and that number picks the
 winner. Verifier kinds resolve through a closed registry, so a name nobody
 registered fails the run. Ask for `score:'judge'` instead and you get the median of
-a model ensemble, which ranks candidates and measures nothing, so a judged run
-writes no record.
+a model ensemble, which ranks candidates without measuring anything, and nothing
+from a judged run persists as a record.
 
 A `preset` fixes the shape of the search. `ideate` is flat by construction, at depth
 1 and 5 branches, and nothing ranks its results. `optimise` climbs one measured
@@ -145,10 +145,10 @@ knows where to send a job.
 them with a time-decayed EMA, and indexes them with FTS5 so the agent can find them
 again.
 
-**A mutable scaffold.** The agentic loop is code the agent can rewrite. 4 structural gates validate a
-mutation before it runs.
+**A mutable scaffold.** The agentic loop is code the agent can rewrite. Four structural
+gates validate a mutation before it runs.
 
-**Evolution on 3 timescales.** Per turn, quality scoring then reflection. Per
+**Evolution on three timescales.** Per turn, quality scoring then reflection. Per
 session, pattern consolidation then scaffold mutation. Per lifetime, `runMCTS`.
 `core/src/evolution/engine.ts` and `kinu evolve` call the MCTS engine; the `agents`
 tool does not.
