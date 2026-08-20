@@ -51,12 +51,15 @@ export default function MCTSExplorer() {
 
   return (
     <div className="h-full flex flex-col p-bg">
-      <div className="flex items-center gap-3 px-5 py-3.5 border-b p-border">
-        <Link to={`/workspace/${agentId}`}><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
-        <div className="h-4 w-px bg-[var(--c-border)]" />
-        <GitForkIcon size={16} className="p-accent" />
-        <span className="font-semibold text-sm p-text">Search explorer</span>
-        {run && <span className="text-xs p-text-2 truncate" title={run.task}>{run.task}</span>}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3.5 border-b p-border">
+        <Link to={`/workspace/${agentId}`} className="shrink-0"><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
+        <div className="hidden sm:block h-4 w-px shrink-0 bg-[var(--c-border)]" />
+        <GitForkIcon size={16} className="p-accent shrink-0" />
+        <span className="font-semibold text-sm p-text shrink-0">Search explorer</span>
+        {/* The task keeps the whole remaining line and hands over the rest of
+            itself on hover: at 640px this is the row that decided whether the
+            title broke mid-word or simply ran out of room. */}
+        {run && <span className="min-w-0 flex-1 text-xs p-text-2 truncate" title={run.task}>{run.task}</span>}
       </div>
       {run && selectionResource.status === "error" && (
         <LoadFailure what="fresh exploration runs" message={selectionResource.message} onRetry={reloadSelection} className="px-5 py-2 border-b p-border" />
@@ -135,10 +138,17 @@ function ExplorerBody({
           refused run still has a root and often has branches that failed for a
           reason worth reading. */}
       {refusal !== null && <RunRefusalNote refusal={refusal} />}
-      {/* Canvas and transcript side by side: the whole point of a full-screen
-          explorer is room, and a selected node that only produced a one-line
-          footer chip was the reason opening one told the reader nothing. */}
-      <div className="flex-1 min-h-0 flex">
+      {/* Canvas and transcript side by side WHERE THERE IS ROOM: the whole point
+          of a full-screen explorer is room, and a selected node that only
+          produced a one-line footer chip was the reason opening one told the
+          reader nothing.
+
+          Below `md` there is no room for both. The transcript was a hard 28rem
+          `shrink-0`, so on a 640px screen it took 70% of the width and left the
+          tree 190px — the surface's whole subject squeezed into a gutter. It
+          stacks instead, bounded to just over half the height, and stays out of
+          the way entirely until a node is opened. */}
+      <div className="flex-1 min-h-0 flex flex-col md:flex-row">
         <div ref={attach} className="flex-1 min-h-0 relative overflow-hidden p-surface">
           {tree && resource.status === "error" && (
             <LoadFailure what="the latest fork tree" message={resource.message} onRetry={reload}
@@ -172,15 +182,15 @@ function ExplorerBody({
             </div>
           )}
         </div>
-        <div className="w-[28rem] shrink-0 border-l p-border flex flex-col min-h-0 p-2">
+        <div className={`${selectedId === null ? "hidden md:flex" : "flex"} w-full max-h-[55%] shrink-0 flex-col min-h-0 border-t p-border p-2 md:h-auto md:max-h-none md:w-[28rem] md:border-t-0 md:border-l`}>
           <NodeTranscript
             selection={selection}
             trees={state.mctsTrees} rpc={state.rpc} headActivity={state.headActivity}
             onSelect={setSelectedId} />
         </div>
       </div>
-      <div className="flex items-center justify-between px-5 py-2.5 border-t p-border">
-        <div className="flex items-center gap-6 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 px-5 py-2.5 border-t p-border">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs">
           <span className="p-text-2">Branches: <span className="p-text font-medium">{Math.max(0, (stats?.nodes ?? 1) - 1)}</span></span>
           <span className="p-text-2">Depth: <span className="p-text font-medium">{stats?.depth ?? 0}</span></span>
           {/* The resolution line is stated once, in the panel above the tree and on the
