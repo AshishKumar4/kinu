@@ -43,7 +43,7 @@ import {
 } from "./fork-runs";
 import {
   fanInVertices, nodeRationales, runRefusal, swarmAxisRows, swarmResolutionOf,
-  type RunRefusal, type SwarmResolution,
+  type RunRefusal, type SwarmAxis, type SwarmResolution,
 } from "./swarm-resolution";
 
 export interface ExplorationSurfaceProps {
@@ -574,47 +574,91 @@ export function SwarmResolutionPanel(
   { resolution, judges = null }: { resolution: SwarmResolution | undefined; judges?: string | null },
 ) {
   if (resolution === undefined) return null;
+  const caps = resolution.kind === "preset"
+    ? `depth ${resolution.depth} · branches ${resolution.branches}`
+    : null;
   return (
     <div data-swarm-resolution={resolution.kind}
-      className="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 border-b p-border text-[10px]">
-      <span className="font-mono p-accent-fg shrink-0">
-        {resolution.kind === "custom" ? `custom "${resolution.label}"` : `preset=${resolution.preset}`}
-      </span>
-      {resolution.kind === "preset" && (
-        <>
-          {swarmAxisRows(resolution.config).map((row) => (
-            <span key={row.axis} className="font-mono p-text-3 whitespace-nowrap">
-              {row.axis}:<span className="p-text-2">{row.value}</span>
-            </span>
-          ))}
-          <span className="font-mono p-text-3 whitespace-nowrap">
-            settle:<span className="p-text-2">{resolution.settle}</span>
-            <span className="p-text-3"> (derived)</span>
-          </span>
-          <span className="font-mono p-text-3 whitespace-nowrap">
-            preset caps <span className="p-text-2">depth {resolution.depth} · branches {resolution.branches}</span>
-          </span>
-        </>
-      )}
-      {resolution.kind === "undeclared" && (
-        <span className="p-warning leading-snug min-w-0">
-          This preset does not resolve, so the run has no axis tuple to show — {resolution.undeclared}.
+      className="shrink-0 border-b p-border px-3 py-2">
+      {/* One line naming the run, and ONE accent on it. Everything else in this
+          panel is a fact about the tuple; the name is the thing a reader is
+          looking for, so it is the only thing coloured. */}
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="text-[9px] uppercase tracking-wider p-text-3 shrink-0">
+          {resolution.kind === "custom" ? "composition" : "preset"}
         </span>
+        <span className="font-mono text-[11px] font-medium p-accent-fg min-w-0 break-words">
+          {resolution.kind === "custom" ? resolution.label : resolution.preset}
+        </span>
+        {resolution.kind === "preset" && (
+          <span className="ml-auto shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[10px] p-badge-neutral"
+            title="Derived from the score and advance axes rather than chosen — settleOf(config), the same total function the engine reads.">
+              settle {resolution.settle}
+          </span>
+        )}
+      </div>
+
+      {/* THE TUPLE, as a tuple. Six `axis:value` chips in one wrapping sentence
+          read as a run of mono text at any width and as a wall of it at 313px,
+          which is the crowding the owner named. A grid of labelled cells fitted
+          to the available width — no breakpoint, `auto-fit` decides — gives every
+          axis its own column, so a value has room to WRAP rather than truncate
+          and no axis is ever the one that got hidden. */}
+      {resolution.kind === "preset" && (
+        <dl className="mt-1.5 grid gap-x-3 gap-y-1.5 [grid-template-columns:repeat(auto-fit,minmax(5.25rem,1fr))]">
+          {swarmAxisRows(resolution.config).map((row) => (
+            <div key={row.axis} className="min-w-0" title={`${row.axis} — ${AXIS_MEANING[row.axis]}`}>
+              <dt className="text-[9px] uppercase tracking-wider p-text-3">{row.axis}</dt>
+              <dd className="font-mono text-[11px] p-text break-words">{row.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {resolution.kind === "undeclared" && (
+        <p className="mt-1.5 text-[10px] p-warning leading-snug">
+          This preset does not resolve, so the run has no axis tuple to show — {resolution.undeclared}.
+        </p>
       )}
       {resolution.kind === "custom" && (
-        <span className="p-text-3 leading-snug min-w-0">
+        <p className="mt-1.5 text-[10px] p-text-3 leading-snug">
           A composition's resolved axes are digested into its records row, which has no
           read model, so only the provenance label reached this surface.
-        </span>
+        </p>
       )}
-      {judges !== null && (
-        <span className="font-mono p-text-3 whitespace-nowrap" data-swarm-judges>
-          judges <span className="p-text-2">{judges}</span>
-        </span>
+
+      {(caps !== null || judges !== null) && (
+        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[10px] p-text-3">
+          {caps !== null && (
+            <span className="whitespace-nowrap" title="The caps the preset resolved, not the caps this run spent.">
+              caps <span className="p-text-2">{caps}</span>
+            </span>
+          )}
+          {judges !== null && (
+            <span className="whitespace-nowrap" data-swarm-judges>
+              judges <span className="p-text-2">{judges}</span>
+            </span>
+          )}
+        </div>
       )}
     </div>
   );
 }
+
+/**
+ * What each axis DECIDES, one line each, quoted from the declarations in
+ * `core/src/strategy/swarm.ts` rather than paraphrased here — the panel is the
+ * only place a first-time reader meets these six words, and a gloss that drifts
+ * from the axis it names is worse than none.
+ */
+const AXIS_MEANING = {
+  unit: "what one node produces",
+  context: "what a child starts from",
+  expand: "how children are produced — `aggregate` is fan-in, k parents into one child",
+  score: "how a node is valued",
+  advance: "where the next unit of budget goes",
+  carry: "what survives across iterations",
+} as const satisfies Record<SwarmAxis, string>;
 
 /**
  * A run that reached nothing, said as a refusal rather than left to a picture of
