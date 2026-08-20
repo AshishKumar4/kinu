@@ -531,7 +531,7 @@ export async function driveNode(script: ScriptedTurn, opts?: NodeFixtureOptions)
         ? { status: view.status, errorMessage: view.errorMessage }
         : null,
       usage: run?.usage ?? {},
-      stepCount: view?.steps.length ?? 0,
+      stepCount: journal.readSteps(input.nodeId).length,
     },
     run, thrown, view, journal,
   };

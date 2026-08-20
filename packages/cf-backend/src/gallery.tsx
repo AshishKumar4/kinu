@@ -8,6 +8,9 @@
  *   /gallery.html?frame=chat     → chat column inventory
  *   /gallery.html?frame=chatempty → a workspace before its first turn: the
  *                                  mission it was created for, not a message
+ *   /gallery.html?frame=chatloading → a workspace WITH a history, before the
+ *                                  transcript has arrived — the state that used
+ *                                  to render as `chatempty` and lie
  *   /gallery.html?frame=toolcalls → every tool-call render state, pre-expanded
  *                                    (quiet failure, protocol failure, a
  *                                    multi-line `run`, an MCP tool, a failing
@@ -76,7 +79,7 @@ import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { MessageView } from "@/components/MessageView";
-import { DeviceConsentCard, ChatErrorCard, EmptyConversation, HistoryBoundary } from "@/pages/WorkspacePage";
+import { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation, HistoryBoundary } from "@/pages/WorkspacePage";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useTheme } from "@/hooks/use-theme";
@@ -646,7 +649,7 @@ function swarmNode(
   return {
     id, task, rationale, status: "completed", summary: null, errorMessage: null,
     usage: { input: 6_200, output: 480 }, wallClockMs: 12_400,
-    spawnedAt: NOW - 21e5, lastStepAt: NOW - 20e5, decisions: [], steps: [],
+    spawnedAt: NOW - 21e5, lastStepAt: NOW - 20e5, decisions: [],
     ...extra,
   };
 }
@@ -849,38 +852,31 @@ const MERGED_RUN: HeadRunView = {
       errorMessage: null, usage: { input: 8_420, output: 610 }, wallClockMs: 14_200,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5,
       decisions: [{ question: "Guard at the edge or at the reader?", choice: "at the reader", rationale: "the edge would still let a null through the cart serializer" }],
-      steps: [
-        { text: "Reading the handler and its two callers.", reasoning: "The 500 is a deref, so the fix has to be where the deref is.", toolCalls: [{ name: "file", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" }] },
-        { text: "Both call sites take the same shape. One guard covers them.", toolCalls: [{ name: "run", input: { command: "bun test packages/checkout" }, output: "exit=0" }] },
-      ],
     },
     {
       id: "root-merge-1-h1", task: "packages/cart/src/serializer.ts", rationale: "the lazy path",
       status: "completed", summary: "One read, already null-safe — no change needed here.",
       errorMessage: null, usage: { input: 5_110, output: 240 }, wallClockMs: 9_800,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 515e4, decisions: [],
-      steps: [{ text: "Already uses the optional chain.", toolCalls: [{ name: "file", input: { action: "read", path: "packages/cart/src/serializer.ts" }, output: "…" }] }],
     },
     {
       id: "root-merge-1-h2", task: "packages/admin/src/coupon-report.ts", rationale: "the reporting path",
       status: "errored", summary: null,
       errorMessage: "the admin package is not checked out in this sandbox",
       usage: { input: 1_020, output: 0 }, wallClockMs: 2_100,
-      spawnedAt: NOW - 52e5, lastStepAt: null, decisions: [], steps: [],
+      spawnedAt: NOW - 52e5, lastStepAt: null, decisions: [],
     },
     {
       id: "root-merge-1-h3", task: "packages/checkout/src/pricing.ts", rationale: "the discount maths",
       status: "completed", summary: "Indexes by kind twice inside the percentage path; both reads are behind the same guard.",
       errorMessage: null, usage: { input: 6_240, output: 380 }, wallClockMs: 11_400,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 512e4, decisions: [],
-      steps: [{ text: "The percentage branch reads rules[kind] before the null check.", toolCalls: [{ name: "file", input: { action: "read", path: "packages/checkout/src/pricing.ts" }, output: "…" }] }],
     },
     {
       id: "root-merge-1-h4", task: "packages/api/src/coupon-routes.ts", rationale: "the public surface",
       status: "running", summary: null, errorMessage: null,
       usage: { input: 3_180, output: 90 }, wallClockMs: 4_600,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5, decisions: [],
-      steps: [{ text: "Walking the route handlers for a kind lookup.", toolCalls: [] }],
     },
   ],
   merge: {
@@ -1623,6 +1619,25 @@ function ChatEmptyFrame() {
         <GalleryChatTabs clearable={false} />
         <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
           <EmptyConversation mission={BRAIN_STATUS.purpose} />
+        </div>
+        <GalleryComposer />
+      </div>
+    </div>
+  );
+}
+
+/* What EVERY workspace with a history opens on, for as long as the wake and the
+   transfer take — 0.8-3.8 seconds against production, measured 2026-08-20.
+   Photographed beside ChatEmptyFrame on purpose: the two used to be the same
+   picture, and that is the defect. One says "there is nothing here", the other
+   says "not yet", and only one of them is true of a workspace with messages. */
+function ChatLoadingFrame() {
+  return (
+    <div className="flex h-screen justify-center p-bg p-text">
+      <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
+        <GalleryChatTabs clearable={false} />
+        <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
+          <ConversationSkeleton />
         </div>
         <GalleryComposer />
       </div>
@@ -3063,6 +3078,7 @@ async function mount() {
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "chatempty") node = <ChatEmptyFrame />;
+  else if (frame === "chatloading") node = <ChatLoadingFrame />;
   else if (frame === "chathistory") node = <ChatHistoryFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;

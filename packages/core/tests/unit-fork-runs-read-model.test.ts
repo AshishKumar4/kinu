@@ -21,6 +21,8 @@ import { initSearchTables } from '../src/mcts/schemas';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initHeadsTables } from '../src/heads/schema';
 import { listForkRuns, readForkRun } from '../src/read-models/fork-runs';
+import { readExplorationCanvas } from '../src/read-models/exploration-canvas';
+import { HeadJournal } from '../src/heads/journal';
 import { newBranchId } from '../src/steer-branch';
 import type { Page, SeekCursor } from '../src/read-models/page';
 import type { ForkRunSummary } from '../src/read-models/fork-runs';
@@ -368,5 +370,66 @@ describe('a run that wrote both stores', () => {
     expect(readForkRun(sql, 'swarm-1')).toMatchObject({
       hasSearchTree: true, hasNodeTranscripts: true, task: TASK, winnerScore: 0.71,
     });
+  });
+});
+
+/**
+ * WHAT A CANVAS PAGE MAY NOT CARRY.
+ *
+ * `readExplorationCanvas` composes thirty runs and every head of each. When a
+ * head view carried its own step trace, that made one production Exploration
+ * page 824 KiB and — because the page also seeded the workspace's initial load
+ * — put the same bytes in front of the chat pane on every workspace open. No
+ * renderer read them: `headRunToTree`, the fan-in marks and the resolution
+ * label are folds over the head's lifecycle fields, and the one surface that
+ * shows prose opens ONE branch and reads it by id.
+ *
+ * So this is a size contract with a behavioural test: the page must not grow
+ * with the length of the traces on it, and the per-branch read must still
+ * deliver every step. Both directions, because dropping the trace from the
+ * canvas is only correct while the branch reader still has it.
+ */
+describe('the canvas page does not carry step traces', () => {
+  function seedWithTrace(db: Database, chars: number) {
+    seedJournalledRun(db, {
+      rootId: 'traced', task: 'a swarm that talked a lot', at: 1_000,
+      heads: [{ status: 'completed' }, { status: 'completed' }],
+    });
+    const journal = new HeadJournal(makeSql(db));
+    for (const id of ['traced-h0', 'traced-h1']) {
+      journal.appendStep(id, 0, { text: 'x'.repeat(chars), toolCalls: [{ name: 'file' }] });
+      journal.appendStep(id, 1, { text: 'y'.repeat(chars), toolCalls: [] });
+    }
+    return journal;
+  }
+
+  test('a page of a run whose heads wrote long traces is the same size as one whose heads wrote short ones', () => {
+    const short = freshDb();
+    seedWithTrace(short.db, 10);
+    const long = freshDb();
+    seedWithTrace(long.db, 50_000);
+
+    const shortBytes = JSON.stringify(readExplorationCanvas(short.sql)).length;
+    const longBytes = JSON.stringify(readExplorationCanvas(long.sql)).length;
+    // Identical, not merely close: nothing derived from a step's length may
+    // reach this payload at all. 200 KiB of prose was written on the long side.
+    expect(longBytes).toBe(shortBytes);
+  });
+
+  test('the branch reader still delivers every step', () => {
+    const { db, sql } = freshDb();
+    const journal = seedWithTrace(db, 10);
+    // The canvas lists the head…
+    const page = readExplorationCanvas(sql);
+    const head = page.items[0]?.head?.heads.find((candidate) => candidate.id === 'traced-h0');
+    expect(head).toBeDefined();
+    // …and its lifecycle is intact, including the aggregate over the very rows
+    // the page declines to carry.
+    expect(head?.lastStepAt).toBeGreaterThan(0);
+    // …and opening it reads the trace.
+    const steps = journal.readSteps('traced-h0');
+    expect(steps.map((step) => step.text)).toEqual(['x'.repeat(10), 'y'.repeat(10)]);
+    expect(steps[0]?.toolCalls.map((call) => call.name)).toEqual(['file']);
+    expect(new HeadJournal(sql).readHeadView('traced-h0')?.task).toBe('branch 0');
   });
 });

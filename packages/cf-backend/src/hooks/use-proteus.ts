@@ -8,7 +8,6 @@ import {
   ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
   type AgentViewSummary, type PendingAction, type PlanReview,
 } from "@kinu/core";
-import type { ExplorationCanvasRun, Page, TimelineSpan } from "@kinu/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
@@ -36,8 +35,15 @@ import { renderThrownChain } from "@kinu/core/obs";
 
 export type { ExecutorInfo };
 
+/** One command's row in the executor terminal's scrollback.
+ *
+ *  `stdout`/`stderr` are CLIPPED by the server; `stdout_len`/`stderr_len` are the
+ *  stored lengths. The pane needs both because it must say what it withheld —
+ *  showing a prefix as if it were the output is the lie this pair prevents. */
 export interface ExecutorOutput {
-  id: string; command: string; stdout: string; stderr: string;
+  id: string; command: string;
+  stdout: string; stdout_len: number;
+  stderr: string; stderr_len: number;
   exit_code: number; created_at: number;
 }
 
@@ -114,20 +120,25 @@ export interface AgentStatus {
   forkLineage: ForkLineage | null;
 }
 
-/** One-round-trip initial-load payload (server: getWorkspaceSnapshot). */
+/** One-round-trip initial-load payload (server: getWorkspaceSnapshot).
+ *
+ *  Everything a workspace needs before the chat pane can paint, and nothing a
+ *  surface that is not open needs. The exploration canvas and the run timeline
+ *  used to ride along and were 95% of the bytes on every workspace open; the
+ *  Exploration surface reads its own canvas page and nothing read the timeline
+ *  at all. See the server RPC's note for the measurements. */
 export interface WorkspaceSnapshot {
   status: AgentStatus;
   tools: ToolDescResult;
   memoryContent: string;
-  /** The first page of the canvas — every fork on it with its own parameters and
-   *  its own tree, so first paint draws every tree rather than only the newest.
-   *  One row per fork, so nothing here can be re-associated wrongly. */
-  exploration: Page<ExplorationCanvasRun>;
-  /** Still returned by the server for `kinu inspect`; no UI reads it. */
-  timeline: TimelineSpan[];
+
   executors: ExecutorInfo[];
   executorOutputs: Array<{ name: string; outputs: ExecutorOutput[] }>;
   lastActiveExecutor: string | null;
+  /** The plan waiting on the owner, if any. On the snapshot because it decides
+   *  the composer's mode and the opening surface: fetching it a beat later made
+   *  a plan-gated workspace paint in build mode and then jump. */
+  activePlan: unknown;
 }
 
 const PlanAnnotationTextPositionSchema = v.object({
@@ -208,6 +219,11 @@ const SubordinateActivityEventSchema = v.object({
 
 const SocketMessageSchema = v.variant("type", [
   v.object({ type: v.literal("workspace_renamed"), displayName: v.optional(v.string()) }),
+  // The server's statement of what this conversation IS, sent unconditionally
+  // on an idle connect (`Think._buildIdleConnectMessages`). Its ARRIVAL is what
+  // the chat pane waits on — the payload is the SDK's business, so nothing is
+  // parsed out of it here.
+  v.looseObject({ type: v.literal("cf_agent_chat_messages") }),
   v.object({
     type: v.literal("cf_agent_use_chat_response"),
     error: v.optional(v.boolean()), done: v.optional(v.boolean()), body: v.optional(v.string()),
@@ -589,6 +605,12 @@ export function useProteus(target?: string | ProteusActorAddress) {
   /** Background-event cards, from the delivery seam's own lifecycle stream. */
   const [signalCards, setSignalCards] = useState<readonly SignalCard[]>([]);
   const [activePlan, setActivePlan] = useState<PlanReview | null>(null);
+  // Has the server said what this conversation is? Set by the connect frame,
+  // and the ONLY thing that entitles the pane to draw an empty conversation: a
+  // workspace with four hundred messages spent the whole wake-plus-transfer
+  // window claiming it had none, and then replaced that claim with the
+  // transcript. False is "not yet", never "nothing".
+  const [transcriptSeeded, setTranscriptSeeded] = useState(false);
 
   const agentOptions: Parameters<typeof useAgent>[0] = {
     agent: ORCHESTRATOR_AGENT_SLUG,
@@ -812,7 +834,9 @@ export function useProteus(target?: string | ProteusActorAddress) {
     const handler = (event: MessageEvent) => {
       const msg = parseSocketMessage(event.data);
       if (!msg) return;
-        if (msg.type === "mcts-progress") {
+        if (msg.type === "cf_agent_chat_messages") {
+          setTranscriptSeeded(true);
+        } else if (msg.type === "mcts-progress") {
           setMctsTreeFromRows(msg.rootId, msg.nodes);
         } else if (msg.type === "device_consent") {
           setPendingConsents((prev) => prev.some((c) => c.consentId === msg.consentId) ? prev
@@ -982,9 +1006,16 @@ export function useProteus(target?: string | ProteusActorAddress) {
     return () => clearInterval(interval);
   }, [isConnected, isSubordinate, refreshLiveData]);
 
-  // Initial load — ONE round-trip (getWorkspaceSnapshot) instead of 6 + N. The
-  // server guards each field independently, so a single failing read degrades
-  // that surface only. Live updates continue via refreshLiveData + events.
+  // Initial load — ONE round-trip, and it stays one: the active plan used to be
+  // a second awaited RPC here, so a plan-gated workspace painted its composer in
+  // build mode and moved a beat later.
+  //
+  // The exploration canvas is deliberately NOT seeded from here any more. It was
+  // the largest thing on this path (499-824 KiB per workspace, measured against
+  // production 2026-08-20) and its only effect was to pre-fill a tree map that
+  // the Exploration surface rebuilds from its own `getExplorationCanvas` when it
+  // mounts, and that `useForkRunTree` fetches per run when it does not. Live
+  // trees still arrive on the `mcts_update` broadcast.
   async function loadAllData(isCurrent: () => boolean): Promise<void> {
     const snap = await rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", []);
     if (!isCurrent()) return;
@@ -992,22 +1023,14 @@ export function useProteus(target?: string | ProteusActorAddress) {
     setTools(mapToolDescriptions(snap.tools));
     setMemoryContent(snap.memoryContent);
     if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
-    // Every tree, not just the newest: a workspace can have several searches in
-    // flight, and the canvas draws all of them from first paint. Each fork
-    // carries its own rows, so there is no grouping pass and no chance of
-    // folding one search's nodes into another's root.
-    for (const entry of snap.exploration.items) {
-      if (entry.tree.length > 0) setMctsTreeFromRows(entry.run.id, [...entry.tree]);
-    }
     setExecutors(snap.executors);
     setLastActiveExecutor(snap.lastActiveExecutor);
     const outputs = new Map<string, ExecutorOutput[]>();
     for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
     setExecutorOutputs(outputs);
+    setActivePlan(parsePlanReview(snap.activePlan));
     void refreshExposedPorts();
     void refreshPendingActions();
-    const plan = await rpc<unknown>("getActivePlanReview", []);
-    if (isCurrent()) setActivePlan(parsePlanReview(plan));
   }
 
   async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
@@ -1222,9 +1245,16 @@ export function useProteus(target?: string | ProteusActorAddress) {
           setExecutorOutputs(prev => {
             const next = new Map(prev);
             const existing = next.get(msg.executor) ?? [];
+            // The live echo is the whole output of a command that just ran, so
+            // the stored length IS what is shown — nothing was withheld here.
+            // A reload reads the same row back through the clipped SQL and the
+            // pane says so then.
+            const stdout = msg.stdout ?? "";
+            const stderr = msg.stderr ?? "";
             next.set(msg.executor, [...existing, {
               id: crypto.randomUUID(), command: msg.command,
-              stdout: msg.stdout ?? "", stderr: msg.stderr ?? "",
+              stdout, stdout_len: stdout.length,
+              stderr, stderr_len: stderr.length,
               exit_code: msg.exitCode ?? 0, created_at: msg.timestamp,
             }]);
             return next;
@@ -1238,6 +1268,9 @@ export function useProteus(target?: string | ProteusActorAddress) {
   return {
     messages,
     isStreaming,
+    /** True once the server has stated this conversation's contents. Until then
+     *  `messages` being empty means "not delivered", not "there is nothing". */
+    transcriptSeeded,
     connectionStatus,
     /** The sticky load/action failure, if any — never auto-expires. */
     error,

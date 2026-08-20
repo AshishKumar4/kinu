@@ -992,6 +992,24 @@ body { background: var(--c-bg); color: var(--c-text); }
   animation: p-shimmer 1.8s linear infinite;
 }
 
+/* Transcript skeleton — the shape of a conversation that has not arrived yet,
+   so a pane waiting for its messages reads as loading rather than as a
+   workspace with nothing in it.
+
+   Colour and highlight are SEPARATE properties, not two stops of one gradient.
+   `--c-fill` and `--c-elevated` are the same value in both dark palettes (see
+   the note at the top of the token block), so a tone-to-tone sweep is invisible
+   there; and a bar whose whole surface is the animation disappears the moment
+   `prefers-reduced-motion` stops it. A solid base plus a travelling highlight
+   holds in all four palettes and still reads as a bar when it is standing
+   still. */
+.p-skeleton-bar {
+  background-color: var(--c-fill);
+  background-image: linear-gradient(90deg, transparent 0%, var(--c-border-strong) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: p-shimmer 1.8s linear infinite;
+}
+
 /* The streaming caret, drawn INSIDE the last block the markdown emitted.
 
    It used to be a sibling <span> after the rendered markdown. Markdown emits
@@ -1049,6 +1067,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 @media (prefers-reduced-motion: reduce) {
   .p-shimmer { animation: none; color: var(--c-text-2); -webkit-text-fill-color: currentColor; }
   .animate-fade-in, .animate-scale-in { animation: none; }
+  /* The skeleton still marks where the transcript will land; it just holds. */
+  .p-skeleton-bar { animation: none; }
   /* The caret still marks where the text is being written; it just holds. */
   .p-streaming > :last-child::after { animation: none; }
   .p-btn:active, .p-btn-quiet:active { transform: none; }

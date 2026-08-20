@@ -431,7 +431,7 @@ describe('HeadController.run', () => {
     // (HeadInferenceDeps.reportStep), never from the finished report — so a
     // report claiming two steps must NOT materialize a trace here, or a late
     // report could overwrite the live rows already written.
-    expect(run!.heads[0].steps).toHaveLength(0);
+    expect(journal.readSteps(run!.heads[0]!.id)).toHaveLength(0);
   });
 });
 

@@ -198,14 +198,22 @@ export interface HeadReport {
 }
 
 /**
- * One head as the Exploration surface renders it — lifecycle, liveness, and
- * the ordered trace. Assembled by HeadJournal.assembleRun.
+ * One head as the Exploration surface renders it — lifecycle and liveness.
+ * Assembled by HeadJournal.assembleRun.
  *
  * `spawnedAt` and `lastStepAt` are what make a RUNNING branch legible. Without
  * them the surface could only say "no steps", which reads as lost data; with
  * them it can say "started 3s ago, nothing yet" or "4 steps, last one 6 minutes
  * ago" — the difference between a head that is working and a head that is
  * wedged on a call that never answers.
+ *
+ * THE TRACE IS NOT HERE, and that is the point. A run view holds every head of
+ * a run, and the canvas composes thirty runs at once; carrying each head's
+ * prose made one Exploration page 824 KiB and one workspace's initial load
+ * 13.2 MB (measured against production, 2026-08-20). Nothing that renders a run
+ * ever read it — `headRunToTree`, the fan-in marks and the resolution label use
+ * the fields above. The one reader of a trace opens ONE branch, and reaches it
+ * through {@link HeadJournal.readSteps} on that branch's id.
  */
 export interface HeadRunHeadView {
   readonly id: HeadId;
@@ -225,7 +233,6 @@ export interface HeadRunHeadView {
   /** When the head last recorded a step, or null when it has recorded none. */
   readonly lastStepAt: number | null;
   readonly decisions: ReadonlyArray<{ question: string; choice: string; rationale: string }>;
-  readonly steps: readonly HeadStep[];
 }
 
 /** One split (a run): its identity + grouped heads + the merge synthesis. */

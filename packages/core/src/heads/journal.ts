@@ -62,7 +62,9 @@ export function storedUsage(row: StoredHeadUsage): Usage {
  *
  * `last_step_at` is an aggregate over `head_steps` rather than a column on the
  * head row: the steps ARE the progress record, so a second field could only ever
- * disagree with them.
+ * disagree with them. That aggregate is ALL a run view takes from that table —
+ * the prose belongs to {@link HeadJournal.readSteps}, which one opened branch
+ * asks for by id.
  *
  * Usage arrives as {@link StoredHeadUsage}, not as two token columns: {@link
  * storedUsage} folds every usage column the journal stores, and naming a subset
@@ -75,7 +77,7 @@ interface HeadViewRow extends StoredHeadUsage {
   spawned_at: number; last_step_at: number | null; decisions_json: string | null;
 }
 
-function headViewOf(row: HeadViewRow, steps: HeadStep[]): HeadRunHeadView {
+function headViewOf(row: HeadViewRow): HeadRunHeadView {
   return {
     id: row.id, task: row.task, rationale: row.rationale ?? '', status: row.status,
     summary: row.summary, errorMessage: row.error_message,
@@ -87,7 +89,6 @@ function headViewOf(row: HeadViewRow, steps: HeadStep[]): HeadRunHeadView {
         choice: String(d?.choice ?? ''),
         rationale: String(d?.rationale ?? ''),
       })),
-    steps,
   };
 }
 
@@ -430,10 +431,11 @@ export class HeadJournal {
    * {@link listRuns} folds, scoped to one id instead of to a run.
    *
    * Two scopings of ONE projection: the batch query in {@link assembleRun} joins
-   * every head of a run in a single pass (a per-head read there would be N+1),
-   * and this one answers a reader that opened exactly one branch and must not
-   * pay for its siblings' traces. Both hand their row to {@link headViewOf}, so
-   * neither can describe a head differently from the other.
+   * every head of a run in a single pass, and this one answers a reader that
+   * opened exactly one branch. Both hand their row to {@link headViewOf}, so
+   * neither can describe a head differently from the other. Neither loads the
+   * trace — {@link readSteps} is its own read, taken by the one reader that
+   * renders prose.
    */
   readHeadView(headId: HeadId): HeadRunHeadView | null {
     const row = this.sql<HeadViewRow>`
@@ -443,7 +445,7 @@ export class HeadJournal {
       FROM head_journal j LEFT JOIN head_steps s ON s.head_id = j.id
       WHERE j.id = ${headId}
       GROUP BY j.id`[0];
-    return row ? headViewOf(row, this.readSteps(row.id)) : null;
+    return row ? headViewOf(row) : null;
   }
 
   /**
@@ -452,10 +454,9 @@ export class HeadJournal {
    *
    * THE LIVENESS READ, for a watchdog that has to tell a head which is between steps
    * from one which is wedged on a call that never answers. It is the same aggregate
-   * {@link readHeadView} folds and deliberately not that projection: this is asked once
-   * per envelope per head, and `readHeadView` loads every step's prose to answer a
-   * question about one timestamp. Both read `MAX(created_at)` over the same two tables,
-   * so there is one definition of progress and this is its cheap scoping.
+   * {@link readHeadView} folds, asked once per envelope per head without the rest of
+   * the projection. Both read `MAX(created_at)` over the same two tables, so there is
+   * one definition of progress and this is its cheap scoping.
    *
    * NULL IS ABSENT AND NOT ZERO: a head with no row has not been spawned, which a caller
    * distinguishes from a head spawned and idle since. Falling back to `spawned_at` inside
@@ -490,7 +491,7 @@ export class HeadJournal {
     const rootRow = rows.find((h) => h.id === rootId) ?? null;
     const heads: HeadRunHeadView[] = rows
       .filter((h) => h.id !== rootId)
-      .map((h) => headViewOf(h, this.readSteps(h.id)));
+      .map((h) => headViewOf(h));
 
     const runRow = this.sql<{ rationale: string | null }>`
       SELECT rationale FROM head_runs WHERE root_id = ${rootId}`[0];

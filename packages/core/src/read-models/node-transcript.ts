@@ -140,9 +140,10 @@ function readHeadTranscript(
   nodeId: string,
 ): NodeTranscriptView | null {
   const journal = new HeadJournal(sql);
-  // The run's head rows carry the parent chain; the view carries the trace. Two
+  // The run's head rows carry the parent chain; the trace is its own read. Three
   // reads rather than one because only one of them is per-head, and a reader who
-  // opened one branch must not pay for its siblings' steps.
+  // opened one branch must not pay for its siblings' steps — which is also why
+  // `HeadRunHeadView` no longer carries any.
   const rows = journal.readTree(runId);
   const row = rows.find((candidate) => candidate.id === nodeId);
   if (!row) return null;
@@ -162,7 +163,7 @@ function readHeadTranscript(
     lastStepAt: head.lastStepAt,
     wallClockMs: head.wallClockMs,
     usage: head.usage,
-    steps: head.steps,
+    steps: journal.readSteps(nodeId),
     answer: head.summary,
     decisions: head.decisions,
     errorMessage: head.errorMessage,

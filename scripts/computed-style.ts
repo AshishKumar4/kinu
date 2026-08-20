@@ -61,7 +61,7 @@ import { withGallery } from './gallery-harness';
  *  meaningful denominator rather than whatever the default frame happens to
  *  show. */
 const FRAMES = [
-  'shell', 'chat', 'chatempty', 'toolcalls', 'streaming', 'modal', 'home', 'tabs', 'markdown',
+  'shell', 'chat', 'chatempty', 'chatloading', 'toolcalls', 'streaming', 'modal', 'home', 'tabs', 'markdown',
   'views', 'viewfail', 'releases', 'work', 'workempty', 'approvals', 'environment', 'supervise',
   'settings', 'forks', 'forkmerge', 'forkfull',
 ] as const;

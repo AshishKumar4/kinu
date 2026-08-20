@@ -79,6 +79,47 @@ export function EmptyConversation({ mission }: { mission: string }) {
   );
 }
 
+/** The bars a loading transcript draws. Fixed rather than random: a skeleton
+ *  that reflows on every render is a second animation nobody asked for. */
+const SKELETON_ROWS: readonly { mine: boolean; width: string }[] = [
+  { mine: true, width: "38%" },
+  { mine: false, width: "82%" },
+  { mine: false, width: "64%" },
+  { mine: true, width: "46%" },
+  { mine: false, width: "74%" },
+];
+
+/**
+ * The chat pane between connect and the transcript arriving.
+ *
+ * This state exists because the pane had no way to say "not yet". A workspace
+ * whose conversation had not been delivered rendered {@link EmptyConversation}
+ * — "Send the first message to start", under the mission — and then replaced it
+ * with four hundred messages. Measured against production on 2026-08-20 that
+ * window was 0.8-3.8 seconds of the app stating the opposite of the truth, and
+ * it is the whole of what "clicking a workspace takes forever" felt like: the
+ * page had painted, and what it had painted was wrong.
+ *
+ * Shaped like a transcript rather than centred like a spinner, so the messages
+ * land where the bars already are instead of shifting the pane under the
+ * reader.
+ */
+export function ConversationSkeleton() {
+  return (
+    <div className="space-y-5" role="status" aria-busy="true" data-testid="conversation-skeleton">
+      <span className="sr-only">Loading this conversation…</span>
+      {SKELETON_ROWS.map((row, index) => (
+        <div key={index} className={`flex ${row.mine ? "justify-end" : "justify-start"}`} aria-hidden>
+          <div className="max-w-[82%] space-y-2" style={{ width: row.width }}>
+            <div className="p-skeleton-bar h-3.5 rounded-md" />
+            <div className="p-skeleton-bar h-3.5 w-[70%] rounded-md" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /**
  * The top of the transcript: what is above the oldest message on screen.
  *
@@ -518,6 +559,12 @@ export default function WorkspacePage() {
     () => mergeTranscript(history.fetched, state.messages),
     [history.fetched, state.messages]);
 
+  // Two clauses, both load-bearing. The connect frame settles the ordinary case
+  // whatever the transcript turns out to hold, including empty. It is NOT sent
+  // when a stream was already running at connect — that path goes through the
+  // resume handshake instead — and there the arriving messages are the proof.
+  const transcriptPending = !state.transcriptSeeded && transcript.length === 0;
+
   const messagesRef = useGrowingScroll<HTMLDivElement>({
     grows: "up",
     content: transcript,
@@ -893,7 +940,8 @@ export default function WorkspacePage() {
                 whitescreen the chat. (STABILITY-AUDIT §D2.) */}
             <ErrorBoundary label="Chat">
             <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
-              {transcript.length === 0 && !state.isStreaming && (
+              {transcriptPending && <ConversationSkeleton />}
+              {!transcriptPending && transcript.length === 0 && !state.isStreaming && (
                 <EmptyConversation mission={as?.purpose ?? ""} />
               )}
               {transcript.length > 0 && (

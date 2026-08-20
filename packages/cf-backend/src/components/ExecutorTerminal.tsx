@@ -30,6 +30,11 @@ export interface TerminalOutput {
   command: string;
   stdout: string;
   stderr: string;
+  /** Stored lengths of the two streams. The server clips what it sends, and a
+   *  pane that showed the prefix alone would present part of an output as the
+   *  whole of it — so the clip is drawn, never implied. */
+  stdout_len: number;
+  stderr_len: number;
   exit_code: number;
   created_at: number;
 }
@@ -164,16 +169,26 @@ export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTermi
         t.write(o.stdout);
         if (!o.stdout.endsWith("\n")) t.write("\r\n");
       }
+      writeClipNote(t, "stdout", o.stdout.length, o.stdout_len);
       if (o.stderr && o.exit_code !== 0) {
         t.write(`\x1b[31m${o.stderr}\x1b[0m`);
         if (!o.stderr.endsWith("\n")) t.write("\r\n");
       }
+      if (o.exit_code !== 0) writeClipNote(t, "stderr", o.stderr.length, o.stderr_len);
       wroteSomething = true;
     }
     if (wroteSomething) promptLine(t);
   }, [outputs]);
 
   return <div ref={ref} className="p-bg w-full h-full rounded-lg border p-border overflow-hidden" />;
+}
+
+/** Say what the row is not showing. Silence here would turn a clipped prefix
+ *  into a claim about the whole output. */
+function writeClipNote(t: Terminal, stream: string, shown: number, stored: number) {
+  const withheld = stored - shown;
+  if (withheld <= 0) return;
+  t.write(`\x1b[2m… ${withheld.toLocaleString()} more ${stream} characters are stored and not shown here\x1b[0m\r\n`);
 }
 
 /**
