@@ -4,6 +4,7 @@ export * from './sql';
 export * from './scratch';
 export * from './vfs';
 export * from './llm';
+export * from './turn-model';
 export * from './network';
 export * from './runtime';
 export * from './provider';

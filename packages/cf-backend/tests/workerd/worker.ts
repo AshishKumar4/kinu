@@ -14,6 +14,9 @@
  * a control group for a rule, not a second copy of the rule's subject.
  */
 import { DurableObject } from 'cloudflare:workers';
+
+// The one production class hosted here — see steer-probe.ts for the charter exception.
+export { SteerProbeDO } from './steer-probe';
 import * as v from 'valibot';
 
 /** The storage key `armTimer` commits. Named after the real one so a reader of

@@ -2,7 +2,7 @@
   "extends": "../../../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "ES2024.Promise"],
     "types": [
       "@cloudflare/workers-types/experimental",
       "@cloudflare/vitest-pool-workers/types"

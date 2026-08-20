@@ -642,11 +642,8 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     factCount: 0, errors: [], sectionFailures: [],
   };
 
-  /** A section that cannot be read is a FINDING, never an empty section. This
-   *  tool exists to diagnose, and a bare `catch { return fallback }` here made
-   *  a failing RPC indistinguishable from an empty workspace: two cloud
-   *  workspaces read "messages 0" while every call was throwing. The bundle
-   *  carries the failure row and the summary prints the chain. */
+  /** A section that cannot be read is a FINDING, never an empty section — a
+   *  bare catch-fallback here once read failing RPCs as empty workspaces. */
   const safe = async <T>(section: string, p: Promise<T>, fallback: T): Promise<T> => {
     try {
       return await p;

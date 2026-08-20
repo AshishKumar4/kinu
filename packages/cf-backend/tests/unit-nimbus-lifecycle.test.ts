@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import {
   archiveSqlFromDatabase,
   restoreWorkspaceArchive,
@@ -11,13 +11,26 @@ import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/u
 import { createNimbusWorkspaceSandbox } from '../src/nimbus-route';
 import * as v from 'valibot';
 
+// `mock.module` state is PROCESS-WIDE and bun's test-file order is
+// filesystem-dependent: when unit-preview-origin.test.ts loads first, its
+// throwing `getSandbox` stub is what destroyAgent would call here (measured
+// 2026-08-20: 59/2 in a fresh worktree, 61/0 in the primary — same files).
+// So this file owns the module for its own run: `getSandbox` resolves through
+// whatever `env.Sandbox` binding each test installed, exactly like the SDK.
+mock.module('@cloudflare/sandbox', () => ({
+  getSandbox: (namespace: SandboxNamespaceProbe, name: string) =>
+    namespace.get(namespace.idFromName(name)),
+  Sandbox: class {},
+  proxyToSandbox: () => { throw new Error('proxyToSandbox is not exercised by this suite.'); },
+}));
+
 const OWNER = '0123456789abcdef0123456789abcdef';
 
 type Entry = { readonly type: 'file' | 'directory'; readonly bytes?: Uint8Array };
 type HarnessAgent = ReturnType<typeof orchestratorHarness>['agent'];
 interface SandboxNamespaceProbe {
   idFromName(name: string): string;
-  get(): { destroy(): Promise<void> };
+  get(id: string): { discardWorkspaceSnapshot?(): Promise<void>; destroy(): Promise<void> };
 }
 
 function contentBytes(content: string | Uint8Array): Uint8Array {

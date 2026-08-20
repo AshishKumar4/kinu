@@ -5,7 +5,7 @@
 // each other. `cloudflare:test` and `cloudflare:workers` both read
 // `Cloudflare.Env`, which is why the augmentation targets that namespace and
 // not the bare global `Env`.
-import type { AlarmDO, GatedDO, NeighbourDO, RetentionDO, SocketDO, TransactionDO } from './worker';
+import type { AlarmDO, GatedDO, NeighbourDO, RetentionDO, SocketDO, SteerProbeDO, TransactionDO } from './worker';
 
 declare global {
   namespace Cloudflare {
@@ -16,6 +16,7 @@ declare global {
       TRANSACTION: DurableObjectNamespace<TransactionDO>;
       SOCKET: DurableObjectNamespace<SocketDO>;
       ALARMED: DurableObjectNamespace<AlarmDO>;
+      STEER_PROBE: DurableObjectNamespace<SteerProbeDO>;
     }
   }
 }
