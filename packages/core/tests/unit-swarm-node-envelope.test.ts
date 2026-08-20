@@ -26,6 +26,7 @@ import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { DEFAULT_MAX_STEPS, TURN_WALL_CLOCK_ENVELOPE_MS } from '../src/config';
 import { nodeWallClockEnvelopeMs, runNodeAgent } from '../src/strategy/node-agent';
+import type { NodeRun } from '../src/strategy/node-agent';
 
 /** The three nodes of that run, exactly as it reported them. */
 const MEASURED_NODES = [
@@ -102,49 +103,60 @@ describe('a node envelope is derived from a step, not chosen', () => {
  * any effect on it. So the limit is asserted here in both directions: the deadline DOES
  * stop a node, and it does NOT stop the step that was running when it passed.
  */
+/**
+ * One node with room for 40 steps and a deadline of `maxWallClockMs`, whose model never
+ * stops on its own: every step asks for another tool call, so the ONLY thing that can
+ * end this loop is a bound. Shared by both arms below, which differ in exactly one
+ * number — a second copy of a scripted loop is a second thing to keep in step.
+ */
+async function nodeUnderDeadline(
+  maxWallClockMs: number,
+): Promise<{ readonly run: NodeRun; readonly steps: number }> {
+  const { rt } = createTestRuntime();
+  const journal = new HeadJournal(rt.storage.sql);
+  let steps = 0;
+  const run = await runNodeAgent({
+    nodeId: 'n-deadline', rootId: 'r-deadline', parentId: null, depth: 0,
+    task: 'answer the task', rationale: 'the run asked for it',
+    base: 'You are a node under test.',
+    messages: [{ role: 'user', content: 'Answer the task.' }],
+    inherited: [], context: 'fresh', mode: 'build', settle: 'best', arbitrate: null,
+  }, {
+    rt,
+    model: scriptedTurnModel({
+      provider: 'fake',
+      modelId: 'fake-never-stops',
+      doGenerate: async () => {
+        steps += 1;
+        return {
+          content: [{
+            type: 'tool-call' as const,
+            toolCallId: `read-${String(steps)}`,
+            toolName: 'file',
+            input: JSON.stringify({ action: 'read', path: 'nothing/here.txt' }),
+          }],
+          finishReason: { unified: 'tool-calls' as const, raw: undefined },
+          usage: {
+            inputTokens: { total: 4, noCache: 4, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 3, text: 3, reasoning: undefined },
+          },
+          warnings: [],
+        };
+      },
+    }),
+    journal,
+    maxSteps: 40,
+    maxWallClockMs,
+    logger: createRecordingLogger(),
+  });
+  return { run, steps };
+}
+
 describe('what the node deadline reaches, and what it does not', () => {
   test('an already-passed deadline stops the node at its NEXT step boundary, not inside one', async () => {
-    const { rt } = createTestRuntime();
-    const journal = new HeadJournal(rt.storage.sql);
-    let steps = 0;
-    const run = await runNodeAgent({
-      nodeId: 'n-deadline', rootId: 'r-deadline', parentId: null, depth: 0,
-      task: 'answer the task', rationale: 'the run asked for it',
-      base: 'You are a node under test.',
-      messages: [{ role: 'user', content: 'Answer the task.' }],
-      inherited: [], context: 'fresh', mode: 'build', settle: 'best', arbitrate: null,
-    }, {
-      rt,
-      // A node that never stops on its own: every step asks for another tool call, so
-      // the ONLY thing that can end this loop is a bound.
-      model: scriptedTurnModel({
-        provider: 'fake',
-        modelId: 'fake-never-stops',
-        doGenerate: async () => {
-          steps += 1;
-          return {
-            content: [{
-              type: 'tool-call' as const,
-              toolCallId: `read-${String(steps)}`,
-              toolName: 'file',
-              input: JSON.stringify({ action: 'read', path: 'nothing/here.txt' }),
-            }],
-            finishReason: { unified: 'tool-calls' as const, raw: undefined },
-            usage: {
-              inputTokens: { total: 4, noCache: 4, cacheRead: undefined, cacheWrite: undefined },
-              outputTokens: { total: 3, text: 3, reasoning: undefined },
-            },
-            warnings: [],
-          };
-        },
-      }),
-      journal,
-      // Room for 40 steps, and a deadline that has already passed by the time the first
-      // one finishes. The step cap is therefore NOT what stops this node.
-      maxSteps: 40,
-      maxWallClockMs: 1,
-      logger: createRecordingLogger(),
-    });
+    // Room for 40 steps, and a deadline that has already passed by the time the first
+    // one finishes. The step cap is therefore NOT what stops this node.
+    const { run, steps } = await nodeUnderDeadline(1);
 
     // IT STOPS THE NODE, and says which bound did it.
     expect(run.report.status).toBe('budget_exceeded');
@@ -156,6 +168,25 @@ describe('what the node deadline reaches, and what it does not', () => {
     // tool result, banked. That is the residue, measured rather than asserted away: a
     // deadline that could pre-empt would have produced no steps at all, and a node
     // whose one step took 26 minutes would still take 26 minutes here.
+    expect(steps).toBe(1);
+    expect(run.report.stepCount).toBe(1);
+  });
+
+  test('a deadline of ZERO is a deadline, so a node declared no time is given none', async () => {
+    // WHY THIS NUMBER RATHER THAN ANOTHER SMALL ONE. Zero is the single input on which
+    // `??` and `||` disagree, and `runSwarm` resolves a caller's clock with `??`. The
+    // table in `unit-swarm-incomplete-node.test.ts` pins the number a node is GRANTED;
+    // this pins the number MEANING something, which is what makes zero a legal
+    // declaration rather than an accident of the type. `budgetExhausted` compares
+    // elapsed against the bound with `>=`, so a zero bound is already spent at the first
+    // boundary it is asked at — and a node stopped by it is reported exactly as a node
+    // stopped by any other clock, rather than as a node with no clock at all.
+    const { run, steps } = await nodeUnderDeadline(0);
+
+    expect(run.report.status).toBe('budget_exceeded');
+    expect(run.report.errorMessage).toContain('wall-clock');
+    // The same residue, and it is why this is not simply "no steps at all": a
+    // cooperative deadline cannot pre-empt the step that was already running.
     expect(steps).toBe(1);
     expect(run.report.stepCount).toBe(1);
   });
