@@ -294,12 +294,6 @@ export const REVIEWED_ADVISORIES = {
       + 'downloads. No fixed release exists — the advisory covers <=2.0.1, the latest publish.',
     ids: [1139346],
   },
-  'fast-uri': {
-    reason: 'transitive: ajv 8.20.0 <- @modelcontextprotocol/sdk. Host confusion when parsing a '
-      + 'URI, reached only where ajv compiles a schema using the uri format. Fixed in 3.1.3 and '
-      + '3.1.5, inside ajv\'s ^3.0.1 — a lockfile refresh clears these.',
-    ids: [1124064, 1130720, 1144861],
-  },
   'file-type': {
     reason: 'transitive: @jimp/core requires ^16.0.0 <- jimp <- @opentui/core, the CLI\'s TUI '
       + 'image path. Infinite loop in the ASF parser on malformed input. 16.5.4 is the last of '

@@ -8,6 +8,15 @@ import { describe, expect, test } from 'bun:test';
 import type { MCTSProgressEvent } from '@proteus/core';
 import { formatMctsProgress } from '../src/commands/evolve';
 
+/** The renderer colours for a terminal; these tests assert its WORDS. Stripping
+ *  at the seam keeps them true in a pipe, a PTY and under FORCE_COLOR alike —
+ *  the deploy runs in a terminal and every local run was a pipe, which is how
+ *  a green suite hid a red deploy twice in one day. */
+function plain(text: string): string {
+  return Bun.stripANSI(text);
+}
+
+
 describe('evolve progress rendering', () => {
   test('a phase becomes transient status with the iteration and branch count', () => {
     const line = formatMctsProgress(
@@ -16,8 +25,8 @@ describe('evolve progress rendering', () => {
     );
 
     expect(line.sink).toBe('status');
-    expect(line.text).toContain('[1/2]');
-    expect(line.text).toContain('exploring 3 branches');
+    expect(plain(line.text)).toContain('[1/2]');
+    expect(plain(line.text)).toContain('exploring 3 branches');
   });
 
   test('phases name what they are doing, and a single branch reads singular', () => {
@@ -27,7 +36,7 @@ describe('evolve progress rendering', () => {
       { rootId: 'r1', type: 'phase', phase: 'reflect', iteration: 1, remainingBudget: 1, branches: 1 },
     ];
 
-    expect(phases.map(p => formatMctsProgress(p, 1).text)).toEqual([
+    expect(phases.map(p => Bun.stripANSI(formatMctsProgress(p, 1).text))).toEqual([
       '[1/1] exploring 1 branch...',
       '[1/1] evaluating 1 branch...',
       '[1/1] reflecting on 1 branch...',
@@ -45,10 +54,10 @@ describe('evolve progress rendering', () => {
     }, 4);
 
     expect(line.sink).toBe('log');
-    expect(line.text).toContain('[2/4]');
-    expect(line.text).toContain('a1b2c3d4-e5f6g7h8');
-    expect(line.text).toContain('(explore)');
-    expect(line.text).toContain('Failed after 3 attempts. Last error: 429 rate limited');
+    expect(plain(line.text)).toContain('[2/4]');
+    expect(plain(line.text)).toContain('a1b2c3d4-e5f6g7h8');
+    expect(plain(line.text)).toContain('(explore)');
+    expect(plain(line.text)).toContain('Failed after 3 attempts. Last error: 429 rate limited');
   });
 
   test('a completed iteration keeps its scores in the scrollback', () => {
@@ -58,8 +67,8 @@ describe('evolve progress rendering', () => {
     );
 
     expect(line.sink).toBe('log');
-    expect(line.text).toContain('[1/2]');
-    expect(line.text).toContain('scores 0.82, 0.00');
+    expect(plain(line.text)).toContain('[1/2]');
+    expect(plain(line.text)).toContain('scores 0.82, 0.00');
   });
 
   test('an unsupported branch language is visible as unverified grounding', () => {
@@ -72,8 +81,8 @@ describe('evolve progress rendering', () => {
       remainingBudget: 1,
     }, 3);
     expect(line.sink).toBe('log');
-    expect(line.text).toContain('[2/3]');
-    expect(line.text).toContain('cannot run rust');
-    expect(line.text).toContain('runnable: javascript, python');
+    expect(plain(line.text)).toContain('[2/3]');
+    expect(plain(line.text)).toContain('cannot run rust');
+    expect(plain(line.text)).toContain('runnable: javascript, python');
   });
 });

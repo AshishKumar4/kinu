@@ -41,6 +41,7 @@
     "gate:skip-ratchet": "bun scripts/skip-ratchet.ts",
     "gate:typecheck-coverage": "bun scripts/typecheck-coverage.ts",
     "test:mutation": "bun test packages/core/tests/mutation-*.test.ts",
+    "sweep:mutation": "bun scripts/mutation-sweep.ts",
     "test:eval": "bash scripts/eval-tier.sh",
     "ladder": "bun scripts/ladder.ts",
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",
@@ -57,7 +58,8 @@
     "gate:agents-fields": "bun scripts/agents-fields.ts",
     "gate:infra": "bun scripts/infra-verify.ts",
     "infra:provision": "bun scripts/infra-provision.ts",
-    "infra:teardown": "bun scripts/infra-teardown.ts"
+    "infra:teardown": "bun scripts/infra-teardown.ts",
+    "evals:full": "bash scripts/eval-tier.sh"
   },
   "knip": {
     "ignoreExportsUsedInFile": true,
@@ -117,5 +119,8 @@
   },
   "patchedDependencies": {
     "@plannotator/ui@0.30.0": "patches/@plannotator%2Fui@0.30.0.patch"
+  },
+  "overrides": {
+    "fast-uri": "^3.1.3"
   }
 }

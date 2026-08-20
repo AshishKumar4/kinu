@@ -63,7 +63,6 @@ const REQUIRED_GATES = [
   "bun run gate:bench-corpus",
   "bun test packages/pc-agent/",
   "bun test ./tests/",
-  "bun run test:eval",
   "bun run layergate",
   "bun run layergate --matrix",
   "bun run verify:lean",

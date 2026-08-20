@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import {
   ENUMERATOR, NON_REPOSITORY_SCANS, auditGateProgram, gateCommands, gatePrograms,
 } from './gate-set-equality';
-import { LADDER, deployGates } from './ladder';
+import { LADDER, deployGates, claims, trackedTestFiles } from './ladder';
 import { isTestFile, isRunnableSuite, trackedFiles } from './sources';
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname;
@@ -194,14 +194,32 @@ describe('silent: the legitimate shapes its first draft mistook for violations',
 
 describe('the denominator, from both sides', () => {
   test('gate commands are resolved from LADDER *and* deploy.sh, which disagree', () => {
-    // The warning that makes this gate honest: deriving "all gates" from LADDER
-    // alone would certify 34 while governing 35.
+    // The warning that makes this gate honest: deriving "all gates" from either
+    // source alone certifies less than it governs, and the disagreement runs in
+    // BOTH directions — deploy.sh carries gates the LADDER does not declare
+    // (verify:lean), and the LADDER carries the `evals` tier, deliberately not
+    // a deploy gate, with its own runner `bun run evals:full`. Either direction
+    // collapsing to zero means one source became a subset and the union
+    // denominator stopped being load-bearing.
     const ladder = new Set(LADDER.map((gate) => gate.run));
     const deploy = deployGates();
-    expect(deploy.length).toBeGreaterThan(ladder.size);
 
     const deployOnly = deploy.filter((run) => !ladder.has(run));
     expect(deployOnly).toContain('bun run verify:lean');
+
+    // Ladder-only entries come in exactly two legitimate shapes. Tier `evals`
+    // is DELIBERATELY absent — live-model evidence with its own runner, `bun
+    // run evals:full`. Anything else may be absent by COMMAND only while its
+    // files are covered by a wider deploy gate; the orphan rule in
+    // ladder.test.ts proves that coverage, so here it is enough that the entry
+    // claims files at all. A third shape — absent and claiming nothing — is a
+    // gate the deploy silently lost.
+    const ladderOnly = LADDER.filter((gate) => !deploy.includes(gate.run));
+    expect(ladderOnly.map((gate) => gate.run)).toContain('bun run test:eval');
+    for (const gate of ladderOnly) {
+      if (gate.tier === 'evals') continue;
+      expect(claims(gate.run, trackedTestFiles()).length).toBeGreaterThan(0);
+    }
 
     // Resolved through `bun run`, so a deploy-only npm script contributes the
     // program it names rather than reading as one opaque gate.

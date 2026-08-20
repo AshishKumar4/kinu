@@ -183,7 +183,6 @@ run_required_gate "Committed patches reproduce node_modules" bun run gate:patch-
 run_required_gate "Seeded bench defects still apply" bun run gate:bench-corpus
 run_required_gate "Local-device daemon suite" bun test packages/pc-agent/
 run_required_gate "Root end-to-end lifecycle suites" bun test ./tests/
-run_required_gate "Behavioural evals" bun run test:eval
 run_required_gate "Layergate conformance" bun run layergate
 run_required_gate "Layergate fault-localization matrix" bun run layergate --matrix
 run_required_gate "Lean proofs, consistency, and traceability" bun run verify:lean

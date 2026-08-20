@@ -25,7 +25,7 @@ import { createTestRuntime } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import {
-  nodeWallClockEnvelopeMs, PROPOSE_BRANCH_TOOL, runNodeAgent, runNodeLoop,
+  nodeWallClockEnvelopeMs, PROPOSE_BRANCH_TOOL, readNodeReport, runNodeAgent, runNodeLoop,
 } from '../src/strategy/node-agent';
 import type {
   NodeAgentDeps,
@@ -34,6 +34,8 @@ import type {
   NodeRunSpec,
 } from '../src/strategy/node-agent';
 import type { BranchDecision } from '../src/strategy/swarm-budget';
+import type { SwarmSettle } from '../src/strategy/swarm';
+import type { HeadReport, MergeStrategy } from '../src/heads/types';
 import type { MissionScope } from '../src/mission-budget';
 
 /**
@@ -117,6 +119,9 @@ function fixture(opts?: {
   readonly nodeId?: string;
   readonly offered?: Set<string>;
   readonly mission?: MissionScope;
+  /** How the search this node belongs to settles. Defaults to `best`, which is what
+   *  every other test here wants; varied by the label derivation's own test. */
+  readonly settle?: SwarmSettle;
 }): Fixture {
   const { rt } = createTestRuntime();
   const journal = new HeadJournal(rt.storage.sql);
@@ -132,7 +137,7 @@ function fixture(opts?: {
     inherited: [],
     context: 'fresh',
     mode: 'build',
-    settle: 'best',
+    settle: opts?.settle ?? 'best',
     arbitrate: opts?.arbitrate ?? null,
   };
   const deps: NodeAgentDeps = {
@@ -466,5 +471,96 @@ describe('the arbiter is offered only when a branch could be granted', () => {
     // and simply not called — which is the point: offering it must not require
     // resolving it, or a node would pay for a branch it never asked for.
     expect(asked).toBe(false);
+  });
+});
+
+/** The four values of the settle axis, so the label table below is walked rather than
+ *  spot-checked. Held beside a `Record` over the same axis, which is what makes a fifth
+ *  value a compile error instead of a silent else-branch. */
+const SETTLES: readonly SwarmSettle[] = ['best', 'archive', 'front', 'merge'];
+
+/** A finished report carrying `summary` and nothing else of interest, so whatever
+ *  `readNodeReport` returns can only have come from the field under test. */
+function reportWithSummary(summary: string): HeadReport {
+  return {
+    id: 'n1', status: 'completed', summary,
+    evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
+    toolCalls: [], stepCount: 2, usage: {}, wallClockMs: 12,
+  };
+}
+
+/**
+ * THE TWO THINGS `runNodeAgent` DERIVES FROM ITS INPUT, each asserted where it lands.
+ *
+ * Both are one-line ternaries, both are read by something outside this module — a journal
+ * column and the engine's own grading signal — and neither had a test. A ternary read the
+ * other way changes no type and throws nothing, so a green suite says nothing at all
+ * about which way round it is.
+ */
+describe("what a node's run derives, and where each derivation lands", () => {
+  test("the journal's label column says best_of exactly when the search settles by best", async () => {
+    // ONE MAPPING OVER THE WHOLE AXIS. `SwarmSettle` has four values and the journal's
+    // column three, so the derivation is a fan-in: one settle spells `best_of` and the
+    // other three take the synthesis word, because the column is a LABEL in the head
+    // vocabulary while `ResolvedSwarm.settle` is the fact. Held as a `Record` over the
+    // axis so a fifth settle value fails to COMPILE here rather than quietly taking the
+    // else-branch and reporting a search as a synthesis it never performed.
+    const EXPECTED = {
+      best: 'best_of',
+      archive: 'synthesize',
+      front: 'synthesize',
+      merge: 'synthesize',
+    } satisfies Record<SwarmSettle, MergeStrategy>;
+    // The two labels really do differ, so the table is not satisfied by a column holding
+    // one constant — and the walk really does cover the table.
+    expect(new Set(Object.values(EXPECTED)).size).toBe(2);
+    expect(SETTLES).toHaveLength(Object.keys(EXPECTED).length);
+
+    for (const settle of SETTLES) {
+      const { input, deps, journal } = fixture({ settle });
+      const run = await runNodeAgent(input, deps);
+      // The node really ran, so the row under test is one a live search would have
+      // written rather than an insert with nothing behind it.
+      expect(run.report.status).toBe('completed');
+      expect(journal.readHead(input.nodeId)?.merge_strategy).toBe(EXPECTED[settle]);
+    }
+  });
+
+  test('a report made only of whitespace has reported nothing, so the loop summary stands', () => {
+    // `readNodeReport` is the whole boundary between what a node's loop produced and what
+    // the engine grades, and the fallback is `||` rather than `??` for a reason with
+    // consequences. A node that called `report` with a blank string produced no answer;
+    // read the other way the engine hands the instrument an empty candidate, and an empty
+    // candidate is not measured badly — `evaluateWithMultiModelJudging` returns 0 for an
+    // empty trajectory without spending a judge call, and `exec-ratio` reports it
+    // unmeasurable. Everything the node's loop did learn would be discarded for nothing.
+    const summary = 'the loop settled on a single scan';
+    for (const blank of ['', ' ', '\n', '\t  \n ']) {
+      const read = readNodeReport({
+        report: reportWithSummary(summary),
+        reported: { status: 'completed', content: blank },
+        languages: ['javascript'],
+      });
+      expect(read.conclusion).toBe(summary);
+      expect(read.candidate).toBe(summary);
+    }
+
+    // AND A REPORT WITH CONTENT WINS, which is what makes the arm above a FALLBACK rather
+    // than the only path — trimmed, because the boundary decides emptiness by trimming and
+    // must therefore hand on what it trimmed.
+    const reported = readNodeReport({
+      report: reportWithSummary(summary),
+      reported: { status: 'completed', content: '  use the running maximum  ' },
+      languages: ['javascript'],
+    });
+    expect(reported.conclusion).toBe('use the running maximum');
+
+    // A node that called no report at all falls back the same way. The absent case both
+    // readings agree about, kept because it is what the whitespace case is being told
+    // apart FROM.
+    const unreported = readNodeReport({
+      report: reportWithSummary(summary), reported: null, languages: ['javascript'],
+    });
+    expect(unreported.conclusion).toBe(summary);
   });
 });

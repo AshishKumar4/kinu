@@ -23,6 +23,8 @@
 
 import { spawnSync } from 'node:child_process';
 import { resolve as resolveHostname } from 'node:dns/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import * as v from 'valibot';
 
 const REPO = new URL('..', import.meta.url).pathname;
@@ -59,12 +61,40 @@ export interface Run {
  * store, and stripping it to a curated list is how a program stops working the
  * moment somebody uses CLOUDFLARE_API_TOKEN instead of a login.
  */
+/** The account `wrangler.jsonc` declares, so a subcommand that does not read that
+ *  file still addresses the same account `wrangler deploy` does. Without it,
+ *  `wrangler r2 bucket list` fails on an owner who belongs to two accounts and
+ *  asks the caller to choose — measured 2026-08-19: this gate failed standalone
+ *  and passed inside `scripts/deploy.sh`, which exports the id itself. A gate that
+ *  runs only inside one script is a gate nobody checks. An ambient
+ *  CLOUDFLARE_ACCOUNT_ID still wins, because that is how a second account is
+ *  addressed deliberately. */
+const DeclaredAccount = v.object({ account_id: v.optional(v.string()) });
+
+function declaredAccountId(): string | undefined {
+  const config = join(CF_BACKEND, 'wrangler.jsonc');
+  if (!existsSync(config)) return undefined;
+  // Bun decodes JSONC natively on `require` — structural, where the regex this
+  // replaces read the raw text and would have matched a commented-out id. The
+  // hex pin is the same contract the regex carried: an account id is 32 hex
+  // digits, and a placeholder must lose to the ambient variable, not win.
+  const declared = v.parse(DeclaredAccount, require(config)).account_id;
+  return declared !== undefined && /^[0-9a-f]+$/.test(declared) ? declared : undefined;
+}
+
 export function wrangler(argv: readonly string[], timeoutMs = 120_000, stdin?: string): Run {
+  const env = {
+    ...process.env,
+    WRANGLER_SEND_METRICS: 'false',
+    // `undefined` is a legal value here and `spawnSync` omits the entry, so an
+    // owner with one account and no declared id is unaffected.
+    CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID ?? declaredAccountId(),
+  };
   const result = spawnSync('npx', ['wrangler', ...argv], {
     cwd: CF_BACKEND,
     encoding: 'utf8',
     timeout: timeoutMs,
-    env: { ...process.env, WRANGLER_SEND_METRICS: 'false' },
+    env,
     input: stdin,
   });
   if (result.error !== undefined) {

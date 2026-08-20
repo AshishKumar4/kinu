@@ -34,6 +34,7 @@ import { createRecordingLogger } from '../src/obs/index';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
 import { nodeWallClockEnvelopeMs } from '../src/strategy/node-agent';
+import { DEFAULT_MAX_STEPS } from '../src/config';
 import { diversityAngle } from '../src/mcts/diversity';
 import type { SwarmRunDeps } from '../src/strategy/swarm-run';
 import type { NodeLoopResult, NodeRunSpec } from '../src/strategy/node-host';
@@ -169,10 +170,15 @@ async function run(input: {
   readonly branch0: Outcome;
   readonly branch1: Outcome;
   readonly maxSteps?: number;
+  /** A clock the caller declares instead of taking the derived envelope. */
+  readonly maxWallClockMs?: number;
 }) {
   const { rt } = createTestRuntime();
   const logger = createRecordingLogger();
   const budgets: (number | undefined)[] = [];
+  /** The step cap each node was GRANTED, read off the spec a host receives — the same
+   *  field an `ExplorationAgent` facet reads across an RPC. */
+  const steps: number[] = [];
   const deps: SwarmRunDeps = {
     rt,
     // NEVER CALLED. Every node runs through the host below, and a swarm that reached
@@ -188,6 +194,7 @@ async function run(input: {
     logger,
     host: async (spec): Promise<NodeLoopResult> => {
       budgets.push(spec.headInput.budget.maxWallClockMs);
+      steps.push(spec.maxSteps);
       const outcome = isBranch(spec, 0) ? input.branch0 : input.branch1;
       return {
         report: headReport({
@@ -204,13 +211,18 @@ async function run(input: {
       };
     },
   };
-  const result = await runSwarm(
-    input.maxSteps === undefined ? deps : { ...deps, maxSteps: input.maxSteps },
-    resolved(),
-  );
+  // Assigned rather than spread conditionally, so a bound the caller did not declare is
+  // an ABSENT KEY: "declared nothing" and "declared undefined" must not arrive at the
+  // resolution under test as one input.
+  const declared: SwarmRunDeps = { ...deps };
+  if (input.maxSteps !== undefined) Object.assign(declared, { maxSteps: input.maxSteps });
+  if (input.maxWallClockMs !== undefined) {
+    Object.assign(declared, { maxWallClockMs: input.maxWallClockMs });
+  }
+  const result = await runSwarm(declared, resolved());
   const rows = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
-  return { result, rows, budgets };
+  return { result, rows, budgets, steps };
 }
 
 const fenced = (code: string) => `Here is the answer.\n\n\`\`\`javascript\n${code}\`\`\``;
@@ -310,5 +322,63 @@ describe('every node runs to a deadline it can observe', () => {
       maxSteps: 9,
     });
     expect(budgets).toEqual([nodeWallClockEnvelopeMs(9), nodeWallClockEnvelopeMs(9)]);
+  }, 60_000);
+
+  test('a bound the caller DECLARED is honoured exactly; only an absent one is derived', async () => {
+    // THE WHOLE OF `runSwarm`'s budget resolution, at the seam a host reads it. Two `??`
+    // decide it and neither was fully asserted: the test above declares a step cap and
+    // reads back the DERIVED clock, so nothing pinned what reaches a node when a caller
+    // declares the clock itself, and nothing pinned the one input on which the two
+    // readings of `??` disagree.
+    //
+    // ZERO IS A DECLARATION, NOT AN ABSENCE, and this tree already says so in the same
+    // vocabulary: `budgetExhausted` treats `maxDepth: 0` as exhausted, and `node-agent.ts`
+    // records that as a deliberate meaning rather than an accident.
+    // `unit-swarm-node-envelope.test.ts` holds the behaviour a zero clock produces. Read
+    // the other way, a caller asking for the NARROWEST bound in the file silently
+    // receives the WIDEST one — a bound that reports as working while governing nothing.
+    const settled: Outcome = { status: 'completed', content: fenced(WASTEFUL), stepCount: 4 };
+    const cases = [
+      {
+        name: 'nothing declared',
+        declare: {},
+        steps: DEFAULT_MAX_STEPS,
+        clock: nodeWallClockEnvelopeMs(DEFAULT_MAX_STEPS),
+      },
+      {
+        name: 'both declared',
+        declare: { maxSteps: 9, maxWallClockMs: 250 },
+        steps: 9,
+        clock: 250,
+      },
+      {
+        name: 'a step cap of zero',
+        declare: { maxSteps: 0, maxWallClockMs: 250 },
+        steps: 0,
+        clock: 250,
+      },
+      {
+        name: 'a clock of zero',
+        declare: { maxWallClockMs: 0 },
+        steps: DEFAULT_MAX_STEPS,
+        clock: 0,
+      },
+    ] as const;
+
+    for (const declaration of cases) {
+      const { result, steps, budgets } = await run({
+        branch0: settled, branch1: settled, ...declaration.declare,
+      });
+      if ('reason' in result) {
+        throw new Error(`the run refused with ${declaration.name}: ${result.error}`);
+      }
+      // BOTH nodes, so a resolution that happened to be right for one node is not
+      // mistaken for a run-wide one.
+      expect({ case: declaration.name, steps, budgets }).toEqual({
+        case: declaration.name,
+        steps: [declaration.steps, declaration.steps],
+        budgets: [declaration.clock, declaration.clock],
+      });
+    }
   }, 60_000);
 });

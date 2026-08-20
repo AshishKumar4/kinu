@@ -1,11 +1,14 @@
-import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { describe, expect, test } from 'bun:test';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+import { scratchDir } from '@proteus/test-utils';
+import * as v from 'valibot';
 
 import { findDuplicateGroups } from './ast-duplication';
 import { findMovable, withoutComments } from './capability-parity';
 import { classify, exportedDeclarations, inScope, keyOf } from './dead-code';
+import { declaredSandboxClasses, WranglerContainers, wranglerContainerClasses } from './egress-interception';
 import { assertMeasured, reconcile, writeLock } from './gate-ratchet';
 import { configuredScanner, judgeAdvisories } from './dependency-advisory-gate';
 import {
@@ -303,19 +306,8 @@ describe('capability parity gate', () => {
 });
 
 describe('gate ratchet', () => {
-  // A module-level mkdtemp with no cleanup is how 388,700 inodes leaked out of
-  // one other test file on this box. Same pattern as deploy.test.ts.
-  const temporaryDirectories: string[] = [];
-  afterEach(() => {
-    for (const directory of temporaryDirectories.splice(0)) {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
   const lockPath = (keys: readonly string[]): string => {
-    const directory = mkdtempSync(join(tmpdir(), 'proteus-ratchet-'));
-    temporaryDirectories.push(directory);
-    const path = join(directory, 'lock.json');
+    const path = join(scratchDir('gates-ratchet'), 'lock.json');
     writeFileSync(path, `${JSON.stringify(keys, null, 2)}\n`);
     return path;
   };
@@ -634,5 +626,40 @@ describe('agents action/field gate', () => {
     expect([...reads.byAction.get('fork') ?? []]).toEqual(['cap']);
     expect(reads.hops).toContain('readLimits(…)');
     expect(auditAgentsFields(readAgentsDeclarations(parsed), reads)).toEqual([]);
+  });
+});
+
+/**
+ * The egress gate's denominator, over the shapes that broke its regex
+ * predecessors: both readers used to measure rendered text, so a nested array
+ * truncated the container block and a generic parameter hid a class — silent
+ * shrinks in a security gate's corpus (2026-08-19 census).
+ */
+describe('egress interception denominator', () => {
+  test('a container entry after an array-valued field is still counted', () => {
+    const config = join(scratchDir('egress'), 'wrangler.jsonc');
+    writeFileSync(config, `{
+      // a commented-out block must not count:
+      // "containers": [ { "class_name": "Retired" } ],
+      "containers": [
+        { "class_name": "A", "instances": [1, 2] },
+        { "class_name": "B" }
+      ],
+      "env": { "staging": { "containers": [ { "class_name": "C" } ] } }
+    }`);
+    expect(wranglerContainerClasses(v.parse(WranglerContainers, require(config)))).toEqual(['A', 'B', 'C']);
+  });
+
+  test('a generic container class is in the denominator', () => {
+    expect(declaredSandboxClasses(new Map([
+      ['packages/cf-backend/src/g.ts', 'export class Gen<T> extends Sandbox<T> { run(): void {} }'],
+    ]))).toEqual(['Gen']);
+  });
+
+  test('a mention in a comment or a string is not a declaration', () => {
+    expect(declaredSandboxClasses(new Map([
+      ['packages/cf-backend/src/c.ts',
+        '// class Fake extends Sandbox\nexport const doc = "class AlsoFake extends Sandbox";'],
+    ]))).toEqual([]);
   });
 });
