@@ -76,6 +76,7 @@
   "packages/cf-backend/src/pages/MCTSExplorer.tsx#MCTSExplorer (unreached-export)",
   "packages/cf-backend/src/preview-proxy.ts#SDK_FORWARD_FAILURE (unreached-export)",
   "packages/cf-backend/src/providers/agent-registry.ts#AgentProviderDeps.refererURL (unsupplied-field)",
+  "packages/cf-backend/src/providers/cloudflare-ai-fetch.ts#DEAD_CLOUDFLARE_LOGIN (unreached-export)",
   "packages/cf-backend/src/rpc-surface.ts#AGENTS_FACET_RPC_SURFACE (unreached-export)",
   "packages/cf-backend/src/rpc-surface.ts#PLATFORM_RPC_SURFACE (unreached-export)",
   "packages/cf-backend/src/rpc-surface.ts#rpcReachableNames (unreached-export)",
