@@ -16,6 +16,7 @@ import { attemptPassed } from '../packages/core/src/index';
 import type { AttemptBudget, BenchCheck, BenchTask, CheckOutcome } from '../packages/core/src/index';
 import { tolerate } from '../packages/core/src/obs/index';
 import { ARTIFACT_DIRNAME } from './bench-retention';
+import { workspaceScope } from './sources';
 
 /** Paths never copied into a sandbox. `tests/bench` is the seal's outermost
  *  ring: an agent that cannot read the corpus cannot read the held-out tasks,
@@ -37,8 +38,11 @@ const SANDBOX_EXCLUDES = [
  *  solver's cross-package edits be seen, so those must be copied. */
 const SANDBOX_EXCLUDED_NAMES = new Set(['.git']);
 
-/** Workspace scope whose links must be re-pointed into the sandbox copy. */
-const WORKSPACE_SCOPE = '@proteus';
+/** Workspace scope whose links must be re-pointed into the sandbox copy. Read
+ *  from the manifests, not spelled here: a stale literal skips the re-pointing
+ *  below, and every solver edit is then graded against the real repo instead of
+ *  the sandbox copy — silently, because the donor's links still resolve. */
+const WORKSPACE_SCOPE = workspaceScope();
 const NESTED_CHECKOUT_DIRS = ['.claude', 'external'] as const;
 
 const OUTPUT_TAIL_BYTES = 4000;

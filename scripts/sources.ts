@@ -56,6 +56,7 @@ import {
 import {
   RAW_NODE_MODULE,
 } from '../tools/oxlint/anti-slop/rules/require-runtime-import-extension.ts';
+import * as v from 'valibot';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -123,6 +124,39 @@ export function enumerateRepository(repoRoot: string): Enumeration {
 export function trackedFiles(): readonly string[] {
   if (enumerated === undefined) enumerated = enumerateRepository(root).files;
   return enumerated;
+}
+
+const PackageNameSchema = v.object({ name: v.optional(v.string()) });
+
+let scope: string | undefined;
+
+/** The npm scope every workspace package is published under (`@name`, no
+ *  trailing slash), read from the manifests rather than written down.
+ *
+ *  Two gate programs and `scripts/setup-worktree.sh` rebuild
+ *  `node_modules/<scope>` so it points at the tree under test, and a literal
+ *  scope in any of them is this module's own defect shape: a name measured in
+ *  one spelling and governed in another. It is worse here than elsewhere,
+ *  because a stale scope directory does not fail — it resolves to a REAL
+ *  checkout, so the suite passes while measuring a tree nobody edited. That has
+ *  already cost a bench run, the harbor adapter and a week of worktrees.
+ *  Derived, it cannot drift across a rename, and a workspace whose packages
+ *  disagree is an error rather than whichever name got read first. */
+export function workspaceScope(): string {
+  if (scope !== undefined) return scope;
+  const found = new Set<string>();
+  for (const file of trackedFiles()) {
+    if (!/^packages\/[^/]+\/package\.json$/.test(file)) continue;
+    const { name } = v.parse(PackageNameSchema, JSON.parse(readRepositoryFile(root, file)));
+    if (name === undefined || !name.startsWith('@')) continue;
+    found.add(name.slice(0, name.indexOf('/')));
+  }
+  if (found.size !== 1) {
+    throw new Error('sources: expected exactly one workspace scope across packages/*/package.json, '
+      + `found ${found.size === 0 ? 'none' : [...found].sort().join(', ')}`);
+  }
+  [scope] = found;
+  return scope;
 }
 
 /** Product source: the files a gate holds to the standard. Test code is out —

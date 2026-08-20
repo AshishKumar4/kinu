@@ -1,22 +1,27 @@
 /**
- * The workspace-resolution guard: `@proteus/*` must resolve INSIDE the checkout
- * being tested.
+ * The workspace-resolution guard: a workspace package must resolve INSIDE the
+ * checkout being tested.
  *
  * This has broken silently three times, always the same way. A tree with no
  * node_modules of its own borrows one wholesale — `ln -s` the directory, a bind
  * mount, a copied sandbox image — and every entry inside it resolves through the
- * DONOR's path, `@proteus` included. `@proteus/core` is then the donor's core:
- * the suite runs, passes, and measures a tree nobody edited. It cost us a bench
- * run in which solver edits were graded as if they had never been made, the
- * harbor adapter, and a week of agent worktrees.
+ * DONOR's path, the workspace scope included. `<scope>/core` is then the donor's
+ * core: the suite runs, passes, and measures a tree nobody edited. It cost us a
+ * bench run in which solver edits were graded as if they had never been made,
+ * the harbor adapter, and a week of agent worktrees.
  *
  * Nothing about that failure is loud on its own — the imports work, the tests
  * are green — so this makes it loud. Every package's suite calls it, and the
  * message names the fix.
  *
- * Reached from those suites by RELATIVE path, never as `@proteus/test-utils`: a
- * guard imported through the workspace scope cannot report that the workspace
- * scope is wrong.
+ * Reached from those suites by RELATIVE path, never through the workspace scope
+ * itself: a guard imported through that scope cannot report that the scope is
+ * wrong.
+ *
+ * Every name here is READ from the manifests on disk. Writing the scope down
+ * would put this file's own copy of it one rename behind the packages it
+ * checks — and a guard that checks the wrong name passes, which is the exact
+ * failure it exists to make loud.
  */
 
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
@@ -41,7 +46,7 @@ function treeRoot(from: string): string {
 }
 
 /** Every workspace package that has an entry point to resolve, name → directory.
- *  A bin-only package (`@proteus/cli`) has none and is not a resolution target. */
+ *  A bin-only package (the CLI) has none and is not a resolution target. */
 function workspacePackages(root: string): Map<string, string> {
   const packages = new Map<string, string>();
   for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
@@ -80,12 +85,16 @@ export function assertWorkspaceResolution(from: string): void {
     }
   }
   if (problems.length === 0) return;
+  const scopes = [...new Set([...workspacePackages(root).keys()]
+    .filter((name) => name.startsWith('@'))
+    .map((name) => name.slice(0, name.indexOf('/'))))].sort();
+  const scope = scopes.length === 1 ? `${scopes[0]}/*` : 'a workspace package';
   throw new Error(
-    `@proteus/* does not resolve inside this checkout (${root}):\n\n${problems.join('\n')}\n\n`
+    `${scope} does not resolve inside this checkout (${root}):\n\n${problems.join('\n')}\n\n`
     + 'This tree\'s node_modules points at another checkout, so the suite is exercising THAT\n'
     + 'tree\'s source and every change under test is invisible. Prepare this checkout with:\n\n'
     + `    ${SETUP_COMMAND}\n\n`
-    + 'Never symlink or copy a whole node_modules directory into a worktree: its @proteus\n'
+    + 'Never symlink or copy a whole node_modules directory into a worktree: its workspace\n'
     + 'entries are relative to the donor, which is precisely how they end up back there.',
   );
 }
