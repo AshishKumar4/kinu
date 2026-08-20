@@ -90,7 +90,7 @@ A fresh worktree has no `node_modules`. **Run `bash scripts/setup-worktree.sh` i
 it — once — before anything else.**
 
 Do NOT symlink or copy the main checkout's `node_modules` wholesale. Everything
-inside it, `@proteus` included, then resolves through the main checkout, so
+inside it, the workspace scope included, then resolves through the main checkout, so
 `@kinu/core` is *main's* core: cross-package tests and `bun run check` run
 green against source nobody edited, and the branch under test is never loaded.
 That has silently cost us a bench run (solver edits graded as if never made),

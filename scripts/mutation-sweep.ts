@@ -162,7 +162,7 @@ function git(...args: readonly string[]): string {
  *
  * The main checkout is shared: other agents, other suites and the editor all read it.
  * A worktree is one branch's own tree, and `setup-worktree.sh` has already given it
- * its own `@proteus` scope, so a mutation there is visible to this process only.
+ * its own workspace scope, so a mutation there is visible to this process only.
  */
 function requireOwnWorktree(): void {
   const tree = git('rev-parse', '--show-toplevel');
