@@ -58,7 +58,7 @@ export function initTurnReviewQueueTable(execRaw: RawSqlExec): void {
  * well above the session-reflection interval so a full window's worth of turns
  * can be owed at once without the queue starting to shed the newest evidence.
  */
-export const MAX_QUEUED_TURN_REVIEWS = 32;
+const MAX_QUEUED_TURN_REVIEWS = 32;
 
 /**
  * Reviews ONE session open drains.

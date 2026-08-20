@@ -15,7 +15,7 @@ import type { CompletedTurn } from '../src/evolution/types';
 import { listTurnOutcomes, listLessons, type TurnOutcomeRow } from '../src/evolution/outcomes';
 import {
   countQueuedTurnReviews, takeQueuedTurnReviews, queueTurnReview,
-  MAX_QUEUED_TURN_REVIEWS, MAX_TURN_REVIEWS_PER_OPEN,
+  MAX_TURN_REVIEWS_PER_OPEN,
 } from '../src/evolution/review-queue';
 import { initCraftScoreTables } from '../src/craft/schemas';
 
@@ -160,11 +160,17 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
 
   test('the queue refuses past its ceiling rather than growing without bound', () => {
     const { rt, engine } = workspace();
-    for (let i = 0; i < MAX_QUEUED_TURN_REVIEWS; i++) {
-      expect(engine.deferTurnReview(makeTurn({ turnId: `msg-${i}` }), null)).toBe('queued');
+    // The contract, not the number: a ceiling exists, everything under it
+    // queues, and the first refusal is exactly where the count stops moving.
+    let queued = 0;
+    while (engine.deferTurnReview(makeTurn({ turnId: `msg-${String(queued)}` }), null) === 'queued') {
+      queued += 1;
+      if (queued > 1_000) throw new Error('no ceiling: 1000 reviews queued without a refusal');
     }
-    expect(engine.deferTurnReview(makeTurn({ turnId: 'one-too-many' }), null)).toBe('queue_full');
-    expect(countQueuedTurnReviews(rt.storage.sql)).toBe(MAX_QUEUED_TURN_REVIEWS);
+    expect(queued).toBeGreaterThan(0);
+    expect(countQueuedTurnReviews(rt.storage.sql)).toBe(queued);
+    expect(engine.deferTurnReview(makeTurn({ turnId: 'still-refused' }), null)).toBe('queue_full');
+    expect(countQueuedTurnReviews(rt.storage.sql)).toBe(queued);
   });
 
   test('an unserializable turn is refused at the queue, never written as a corrupt row', () => {

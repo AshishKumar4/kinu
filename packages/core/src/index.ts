@@ -152,7 +152,7 @@ export {
 } from './evolution/session-window';
 export {
   initTurnReviewQueueTable, queueTurnReview, takeQueuedTurnReviews, dropQueuedTurnReview,
-  countQueuedTurnReviews, MAX_QUEUED_TURN_REVIEWS, MAX_TURN_REVIEWS_PER_OPEN,
+  countQueuedTurnReviews, MAX_TURN_REVIEWS_PER_OPEN,
   type DeferredTurnReview, type RefusedTurnReview, type TakenTurnReviews,
   type TurnReviewQueueOutcome, type DeferredReviewDrain,
 } from './evolution/review-queue';
