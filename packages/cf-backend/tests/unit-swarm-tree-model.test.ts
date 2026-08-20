@@ -4,8 +4,8 @@
 import { describe, test, expect } from 'bun:test';
 import type { ForkNode } from '../src/lib/protocol';
 import {
-  ancestorIds, cleanNodeLabel, findForkNode, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX,
-  NODE_R_MIN, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats, truncate,
+  ancestorIds, cleanNodeLabel, clipToWidth, findForkNode, linkWidth, losingBranchIds, maxVisits,
+  NODE_R_MAX, NODE_R_MIN, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats,
 } from '../src/components/swarm-tree-model';
 
 let seq = 0;
@@ -209,8 +209,36 @@ describe('labels', () => {
     expect(cleanNodeLabel('   ', '(root)')).toBe('(root)');
   });
 
-  test('truncation keeps the cap, ellipsis included', () => {
-    expect(truncate('abcdefghij', 5)).toBe('abcd…');
-    expect(truncate('abcd', 5)).toBe('abcd');
+  // Fixed-width faces stand in for the real one. The contract under test is
+  // that the clip is decided by the ROOM; measuring a proportional face here
+  // would make every expected string an assertion about Chrome's metrics.
+  const perChar = (text: string) => text.length * 10;
+  const wide = (text: string) => [...text].reduce((sum, ch) => sum + (ch === 'W' ? 20 : 5), 0);
+
+  test('a label that fits its room is not touched', () => {
+    expect(clipToWidth('abcd', 40, perChar)).toBe('abcd');
+    expect(clipToWidth('abcd', 40.5, perChar)).toBe('abcd');
+  });
+
+  test('the ellipsis is inside the room, never beyond it', () => {
+    // 10 chars want 100px; 50px holds four glyphs, so three survive plus the
+    // ellipsis. A clip that spent the room on text and then appended would
+    // overflow by exactly one glyph — which is how a label lands on its
+    // neighbour's column.
+    expect(clipToWidth('abcdefghij', 50, perChar)).toBe('abcd…');
+    expect(clipToWidth('abcdefghij', 55, perChar)).toBe('abcd…');
+    expect(clipToWidth('abcdefghij', 60, perChar)).toBe('abcde…');
+  });
+
+  test('room too small for even one glyph yields nothing, never a bare ellipsis', () => {
+    expect(clipToWidth('abcdefghij', 10, perChar)).toBe('');
+    expect(clipToWidth('abcdefghij', 0, perChar)).toBe('');
+    expect(clipToWidth('abcdefghij', -5, perChar)).toBe('');
+  });
+
+  test('room is spent on the widest prefix that fits, not on a character count', () => {
+    // `iiiiii` and `WWWWWW` are the same six characters and not the same label.
+    expect(clipToWidth('WWWWWW', 45, wide)).toBe('WW…');
+    expect(clipToWidth('iiiiii', 45, wide)).toBe('iiiiii');
   });
 });

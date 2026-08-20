@@ -67,10 +67,11 @@ import {
 	ArrowsInSimpleIcon, ArrowsOutSimpleIcon,
 } from "@phosphor-icons/react";
 import { useTheme } from "@/hooks/use-theme";
+import { useElementSize } from "@/hooks/use-element-size";
 import type { ForkNode } from "@/lib/protocol";
 import {
-	ancestorIds, cleanNodeLabel, isCompeted, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX,
-	NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, truncate,
+	ancestorIds, cleanNodeLabel, clipToWidth, isCompeted, linkWidth, losingBranchIds, maxVisits,
+	NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount,
 	type ExplorerSelection,
 } from "./swarm-tree-model";
 
@@ -120,13 +121,27 @@ interface Props {
 
 /** Row pitch. One text line plus air — labels cannot collide at any tree size. */
 const ROW = 22;
-/** Depth pitch. Wide enough for a node, its fold handle and a 20-char label. */
+/** Depth pitch. Wide enough for a node, its fold handle and a label. */
 const COL = 206;
 const HANDLE_X = NODE_R_MAX + 8;
 const LABEL_X = NODE_R_MAX + 22;
-/** Room the rightmost column's labels need inside the fitted extent — without
- *  it the deepest column is fitted to its dots and its text falls off. */
-const LABEL_W = 205;
+/** Air between a label's end and whatever the next column puts on its row. */
+const LABEL_GAP = 8;
+/**
+ * Room a label may use, in scene units.
+ *
+ * `INNER` is the pitch: a node with children drawn to its right shares its row
+ * with them, so its label stops before their column. `LEAF` is a reading bound
+ * and not a collision one — d3 gives every leaf a row of its own, so nothing
+ * is ever drawn to the right of one and the only argument for stopping is that
+ * past two columns a label is prose, which is what the tooltip is for.
+ *
+ * Both replace a flat 20-character clip. That clip cut 127 of the 178 labels on
+ * the 106-node search, most of them with room to spare beside them, because a
+ * character count cannot know either number.
+ */
+const LABEL_ROOM_INNER = COL - LABEL_X - LABEL_GAP;
+const LABEL_ROOM_LEAF = COL * 2 - LABEL_X - LABEL_GAP;
 /** Below this zoom a label is under ~8px on screen — noise, not text. */
 const LABEL_MIN_SCALE = 0.72;
 /**
@@ -139,6 +154,17 @@ const LABEL_MIN_SCALE = 0.72;
 const OVERVIEW_MIN_SCALE = 0.3;
 const RULER_H = 20;
 const FIT_PAD = 16;
+/**
+ * The docked row under the scene holding the key and the controls.
+ *
+ * Docked, not floated. Both used to be absolutely positioned over the canvas,
+ * which was survivable while a fitted tree left the bottom of the canvas empty
+ * and became a chip sitting on top of the branches once a fit filled the
+ * height. The row is in flow now; this figure is what the host reserves for it
+ * when it asks how tall the whole thing wants to be, and the row is measured
+ * rather than assumed once it is on screen.
+ */
+const LEGEND_H = 30;
 /** Air inside a band's boundary, and the line of type naming the search. */
 const BAND_PAD = 10;
 const BAND_TITLE_H = 26;
@@ -157,6 +183,95 @@ function foldKey(runId: string, nodeId: string): string {
  *  workspace of them does not churn a Map per band per render. */
 const EMPTY_NODE_MAP: ReadonlyMap<string, number> = new Map();
 const EMPTY_TEXT_MAP: ReadonlyMap<string, string> = new Map();
+/** The unfolded scene, for the pure height question the host asks before the
+ *  reader has folded anything. */
+const NO_FOLDS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * What the two label faces actually measure, as the cascade resolved them.
+ *
+ * A label's room is a width, so its clip has to be one, and the only honest
+ * source for "how wide is this string" is the face the browser will set it in.
+ * Measured off a canvas context rather than by laying text out in the SVG:
+ * `getComputedTextLength` costs a layout per call and there are 520 nodes on
+ * the frame this view has to survive.
+ */
+interface LabelFont {
+	/** The 11px UI face the node's name is set in. */
+	name(text: string): number;
+	/** The 9px mono face the score and the `+n`/`⋈k` badges are set in. */
+	badge(text: string): number;
+}
+
+/** One context and one pair of font strings for the document's lifetime. The
+ *  faces are declared on `:root` and never change under a palette switch, so a
+ *  measurer per render would re-read the cascade for the same answer. */
+let fontCache: LabelFont | null = null;
+
+function labelFont(): LabelFont {
+	if (fontCache !== null) return fontCache;
+	const cs = getComputedStyle(document.documentElement);
+	const mono = cs.getPropertyValue("--font-mono").trim() || "monospace";
+	const body = getComputedStyle(document.body).fontFamily || "sans-serif";
+	const ctx = document.createElement("canvas").getContext("2d");
+	if (ctx === null) {
+		// No 2d context — a headless or hardened environment. Fall back to the
+		// mean advance of the faces at these sizes, so labels are clipped a
+		// little conservatively rather than not at all.
+		fontCache = { name: (text) => text.length * 5.9, badge: (text) => text.length * 5.4 };
+		return fontCache;
+	}
+	const measure = (font: string) => (text: string): number => {
+		ctx.font = font;
+		return ctx.measureText(text).width;
+	};
+	fontCache = { name: measure(`11px ${body}`), badge: measure(`9px ${mono}`) };
+	return fontCache;
+}
+
+/** Every tspan of one node's label, already clipped to the room that node has.
+ *  Decided during layout because the scene's right edge is where the widest of
+ *  them ends — the extent and the clip are one fact and used to be two. */
+interface NodeLabel {
+	/** `47%` or `fail`, or empty for a branch no fork ranked. */
+	readonly score: string;
+	/** The node's own line, clipped. */
+	readonly name: string;
+	/** `+12` for a fold, `⋈3` for a fan-in vertex, or both. */
+	readonly badge: string;
+	/** Where the label ends, in the tree's own x. */
+	readonly end: number;
+}
+
+/**
+ * One node's label, clipped to the room its column leaves it.
+ *
+ * The score and the badges are set at their own size and are never clipped:
+ * they are the two facts a column of labels is scanned on, and a truncated
+ * percentage is worse than a truncated sentence. What gives is the name.
+ */
+function nodeLabel(
+	node: PointNode, region: SwarmTreeRegion, collapsed: ReadonlySet<string>,
+	fanIn: ReadonlyMap<string, number>, font: LabelFont,
+): NodeLabel {
+	const folded = collapsed.has(foldKey(region.runId, node.data.id));
+	const scored = node.data.status === "failed" || node.data.value !== null;
+	const score = !scored ? ""
+		: node.data.status === "failed" ? "fail"
+		: `${Math.round(Math.min(1, Math.max(0, node.data.value ?? 0)) * 100)}%`;
+	const fold = folded ? ` +${subtreeCount(node.data)}` : "";
+	const join = fanIn.has(node.data.id) ? ` ⋈${fanIn.get(node.data.id) ?? 0}` : "";
+	const badge = `${fold}${join}`;
+	// A folded node draws no children, so its row is clear to the right and it
+	// gets a leaf's room — which is also where the `+n` it just gained needs it.
+	const room = node.data.children.length === 0 || folded ? LABEL_ROOM_LEAF : LABEL_ROOM_INNER;
+	const spend = font.badge(score) + font.badge(badge);
+	const name = clipToWidth(
+		`${score === "" ? "" : " "}${cleanNodeLabel(node.data.action, "(root)")}`,
+		room - spend, font.name,
+	);
+	return { score, name, badge, end: LABEL_X + spend + font.name(name) };
+}
 
 /** One search, laid out and placed in the scene. */
 interface RegionLayout {
@@ -175,6 +290,8 @@ interface RegionLayout {
 	 *  whether a search had a journal. */
 	fanIn: ReadonlyMap<string, number>;
 	why: ReadonlyMap<string, string>;
+	/** Each node's label, already clipped to the room its column leaves it. */
+	labels: Map<string, NodeLabel>;
 	/** Rows of this tree, in the tree's own coordinates. */
 	rows: { start: number; end: number };
 	/** Scene y the tree's rows are translated by. */
@@ -198,6 +315,7 @@ interface RenderState {
 function layoutRegions(
 	regions: readonly SwarmTreeRegion[],
 	collapsed: ReadonlySet<string>,
+	font: LabelFont,
 ): RenderState {
 	const layout = d3.tree<ForkNode>().nodeSize([ROW, COL])
 		.separation((a, b) => (a.parent === b.parent ? 1 : 1.6));
@@ -206,6 +324,12 @@ function layoutRegions(
 	// Boundaries are flush columns rather than ragged to each tree's own width:
 	// a band is a region of one canvas, and a ragged right edge reads as a stack
 	// of cards, which is the thing this replaced.
+	//
+	// The right edge is where the widest LABEL ends, not `depth * COL` plus a
+	// constant guess at how much text a column holds. That guess was 205px, and
+	// it was both too much for a tree of short labels — dead canvas the fit then
+	// spent scale on — and too little for the leaf labels that are now allowed
+	// two columns.
 	let widest = 0;
 	for (const region of regions) {
 		const hierarchy = d3.hierarchy(region.root, (d) => (
@@ -217,15 +341,22 @@ function layoutRegions(
 		const [rowStart, rowEnd] = d3.extent(nodes, (d) => d.x);
 		if (rowStart === undefined || rowEnd === undefined) continue;
 		maxDepth = Math.max(maxDepth, depth);
-		widest = Math.max(widest, depth * COL + LABEL_W);
+		const fanIn = region.fanIn ?? EMPTY_NODE_MAP;
+		const labels = new Map<string, NodeLabel>();
+		for (const node of nodes) {
+			const label = nodeLabel(node, region, collapsed, fanIn, font);
+			labels.set(node.data.id, label);
+			widest = Math.max(widest, node.y + label.end);
+		}
 		placed.push({
 			runId: region.runId, root: region.root, nodes, links: data.links(),
 			byId: new Map(nodes.map((d) => [d.data.id, d])),
 			pv: principalVariation(region.root),
 			competed: isCompeted(region.root),
 			visitMax: maxVisits(region.root),
-			fanIn: region.fanIn ?? EMPTY_NODE_MAP,
+			fanIn,
 			why: region.why ?? EMPTY_TEXT_MAP,
+			labels,
 			depth,
 			rows: { start: rowStart, end: rowEnd },
 			shiftY: 0,
@@ -234,7 +365,7 @@ function layoutRegions(
 	}
 
 	const x0 = -NODE_R_MAX - BAND_PAD;
-	const x1 = Math.max(widest, COL);
+	const x1 = Math.max(widest + BAND_PAD, COL);
 	let cursor = 0;
 	for (const region of placed) {
 		const treeH = region.rows.end - region.rows.start + ROW;
@@ -249,6 +380,22 @@ function layoutRegions(
 		depth: maxDepth,
 		extent: { x0, x1, y0: 0, y1: Math.max(cursor - BAND_GAP, ROW) },
 	};
+}
+
+/**
+ * How tall this scene wants to be: every band at 1:1, the depth ruler, the air
+ * around it and the docked legend row.
+ *
+ * The host caps the canvas at this. Without a cap a workspace of short searches
+ * sat under several hundred pixels of reserved nothing with the key stranded at
+ * the bottom of it, which is the defect that one fixed-height card per run was
+ * replaced to fix — reintroduced by handing the canvas a whole column whatever
+ * it held. Fully expanded, because that is the state a search opens in, so
+ * folding a branch shrinks the scene inside a budget rather than moving it.
+ */
+export function naturalCanvasHeight(regions: readonly SwarmTreeRegion[]): number {
+	const { extent } = layoutRegions(regions, NO_FOLDS, labelFont());
+	return RULER_H + FIT_PAD * 2 + (extent.y1 - extent.y0) + LEGEND_H;
 }
 
 /**
@@ -369,6 +516,11 @@ export function SwarmTree({
 	 *  re-reads them. Keyed to the whole theme, not just the mode: a palette
 	 *  switch changes the same tokens. */
 	const theme = useTheme();
+	/** The docked legend row, measured rather than assumed: it collapses its
+	 *  entries by width and takes a second line on the narrowest canvas, and the
+	 *  scene has to know how much height that left it. */
+	const { attach: attachLegend, size: legend } = useElementSize();
+	const sceneH = Math.max(0, height - (legend.h > 0 ? legend.h : LEGEND_H));
 
 	/**
 	 * Fit the SELECTED search, not the whole canvas: the reader chose one, and
@@ -389,7 +541,7 @@ export function SwarmTree({
 		const w = Math.max(1, x1 - x0);
 		const h = Math.max(1, y1 - y0);
 		const availW = width - FIT_PAD * 2;
-		const availH = height - RULER_H - FIT_PAD * 2;
+		const availH = sceneH - RULER_H - FIT_PAD * 2;
 		// Fit the ROWS, not the bounding box.
 		//
 		// The two axes are not alike. Depth is bounded and PANNABLE — a 106-node
@@ -415,12 +567,20 @@ export function SwarmTree({
 		// — the reason that matters — centring pushes the bands that FOLLOW it off
 		// the bottom, which is the comparison between forks that one canvas exists
 		// to keep. Anchored, the next fork is right underneath where it belongs.
-		const ty = RULER_H + FIT_PAD - y0 * k;
+		//
+		// Anchored on the SCENE, not on the band, whenever every band fits at this
+		// scale. Anchoring the band is right when the scene is taller than the
+		// canvas, and wrong when it is not: with the canvas capped to what the
+		// searches need, selecting the second of two short searches put the whole
+		// scene at k=1 and then scrolled the first one off the top.
+		const scene = state.extent;
+		const fitsWhole = (scene.y1 - scene.y0) * k <= availH;
+		const ty = RULER_H + FIT_PAD - (fitsWhole ? scene.y0 : y0) * k;
 		const svg = d3.select(svgRef.current);
 		const to = d3.zoomIdentity.translate(tx, ty).scale(k);
 		if (animate) svg.transition().duration(280).call(zoomRef.current.transform, to);
 		else svg.call(zoomRef.current.transform, to);
-	}, [width, height, selectedRunId]);
+	}, [width, sceneH, selectedRunId]);
 
 	const scaleBy = useCallback((factor: number) => {
 		if (!svgRef.current || !zoomRef.current) return;
@@ -514,7 +674,7 @@ export function SwarmTree({
 		const g = d3.select(rootGroup);
 		g.selectAll("*").remove();
 
-		const state = layoutRegions(regions, collapsed);
+		const state = layoutRegions(regions, collapsed, labelFont());
 		stateRef.current = state;
 		const ramp = scoreRamp();
 		const titles = new Map(regions.map((r) => [r.runId, r]));
@@ -550,17 +710,24 @@ export function SwarmTree({
 			overlay.replaceChildren(...state.regions.map((region) => {
 				const meta = titles.get(region.runId);
 				const el = document.createElement("div");
-				el.className = "absolute flex items-baseline gap-2 whitespace-nowrap";
+				el.className = "absolute flex min-w-0 items-baseline gap-2 whitespace-nowrap";
 				el.dataset.x = String(region.band.x0 + BAND_PAD);
 				el.dataset.y = String(region.band.y0 + BAND_PAD);
 				const name = document.createElement("span");
-				name.className = `text-[11px] font-medium truncate max-w-[22rem] ${
+				name.className = `min-w-0 shrink truncate text-[11px] font-medium ${
 					region.runId === selectedRunId ? "p-text" : "p-text-2"
 				}`;
 				name.textContent = meta?.title ?? "";
+				// A truncated caption is the one place on this canvas where the
+				// untruncated text is nowhere else: a band has no tooltip, and the
+				// task it names can be a paragraph. The cap used to be a flat 22rem,
+				// which on a 313px column truncated mid-word with no way to read the
+				// rest.
+				name.title = meta?.title ?? "";
 				const note = document.createElement("span");
-				note.className = "text-[9px] font-mono p-text-3 truncate max-w-[18rem]";
+				note.className = "min-w-0 shrink-0 truncate text-[9px] font-mono p-text-3";
 				note.textContent = meta?.note ?? "";
+				note.title = meta?.note ?? "";
 				el.appendChild(name);
 				el.appendChild(note);
 				return el;
@@ -574,7 +741,13 @@ export function SwarmTree({
 				.attr("data-run", region.runId)
 				// Unselected searches recede but stay readable: this is the only
 				// place a band's trees are treated differently from the lit one.
-				.attr("opacity", dim ? 0.5 : 1)
+				//
+				// 0.72, not 0.5. At a half the 11px labels of an unselected band are
+				// under the contrast at which they are text, so a four-branch search
+				// beside a hundred-branch one read as a smudge rather than as the
+				// comparison the canvas exists for. Recession is the point; illegible
+				// is not recession.
+				.attr("opacity", dim ? 0.72 : 1)
 				.attr("transform", `translate(0,${region.shiftY})`);
 
 			// Depth guides — the columns the ruler labels.
@@ -693,25 +866,27 @@ export function SwarmTree({
 			// scannable in a way a hundred prose fragments are not. A branch with no
 			// score contributes no tspan at all, so the label starts at its text
 			// rather than at a fabricated `0%`.
-			text.filter((d) => d.data.status === "failed" || d.data.value !== null)
+			//
+			// Every part is read off the layout's own clip. The score, the name and
+			// the badges used to be four independent expressions here, and the
+			// scene's right edge was a fifth constant that had to agree with them —
+			// which is how a label could be cut at 20 characters and still be fitted
+			// as if it were 205px wide.
+			const labelOf = (d: PointNode) => region.labels.get(d.data.id);
+			text.filter((d) => (labelOf(d)?.score ?? "") !== "")
 				.append("tspan")
-				.text((d) => (d.data.status === "failed" ? "fail" : `${Math.round(Math.min(1, Math.max(0, d.data.value ?? 0)) * 100)}%`))
+				.text((d) => labelOf(d)?.score ?? "")
 				.attr("font-family", "var(--font-mono)").attr("font-size", "9px")
 				.attr("fill", (d) => (d.data.status === "failed" ? "var(--c-danger)" : scoreToken(d.data.value ?? 0)));
 			text.append("tspan")
-				.text((d) => `${d.data.status === "failed" || d.data.value !== null ? " " : ""}${truncate(cleanNodeLabel(d.data.action, "(root)"), 20)}`)
+				.text((d) => labelOf(d)?.name ?? "")
 				.attr("fill", (d) => (d.data.status === "pruned" ? "var(--c-text-3)" : "var(--c-text-2)"));
-			text.filter((d) => collapsed.has(foldKey(region.runId, d.data.id)))
+			// `+n` for the subtree a fold hides, `⋈k` for the join and how many
+			// parents it joined. Mono and accent, after the name rather than before
+			// it, so a column of labels still scans on its scores.
+			text.filter((d) => (labelOf(d)?.badge ?? "") !== "")
 				.append("tspan")
-				.text((d) => ` +${subtreeCount(d.data)}`)
-				.attr("font-family", "var(--font-mono)").attr("font-size", "9px")
-				.attr("fill", "var(--c-accent-fg)");
-			// `⋈k` — the join, and how many parents it joined. Mono and accent, after
-			// the name rather than before it, so a column of labels still scans on
-			// its scores.
-			text.filter((d) => region.fanIn.has(d.data.id))
-				.append("tspan")
-				.text((d) => ` ⋈${region.fanIn.get(d.data.id) ?? 0}`)
+				.text((d) => labelOf(d)?.badge ?? "")
 				.attr("font-family", "var(--font-mono)").attr("font-size", "9px")
 				.attr("fill", "var(--c-accent-fg)");
 
@@ -758,7 +933,7 @@ export function SwarmTree({
 			g.selectAll("g.mcts-labels").attr("data-lod", transform.k >= LABEL_MIN_SCALE ? "" : null);
 			positionRuler(d3.select(rulerRef.current!), state, transform);
 		}
-	}, [regions, width, height, collapsed, theme, selectedRunId, fit]);
+	}, [regions, width, sceneH, collapsed, theme, selectedRunId, fit]);
 
 	// Selection is an attribute update, plus the two things that make a node
 	// chosen from the inspector actually appear: open the folds hiding it, then
@@ -806,14 +981,14 @@ export function SwarmTree({
 		if (!userMoved.current) return;
 		const t = d3.zoomTransform(svgRef.current);
 		const [sx, sy] = [t.applyX(target.y), t.applyY(target.x + region.shiftY)];
-		if (sx > 40 && sx < width - 40 && sy > RULER_H + 20 && sy < height - 20) return;
+		if (sx > 40 && sx < width - 40 && sy > RULER_H + 20 && sy < sceneH - 20) return;
 		d3.select(svgRef.current).transition().duration(320).call(
 			zoomRef.current.transform,
 			d3.zoomIdentity
-				.translate(width / 2 - target.y * t.k, height / 2 - (target.x + region.shiftY) * t.k)
+				.translate(width / 2 - target.y * t.k, sceneH / 2 - (target.x + region.shiftY) * t.k)
 				.scale(t.k),
 		);
-	}, [selection, collapsed, width, height]);
+	}, [selection, collapsed, width, sceneH]);
 
 	const selectedRegion = stateRef.current?.regions.find((r) => r.runId === selectedRunId);
 	const competedSelected = selectedRegion?.competed ?? true;
@@ -823,30 +998,36 @@ export function SwarmTree({
 	const fansInSelected = (selectedRegion?.fanIn.size ?? 0) > 0;
 
 	return (
-		<div className="relative w-full h-full overflow-hidden">
-			<svg
-				ref={svgRef} width={width} height={height} className="w-full h-full block"
-				style={{ touchAction: "none" }}
-			/>
+		<div className="relative flex w-full h-full flex-col overflow-hidden">
+			{/* The scene, and only the scene. Its height is what the canvas has left
+			    after the docked row below measures itself, so the fit can never
+			    place a band under the key. */}
+			<div className="relative shrink-0" style={{ height: sceneH }}>
+				<svg
+					ref={svgRef} width={width} height={sceneH} className="w-full h-full block"
+					style={{ touchAction: "none" }}
+				/>
 
-			{/* One title per band, pinned to its band in screen space. Populated
-			    imperatively and moved from the zoom handler, so panning does not
-			    round-trip through React. `top-0 left-0` because every child is
-			    placed by a `translate` the handler writes. */}
-			<div ref={titlesRef} aria-hidden
-				className="absolute inset-0 overflow-hidden pointer-events-none select-none [&>*]:top-0 [&>*]:left-0" />
+				{/* One title per band, pinned to its band in screen space. Populated
+				    imperatively and moved from the zoom handler, so panning does not
+				    round-trip through React. `top-0 left-0` because every child is
+				    placed by a `translate` the handler writes. */}
+				<div ref={titlesRef} aria-hidden
+					className="absolute inset-0 overflow-hidden pointer-events-none select-none [&>*]:top-0 [&>*]:left-0" />
 
-			{/* Legend and controls share one bottom row so neither can ever be
-			    laid over the other on a narrow canvas. */}
-			<div className="absolute inset-x-2 bottom-2 flex items-end justify-between gap-3 pointer-events-none">
-				{/* The same chip as the controls opposite it. Without one the key sat
-				    as bare text over whatever the tree put behind it — survivable
-				    while a fitted tree left the bottom of the canvas empty, and
-				    unreadable now that a fit fills the height with branches.
+				{tooltip && <NodeTip tip={tooltip} width={width} />}
+			</div>
 
-				    On a narrow canvas the full key wraps into a block that covers
-				    the tree it explains, so only the colour scale survives. */}
-				<div className="min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border p-border p-surface p-shadow-menu px-2 py-1 text-[10px] p-text-3 select-none">
+			{/* The key and the controls, DOCKED under the rows rather than floated
+			    over them. Both were absolutely positioned inside the canvas, which
+			    was survivable while a fitted tree left the bottom empty and became
+			    two chips sitting on top of the branches the moment a fit filled the
+			    height. On the narrowest canvas the row wraps — the key on one line,
+			    the controls on the next — and the scene above is measured to match,
+			    so nothing is ever covered and nothing is ever clipped. */}
+			<div ref={attachLegend} data-tree-legend
+				className="shrink-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2 pt-1 pb-1.5">
+				<div className="min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] p-text-3 select-none">
 					{competedSelected ? (
 						<>
 							<span className="flex items-center gap-1.5">
@@ -865,7 +1046,7 @@ export function SwarmTree({
 						/* Nothing was ranked here, so the key says what the picture
 						   actually encodes: lifecycle, and only lifecycle. */
 						<>
-							<span>every branch fed the settle · none was ranked</span>
+							<span className="min-w-0">every branch fed the settle · none was ranked</span>
 							{width >= 470 && (
 								<span className="opacity-70">amber = running · hollow = failed</span>
 							)}
@@ -879,7 +1060,7 @@ export function SwarmTree({
 						</span>
 					)}
 				</div>
-				<div className="shrink-0 pointer-events-auto flex items-center gap-0.5 rounded-md border p-border p-surface p-shadow-menu px-0.5 py-0.5">
+				<div className="ml-auto shrink-0 flex items-center gap-0.5">
 					<TreeControl label="Fold abandoned branches" onClick={foldLosing}><ArrowsInSimpleIcon size={13} /></TreeControl>
 					<TreeControl label="Expand every branch" onClick={expandAll}><ArrowsOutSimpleIcon size={13} /></TreeControl>
 					<span aria-hidden className="mx-0.5 h-3.5 w-px" style={{ background: "var(--c-border)" }} />
@@ -888,8 +1069,6 @@ export function SwarmTree({
 					<TreeControl label="Fit the selected search to view" onClick={() => fit(true)}><ArrowsOutIcon size={13} /></TreeControl>
 				</div>
 			</div>
-
-			{tooltip && <NodeTip tip={tooltip} width={width} />}
 		</div>
 	);
 }
@@ -914,13 +1093,18 @@ function positionBandTitles(
 ): void {
 	if (!overlay) return;
 	// Measured here rather than closed over: this runs from the zoom handler,
-	// which is installed once, so a captured height would be the first one
-	// forever. The overlay is inset to the canvas, so it IS the canvas height.
-	const height = overlay.clientHeight;
+	// which is installed once, so a captured size would be the first one
+	// forever. The overlay is inset to the scene, so it IS the scene's box.
+	const { clientHeight: height, clientWidth: width } = overlay;
 	for (const el of overlay.querySelectorAll<HTMLElement>(":scope > div")) {
 		const x = transform.applyX(Number(el.dataset.x));
 		const y = transform.applyY(Number(el.dataset.y));
 		el.style.transform = `translate(${x}px,${y}px)`;
+		// The room a caption has is the canvas to the right of where the caption
+		// starts, which moves with the pan. It was a flat 22rem, so on a 313px
+		// column the title truncated mid-word while a wide canvas left it short of
+		// the edge it could have used.
+		el.style.maxWidth = `${Math.max(0, width - x - BAND_PAD)}px`;
 		el.style.visibility = y < RULER_H || y > height - 12 ? "hidden" : "visible";
 	}
 }
