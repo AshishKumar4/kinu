@@ -21,4 +21,18 @@ describe('createSandboxedExecutor', () => {
     const result = await executor.execute('puts 42', [], { language: 'ruby' });
     expect(result.error).toContain('does not support language "ruby"');
   });
+
+  // The TB2.1 nginx hang: the craft probe's code daemonized a server, the
+  // daemon kept the inherited stdout pipe open after the probe exited, and the
+  // EOF-bound read held `proteus exec` until the harness cap killed it. With
+  // file-backed stdio the read completes at EXIT. The daemonization below is
+  // the same shape (sh backgrounds a child holding the wrapper's stdio and
+  // exits); a hang outlives bun's 5s default test timeout and fails red.
+  test('a daemonized grandchild does not hold the executor past exit', async () => {
+    const result = await createSandboxedExecutor().execute(
+      'const c = Bun.spawn(["sleep", "30"], { stdout: "inherit", stderr: "inherit" });\nc.unref();\n"done"',
+      [],
+    );
+    expect(result).toEqual({ result: 'done' });
+  });
 });

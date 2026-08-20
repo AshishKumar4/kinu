@@ -187,10 +187,29 @@ export class HeadJournal {
    * did: `background_jobs` read `cancelled by operator` while the
    * dynamic-context block kept rendering "4 of 4 heads running".
    *
-   * `scope` narrows it to one run, for the re-drive that reclaims that run's
+   * `scope` narrows it, and both narrowings are load-bearing.
+   *
+   * `rootId` narrows to one run, for the re-drive that reclaims that run's
    * identity: same transition, same `error_message` column, so a reclaim does
    * not get a second writer of the status this bug was caused by having only
-   * one of. Omitted, it sweeps the whole journal.
+   * one of. Omitted, it sweeps every run.
+   *
+   * `spawnedBefore` is THE ORDERING RULE between this reconciliation and a
+   * resume, and it is a bound on the WRITE rather than an order on the calls.
+   * The claim above — "at the start of an activation every `running` row is
+   * stale" — is only true of rows spawned by an EARLIER activation, and a
+   * resume spawns heads of its own: a swarm re-entering its interrupted tree
+   * (`strategy/swarm-resume.ts`) re-expands the nodes this transition just
+   * retired, and a fork re-drive spawns a fresh set under the reclaimed root.
+   * Sweeping those would mark live work `aborted` and tell the agent, over the
+   * one signal seam, that work still running had been retired. The two cannot
+   * be ordered from here — the CLI awaits reconciliation before recovery
+   * (`local-session.ts`), while a Durable Object's `onStart` and
+   * `onFiberRecovered` are both dispatched by the SDK and their order is not
+   * ours — so the predicate carries the activation's own start instead, and
+   * holds whichever runs first. Omitted, it sweeps regardless of spawn time,
+   * which is what a `rootId`-scoped reclaim wants: it is retiring exactly the
+   * attempt it is taking over.
    *
    * Returns the runs it settled so the caller can tell the agent — a fork
    * disappearing from the roster is not the same as the agent learning it is
@@ -198,14 +217,17 @@ export class HeadJournal {
    */
   abandonRunning(
     reason: string,
-    scope?: { readonly rootId: HeadId },
+    scope?: { readonly rootId?: HeadId; readonly spawnedBefore?: number },
     now = Date.now(),
   ): AbandonedHeadRun[] {
     const root = scope?.rootId ?? null;
+    const before = scope?.spawnedBefore ?? null;
     const runs = this.sql<{ root_id: string; rationale: string | null; abandoned: number; total: number }>`
       SELECT j.root_id AS root_id,
              MAX(r.rationale) AS rationale,
-             SUM(CASE WHEN j.status = 'running' THEN 1 ELSE 0 END) AS abandoned,
+             SUM(CASE WHEN j.status = 'running'
+                       AND (${before} IS NULL OR j.spawned_at < ${before})
+                      THEN 1 ELSE 0 END) AS abandoned,
              COUNT(*) AS total
       FROM head_journal j LEFT JOIN head_runs r ON r.root_id = j.root_id
       WHERE ${root} IS NULL OR j.root_id = ${root}
@@ -214,7 +236,8 @@ export class HeadJournal {
     if (runs.length === 0) return [];
     void this.sql`UPDATE head_journal
       SET status = 'aborted', completed_at = ${now}, error_message = ${reason}
-      WHERE status = 'running' AND (${root} IS NULL OR root_id = ${root})`;
+      WHERE status = 'running' AND (${root} IS NULL OR root_id = ${root})
+        AND (${before} IS NULL OR spawned_at < ${before})`;
     return runs.map((row) => ({
       rootId: row.root_id,
       rationale: row.rationale ?? '',

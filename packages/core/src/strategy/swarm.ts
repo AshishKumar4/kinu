@@ -1443,6 +1443,49 @@ export interface SwarmFanInReport {
 }
 
 /**
+ * What a run RE-ENTERED, or null when it started its own search.
+ *
+ * DISCLOSED RATHER THAN INVISIBLE, and that is the whole reason the field exists: a
+ * resumed run that reports exactly like a fresh one hides the eviction from the
+ * operator — the incident that produced this machinery settled a job `completed — took
+ * 18m` with nothing anywhere saying the search had died and been restarted twice. An
+ * 18-minute wall clock over four expansions is a question a reader has to be able to
+ * ask.
+ */
+export interface SwarmResumeReport {
+  /** The root this run adopted. The same id its first attempt wrote, which is the
+   *  property the whole path is for: one request, one tree. */
+  readonly rootId: string;
+  /**
+   * Nodes an earlier attempt settled and this one did not re-pay for.
+   *
+   * `expansions` on the report above counts the WHOLE search; this is the part of it
+   * that predates this attempt, so `expansions - inheritedExpansions` is what this
+   * activation actually bought.
+   */
+  readonly inheritedExpansions: number;
+  /** Expansion budget left when this run re-entered — derived from the tree, so it
+   *  never re-pays for a settled node. */
+  readonly remainingBudget: number;
+  /** Tokens the earlier attempts reported, as their per-node records hold them. Null
+   *  where none of them reported any. `tokens` above is THIS attempt's spend and
+   *  deliberately not the sum: it is what this activation's ledger was charged, and
+   *  adding a figure nobody charged here to it would make the two disagree. */
+  readonly inheritedTokens: number | null;
+  /** Node rows the dead attempt left `running`, retired through the journal's own
+   *  transition. Zero on a clean re-entry, which is the common case: the activation's
+   *  start-of-life reconciliation usually got there first. */
+  readonly abandonedNodes: number;
+  /** Ledger rows for the same task this re-entry superseded — empty unless two
+   *  identical-task attempts were both left `running`. */
+  readonly superseded: readonly string[];
+  /** How many times this search has now been re-driven, counting this one. Reads
+   *  straight off the lease the re-entry claimed, which `reclaim` bumps once per
+   *  attempt, so it cannot drift from the fencing it is derived from. */
+  readonly attempt: number;
+}
+
+/**
  * The settle report: what the run REACHED, what it spent, and what it
  * did not find — with the last one stated as a fact about the search rather than
  * about the world.
@@ -1512,6 +1555,8 @@ export interface SwarmSettleReport {
   readonly durationMs: number;
   /** What `expand:'aggregate'` fanned in, or null on a run that fans in nothing. */
   readonly fanIn: SwarmFanInReport | null;
+  /** What this run re-entered, or null when it is the search's first attempt. */
+  readonly resumed: SwarmResumeReport | null;
 }
 
 /**

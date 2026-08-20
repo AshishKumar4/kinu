@@ -191,6 +191,8 @@ export interface PairedDelta {
 export interface EvalCostComparison {
   readonly tokensIn: PairedDelta;
   readonly tokensOut: PairedDelta;
+  /** Reasoning-token delta — the deliberation cost a prompt edit claims to cut. */
+  readonly reasoning: PairedDelta;
   readonly ms: PairedDelta;
 }
 
@@ -552,6 +554,7 @@ export function compareRuns(
     cost: {
       tokensIn: pairedMetric(tasks, (o) => o.tokensIn, opts),
       tokensOut: pairedMetric(tasks, (o) => o.tokensOut, opts),
+      reasoning: pairedMetric(tasks, (o) => o.reasoningOut ?? 0, opts),
       ms: pairedMetric(tasks, (o) => o.ms, opts),
     },
   };
@@ -618,6 +621,7 @@ export function formatComparison(comparison: EvalComparison): string {
   const metrics = [
     ['tokens in ', comparison.cost.tokensIn],
     ['tokens out', comparison.cost.tokensOut],
+    ['reasoning tokens', comparison.cost.reasoning],
     ['latency ms', comparison.cost.ms],
   ] as const;
   for (const [label, d] of metrics) {

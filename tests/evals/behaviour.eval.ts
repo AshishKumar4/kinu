@@ -353,7 +353,8 @@ describeEval('Agent behaviour over the run-event ledger', {
           // now, which is why "did it ever enter codemode" had to be re-derived
           // from source rather than read off the artifact.
           toolNames: output.toolNames,
-          tokensIn: output.tokensIn, tokensOut: output.tokensOut, ms: Date.now() - startedAt,
+          tokensIn: output.tokensIn, tokensOut: output.tokensOut,
+          reasoningOut: output.reasoningOut, ms: Date.now() - startedAt,
         });
         return {
           output,

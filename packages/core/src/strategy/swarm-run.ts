@@ -150,7 +150,7 @@ import {
   carrySuppression, floorMargin, isBetter, normalisedScore, PUBLISHING_CARRIES,
 } from './objective';
 import type {
-  ExplorationRecord, Floor, FloorBreach, MeasuredValue, Measurement, MeasurementContext,
+  ExplorationRecord, Floor, Measurement, MeasurementContext,
   Objective, ObjectiveDirection, ObjectiveIdentity, ObjectiveScale, PublicationState,
   PublishingCarry, VerifierSource,
 } from './objective';
@@ -169,25 +169,45 @@ import {
   type MemberApply, type MemberDiff, type MergeBackDeps, type MergeMember,
   type MergeNodeRequest, type Reverifier,
 } from './merge-back';
+import {
+  initSwarmNodeRecords, markSwarmNodeMerged, recordSwarmNode, reenterSwarm,
+  type ChildOutcome,
+} from './swarm-resume';
 import type { VFS } from '../types/primitives';
 import type {
   BranchContext, BranchProposal, BranchRefusalPolicy, BranchVerdict, JudgeEnsembleReport,
   ResolvedSwarm, SwarmAdvance, SwarmCandidate, SwarmFanInReport, SwarmPreset, SwarmResult,
-  SwarmSettleReport,
+  SwarmResumeReport, SwarmSettleReport,
 } from './swarm';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ModelCallSink } from '../events/model-call';
 import type { WorkMode } from '../prompting/surface';
 
 /**
- * The lease epoch every ledger write of a swarm is stamped with.
+ * The lease epoch a swarm's FIRST attempt writes, and the reason the number matters.
  *
- * Always zero, and that is a property rather than a placeholder: the ledger's fencing
- * exists so a RESUMED MCTS search can reclaim its lease and invalidate the executor
- * still holding the old one, and a swarm has no resume to fence against — it settles
- * or it is gone. `MctsSearchStore.begin` writes epoch 0 and nothing here bumps it.
+ * `MctsSearchStore.begin` writes zero, and every attempt after the first claims a
+ * higher one through `reclaim` (`swarm-resume.ts`). That fencing is live rather than
+ * decorative now: a swarm HAS a resume, so an executor from the activation that was
+ * evicted could still be holding the old lease, and a `converge` from it would settle
+ * a row a re-entry is making progress on. Every ledger write below is stamped with
+ * this run's own epoch for exactly that reason.
  */
-const SWARM_LEDGER_EPOCH = 0;
+const SWARM_FIRST_LEDGER_EPOCH = 0;
+
+/**
+ * What a node's row in the head journal records when a re-entry takes over the attempt
+ * that spawned it.
+ *
+ * Written into `head_journal.error_message`, which the Exploration surface shows
+ * verbatim, so it is worded for the person reading the node — the same reason
+ * `heads/controller.ts` words `RECLAIMED_RUN_REASON` that way. Two observations and no
+ * cause: the row said "spawned, never reported", and this run found nothing left that
+ * could report it.
+ */
+const RESUMED_SWARM_NODE_REASON =
+  'Interrupted before it reported. This search was re-entered from its durable rows, '
+  + 'and the nodes after it are the continuation.';
 
 /** What a run needs that a resolved call does not carry: a model to expand with, and
  *  a workspace to measure in. */
@@ -305,6 +325,22 @@ export interface SwarmRunDeps {
   readonly compactShared?: (
     messages: readonly ModelMessage[],
   ) => Promise<readonly ModelMessage[]>;
+  /**
+   * This call is an evict/exit RE-DRIVE of a durable job row, so it RE-ENTERS the
+   * interrupted search for this task rather than starting a new one.
+   *
+   * Set by `orchestrator/background-tools.ts` and by nothing else — the delegation
+   * tool reads the marker off the call's options bag
+   * (`jobs/threshold.ts` {@link RESUME_REDRIVE_OPTION}) and passes it here. It is a
+   * property of the CALL rather than of the input, because the input is the durable row
+   * and a re-drive replays it verbatim: there is nothing in it that could tell the two
+   * apart.
+   *
+   * Absent (the default) is a first call, and a first call never adopts another run's
+   * tree — which is what keeps two concurrent `agents.swarm` calls with the same task
+   * from growing one search between them.
+   */
+  readonly redrive?: boolean;
 }
 
 /** The scalar half of an objective — the metric, direction, scale, target, floor and
@@ -1291,59 +1327,6 @@ function answerProposal(input: {
   return decision;
 }
 
-/** What scoring one child produced, and what the tree must do about it. */
-type ChildOutcome =
-  | { readonly kind: 'instrument-faulted'; readonly error: string }
-  | { readonly kind: 'unmeasurable'; readonly detail: string }
-  | {
-    /**
-     * THE NODE NEVER FINISHED, so nothing was measured and nothing may be inferred.
-     *
-     * A SEPARATE ARM from `unmeasurable`, and the distinction is the whole point: an
-     * unmeasurable candidate is an answer the INSTRUMENT could not turn into a number,
-     * which is a fact about the answer; an incomplete node has no answer for the
-     * instrument to look at, which is a fact about the run. Collapsing them makes the
-     * verifier's reason ("no runnable code") the story of a node the clock stopped —
-     * and where an unfinished node's status line happens to carry a fence, collapsing
-     * them SCORES it, which is the ranking measuring the clock.
-     *
-     * Neither is backpropagated, both take the node out of selection, and only this one
-     * says the run was cut.
-     */
-    readonly kind: 'incomplete';
-    readonly detail: string;
-  }
-  | {
-    readonly kind: 'sealed';
-    readonly measurement: MeasuredValue;
-    readonly breach: FloorBreach;
-  }
-  | {
-    readonly kind: 'scored';
-    readonly measurement: MeasuredValue;
-    /** Null where the objective's own range admits no score for this value. */
-    readonly score: number | null;
-  }
-  | {
-    /**
-     * Scored by the marginalised judge ensemble rather than by an instrument.
-     *
-     * A SEPARATE ARM and not a `scored` with a synthesised `MeasuredValue`, because a
-     * judged node has no raw value in any objective's unit — the ensemble's [0,1]
-     * median IS the number, and manufacturing a `measurement` around it would put a
-     * judge's opinion into the field the records store keeps raw measurements in.
-     * There is no `sealed` counterpart for the same reason: a floor is a bound on a
-     * measured quantity and nothing here measured one.
-     */
-    readonly kind: 'judged';
-    readonly score: number;
-    /** The ensemble this candidate ACTUALLY sampled, which is the request after the
-     *  per-evaluation call budget clamped it. Zero when the cascade short-circuited
-     *  before the ensemble was reached — never asked, not asked and answered. */
-    readonly ensemble: number;
-    readonly grounding: string;
-  };
-
 /**
  * Measure one child: write it to the path the instrument reads, run the instrument,
  * and classify what came back.
@@ -1650,6 +1633,11 @@ export async function runSwarm(
   // the carry-in read immediately below would be a query against a table that does not
   // exist.
   initExplorationRecordsTable(deps.rt.storage.execRaw, sql);
+  // The per-node content store a RE-ENTRY reads (*swarm-resume.ts*), initialised for
+  // the same reason the three above are. `search_nodes` holds this tree's selection
+  // state and cannot answer a resume — `value` is a mean over a subtree, and no column
+  // holds the raw measurement a winner is ranked on or the breach that seals a run.
+  initSwarmNodeRecords(deps.rt.storage.execRaw);
 
   // CARRY-IN. What earlier runs of THIS objective, under THIS floor, already reached —
   // read before anything is expanded, so the search starts from it rather than
@@ -1689,16 +1677,42 @@ export async function runSwarm(
     return unsupported(`advance:"${resolved.config.advance.kind}" has no scheduler in this runner.`);
   }
 
+  /**
+   * THE SEARCH THIS CALL IS: the interrupted one it re-enters, or a new one.
+   *
+   * A re-driven background job replays the stored tool input verbatim
+   * (`orchestrator/background-tools.ts`), so minting a fresh root here is what turned
+   * ONE evicted five-head search into two abandoned trees, a second ledger row, and a
+   * job that settled `completed — took 18m` carrying an aborted result. Gated on the
+   * call being a re-drive, so a fresh `agents.swarm` whose task matches a search still
+   * expanding gets its own root; `swarm-resume.ts` states the rest of the rule and
+   * names what a re-entry cannot recover.
+   */
+  const reentry = deps.redrive === true
+    ? reenterSwarm({ sql, ledger: searchLedger, journal }, {
+      task: resolved.task, reason: RESUMED_SWARM_NODE_REASON, now: Date.now(),
+    })
+    : null;
   // The ROOT is the workspace as found at depth 0 — the one node no model wrote.
   // Recorded so that selection has something to select and so that every child's
   // depth is DERIVED from a row this engine wrote rather than asserted by its author.
-  const rootId = nanoid();
+  // A re-entry adopts the row its first attempt wrote: re-inserting it would collide on
+  // the primary key, and minting a second root is the defect above.
+  const rootId = reentry?.rootId ?? nanoid();
+  // MEASURED NOW IN BOTH CASES, never read back off the row. The root IS the workspace
+  // as found, and what a re-entering run finds is the state its own first attempt left
+  // — including the winner an earlier settle applied. Reading the stored `observation`
+  // instead would hand a resumed run the workspace as it was BEFORE any of that, and
+  // that column also carries the task string where the path held nothing, which is not
+  // an artifact at all.
   const rootArtifact = verifier && ctx ? await readArtifact(ctx, verifier.artifact) : null;
-  insertSearchNode(sql, {
-    nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
-    task: resolved.task, action: '', observation: rootArtifact ?? resolved.task,
-    codeUsed: null, depth: 0, msgId: null,
-  });
+  if (!reentry) {
+    insertSearchNode(sql, {
+      nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
+      task: resolved.task, action: '', observation: rootArtifact ?? resolved.task,
+      codeUsed: null, depth: 0, msgId: null,
+    });
+  }
   const nodes = new Map<string, TreeNode>([[rootId, {
     id: rootId, parentId: null, depth: 0, artifact: rootArtifact,
     // The baseline IS the root's measurement, and its normalised score is 0 by
@@ -1716,7 +1730,8 @@ export async function runSwarm(
   }]]);
   // One run header, so every node of this search groups under one root in the journal
   // instead of each appearing as its own empty run — the defect `recordSplit` exists
-  // to close, reached here for the same reason.
+  // to close, reached here for the same reason. Idempotent under a re-entry: the row is
+  // keyed on the root and re-labelled rather than duplicated.
   if (agentNodes) {
     journal.recordSplit(rootId, resolved.label ?? resolved.preset, Date.now());
   }
@@ -1744,6 +1759,87 @@ export async function runSwarm(
   /** Realised sizes whose clamp has already been disclosed, so one run reports one event
    *  per distinct size rather than one per candidate. */
   const clampsReported = new Set<number>();
+  /**
+   * WHAT AN EARLIER ATTEMPT OF THIS SEARCH ALREADY SETTLED, put back.
+   *
+   * Every accumulator above is seeded from the durable rows so a re-entry continues
+   * one search instead of reporting the half of it that happens to be in memory: the
+   * tree (so selection descends what exists), the candidate list (so `expansions`
+   * counts the whole search), the WINNER (so a resumed run cannot crown a candidate
+   * worse than one already measured), the SEAL (so a run that breached its floor stays
+   * unpublishable — resuming open would publish work the seal exists to hold back),
+   * the realised ensembles and the per-candidate spend.
+   *
+   * Nodes arrive parent-before-child, which is what lets a `context:'fork'` child of a
+   * re-entered parent inherit that parent's conversation: the transcript is composed
+   * down the chain exactly as the loop composes it. What it does NOT carry is each
+   * child's own seed message — a user turn built from prompt state that was never
+   * durable — so an inherited prefix is the ancestors' turns without the questions that
+   * prompted them. Named because it is a real difference in what a resumed child reads,
+   * and the alternative was persisting every node's whole prefix, which is quadratic in
+   * depth.
+   *
+   * A node with a tree row and no record cannot happen going forward — the record is
+   * written first, so a row implies one — but an older workspace can hold one, and it
+   * is rebuilt as a selectable parent that is not a candidate: it has an answer and no
+   * measurement, and ranking it would rank an unmeasured node.
+   */
+  let inheritedExpansions = 0;
+  let inheritedTokens: number | null = null;
+  for (const node of reentry?.nodes ?? []) {
+    // The root was seeded above, measured against the workspace as it is NOW.
+    if (node.parentId === null) continue;
+    inheritedExpansions += 1;
+    const { record } = node;
+    const outcome = record?.outcome ?? null;
+    const measurement = outcome?.kind === 'sealed' || outcome?.kind === 'scored'
+      ? outcome.measurement
+      : null;
+    const score = outcome?.kind === 'scored' || outcome?.kind === 'judged'
+      ? outcome.score
+      : null;
+    nodes.set(node.id, {
+      id: node.id, parentId: node.parentId, depth: node.depth,
+      artifact: node.artifact,
+      measurement, score,
+      // A proposal and a grant were in-memory state of the dead attempt. Both are
+      // named losses in `swarm-resume.ts`: the node is selectable again and expands
+      // under the run's own `context`, and the grant's debit is refunded because
+      // nothing was created.
+      proposal: null, proposalError: null, granted: null,
+      conclusion: record?.conclusion ?? null,
+      transcript: [...(nodes.get(node.parentId)?.transcript ?? []), ...node.produced],
+      // Recomputed when this node becomes a branch point, exactly as a fresh one is.
+      compacted: null,
+      aggregated: record?.aggregated ?? [],
+    });
+    if (!record) continue;
+    const candidate: SwarmCandidate = {
+      id: node.id,
+      artifact: node.artifact,
+      measured: measurement,
+      unmeasurable: outcome?.kind === 'unmeasurable' ? outcome.detail : null,
+      incomplete: outcome?.kind === 'incomplete' ? outcome.detail : null,
+      score,
+    };
+    candidates.push(candidate);
+    spentBy.set(node.id, record.tokens);
+    if (record.tokens !== null) inheritedTokens = (inheritedTokens ?? 0) + record.tokens;
+    if (outcome?.kind === 'judged' && outcome.ensemble > 0) ensembles.push(outcome.ensemble);
+    if (outcome?.kind === 'sealed') {
+      publication = { kind: 'sealed', breach: outcome.breach, clearedBy: null };
+    }
+    // THE SAME RANK EXPRESSION THE LOOP USES, over the same arms: a verified candidate
+    // ranks on its RAW measurement and a judged one on the ensemble's median, and a
+    // sealed candidate ranks on nothing at all.
+    const rank = outcome?.kind === 'scored'
+      ? outcome.measurement.value
+      : outcome?.kind === 'judged' ? outcome.score : null;
+    if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
+      best = candidate;
+      bestValue = rank;
+    }
+  }
   // THE EXPANSION BUDGET, in units of one child: `depth` waves of `branches`, DERIVED
   // from the two caps the call resolved because there is no third cap to read. `budget`
   // (iterations) was filed as a cap on `SwarmInput`, but `SwarmInput` declares none and
@@ -1760,31 +1856,63 @@ export async function runSwarm(
   // in this loop: an agent node asks from inside its own concurrent tool loop, so the
   // read and the debit have to be one step (`swarm-budget.ts`).
   const expansionBudget = maxDepth * branches;
-  const budget = new SwarmBudget(expansionBudget);
-  // THE RUN'S OWN LEDGER ROW, here rather than beside the other two run headers above
-  // because the budget it records is derived immediately above it. Written at the START
-  // so a live swarm reads as running and a settled one as settled, which is the same
-  // discipline `mcts/engine.ts` keeps: the alternative — one row at the settle barrier —
-  // would leave every in-flight run indistinguishable from one that never recorded
-  // anything. Knobs left `undefined` are omitted by `JSON.stringify`, and the read model
-  // reports an absent knob as unrecorded rather than as a default it invented.
-  searchLedger.begin({
-    rootId,
-    task: resolved.task,
-    engine: 'swarm',
-    // A swarm's root is the workspace as found, not a message in a conversation.
-    rootMsgId: null,
-    config: {
+  /**
+   * WHAT THIS ATTEMPT MAY STILL SPEND.
+   *
+   * Derived from the TREE and not from the ledger's `budget` column, and the two can
+   * disagree: a swarm checkpoints at its level barriers, so an attempt cut inside a
+   * level left the column reading the level before it. The tree is the record of
+   * expansions that actually HAPPENED, so this never re-pays for a settled node — and
+   * never charges for one that was bought and never created, which is the other
+   * direction: an agent node's grant debits from inside its own tool call, so an
+   * eviction can lose children the run had already paid for, and refunding them is
+   * correct because nothing exists that they paid for.
+   */
+  const budget = new SwarmBudget(Math.max(0, expansionBudget - inheritedExpansions));
+  /**
+   * THE LEASE every ledger write of this run is stamped with: the epoch a re-entry
+   * claimed, or zero for a first attempt.
+   *
+   * Live fencing rather than the constant zero it used to be. A swarm has a resume now,
+   * so an executor from the evicted activation may still hold the previous lease, and a
+   * `converge` from it would settle a row this run is making progress on.
+   */
+  const ledgerEpoch = reentry?.epoch ?? SWARM_FIRST_LEDGER_EPOCH;
+  // THE RUN'S OWN LEDGER ROW. Written at the START so a live swarm reads as running and
+  // a settled one as settled, which is the same discipline `mcts/engine.ts` keeps: the
+  // alternative — one row at the settle barrier — would leave every in-flight run
+  // indistinguishable from one that never recorded anything. Knobs left `undefined` are
+  // omitted by `JSON.stringify`, and the read model reports an absent knob as
+  // unrecorded rather than as a default it invented.
+  //
+  // A RE-ENTRY CHECKPOINTS THE ROW IT CLAIMED instead of writing one. `begin` is an
+  // INSERT OR REPLACE that resets the status to `running` and the epoch to zero, so
+  // calling it here would throw away the lease this run just took and un-fence the
+  // executor it was taken from. What the row needs is the truth about progress, which
+  // is what the checkpoint carries.
+  if (reentry) {
+    searchLedger.checkpoint(
+      rootId, ledgerEpoch, inheritedExpansions, budget.remaining, Date.now(),
+    );
+  } else {
+    searchLedger.begin({
+      rootId,
+      task: resolved.task,
+      engine: 'swarm',
+      // A swarm's root is the workspace as found, not a message in a conversation.
+      rootMsgId: null,
+      config: {
+        budget: expansionBudget,
+        branches,
+        mode: deps.mode,
+        maxDepth,
+        explorationWeight: resolved.config.explorationWeight,
+        judgeSamples: judgeSamples ?? undefined,
+      },
       budget: expansionBudget,
-      branches,
-      mode: deps.mode,
-      maxDepth,
-      explorationWeight: resolved.config.explorationWeight,
-      judgeSamples: judgeSamples ?? undefined,
-    },
-    budget: expansionBudget,
-    now: Date.now(),
-  });
+      now: Date.now(),
+    });
+  }
 
   /**
    * What every agent node of this run is handed, built ONCE.
@@ -1992,8 +2120,15 @@ export async function runSwarm(
   /** THE RUN'S MERGE LEDGER: what a fan-in has already landed in the origin.
    *  *Dependency order* asks whether a dependency has SETTLED, and one that settled at
    *  an earlier barrier of this run has — a DAG merged one fan-in at a time is still one
-   *  merge order. */
-  const landed = new Set<string>();
+   *  merge order.
+   *
+   *  SEEDED FROM THE DURABLE RECORDS, because "landed" is a fact about the ORIGIN and
+   *  the origin outlives the activation: a member an earlier attempt applied is in the
+   *  workspace, and re-offering it would re-apply bytes the origin already holds and
+   *  could only disagree with a sibling that barrier already reconciled. */
+  const landed = new Set<string>(
+    (reentry?.nodes ?? []).filter((node) => node.merged).map((node) => node.id),
+  );
   /** Level members no fan-in could consume, and members a fan-in consumed after the tree
    *  had retired them. Sets, so two fan-ins over one level cannot count a node twice. */
   const unusableParents = new Set<string>();
@@ -2271,6 +2406,10 @@ export async function runSwarm(
     for (const outcome of report.outcomes) {
       if (outcome.kind !== 'applied') continue;
       landed.add(outcome.nodeId);
+      // AND DURABLY, because what this records is a fact about the ORIGIN: the bytes are
+      // in the workspace and outlive the activation, so a re-entry that re-offered this
+      // member would re-apply them.
+      markSwarmNodeMerged(sql, outcome.nodeId, Date.now());
       fanInMerged += 1;
     }
     for (const vertex of vertices) aggregateVertices.push(vertex.id);
@@ -2337,7 +2476,7 @@ export async function runSwarm(
       // from an unknown parent would produce children nothing can explain.
       // The ledger is settled on the way out: a run that returned a refusal is not a
       // run still going, and this row is what the surface reads its status from.
-      searchLedger.fail(rootId, SWARM_LEDGER_EPOCH, Date.now());
+      searchLedger.fail(rootId, ledgerEpoch, Date.now());
       return unavailable(`the search selected node ${selected.id} of its own tree and this run holds `
         + 'no content for it, so the expansion would have no parent to continue from. That is an '
         + 'inconsistent tree rather than a missing instrument, and it stops the run.');
@@ -2463,6 +2602,12 @@ export async function runSwarm(
     // than summarised, because a level's failure is only actionable if the reader can see
     // which node said what.
     if (failures.length > 0 && expansions.length === 0) {
+      // THE LEDGER IS SETTLED ON THE WAY OUT, as it is on every other refusal past
+      // `begin`. A refused run left `running` used to be merely untidy; now it is a
+      // RESUME TARGET — the next re-drive of this task would re-enter a tree whose run
+      // already gave up — so a refusal that does not settle its row is a refusal that
+      // silently continues.
+      searchLedger.fail(rootId, ledgerEpoch, Date.now());
       return unavailable(`the level at depth ${String(childDepth)} produced no candidate: all `
         + `${String(width)} of its nodes failed. ${failures.join(' | ')}`);
     }
@@ -2539,7 +2684,7 @@ export async function runSwarm(
         // nothing is published, and the reason reaches the caller intact.
         // NAMED, because there are two scorers now and "the verifier faulted" on a judged
         // run sends a reader to an instrument the run never ran.
-        searchLedger.fail(rootId, SWARM_LEDGER_EPOCH, Date.now());
+        searchLedger.fail(rootId, ledgerEpoch, Date.now());
         return unavailable(`the ${measures ? 'verifier' : 'judge'} faulted while scoring `
           + `${expansion.id}, so no number this run produced can be trusted: ${outcome.error}`);
       }
@@ -2564,6 +2709,26 @@ export async function runSwarm(
         score,
       };
       candidates.push(candidate);
+      // THE NODE'S OWN RECORD, and it is written BEFORE the tree row on purpose: a
+      // record with no row is invisible to the re-entry reader, which joins from the
+      // tree, while a row with no record would be a node with an answer and no
+      // measurement — selectable, unrankable, and indistinguishable from one the
+      // instrument could not measure. This ordering makes the second state unreachable
+      // for anything this build writes (*swarm-resume.ts*).
+      //
+      // `outcome` is null only for a run whose `score` axis measures nothing, which is
+      // an outcome that was never asked for rather than one that produced no number.
+      recordSwarmNode(sql, {
+        rootId,
+        nodeId: expansion.id,
+        record: {
+          outcome,
+          conclusion: expansion.conclusion,
+          aggregated: expansion.aggregated,
+          tokens: spentBy.get(expansion.id) ?? null,
+        },
+        now: Date.now(),
+      });
       // DEPTH IS DERIVED: the parent's row plus one, computed here and written by the
       // engine. A node supplies no depth, so there is no number for it to lie about.
       insertSearchNode(sql, {
@@ -2672,6 +2837,31 @@ export async function runSwarm(
         deps.rt, rootId, resolved.config.pruneThreshold, resolved.config.minVisitsForPrune,
       );
     }
+
+    // THE LEVEL BARRIER IS THIS RUN'S CHECKPOINT, and it is what makes the ledger row
+    // readable while the search is alive. The row used to be written once at `begin`
+    // and once at the settle barrier, so an evicted run left `iter=0/5` on disk
+    // forever — the state two rows of the live incident were still in eleven hours
+    // later — and a re-entry had nothing to read progress from. The barrier is the
+    // right grain rather than a timer: it is the point at which a wave is measured,
+    // compared and recorded, so the numbers written here are facts the tree agrees
+    // with. Fenced on this run's lease, so an executor from a superseded activation
+    // cannot write over it.
+    searchLedger.checkpoint(
+      rootId, ledgerEpoch, candidates.length, budget.remaining, Date.now(),
+    );
+    // AND IT IS SAID OUT LOUD, the way `mcts.checkpoint_reached` is. The ledger row is
+    // the only real heartbeat a hosted search has, and the MCTS half of that lesson was
+    // learned once already: a durably-checkpointed search ran for hours and produced
+    // nothing in Workers Logs per iteration, so nobody could tell a working search from
+    // a hung one. A swarm now checkpoints, so it says so.
+    log.event('swarm.checkpoint_reached', {
+      preset: resolved.preset,
+      root_id: rootId,
+      epoch: ledgerEpoch,
+      expansions: candidates.length,
+      remaining: budget.remaining,
+    });
   }
 
   // THE SWEEP. Every THOUGHT node's proposal that selection never reached is answered
@@ -2950,6 +3140,20 @@ export async function runSwarm(
         prunedParents: prunedParents.size,
       }
       : null,
+    // WHAT THIS RUN RE-ENTERED, or null on a first attempt. `expansions` above counts
+    // the WHOLE search across attempts — one request, one tree, one count — so this is
+    // the field that says how much of it predates this activation.
+    resumed: reentry === null ? null : {
+      rootId,
+      inheritedExpansions,
+      remainingBudget: expansionBudget - inheritedExpansions,
+      inheritedTokens,
+      abandonedNodes: reentry.abandoned,
+      superseded: reentry.superseded,
+      // The lease IS the attempt counter: `reclaim` bumps it exactly once per re-entry,
+      // and epoch 0 is the first attempt — so this run is the (epoch + 1)th.
+      attempt: reentry.epoch + 1,
+    },
     // Why the run ended, from what the loop observed rather than from the count. A
     // budget spent with nothing left to select is a SETTLED search; a budget spent
     // with a frontier still open is a truncated one, and a search narrower than its
@@ -2975,10 +3179,10 @@ export async function runSwarm(
   // settle report either way, but a row that says `converged` about a run cut short
   // would make the surface claim a search settled that did not.
   searchLedger.checkpoint(
-    rootId, SWARM_LEDGER_EPOCH, candidates.length, budget.remaining, Date.now(),
+    rootId, ledgerEpoch, candidates.length, budget.remaining, Date.now(),
   );
-  if (aborted) searchLedger.fail(rootId, SWARM_LEDGER_EPOCH, Date.now());
-  else searchLedger.converge(rootId, SWARM_LEDGER_EPOCH, Date.now());
+  if (aborted) searchLedger.fail(rootId, ledgerEpoch, Date.now());
+  else searchLedger.converge(rootId, ledgerEpoch, Date.now());
   return {
     preset: resolved.preset,
     label: resolved.label,
@@ -3103,6 +3307,8 @@ function settleReport(input: {
   readonly durationMs: number;
   /** What the fan-ins did, or null on a run that fans in nothing. */
   readonly fanIn: SwarmFanInReport | null;
+  /** What this run re-entered, or null on a first attempt. */
+  readonly resumed: SwarmResumeReport | null;
 }): SwarmSettleReport {
   const { resolved, measured, best, carry } = input;
   return {
@@ -3125,5 +3331,6 @@ function settleReport(input: {
     tokens: usageTotal(input.usage) ?? null,
     durationMs: input.durationMs,
     fanIn: input.fanIn,
+    resumed: input.resumed,
   };
 }

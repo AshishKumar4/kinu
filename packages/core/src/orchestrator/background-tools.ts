@@ -11,8 +11,9 @@
  * reaching this module for it would close that ring.
  */
 
-import type { ToolSet } from 'ai';
+import type { ToolExecutionOptions, ToolSet } from 'ai';
 import { CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool } from '../jobs/background-wrap';
+import { RESUME_REDRIVE_OPTION } from '../jobs/threshold';
 import { JobNotResumable } from '../jobs/runner';
 import type { WorkMode } from '../prompting/surface';
 import { resumableAgentsInput } from '../tools/agents-tool';
@@ -42,8 +43,20 @@ export const BACKGROUNDABLE_TOOLS = {
 
 /**
  * Re-drive a background job interrupted by a DO eviction / CLI process exit
- * (B6). Only a SEARCH is resumable: re-running the RAW agents tool (no 30s
- * re-detach) continues an interrupted search from its durable checkpoint.
+ * (B6). Only a SEARCH is resumable, and re-running the RAW agents tool (no 30s
+ * re-detach) CONTINUES the interrupted search rather than starting another: both
+ * engines re-enter their own durable rows — `mcts/engine.ts` from its checkpoint,
+ * `strategy/swarm-run.ts` from its tree and its per-node records
+ * (`strategy/swarm-resume.ts`). That claim used to be true of MCTS only, and the
+ * swarm half of it was measured costing a live five-head search its whole tree: the
+ * re-drive minted a second root, re-paid for every expansion and abandoned the first.
+ *
+ * THE CALL IS MARKED AS A RE-DRIVE, and it is the only path that sets that marker.
+ * The stored input is replayed verbatim, so nothing in it distinguishes a re-drive
+ * from a first call — and only a re-drive may re-enter: a fresh `agents.swarm` whose
+ * task matches a search still expanding must get its own tree. See
+ * {@link RESUME_REDRIVE_OPTION}.
+ *
  * Rows stored before today's surface — the pre-unification `think` kind, and
  * the removed `fork` action — are TRANSLATED onto the same path by
  * `resumableAgentsInput` rather than refused, because a durable row is history
@@ -65,8 +78,13 @@ export async function resumeBackgroundJob(
   if (!resumed) throw new JobNotResumable(kind);
   const exec = rawTools(mode).agents?.execute;
   if (!exec) throw new JobNotResumable(kind);
-  const result = await exec(resumed, {
+  // Typed as a variable rather than written inline, for `background-wrap.ts`'s reason:
+  // the SDK's own options type is closed, so an extra key in a literal fails overload
+  // resolution instead of widening.
+  const execOptions: ToolExecutionOptions & { [RESUME_REDRIVE_OPTION]: true } = {
     abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
-  });
+    [RESUME_REDRIVE_OPTION]: true,
+  };
+  const result = await exec(resumed, execOptions);
   return result === undefined ? undefined : decodeJsonValue({ value: result });
 }

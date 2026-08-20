@@ -1209,9 +1209,18 @@ export class LocalAgentSession implements BackendHost {
   async end(): Promise<void> {
     this.ended = true;
     this.clearLocalAlarm();
+    const t0 = Date.now();
     await this.orch.settleEvolution();
+    const t1 = Date.now();
     await this.joinBackgroundFibers(this.drainDeadline());
+    const t2 = Date.now();
     await this.mcpClose?.();
+    const t3 = Date.now();
+    // The exit tail, attributed: see evolution.settled for WHAT the first
+    // phase waited on.
+    diagnostics.event('session.settle_timings', {
+      evolutionMs: t1 - t0, fibersMs: t2 - t1, mcpMs: t3 - t2,
+    });
   }
 
   /** Durable fibers detached from a turn — a backgrounded tool call, or an

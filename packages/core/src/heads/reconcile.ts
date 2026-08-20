@@ -87,10 +87,18 @@ export function forkInterruptedWake(runs: readonly AbandonedHeadRun[]): string {
 /**
  * Settle the journal's interrupted runs and tell the agent about them.
  *
- * Call once at the start of an activation, BEFORE anything can resume a fork:
- * at that instant no head can be running, so every `running` row is stale by
- * construction — the same argument `BackgroundJobRunner.recoverOrphans` makes
- * for its own registry, and the reason neither needs a liveness handshake.
+ * Call once at the start of an activation. Every `running` row at that instant was
+ * spawned by an earlier one, and nothing carries a head across a process exit or a DO
+ * eviction, so the status is stale by construction — the same argument
+ * `BackgroundJobRunner.recoverOrphans` makes for its own registry, and the reason
+ * neither needs a liveness handshake.
+ *
+ * IT DOES NOT HAVE TO RUN BEFORE A RESUME, and that is deliberate: the sweep is
+ * bounded to heads spawned before `now`, so a head a resume spawns in THIS activation
+ * is outside it whichever of the two runs first. See
+ * `HeadJournal.abandonRunning` — the bound is the ordering rule, because the order
+ * itself belongs to the platform: the CLI awaits this before recovery, while a
+ * Durable Object's `onStart` and `onFiberRecovered` are both the SDK's to dispatch.
  *
  * Returns the runs it settled so the caller can log what it reconciled; the
  * empty array is the clean-start case and delivers nothing.
@@ -104,8 +112,14 @@ export async function reconcileInterruptedForks(deps: {
    *  Timeline and every delegation-cost query read. */
   readonly runEvents?: RunEventLedger;
   readonly logActivity?: (event: string, detail?: string) => void;
+  /** This activation's start, and the sweep's own bound. Injected for a test that
+   *  needs the two sides of it. */
+  readonly now?: number;
 }): Promise<readonly AbandonedHeadRun[]> {
-  const runs = deps.journal.abandonRunning(FORK_INTERRUPTED_REASON);
+  const startedAt = deps.now ?? Date.now();
+  const runs = deps.journal.abandonRunning(
+    FORK_INTERRUPTED_REASON, { spawnedBefore: startedAt }, startedAt,
+  );
   if (runs.length === 0) return runs;
   deps.logActivity?.(
     'fork_runs_abandoned',

@@ -97,35 +97,61 @@ async function executeWithInterpreter(
   interpreter: { readonly command: string; readonly extension: string },
   timeoutMs: number,
 ): Promise<ExecuteResult> {
-  const tmpFile = join(tmpdir(), `proteus-exec-${Date.now()}-${Math.random().toString(36).slice(2)}${interpreter.extension}`);
+  const run = await runToCompletion([interpreter.command], code, interpreter.extension, timeoutMs);
+  if (run.error) return { result: undefined, error: run.error };
+  return run.exitCode === 0
+    ? { result: run.stdout.trim() || null }
+    : { result: undefined, error: run.stderr.trim() || `Process exited with code ${run.exitCode}` };
+}
+
+/**
+ * Spawn, bound by wall clock, and read output WITHOUT depending on pipe EOF.
+ *
+ * stdio goes to temp files, read after exit. With pipes, `new Response(stdout)`
+ * resolves only at EOF, and a grandchild the code left running (a daemonized
+ * server) inherits the write end — so a finished probe held `proteus exec`
+ * open until the harness cap killed it (TB2.1 nginx trial, 2026-08-20).
+ */
+async function runToCompletion(
+  argv: string[],
+  code: string,
+  extension: string,
+  timeoutMs: number,
+): Promise<{ exitCode: number; stdout: string; stderr: string; error?: string }> {
+  const stem = join(tmpdir(), `proteus-exec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const tmpFile = `${stem}${extension}`;
+  const outFile = `${stem}.out`;
+  const errFile = `${stem}.err`;
   writeFileSync(tmpFile, code);
+  writeFileSync(outFile, '');
+  writeFileSync(errFile, '');
   try {
-    const proc = Bun.spawn([interpreter.command, tmpFile], {
-      stdout: 'pipe',
-      stderr: 'pipe',
+    const proc = Bun.spawn([...argv, tmpFile], {
+      stdout: Bun.file(outFile),
+      stderr: Bun.file(errFile),
       env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp' },
     });
     let killedByTimeout = false;
     const timeout = setTimeout(() => { killedByTimeout = true; proc.kill(); }, timeoutMs);
     const exitCode = await proc.exited;
     clearTimeout(timeout);
-
-    const stdout = (await new Response(proc.stdout).text()).trim();
-    const stderr = (await new Response(proc.stderr).text()).trim();
     if (killedByTimeout) {
-      return { result: undefined, error: `Execution timeout (${Math.round(timeoutMs / 1000)}s)` };
+      return { exitCode, stdout: '', stderr: '', error: `Execution timeout (${Math.round(timeoutMs / 1000)}s)` };
     }
-    return exitCode === 0
-      ? { result: stdout || null }
-      : { result: undefined, error: stderr || `Process exited with code ${exitCode}` };
+    return {
+      exitCode,
+      stdout: await Bun.file(outFile).text(),
+      stderr: await Bun.file(errFile).text(),
+    };
   } finally {
     unlinkSync(tmpFile);
+    unlinkSync(outFile);
+    unlinkSync(errFile);
   }
 }
 
 /** Execute in a Bun subprocess with timeout. */
 async function executeInSubprocess(code: string, timeoutMs: number): Promise<ExecuteResult> {
-  const tmpFile = join(tmpdir(), `proteus-exec-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`);
   // LLMs often send bare expressions (e.g., "7 * 13") without return.
   // Strategy: try as expression first, fall back to statements with
   // auto-return on the last line if it looks like an expression.
@@ -144,46 +170,24 @@ async function executeInSubprocess(code: string, timeoutMs: number): Promise<Exe
     }
   `;
 
-  writeFileSync(tmpFile, wrapper);
-
+  // A compiled `proteus` binary is not the bun CLI and usually ships without
+  // one beside it (TB2.1: turn review failed in every container-less deploy).
+  // With no subprocess runtime, in-process execution is the real remaining
+  // executor — same code, no isolation, stated here rather than guessed at.
+  const bunBin = Bun.which('bun');
+  if (!bunBin) return executeInProcess(code, [], timeoutMs);
+  const run = await runToCompletion([bunBin, 'run'], wrapper, '.mjs', timeoutMs);
+  if (run.error) return { result: undefined, error: run.error };
+  if (run.exitCode !== 0) {
+    return { result: undefined, error: run.stderr.trim() || `Process exited with code ${run.exitCode}` };
+  }
+  const lastLine = run.stdout.trim().split('\n').pop() ?? '';
   try {
-    const proc = Bun.spawn(['bun', 'run', tmpFile], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp' },
-    });
-
-    // The kill has to be distinguishable from a crash. `proc.kill()` leaves an
-    // empty stderr and a null exit code, so a candidate that was CUT read as
-    // "Process exited with code null" — a bound whose firing looked like a defect
-    // in the code it bounded, which is the one way a timeout cannot be audited
-    // from its symptoms. The in-process path already names itself; this one now
-    // does too.
-    let killedByTimeout = false;
-    const timeout = setTimeout(() => { killedByTimeout = true; proc.kill(); }, timeoutMs);
-    const exitCode = await proc.exited;
-    clearTimeout(timeout);
-
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-
-    if (killedByTimeout) {
-      return { result: undefined, error: `Execution timeout (${Math.round(timeoutMs / 1000)}s)` };
-    }
-    if (exitCode !== 0) {
-      return { result: undefined, error: stderr.trim() || `Process exited with code ${exitCode}` };
-    }
-
-    const lastLine = stdout.trim().split('\n').pop() ?? '';
-    try {
-      const parsed = v.parse(subprocessResultSchema, JSON.parse(lastLine));
-      if (parsed.ok) return { result: parsed.result };
-      return { result: undefined, error: parsed.error ?? 'Unknown error' };
-    } catch {
-      return { result: stdout.trim() || undefined };
-    }
-  } finally {
-    unlinkSync(tmpFile);
+    const parsed = v.parse(subprocessResultSchema, JSON.parse(lastLine));
+    if (parsed.ok) return { result: parsed.result };
+    return { result: undefined, error: parsed.error ?? 'Unknown error' };
+  } catch {
+    return { result: run.stdout.trim() || undefined };
   }
 }
 

@@ -35,8 +35,21 @@ const RATIONALE = 'four angles on the research question';
 /** The run the fork was dispatched from — the one carrying its `head_split`. */
 const RUN = 'run-dispatched-the-fork';
 
+/**
+ * How long before the reconciling activation the dead one spawned these heads.
+ *
+ * Load-bearing rather than cosmetic. `abandonRunning` retires heads spawned BEFORE the
+ * activation doing the sweep — that bound is what stops a resume's own heads from being
+ * retired by a reconciliation running beside it — so a fixture that spawns its heads at
+ * `Date.now()` is asserting the impossible: an activation cannot spawn a head after the
+ * activation that reconciles it has started. The whole point of the scenario is that
+ * these heads outlived the process that owned them.
+ */
+const SPAWNED_A_MINUTE_EARLIER_MS = 60_000;
+
 /** The workspace as it stood when the operator cancelled: a detached 4-head
- *  fork, journalled by the real controller's writes. */
+ *  fork, journalled by the real controller's writes, by a process that has since
+ *  exited. */
 function workspace() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -46,7 +59,7 @@ function workspace() {
   const journal = new HeadJournal(sql);
   const jobs = new BackgroundJobStore(sql);
 
-  const now = Date.now();
+  const now = Date.now() - SPAWNED_A_MINUTE_EARLIER_MS;
   jobs.create({
     id: 'bgjob-fork', kind: 'agents', workMode: 'build', now,
     label: 'search: survey the prior art',
@@ -241,6 +254,48 @@ describe('an operator-cancelled fork is not reported as running', () => {
     expect(ledger.size).toBe(2);
     expect(after[1]).toEqual(before.at(-1)!);
     expect(String(after.at(-1)?.content)).not.toContain('heads running');
+  });
+
+  /**
+   * THE ORDERING RULE, from both sides.
+   *
+   * Reconciliation and a RESUME both run at start of life, and neither backend can
+   * order them: the CLI awaits this before recovery, while a Durable Object's `onStart`
+   * and `onFiberRecovered` are both dispatched by the Agents SDK. So the safety is a
+   * bound on the write — heads spawned before the reconciling activation — and these two
+   * tests are its two directions. Without the bound the second one fails: a resume that
+   * re-expanded its tree and then had this sweep run beside it would have its live nodes
+   * marked `aborted`, and the agent would be TOLD, over the one signal seam, that work
+   * still running had been retired.
+   */
+  test('a head the resume spawned in THIS activation survives the sweep beside it', async () => {
+    const w = workspace();
+    const activationStart = Date.now();
+    // The re-drive re-expands the interrupted tree: a new node, spawned now, under a
+    // root of its own. Journalled through the same writer a swarm node uses.
+    w.journal.recordSplit('root-resumed', 'the re-entered search', activationStart + 5);
+    w.journal.insertSpawn({
+      id: 'resumed-node', parentId: null, rootId: 'root-resumed', depth: 1,
+      task: 'the continuation', rationale: 'why', mode: 'build',
+      inheritedContext: [], mergeStrategy: 'synthesize',
+      budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: activationStart + 5 },
+    });
+
+    const agent = idleAgent();
+    const settled = await reconcileInterruptedForks({
+      journal: w.journal, signals: agent.signals, now: activationStart,
+    });
+
+    // The DEAD attempt's heads are retired — the denominator, so this cannot pass by
+    // the sweep having done nothing at all.
+    expect(settled.map((run) => run.rootId)).toEqual([ROOT]);
+    expect(settled[0]?.abandoned).toBe(HEADS);
+    // And the live node is untouched: still `running`, still on the roster, and never
+    // named in the wake the agent was sent.
+    expect(w.journal.readHead('resumed-node')?.status).toBe('running');
+    expect(w.journal.readHead('resumed-node')?.error_message).toBeNull();
+    expect(w.journal.listLive().map((run) => run.rootId)).toEqual(['root-resumed']);
+    expect(String(agent.enqueued[0]?.text)).not.toContain('root-resumed');
   });
 });
 

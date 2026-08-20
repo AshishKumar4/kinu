@@ -134,6 +134,9 @@ export type EvalObservation =
     readonly toolNames?: readonly string[];
     readonly tokensIn: number;
     readonly tokensOut: number;
+    /** Reasoning tokens, when the provider reported them. Optional for the same
+     *  reason as `toolNames`: the flash-a/b baselines predate it. */
+    readonly reasoningOut?: number;
     readonly ms: number;
   }
   | {

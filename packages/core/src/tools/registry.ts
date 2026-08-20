@@ -255,6 +255,8 @@ export const DELEGATION_RUNGS = {
     // the rung carries only what decides whether to search at all.
     + '`objective` states what is measured, in what unit, which direction is better, the target that counts as done, and `verify` as {kind, spec} naming a registered instrument — a verifier is CODE that runs, so a metric nothing can execute is not an objective. '
     + 'A floor is optional and is a PROOF: declare one and a candidate that measures past it is reported as a breach with the measurement kept, never as a score, because the bound may be what is wrong. '
+    // A production deliberation burned ~4k reasoning tokens on what an omitted budget means.
+    + 'Spend: `budget_tokens`/`budget_usd` cap everything the search transitively spawns and nest under your own mission scope; omitted means uncapped within that scope, so omit unless the caller gave you a number to enforce. '
     // The delivery contract, stated because it changes how a caller plans the turn.
     + 'It takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you. '
     + 'It refuses rather than approximates: an illegal composition comes back naming the axis and what to change, and a shape no engine here can run faithfully says so instead of returning a number from a different mechanism.',

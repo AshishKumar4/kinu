@@ -236,3 +236,30 @@ export function readSpawnStarted<T>(toolOptions: T): (() => void) | undefined {
   const fn = parsed.success ? parsed.output[SPAWN_STARTED_OPTION] : undefined;
   return fn;
 }
+
+/**
+ * Options-bag key the RESUME path sets: this call is an evict/exit re-drive of a
+ * durable job row, not a fresh call from a model.
+ *
+ * The distinction is load-bearing and nothing else carries it. A re-drive replays the
+ * stored input verbatim, so the input cannot say which it is — and only a re-drive may
+ * RE-ENTER an interrupted search: a fresh `agents.swarm` whose task happens to match a
+ * run still expanding must get its own tree, or two live searches would grow one
+ * (`mcts/search-store.ts` findRunningSwarms states the whole rule). Absent everywhere
+ * else, which is what makes a first call structurally unable to adopt a sibling's tree.
+ *
+ * Set on the options bag rather than on the input for {@link SPAWN_STARTED_OPTION}'s
+ * reason: the input is the durable row, and a field this path added to it would be
+ * persisted on the next detach and re-read as if the model had sent it.
+ */
+export const RESUME_REDRIVE_OPTION = 'proteusResumeRedrive';
+
+const ResumeRedriveOptionsSchema = v.object({
+  [RESUME_REDRIVE_OPTION]: v.optional(v.boolean()),
+});
+
+/** Whether this tool call is a job re-drive. False for every other caller. */
+export function readResumeRedrive<T>(toolOptions: T): boolean {
+  const parsed = v.safeParse(ResumeRedriveOptionsSchema, toolOptions);
+  return parsed.success && parsed.output[RESUME_REDRIVE_OPTION] === true;
+}
