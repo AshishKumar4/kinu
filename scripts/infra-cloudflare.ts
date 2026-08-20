@@ -23,7 +23,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { resolve as resolveHostname } from 'node:dns/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 
@@ -69,11 +69,17 @@ export interface Run {
  *  runs only inside one script is a gate nobody checks. An ambient
  *  CLOUDFLARE_ACCOUNT_ID still wins, because that is how a second account is
  *  addressed deliberately. */
+const DeclaredAccount = v.object({ account_id: v.optional(v.string()) });
+
 function declaredAccountId(): string | undefined {
   const config = join(CF_BACKEND, 'wrangler.jsonc');
   if (!existsSync(config)) return undefined;
-  const found = /"account_id"\s*:\s*"([0-9a-f]+)"/.exec(readFileSync(config, 'utf8'));
-  return found?.[1];
+  // Bun decodes JSONC natively on `require` — structural, where the regex this
+  // replaces read the raw text and would have matched a commented-out id. The
+  // hex pin is the same contract the regex carried: an account id is 32 hex
+  // digits, and a placeholder must lose to the ambient variable, not win.
+  const declared = v.parse(DeclaredAccount, require(config)).account_id;
+  return declared !== undefined && /^[0-9a-f]+$/.test(declared) ? declared : undefined;
 }
 
 export function wrangler(argv: readonly string[], timeoutMs = 120_000, stdin?: string): Run {

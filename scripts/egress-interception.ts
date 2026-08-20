@@ -75,9 +75,11 @@
 
 import { readFileSync } from 'node:fs';
 
+import * as v from 'valibot';
+
 import { readSources } from './sources';
 import { assertMeasured, finding } from './gate-ratchet';
-import { classMembers, declaredName, literalText, parse, walk, type SyntaxNode } from './syntax';
+import { classMembers, declaredName, literalText, parse, superClassName, walk, type SyntaxNode } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -95,12 +97,25 @@ const REQUIRED_FIELDS = {
 /** Fields whose mere presence opens path 4. */
 const FORBIDDEN_FIELDS: readonly string[] = ['allowedHosts', 'deniedHosts'];
 
-/** Classes bound to a container image by the deployment itself. */
-export function wranglerContainerClasses(wrangler: string): string[] {
-  const containers = [...wrangler.matchAll(/"containers"\s*:\s*\[([\s\S]*?)\]/g)];
+/** `containers[].class_name` — the shape this gate reads out of wrangler.jsonc,
+ *  at the top level and under every named environment. Parsed where the file is
+ *  required; Bun decodes JSONC natively, so a commented-out block never reaches
+ *  the schema. */
+const ContainerList = v.optional(v.array(v.object({ class_name: v.string() })));
+export const WranglerContainers = v.object({
+  containers: ContainerList,
+  env: v.optional(v.record(v.string(), v.object({ containers: ContainerList }))),
+});
+
+/** Classes bound to a container image by the deployment itself. Decoded
+ *  structurally rather than by the regex this replaces, which stopped at the
+ *  first `]` inside the block (an array-valued field on one entry silently
+ *  dropped every class_name after it) and matched a commented-out block as if
+ *  it were bound. */
+export function wranglerContainerClasses(declared: v.InferOutput<typeof WranglerContainers>): string[] {
   const names = new Set<string>();
-  for (const [, block] of containers) {
-    for (const [, name] of block!.matchAll(/"class_name"\s*:\s*"(\w+)"/g)) names.add(name!);
+  for (const scope of [declared, ...Object.values(declared.env ?? {})]) {
+    for (const { class_name } of scope.containers ?? []) names.add(class_name);
   }
   return [...names].sort();
 }
@@ -115,11 +130,22 @@ export function wranglerContainerClasses(wrangler: string): string[] {
  * that quietly measures less is indistinguishable from one that got easier. A
  * class that extends Sandbox is a container whether or not it is bound yet, so
  * the two sources fail in opposite directions and the union survives both.
+ *
+ * Read from the AST rather than by the regex this replaces: `class X<T> extends
+ * Sandbox` has a token between the name and `extends`, so a generic container
+ * class silently left this denominator, and a mention inside a comment or a
+ * string counted as a declaration. The `includes` prefilter is sound — an
+ * identifier cannot reach the AST without its token appearing in the text.
  */
 export function declaredSandboxClasses(sources: ReadonlyMap<string, string>): string[] {
   const names = new Set<string>();
-  for (const [, text] of sources) {
-    for (const [, name] of text.matchAll(/class\s+(\w+)\s+extends\s+Sandbox\b/g)) names.add(name!);
+  for (const [file, text] of sources) {
+    if (!text.includes('Sandbox')) continue;
+    walk(parse(file, text).root, (node) => {
+      if (superClassName(node) !== 'Sandbox') return;
+      const name = declaredName(node);
+      if (name !== undefined) names.add(name);
+    });
   }
   return [...names].sort();
 }
@@ -218,14 +244,14 @@ export function catchAllIsBound(sources: ReadonlyMap<string, string>): boolean {
 
 if (import.meta.main) {
   const sources = readSources();
-  const fromWrangler = wranglerContainerClasses(readFileSync(`${root}${WRANGLER}`, 'utf8'));
+  const fromWrangler = wranglerContainerClasses(v.parse(WranglerContainers, require(`${root}${WRANGLER}`)));
   const fromSource = declaredSandboxClasses(sources);
   const classes = [...new Set([...fromWrangler, ...fromSource])].sort();
   const { inspected, violations } = auditInterception(sources, classes);
 
   const problems: string[] = [];
   if (fromWrangler.length === 0) {
-    problems.push(`parsed no "containers" class_name out of ${WRANGLER} — the matcher is not matching`);
+    problems.push(`parsed no "containers" class_name out of ${WRANGLER} — nothing is bound to a container image`);
   }
   if (fromSource.length === 0) {
     problems.push('found no `class X extends Sandbox` in the source — the matcher is not matching');
