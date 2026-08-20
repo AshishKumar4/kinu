@@ -527,7 +527,7 @@ packages/
 │  ├─ unit-agent-registry.test.ts  (provider registry composition)
 │  ├─ unit-alarm-tracing.test.ts   (the span seam on the alarm and RPC paths)
 │  ├─ unit-auth-security.test.ts   (browser OAuth and CLI auth invariants)
-│  ├─ unit-cli-auth-store.test.ts  (D1-backed device-code flow)
+│  ├─ unit-cli-auth-store.test.ts  (KV-backed device-code flow)
 │  ├─ unit-webhook-ingress.test.ts (webhook body/rate-limit helpers)
 │  └─ workerd/                (5 files — vitest inside workerd, not bun)
 ├─ cli-backend/tests/         (32 files)

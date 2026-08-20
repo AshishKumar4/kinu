@@ -51,7 +51,6 @@ import {
   containPreviewResponse, hostOf, isPreviewHostRequest, previewHostSuffix, previewSuffixMetaName,
 } from "./lib/preview-origin";
 import { withAppSecurityHeaders } from "./lib/security-headers";
-import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do";
 import { ownerCaller } from "./user/workspace-capability";
 import { CLI_SCOPES_HEADER } from "./cli/rpc-gate";
@@ -295,11 +294,6 @@ function wantsHtml(request: Request): boolean {
   return request.method === 'GET' && (accept.includes('text/html') || accept.includes('*/*'));
 }
 
-function withD1Bookmark(response: Response, identity: AuthIdentity): Response {
-  if (response.status === 101) return response;
-  return withD1BookmarkCookie(response, identity.d1Bookmark);
-}
-
 /**
  * The hostnames this deployment publishes over HTTPS.
  *
@@ -447,12 +441,12 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
   // 9. /api/user/* — user-scoped routes.
   const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);
-  if (userResp) return withD1Bookmark(userResp, identity);
+  if (userResp) return userResp;
 
   // 10. Per-agent routes — reject every namespace/facet path outside the
   // closed public actor grammar before ownership lookup or SDK routing.
   if (isForeignAgentNamespacePath(url.pathname)) {
-    return withD1Bookmark(err(404, 'Not found'), identity);
+    return err(404, 'Not found');
   }
 
   // Verify ownership of the root workspace. A direct subordinate facet is
@@ -464,7 +458,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // /sub/{class}/{name} segments. The closed-path rejection above keeps
     // UserDO, ExplorationAgent, ProteusSandbox and Nimbus* worker-side-only.
     const denial = await ensureAgentOwnership(env, identity, agentName);
-    if (denial) return withD1Bookmark(denial, identity);
+    if (denial) return denial;
     // Inject the userId so downstream handlers can resolve UserDO without
     // re-running auth. Worker → DO requests preserve headers.
     const reqWithId = new Request(authenticatedRequest, {
@@ -472,18 +466,18 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     });
 
     const runEventsResp = await handleRunEventsRequest(reqWithId, env);
-    if (runEventsResp) return withD1Bookmark(runEventsResp, identity);
+    if (runEventsResp) return runEventsResp;
     // EventsHub authenticated routes: /triggers, /events
     const hubResp = await handleHubRequest(reqWithId, env, agentName);
-    if (hubResp) return withD1Bookmark(hubResp, identity);
+    if (hubResp) return hubResp;
     // File uploads: HTTP rather than an agent RPC, because the RPC transport
     // is the chat WebSocket and its frame ceiling is below ordinary files.
     const filesResp = await handleFilesRequest(reqWithId, env, agentName);
-    if (filesResp) return withD1Bookmark(filesResp, identity);
+    if (filesResp) return filesResp;
     const agentResp = await routeAgentRequest(reqWithId, env);
-    if (agentResp) return withD1Bookmark(agentResp, identity);
+    if (agentResp) return agentResp;
   }
 
   // 11. SPA fallback.
-  return withD1Bookmark(await serveApp(request, env), identity);
+  return serveApp(request, env);
 }

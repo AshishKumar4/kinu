@@ -995,7 +995,7 @@ const TRANSCRIPTS = {
         text: "Checking whether Tuesday's migration reached staging at all.",
         reasoning: "If staging never ran it, the null `kind` column there proves nothing about production and the whole comparison is off.",
         toolCalls: [
-          { name: "run", input: { command: "wrangler d1 migrations list proteus-staging" }, output: "0007_coupon_kind.sql  applied 2026-08-11" },
+          { name: "run", input: { command: "./scripts/migrations.sh status --env staging" }, output: "0007_coupon_kind.sql  applied 2026-08-11" },
         ],
       },
       {

@@ -1,10 +1,9 @@
 import * as oauth from 'oauth4webapi';
 import { AuthError, SESSION_COOKIE_NAME, authenticateRequest, readSessionToken } from './session';
 import {
-  cleanupExpiredAuthRows, clearD1BookmarkCookie, consumeOAuthState, createOAuthState,
-  createSession, d1BookmarkCookie, revokeSession, sanitizeReturnTo, withD1Bookmark,
+  consumeOAuthState, createOAuthState, createSession, revokeSession, sanitizeReturnTo,
   type OAuthProfile,
-} from './d1-store';
+} from './store';
 import { escapeHtml, json } from '../lib/http';
 import { publicHtmlHeaders } from '../lib/security-headers';
 import {
@@ -34,7 +33,7 @@ const CloudflareUserSchema = v.object({
 });
 const GitHubUserSchema = v.object({
   id: v.union([v.number(), v.string()]), login: v.optional(v.string()), name: v.nullable(v.optional(v.string())),
-  email: v.nullable(v.optional(v.string())), avatar_url: v.nullable(v.optional(v.string())),
+  email: v.nullable(v.optional(v.string())),
 });
 const GitHubEmailSchema = v.object({
   email: v.optional(v.string()), primary: v.optional(v.boolean()), verified: v.optional(v.boolean()),
@@ -59,7 +58,7 @@ export async function handleAuthRequest(request: Request, env: Env, ctx?: Execut
   if (url.pathname === '/api/auth/me' && method === 'GET') {
     try {
       const identity = await authenticateRequest(request, env);
-      return withD1Bookmark(json({ user: publicIdentity(identity) }), identity.d1Bookmark);
+      return json({ user: publicIdentity(identity) });
     } catch (e) {
       if (e instanceof AuthError && e.status === 401) return json({ user: null }, { status: 401 });
       throw e;
@@ -71,12 +70,12 @@ export async function handleAuthRequest(request: Request, env: Env, ctx?: Execut
   }
 
   if (url.pathname === '/logout' && (method === 'GET' || method === 'POST')) {
-    return logout(request, env, ctx);
+    return logout(request, env);
   }
 
   const startMatch = url.pathname.match(/^\/auth\/([^/]+)\/start$/);
   if (startMatch && method === 'GET') {
-    return startOAuth(request, env, ctx, decodeURIComponent(startMatch[1]));
+    return startOAuth(request, env, decodeURIComponent(startMatch[1]));
   }
 
   const callbackMatch = url.pathname.match(/^\/auth\/([^/]+)\/callback$/);
@@ -117,10 +116,10 @@ async function renderLogin(request: Request, env: Env): Promise<Response> {
   `, { headers: { 'cache-control': 'no-store' } });
 }
 
-async function startOAuth(request: Request, env: Env, ctx: ExecutionContext | undefined, providerId: string): Promise<Response> {
+async function startOAuth(request: Request, env: Env, providerId: string): Promise<Response> {
   const provider = getOAuthProvider(env, providerId);
   if (!provider) return html('Sign in unavailable', '<p>This sign-in provider is not configured.</p>', { status: 404 });
-  if (!env.AUTH_DB) return html('Sign in unavailable', '<p>Browser auth database is not configured.</p>', { status: 503 });
+  if (!env.AUTH_KV) return html('Sign in unavailable', '<p>Browser auth storage is not configured.</p>', { status: 503 });
 
   const url = new URL(request.url);
   const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
@@ -131,14 +130,13 @@ async function startOAuth(request: Request, env: Env, ctx: ExecutionContext | un
   const codeVerifier = oauth.generateRandomCodeVerifier();
   const codeChallenge = await oauth.calculatePKCECodeChallenge(codeVerifier);
   const nonce = provider.kind === 'oidc' ? oauth.generateRandomNonce() : null;
-  const { state } = await createOAuthState(env.AUTH_DB, {
+  const { state } = await createOAuthState(env.AUTH_KV, {
     provider: provider.id,
     codeVerifier,
     nonce,
     returnTo,
     redirectUri,
   });
-  ctx?.waitUntil(cleanupExpiredAuthRows(env.AUTH_DB));
 
   const authorizationUrl = new URL(as.authorization_endpoint);
   authorizationUrl.searchParams.set('client_id', provider.clientId);
@@ -162,7 +160,7 @@ async function startOAuth(request: Request, env: Env, ctx: ExecutionContext | un
 async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | undefined, providerId: string): Promise<Response> {
   const provider = getOAuthProvider(env, providerId);
   if (!provider) return html('Sign in unavailable', '<p>This sign-in provider is not configured.</p>', { status: 404 });
-  if (!env.AUTH_DB) return html('Sign in unavailable', '<p>Browser auth database is not configured.</p>', { status: 503 });
+  if (!env.AUTH_KV) return html('Sign in unavailable', '<p>Browser auth storage is not configured.</p>', { status: 503 });
 
   const url = new URL(request.url);
   const state = url.searchParams.get('state');
@@ -170,7 +168,7 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
 
   let stage = 'state';
   try {
-    const savedState = await consumeOAuthState(env.AUTH_DB, state, provider.id);
+    const savedState = await consumeOAuthState(env.AUTH_KV, state, provider.id);
     stage = 'metadata';
     const as = await getAuthorizationServer(provider);
     const client: oauth.Client = { client_id: provider.clientId };
@@ -194,12 +192,9 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
     if (provider.id === 'cloudflare') {
       await attachCloudflareWorkersAI(env, ctx, session.identity.userId, tokens);
     }
-    ctx?.waitUntil(cleanupExpiredAuthRows(env.AUTH_DB));
     const destination = new URL(savedState.returnTo, url.origin).toString();
     const headers = new Headers({ 'cache-control': 'no-store' });
     headers.append('set-cookie', sessionCookie(session.token, session.expiresAt));
-    const bookmarkCookie = d1BookmarkCookie(session.bookmark);
-    if (bookmarkCookie) headers.append('set-cookie', bookmarkCookie);
     return redirect(destination, {
       headers,
     });
@@ -272,17 +267,13 @@ async function processOAuthTokenResponse(
   return oauth.processGenericTokenEndpointResponse(as, client, response);
 }
 
-async function logout(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+async function logout(request: Request, env: Env): Promise<Response> {
   const token = readSessionToken(request);
-  if (token && env.AUTH_DB) {
-    await revokeSession(env.AUTH_DB, token);
-    ctx?.waitUntil(cleanupExpiredAuthRows(env.AUTH_DB));
-  }
+  if (token && env.AUTH_KV) await revokeSession(env.AUTH_KV, token);
   const url = new URL(request.url);
   const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
   const headers = new Headers({ 'cache-control': 'no-store' });
   headers.append('set-cookie', clearSessionCookie());
-  headers.append('set-cookie', clearD1BookmarkCookie());
   return redirect(new URL(returnTo, url.origin).toString(), {
     headers,
   });
@@ -321,7 +312,6 @@ async function fetchOAuthProfile(
     email,
     emailVerified,
     displayName: stringClaim(userinfo?.name) ?? stringClaim(idClaims?.name) ?? null,
-    avatarUrl: stringClaim(userinfo?.picture) ?? stringClaim(idClaims?.picture) ?? null,
   };
 }
 
@@ -412,7 +402,6 @@ export function cloudflareUserResultToProfile<Input>(input: Input): OAuthProfile
     email,
     emailVerified: true,
     displayName: fullName || username || null,
-    avatarUrl: null,
   };
 }
 
@@ -444,7 +433,6 @@ async function fetchGitHubProfile(accessToken: string): Promise<OAuthProfile> {
     email,
     emailVerified,
     displayName: user.name || user.login || null,
-    avatarUrl: user.avatar_url ?? null,
   };
 }
 

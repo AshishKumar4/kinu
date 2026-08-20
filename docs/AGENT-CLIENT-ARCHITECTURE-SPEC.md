@@ -82,7 +82,7 @@ All ten hold, and each is behaviour now.
 
 | State | Cloud authority | Local authority | Client rule |
 |---|---|---|---|
-| User identity | D1 auth store plus `UserDO` | local config, local prefs only | Cloud identity never comes from local config. |
+| User identity | KV session store plus `UserDO` | local config, local prefs only | Cloud identity never comes from local config. |
 | Workspace roster | `UserDO.user_workspaces` | local config plus local DB discovery | The CLI caches aliases, not the roster. |
 | Identity and soul | `SOUL.md` in the workspace VFS | local VFS / SQLite | One `SOUL.md` per backend. |
 | Chat history | Think session store in `OrchestratorAgent` | recorded terminal transcript | The cloud TUI reads Durable Object history. |

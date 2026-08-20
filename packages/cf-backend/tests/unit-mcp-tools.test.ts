@@ -52,7 +52,7 @@ function mcpEnv() {
     async transitionReleaseChange(changeId: string, status: string) { record('transitionReleaseChange', changeId, status); return { id: changeId, status }; },
   };
   const bindings = {
-    AUTH_DB: {},
+    AUTH_KV: {},
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
     OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,

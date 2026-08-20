@@ -1,5 +1,4 @@
 [
-  "cross-file packages/cf-backend/src/auth/d1-store.ts#readD1Bookmark | packages/cf-backend/src/auth/session.ts#readSessionToken",
   "cross-file packages/cf-backend/src/auth/routes.ts#readJsonObject | packages/cf-backend/src/lib/cloudflare-oauth.ts#readJsonObject",
   "cross-file packages/cf-backend/src/components/FilesPane.tsx#onListDrop > useCallback | packages/cf-backend/src/pages/WorkspacePage.tsx#onChatDrop > useCallback",
   "cross-file packages/cli-backend/src/claude-cli-provider.ts#readAll | packages/cli-backend/src/opencode-provider.ts#readAll",

@@ -45,8 +45,9 @@ declare global {
      *  Binding name is fixed to "Sandbox" because the SDK's proxyToSandbox
      *  looks up `env.Sandbox` directly. */
     Sandbox: DurableObjectNamespace<ProteusSandbox>;
-    /** D1 browser OAuth/session store. Reads use D1 Sessions for replicas. */
-    AUTH_DB: D1Database;
+    /** Browser sessions, one-time OAuth state, and CLI browser-approval state.
+     *  Everything in it expires on its own; nothing in it is a source of truth. */
+    AUTH_KV: KVNamespace;
     /** R2 bucket holding sandbox /workspace snapshots. Read directly by
      *  ProteusSandbox to verify a snapshot before restoring from it. */
     BACKUP_BUCKET?: R2Bucket;

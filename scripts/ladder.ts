@@ -508,8 +508,8 @@ export const LADDER: readonly Gate[] = [
       + '(SUPPLY against the derived `Env` census, UNOBSERVABLE against the rows that came back '
       + 'blind) proven red in both directions.',
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts. For infra, '
-      + 'everything that needs an account: no test here proves a `wrangler d1 create` creates a '
-      + 'database.',
+      + 'everything that needs an account: no test here proves a `wrangler r2 bucket create` '
+      + 'creates a bucket.',
   },
   {
     run: 'bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts',

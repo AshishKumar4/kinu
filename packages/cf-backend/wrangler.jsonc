@@ -89,7 +89,7 @@
     "bindings": [
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
       // Per-user DO: profile + agent registry + credentials + defaults.
-      // Keyed by stable Kinu userId assigned by AUTH_DB.
+      // Keyed by the stable Kinu userId derived from the verified email.
       { "class_name": "UserDO", "name": "UserDO" },
       // Synthetic monitoring — one instance ("site"), driven by the cron
       // trigger below. Holds open incidents (so an outage alerts once, not
@@ -270,16 +270,12 @@
     { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-backups" },
     { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" }
   ],
-  // D1 auth/session store. Browser auth reads use D1 Sessions API so Cloudflare
-  // can route read-only verification queries to read replicas when replication
-  // is enabled on this database.
-  "d1_databases": [
-    {
-      "binding": "AUTH_DB",
-      "database_name": "proteus-auth",
-      "database_id": "87ca0567-04e5-4c66-b0da-86442eb77bf6",
-      "migrations_dir": "migrations/auth"
-    }
+  // Browser sessions, one-time OAuth state, and CLI browser-approval state.
+  // All of it expires on its own clock, and all of it is read at the edge on
+  // the request path, which is what KV is for. Nothing here is a source of
+  // truth: an emptied namespace costs everyone a fresh sign-in and nothing else.
+  "kv_namespaces": [
+    { "binding": "AUTH_KV", "id": "4a677dd3488e4325917a2e4aefa9a6f8" }
   ],
   // Semantic memory: runtime.ts auto-detects MEMORY_VECTORS and builds the
   // CloudflareVectorStore so search_memory / searchMemoryHybrid return
@@ -375,13 +371,8 @@
         { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-backups" },
         { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" }
       ],
-      "d1_databases": [
-        {
-          "binding": "AUTH_DB",
-          "database_name": "proteus-auth-staging",
-          "database_id": "f81423fd-ece5-41ea-a217-b9540ebea502",
-          "migrations_dir": "migrations/auth"
-        }
+      "kv_namespaces": [
+        { "binding": "AUTH_KV", "id": "c06cad3d9e2642258e80b4c4700e04be" }
       ],
       "vars": {
         "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway/workers-ai/v1",

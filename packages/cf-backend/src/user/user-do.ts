@@ -1,6 +1,6 @@
 /**
  * UserDO — per-user Durable Object. Keyed by the stable Kinu userId.
- * OAuth identities are mapped by the D1 auth store before requests reach this DO.
+ * OAuth identities are resolved to that userId by auth/store.ts before requests reach this DO.
  *
  * Owns:
  *   - identity (email, displayName, last_seen)

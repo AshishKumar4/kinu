@@ -20,12 +20,12 @@ interface TestNamespace<Stub> {
   get(): Stub;
 }
 
-interface UnusedAuthDatabase {
+interface UnusedAuthStore {
   readonly unused?: never;
 }
 
 interface McpTestBindings<UserStub, AgentStub> {
-  AUTH_DB: UnusedAuthDatabase;
+  AUTH_KV: UnusedAuthStore;
   UserDO: TestNamespace<UserStub>;
   OrchestratorAgent: TestNamespace<AgentStub>;
   CREDENTIAL_ENCRYPTION_KEY: string;
@@ -35,7 +35,7 @@ function testEnv<UserStub, AgentStub>(bindings: McpTestBindings<UserStub, AgentS
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
   // SAFETY: Bearer-authenticated MCP requests read exactly the two constructed
-  // namespaces and credential key; AUTH_DB is present but unreachable without a cookie.
+  // namespaces and credential key; AUTH_KV is present but unreachable without a cookie.
   return env as Env;
 }
 
@@ -56,7 +56,7 @@ function mcpEnv() {
   const env = testEnv({
     // Present but never reached in these tests (no session cookie is sent);
     // its presence makes the unauthenticated path a clean AuthError 401.
-    AUTH_DB: {},
+    AUTH_KV: {},
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
     OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,

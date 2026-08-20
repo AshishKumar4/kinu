@@ -16,11 +16,17 @@ the isolation MCTS branches and heads depend on. `UserDO` holds the per-user
 `user_*` and `device_*` tables and the owner's `experience_library`, which
 belong to the user rather than to any workspace.
 
-Four things live outside actor SQLite entirely: browser auth in the `AUTH_DB` D1
-database (`packages/cf-backend/migrations/auth/`), sandbox `/workspace` backups
-in the `BACKUP_BUCKET` R2 bucket, the authoritative Nimbus workspace, and
-optional embedding recall in the `MEMORY_VECTORS` Vectorize index. Vectorize is
-an addition to FTS5 and never the source of truth.
+Four things live outside actor SQLite entirely: browser auth in the `AUTH_KV` KV
+namespace, sandbox `/workspace` backups in the `BACKUP_BUCKET` R2 bucket, the
+authoritative Nimbus workspace, and optional embedding recall in the
+`MEMORY_VECTORS` Vectorize index. Vectorize is an addition to FTS5 and never the
+source of truth.
+
+`AUTH_KV` holds only expiring records: browser sessions, one-time OAuth handoff
+state, and CLI browser-approval state. Each write carries its own TTL, so
+nothing sweeps them. None of it is a source of truth. A user's identity lives in
+that user's `UserDO`, addressed by a userId derived from the verified email, so
+an emptied namespace costs everyone a fresh sign-in and nothing more.
 
 ## Entity Relationship
 
