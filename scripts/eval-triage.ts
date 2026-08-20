@@ -166,10 +166,25 @@ function admissibilityFinding(failure: string): string {
   return head.startsWith('declared ') ? 'declared tasks were never attempted' : head;
 }
 
-/** The failure mix a scored attempt published, empty when the record names none. */
-function failureMixOf(observation: Scored): readonly (readonly [string, number])[] {
+/**
+ * The failure mix a scored attempt published, empty when the record names none.
+ *
+ * `parseFailureMix` throws on a shape it does not recognise, which is right — a
+ * mix this cannot read is format drift and not data. Rethrown with the record and
+ * the attempt named, because the raw message says only which entry was wrong, and
+ * the reader needs to know which of 89 records to open.
+ */
+function failureMixOf(
+  observation: Scored, at: string,
+): readonly (readonly [string, number])[] {
   const row = observation.scores.find((score) => score.name === toolOutcomes.name);
-  return row === undefined ? [] : parseFailureMix(row.detail);
+  if (row === undefined) return [];
+  try {
+    return parseFailureMix(row.detail);
+  } catch (error) {
+    throw new Error(`${at} ${observationKey(observation)}: unreadable tool_outcomes detail`,
+      { cause: error });
+  }
 }
 
 function shortPath(path: string): string {
@@ -252,7 +267,7 @@ function signalsOf({ path, record }: Loaded): Signal[] {
         `${at} ${key} ${score.name} `
         + `${String(score.passed)}/${String(score.eligible)}: ${score.detail}`);
     }
-    for (const [failureKey, count] of failureMixOf(observation)) {
+    for (const [failureKey, count] of failureMixOf(observation, at)) {
       if (toolFailurePartOfKey(failureKey) === 'refused') continue;
       push('tool-failure', failureKey, observation.taskId, key, count,
         `${at} ${key}: ${failureKey}×${String(count)}`);
@@ -375,7 +390,7 @@ function attemptFacts(loaded: readonly Loaded[]): AttemptFacts {
     for (const observation of record.observations) {
       if (observation.outcome !== 'scored') continue;
       const id = `${path}#${observationKey(observation)}`;
-      const mix = failureMixOf(observation);
+      const mix = failureMixOf(observation, shortPath(path));
       const row = observation.scores.find((score) => score.name === toolOutcomes.name);
       if (mix.length > 0) facts.attributed.add(id);
       else if (row !== undefined && row.passed < row.eligible) facts.unattributed.add(id);
@@ -537,11 +552,11 @@ export function triage(loaded: readonly Loaded[], verdicts: readonly Verdict[]):
 
   let refusedCalls = 0;
   let skippedAttempts = 0;
-  for (const { record } of loaded) {
+  for (const { path, record } of loaded) {
     for (const observation of record.observations) {
       if (observation.outcome === 'skipped') skippedAttempts++;
       if (observation.outcome !== 'scored') continue;
-      for (const [failureKey, count] of failureMixOf(observation)) {
+      for (const [failureKey, count] of failureMixOf(observation, shortPath(path))) {
         if (toolFailurePartOfKey(failureKey) === 'refused') refusedCalls += count;
       }
     }
