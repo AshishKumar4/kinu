@@ -72,6 +72,7 @@ import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
 import type { ResolvedSwarm, SwarmConfig, SwarmResult } from '../src/strategy/swarm';
 import type { Objective } from '../src/strategy/objective';
 import type { HeadJournalRow } from '../src/heads/journal';
+import type { SearchNode } from '../src/types/mcts';
 
 /** The exact string the expired credential produced, kept verbatim: the point of the
  *  terminal write is that a human reading the row learns THIS rather than "errored". */
@@ -174,6 +175,28 @@ function resolved(): ResolvedSwarm {
   return call;
 }
 
+/**
+ * The FLAT preset, resolved through the real resolver: `ideate` at the drill's own
+ * width.
+ *
+ * It measures nothing and ranks nothing — score:'none', advance:'none', carry:'none' —
+ * so what it owes its caller is the whole set of answers its nodes produced. A search
+ * that returns one of three has under-delivered its own contract however its nodes
+ * fared, which is why this arm asks for no objective and asserts no score.
+ */
+function resolvedIdeate(): ResolvedSwarm {
+  const call = resolveSwarm({
+    preset: 'ideate',
+    task: 'Propose a naming scheme for a CLI tool that schedules cron jobs.',
+    depth: 1,
+    branches: BRANCHES,
+  });
+  if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
+  const illegal = swarmValidity(call);
+  if (illegal) throw new Error(`the suite's own composition is not legal: ${illegal.error}`);
+  return call;
+}
+
 /* ── The two providers the measured run actually met ───────────────────────── */
 
 /** Raises the upstream authentication error on every call, exactly as the expired
@@ -193,26 +216,34 @@ const SILENT_MODEL = scriptedTurnModel({
 });
 
 /**
- * One node answers and every other node is silent.
+ * One node answers; every other node meets `siblings`.
  *
  * The answering node is chosen by its own SEED rather than by a call counter: siblings
  * run concurrently under one barrier, so a counter would pick whichever node the
  * scheduler happened to start first and could split one node's turns across both
  * behaviours. A seed is unique per sibling — each carries its own diversity angle — so
  * this keeps exactly one node answering across all of its steps.
+ *
+ * BOTH SIBLING FATES ARE THE MEASURED ONES. `silent` is the provider that never answers;
+ * `raising` is the expired credential, which is what the live `preset:'ideate'` drill met
+ * partway through its wave — one node had already reported when the login went.
  */
-function oneAnsweringProvider(): MockLanguageModelV3 {
+function oneAnsweringProvider(siblings: 'silent' | 'raising'): MockLanguageModelV3 {
   let chosen: string | null = null;
   return scriptedTurnModel({
     provider: 'fake',
-    modelId: 'fake-one-answers',
+    modelId: `fake-one-answers-${siblings}`,
     doGenerate: ({ prompt }) => {
       let seed = '';
       for (const message of prompt) {
         if (message.role === 'user') seed = JSON.stringify(message.content);
       }
       chosen ??= seed;
-      if (seed !== chosen) return Promise.withResolvers<never>().promise;
+      if (seed !== chosen) {
+        return siblings === 'silent'
+          ? Promise.withResolvers<never>().promise
+          : Promise.reject(new Error(UPSTREAM));
+      }
       const reported = prompt.some((message) => message.role === 'tool');
       const content: LanguageModelV3Content[] = reported
         ? [{ type: 'text', text: 'Reported: a single linear scan.' }]
@@ -398,13 +429,19 @@ describe('a node that failed is not a node still working', () => {
 interface SilentRun {
   readonly result: SwarmResult | Refusal;
   readonly rows: readonly HeadJournalRow[];
+  /** The tree the run actually wrote — the store the drill's own database was read back
+   *  from, where a dropped sibling leaves no row at all. */
+  readonly tree: readonly SearchNode[];
   readonly logger: RecordingLogger;
   readonly elapsedMs: number;
 }
 
 const STALL_MS = 250;
 
-async function runWith(model: MockLanguageModelV3): Promise<SilentRun> {
+async function runWith(
+  model: MockLanguageModelV3,
+  call: ResolvedSwarm = resolved(),
+): Promise<SilentRun> {
   const { rt } = createTestRuntime();
   // A real file, so a node that reads before it answers reads something. The read is what
   // makes a step a step: a text-only turn ends the loop, so a node cannot demonstrate
@@ -415,7 +452,7 @@ async function runWith(model: MockLanguageModelV3): Promise<SilentRun> {
   const startedAt = Date.now();
   const result = await runSwarm(
     { rt, model, mode: 'build', logger, maxSteps: NODE_STEPS, stallTimeoutMs: STALL_MS },
-    resolved(),
+    call,
   );
   const elapsedMs = Date.now() - startedAt;
   const rows = rt.storage.sql<HeadJournalRow>`
@@ -424,7 +461,9 @@ async function runWith(model: MockLanguageModelV3): Promise<SilentRun> {
            token_cache_write_1h, token_reasoning, neurons, wall_clock_ms, summary,
            error_message, merge_strategy
     FROM head_journal ORDER BY spawned_at`;
-  return { result, rows, logger, elapsedMs };
+  const tree = rt.storage.sql<SearchNode>`
+    SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
+  return { result, rows, tree, logger, elapsedMs };
 }
 
 describe('a level whose nodes never answer', () => {
@@ -468,11 +507,11 @@ describe('a level whose nodes never answer', () => {
     expect(logger.emitted.filter((line) => line.event === 'swarm.level_silent')).toEqual([]);
   });
 
-  test('a level that answered once keeps that answer and loses only the rest', async () => {
+  test('a level that answered once keeps that answer and reports the rest', async () => {
     // The boundary: losing a member NARROWS the run, and only a level that produced
     // nothing at all ends it. A barrier that refused on the first failed sibling would
     // throw away work the search had already paid for.
-    const { result, rows, elapsedMs } = await runWith(oneAnsweringProvider());
+    const { result, rows, elapsedMs } = await runWith(oneAnsweringProvider('silent'));
 
     expect('reason' in result).toBe(false);
     expect(elapsedMs).toBeLessThan(STALL_MS * 60);
@@ -487,6 +526,21 @@ describe('a level whose nodes never answer', () => {
       expect(row.status).not.toBe('running');
       expect(row.completed_at).toBeGreaterThan(0);
     }
+
+    // AND THE RUN REPORTS THE REST RATHER THAN SHEDDING IT. A node that ended `errored`
+    // was thrown at the barrier, so a caller saw a smaller wave and no reason for it.
+    if ('reason' in result) return;
+    expect(result.candidates).toHaveLength(BRANCHES);
+    for (const candidate of result.candidates.filter((entry) => entry.incomplete !== null)) {
+      expect(candidate.incomplete).toContain('stalled');
+      expect(candidate.measured).toBeNull();
+      expect(candidate.score).toBeNull();
+    }
+    // THE RANKING IS UNTOUCHED BY THAT: an unfinished node is not measured, not scored
+    // and cannot be crowned, so the node that answered is still the one that wins on the
+    // instrument's own number.
+    expect(result.best?.incomplete).toBeNull();
+    expect(result.best?.measured?.value).toBe(N - 1);
   });
 
   test('a node slower than the envelope survives it, because the bound is FLOW and not time', async () => {
@@ -506,5 +560,76 @@ describe('a level whose nodes never answer', () => {
       expect(row.wall_clock_ms).toBeGreaterThan(STALL_MS);
       expect(row.error_message).toBeNull();
     }
+  });
+});
+
+/* ── A flat preset owes its caller every node it ran ───────────────────────── */
+
+/**
+ * THE DRILL THIS CLOSES, run on this box on 2026-08-20: `agents action=swarm
+ * preset=ideate branches=3 depth=1` against a workers-ai model on a local workspace.
+ * Three nodes ran; one reported, and the signed-in proxy's Cloudflare login expired
+ * under the other two. The tool result carried `candidates: 1`, `report.expansions: 1`
+ * and `report.stop: 'budget'` with `resumed: null`, while the drill workspace's own
+ * database held ONE depth-1 `search_nodes` row against THREE `head_journal` rows — one
+ * `completed`, two `errored` with "Your Cloudflare login is no longer valid" on each.
+ * The caller recovered the other two answers out of workspace files.
+ *
+ * ONE LINE MADE ALL OF THAT. A node whose report said `errored` was thrown out of
+ * `expandChild`, so the barrier read it as a member that never arrived: no candidate, no
+ * tree row, no record, and `lost` counting it — which is why `stop` said `budget` about a
+ * call that passed no cap. The throw predated `Expansion.incomplete`, the mechanism that
+ * already carries an unfinished node without measuring it, and the two disagreed.
+ *
+ * `ideate` is documented as returning "a set of distinct approaches, unranked", so a
+ * 3-branch ideate returning one candidate under-delivers its own contract however its
+ * nodes fared. What it owes is every node it ran: the ones that answered with their
+ * answers, the ones that did not with their reason.
+ */
+describe('a flat preset returns every node it ran', () => {
+  test('a 3-branch ideate returns 3 candidates when the credential dies under two of them', async () => {
+    const { result, rows, tree } = await runWith(
+      oneAnsweringProvider('raising'), resolvedIdeate(),
+    );
+    if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
+
+    // THE DRILL'S OWN SHAPE, asserted first as the denominator: three nodes ran, one
+    // reported and two met the expired credential. A result of three candidates over a
+    // wave of one would satisfy the claim below for the wrong reason.
+    expect(rows.length).toBe(BRANCHES);
+    expect(rows.filter((row) => row.status === 'completed').length).toBe(1);
+    const broken = rows.filter((row) => row.status === 'errored');
+    expect(broken.length).toBe(BRANCHES - 1);
+    for (const row of broken) expect(row.error_message).toContain('Authentication error');
+
+    // THE CONTRACT: every node the search ran is in the result, and in the tree — where
+    // the drill's database had one row for three nodes.
+    expect(result.candidates).toHaveLength(BRANCHES);
+    expect(result.report.expansions).toBe(BRANCHES);
+    expect(tree.filter((node) => node.depth === 1)).toHaveLength(BRANCHES);
+
+    // THE ONE THAT ANSWERED carries its answer and has nothing to explain.
+    const answered = result.candidates.filter((candidate) => candidate.incomplete === null);
+    expect(answered).toHaveLength(1);
+    expect(answered[0]?.artifact).toContain('let best = t[0]');
+
+    // THE TWO THAT BROKE carry the cause, in the RESULT, which is where the drill's
+    // caller could not read it — it went to the workspace for the answers instead.
+    const cut = result.candidates.filter((candidate) => candidate.incomplete !== null);
+    expect(cut).toHaveLength(BRANCHES - 1);
+    for (const candidate of cut) {
+      expect(candidate.incomplete).toStartWith('errored after');
+      expect(candidate.incomplete).toContain('Authentication error');
+      // Unmeasured rather than measured badly. This preset measures nothing at all, and
+      // a broken node would carry no number under one that did.
+      expect(candidate.measured).toBeNull();
+      expect(candidate.score).toBeNull();
+      expect(candidate.unmeasurable).toBeNull();
+    }
+
+    // AND `stop` NAMES WHAT ENDED IT. The run spent its whole configured width and had
+    // nothing left to select. `budget` is what sent the drill's reader looking for a cap
+    // the call never passed.
+    expect(result.report.stop).toBe('settled');
   });
 });
