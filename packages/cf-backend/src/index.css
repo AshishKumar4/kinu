@@ -479,7 +479,10 @@ html, body, #root {
   --c-text-3:   #A69C8E;   /* dim             6.5:1 on bg, 4.8:1 on overlay */
 
   --c-accent:    #E3D2AE;  /* the thread — fills, strokes, the winning line */
-  --c-accent-fg: #F1E4C6;  /* the sheen — links, brand ink, active labels */
+  /* The sheen — links, brand ink, active labels. Champagne rather than a
+     brighter pearl: at body size a paler neutral was within 0.08 luminance of
+     `--c-text` and a link stopped reading as one. 9.9:1 at worst. */
+  --c-accent-fg: #F2DFB4;
   --c-accent-on: #131C27;  /* dye ink on the thread, 11.5:1 */
   --c-accent-subtle: rgba(227, 210, 174, 0.14);
 
