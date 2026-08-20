@@ -230,9 +230,9 @@ trying it:
   no model in the scoring path, and rejection by default. If the answer turns out to
   be that evolution does nothing, that is the answer I want.
 - **Three of the seven search presets refuse to resolve.** `research` and `audit`
-  need a `carry:'artifacts'` threshold, and `redteam` needs an `advance:'archive'`
-  threshold, that the preset table does not state. `resolveSwarm` refuses the call
-  and states which threshold is missing. Use `custom` and state the axes yourself.
+  need a `carry:'artifacts'` threshold and `redteam` needs an `advance:'archive'`
+  threshold. The preset table states neither, so `resolveSwarm` refuses the call and
+  names the missing threshold. Use `custom` and state the axes yourself.
 - **`advance:'pareto'` is not implemented.** It needs a per-instance measurement path
   and a dominance comparison, and the error names both.
 - **`python` does not work in a hosted workspace.** Hosted runtimes come from R2 via
