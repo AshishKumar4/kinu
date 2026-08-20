@@ -1190,6 +1190,7 @@ export {
   deriveChildBudget, budgetExhausted,
   initHeadsTables,
   HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
+  LiveHeadJournal, type AnnounceHeadActivity,
   reconcileInterruptedForks, forkInterruptedWake,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   HeadController, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,

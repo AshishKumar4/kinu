@@ -86,7 +86,7 @@ import {
   ACTIVE_TOOLS,
   nanoid,
   // Branching heads
-  HeadController, type HeadJournal,
+  HeadController, type HeadJournal, LiveHeadJournal,
   type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
   type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type HeadGrounding, type MergeResult,
   type NodeLoopHost, type NodeArbiter, type BranchProposal, type BranchDecision,
@@ -1242,12 +1242,11 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   async headJournalRecordReport(report: HeadReport): Promise<void> {
+    // The announcement is the JOURNAL's now, not this method's. It used to
+    // broadcast here, which made a branch's last write — the summary, the status
+    // and the wall clock — live for a recursive split and for nothing else,
+    // because this RPC is only reachable from a facet calling its parent.
     this.headJournal.recordReport(report);
-    // Same channel as the per-step announcement, because a reader watching a
-    // branch needs its LAST write most: the summary, the status and the wall
-    // clock all land here, AFTER the final step. Announcing only steps left an
-    // open transcript stuck one write short of the answer it was waiting for.
-    this.broadcast(JSON.stringify({ type: 'head_activity', headId: report.id }));
   }
 
   async headJournalCacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): Promise<void> {
@@ -1566,10 +1565,31 @@ export abstract class ActorAgent extends Think<Env> {
    *  it be built here rather than in the constructor body. */
   private readonly stores = createAgentStores(() => this.boundSql);
 
-  // The orchestrator's view of head activity (journal + runs + steps). Shared by
-  // getHeadController (write path) and getHeadRuns (read path).
+  private _liveHeadJournal: LiveHeadJournal | null = null;
+
+  /**
+   * The orchestrator's view of head activity (journal + runs + steps). Shared by
+   * getHeadController (write path) and getHeadRuns (read path).
+   *
+   * ANNOUNCING, and that is the whole of the liveness fix. This handed out the
+   * raw store, so every write core made through it — a node's spawn, its steps
+   * on the unhosted path, its report, the settle — landed durably and told
+   * nobody. Wrapping the one instance both paths already share is what makes a
+   * search live without a line in `packages/core`, whose swarm runner carries no
+   * progress seam to hang a callback on.
+   */
   protected get headJournal(): HeadJournal {
-    return this.stores.headJournal;
+    return (this._liveHeadJournal ??= new LiveHeadJournal(
+      this.boundSql,
+      (headId) => this.announceHeadActivity(headId),
+    ));
+  }
+
+  /** Tell every open client that one branch's ledger moved. Ordering and
+   *  failure isolation belong to {@link LiveHeadJournal}, which calls this only
+   *  after its write has returned and never lets a throw here reach core. */
+  private announceHeadActivity(headId: string): void {
+    this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
   }
 
   // Durable run-event recorder (Flue-style discriminated union, SSE-resumable).

@@ -2554,8 +2554,10 @@ export class OrchestratorAgent extends ActorAgent {
     return await this.tracing.invocation('rpc', 'head.record_step', async (_invocation, span) => {
       span.setAttribute('proteus.head_id', headId);
       span.setAttribute('proteus.step_seq', seq);
+      // The announcement rides the journal write itself (LiveHeadJournal), so
+      // it happens once whether a step arrives through this RPC from a hosted
+      // facet or straight from an in-isolate node that has no facet at all.
       this.headJournal.appendStep(headId, seq, step);
-      this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
       return { ok: true };
     });
   }
