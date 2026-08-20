@@ -179,6 +179,11 @@ describe('the ladder is monotone — commit ⊆ push ⊆ ci ⊆ deploy', () => {
     const filesAtDeploy = new Set(deploy.flatMap((run) => claims(run, tracked)));
     const orphans: string[] = [];
     for (const gate of LADDER) {
+      // The `evals` tier is deliberately NOT a deploy gate: live-model
+      // behavioural evidence a deploy must not wait on or pay for. Its
+      // deliberate runner is `bun run evals:full`, and TIERS' own doc carries
+      // the reason. Every other tier must still be covered at deploy.
+      if (gate.tier === 'evals') continue;
       if (atDeploy.has(gate.run)) continue;
       const files = claims(gate.run, tracked);
       if (files.length === 0) {

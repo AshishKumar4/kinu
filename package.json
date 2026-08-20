@@ -58,7 +58,8 @@
     "gate:agents-fields": "bun scripts/agents-fields.ts",
     "gate:infra": "bun scripts/infra-verify.ts",
     "infra:provision": "bun scripts/infra-provision.ts",
-    "infra:teardown": "bun scripts/infra-teardown.ts"
+    "infra:teardown": "bun scripts/infra-teardown.ts",
+    "evals:full": "bash scripts/eval-tier.sh"
   },
   "knip": {
     "ignoreExportsUsedInFile": true,

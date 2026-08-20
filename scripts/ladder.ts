@@ -55,7 +55,19 @@ const root = new URL('..', import.meta.url).pathname;
 export const HOOKS_DIR = '.githooks';
 
 
-export const TIERS = ['commit', 'push', 'ci', 'deploy'] as const;
+/**
+ * Tier order is containment order: a later tier runs everything before it.
+ * `evals` sits LAST, after `deploy`, and that placement is its meaning:
+ * live-model behavioural evidence that no hook, push or deploy waits on. A
+ * deploy that ran the evals took over an hour and spent real tokens to ship a
+ * build, so the evals run deliberately — `bun run evals:full` — and a full
+ * evals run still runs every cheaper tier first, which is what the containment
+ * order buys. gate-set-equality exempts exactly this tier from the "every
+ * LADDER entry is a deploy gate" rule and prints the exemption with the tier's
+ * members, so an entry cannot hide from the deploy by wearing the tier
+ * silently.
+ */
+export const TIERS = ['commit', 'push', 'ci', 'deploy', 'evals'] as const;
 export type Tier = (typeof TIERS)[number];
 
 export interface Gate {
@@ -743,7 +755,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run test:eval',
-    tier: 'ci',
+    tier: 'evals',
     // The CREDENTIALED cost, because that is the cost this gate actually incurs
     // where it runs. `scripts/eval-tier.sh` borrows the signed-in CLI session
     // when the environment names no target, so a deploy from a machine that has
