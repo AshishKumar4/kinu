@@ -46,9 +46,35 @@
   // custom_domain: true tells wrangler to auto-create the DNS record on
   // deploy. Without it, the `pattern + zone_id` form requires a pre-existing
   // proxied DNS record on the zone (manual setup via the dashboard).
+  //
+  // TWO app origins on purpose. `kinu.run` is the product's new name and is
+  // served ALONGSIDE the original hostname, which keeps answering until the
+  // owner calls the cutover. Verified against the API on 2026-08-20: the zone
+  // is `6c181c0cb19bef416fcc7f1fef7f6993`, status active since 2026-08-18, and
+  // it is on THIS Worker's account (f44999d1ddda7012e9a87729eba250f1) — a
+  // custom domain cannot cross accounts, so that check is the precondition, not
+  // a formality. The zone had zero DNS records, so `custom_domain: true` is
+  // creating the apex record rather than competing with one.
+  //
+  // Both origins are named in PUBLIC_ORIGINS below. A route here without that
+  // entry serves the app over plain HTTP with no upgrade and no HSTS.
+  //
+  // NO preview route for kinu.run yet: previews are keyed to
+  // PREVIEW_HOST_SUFFIX, still the original zone, and moving them is part of
+  // the cutover. `kinu.run`'s Universal SSL covers `*.kinu.run` — ONE label —
+  // so previews there would need no ACM, but a deeper suffix would.
+  //
+  // ORDER MATTERS, once. `gate:infra` observes a custom domain by asking
+  // `https://<host>/api/health` for a build stamp, and `scripts/deploy.sh` runs
+  // that gate as REQUIRED — so a domain declared here and not yet bound makes
+  // the only deploy path red, and `custom_domain: true` cannot create it
+  // because the deploy never starts. The domain is therefore bound ONCE out of
+  // band, against the already-deployed Worker, and every deploy after that is
+  // ordinary: see docs/DEPLOYMENT.md § Adding an app origin.
   "routes": [
     { "pattern": "proteus.ashishkumarsingh.com", "custom_domain": true },
-    { "pattern": "*.proteus.ashishkumarsingh.com/*", "zone_name": "ashishkumarsingh.com" }
+    { "pattern": "*.proteus.ashishkumarsingh.com/*", "zone_name": "ashishkumarsingh.com" },
+    { "pattern": "kinu.run", "custom_domain": true }
   ],
   // The Worker runs first for every request. Asset routing is path-only, so an
   // `/assets/*` bypass would also intercept preview apps' own asset paths
@@ -184,6 +210,14 @@
     "PREVIEW_HOST_SUFFIX": "proteus.ashishkumarsingh.com",
     "CLI_PUBLIC_ORIGIN": "https://proteus.ashishkumarsingh.com",
     "CLI_APPROVAL_ORIGIN": "https://proteus.ashishkumarsingh.com",
+    // Every app origin, canonical one included. Transport security keys on this
+    // set, so both routes above get the HTTPS upgrade and the HSTS header.
+    // CLI_PUBLIC_ORIGIN stays the CANONICAL origin — links, redirects and the
+    // install script are built from it, and exactly one origin can hold that
+    // job. The cutover is: swap the two origin vars to https://kinu.run, move
+    // PREVIEW_HOST_SUFFIX and EMAIL_DOMAIN, and drop the old name from here
+    // once nothing links to it.
+    "PUBLIC_ORIGINS": "https://proteus.ashishkumarsingh.com,https://kinu.run",
     "CLOUDFLARE_OAUTH_CLIENT_ID": "457ce8fea9fb4e89d4a6df3a71cdf875",
     // Scopes default to CLOUDFLARE_WORKERS_AI_SCOPES (lib/cloudflare-oauth.ts);
     // set CLOUDFLARE_OAUTH_SCOPES here only to override that one source.

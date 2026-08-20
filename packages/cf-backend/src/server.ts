@@ -48,7 +48,8 @@ import {
   type AuthIdentity,
 } from "./auth/session";
 import {
-  containPreviewResponse, hostOf, isPreviewHostRequest, previewHostSuffix, previewSuffixMetaName,
+  containPreviewResponse, isPreviewHostRequest, previewHostSuffix, previewSuffixMetaName,
+  publishedHosts,
 } from "./lib/preview-origin";
 import { withAppSecurityHeaders } from "./lib/security-headers";
 import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store";
@@ -303,15 +304,20 @@ function withD1Bookmark(response: Response, identity: AuthIdentity): Response {
 /**
  * The hostnames this deployment publishes over HTTPS.
  *
- * Derived from the two vars that already state what this deployment is on the
+ * Derived from the vars that already state what this deployment is on the
  * internet — the same pair the preview router keys on — rather than from a new
  * flag or a hand-maintained private-address list. A dev server on localhost or
  * a LAN address matches neither and is left on plain HTTP, which is what makes
  * `vite dev` keep working with nothing to remember.
+ *
+ * `publishedHosts` is the whole app-origin set, not just the canonical one: a
+ * deployment mid-domain-migration answers on the old name and the new one, and
+ * a custom domain missing from that set would serve the app with no HTTPS
+ * upgrade and no HSTS.
  */
 function isPublishedHost(url: URL, env: Env): boolean {
   if (isPreviewHostRequest(url, env)) return true;
-  return url.hostname.toLowerCase() === hostOf(env.CLI_PUBLIC_ORIGIN);
+  return publishedHosts(env).has(url.hostname.toLowerCase());
 }
 
 /**

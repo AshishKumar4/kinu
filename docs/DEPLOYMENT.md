@@ -5,6 +5,8 @@
 ## Live Instance
 
 **Production:** https://proteus.ashishkumarsingh.com  
+**New name:** https://kinu.run — declared in `wrangler.jsonc`, pending the
+one-time domain binding below  
 **Preview hosts:** one capability hostname per exposed Workspace or Sandbox port
 under `<PREVIEW_HOST_SUFFIX>`
 
@@ -15,6 +17,48 @@ preview-host trust boundary. The suffix needs a wildcard DNS record.
 `PREVIEW_HOST_SUFFIX` below has the two steps, and
 `packages/cf-backend/src/lib/preview-origin.ts` has the reasoning and the
 remaining Public Suffix List prerequisite for complete cookie-site isolation.
+
+### Adding an app origin
+
+The product is renamed to Kinu, and `kinu.run` is declared as a second custom
+domain. Both origins serve the same Worker. `CLI_PUBLIC_ORIGIN` stays the
+CANONICAL one — links, redirects and the install script are built from it — and
+`PUBLIC_ORIGINS` names every origin so transport security covers all of them.
+A custom domain absent from `PUBLIC_ORIGINS` serves the app in cleartext with
+no HSTS.
+
+A NEW custom domain takes one action outside the deploy, exactly once, and the
+order is forced rather than preferred. `gate:infra` observes a custom domain by
+asking `https://<host>/api/health` for a build stamp, and `scripts/deploy.sh`
+runs that gate as REQUIRED. So a domain that is declared but not yet bound makes
+`bun run deploy` fail closed, and `custom_domain: true` never gets to create the
+record because the deploy does not start. Bind it against the Worker that is
+ALREADY deployed:
+
+> Cloudflare dashboard → Workers & Pages → `proteus` → Settings → Domains &
+> Routes → Add → Custom domain → `kinu.run`.
+
+That creates the proxied DNS record and the hostname binding together. The
+currently deployed Worker starts answering immediately, so:
+
+```bash
+curl -s https://kinu.run/api/health
+# {"ok":true,"build":{"version":"0.2.0+<sha>","sha":"<sha>","builtAt":"..."},"features":[...],...}
+```
+
+`ok: true` and a `build.sha` are what `gate:infra` reads; anything else — an
+HTML page, a 5xx, a JSON body with no build stamp — it reports as a hostname
+that resolves to something other than this Worker. Once that curl answers,
+`bun run deploy` is green again and every later deploy reconciles the domain
+normally.
+
+Nothing about the existing hostname changes. It keeps its DNS, its route, its
+previews and its mail. The cutover is a separate, deliberate edit: point
+`CLI_PUBLIC_ORIGIN`, `CLI_APPROVAL_ORIGIN`, `PREVIEW_HOST_SUFFIX` and
+`EMAIL_DOMAIN` at the new zone, add the preview wildcard route and its DNS
+record there, then drop the old origin from `PUBLIC_ORIGINS` when nothing links
+to it. Previews need that wildcard: `kinu.run`'s Universal SSL covers
+`*.kinu.run` but no deeper label.
 
 ## Local Development
 

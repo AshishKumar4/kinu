@@ -27,6 +27,13 @@ const APP_HOST = 'app.example.com';
 /** Production shape: the preview suffix IS the app host, so every preview
  *  hostname is a strict subdomain of it (wrangler.jsonc PREVIEW_HOST_SUFFIX). */
 const PREVIEW_HOST = `3000-workspace-tok.${APP_HOST}`;
+/** A SECOND app origin, as during a domain migration. Named only in
+ *  PUBLIC_ORIGINS — never in CLI_PUBLIC_ORIGIN — so every test above that
+ *  pins APP_HOST is also proving the two are unioned rather than replaced. */
+const RENAMED_HOST = 'kinu.example';
+/** Reachable but not published: proves the pin follows the declared set rather
+ *  than any host that happens to arrive over TLS. */
+const FOREIGN_HOST = 'unrelated.example.net';
 const HSTS = 'max-age=31536000; includeSubDomains';
 
 function harness(assetResponse: () => Response) {
@@ -35,6 +42,7 @@ function harness(assetResponse: () => Response) {
   Object.assign(partialEnv, {
     CLI_PUBLIC_ORIGIN: `https://${APP_HOST}`,
     PREVIEW_HOST_SUFFIX: APP_HOST,
+    PUBLIC_ORIGINS: `https://${RENAMED_HOST}`,
     ASSETS: {
       fetch: async (request: Request) => {
         assetRequests.push(new URL(request.url).pathname);
@@ -123,6 +131,44 @@ describe('HTTPS responses are pinned', () => {
     // rebuilt into a new Response, so the pin must skip it entirely.
     expect(response).toBe(upgrade);
     expect(response.headers.get('strict-transport-security')).toBeNull();
+  });
+});
+
+describe('a second app origin is published too', () => {
+  test('the renamed host is upgraded off cleartext, and serves nothing over it', async () => {
+    const { env, ctx, assetRequests } = harness(script);
+    const response = await worker.fetch(
+      new Request(`http://${RENAMED_HOST}/api/health`), env, ctx,
+    );
+
+    expect(response.status).toBe(301);
+    expect(response.headers.get('location')).toBe(`https://${RENAMED_HOST}/api/health`);
+    expect(assetRequests).toEqual([]);
+  });
+
+  test('the renamed host is pinned on https', async () => {
+    const { env, ctx } = harness(script);
+    const response = await worker.fetch(
+      new Request(`https://${RENAMED_HOST}/assets/main.js`), env, ctx,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('strict-transport-security')).toBe(HSTS);
+  });
+
+  test('a host outside the declared set is neither upgraded nor pinned', async () => {
+    const { env, ctx } = harness(script);
+    const cleartext = await worker.fetch(
+      new Request(`http://${FOREIGN_HOST}/assets/main.js`), env, ctx,
+    );
+    const secure = await worker.fetch(
+      new Request(`https://${FOREIGN_HOST}/assets/main.js`), env, ctx,
+    );
+
+    // Not a 301: the redirect would send a browser to a hostname this
+    // deployment never claimed, and the pin would outlive the claim by a year.
+    expect(cleartext.status).toBe(200);
+    expect(secure.headers.get('strict-transport-security')).toBeNull();
   });
 });
 

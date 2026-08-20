@@ -110,6 +110,12 @@ declare global {
     /** Public origin for unauthenticated CLI install/auth endpoints. Also the
      *  origin synthetic monitoring probes. */
     CLI_PUBLIC_ORIGIN?: string;
+    /** Every OTHER origin this deployment answers on as the app, comma
+     *  separated, unioned with CLI_PUBLIC_ORIGIN. Transport security keys on
+     *  that union, so a custom domain in wrangler.jsonc that is absent here
+     *  serves the app with no HTTPS upgrade and no HSTS. OPTIONAL: unset means
+     *  the canonical origin is the only one. */
+    PUBLIC_ORIGINS?: string;
     /** Where synthetic-monitoring alerts go. Unset (as in staging) leaves the
      *  monitor observing and recording, but silent. */
     OPS_ALERT_EMAIL?: string;
