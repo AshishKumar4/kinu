@@ -72,9 +72,10 @@ export const SKIP_RATCHET_TARGETS: readonly string[] = ['./tests/'];
  * never appear in the bun report and a directory target cannot distinguish them.
  *
  * ONE ENTRY PER ARM, because `unmatchedTargets` proves a target non-empty and an arm
- * is what can go missing: `eval-tier.sh` runs the behaviour eval and the live swarm
- * eval as separate invocations with separate spend files, so a target naming only the
- * first would be satisfied while the second produced no report at all.
+ * is what can go missing: `eval-tier.sh` runs the behaviour eval, the live swarm
+ * eval, the research eval and the optimization eval as separate invocations with
+ * separate spend files, so a target naming only the first would be satisfied while
+ * any of the others produced no report at all.
  *
  * A rename therefore fails this gate loudly with the path it looked for, which is
  * the correct outcome: the arm moved and nobody re-pointed the gate at it.
@@ -82,6 +83,8 @@ export const SKIP_RATCHET_TARGETS: readonly string[] = ['./tests/'];
 export const SKIP_RATCHET_VITEST_TARGETS: readonly string[] = [
   './tests/evals/behaviour.eval.ts',
   './tests/evals/swarm.eval.ts',
+  './tests/evals/research.eval.ts',
+  './tests/evals/optimization.eval.ts',
 ];
 
 /** Every target, both runners. What `unmatchedTargets` proves by default. */

@@ -71,6 +71,37 @@ const SWARM_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
     </testsuite>
 </testsuites>`;
 
+/**
+ * The RESEARCH and OPTIMIZATION arms' reports, verbatim from a credential-free
+ * run of each single-family file: the credential-free half runs, the MEASURED
+ * half skips. One fixture each for the reason the swarm arm has its own — all
+ * four vitest arms share one reporter shape and differ only in the file they
+ * name, which is exactly what a shared fixture would hide.
+ */
+const RESEARCH_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="3" failures="0" errors="0" time="0.5">
+    <testsuite name="tests/evals/research.eval.ts" tests="3" failures="0" errors="0" skipped="1" time="0.5">
+        <testcase classname="tests/evals/research.eval.ts" name="Research evals — a live retrieval from a controlled MCP source &gt; the corpus is controlled: facts in the archive, none of them in the prompt" time="0.001">
+        </testcase>
+        <testcase classname="tests/evals/research.eval.ts" name="Research evals — a live retrieval from a controlled MCP source &gt; the archive comes up through the product MCP client and both tools answer" time="0.4">
+        </testcase>
+        <testcase classname="tests/evals/research.eval.ts" name="Research evals — a live retrieval from a controlled MCP source &gt; MEASURED: the agent reads the archive and its report carries the planted facts and the canary" time="0">
+            <skipped/>
+        </testcase>
+    </testsuite>
+</testsuites>`;
+
+const OPTIMIZATION_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="2" failures="0" errors="0" time="0.1">
+    <testsuite name="tests/evals/optimization.eval.ts" tests="2" failures="0" errors="0" skipped="1" time="0.1">
+        <testcase classname="tests/evals/optimization.eval.ts" name="Optimization evals — a measured challenge with a pre-registered threshold &gt; the threshold is a bar something can clear and something can miss" time="0.002">
+        </testcase>
+        <testcase classname="tests/evals/optimization.eval.ts" name="Optimization evals — a measured challenge with a pre-registered threshold &gt; MEASURED: the agent attains the threshold on the metered instrument" time="0">
+            <skipped/>
+        </testcase>
+    </testsuite>
+</testsuites>`;
+
 describe('parseJUnit', () => {
   test('counts every testcase, not only the self-closing ones', () => {
     // A regex matching only `<testcase ... />` would report 1 test and 0 skips
@@ -265,19 +296,31 @@ describe('unmatchedTargets', () => {
 
   test('every arm reporting satisfies every target', () => {
     const merged = mergeReports(
-      [REPORT, VITEST_REPORT, SWARM_REPORT].map((xml) => parseJUnit(xml)),
+      [REPORT, VITEST_REPORT, SWARM_REPORT, RESEARCH_REPORT, OPTIMIZATION_REPORT]
+        .map((xml) => parseJUnit(xml)),
     );
     expect(unmatchedTargets(merged)).toEqual([]);
   });
 
-  // ONE ARM AT A TIME, both directions, because the two vitest arms are the pair a
+  // ONE ARM AT A TIME, both directions, because the four vitest arms are the set a
   // single target could not tell apart: they run under one config and differ only in
-  // the file they select, so a report from either must leave the OTHER owing one.
-  test('a report from one vitest arm leaves the bun target and the other arm unmatched', () => {
-    expect(unmatchedTargets(parseJUnit(VITEST_REPORT)))
-      .toEqual([...SKIP_RATCHET_TARGETS, './tests/evals/swarm.eval.ts']);
-    expect(unmatchedTargets(parseJUnit(SWARM_REPORT)))
-      .toEqual([...SKIP_RATCHET_TARGETS, './tests/evals/behaviour.eval.ts']);
+  // the file they select, so a report from any one must leave every OTHER owing one.
+  test('a report from one vitest arm leaves the bun target and every other arm unmatched', () => {
+    const arms: readonly { readonly file: string; readonly xml: string }[] = [
+      { file: './tests/evals/behaviour.eval.ts', xml: VITEST_REPORT },
+      { file: './tests/evals/swarm.eval.ts', xml: SWARM_REPORT },
+      { file: './tests/evals/research.eval.ts', xml: RESEARCH_REPORT },
+      { file: './tests/evals/optimization.eval.ts', xml: OPTIMIZATION_REPORT },
+    ];
+    // The fixture set and the target list are the same set, or an arm added to
+    // one and not the other would silently shrink this proof.
+    expect(arms.map((arm) => arm.file).sort()).toEqual([...SKIP_RATCHET_VITEST_TARGETS].sort());
+    for (const arm of arms) {
+      expect(unmatchedTargets(parseJUnit(arm.xml))).toEqual([
+        ...SKIP_RATCHET_TARGETS,
+        ...SKIP_RATCHET_VITEST_TARGETS.filter((target) => target !== arm.file),
+      ]);
+    }
   });
 });
 
