@@ -58,6 +58,37 @@ export function hasActiveForkWork(
   return isStreaming || backgroundJobs.some((job) => job.status === "running");
 }
 
+/**
+ * Roots that just moved and whose movement the polled list cannot explain.
+ *
+ * The canvas draws its bands by walking the POLLED list and looking up each
+ * run's tree, so a live tree or a live journal write for a root the list does not
+ * carry draws nothing at all — and the list is on its idle clock exactly when
+ * this matters, because a search it has never heard of and a search it believes
+ * is over are both searches it has no reason to poll fast for.
+ *
+ * Two shapes, and the second is not about new searches. A root the list has
+ * NEVER heard of is a new search. A root it holds in a state that is not
+ * `running` is a search it believes is finished — which is what a RESUMED run
+ * looks like the instant it re-enters, because a resume reuses its rootId and
+ * flips a reclaimed row back to running.
+ *
+ * Sorted, so a caller can use the answer as a memo key and re-read once per
+ * CHANGE of this set rather than once per journal write. `null` entries mean the
+ * list has not loaded, and nothing is unexplained until there is an answer to
+ * contradict.
+ */
+export function unexplainedForkRoots(
+  entries: readonly ExplorationCanvasRun[] | null,
+  moved: Iterable<string>,
+): readonly string[] {
+  if (entries === null) return [];
+  const live = new Set(entries
+    .filter((entry) => entry.run.status === "running")
+    .map((entry) => entry.run.id));
+  return [...new Set(moved)].filter((rootId) => !live.has(rootId)).sort();
+}
+
 /** An explicit permalink never falls through to a different run. */
 export function selectForkRun(
   runs: readonly ForkRunSummary[] | null,
@@ -207,37 +238,27 @@ export function useExplorationCanvas(
   }, [entries, liveTrees]);
 
   /**
-   * A search this list has never heard of just moved — so read the list again,
-   * now, instead of waiting out the idle clock.
+   * A search moved in a way the list cannot explain, so read it again NOW rather
+   * than waiting out the idle clock. Measured on the live frame: 13.2 seconds
+   * from the ledger gaining the row to the row appearing, against a 1.5s budget.
    *
-   * The canvas draws its bands by walking the POLLED run list and looking up
-   * each run's tree, so a live tree or a live journal write for a root the list
-   * does not carry draws nothing at all. A swarm dispatched with no streaming
-   * turn and no background job leaves `hasActiveWork` false, which puts the
-   * cadence at FORK_IDLE_REVALIDATE_MS: measured, the owner's new search could
-   * sit invisible for fifteen seconds while its nodes were already working.
-   *
-   * Guarded on the SET of unknown ids, so this fires once per genuinely new
-   * search rather than once per step. A root the list already holds — including
-   * one it holds as settled, which a resumed run flips back to running — is not
-   * news here: the fast cadence covers it, and re-reading per step would be a
-   * poll storm dressed as a push.
+   * Keyed on the SET, so this fires once per change of it rather than once per
+   * step — a run the list already holds AS RUNNING is not news, and re-reading
+   * per journal write would be a poll storm dressed as a push.
    */
-  const unknown = useMemo(() => {
-    if (entries === null) return "";
-    const listed = new Set(entries.map((entry) => entry.run.id));
-    const missing = [
-      ...[...liveTrees.keys()].filter((rootId) => !listed.has(rootId)),
-      ...[...headActivity.keys()].filter((id) => !listed.has(id)),
-    ];
-    return missing.sort().join("\u0000");
-  }, [entries, liveTrees, headActivity]);
+  const unexplained = useMemo(
+    () => unexplainedForkRoots(
+      entries,
+      [...liveTrees.keys(), ...headActivity.keys()],
+    ).join("\u0000"),
+    [entries, liveTrees, headActivity],
+  );
   const reloadedFor = useRef("");
   useEffect(() => {
-    if (unknown === "" || reloadedFor.current === unknown) return;
-    reloadedFor.current = unknown;
+    if (unexplained === "" || reloadedFor.current === unexplained) return;
+    reloadedFor.current = unexplained;
     reload();
-  }, [unknown, reload]);
+  }, [unexplained, reload]);
 
   const params = useMemo(() => {
     const byRoot = new Map<string, ForkRunParams>();

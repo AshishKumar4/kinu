@@ -13,11 +13,13 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ForkRunParams, ForkRunSummary, HeadRunView, SearchRunParams } from '@proteus/core';
+import type {
+  ExplorationCanvasRun, ForkRunParams, ForkRunSummary, HeadRunView, SearchRunParams,
+} from '@proteus/core';
 import type { BackgroundJob } from '../src/lib/protocol';
 import {
   FORK_IDLE_REVALIDATE_MS, FORK_REVALIDATE_MS, forkRunsRevalidateMs, hasLiveForkRun,
-  hasActiveForkWork, headRunToTree, selectForkRun, forkParamRows,
+  hasActiveForkWork, headRunToTree, selectForkRun, forkParamRows, unexplainedForkRoots,
 } from '../src/components/surfaces/fork-runs';
 import { isCompeted, principalVariation, maxVisits } from '../src/components/swarm-tree-model';
 
@@ -101,6 +103,54 @@ describe('fork revalidation policy', () => {
     expect(hasActiveForkWork(false, [backgroundJob('running')])).toBe(true);
     expect(hasActiveForkWork(false, [backgroundJob('completed')])).toBe(false);
     expect(hasActiveForkWork(true, [])).toBe(true);
+  });
+
+  // A search that moves while the list is on its idle clock. The canvas builds
+  // its bands by walking the POLLED list, so the list's answer being stale is
+  // the same thing as the search being invisible: measured on the live gallery
+  // frame at 13.2 seconds from the ledger gaining the row to the row appearing.
+  describe('a search whose movement the list cannot explain', () => {
+    const canvasRow = (over: Partial<ForkRunSummary>): ExplorationCanvasRun => ({
+      run: summary(over), params: null, tree: [], head: null,
+    });
+
+    test('a root the list has never heard of is a new search', () => {
+      const listed = [canvasRow({ id: 'known', status: 'running' })];
+      expect(unexplainedForkRoots(listed, ['known', 'brand-new'])).toEqual(['brand-new']);
+    });
+
+    test('a root the list holds as RUNNING is explained and asks for nothing', () => {
+      const listed = [canvasRow({ id: 'known', status: 'running' })];
+      expect(unexplainedForkRoots(listed, ['known'])).toEqual([]);
+    });
+
+    test('a root the list believes is over is a RESUMED run', () => {
+      // A resume reuses its rootId and flips a reclaimed row back to running, so
+      // the row the list holds is the stale half of that flip — and a run the
+      // list thinks is finished is not a run it polls fast for. Every terminal
+      // state, because reclamation can leave a run in any of them.
+      for (const status of ['completed', 'failed', 'partial'] as const) {
+        expect(
+          unexplainedForkRoots([canvasRow({ id: 'again', status })], ['again']),
+          `a ${status} row that moved should be a re-read`,
+        ).toEqual(['again']);
+      }
+    });
+
+    test('the answer is sorted and deduplicated, so it can be a memo key', () => {
+      // The caller re-reads once per CHANGE of this set. Two orderings of the
+      // same set must compare equal, or every journal write is a fresh read.
+      const listed = [canvasRow({ id: 'known', status: 'running' })];
+      expect(unexplainedForkRoots(listed, ['b', 'a', 'b'])).toEqual(['a', 'b']);
+      expect(unexplainedForkRoots(listed, ['b', 'a']).join('|'))
+        .toBe(unexplainedForkRoots(listed, ['a', 'b']).join('|'));
+    });
+
+    test('nothing is unexplained before the list has answered at all', () => {
+      // No answer cannot be contradicted, and re-reading a read already in
+      // flight would loop it.
+      expect(unexplainedForkRoots(null, ['anything'])).toEqual([]);
+    });
   });
 
   test('the canvas and the full-page explorer read the resources they claim to', () => {
