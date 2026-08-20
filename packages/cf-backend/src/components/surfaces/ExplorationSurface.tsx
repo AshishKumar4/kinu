@@ -26,7 +26,7 @@ import { Link, useParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { GitForkIcon, TreeStructureIcon, ArrowsOutIcon, XIcon } from "@phosphor-icons/react";
 import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@proteus/core";
-import { SwarmTree } from "@/components/swarm-tree";
+import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { type ExplorerSelection } from "@/components/swarm-tree-model";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
@@ -385,6 +385,10 @@ function ForkBranchView({
   );
 }
 
+/** The canvas card's hairline, top and bottom — the difference between the box
+ *  the column measures and the box the graph is laid out in. */
+const CARD_BORDER = 2;
+
 /**
  * The canvas: every tree the workspace has grown, on ONE surface.
  *
@@ -418,6 +422,13 @@ function ForkCanvas({
   /** Full-screen permalink for the focused run, or null outside a workspace. */
   expandTo: string | null;
 }) {
+  /** Three measurements, each of a box that cannot be the one it constrains.
+   *  `cell` is the column's whole height and never shrinks, so it is a stable
+   *  budget; `chrome` is the header stack above the graph; `size` is the graph
+   *  box, read for its WIDTH only — its height is set here, so measuring it for
+   *  height would be a loop that could only ever ratchet down. */
+  const { attach: attachCell, size: cell } = useElementSize();
+  const { attach: attachChrome, size: chrome } = useElementSize();
   const { attach, size } = useElementSize();
 
   // Memoised on the identities the render actually depends on: the tree objects
@@ -446,57 +457,98 @@ function ForkCanvas({
   const focusedResolution = resolutions.get(focusedId);
   const paramRows = forkParamRows(params.get(focusedId));
   const refusal = focused === null ? null : runRefusal(focused, journals.get(focusedId) ?? null);
+  /** What the searches WANT, measured off the same layout the canvas draws with
+   *  — never a second stacking rule that could disagree with it. Null where
+   *  there is no tree to want anything: the box then holds a sentence, and a
+   *  sentence is centred in the room it is given. */
+  const natural = useMemo(
+    () => (regions.length === 0 ? null : naturalCanvasHeight(regions)),
+    [regions],
+  );
+  /** The column's remaining height, capped at that. Zero until the cell has
+   *  been measured, which the graph box below renders as "sizing" rather than
+   *  as an empty canvas.
+   *
+   *  The card's own hairline is subtracted because `cell` is measured OUTSIDE
+   *  it and the graph is laid out inside: without it the graph is two pixels
+   *  taller than the card can hold and `overflow-hidden` takes them off the
+   *  bottom of the key. */
+  const budget = Math.max(0, cell.h - CARD_BORDER - chrome.h);
+  const canvasH = natural === null ? budget : Math.min(budget, natural);
 
   return (
-    <div className="h-full min-h-0 flex flex-col rounded-lg border p-border p-surface overflow-hidden">
-      <div className="shrink-0 flex items-center gap-3 px-3 py-1.5 border-b p-border">
-        <span className="text-[10px] uppercase tracking-normal p-text-3">
-          {regions.length === 1 ? "1 search" : `${regions.length} searches`}
-        </span>
-        <span className="text-[10px] p-text-3 truncate">{focused?.task ?? ""}</span>
-        {paramRows.length > 0 && (
-          <div className="hidden @xl:flex items-center gap-x-3 shrink-0 text-[10px] p-text-3 font-mono">
-            {paramRows.map((row) => (
-              <span key={row.label}>{row.label} <span className="p-text-2">{row.value}</span></span>
-            ))}
+    // Two boxes, not one. The outer is the column's whole height and is what
+    // the canvas budget is measured against; the card inside HUGS what it
+    // holds, so a workspace of short searches no longer draws a bordered box
+    // with several hundred pixels of nothing under its trees.
+    <div ref={attachCell} className="h-full min-h-0">
+      <div className="flex max-h-full flex-col rounded-lg border p-border p-surface overflow-hidden">
+        <div ref={attachChrome} className="shrink-0">
+          {/* The header WRAPS as a group. Every part of it was on one line with a
+              single truncating title between fixed neighbours, so at a 313px
+              column the count label broke over two lines, the parameters were
+              hidden outright below `@xl`, and the task was cut mid-word with the
+              rest of it nowhere. */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1.5 border-b p-border">
+            <span className="shrink-0 whitespace-nowrap text-[10px] uppercase tracking-normal p-text-3">
+              {regions.length === 1 ? "1 search" : `${regions.length} searches`}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[10px] p-text-3" title={focused?.task ?? ""}>
+              {focused?.task ?? ""}
+            </span>
+            {expandTo && (
+              <Link to={expandTo} title="Open the selected search full-screen"
+                className="shrink-0 flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-md p-text-3 hover:p-text transition-colors">
+                <ArrowsOutIcon size={11} />Expand
+              </Link>
+            )}
+            {/* The dispatch parameters, wrapping with the rest rather than
+                disappearing below a container width. They are the only thing on
+                this row that tells two runs of the same task apart, so hiding
+                them narrow was hiding the answer on the surface most likely to
+                be read narrow. */}
+            {paramRows.length > 0 && (
+              <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] p-text-3 font-mono @xl:w-auto">
+                {paramRows.map((row) => (
+                  <span key={row.label} className="whitespace-nowrap">
+                    {row.label} <span className="p-text-2">{row.value}</span>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-        {expandTo && (
-          <Link to={expandTo} title="Open the selected search full-screen"
-            className="ml-auto shrink-0 flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-md p-text-3 hover:p-text transition-colors">
-            <ArrowsOutIcon size={11} />Expand
-          </Link>
-        )}
-      </div>
-      {/* The resolution the focused run resolved, above the tree it produced. Its own
-          row rather than another clause in the header's sentence: six axes and a
-          derived settle do not fit beside a task title, and a reader comparing two
-          runs of one task is reading exactly this. */}
-      <SwarmResolutionPanel resolution={focusedResolution} judges={judgeEnsembleLabel(params.get(focusedId))} />
-      {/* A run that reached nothing says so HERE, above its own band, and the canvas
-          below keeps every band it had. Replacing the canvas would hide the other
-          searches because one of them was refused, and the whole point of one canvas
-          is that the comparison stays on screen. */}
-      {refusal !== null && <RunRefusalNote refusal={refusal} />}
-      {/* The graph gets the entire remaining height of the column — the whole
-          point of one canvas — and measures the element that is actually
-          mounted. */}
-      <div ref={attach} className="flex-1 min-h-0 relative">
-        {regions.length === 0 ? (
-          <div className="h-full flex items-center justify-center px-6 text-center text-[11px] p-text-3">
-            No branch was ever written for these searches. Each stopped before its first
-            expansion landed.
-          </div>
-        ) : size.w > 0 && size.h > 0 ? (
-          <SwarmTree
-            regions={regions} width={size.w} height={size.h}
-            selectedRunId={focusedId} selection={selection}
-            onSelectRun={onFocus}
-            onSelectNode={onSelectNode}
-          />
-        ) : (
-          <div className="h-full flex items-center justify-center text-[11px] p-text-3">Sizing canvas…</div>
-        )}
+          {/* The resolution the focused run resolved, above the tree it produced. Its own
+              row rather than another clause in the header's sentence: six axes and a
+              derived settle do not fit beside a task title, and a reader comparing two
+              runs of one task is reading exactly this. */}
+          <SwarmResolutionPanel resolution={focusedResolution} judges={judgeEnsembleLabel(params.get(focusedId))} />
+          {/* A run that reached nothing says so HERE, above its own band, and the canvas
+              below keeps every band it had. Replacing the canvas would hide the other
+              searches because one of them was refused, and the whole point of one canvas
+              is that the comparison stays on screen. */}
+          {refusal !== null && <RunRefusalNote refusal={refusal} />}
+        </div>
+        {/* The graph gets every pixel the searches can USE and no more: the
+            column's remaining height, capped at what the scene wants at 1:1.
+            `flex-1` alone gave a three-node merge the whole column, which is the
+            fixed-height-card defect from the other direction. */}
+        <div ref={attach} className="relative shrink-0 min-h-0" style={{ height: canvasH }}>
+          {regions.length === 0 ? (
+            <div className="h-full flex items-center justify-center px-6 text-center text-[11px] p-text-3">
+              No branch was ever written for these searches. Each stopped before its first
+              expansion landed.
+            </div>
+          ) : size.w > 0 && canvasH > 0 ? (
+            <SwarmTree
+              regions={regions} width={size.w} height={canvasH}
+              selectedRunId={focusedId} selection={selection}
+              onSelectRun={onFocus}
+              onSelectNode={onSelectNode}
+            />
+          ) : (
+            <div className="h-full flex items-center justify-center text-[11px] p-text-3">Sizing canvas…</div>
+          )}
+        </div>
       </div>
     </div>
   );
