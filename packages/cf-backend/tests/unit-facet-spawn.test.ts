@@ -125,7 +125,7 @@ describe('exploration-facet spawn seam', () => {
     const head = await spawnHeadFacet(host, input, {
       ownerUserId: 'user-1',
       capabilityToken: 'pwc_parent',
-      sharedParent: 'proteus-main',
+      sharedParent: 'kinu-main',
     });
 
     expect(methods(calls)).toEqual(['subAgent', 'setOwner', 'setSharedParent', 'initHead']);
@@ -138,7 +138,7 @@ describe('exploration-facet spawn seam', () => {
     // the head reaches the user's credentials AS the parent workspace and is
     // attenuated with it — no per-head identity to taint separately.
     expect(calls[1]?.args).toEqual(['user-1', 'pwc_parent']);
-    expect(calls[2]?.args).toEqual(['proteus-main']);
+    expect(calls[2]?.args).toEqual(['kinu-main']);
     // The budget the caller derived reaches the facet untouched.
     expect(calls[3]?.args).toEqual([input]);
     expect(head.id).toBe('head-1');
@@ -147,7 +147,7 @@ describe('exploration-facet spawn seam', () => {
   test('a head RECLAIMS its facet when run() settles, and only EVICTS on abort()', async () => {
     const { host, calls } = makeHost();
     const head = await spawnHeadFacet(host, headInput(), {
-      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main',
     });
     calls.length = 0;
 
@@ -166,7 +166,7 @@ describe('exploration-facet spawn seam', () => {
   test('run() reclaims the facet even when runAsHead rejects, and the original error propagates', async () => {
     const { host, calls } = makeHost({ runAsHeadRejects: true });
     const head = await spawnHeadFacet(host, headInput(), {
-      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main',
     });
     calls.length = 0;
 
@@ -181,7 +181,7 @@ describe('exploration-facet spawn seam', () => {
   test('abort() on a live head never deletes — releasing there would wipe a head still writing', async () => {
     const { host, calls } = makeHost();
     const head = await spawnHeadFacet(host, headInput(), {
-      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main',
     });
     calls.length = 0;
 
@@ -194,7 +194,7 @@ describe('exploration-facet spawn seam', () => {
   test('a failing in-facet abort still evicts, and the failure is not discarded', async () => {
     const { host, calls } = makeHost({ failing: 'abortHead' });
     const head = await spawnHeadFacet(host, headInput(), {
-      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main',
     });
     calls.length = 0;
 
@@ -211,7 +211,7 @@ describe('exploration-facet spawn seam', () => {
     const { host, calls } = makeHost({ failing: 'initHead' });
 
     await expect(spawnHeadFacet(host, headInput(), {
-      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main',
     })).rejects.toThrow('initHead exploded');
 
     // The half-seeded facet is WIPED, not merely evicted: nothing will ever

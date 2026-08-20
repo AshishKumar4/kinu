@@ -172,7 +172,7 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
   defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
-  const key = `proteus.section.${id}`;
+  const key = `kinu.section.${id}`;
   // Read once on mount and write only on toggle: an effect that mirrored state
   // would stamp every default into storage on first paint, which then looks
   // like a choice the user made and freezes the defaults forever.

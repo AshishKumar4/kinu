@@ -48,7 +48,7 @@ import {
   refusalText, validate, type ProposedConfig, type RemedyOrder, type Validation,
 } from './validate';
 import {
-  ProteusConfigSchema, readAnswer, readChatCompletion, readForwardProbe, readOllamaReply,
+  KinuConfigSchema, readAnswer, readChatCompletion, readForwardProbe, readOllamaReply,
   readReverseProbe, type ForwardProbeRead, type ReadAnswer, type Reply,
 } from './answer';
 
@@ -191,8 +191,8 @@ function openRouterKey(): string {
   if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
   // The CLI's own resolved config is the same credential the rest of this
   // machine already uses; reading it here avoids asking for a second copy.
-  const path = join(homedir(), '.proteus', 'config.json');
-  const key = v.parse(ProteusConfigSchema, JSON.parse(readFileSync(path, 'utf8'))).providers.openrouter.apiKey;
+  const path = join(homedir(), '.kinu', 'config.json');
+  const key = v.parse(KinuConfigSchema, JSON.parse(readFileSync(path, 'utf8'))).providers.openrouter.apiKey;
   if (key === '') {
     throw new Error(
       'no OpenRouter credential: set OPENROUTER_API_KEY, or sign in so '
@@ -219,7 +219,7 @@ async function askOpenRouter(model: string, system: string, user: string, json: 
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${openRouterKey()}`,
-        'x-title': 'proteus axis-ergonomics study',
+        'x-title': 'kinu axis-ergonomics study',
       },
       body: JSON.stringify(body),
     });

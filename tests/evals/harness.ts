@@ -256,7 +256,7 @@ export function readLedgerTotals(db: Database): LedgerTotals {
  * cannot drift from the number enforced.
  */
 function stepCapRow(steps: number): EvalScoreRow {
-  const cap = resolveMaxSteps(process.env.PROTEUS_MAX_STEPS);
+  const cap = resolveMaxSteps(process.env.KINU_MAX_STEPS);
   const reached = steps >= cap;
   return {
     name: 'step_cap_reached',

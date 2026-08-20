@@ -407,7 +407,7 @@ async function testWorkspaceWriteFile(ws: WebSocket) {
 
 async function testSaveNoteSearchMemory(ws: WebSocket) {
   try {
-    const marker = `proteus-e2e-${Date.now()}`;
+    const marker = `kinu-e2e-${Date.now()}`;
 
     // Save a note with a unique marker
     await chat(ws, `Use the save_note tool to save exactly this: "${marker}". Reply only DONE.`, 60_000);
@@ -449,7 +449,7 @@ async function testClearConversation(ws: WebSocket) {
 // ── main ─────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`\nProteus Web E2E Tests`);
+  console.log(`\nKinu Web E2E Tests`);
   console.log(`Target: ${BASE_URL}`);
   console.log(`Agent:  ${AGENT_NAME}`);
   console.log(`────────────────────────────────────`);

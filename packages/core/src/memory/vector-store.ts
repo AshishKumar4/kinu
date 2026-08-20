@@ -14,7 +14,7 @@
 
 import type { JsonObject } from '../utils/json';
 import type { ModelCallSink } from '../events/model-call';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 
 /** A Vectorize-shaped binding (subset we need). Duck-typed so core stays dep-free. */
 export interface VectorMutation {
@@ -177,7 +177,7 @@ export function createCloudflareVectorStore(opts: {
   const trip = (op: string, input: { error: unknown }): void => {
     diagnostics.failure(
       'vector.backend_tripped',
-      toProteusError({ doing: 'reach the vector backend', cause: input.error, otherwise: 'unavailable' }),
+      toKinuError({ doing: 'reach the vector backend', cause: input.error, otherwise: 'unavailable' }),
       { operation: op },
     );
     unavailableUntil = Date.now() + VECTOR_BACKEND_COOLDOWN_MS;

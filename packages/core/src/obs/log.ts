@@ -23,7 +23,7 @@
  *
  * `packages/core/src` holds 55, not the ~1,180 this comment previously claimed;
  * that figure was never counted. The shape the diagnostics settled on is
- * `console.warn('[proteus] <prose>', someValue)`: no event name a query could key
+ * `console.warn('[kinu] <prose>', someValue)`: no event name a query could key
  * on, and a second argument that is frequently an object nobody looked inside.
  * Both rules are mechanical, so both are types here.
  *
@@ -66,7 +66,7 @@
  * diagnostic names the field and states the rule.
  */
 
-import { renderCauseChain, type ErrorCode, type ProteusError } from './error';
+import { renderCauseChain, type ErrorCode, type KinuError } from './error';
 
 /**
  * Field names that may never appear on a log line, from AGENTS.md § Errors.
@@ -175,7 +175,7 @@ export interface Logger {
   event<Fields>(name: LogEventName, fields?: Fields & LoggableFields<Fields>): void;
   failure<Fields>(
     name: LogEventName,
-    error: ProteusError,
+    error: KinuError,
     fields?: Fields & LoggableFields<Fields>,
   ): void;
 }
@@ -227,7 +227,7 @@ export function createConsoleLogger(): Logger {
       const line: LogLine = { event: name, fields: fields ?? {} };
       console.error(JSON.stringify(line));
     },
-    failure(name: LogEventName, error: ProteusError, fields?: LogFields): void {
+    failure(name: LogEventName, error: KinuError, fields?: LogFields): void {
       const line: LogLine = {
         event: name,
         code: error.code,
@@ -304,7 +304,7 @@ export function createRecordingLogger(): RecordingLogger {
     event(name: LogEventName, fields?: LogFields): void {
       emitted.push({ event: name, code: null, cause: null, fields: fields ?? {} });
     },
-    failure(name: LogEventName, error: ProteusError, fields?: LogFields): void {
+    failure(name: LogEventName, error: KinuError, fields?: LogFields): void {
       emitted.push({
         event: name,
         code: error.code,

@@ -129,7 +129,7 @@ async function runCli(
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, ...env, PROTEUS_HOME: home },
+    env: { ...process.env, ...env, KINU_HOME: home },
   });
   const timer = setTimeout(() => proc.kill("SIGKILL"), timeoutMs);
   const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
@@ -167,9 +167,9 @@ describe("kinu exec — a one-shot run terminates", () => {
     const beat = join(home, "heartbeat.log");
     const server = modelThatRuns(heartbeatCommand(home, beat, 90));
     const env = {
-      PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
-      PROTEUS_AUTH: "Bearer mock",
-      PROTEUS_MODEL: "mock-model",
+      KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
+      KINU_AUTH: "Bearer mock",
+      KINU_MODEL: "mock-model",
     };
     try {
       const created = await runCli(
@@ -205,9 +205,9 @@ describe("kinu exec — a one-shot run terminates", () => {
     const home = newHome();
     const server = modelThatRuns(heartbeatCommand(home, join(home, "hb2.log"), 90));
     const env = {
-      PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
-      PROTEUS_AUTH: "Bearer mock",
-      PROTEUS_MODEL: "mock-model",
+      KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
+      KINU_AUTH: "Bearer mock",
+      KINU_MODEL: "mock-model",
     };
     try {
       expect((await runCli(

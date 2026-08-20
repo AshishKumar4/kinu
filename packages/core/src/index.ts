@@ -308,7 +308,7 @@ export { runChat, INTERRUPTED_TURN, type ChatEvent, type ChatOptions } from './c
 // Extension seam (public plugin API — observe + extend a turn)
 export {
   ExtensionHost,
-  type ProteusExtension,
+  type KinuExtension,
   type TurnStartContext,
   type ToolCallContext,
   type ToolResultContext,

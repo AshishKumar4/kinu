@@ -4,7 +4,7 @@
  * The defect this locks was invisible to typecheck, lint, build and every
  * render test, and it shipped: `@theme inline` mapped Tailwind's radius scale
  * onto `calc(var(--radius) - 2px)` and friends, and `--radius` was never
- * declared outside `[data-proteus-plan-review]`. A `var()` that resolves to
+ * declared outside `[data-kinu-plan-review]`. A `var()` that resolves to
  * nothing makes the whole declaration invalid at computed-value time, so
  * `border-radius` fell back to its initial value — 0px. Measured in the
  * browser at the time: `rounded-sm`, `rounded-md`, `rounded-lg` and
@@ -39,7 +39,7 @@ const ROLES = ['--r-control', '--r-row', '--r-card', '--r-overlay'] as const;
  * global omission hard to see.
  */
 function globalDeclarations(): Map<string, string> {
-  const plannotator = NO_COMMENTS.indexOf('[data-proteus-plan-review]');
+  const plannotator = NO_COMMENTS.indexOf('[data-kinu-plan-review]');
   const scope = plannotator === -1 ? NO_COMMENTS : NO_COMMENTS.slice(0, plannotator);
   const out = new Map<string, string>();
   for (const [, name, value] of scope.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;{}]+);/gi)) {

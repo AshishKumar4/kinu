@@ -19,7 +19,7 @@ import * as v from 'valibot';
 const python = Bun.which("python3");
 const promptModule = resolve(__dirname, "../src/prompt.ts");
 
-const fixtures = mkdtempSync(join(tmpdir(), "proteus-pty-test-"));
+const fixtures = mkdtempSync(join(tmpdir(), "kinu-pty-test-"));
 afterAll(() => rmSync(fixtures, { recursive: true, force: true }));
 
 const HARNESS = `

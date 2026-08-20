@@ -44,7 +44,7 @@
  * the same intuition + add Cloudflare-Workers-specific deny rules.
  */
 
-import { diagnostics, ProteusError } from '../obs/index';
+import { diagnostics, KinuError } from '../obs/index';
 
 export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 
@@ -694,7 +694,7 @@ export async function decideApproval(
     if (mode === 'allow_all') {
       diagnostics.failure(
         'approval.gate_bypassed',
-        new ProteusError('unsupported', 'allow_all mode cannot ask the owner; the gated command ran unapproved'),
+        new KinuError('unsupported', 'allow_all mode cannot ask the owner; the gated command ran unapproved'),
         { executor, rules: review.hits.map((h) => h.rule).join(',') },
       );
     } else {
@@ -741,7 +741,7 @@ export async function decideApproval(
     }
     diagnostics.failure(
       'approval.warn_unenforced',
-      new ProteusError('unsupported', 'a warn-level review is not put to the owner; the command ran'),
+      new KinuError('unsupported', 'a warn-level review is not put to the owner; the command ran'),
       { executor, rules: review.hits.map((h) => h.rule).join(',') },
     );
   }

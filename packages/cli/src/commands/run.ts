@@ -572,7 +572,7 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
       // The turn's usage, field-for-field, and only when the provider reported
       // something: a reader must be able to tell "spent nothing" from "nobody
       // metered this", so an unreported field is an ABSENT key rather than a 0
-      // (bench/clbench/proteus/events.py is the reader that depends on it).
+      // (bench/clbench/kinu/events.py is the reader that depends on it).
       // `projectJsonValue`, not `decodeJsonValue`, for the same reason the
       // run-event arm below uses it: this is an in-process object on its way
       // OUT, so a present-and-`undefined` field must be dropped rather than

@@ -8,7 +8,7 @@ import { Database } from 'bun:sqlite';
 import {
   deriveEventTrust, derivePriority, deriveFields,
   EventLog, initEventsHubTables, buildDrainBatch, dedupeKeyFor,
-  type IngressDescriptor, type ProteusEvent,
+  type IngressDescriptor, type KinuEvent,
   type SubordinateTaskPayload, type SubordinateReportPayload,
 } from '../src/events/hub/index';
 import type { SqlExec } from '../src/index';
@@ -23,7 +23,7 @@ const taskPayload: SubordinateTaskPayload = {
   kind: 'task',
   body: 'Survey the auth module and report the seams.',
   deliverable: 'a findings note in /workspace/notes/auth.md',
-  proteus_mode: 'build',
+  kinu_mode: 'build',
 };
 
 const reportPayload: SubordinateReportPayload = {
@@ -31,7 +31,7 @@ const reportPayload: SubordinateReportPayload = {
   status: 'completed',
   content: 'Survey done — three seams found; note written.',
   task: 'Survey the auth module',
-  proteus_mode: 'build',
+  kinu_mode: 'build',
 };
 
 const taskDescriptor: IngressDescriptor = {
@@ -66,11 +66,11 @@ describe('subordinate event derivation', () => {
       id: 'e', trace_id: 'e', caused_by: null, ingress: 'subordinate',
       trust: 'authenticated', priority: 'normal', payload_visibility: 'redact',
       received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null,
-    } satisfies Pick<ProteusEvent,
+    } satisfies Pick<KinuEvent,
       'id' | 'trace_id' | 'caused_by' | 'ingress' | 'trust' | 'priority'
       | 'payload_visibility' | 'received_at' | 'schema_version' | 'reply_channel' | 'dedupe_key'>;
-    const taskEvent: ProteusEvent = { ...base, variant: 'subordinate_task', payload: taskPayload };
-    const reportEvent: ProteusEvent = { ...base, variant: 'subordinate_report', payload: reportPayload };
+    const taskEvent: KinuEvent = { ...base, variant: 'subordinate_task', payload: taskPayload };
+    const reportEvent: KinuEvent = { ...base, variant: 'subordinate_report', payload: reportPayload };
     expect(dedupeKeyFor(taskEvent)).toBeNull();
     expect(dedupeKeyFor(reportEvent)).toBeNull();
   });

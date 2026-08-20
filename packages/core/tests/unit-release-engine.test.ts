@@ -208,7 +208,7 @@ describe('engine.apply', () => {
     expect(detail.checks[0].stderr).toContain('patch does not apply');
   });
 
-  test('github source: clones the repo with the stored credential and branches proteus/<changeId>', async () => {
+  test('github source: clones the repo with the stored credential and branches kinu/<changeId>', async () => {
     const s = setup({
       binding: { kind: 'github', repoUrl: 'https://github.com/acme/site', defaultBranch: 'main' },
       gitHubAuth: async () => 'Basic dGVzdA==',
@@ -223,7 +223,7 @@ describe('engine.apply', () => {
     expect(clone).toContain("'https://github.com/acme/site'");
     expect(clone).toContain(`GIT_CONFIG_GLOBAL='/tmp/${s.changeId}.gitauth'`);
     const checkout = s.sandbox.commands.find((c) => c.includes('checkout -B'));
-    expect(checkout).toContain(`'proteus/${s.changeId}'`);
+    expect(checkout).toContain(`'kinu/${s.changeId}'`);
     expect(checkout).toContain("'origin/main'");
   });
 

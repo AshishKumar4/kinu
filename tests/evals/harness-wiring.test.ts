@@ -634,7 +634,7 @@ describe('episode spend — the meter is fed by the session, not by silence', ()
    *
    * Rendered from the in-memory meter rather than by calling
    * `reportLiveModelSpend` and reading its file: that would publish this file's
-   * scripted tokens into whatever `PROTEUS_EVAL_SPEND_FILE` the eval tier has
+   * scripted tokens into whatever `KINU_EVAL_SPEND_FILE` the eval tier has
    * exported, which is the tier's real cost report. The `JSON.stringify` here IS
    * the line `reportLiveModelSpend` writes, so the serialization is still under
    * test — without a test writing to the run's ledger of what it spent.

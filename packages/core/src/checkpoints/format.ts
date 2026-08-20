@@ -2,9 +2,9 @@
  * Shadow-git checkpoint STORE FORMAT — the contract both engines write:
  *
  *   <base>/<agent>/<sha256(dir)[:16]>/   — bare GIT_DIR per working directory
- *     PROTEUS_WORKDIR                    — marker file with the target dir
+ *     KINU_WORKDIR                    — marker file with the target dir
  *     info/exclude                       — CHECKPOINT_EXCLUDES
- *     refs/proteus/<ms13>-<seq36>        — one ref per snapshot
+ *     refs/kinu/<ms13>-<seq36>        — one ref per snapshot
  *
  * with parentless commits whose subject encodes the turn:
  * `turn=<id|-> session=<id|-> <reason>`.
@@ -20,10 +20,10 @@
 import type { CheckpointTurnMeta } from './types';
 
 /** Ref namespace inside each bare store — one ref per snapshot. */
-export const CHECKPOINT_REF_PREFIX = 'refs/proteus';
+export const CHECKPOINT_REF_PREFIX = 'refs/kinu';
 
 /** Marker file in each store recording the absolute target directory. */
-export const CHECKPOINT_WORKDIR_MARKER = 'PROTEUS_WORKDIR';
+export const CHECKPOINT_WORKDIR_MARKER = 'KINU_WORKDIR';
 
 /** Default `info/exclude` contents — generated/derived trees never snapshot. */
 export const CHECKPOINT_EXCLUDES = [
@@ -140,7 +140,7 @@ export function checkpointReason(reason: string, unreadable: readonly string[]):
   return `${reason} [skipped ${String(unreadable.length)} unreadable: ${shown.join(' ')}${more}]`;
 }
 
-/** Snapshot time from a `refs/proteus/<ms13>-<seq36>` ref name. */
+/** Snapshot time from a `refs/kinu/<ms13>-<seq36>` ref name. */
 export function checkpointRefTimestampMs(ref: string): number {
   const m = /(\d{13})-[0-9a-z]+$/.exec(ref);
   return m ? Number(m[1]) : 0;

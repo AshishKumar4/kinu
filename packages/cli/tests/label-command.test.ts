@@ -30,7 +30,7 @@ function runCli(home: string, args: string[]) {
     cwd: repoRoot,
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, PROTEUS_HOME: home, NO_COLOR: '1' },
+    env: { ...process.env, KINU_HOME: home, NO_COLOR: '1' },
   });
   return {
     stdout: `${result.stdout.toString()}${result.stderr.toString()}`.replace(
@@ -49,7 +49,7 @@ interface World {
 /** A workspace whose classifier catches only 65% of real corrections and
  *  falsely flags 4% of the good turns — a bias no telemetry can see. */
 function seedWorkspace(name: string, size = 600): World {
-  const home = mkdtempSync(join(tmpdir(), 'proteus-label-'));
+  const home = mkdtempSync(join(tmpdir(), 'kinu-label-'));
   tempDirs.push(home);
   mkdirSync(join(home, name), { recursive: true });
   const db = new Database(join(home, name, 'agent.db'));

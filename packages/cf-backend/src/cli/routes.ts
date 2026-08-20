@@ -441,7 +441,7 @@ async function approveFromBrowser(request: Request, env: Env): Promise<Response>
   catch { return html('Kinu CLI Auth', '<p>Invalid approval form.</p>', 400); }
   const code = String(form.get('userCode') ?? '');
   const csrf = String(form.get('csrf') ?? '');
-  const cookieCsrf = readCookie(request, 'proteus_cli_auth_csrf');
+  const cookieCsrf = readCookie(request, 'kinu_cli_auth_csrf');
   if (!csrf || !cookieCsrf || !timingSafeEqual(csrf, cookieCsrf)) {
     return html('Kinu CLI Auth', '<p>Invalid or expired approval session. Refresh the approval page and try again.</p>', 403);
   }
@@ -667,7 +667,7 @@ function installPageResponse(origin: string): Response {
       <section class="hero" aria-labelledby="install-title">
         <p class="eyebrow">Terminal setup</p>
         <h1 id="install-title">Install Kinu CLI</h1>
-        <p class="lede">Run one command on macOS or Linux. Kinu installs into <code>~/.proteus</code>, adds the command to your PATH, then starts browser sign-in and local setup when a terminal is available.</p>
+        <p class="lede">Run one command on macOS or Linux. Kinu installs into <code>~/.kinu</code>, adds the command to your PATH, then starts browser sign-in and local setup when a terminal is available.</p>
       </section>
 
       <section aria-label="Install command">
@@ -714,9 +714,9 @@ function installScriptResponse(origin: string, head = false): Response {
   const script = `#!/usr/bin/env bash
 set -euo pipefail
 
-PROTEUS_ORIGIN="\${PROTEUS_ORIGIN:-${origin}}"
-PROTEUS_HOME="\${PROTEUS_HOME:-$HOME/.proteus}"
-BIN_DIR="$PROTEUS_HOME/bin"
+KINU_ORIGIN="\${KINU_ORIGIN:-${origin}}"
+KINU_HOME="\${KINU_HOME:-$HOME/.kinu}"
+BIN_DIR="$KINU_HOME/bin"
 BIN_PATH="$BIN_DIR/kinu"
 YES=0
 NO_SETUP=0
@@ -740,7 +740,7 @@ while [ "$#" -gt 0 ]; do
     --origin)
       shift
       [ "$#" -gt 0 ] || { echo "--origin requires a value" >&2; exit 2; }
-      PROTEUS_ORIGIN="\${1%/}"
+      KINU_ORIGIN="\${1%/}"
       ;;
     --uninstall) UNINSTALL=1 ;;
     --purge) PURGE=1 ;;
@@ -749,7 +749,7 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-PROTEUS_ORIGIN="\${PROTEUS_ORIGIN%/}"
+KINU_ORIGIN="\${KINU_ORIGIN%/}"
 
 say() { printf '%s\\n' "$*"; }
 die() { printf 'Kinu install error: %s\\n' "$*" >&2; exit 1; }
@@ -764,7 +764,7 @@ if [ "$UNINSTALL" = "1" ]; then
     rm -f /usr/local/bin/kinu 2>/dev/null || true
   fi
   rm -f "$BIN_PATH"
-  if [ "$PURGE" = "1" ]; then rm -rf "$PROTEUS_HOME"; fi
+  if [ "$PURGE" = "1" ]; then rm -rf "$KINU_HOME"; fi
   say "Kinu CLI removed."
   exit 0
 fi
@@ -779,8 +779,8 @@ need mktemp
 
 install_bun_if_missing() {
   if command -v bun >/dev/null 2>&1; then return 0; fi
-  if [ "\${PROTEUS_INSTALL_BUN:-1}" = "0" ]; then
-    die "Bun is required. Install Bun or rerun without PROTEUS_INSTALL_BUN=0."
+  if [ "\${KINU_INSTALL_BUN:-1}" = "0" ]; then
+    die "Bun is required. Install Bun or rerun without KINU_INSTALL_BUN=0."
   fi
   say "Installing Bun runtime..."
   curl -fsSL https://bun.sh/install | bash
@@ -799,7 +799,7 @@ has_tty() {
 # one dies mid-prompt anyway, restore the terminal before surfacing failure.
 run_on_tty() {
   rc=0
-  env PROTEUS_HOME="$PROTEUS_HOME" "$@" < /dev/tty || rc=$?
+  env KINU_HOME="$KINU_HOME" "$@" < /dev/tty || rc=$?
   if [ "$rc" -ne 0 ]; then
     stty sane < /dev/tty 2>/dev/null || true
   fi
@@ -810,14 +810,14 @@ run_setup_if_requested() {
   if [ "$NO_SETUP" = "1" ]; then return 0; fi
   if ! has_tty; then
     say "Setup was not started because no interactive terminal is attached."
-    say "Run: $BIN_PATH setup --origin $PROTEUS_ORIGIN"
+    say "Run: $BIN_PATH setup --origin $KINU_ORIGIN"
     return 0
   fi
   say "Starting Kinu setup..."
   if [ "$YES" = "1" ]; then
-    run_on_tty "$BIN_PATH" setup --origin "$PROTEUS_ORIGIN" --account-only --yes
+    run_on_tty "$BIN_PATH" setup --origin "$KINU_ORIGIN" --account-only --yes
   else
-    run_on_tty "$BIN_PATH" setup --origin "$PROTEUS_ORIGIN" --account-only
+    run_on_tty "$BIN_PATH" setup --origin "$KINU_ORIGIN" --account-only
   fi
 }
 
@@ -831,9 +831,9 @@ run_connect_if_requested() {
     fi
   else
     if [ -n "$CONNECT_LABEL" ]; then
-      PROTEUS_HOME="$PROTEUS_HOME" "$BIN_PATH" connect --label "$CONNECT_LABEL"
+      KINU_HOME="$KINU_HOME" "$BIN_PATH" connect --label "$CONNECT_LABEL"
     else
-      PROTEUS_HOME="$PROTEUS_HOME" "$BIN_PATH" connect
+      KINU_HOME="$KINU_HOME" "$BIN_PATH" connect
     fi
   fi
 }
@@ -842,20 +842,20 @@ prepare_cli_source() {
   say "Preparing Kinu CLI..."
   # </dev/null: under curl|bash our stdin is the unread remainder of this
   # script — a child that reads stdin would consume it mid-execution.
-  help="$(PROTEUS_HOME="$PROTEUS_HOME" PROTEUS_REFRESH_SOURCE=1 "$BIN_PATH" --help </dev/null)" || die "Kinu CLI source setup failed."
+  help="$(KINU_HOME="$KINU_HOME" KINU_REFRESH_SOURCE=1 "$BIN_PATH" --help </dev/null)" || die "Kinu CLI source setup failed."
   printf '%s\\n' "$help" | grep -Eq '^[[:space:]]+setup[[:space:]]' \
     || die "Downloaded Kinu CLI is missing setup. Retry after the deployment has finished."
 }
 
 mkdir -p "$BIN_DIR"
-chmod 700 "$PROTEUS_HOME"
+chmod 700 "$KINU_HOME"
 install_bun_if_missing
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 say "Installing Kinu CLI..."
-curl -fsSL "$PROTEUS_ORIGIN/downloads/kinu" -o "$tmp/kinu"
+curl -fsSL "$KINU_ORIGIN/downloads/kinu" -o "$tmp/kinu"
 chmod 755 "$tmp/kinu"
 mv "$tmp/kinu" "$BIN_PATH"
 prepare_cli_source
@@ -873,13 +873,13 @@ case ":$PATH:" in
     elif [ "$shell_name" = "bash" ]; then profile="$HOME/.bashrc";
     else profile="$HOME/.profile"; fi
     profile_line="export PATH=\\"$BIN_DIR:\\$PATH\\""
-    if [ "$BIN_DIR" = "$HOME/.proteus/bin" ]; then
-      profile_line='export PATH="$HOME/.proteus/bin:$PATH"'
+    if [ "$BIN_DIR" = "$HOME/.kinu/bin" ]; then
+      profile_line='export PATH="$HOME/.kinu/bin:$PATH"'
     fi
     if touch "$profile" 2>/dev/null; then
       if grep -F "$BIN_DIR" "$profile" >/dev/null 2>&1; then
         :
-      elif [ "$BIN_DIR" = "$HOME/.proteus/bin" ] && grep -F '$HOME/.proteus/bin' "$profile" >/dev/null 2>&1; then
+      elif [ "$BIN_DIR" = "$HOME/.kinu/bin" ] && grep -F '$HOME/.kinu/bin' "$profile" >/dev/null 2>&1; then
         :
       else
         {
@@ -901,7 +901,7 @@ run_connect_if_requested
 
 if [ "$NO_SETUP" = "1" ] && [ "$CONNECT" != "1" ]; then
   say "Next:"
-  say "  kinu setup --origin $PROTEUS_ORIGIN"
+  say "  kinu setup --origin $KINU_ORIGIN"
   say "  kinu create"
 else
   say "Kinu CLI is ready."
@@ -951,13 +951,13 @@ function cliShimResponse(origin: string, head = false): Response {
   const script = `#!/usr/bin/env bash
 set -euo pipefail
 
-PROTEUS_HOME="\${PROTEUS_HOME:-$HOME/.proteus}"
-SOURCE_ROOT="$PROTEUS_HOME/source"
+KINU_HOME="\${KINU_HOME:-$HOME/.kinu}"
+SOURCE_ROOT="$KINU_HOME/source"
 SRC_DIR="$SOURCE_ROOT/current"
-TARBALL_URL="\${PROTEUS_SOURCE_TARBALL:-${origin}${CLI_SOURCE_TARBALL_PATH}}"
+TARBALL_URL="\${KINU_SOURCE_TARBALL:-${origin}${CLI_SOURCE_TARBALL_PATH}}"
 # Pinned checksum override; when unset, the published <tarball>.sha256 asset
 # is fetched and verification is mandatory.
-TARBALL_SHA256="\${PROTEUS_SOURCE_SHA256:-}"
+TARBALL_SHA256="\${KINU_SOURCE_SHA256:-}"
 
 need_bun() {
   if command -v bun >/dev/null 2>&1; then return 0; fi
@@ -1006,10 +1006,10 @@ refresh_source() {
 need_bun
 
 case "\${1:-}" in
-  update|upgrade) PROTEUS_REFRESH_SOURCE=1 ;;
+  update|upgrade) KINU_REFRESH_SOURCE=1 ;;
 esac
 
-if [ "\${PROTEUS_REFRESH_SOURCE:-0}" = "1" ] || [ ! -f "$SRC_DIR/packages/cli/bin/cli.ts" ]; then
+if [ "\${KINU_REFRESH_SOURCE:-0}" = "1" ] || [ ! -f "$SRC_DIR/packages/cli/bin/cli.ts" ]; then
   refresh_source
 fi
 
@@ -1102,11 +1102,11 @@ function toError<Thrown>(thrown: Thrown): Error {
 }
 
 function csrfCookie(value: string): string {
-  return `proteus_cli_auth_csrf=${value}; Path=/cli/auth; Max-Age=600; HttpOnly; Secure; SameSite=Strict`;
+  return `kinu_cli_auth_csrf=${value}; Path=/cli/auth; Max-Age=600; HttpOnly; Secure; SameSite=Strict`;
 }
 
 function clearCsrfCookie(): string {
-  return 'proteus_cli_auth_csrf=; Path=/cli/auth; Max-Age=0; HttpOnly; Secure; SameSite=Strict';
+  return 'kinu_cli_auth_csrf=; Path=/cli/auth; Max-Age=0; HttpOnly; Secure; SameSite=Strict';
 }
 
 function readCookie(request: Request, name: string): string | null {

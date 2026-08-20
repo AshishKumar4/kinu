@@ -21,11 +21,11 @@ import { scratchDir, scratchPath, toolExecute } from '@kinu/test-utils';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, createCLIRuntime, buildCLIHeadRuntime } from '../src/runtime';
 
-// A local head's scratch is a real store under PROTEUS_HOME (home.ts is the
+// A local head's scratch is a real store under KINU_HOME (home.ts is the
 // isolation boundary), so point that boundary at a temp dir before anything
 // reads it: a test run must never write into the real home.
-process.env.PROTEUS_HOME = scratchDir('head-runtime-home');
-const HEAD_SCRATCH_DIR = join(process.env.PROTEUS_HOME, 'heads');
+process.env.KINU_HOME = scratchDir('head-runtime-home');
+const HEAD_SCRATCH_DIR = join(process.env.KINU_HOME, 'heads');
 
 /** Scratch stores present right now — [] before any head has ever run. */
 function scratchStores(): string[] {

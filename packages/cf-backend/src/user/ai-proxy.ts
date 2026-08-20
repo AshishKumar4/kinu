@@ -31,7 +31,7 @@ import { ownerCaller } from './workspace-capability';
 import { USER_AI_PROXY_PATH } from '@kinu/core';
 import * as v from 'valibot';
 
-const PROXY_PLACEHOLDER = 'https://proteus-user-ai-proxy.invalid';
+const PROXY_PLACEHOLDER = 'https://kinu-user-ai-proxy.invalid';
 const ChatCompletionRouteSchema = v.object({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
 });

@@ -1,12 +1,12 @@
-# Configuration — `~/.proteus/config.json` and the environment
+# Configuration — `~/.kinu/config.json` and the environment
 
 Every CLI setting lives in one JSON file. `kinu setup`, `kinu auth`,
 `kinu providers connect` and `kinu create` write it for you; this page is
 for when you want to read or edit it yourself. The authoritative shape is
-`ProteusConfig` in `packages/cli/src/config.ts`.
+`KinuConfig` in `packages/cli/src/config.ts`.
 
 ```
-~/.proteus/                 mode 0700
+~/.kinu/                 mode 0700
   config.json               mode 0600, everything below
   bin/                      the kinu command + your workspace alias shims
   source/                   the CLI source cache the launcher runs
@@ -18,7 +18,7 @@ for when you want to read or edit it yourself. The authoritative shape is
   device.json, pc-agent.*   the desktop execution daemon, its script and its log
 ```
 
-`PROTEUS_HOME` moves all of it. The CLI keeps no state anywhere else, so backing
+`KINU_HOME` moves all of it. The CLI keeps no state anywhere else, so backing
 up this directory backs up everything it knows. Files you name yourself, such as
 an export archive, land where you point them and are the one exception.
 
@@ -26,12 +26,12 @@ an export archive, land where you point them and are the one exception.
 
 | Field | Type | What it is |
 | --- | --- | --- |
-| `origin` | string | The Kinu deployment this CLI talks to. Defaults to `https://kinu.run`; `PROTEUS_ORIGIN` and `--origin` override it. |
+| `origin` | string | The Kinu deployment this CLI talks to. Defaults to `https://kinu.run`; `KINU_ORIGIN` and `--origin` override it. |
 | `accessToken` | string | The interactive session token from `kinu auth`. Treat it as a password. |
 | `tokenExpiresAt` | ISO date | When that token expires. The CLI refuses it after this and asks you to re-auth. |
 | `user` | `{id, email, displayName?}` | Who the token belongs to. `kinu whoami` prints it. |
 
-`PROTEUS_TOKEN` overrides `accessToken` for CI. In CI, use a scoped token from
+`KINU_TOKEN` overrides `accessToken` for CI. In CI, use a scoped token from
 `kinu tokens create`.
 
 ## Workspaces
@@ -54,7 +54,7 @@ not shadow a built-in command name.
 
 | Field | Type | What it is |
 | --- | --- | --- |
-| `model` | string | Default model spec for new work, e.g. `workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813`. `PROTEUS_MODEL` and `--model` override it. |
+| `model` | string | Default model spec for new work, e.g. `workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813`. `KINU_MODEL` and `--model` override it. |
 | `reasoningEffort` | `"low"` \| `"medium"` \| `"high"` | Default reasoning effort. |
 
 ## Providers
@@ -123,15 +123,15 @@ Six apply to every command, and `kinu --help` lists exactly these.
 
 | Variable | What it does |
 | --- | --- |
-| `PROTEUS_HOME` | Workspace + config directory (default `~/.proteus`). |
-| `PROTEUS_ORIGIN` | Kinu app origin. |
-| `PROTEUS_TOKEN` | Account access token, for CI. |
-| `PROTEUS_MODEL` | Default model ID. |
-| `PROTEUS_BASE_URL` | LLM API base URL. |
-| `PROTEUS_AUTH` | LLM auth header value. |
+| `KINU_HOME` | Workspace + config directory (default `~/.kinu`). |
+| `KINU_ORIGIN` | Kinu app origin. |
+| `KINU_TOKEN` | Account access token, for CI. |
+| `KINU_MODEL` | Default model ID. |
+| `KINU_BASE_URL` | LLM API base URL. |
+| `KINU_AUTH` | LLM auth header value. |
 
 `resolveLLMConfig` reads three more as fallbacks, each taken only when its
-`PROTEUS_` counterpart is unset: `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_AUTH` and
+`KINU_` counterpart is unset: `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_AUTH` and
 `AI_GATEWAY_MODEL`.
 
 `resolveProviderCredentials` reads the local provider keys from the environment
@@ -146,7 +146,7 @@ sets it.
 | `CODEX_ACCESS_TOKEN` | the access token in `providers.codex` |
 
 Precedence is the same everywhere. An explicit flag beats the environment, and
-the environment beats `config.json`. `PROTEUS_BASE_URL` and `PROTEUS_AUTH` have
+the environment beats `config.json`. `KINU_BASE_URL` and `KINU_AUTH` have
 no `config.json` counterpart, so a direct endpoint is only ever set by a flag or
 the environment.
 

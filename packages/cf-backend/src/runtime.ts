@@ -42,7 +42,7 @@ import {
   type VectorStore,
 } from "@kinu/core";
 import type { SandboxHandle } from "@kinu/core";
-import { diagnostics, renderThrownChain, toProteusError } from "@kinu/core/obs";
+import { diagnostics, renderThrownChain, toKinuError } from "@kinu/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
 import { configureContainerEgress, withConfiguredEgress } from "./egress/configure";
 import { previewHostSuffix } from "./lib/preview-origin";
@@ -67,7 +67,7 @@ import { resolveJudgeModelSelection } from "./providers/judge-model";
 import { ownerCaller, type UserCaller } from "./user/workspace-capability";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
 import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@kinu/core";
-import type { ProteusSandbox } from "./proteus-sandbox";
+import type { KinuSandbox } from "./kinu-sandbox";
 import {
   createNimbusWorkspaceSandbox,
   nimbusPreviewConfigured,
@@ -190,7 +190,7 @@ async function listOwnerEgressVault(
     const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(userId));
     return [...await vault.listEgressSecrets(await ownerCaller(env))];
   } catch (err) {
-    diagnostics.failure('egress.vault_unreadable', toProteusError({
+    diagnostics.failure('egress.vault_unreadable', toKinuError({
       doing: "reading the owner's egress vault",
       cause: err,
       otherwise: 'unavailable',
@@ -453,7 +453,7 @@ export function createCFRuntime(
   // builds preview URLs on — `<port>-<sandbox>-<token>.<suffix>`, routed back
   // by preview-proxy.ts. `sandboxId` is the stable DO key those URLs carry.
   const previewSuffix = previewHostSuffix(env) ?? undefined;
-  const sandboxId = `proteus-${actor.workspaceName}`;
+  const sandboxId = `kinu-${actor.workspaceName}`;
   let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox) {
     try {
@@ -507,7 +507,7 @@ export function createCFRuntime(
       });
       sandboxHandle = handle;
       // No restore wrapper here, deliberately. Restoring /workspace is the
-      // container's own affair and happens in ProteusSandbox.onStart, inside the
+      // container's own affair and happens in KinuSandbox.onStart, inside the
       // blockConcurrencyWhile that no exec can jump ahead of. The predicate this
       // replaced ("only the container's owner may decide a restore") existed to
       // stop a facet reading its own empty `agent_config` and latching the
@@ -524,7 +524,7 @@ export function createCFRuntime(
         previews: previewSuffix ?? '',
       });
     } catch (err) {
-      diagnostics.failure('sandbox.executor_registration_failed', toProteusError({
+      diagnostics.failure('sandbox.executor_registration_failed', toKinuError({
         doing: 'registering the sandbox executor',
         cause: err,
         otherwise: 'unavailable',
@@ -563,7 +563,7 @@ export function createCFRuntime(
         // consented subtree, never widen it. Recorded rather than discarded —
         // `false` alone cannot distinguish "no full-filesystem tier" from "the hub
         // could not be reached", and only one of those is a fault.
-        diagnostics.failure('device.fs_consent_unverifiable', toProteusError({
+        diagnostics.failure('device.fs_consent_unverifiable', toKinuError({
           doing: "reading the device's full-filesystem consent tier",
           cause: error,
           otherwise: 'unavailable',
@@ -671,7 +671,7 @@ async function jsonResultOrVoid<Result>(result: Promise<Result>) {
 /** The SDK's response classes are serializable but intentionally do not carry
  * JsonObject index signatures. Rebuild the small portable SandboxHandle at the
  * boundary and validate opaque mutation responses before core observes them. */
-function adaptCloudflareSandbox(handle: ProteusSandbox): SandboxHandle {
+function adaptCloudflareSandbox(handle: KinuSandbox): SandboxHandle {
   return {
     exec: (command, opts) => handle.exec(command, opts),
     readFile: (path, opts) => handle.readFile(path, opts),
@@ -723,7 +723,7 @@ function buildVectorStore(
     diagnostics.event('vector.store_registered', { namespace: actor.workspaceName });
     return store;
   } catch (err) {
-    diagnostics.failure('vector.store_construction_failed', toProteusError({
+    diagnostics.failure('vector.store_construction_failed', toKinuError({
       doing: 'constructing the Vectorize memory store',
       cause: err,
       otherwise: 'unavailable',
@@ -1037,7 +1037,7 @@ function createFacetSpawner(agent: AgentHost, env: Env, actor: ActorRuntimeIdent
         capabilityToken: await actor.capabilityToken(),
       });
     } catch (err) {
-      diagnostics.failure('mcts.branch_facet_spawn_failed', toProteusError({
+      diagnostics.failure('mcts.branch_facet_spawn_failed', toKinuError({
         doing: 'spawning a branch facet',
         cause: err,
         otherwise: 'unavailable',
@@ -1078,7 +1078,7 @@ function createFacetReleaser(agent: AgentHost): (branchId: string) => Promise<vo
     try {
       await deleteExplorationFacet(agent, branchId);
     } catch (err) {
-      diagnostics.failure('mcts.branch_facet_storage_leaked', toProteusError({
+      diagnostics.failure('mcts.branch_facet_storage_leaked', toKinuError({
         doing: "reclaiming a branch facet's storage",
         cause: err,
         otherwise: 'io',

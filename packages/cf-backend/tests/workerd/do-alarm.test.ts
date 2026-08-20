@@ -7,7 +7,7 @@
  * (`unit-alarm-chain-contract.test.ts`) and an AST walk. They exist because
  * shadowing `alarm()` once silently stopped every scheduled callback for two
  * months — no error, no failed request, just nothing waking up. The nearest
- * behavioural test reaches the tick by calling `_proteusTimerTick()` directly
+ * behavioural test reaches the tick by calling `_kinuTimerTick()` directly
  * (`unit-alarm-tracing.test.ts`), which runs the BODY and never the dispatch.
  * Nothing anywhere invoked `alarm()` through the runtime.
  *

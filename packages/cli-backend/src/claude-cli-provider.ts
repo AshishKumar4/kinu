@@ -11,7 +11,7 @@
 // drive subscription calls, so nothing here is reachable from cf-backend.
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import { JsonObjectSchema, usageTotal } from '@kinu/core';
-import { diagnostics, ProteusError, tolerate } from '@kinu/core/obs';
+import { diagnostics, KinuError, tolerate } from '@kinu/core/obs';
 import type { JsonObject, ModelProvider, ModelInfo, ProviderDeps, Usage } from '@kinu/core';
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as v from 'valibot';
@@ -425,7 +425,7 @@ function parseEventLine(line: string): ClaudeEvent | null {
   if (event !== undefined) return event;
   diagnostics.failure(
     'provider.claude_stream_line_unparsed',
-    new ProteusError('bad_input', `claude stream-json line is not json: ${line.slice(0, 200)}`),
+    new KinuError('bad_input', `claude stream-json line is not json: ${line.slice(0, 200)}`),
   );
   return null;
 }

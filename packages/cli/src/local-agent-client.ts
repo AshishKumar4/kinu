@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import type { AgentRuntime, SessionSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@kinu/core';
 import type { WorkspaceInfo } from '@kinu/core/identity';
 import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, readLatestSearchTree, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@kinu/core';
-import { diagnostics, toProteusError } from '@kinu/core/obs';
+import { diagnostics, toKinuError } from '@kinu/core/obs';
 import {
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   LocalAgentSession,
@@ -164,7 +164,7 @@ export function autoTitleLocalWorkspace(
       // by the time either can happen.
       diagnostics.failure(
         'workspace.title_save_failed',
-        toProteusError({ doing: 'saving the workspace title', cause: error, otherwise: 'io' }),
+        toKinuError({ doing: 'saving the workspace title', cause: error, otherwise: 'io' }),
         { workspace: name },
       );
     }

@@ -92,7 +92,7 @@ export async function daemonCommand(action: string | undefined, workspace?: stri
 
 export function ensureLocalDaemonRunning(): void {
   // Skip daemon startup when explicitly disabled (e.g. in tests).
-  if (process.env.PROTEUS_SKIP_DAEMON === '1') return;
+  if (process.env.KINU_SKIP_DAEMON === '1') return;
   startDaemon({ quiet: true });
 }
 

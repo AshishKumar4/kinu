@@ -184,7 +184,7 @@ flowchart TB
 
     subgraph Host["ExtensionHost (core/src/extension.ts), both backends"]
         Comp["compaction: @kinu/compaction (transformContext)"]
-        Inj["proteus.signals: prepareStep"]
+        Inj["kinu.signals: prepareStep"]
     end
 
     Assembly["Context assembly (core/src/prompting)<br/>attachment-sanitizer · DynamicContextLedger<br/>step-prune (0.7 window) · cache-breakpoints"]
@@ -227,7 +227,7 @@ The two default registrants attach at construction on both backends:
   model step, it is also the one thing a ladder stage can never see. What
   it frees is subtracted from the pressure the engine is told about, so relief
   here can stand the rest of the ladder down.
-- **Signal delivery** (`proteus.signals`, a `prepareStep` hook) is the ONE way
+- **Signal delivery** (`kinu.signals`, a `prepareStep` hook) is the ONE way
   anything asynchronous reaches the agent (`core/src/orchestrator/signals.ts`).
   A producer (the event-hub drain, a settled background job, an overflow retry,
   a take pick, an MCP task) states intent and nothing else. A signal compatible
@@ -244,7 +244,7 @@ The two default registrants attach at construction on both backends:
   live-turn signal uses one buffer and one splice, so no registration order can
   shift another producer's recorded indices; queued own-turn signals use the
   same delivery host without entering that buffer. It is the DO counterpart of
-  the CLI's `proteus.steering` drain, the same mechanism on one host.
+  the CLI's `kinu.steering` drain, the same mechanism on one host.
 
 Supporting context machinery, all in `core/src/prompting` and shared by both
 backends: the **attachment sanitizer** (`attachment-sanitizer.ts`) offloads
@@ -294,7 +294,7 @@ sequenceDiagram
     Note over Evo: async, never blocks TurnQueue
 ```
 
-The browser side is `WorkspacePage.tsx` → `use-proteus.ts` → the agents SDK
+The browser side is `WorkspacePage.tsx` → `use-kinu.ts` → the agents SDK
 WebSocket transport; the worker entrypoint is `cf-backend/src/server.ts`
 (`routeAgentRequest`, plus the `email()` handler). The CLI takes the same core
 loop through `LocalAgentSession` instead of the WebSocket transport.
@@ -451,7 +451,7 @@ process.
 | Executor | codemode LOADER / `new Function()` fallback | Bun subprocess sandbox |
 | LLM | Workers AI binding or AI Gateway | AI Gateway via AI SDK |
 | Schedule | `agent.runFiber()` (durable) + DO `alarm()` | SQLite-backed fiber |
-| Identity | DO id + `SOUL.md` (VFS) | UUID + `~/.proteus/` + `SOUL.md` (VFS) |
+| Identity | DO id + `SOUL.md` (VFS) | UUID + `~/.kinu/` + `SOUL.md` (VFS) |
 | Turn driver | `OrchestratorAgent` (Think hooks) | `LocalAgentSession` (`runChat`) |
 | Swarm nodes | `ExplorationAgent` Facets (`spawnNodeFacet`) | the search's own process (no host wired) |
 | MCTS branches | `ExplorationAgent` Facets (`subAgent`) | `child_process.fork` |
@@ -491,7 +491,7 @@ Two policies apply to every provider:
 
 **Reasoning effort** is user-settable rather than baked in. `/effort` in chat or
 `kinu effort <workspace> <level>` stores `reasoning_effort` in the workspace's
-`agent_config`, with `~/.proteus/config.json` holding the CLI-side default for
+`agent_config`, with `~/.kinu/config.json` holding the CLI-side default for
 new workspaces. `core/src/strategy/effort.ts` maps the level onto each provider
 family's native knob: `reasoning_effort` for Workers AI, `reasoningEffort` for
 OpenAI-shaped and OpenRouter providers, and a thinking `budgetTokens`

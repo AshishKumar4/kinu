@@ -40,13 +40,13 @@ describe('auth and desktop security invariants', () => {
     expect(routes).not.toContain("if (url.pathname === '/cli/auth' && method === 'GET') {\n    return approveFromBrowser");
   });
 
-  test('dashboard and PC install paths do not expose PROTEUS_TOKEN setup commands', () => {
+  test('dashboard and PC install paths do not expose KINU_TOKEN setup commands', () => {
     const userRoutes = source('src/user/routes.ts');
     const cliRoutes = source('src/cli/routes.ts');
     const pcHandler = source('src/pc-handler.ts');
-    expect(userRoutes).not.toContain('PROTEUS_TOKEN=');
-    expect(cliRoutes).not.toContain('PROTEUS_TOKEN=');
-    expect(pcHandler).not.toContain('PROTEUS_TOKEN=');
+    expect(userRoutes).not.toContain('KINU_TOKEN=');
+    expect(cliRoutes).not.toContain('KINU_TOKEN=');
+    expect(pcHandler).not.toContain('KINU_TOKEN=');
   });
 
   test('desktop WebSocket uses short-lived tickets instead of raw device tokens in the URL', () => {
@@ -359,9 +359,9 @@ describe('auth and desktop security invariants', () => {
     const session = source('src/auth/session.ts');
     const store = source('src/auth/store.ts');
     // The cookie name has exactly one home (auth/session.ts); routes reuse it.
-    expect(session).toContain("export const SESSION_COOKIE_NAME = '__Host-proteus_session'");
+    expect(session).toContain("export const SESSION_COOKIE_NAME = '__Host-kinu_session'");
     expect(routes).toContain('SESSION_COOKIE_NAME');
-    expect(routes).not.toContain('__Host-proteus_session');
+    expect(routes).not.toContain('__Host-kinu_session');
     expect(routes).toContain('HttpOnly; Secure; SameSite=Lax');
     // The browser holds a handle, never the state: the state token is hashed
     // into the key, and the record is burned on the way out.
@@ -419,31 +419,31 @@ describe('auth and desktop security invariants', () => {
   });
 
   test('browser install page is HTML while the terminal installer stays raw shell', async () => {
-    const installPage = await handleCliRequest(new Request('https://proteus.example.com/install'), PUBLIC_ROUTE_ENV);
+    const installPage = await handleCliRequest(new Request('https://kinu.example.com/install'), PUBLIC_ROUTE_ENV);
     expect(installPage?.status).toBe(200);
     expect(installPage?.headers.get('content-type')).toContain('text/html');
     expect(installPage?.headers.get('content-security-policy')).toContain('https://static.cloudflareinsights.com');
     const html = await installPage!.text();
     expect(html).toContain('Install Kinu CLI');
     expect(html).toContain('curl -fsSL');
-    expect(html).toContain('https://proteus.example.com/install.sh');
+    expect(html).toContain('https://kinu.example.com/install.sh');
     expect(html).toContain('| bash');
     expect(html).not.toContain('OAuth sign-in required for the dashboard.');
     expect(html).not.toContain('View the raw installer');
     expect(html).not.toContain('href="/install.sh"');
 
-    const installScript = await handleCliRequest(new Request('https://proteus.example.com/install.sh'), PUBLIC_ROUTE_ENV);
+    const installScript = await handleCliRequest(new Request('https://kinu.example.com/install.sh'), PUBLIC_ROUTE_ENV);
     expect(installScript?.status).toBe(200);
     expect(installScript?.headers.get('content-type')).toContain('text/x-shellscript');
     const script = await installScript!.text();
     expect(script).toContain('#!/usr/bin/env bash');
-    expect(script).toContain('PROTEUS_HOME="$PROTEUS_HOME" PROTEUS_REFRESH_SOURCE=1 "$BIN_PATH" --help');
-    expect(script).toContain('setup --origin "$PROTEUS_ORIGIN" --account-only');
+    expect(script).toContain('KINU_HOME="$KINU_HOME" KINU_REFRESH_SOURCE=1 "$BIN_PATH" --help');
+    expect(script).toContain('setup --origin "$KINU_ORIGIN" --account-only');
     expect(script).toContain("grep -Eq '^[[:space:]]+setup[[:space:]]'");
-    expect(script).toContain("grep -F '$HOME/.proteus/bin'");
+    expect(script).toContain("grep -F '$HOME/.kinu/bin'");
 
     const installScriptHead = await handleCliRequest(
-      new Request('https://proteus.example.com/install.sh', { method: 'HEAD' }),
+      new Request('https://kinu.example.com/install.sh', { method: 'HEAD' }),
       PUBLIC_ROUTE_ENV,
     );
     expect(installScriptHead?.status).toBe(200);
@@ -452,23 +452,23 @@ describe('auth and desktop security invariants', () => {
   });
 
   test('CLI shim does not hardcode GitHub archive directory names and verifies the source checksum by default', async () => {
-    const shim = await handleCliRequest(new Request('https://proteus.example.com/downloads/kinu'), PUBLIC_ROUTE_ENV);
+    const shim = await handleCliRequest(new Request('https://kinu.example.com/downloads/kinu'), PUBLIC_ROUTE_ENV);
     expect(shim?.status).toBe(200);
     const script = await shim!.text();
     expect(script).toContain('SRC_DIR="$SOURCE_ROOT/current"');
-    expect(script).toContain('https://proteus.example.com/downloads/kinu-source.tar.gz');
+    expect(script).toContain('https://kinu.example.com/downloads/kinu-source.tar.gz');
     expect(script).not.toContain('github.com');
     expect(script).not.toContain('Kinu-main');
     // Default verification fetches the published .sha256 asset; the env var
     // is only a pin override.
     expect(script).toContain('"$TARBALL_URL.sha256"');
-    expect(script).toContain('PROTEUS_SOURCE_SHA256');
+    expect(script).toContain('KINU_SOURCE_SHA256');
     expect(script).toContain('Source checksum mismatch');
     const syntaxCheck = Bun.spawnSync(['bash', '-n'], { stdin: Buffer.from(script) });
     expect(syntaxCheck.exitCode).toBe(0);
 
     const shimHead = await handleCliRequest(
-      new Request('https://proteus.example.com/downloads/kinu', { method: 'HEAD' }),
+      new Request('https://kinu.example.com/downloads/kinu', { method: 'HEAD' }),
       PUBLIC_ROUTE_ENV,
     );
     expect(shimHead?.status).toBe(200);
@@ -485,14 +485,14 @@ describe('auth and desktop security invariants', () => {
   });
 
   test('CLI setup commands are one-command defaults without embedded auth tokens', () => {
-    expect(buildCliInstallCommand({ origin: 'https://proteus.example.com/' }))
-      .toBe("curl -fsSL 'https://proteus.example.com/install.sh' | bash");
+    expect(buildCliInstallCommand({ origin: 'https://kinu.example.com/' }))
+      .toBe("curl -fsSL 'https://kinu.example.com/install.sh' | bash");
     expect(buildCliInstallCommand({
-      origin: 'https://proteus.example.com',
+      origin: 'https://kinu.example.com',
       setup: false,
       connect: true,
       label: "Ashish's Mac",
-    })).toBe("curl -fsSL 'https://proteus.example.com/install.sh' | bash -s -- --no-setup --connect --label 'Ashish'\\''s Mac'");
+    })).toBe("curl -fsSL 'https://kinu.example.com/install.sh' | bash -s -- --no-setup --connect --label 'Ashish'\\''s Mac'");
   });
 
   test('CLI model menu uses CLI bearer auth rather than browser-only user routes', () => {

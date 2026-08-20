@@ -11,7 +11,7 @@
  *   Ports 80 and 443, HTTP and HTTPS   — intercepted. HTTPS by TLS
  *     termination against an ephemeral CA the container is made to trust; this
  *     requires `interceptHttps = true`, which the SDK does NOT default to
- *     despite what its docs say (see {@link ProteusSandbox}).
+ *     despite what its docs say (see {@link KinuSandbox}).
  *   Every other TCP port               — NEVER routed through a handler by the
  *     platform. Denied outright, because `enableInternet = false`. MEASURED, not
  *     just designed: from a real container on the deployed worker, TCP connects
@@ -74,7 +74,7 @@ import { renderThrownChain } from '@kinu/core/obs';
  * rather than quietly ship the agent's activity to a real server. The port is
  * plain HTTP because the request never leaves the machine.
  */
-export const CONTAINER_EVENT_HOST = 'events.proteus.internal';
+export const CONTAINER_EVENT_HOST = 'events.kinu.internal';
 
 /** The one path on that host. Anything else is a mistake worth naming. */
 export const CONTAINER_EVENT_PATH = '/v1/events';
@@ -83,12 +83,12 @@ export const CONTAINER_EVENT_PATH = '/v1/events';
  *  `setOutboundByHost`. Kept as constants because the string is the contract
  *  between the class's registry and the DO that configures it — a typo would
  *  otherwise surface as a runtime "method not found in outboundHandlers". */
-export const EGRESS_HANDLER = 'proteusEgress';
-export const EVENT_HANDLER = 'proteusEvents';
+export const EGRESS_HANDLER = 'kinuEgress';
+export const EVENT_HANDLER = 'kinuEvents';
 
 /** What the owning Durable Object tells the handlers. Not readable or
  *  influenceable from inside the container. */
-export interface ProteusEgressParams {
+export interface KinuEgressParams {
   /** The workspace whose container this is — the event channel's addressing. */
   readonly workspaceName: string;
   /** Whose vault holds the secrets. */
@@ -119,7 +119,7 @@ const EgressParamsSchema = v.object({
 
 /** Trusted-but-unparsed handler parameters, or undefined when this container
  *  has not been configured yet. Undefined makes both handlers refuse. */
-export function parseEgressParams(ctx: OutboundHandlerContext): ProteusEgressParams | undefined {
+export function parseEgressParams(ctx: OutboundHandlerContext): KinuEgressParams | undefined {
   const parsed = v.safeParse(EgressParamsSchema, ctx.params);
   return parsed.success ? parsed.output : undefined;
 }
@@ -154,7 +154,7 @@ interface ContainerEventClient {
 export async function handleContainerEgress(
   request: Request,
   env: Env,
-  params: ProteusEgressParams | undefined,
+  params: KinuEgressParams | undefined,
 ): Promise<Response> {
   if (!params) {
     // Interception is live but unconfigured. Refuse rather than forward: an
@@ -245,7 +245,7 @@ async function forwardWithSecrets(
 export async function handleContainerEvent(
   request: Request,
   env: Env,
-  params: ProteusEgressParams | undefined,
+  params: KinuEgressParams | undefined,
 ): Promise<Response> {
   if (!params) return refusal(503, 'The event channel is not configured for this container yet.');
   const url = new URL(request.url);

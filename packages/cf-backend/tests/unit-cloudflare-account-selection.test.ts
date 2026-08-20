@@ -191,7 +191,7 @@ function routeHarness(selectFails = false) {
   // no other Env binding is reachable in the account routes exercised here.
   const env = partialEnv as Env;
   const call = (path: string, method: string, body?: { id: string }) =>
-    handleUserRequest(new Request(`https://proteus.example.com/api/user${path}`, {
+    handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {
       method,
       headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),

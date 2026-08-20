@@ -1,5 +1,5 @@
 {
-  "name": "proteus",
+  "name": "kinu",
   "private": true,
   "description": "Self-evolving agent with MCTS parallel exploration, mutable scaffolding, and durable skill evolution",
   "license": "MIT",

@@ -319,7 +319,7 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
 
   test('the fork-interrupted row wears an event card, never the owner\'s bubble', () => {
     // THE INCIDENT, as a browser draws it. This row is the production shape:
-    // a bare UUID id and `proteusEvent: fork_interrupted`, no author stamp,
+    // a bare UUID id and `kinuEvent: fork_interrupted`, no author stamp,
     // which is what five rows in the owner's live workspaces look like. Under
     // the four-name allowlist this rendered right-aligned in `.p-user-bubble`.
     const fork = observed.chat[LEGACY_FORK_ROW]!;

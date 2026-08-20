@@ -37,6 +37,6 @@ describe('root help', () => {
   test('shows usage, options and environment', () => {
     expect(help).toContain('Usage:  kinu <command> [options]');
     expect(help).toContain('-v, --version');
-    expect(help).toContain('PROTEUS_HOME');
+    expect(help).toContain('KINU_HOME');
   });
 });

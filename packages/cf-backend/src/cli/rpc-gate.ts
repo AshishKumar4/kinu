@@ -42,7 +42,7 @@ import * as v from 'valibot';
 
 /** Worker→DO header carrying the verified connect-ticket scopes. Always
  *  rewritten by the edge after authentication so clients cannot smuggle it. */
-export const CLI_SCOPES_HEADER = 'x-proteus-cli-scopes';
+export const CLI_SCOPES_HEADER = 'x-kinu-cli-scopes';
 
 /** Connection tag persisting the scope restriction across hibernation. */
 const CLI_SCOPES_TAG_PREFIX = 'cli-scopes:';

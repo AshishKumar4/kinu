@@ -15,15 +15,15 @@ whole is data loss.
 
 | Producer | Digest kept inline | Resolvable reference | Code |
 |---|---|---|---|
-| `run`, `web` fetch, `execute_tools` results | head + tail (40k) | `.proteus/tool-output/<id>.log` | `core/src/tools/clamp.ts` |
+| `run`, `web` fetch, `execute_tools` results | head + tail (40k) | `.kinu/tool-output/<id>.log` | `core/src/tools/clamp.ts` |
 | `file` read of an oversize file | offset-bounded page (40k) | the file's own path, and the next offset in the marker | `core/src/tools/file-tool.ts` |
 | MCP / external tool results | head + tail (40k) | same | `withClampedToolResults` at each backend's MCP wiring |
 | Attachments the model cannot accept | reference text part | `attachments/<hash>.<ext>` | `core/src/prompting/attachment-sanitizer.ts` |
 | Text attachments over 8 KiB | reference text part | same | same |
 | Documents the model *can* accept, over 1 MiB | reference text part | same | same |
 | Pasted user text over 8 KiB | 2,000-char head + address | same | same |
-| Subordinate reports / peer replies | 600-char brief | `.proteus/event-content/<hash>.txt` | `core/src/events/hub/content-spill.ts` |
-| Compacted history ranges | checkpoint summary | `.proteus/compaction/<session>/<range>.md` | `@kinu/compaction` `stores.ts` |
+| Subordinate reports / peer replies | 600-char brief | `.kinu/event-content/<hash>.txt` | `core/src/events/hub/content-spill.ts` |
+| Compacted history ranges | checkpoint summary | `.kinu/compaction/<session>/<range>.md` | `@kinu/compaction` `stores.ts` |
 
 `SPILL_DIRS` in `core/src/context-budget.ts` is the single source of truth for
 those four directories, and every producer builds its paths from it. The paths

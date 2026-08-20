@@ -43,8 +43,8 @@ import { TASK_OUTCOME, isCovariateRow } from './eval-outcome';
  * from it — the suffixes differ (`-0813` vs `-0731`) — so it is recorded here
  * having been read from the live catalogue:
  *
- *   curl -H "Authorization: Bearer $PROTEUS_TOKEN" \
- *     $PROTEUS_ORIGIN/api/user/ai/v1/models | jq -r '.data[].id'
+ *   curl -H "Authorization: Bearer $KINU_TOKEN" \
+ *     $KINU_ORIGIN/api/user/ai/v1/models | jq -r '.data[].id'
  *
  * The split is the owner's: flash for high-volume runs that produce the stats,
  * pro for a small number of runs that establish the upper bound. Declared as a
@@ -472,7 +472,7 @@ function writeRunRecord(path: string, record: EvalRunRecord): void {
  * that have it today: a fourth family cannot reintroduce it without editing
  * this function.
  *
- * The destination is `PROTEUS_EVAL_RECORD` when set, and otherwise the run's own
+ * The destination is `KINU_EVAL_RECORD` when set, and otherwise the run's own
  * transcripts directory — the record beside the trajectories its scores were
  * computed from. `tests/eval/runs/` holds PUBLISHED records, committed
  * deliberately by whoever publishes the number; the default used to point there
@@ -490,7 +490,7 @@ export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null 
     return null;
   }
   const record = assembleRunRecord(inputs);
-  const out = process.env.PROTEUS_EVAL_RECORD ?? join(inputs.transcripts, 'run-record.json');
+  const out = process.env.KINU_EVAL_RECORD ?? join(inputs.transcripts, 'run-record.json');
   writeRunRecord(out, record);
   console.log(`\n${formatRunRecord(record)}\n\nrecord: ${out}\n`);
   return record;

@@ -16,7 +16,7 @@ import {
   type ConformanceManifest, type ObservedSurface, type RootStatuses,
 } from '../src/index';
 import { renderForLLM } from '../src/events/hub/index';
-import type { ProteusEvent } from '../src/events/hub/index';
+import type { KinuEvent } from '../src/events/hub/index';
 
 // ── Falsifiability: every finding kind can fire ─────────────────────────────
 
@@ -159,11 +159,11 @@ describe('event briefs name only real callables', () => {
     id: 'eid', trace_id: 'tid', caused_by: null,
     ingress: 'webhook_hmac', trust: 'authenticated', priority: 'normal',
     received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null,
-  } satisfies Pick<ProteusEvent,
+  } satisfies Pick<KinuEvent,
     'id' | 'trace_id' | 'caused_by' | 'ingress' | 'trust' | 'priority'
     | 'received_at' | 'schema_version' | 'reply_channel' | 'dedupe_key'>;
 
-  const BRIEF_SOURCES: ProteusEvent[] = [
+  const BRIEF_SOURCES: KinuEvent[] = [
     { ...EVENT_BASE, variant: 'chat', payload_visibility: 'full', payload: { text: 'hello' } },
     { ...EVENT_BASE, variant: 'webhook', payload_visibility: 'full', payload: {
       http_method: 'POST', body: { ok: true }, webhook_id: 'w', http_headers: {}, delivery_id: 'd',
@@ -186,13 +186,13 @@ describe('event briefs name only real callables', () => {
     } },
     { ...EVENT_BASE, variant: 'peer_agent', payload_visibility: 'full', payload: {
       topic: 'sync', body: 'text', from_agent_name: 'peer', from_user_id: 'user-1',
-      sender_event_id: 'sender-1', proteus_mode: 'build',
+      sender_event_id: 'sender-1', kinu_mode: 'build',
     } },
     { ...EVENT_BASE, variant: 'subordinate_task', payload_visibility: 'full', payload: {
-      kind: 'task', body: 'do the thing', from_workspace: 'ws', proteus_mode: 'build',
+      kind: 'task', body: 'do the thing', from_workspace: 'ws', kinu_mode: 'build',
     } },
     { ...EVENT_BASE, variant: 'subordinate_report', payload_visibility: 'full', payload: {
-      status: 'completed', content: 'done', from_subordinate: 'sub', proteus_mode: 'build',
+      status: 'completed', content: 'done', from_subordinate: 'sub', kinu_mode: 'build',
     } },
     { ...EVENT_BASE, variant: 'email', payload_visibility: 'full', payload: {
       from: 'a@b.c', to: 'agent@b.c', subject: 's', body_text: 'hi', message_id: null,

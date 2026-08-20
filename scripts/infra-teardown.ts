@@ -39,7 +39,7 @@ const NC = '\u001B[0m';
 /** Set instead of typing the phrase, for the one case where a terminal is not
  *  available. It carries the SAME phrase — the guard is the sentence, not the
  *  channel, so an automation still has to name the exact environment it means. */
-export const CONFIRM_VAR = 'PROTEUS_TEARDOWN_CONFIRM';
+export const CONFIRM_VAR = 'KINU_TEARDOWN_CONFIRM';
 
 /** The sentence the operator must produce. Derived from the target, so it can
  *  never be right for a deployment other than the one being destroyed. */

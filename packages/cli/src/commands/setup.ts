@@ -8,7 +8,7 @@ import {
 import { renderThrownChain, tolerate } from '@kinu/core/obs';
 import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@kinu/cli-backend';
 import { setCloudCredential } from '../cloud-api';
-import { loadConfigFile, resolveCloudSession, saveConfigFile, setDefaultModel, updateConfigFile, type ProteusConfig } from '../config';
+import { loadConfigFile, resolveCloudSession, saveConfigFile, setDefaultModel, updateConfigFile, type KinuConfig } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { ask, askSecret, canPrompt, confirm } from '../prompt';
 import { authCommand, openBrowser } from './auth';
@@ -327,7 +327,7 @@ export async function setupCommand(opts: {
 const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
 const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `kinu setup` again.';
 
-function withProvider(config: ProteusConfig, patch: Pick<ProteusConfig, 'model' | 'providers'>): ProteusConfig {
+function withProvider(config: KinuConfig, patch: Pick<KinuConfig, 'model' | 'providers'>): KinuConfig {
   return {
     ...config,
     model: patch.model,

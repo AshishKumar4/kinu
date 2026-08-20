@@ -12,7 +12,7 @@ import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, type OAuthCredential } 
 import { makeKv, type FakeKv } from './helpers/kv';
 import type { UserCaller } from '../src/user/workspace-capability';
 
-const ORIGIN = 'https://proteus.example.com';
+const ORIGIN = 'https://kinu.example.com';
 
 interface TestNamespace<Stub> {
   idFromName(name: string): string;
@@ -126,7 +126,7 @@ describe('Cloudflare IdP login attaches the Workers AI credential', () => {
       const response = await loginViaCloudflare(env, kv);
       expect(response.status).toBe(302);
       expect(response.headers.get('location')).toBe(`${ORIGIN}/`);
-      expect(response.headers.get('set-cookie')).toContain('__Host-proteus_session=');
+      expect(response.headers.get('set-cookie')).toContain('__Host-kinu_session=');
 
       // The token exchange carried PKCE + the authorization code.
       expect(tokenRequests).toHaveLength(1);

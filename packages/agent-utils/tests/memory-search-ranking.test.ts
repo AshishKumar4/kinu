@@ -23,11 +23,11 @@ describe("MemoryStore.search ranking", () => {
 		const { store } = createStore();
 		// Dense repetition drives |bm25| far past the old 19 cutoff.
 		const dense = Array.from({ length: 120 }, () =>
-			"proteus workspace sandbox provisioning failure diagnosis",
+			"kinu workspace sandbox provisioning failure diagnosis",
 		).join("\n");
 		const filler = Array.from({ length: 40 }, (_, i) => `unrelated filler line ${i}`).join("\n");
 		await store.indexFile(PATH, `${dense}\n${filler}`);
-		const hits = store.search("proteus workspace sandbox provisioning failure diagnosis");
+		const hits = store.search("kinu workspace sandbox provisioning failure diagnosis");
 		expect(hits.length).toBeGreaterThan(0);
 	});
 

@@ -537,9 +537,9 @@ describe('CLI TUI layout', () => {
   });
 
   test('home model and effort selections persist as global defaults', () => {
-    const proteusHome = mkdtempSync(resolve(tmpdir(), 'proteus-home-tui-'));
+    const kinuHome = mkdtempSync(resolve(tmpdir(), 'kinu-home-tui-'));
     try {
-      writeFileSync(resolve(proteusHome, 'config.json'), JSON.stringify({
+      writeFileSync(resolve(kinuHome, 'config.json'), JSON.stringify({
         model: 'openai/gpt-5.5',
         reasoningEffort: 'medium',
         providers: { openai: { apiKey: 'sk-test' } },
@@ -625,8 +625,8 @@ describe('CLI TUI layout', () => {
         renderer.destroy();
         console.log(readFileSync(CONFIG_PATH, 'utf8'));
       `;
-      const env: NodeJS.ProcessEnv = { ...process.env, PROTEUS_HOME: proteusHome };
-      for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_ACCESS_TOKEN', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'PROTEUS_TOKEN']) {
+      const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
+      for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_ACCESS_TOKEN', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'KINU_TOKEN']) {
         delete env[name];
       }
       const proc = Bun.spawnSync({
@@ -643,7 +643,7 @@ describe('CLI TUI layout', () => {
       expect(config.model).toStartWith('openai/');
       expect(config.model).not.toBe('openai/gpt-5.5');
     } finally {
-      rmSync(proteusHome, { recursive: true, force: true });
+      rmSync(kinuHome, { recursive: true, force: true });
     }
   });
 });
@@ -704,7 +704,7 @@ const INHERITED_CREDENTIALS = [
   'CODEX_ACCESS_TOKEN',
   'OPENAI_API_KEY',
   'OPENROUTER_API_KEY',
-  'PROTEUS_TOKEN',
+  'KINU_TOKEN',
 ];
 
 const HOME_SCREEN_PRELUDE = `
@@ -762,12 +762,12 @@ const HOME_SCREEN_PRELUDE = `
 `;
 
 /** Drives the home screen the CLI actually runs, in a subprocess so that one
- *  PROTEUS_HOME and one renderer swap belong to one test. `driver` runs with
+ *  KINU_HOME and one renderer swap belong to one test. `driver` runs with
  *  `frame`, `rowWith`, `waitFor`, `settle`, `mockInput`, `action` (whatever the
  *  screen has finished with, or null) and `opened` in scope, and prints the one
  *  JSON line the caller asserts on. The caller owns the returned home. */
 function runHomeScreen(options: { driver: string; workspaces?: readonly string[] }) {
-  const home = mkdtempSync(resolve(tmpdir(), 'proteus-home-tui-'));
+  const home = mkdtempSync(resolve(tmpdir(), 'kinu-home-tui-'));
   writeFileSync(resolve(home, 'config.json'), JSON.stringify({
     model: 'openai/gpt-5.5',
     providers: { openai: { apiKey: 'sk-test' } },
@@ -776,7 +776,7 @@ function runHomeScreen(options: { driver: string; workspaces?: readonly string[]
     mkdirSync(resolve(home, name));
     writeFileSync(resolve(home, name, 'agent.db'), '');
   }
-  const env: NodeJS.ProcessEnv = { ...process.env, PROTEUS_HOME: home, PROTEUS_SKIP_DAEMON: '1' };
+  const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: home, KINU_SKIP_DAEMON: '1' };
   for (const name of INHERITED_CREDENTIALS) delete env[name];
 
   const proc = Bun.spawnSync({

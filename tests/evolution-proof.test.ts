@@ -47,7 +47,7 @@ const liveTest = test.skipIf(!TARGET);
 
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
-const TEST_DIR = join(tmpdir(), 'proteus-evolution-proof-' + Date.now());
+const TEST_DIR = join(tmpdir(), 'kinu-evolution-proof-' + Date.now());
 const DB_PATH = join(TEST_DIR, 'agent.db');
 
 interface TurnResult {

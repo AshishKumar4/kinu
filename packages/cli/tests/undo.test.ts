@@ -44,7 +44,7 @@ function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
 }
 
 function realEngineClient(opts: { gitBin?: string } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'proteus-undo-'));
+  const root = mkdtempSync(join(tmpdir(), 'kinu-undo-'));
   const work = join(root, 'project');
   mkdirSync(work, { recursive: true });
   const engine = createHostCheckpoints({ agent: 'undo-test', base: join(root, 'shadow'), gitBin: opts.gitBin });
@@ -119,7 +119,7 @@ describe('performUndo', () => {
    * the same condition 200 reaches once enough directories are active.
    */
   test('a turn split across directories is restored whole, not just the part in the window', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'proteus-undo-split-'));
+    const root = mkdtempSync(join(tmpdir(), 'kinu-undo-split-'));
     try {
       const dirs = ['one', 'two', 'three'].map((name) => {
         const dir = join(root, name);

@@ -30,7 +30,7 @@
  */
 
 import type { ModelMessage, TextPart } from 'ai';
-import type { ProteusExtension, TransformContext } from '@kinu/core';
+import type { KinuExtension, TransformContext } from '@kinu/core';
 import {
   buildCompactionSummaryPrompt,
   stripCheckpointPreamble,
@@ -56,7 +56,7 @@ import {
   type Summarizer,
   type Turn,
 } from '@better-compact/core';
-import { proteusCodec, proteusSpec } from './codec';
+import { kinuCodec, kinuSpec } from './codec';
 import {
   deriveArchiveRange,
   renderArchiveManifest,
@@ -105,9 +105,9 @@ export interface CompactionExtensionDeps {
   onOutcome?: (event: CompactionOutcomeEvent) => void;
 }
 
-export function createCompactionExtension(deps: CompactionExtensionDeps): ProteusExtension {
+export function createCompactionExtension(deps: CompactionExtensionDeps): KinuExtension {
   const profile = deps.profile ?? COMPACTION_PRESETS.light;
-  const engine = createEngine(proteusSpec, deps.ports);
+  const engine = createEngine(kinuSpec, deps.ports);
   const summaryScheduler = createSummaryScheduler(deps.ports.logger);
 
   const summarizer: Summarizer = {
@@ -194,7 +194,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
     summarize: (jobs: BoundarySummaryJob[]) => Promise<Record<string, string>>,
   ): Promise<ProcessResult> {
     const inputs: BuildPlanInputs = { ...buildInputs(ctx, turns, reportedTokens), force: true, priorPlan: prior ?? undefined };
-    let plan = buildPlan(turns, inputs, proteusSpec);
+    let plan = buildPlan(turns, inputs, kinuSpec);
     if (!plan) return { outcome: 'unchanged' };
     if (plan.summaryJobs.length > 0) {
       const summaries = await summarize(plan.summaryJobs);
@@ -202,12 +202,12 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
         plan = buildPlan(
           turns,
           { ...inputs, priorPlan: toPlanSnapshot(plan), assistantSummaries: summaries },
-          proteusSpec,
+          kinuSpec,
         ) ?? plan;
       }
     }
-    await writeTranscript(plan, { transcripts: deps.ports.transcripts, logger: deps.ports.logger, codec: proteusCodec });
-    const transformed = transformTurns(turns, plan.rawTailStartIndex, plan, proteusSpec);
+    await writeTranscript(plan, { transcripts: deps.ports.transcripts, logger: deps.ports.logger, codec: kinuCodec });
+    const transformed = transformTurns(turns, plan.rawTailStartIndex, plan, kinuSpec);
     await deps.ports.plans.save(ctx.sessionKey, toPlanSnapshot(plan));
     return { outcome: 'planned', turns: transformed, plan };
   }
@@ -239,12 +239,12 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
       ? stripCheckpointPreamble(prior.prefixSummary)
       : null;
     const prompt = buildCompactionSummaryPrompt({
-      transcript: plan.transcript.content || formatTranscript(prefixTurns, proteusCodec),
+      transcript: plan.transcript.content || formatTranscript(prefixTurns, kinuCodec),
       latestUserAsk: latestUserAsk(ctx.messages),
       previousSummary: previous,
       // The agents-SDK budget rule the old path used: 20% of the compacted
       // content, floored at 100 tokens.
-      budgetTokens: Math.max(100, Math.floor(proteusCodec.estimateTurns(prefixTurns) * 0.2)),
+      budgetTokens: Math.max(100, Math.floor(kinuCodec.estimateTurns(prefixTurns) * 0.2)),
     });
     let body: string;
     try {
@@ -267,12 +267,12 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
         priorPlan: toPlanSnapshot(plan),
         prefixSummary: wrapCompactionSummary(body),
       },
-      proteusSpec,
+      kinuSpec,
     );
     if (!upgraded) return null;
     // Same compacted range ⇒ same rangeHash ⇒ the transcript is already
     // persisted at the same citable path; no second write needed.
-    const transformed = transformTurns(turns, upgraded.rawTailStartIndex, upgraded, proteusSpec);
+    const transformed = transformTurns(turns, upgraded.rawTailStartIndex, upgraded, kinuSpec);
     await deps.ports.plans.save(ctx.sessionKey, toPlanSnapshot(upgraded));
     return { outcome: 'planned', turns: transformed, plan: upgraded };
   }
@@ -300,7 +300,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
     async transformContext(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
       if (ctx.messages.length === 0 || ctx.contextWindow <= 0) return undefined;
       const messages = [...ctx.messages];
-      const turns = proteusCodec.encode(messages);
+      const turns = kinuCodec.encode(messages);
 
       // Loaded before process (which may replace it) so the prefix-summary
       // upgrade can thread the prior summary through as an iterative update.
@@ -361,7 +361,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
       // when a NEW range is archived — so a replayed plan re-renders it
       // byte-identically and the provider's prefix cache survives.
       const manifest = renderArchiveManifest(deps.archive.list(ctx.sessionKey));
-      return proteusCodec.decode(withArchiveManifest(applied.turns, manifest), messages);
+      return kinuCodec.decode(withArchiveManifest(applied.turns, manifest), messages);
     },
   };
 }
@@ -386,7 +386,7 @@ function systemOverheadFloor(ctx: TransformContext): number {
 function measuredTokens(ctx: TransformContext, turns: Turn[], ephemeralRelief: number): number {
   return Math.max(
     Math.max(0, (ctx.providerReportedTokens ?? 0) - ephemeralRelief),
-    proteusCodec.estimateTurns(turns) + systemOverheadFloor(ctx),
+    kinuCodec.estimateTurns(turns) + systemOverheadFloor(ctx),
   );
 }
 

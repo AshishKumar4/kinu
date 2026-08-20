@@ -110,8 +110,8 @@ export const CATALOGUE: readonly Mutation[] = [
   {
     id: 'refusal-class-unavailable',
     file: 'packages/core/src/strategy/swarm-run.ts',
-    find: "return refusalOf(new ProteusError('unavailable', error));",
-    replace: "return refusalOf(new ProteusError('unsupported', error));",
+    find: "return refusalOf(new KinuError('unavailable', error));",
+    replace: "return refusalOf(new KinuError('unsupported', error));",
     decision: "this file's refusals are transient `unavailable`, not permanent `unsupported`",
     symbol: 'runSwarm',
     control: 'unit-swarm-node-hang.test.ts',

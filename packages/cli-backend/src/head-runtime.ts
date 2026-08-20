@@ -23,13 +23,13 @@ import {
   extractJsonObject, MergeOutputSchema, normalizeUsage, reasoningEffortOptions,
   resolveMaxSteps, localMissionScope,
 } from '@kinu/core';
-import { diagnostics, toProteusError } from '@kinu/core/obs';
+import { diagnostics, toKinuError } from '@kinu/core/obs';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeSql, makeExecRaw, buildCLIHeadRuntime } from './runtime';
 import { createNodeExecuteToolFactory } from './execute-tools-factory';
-import { proteusHome } from './home';
+import { kinuHome } from './home';
 import * as v from 'valibot';
 
 export interface CLIHeadRuntimeDeps {
@@ -127,7 +127,7 @@ interface HeadScratch {
 }
 
 function openHeadScratch(headId: string): HeadScratch {
-  const dir = join(proteusHome(), 'heads');
+  const dir = join(kinuHome(), 'heads');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${headId.replace(/[^A-Za-z0-9_-]/g, '_')}.db`);
   const db = new Database(path, { create: true });
@@ -153,7 +153,7 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
   } catch (err) {
     diagnostics.failure(
       'head.model_resolve_failed',
-      toProteusError({
+      toKinuError({
         doing: "resolving the model this head named — running the session's model instead",
         cause: err,
         otherwise: 'bad_input',
@@ -199,7 +199,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
       workspaceLayout: 'private-scratch',
       // The same envelope the parent session's turn runs to — local-session
       // reads this identical shell variable. A fork of a turn gets the turn's room.
-      maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
+      maxSteps: resolveMaxSteps(process.env.KINU_MAX_STEPS),
       isAborted: () => flag.aborted,
       abortReason: () => flag.reason,
       // Each finished step into the session's journal as it lands — the only

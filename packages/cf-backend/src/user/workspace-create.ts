@@ -11,7 +11,7 @@ import {
   normalizeUsage,
   type ReasoningEffort,
 } from '@kinu/core';
-import { diagnostics, toProteusError } from '@kinu/core/obs';
+import { diagnostics, toKinuError } from '@kinu/core/obs';
 import type { OrchestratorAgent } from '../orchestrator';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
 import type { UserCredentialClient } from '../providers/agent-registry';
@@ -84,7 +84,7 @@ export async function createCloudWorkspaceForUser(
       try {
         await userDO.removeWorkspace(caller, entry.name, userId);
       } catch (rollbackErr) {
-        diagnostics.failure('workspace.create_rollback_failed', toProteusError({
+        diagnostics.failure('workspace.create_rollback_failed', toKinuError({
           doing: 'rolling back a partially created workspace',
           cause: rollbackErr,
           otherwise: 'unavailable',
@@ -132,7 +132,7 @@ function scheduleCloudAgentDisplayNameGeneration(
 ): void {
   const task = applyGeneratedDisplayName(env, userDO, caller, agentName, mission, modelSpec, options.suggestDisplayName)
     .catch((err) => {
-      diagnostics.failure('workspace.display_name_generation_failed', toProteusError({
+      diagnostics.failure('workspace.display_name_generation_failed', toKinuError({
         doing: "generating a new workspace's display name",
         cause: err,
         otherwise: 'unavailable',

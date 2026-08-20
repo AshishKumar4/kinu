@@ -1,6 +1,6 @@
 /**
  * The compaction-ladder layer slice — the @better-compact ladder that actually
- * rewrites history, driven through this package's proteus codec/spec.
+ * rewrites history, driven through this package's kinu codec/spec.
  *
  * Core's layer gate declares `compaction-ladder` but cannot measure it (core
  * cannot import this package without a cycle), so the slice lives HERE, on the
@@ -24,11 +24,11 @@ import {
   transformTurns,
   type BuildPlanInputs,
 } from '@better-compact/core';
-import { proteusCodec, proteusSpec } from './codec';
+import { kinuCodec, kinuSpec } from './codec';
 import { compactionTranscriptPath } from './stores';
 
 export interface CompactionLadderSubjects {
-  readonly proteusCodec: typeof proteusCodec;
+  readonly kinuCodec: typeof kinuCodec;
   readonly buildPlan: typeof buildPlan;
   readonly transformTurns: typeof transformTurns;
   readonly replayPlanSnapshot: typeof replayPlanSnapshot;
@@ -36,7 +36,7 @@ export interface CompactionLadderSubjects {
 }
 
 export function createCompactionLadderSubjects(): CompactionLadderSubjects {
-  return { proteusCodec, buildPlan, transformTurns, replayPlanSnapshot, matchesPlanSnapshot };
+  return { kinuCodec, buildPlan, transformTurns, replayPlanSnapshot, matchesPlanSnapshot };
 }
 
 // ── fixtures ─────────────────────────────────────────────────────
@@ -81,7 +81,7 @@ const PLAN_INPUTS: Omit<BuildPlanInputs, 'force'> = Object.freeze({
 
 /** The model-visible view of a turn list, for byte-stable comparison. */
 function visible(subjects: CompactionLadderSubjects, turns: Parameters<typeof transformTurns>[0]): string {
-  return JSON.stringify(subjects.proteusCodec.decode(turns, []));
+  return JSON.stringify(subjects.kinuCodec.decode(turns, []));
 }
 
 // ── the slice ────────────────────────────────────────────────────
@@ -89,22 +89,22 @@ function visible(subjects: CompactionLadderSubjects, turns: Parameters<typeof tr
 export const COMPACTION_LAYERS: readonly Layer<CompactionLadderSubjects>[] = Object.freeze([
   {
     id: 'compaction-ladder',
-    owns: 'the @better-compact ladder that actually rewrites history — the proteus codec, plan construction, ' +
+    owns: 'the @better-compact ladder that actually rewrites history — the kinu codec, plan construction, ' +
       'the staged transform, and byte-stable snapshot replay',
-    subjects: ['proteusCodec', 'buildPlan', 'transformTurns', 'replayPlanSnapshot', 'matchesPlanSnapshot'],
+    subjects: ['kinuCodec', 'buildPlan', 'transformTurns', 'replayPlanSnapshot', 'matchesPlanSnapshot'],
     probes: [
       {
         id: 'compaction-ladder/codec-roundtrip',
         asserts: 'messages encode to content-keyed turns and decode back losslessly; estimation is chars/4',
         observe: (s) => {
           const messages = toolHeavyConversation();
-          const turns = s.proteusCodec.encode(messages);
+          const turns = s.kinuCodec.encode(messages);
           return {
             topology: turns.map((t) => ({ role: t.role, items: t.items.map((i) => i.kind) })),
             keysContentDerived: JSON.stringify(turns.map((t) => t.key))
-              === JSON.stringify(s.proteusCodec.encode(toolHeavyConversation()).map((t) => t.key)),
-            roundTrip: JSON.stringify(s.proteusCodec.decode(turns, [])) === JSON.stringify(messages),
-            estimate: s.proteusCodec.estimateTurns(turns),
+              === JSON.stringify(s.kinuCodec.encode(toolHeavyConversation()).map((t) => t.key)),
+            roundTrip: JSON.stringify(s.kinuCodec.decode(turns, [])) === JSON.stringify(messages),
+            estimate: s.kinuCodec.estimateTurns(turns),
           };
         },
       },
@@ -112,25 +112,25 @@ export const COMPACTION_LAYERS: readonly Layer<CompactionLadderSubjects>[] = Obj
         id: 'compaction-ladder/no-pressure-no-plan',
         asserts: 'a session inside the window is never rewritten',
         observe: (s) => s.buildPlan(
-          s.proteusCodec.encode(toolHeavyConversation()),
+          s.kinuCodec.encode(toolHeavyConversation()),
           { ...PLAN_INPUTS, contextLimit: 10_000_000 },
-          proteusSpec,
+          kinuSpec,
         ),
       },
       {
         id: 'compaction-ladder/ladder-prunes-under-pressure',
         asserts: 'over the trigger, the staged ladder prunes old tool outputs, protects the raw tail, and shrinks the estimate',
         observe: (s) => {
-          const turns = s.proteusCodec.encode(toolHeavyConversation());
-          const plan = s.buildPlan(turns, { ...PLAN_INPUTS }, proteusSpec);
+          const turns = s.kinuCodec.encode(toolHeavyConversation());
+          const plan = s.buildPlan(turns, { ...PLAN_INPUTS }, kinuSpec);
           if (!plan) return { plan: null };
-          const transformed = s.transformTurns(turns, plan.rawTailStartIndex, plan, proteusSpec);
+          const transformed = s.transformTurns(turns, plan.rawTailStartIndex, plan, kinuSpec);
           return {
             stages: plan.stages.map((r) => ({ name: r.name, status: r.status, cleared: r.clearedTokens > 0 })),
             rawTailStartIndex: plan.rawTailStartIndex,
             turnCountPreserved: transformed.length === turns.length,
-            shrank: s.proteusCodec.estimateTurns(transformed) < s.proteusCodec.estimateTurns(turns),
-            after: s.proteusCodec.estimateTurns(transformed),
+            shrank: s.kinuCodec.estimateTurns(transformed) < s.kinuCodec.estimateTurns(turns),
+            after: s.kinuCodec.estimateTurns(transformed),
             tailIntact: visible(s, transformed.slice(plan.rawTailStartIndex))
               === visible(s, turns.slice(plan.rawTailStartIndex)),
           };
@@ -140,20 +140,20 @@ export const COMPACTION_LAYERS: readonly Layer<CompactionLadderSubjects>[] = Obj
         id: 'compaction-ladder/replay-byte-stable',
         asserts: 'an unchanged prefix replays the snapshot byte-for-byte; a rewritten history invalidates it',
         observe: (s) => {
-          const turns = s.proteusCodec.encode(toolHeavyConversation());
-          const plan = s.buildPlan(turns, { ...PLAN_INPUTS }, proteusSpec);
+          const turns = s.kinuCodec.encode(toolHeavyConversation());
+          const plan = s.buildPlan(turns, { ...PLAN_INPUTS }, kinuSpec);
           if (!plan) return { plan: null };
           const snapshot = toPlanSnapshot(plan);
-          const transformed = s.transformTurns(turns, plan.rawTailStartIndex, plan, proteusSpec);
-          const replayed = s.replayPlanSnapshot(turns, snapshot, proteusSpec);
-          const rewritten = s.proteusCodec.encode([
+          const transformed = s.transformTurns(turns, plan.rawTailStartIndex, plan, kinuSpec);
+          const replayed = s.replayPlanSnapshot(turns, snapshot, kinuSpec);
+          const rewritten = s.kinuCodec.encode([
             { role: 'user', content: 'a completely different history' },
           ]);
           return {
             matches: s.matchesPlanSnapshot(turns, snapshot),
             byteStable: replayed !== null && visible(s, replayed) === visible(s, transformed),
             rewrittenMatches: s.matchesPlanSnapshot(rewritten, snapshot),
-            rewrittenReplay: s.replayPlanSnapshot(rewritten, snapshot, proteusSpec),
+            rewrittenReplay: s.replayPlanSnapshot(rewritten, snapshot, kinuSpec),
           };
         },
       },

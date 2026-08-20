@@ -62,7 +62,7 @@ function createDeviceCheckpoints(options?: DeviceCheckpointOptions) {
 const AGENT = 'parity-agent';
 
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), 'proteus-parity-'));
+  const root = mkdtempSync(join(tmpdir(), 'kinu-parity-'));
   const work = join(root, 'project');
   mkdirSync(work, { recursive: true });
   const base = join(root, 'shadow');
@@ -142,8 +142,8 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
       const [a, b] = stores.map((name) => join(root, 'shadow', AGENT, name));
       expect(readFileSync(join(a!, 'info', 'exclude'), 'utf8')).toBe(readFileSync(join(b!, 'info', 'exclude'), 'utf8'));
       // Marker files differ only by the recorded target dir.
-      expect(readFileSync(join(a!, 'PROTEUS_WORKDIR'), 'utf8').trim()).toMatch(/project(-b)?$/);
-      expect(readFileSync(join(b!, 'PROTEUS_WORKDIR'), 'utf8').trim()).toMatch(/project(-b)?$/);
+      expect(readFileSync(join(a!, 'KINU_WORKDIR'), 'utf8').trim()).toMatch(/project(-b)?$/);
+      expect(readFileSync(join(b!, 'KINU_WORKDIR'), 'utf8').trim()).toMatch(/project(-b)?$/);
     } finally { cleanup(); }
   });
 

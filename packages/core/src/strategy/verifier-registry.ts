@@ -39,7 +39,7 @@
  */
 import * as v from 'valibot';
 import { SOLUTION_FILE, execRatioImplementation, runRatioMeasurement } from './exec-ratio';
-import { ProteusError, refusalOf } from '../obs/error';
+import { KinuError, refusalOf } from '../obs/error';
 import type { Measurement, Verifier, VerifierSpec } from './objective';
 import { renderIssues, type JsonValue } from '../utils/json';
 import type { SwarmRefusal } from './swarm';
@@ -196,7 +196,7 @@ export function resolveVerifier(source: VerifierSpec): ResolvedVerifier | SwarmR
   if (!kind) {
     return {
       reason: 'bad_input',
-      error: refusalOf(new ProteusError(
+      error: refusalOf(new KinuError(
         'bad_input',
         `no verifier kind "${source.kind}" is registered. ${unregisteredKindRefusal()}`,
       )).error,
@@ -207,7 +207,7 @@ export function resolveVerifier(source: VerifierSpec): ResolvedVerifier | SwarmR
   if ('issues' in bound) {
     return {
       reason: 'bad_input',
-      error: refusalOf(new ProteusError(
+      error: refusalOf(new KinuError(
         'bad_input',
         `\`spec\` does not describe a "${kind}" measurement: ${bound.issues}. Every field is `
         + 'required — one that is missing is a quantity the floor and its margin checks '

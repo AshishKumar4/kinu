@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 function makeLog(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'proteus-daemon-log-'));
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-daemon-log-'));
   dirs.push(dir);
   return join(dir, 'daemon.log');
 }

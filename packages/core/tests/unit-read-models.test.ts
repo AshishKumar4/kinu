@@ -537,7 +537,7 @@ describe('background-job control plane', () => {
       }),
     };
 
-    jobs.create({ id: 'j1', kind: 'search', workMode: 'build', input: JSON.stringify({ q: 'proteus' }), now: 1 });
+    jobs.create({ id: 'j1', kind: 'search', workMode: 'build', input: JSON.stringify({ q: 'kinu' }), now: 1 });
     jobs.settle('j1', 0, 'old result', 2);
 
     const retry = retryBackgroundJob({
@@ -546,7 +546,7 @@ describe('background-job control plane', () => {
 
     expect(retry.ok).toBe(true);
     expect(retry.jobId).not.toBe('j1');
-    expect(seen).toEqual([{ q: 'proteus' }]);
+    expect(seen).toEqual([{ q: 'kinu' }]);
     // Detached immediately — the work already proved slow once.
     expect(detached).toEqual([{ jobId: retry.jobId!, kind: 'search' }]);
     db.close();

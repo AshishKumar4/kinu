@@ -15,7 +15,7 @@
 import { JsonValueSchema, type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore } from '@kinu/core';
 import { agentEmailAddress } from './inbound';
 import type { EmailOutbox } from './outbox';
-import { diagnostics, ProteusError } from '@kinu/core/obs';
+import { diagnostics, KinuError } from '@kinu/core/obs';
 import * as v from 'valibot';
 
 const EmailThreadAddrSchema = v.object({
@@ -184,7 +184,7 @@ export async function sendOwnerEmail(
   if (result.status === 'failed') {
     diagnostics.failure(
       'email.owner_notification_failed',
-      new ProteusError('unavailable', result.error),
+      new KinuError('unavailable', result.error),
       { workspace: deps.agentName, messageId: result.messageId },
     );
     return false;

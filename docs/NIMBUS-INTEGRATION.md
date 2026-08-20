@@ -107,9 +107,9 @@ reconstruction and are restored before routing.
 The preview edge:
 
 - routes preview hosts before the application and auth router;
-- strips the `__Host-proteus_session` and `__Host-proteus_d1_bookmark` cookies,
+- strips the `__Host-kinu_session` and `__Host-kinu_d1_bookmark` cookies,
   `pta_`/`ptc_`/`pdt_` bearer tokens, proxy credentials, and every
-  `x-proteus-*` header before guest code receives the request
+  `x-kinu-*` header before guest code receives the request
   (`lib/preview-request.ts`);
 - preserves guest-owned cookies and any other HTTP Authorization value;
 - forwards HTTP bodies with the Worker stream contract;

@@ -48,11 +48,11 @@ describe('CLI cloud agent registry sync', () => {
   });
 
   test('uses the cloud agent list as the source of truth for cloud refs', () => {
-    const home = mkdtempSync(join(tmpdir(), 'proteus-agent-list-'));
+    const home = mkdtempSync(join(tmpdir(), 'kinu-agent-list-'));
     tempDirs.push(home);
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, 'config.json'), JSON.stringify({
-      origin: 'https://proteus.test',
+      origin: 'https://kinu.test',
       accessToken: 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz',
       agents: {
         stale: {
@@ -77,7 +77,7 @@ describe('CLI cloud agent registry sync', () => {
 
     const script = `
       globalThis.fetch = async (input, init) => {
-        if (String(input) !== 'https://proteus.test/api/cli/workspaces') throw new Error(String(input));
+        if (String(input) !== 'https://kinu.test/api/cli/workspaces') throw new Error(String(input));
         if (new Headers(init?.headers).get('authorization') !== 'Bearer ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz') {
           throw new Error('missing auth');
         }
@@ -94,7 +94,7 @@ describe('CLI cloud agent registry sync', () => {
     const proc = Bun.spawnSync({
       cmd: [process.execPath, '-e', script],
       cwd: repoRoot,
-      env: { ...process.env, PROTEUS_HOME: home },
+      env: { ...process.env, KINU_HOME: home },
       stdout: 'pipe',
       stderr: 'pipe',
     });

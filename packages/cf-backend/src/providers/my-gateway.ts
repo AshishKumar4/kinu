@@ -86,7 +86,7 @@ export function createMyGatewayProvider(): ModelProvider {
     },
 
     createModel(modelId, deps): LanguageModel {
-      const placeholder = 'https://proteus-my-gateway.invalid';
+      const placeholder = 'https://kinu-my-gateway.invalid';
       const customFetch = createCloudflareAIFetch({
         credKey: CLOUDFLARE_AI_GATEWAY_CRED_KEY,
         getAuth: deps.getAuth,

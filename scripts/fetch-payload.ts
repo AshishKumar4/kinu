@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Fetch the captured API payload from the DO via RPC, analyze it,
- * and dump to /tmp/proteus-payload.json for curl replay testing.
+ * and dump to /tmp/kinu-payload.json for curl replay testing.
  */
 
 const BASE_URL = process.argv[2] ?? "http://0.0.0.0:5173";
@@ -53,8 +53,8 @@ async function main() {
 
   // Write full body to file
   const { writeFileSync } = await import("fs");
-  writeFileSync("/tmp/proteus-payload.json", result.fullBody);
-  console.log("\nPayload dumped to /tmp/proteus-payload.json");
+  writeFileSync("/tmp/kinu-payload.json", result.fullBody);
+  console.log("\nPayload dumped to /tmp/kinu-payload.json");
 
   // Analyze
   const parsed = JSON.parse(result.fullBody);
@@ -94,11 +94,11 @@ async function main() {
   }
 
   console.log(`\nTo replay directly (bypasses gateway cache with unique suffix):`);
-  console.log(`  Add a unique string to the user message in /tmp/proteus-payload.json`);
+  console.log(`  Add a unique string to the user message in /tmp/kinu-payload.json`);
   console.log(`  Then: curl -sN --max-time 120 -X POST "${result.url}" \\`);
   console.log(`    -H "Content-Type: application/json" \\`);
   console.log(`    -H "Authorization: $AI_GATEWAY_AUTH" \\`);
-  console.log(`    -d @/tmp/proteus-payload.json -w '\\nTTFB: %{time_starttransfer}s\\n'`);
+  console.log(`    -d @/tmp/kinu-payload.json -w '\\nTTFB: %{time_starttransfer}s\\n'`);
 }
 
 main().catch(e => { console.error("FATAL:", e); process.exit(1); });

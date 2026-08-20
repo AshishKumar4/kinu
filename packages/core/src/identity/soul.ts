@@ -53,7 +53,7 @@ function missionKey(mission: string): string {
   return mission.replace(/\s+/g, ' ').trim().slice(0, 40);
 }
 
-/** The `proteusEvent` a workspace's own first turn carries. */
+/** The `kinuEvent` a workspace's own first turn carries. */
 export const WORKSPACE_CREATED_EVENT = 'workspace_created';
 
 /**

@@ -77,7 +77,7 @@ function bunResolves(PATH: string, names: readonly string[]): string[] {
 
 /** A PATH directory laid out by `build`, cleaned up after `fn`. */
 function withPathDir<T>(build: (dir: string) => void, fn: (dir: string) => T): T {
-  const dir = mkdtempSync(join(tmpdir(), 'proteus-scratch-path-parity-'));
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-scratch-path-parity-'));
   try {
     build(dir);
     return fn(dir);

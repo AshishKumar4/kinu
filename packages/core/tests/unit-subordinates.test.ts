@@ -38,7 +38,7 @@ import {
   type SubordinateReportStatus,
   type SubordinateRosterEntry,
   type SubordinateRuntime,
-  type ProteusEvent,
+  type KinuEvent,
 } from '../src/index';
 import { CODE_IS_REFUSAL } from '../src/obs/index';
 import { createMemoryVfs } from '@kinu/test-utils';
@@ -55,7 +55,7 @@ function makeIdentityStore(db: Database = new Database(':memory:')): Subordinate
   return new SubordinateIdentityStore(makeSqlExec(db), makeTagged(db));
 }
 
-function reportPayload(event: ProteusEvent | undefined): SubordinateReportPayload {
+function reportPayload(event: KinuEvent | undefined): SubordinateReportPayload {
   if (!event) throw new Error('expected subordinate report event');
   if (event.variant !== 'subordinate_report') throw new Error('expected subordinate report payload');
   return v.parse(v.object({
@@ -64,7 +64,7 @@ function reportPayload(event: ProteusEvent | undefined): SubordinateReportPayloa
     content: v.string(),
     task: v.optional(v.string()),
     content_path: v.optional(v.string()),
-    proteus_mode: v.picklist(['build', 'plan']),
+    kinu_mode: v.picklist(['build', 'plan']),
   }), event.payload);
 }
 const identityInput = {
@@ -72,7 +72,7 @@ const identityInput = {
   displayName: 'Researcher',
   role: 'market researcher',
   mission: 'Map the market.',
-  parentWorkspace: 'proteus-main',
+  parentWorkspace: 'kinu-main',
   ownerUserId: 'owner-123',
   depth: 1,
 };
@@ -87,7 +87,7 @@ describe('subordinate identity', () => {
 
     expect(identity.read()).toEqual(identityInput);
     expect(identity.ownerUserId()).toBe('owner-123');
-    expect(identity.workspaceName()).toBe('proteus-main');
+    expect(identity.workspaceName()).toBe('kinu-main');
     expect(() => identity.seed({ ...identityInput, ownerUserId: 'attacker' }))
       .toThrow('already initialized');
     expect(identity.read()).toEqual(identityInput);
@@ -144,7 +144,7 @@ describe('subordinate identity', () => {
       mission TEXT NOT NULL, parent_workspace TEXT NOT NULL, owner_user_id TEXT NOT NULL
     )`);
     db.exec(`INSERT INTO subordinate_identity VALUES (1, 'researcher', 'Researcher',
-      'market researcher', 'Map the market.', 'proteus-main', 'owner-123')`);
+      'market researcher', 'Map the market.', 'kinu-main', 'owner-123')`);
 
     const identity = makeIdentityStore(db);
     identity.ensureSchema();
@@ -398,7 +398,7 @@ describe('team action routing', () => {
     initEventsHubTables(sql);
     const log = new EventLog(sql);
     admitSubordinateTask(log, {
-      fromWorkspace: 'proteus-main',
+      fromWorkspace: 'kinu-main',
       kind: 'task',
       body: 'Repair the auth flow.',
       inheritedContext: digest,
@@ -607,7 +607,7 @@ describe('subordinate event admission', () => {
     const log = new EventLog(sql);
 
     const task = admitSubordinateTask(log, {
-      fromWorkspace: 'proteus-main', kind: 'task', body: 'Investigate',
+      fromWorkspace: 'kinu-main', kind: 'task', body: 'Investigate',
       deliverable: 'Report', deadlineHint: 'today', mode: 'build', now: 10,
     });
     const report = admitSubordinateReport(log, {
@@ -619,14 +619,14 @@ describe('subordinate event admission', () => {
     expect(log.pending({ variant: 'subordinate_task' })[0]).toMatchObject({
       trust: 'authenticated', priority: 'normal',
       payload: {
-        from_workspace: 'proteus-main', kind: 'task', body: 'Investigate',
-        deliverable: 'Report', deadline_hint: 'today', proteus_mode: 'build',
+        from_workspace: 'kinu-main', kind: 'task', body: 'Investigate',
+        deliverable: 'Report', deadline_hint: 'today', kinu_mode: 'build',
       },
     });
     expect(log.pending({ variant: 'subordinate_report' })[0]).toMatchObject({
       trust: 'authenticated', priority: 'background',
       payload: {
-        from_subordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate', proteus_mode: 'build',
+        from_subordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate', kinu_mode: 'build',
       },
     });
   });
@@ -638,7 +638,7 @@ describe('subordinate event admission', () => {
     initEventsHubTables(sql);
     const log = new EventLog(sql);
     const admission = admitSubordinateTask(log, {
-      fromWorkspace: 'proteus-main', kind: 'task', body: 'Investigate', mode: 'build', now: 10,
+      fromWorkspace: 'kinu-main', kind: 'task', body: 'Investigate', mode: 'build', now: 10,
     });
 
     const handoff = describeSubordinateHandoff({

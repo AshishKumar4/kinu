@@ -86,7 +86,7 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
 }
 
 function setup(model: LanguageModel) {
-  const home = mkdtempSync(join(tmpdir(), 'proteus-client-'));
+  const home = mkdtempSync(join(tmpdir(), 'kinu-client-'));
   tempDirs.push(home);
   const dbPath = join(home, 'agent.db');
   writeFileSync(dbPath, '');

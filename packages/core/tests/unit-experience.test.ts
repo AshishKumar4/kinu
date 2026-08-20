@@ -184,7 +184,7 @@ describe('publishing is gated on local evidence', () => {
     const ws = workspace('alpha', ownerLibrary());
     const sources = { sql: ws.rt.storage.sql, craftStore: ws.rt.craftStore, facts: ws.facts };
     ws.facts.upsert('deploy.guess', 'maybe-here', { confidence: 0.4 });
-    ws.facts.upsert('deploy.target', 'proteus.workers.dev', { confidence: 1 });
+    ws.facts.upsert('deploy.target', 'kinu.workers.dev', { confidence: 1 });
 
     expect(findPublishable(sources, 'fact', 'deploy.guess')).toEqual({
       refused: 'fact "deploy.guess" is held at confidence 0.40, below the 0.8 publish bar',
@@ -196,7 +196,7 @@ describe('publishing is gated on local evidence', () => {
     const ws = workspace('alpha', ownerLibrary());
     proveCraft(ws, { name: 'fetch_changelog', description: 'fetch a changelog', code: 'async (args) => args.url', score: 0.9, uses: 4 });
     ws.facts.upsert('deploy.guess', 'maybe-here', { confidence: 0.4 });
-    ws.facts.upsert('deploy.target', 'proteus.workers.dev', { confidence: 1 });
+    ws.facts.upsert('deploy.target', 'kinu.workers.dev', { confidence: 1 });
     recordLesson(ws.rt.storage.sql, {
       turnIds: [], text: 'provisional prose', source: 'turn_reflection', status: 'provisional',
     });
@@ -352,7 +352,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
       }, 'alpha'),
       library.publish({
         kind: 'fact', key: 'deploy.target', title: 'deploy.target', evidence: 'held at confidence 1.00',
-        payload: { kind: 'fact', key: 'deploy.target', value: 'proteus.workers.dev', confidence: 1 },
+        payload: { kind: 'fact', key: 'deploy.target', value: 'kinu.workers.dev', confidence: 1 },
       }, 'alpha'),
     ];
     for (const entry of entries) {
@@ -381,7 +381,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
     const craft = beta.rt.craftStore.get('fetch_changelog');
     expect(craft).toMatchObject({ name: 'fetch_changelog', code: 'async (args) => args.url', params: { url: 'string' } });
     expect(beta.facts.recall('deploy.target')).toMatchObject({
-      value: 'proteus.workers.dev', source: 'experience:alpha',
+      value: 'kinu.workers.dev', source: 'experience:alpha',
     });
     expect(await beta.rt.memory.read('memory/MEMORY.md')).toContain('Read the error before rerunning.');
 
@@ -410,7 +410,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
     const beta = workspace('beta', library, { 'reflect': 'noted' });
     const entry = library.publish({
       kind: 'fact', key: 'deploy.target', title: 'deploy.target', evidence: 'held at confidence 1.00',
-      payload: { kind: 'fact', key: 'deploy.target', value: 'proteus.workers.dev', confidence: 1 },
+      payload: { kind: 'fact', key: 'deploy.target', value: 'kinu.workers.dev', confidence: 1 },
     }, 'alpha');
 
     await beta.call({ action: 'import', id: entry.id });
@@ -419,7 +419,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
 
     expect(v.parse(ImportSchema, await beta.call({ action: 'import', id: entry.id })).status).toBe('provisional');
     await gradeTurn(beta, 'turn-2', 'positive');
-    expect(beta.facts.recall('deploy.target')?.value).toBe('proteus.workers.dev');
+    expect(beta.facts.recall('deploy.target')?.value).toBe('kinu.workers.dev');
   });
 
   test('an ungraded turn settles nothing — the import keeps waiting', async () => {
@@ -427,7 +427,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
     const beta = workspace('beta', library);
     const entry = library.publish({
       kind: 'fact', key: 'deploy.target', title: 'deploy.target', evidence: 'held at confidence 1.00',
-      payload: { kind: 'fact', key: 'deploy.target', value: 'proteus.workers.dev', confidence: 1 },
+      payload: { kind: 'fact', key: 'deploy.target', value: 'kinu.workers.dev', confidence: 1 },
     }, 'alpha');
     await beta.call({ action: 'import', id: entry.id });
 
@@ -469,7 +469,7 @@ describe('library search', () => {
     }, 'alpha');
     library.publish({
       kind: 'fact', key: 'deploy.target', title: 'deploy.target', evidence: 'confident',
-      payload: { kind: 'fact', key: 'deploy.target', value: 'proteus.workers.dev', confidence: 1 },
+      payload: { kind: 'fact', key: 'deploy.target', value: 'kinu.workers.dev', confidence: 1 },
     }, 'alpha');
 
     expect(library.search({ query: 'wrangler' }).map((e) => e.key)).toEqual(['l1']);

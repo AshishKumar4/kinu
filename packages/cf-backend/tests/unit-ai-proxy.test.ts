@@ -83,7 +83,7 @@ function chatRequest(token: string | null, body: JsonValue, extraHeaders: Record
   const headers = new Headers(extraHeaders);
   headers.set('content-type', 'application/json');
   if (token) headers.set('authorization', `Bearer ${token}`);
-  return new Request('https://proteus.example.com/api/user/ai/v1/chat/completions', {
+  return new Request('https://kinu.example.com/api/user/ai/v1/chat/completions', {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -131,7 +131,7 @@ describe('AI proxy auth gate', () => {
 
   test('other /api/user routes stay outside the CLI handler', async () => {
     const { env } = setupEnv();
-    const res = await handleCliRequest(new Request('https://proteus.example.com/api/user/profile'), env);
+    const res = await handleCliRequest(new Request('https://kinu.example.com/api/user/profile'), env);
     expect(res).toBeNull();
   });
 
@@ -159,14 +159,14 @@ describe('AI proxy model → upstream selection', () => {
     const res = await handleCliRequest(chatRequest(SESSION_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
       messages: [{ role: 'user', content: 'ping' }],
-    }, { 'x-session-affinity': 'proteus-jarvis' }), env);
+    }, { 'x-session-affinity': 'kinu-jarvis' }), env);
 
     expect(res?.status).toBe(200);
     expect(await res?.json()).toMatchObject({ choices: [{ message: { content: 'ok' } }] });
     expect(captured).toHaveLength(1);
     expect(captured[0].url).toBe(`${AI_BASE_URL}/chat/completions`);
     expect(captured[0].headers.get('authorization')).toBe('Bearer cf-user-token');
-    expect(captured[0].headers.get('x-session-affinity')).toBe('proteus-jarvis');
+    expect(captured[0].headers.get('x-session-affinity')).toBe('kinu-jarvis');
     expect(captured[0].body.model).toBe('@cf/moonshotai/kimi-k2.6');
     expect(captured[0].body.messages).toEqual([{ role: 'user', content: 'ping' }]);
     // The proxied CLI bearer must never leak upstream.
@@ -291,7 +291,7 @@ describe('AI proxy model listing', () => {
       throw new Error(`unexpected fetch: ${url}`);
     });
 
-    const res = await handleCliRequest(new Request('https://proteus.example.com/api/user/ai/v1/models', {
+    const res = await handleCliRequest(new Request('https://kinu.example.com/api/user/ai/v1/models', {
       headers: { authorization: `Bearer ${SESSION_TOKEN}` },
     }), env);
     expect(res?.status).toBe(200);

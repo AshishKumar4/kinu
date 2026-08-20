@@ -13,7 +13,7 @@ export interface LocalModelResolverOptions {
   baseUrl?: string;
   auth?: string;
   /** Pins the agent's signed-in proxy turns to one Workers AI replica
-   *  (x-session-affinity) — same `proteus-<name>` key cloud agents use. */
+   *  (x-session-affinity) — same `kinu-<name>` key cloud agents use. */
   agentName?: string;
 }
 

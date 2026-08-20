@@ -1,5 +1,5 @@
 /**
- * `kinu daemon` lifecycle against a throwaway PROTEUS_HOME. The daemon is a
+ * `kinu daemon` lifecycle against a throwaway KINU_HOME. The daemon is a
  * real detached process, so these run the CLI end to end: the pidfile is the
  * daemon's own and it unlinks it on exit, which is exactly what restart has to
  * sequence correctly.
@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 function makeHome(): string {
-  const home = mkdtempSync(join(tmpdir(), 'proteus-daemon-'));
+  const home = mkdtempSync(join(tmpdir(), 'kinu-daemon-'));
   homes.push(home);
   return home;
 }
@@ -34,7 +34,7 @@ function runDaemon(home: string, action: string) {
     cwd: repoRoot,
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, PROTEUS_HOME: home },
+    env: { ...process.env, KINU_HOME: home },
   });
   return {
     exitCode: proc.exitCode,

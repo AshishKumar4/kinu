@@ -10,7 +10,7 @@
  * concurrent drain can't double-process them.
  */
 import * as v from 'valibot';
-import type { ProteusEvent } from './types';
+import type { KinuEvent } from './types';
 import type { WorkMode } from '../../prompting/surface';
 import { renderForLLM } from './visibility';
 import { JsonObjectSchema } from '../../utils/json';
@@ -32,24 +32,24 @@ export interface DrainBatch {
   readonly mode: WorkMode | null;
 }
 
-function delegatedEventMode(event: ProteusEvent): WorkMode | null {
+function delegatedEventMode(event: KinuEvent): WorkMode | null {
   if (
     event.variant !== 'peer_agent'
     && event.variant !== 'subordinate_task'
     && event.variant !== 'subordinate_report'
   ) return null;
   if (event.payload_visibility === 'full' || event.payload_visibility === 'redact') {
-    return event.payload.proteus_mode;
+    return event.payload.kinu_mode;
   }
   const payload = v.safeParse(JsonObjectSchema, event.payload);
   if (!payload.success) return null;
-  const mode = v.safeParse(v.picklist(['plan', 'build']), payload.output.proteus_mode);
+  const mode = v.safeParse(v.picklist(['plan', 'build']), payload.output.kinu_mode);
   return mode.success ? mode.output : null;
 }
 
 /** Externally-triggered pending events → one drain batch, or null if there are
  *  none (the agent's own self-emitted/internal events never wake a new turn). */
-export function buildDrainBatch(events: ProteusEvent[]): DrainBatch | null {
+export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
   const pending = events.filter((e) => e.ingress !== 'self_emit' && e.variant !== 'internal');
   if (pending.length === 0) return null;
   // A delegated Plan event can never share a turn with Build or neutral work.

@@ -4,12 +4,12 @@
 #
 # A fresh worktree has no node_modules, and the obvious shortcut — symlinking or
 # copying the main checkout's — is the bug this script exists to prevent: every
-# entry inside that directory, `@proteus` included, then resolves through the
-# main checkout, so `@proteus/core` is MAIN's core and the branch under test is
+# entry inside that directory, `@kinu` included, then resolves through the
+# main checkout, so `@kinu/core` is MAIN's core and the branch under test is
 # never loaded. Tests and typechecks pass while measuring the wrong tree.
 #
 # So: link third-party dependencies per entry (they are shared and identical),
-# and give this tree its own real `@proteus` scope directory pointing at its own
+# and give this tree its own real `@kinu` scope directory pointing at its own
 # packages/. Idempotent — re-run it after adding a package.
 #
 #   bash scripts/setup-worktree.sh
@@ -49,9 +49,9 @@ fi
 # Mirror one node_modules directory: every entry symlinked to the donor's, except
 # the workspace scope, which is rebuilt locally against THIS tree's packages.
 # The workspace scope is DERIVED from this tree's own packages, never
-# hardcoded: the product scope has already been renamed once (@proteus ->
-# @kinu), and a hardcoded scope leaves every fresh worktree after such a
-# rename with an empty scope directory that fails workspace resolution.
+# hardcoded: the product scope has been renamed before, and a hardcoded scope
+# leaves every fresh worktree after such a rename with an empty scope directory
+# that fails workspace resolution.
 SCOPES="$(sed -n 's|.*"name"[[:space:]]*:[[:space:]]*"\(@[^/"]*\)/[^"]*".*|\1|p' "$TREE"/packages/*/package.json | sort -u)"
 if [ -z "$SCOPES" ]; then
   echo "No workspace scope found in $TREE/packages/*/package.json - refusing to mirror blind." >&2

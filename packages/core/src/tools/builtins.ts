@@ -92,7 +92,7 @@ import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '.
 import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review';
 import type { JsonValue } from '../utils/json';
 import {
-  createConsoleLogger, diagnostics, ProteusError, toProteusError, type Logger,
+  createConsoleLogger, diagnostics, KinuError, toKinuError, type Logger,
 } from '../obs/index';
 
 type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
@@ -305,7 +305,7 @@ function buildCraftedToolSetFromExecute(
     } catch (err) {
       diagnostics.failure(
         CRAFT_TOOL_SKIPPED,
-        toProteusError({ doing: 'compile a crafted tool', cause: err, otherwise: 'bad_input' }),
+        toKinuError({ doing: 'compile a crafted tool', cause: err, otherwise: 'bad_input' }),
         { tool: t.name },
       );
     }
@@ -411,7 +411,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     } catch (err) {
       logger.failure(
         EXECUTE_TOOLS_UNBUILDABLE,
-        toProteusError({ doing: 'build the execute_tools dispatcher', cause: err, otherwise: 'unavailable' }),
+        toKinuError({ doing: 'build the execute_tools dispatcher', cause: err, otherwise: 'unavailable' }),
       );
     }
   }
@@ -506,7 +506,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       const runtimeKey = args.runtime ?? defaultRuntime;
       if (runtimeKey === 'workspace') {
         if (!shell) {
-          const refusal = new ProteusError(
+          const refusal = new KinuError(
             'unsupported',
             'no workspace shell available in this runtime',
           );
@@ -534,7 +534,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         // a reader that filed it as a capability gap would report a cold start
         // as a missing feature. `error` keeps its literal token because the
         // install card matches on it (cf-backend WorkspacePage.tsx:76-80).
-        const refusal = new ProteusError('unavailable', 'runtime_not_provisioned');
+        const refusal = new KinuError('unavailable', 'runtime_not_provisioned');
         logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
         return JSON.stringify({
           reason: refusal.code,
@@ -554,7 +554,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         // `unsupported`, not `unavailable`: this environment is here and does
         // not have a shell. Retrying cannot change that, and the two codes exist
         // to keep those apart.
-        const refusal = new ProteusError('unsupported', 'runtime_does_not_support_exec');
+        const refusal = new KinuError('unsupported', 'runtime_does_not_support_exec');
         logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
         return JSON.stringify({
           reason: refusal.code,
@@ -573,7 +573,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         // row recorded `threw` and the class was gone — the caller could not
         // tell a cancelled wait from an OOM from a dead transport. Classified
         // here and returned as a refusal the reader can branch on.
-        const failure = toProteusError({
+        const failure = toKinuError({
           doing: `run \`${args.command}\` on ${runtimeKey}`,
           cause: caught,
           otherwise: 'io',

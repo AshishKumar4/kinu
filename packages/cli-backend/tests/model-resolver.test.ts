@@ -225,7 +225,7 @@ describe('createLocalModelResolver', () => {
 
 // ─── Signed-in cloud source — the worker's /api/user/ai/v1 proxy ───────────
 
-const CLOUD_ORIGIN = 'https://proteus.example.com';
+const CLOUD_ORIGIN = 'https://kinu.example.com';
 const CLOUD_TOKEN = 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz';
 
 /** The llm config cli/config.ts derives for a signed-in user with no BYO keys. */
@@ -327,7 +327,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       const resolver = createLocalModelResolver({
         llm: proxyLLMConfig(origin),
         credentials: {},
-        cloud: { origin, token: CLOUD_TOKEN, sessionAffinity: 'proteus-jarvis' },
+        cloud: { origin, token: CLOUD_TOKEN, sessionAffinity: 'kinu-jarvis' },
         fetch: cloudMenuFetch(origin),
       });
 
@@ -345,7 +345,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       expect(seen.map((s) => s.model)).toEqual([DEFAULT_WORKERS_AI_MODEL_ID, 'openai/gpt-4.1']);
       for (const request of seen) {
         expect(request.auth).toBe(`Bearer ${CLOUD_TOKEN}`);
-        expect(request.affinity).toBe('proteus-jarvis');
+        expect(request.affinity).toBe('kinu-jarvis');
       }
     } finally {
       server.stop(true);

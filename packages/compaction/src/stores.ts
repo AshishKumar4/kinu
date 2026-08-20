@@ -8,7 +8,7 @@
  * Backends supply only what genuinely differs: the summarizer transport
  * (their model call), the logger sink, and the onOutcome ledger reset.
  *
- * Transcripts live at `.proteus/compaction/<sessionKey>/<rangeHash>.md`
+ * Transcripts live at `.kinu/compaction/<sessionKey>/<rangeHash>.md`
  * — inside the agent's own file plane, so the reference message's citation is
  * directly readable back through the agent's normal file tools
  * (workspace.readFile / the shell). That read-back IS the lossless-recall

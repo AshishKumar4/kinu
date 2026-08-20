@@ -22,7 +22,7 @@ describe('createFileCodexAuthStore', () => {
     const dir = scratchDir('codex-auth-store');
     const configPath = join(dir, 'config.json');
     writeFileSync(configPath, `${JSON.stringify({
-      origin: 'https://proteus.example',
+      origin: 'https://kinu.example',
       providers: {
         openai: { apiKey: 'sk-openai' },
         codex: {
@@ -54,7 +54,7 @@ describe('createFileCodexAuthStore', () => {
     expect(auth?.headers['ChatGPT-Account-ID']).toBe('acct_123');
 
     const saved = v.parse(savedConfigSchema, JSON.parse(readFileSync(configPath, 'utf-8')));
-    expect(saved.origin).toBe('https://proteus.example');
+    expect(saved.origin).toBe('https://kinu.example');
     expect(saved.providers?.openai?.apiKey).toBe('sk-openai');
     expect(saved.providers?.codex?.refreshToken).toBe('refresh-new');
     expect(saved.providers?.codex?.metadata?.accountId).toBe('acct_123');
@@ -72,7 +72,7 @@ describe('createFileCodexAuthStore', () => {
     const dir = scratchDir('codex-auth-store');
     const configPath = join(dir, 'config.json');
     const intact = JSON.stringify({
-      origin: 'https://proteus.example',
+      origin: 'https://kinu.example',
       providers: { openai: { apiKey: 'sk-openai' }, codex: { refreshToken: 'refresh-old' } },
     }, null, 2);
     writeFileSync(configPath, intact.slice(0, -12));

@@ -137,7 +137,7 @@ describe("executor lifecycle state", () => {
   test("configured sandbox is callable but inactive until first operation", async () => {
     const handle = sandboxHandle();
     const router = new DefaultExecutionRouter();
-    router.register(createSandboxExecutor(handle, "proteus.example.test"));
+    router.register(createSandboxExecutor(handle, "kinu.example.test"));
 
     const [info] = router.listExecutors().filter((e) => e.name === "sandbox");
     expect(info).toMatchObject({
@@ -208,7 +208,7 @@ describe("executor lifecycle state", () => {
 
   test("sandbox exec strips AbortSignal before remote SDK calls", async () => {
     const handle = sandboxHandle();
-    const executor = createSandboxExecutor(handle, "proteus.example.test");
+    const executor = createSandboxExecutor(handle, "kinu.example.test");
     const signal = new AbortController().signal;
 
     const result = await executor.tools.exec.execute("echo ok", { signal });
@@ -220,7 +220,7 @@ describe("executor lifecycle state", () => {
   test("sandbox port discovery preserves a real SDK failure", async () => {
     const handle = sandboxHandle();
     handle.getExposedPorts = async () => { throw new Error("preview registry unavailable"); };
-    const executor = createSandboxExecutor(handle, "proteus.example.test");
+    const executor = createSandboxExecutor(handle, "kinu.example.test");
 
     await expect(executor.listExposedPorts!()).rejects.toThrow("preview registry unavailable");
   });

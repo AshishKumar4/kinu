@@ -24,7 +24,7 @@
 import { createHash, createHmac } from 'node:crypto';
 import * as v from 'valibot';
 import { evidenceWindow } from '../../prompts/evidence-window';
-import type { PayloadPolicy, ProteusEvent } from './types';
+import type { PayloadPolicy, KinuEvent } from './types';
 import {
   isJsonObject, JsonObjectSchema, parseJsonValue,
   type JsonObject, type JsonValue,
@@ -169,7 +169,7 @@ function briefWindow(text: string): string {
 /** Compact, human-readable representation of an event for injection into
  *  the LLM context. Never includes raw payload bytes for non-`full`
  *  visibility events. */
-export function renderForLLM(event: ProteusEvent) {
+export function renderForLLM(event: KinuEvent) {
   return {
     id: event.id,
     variant: event.variant,
@@ -179,7 +179,7 @@ export function renderForLLM(event: ProteusEvent) {
   };
 }
 
-function friendlySource(event: ProteusEvent): string {
+function friendlySource(event: KinuEvent): string {
   const parsedPayload = v.safeParse(JsonObjectSchema, event.payload);
   const payload = parsedPayload.success ? parsedPayload.output : {};
   const text = (field: string, fallback: string): string => {
@@ -211,7 +211,7 @@ function friendlySource(event: ProteusEvent): string {
   }
 }
 
-function briefForVariant(event: ProteusEvent): string {
+function briefForVariant(event: KinuEvent): string {
   // Hash/HMAC/opaque policies replace the payload. Redaction preserves the
   // domain shape and may continue through the variant renderer below.
   if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') {

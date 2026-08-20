@@ -59,7 +59,7 @@ function setMode(agent: HarnessAgent, mode: 'plan' | 'build'): void {
     id: `user-${mode}`,
     role: 'user',
     parts: [{ type: 'text', text: `${mode} this change` }],
-    metadata: { proteusMode: mode },
+    metadata: { kinuMode: mode },
   }]);
 }
 
@@ -144,7 +144,7 @@ describe('Plan mode tool lifecycle', () => {
     const changes = await agent.decidePlanReview(first.id, 1, 'request_changes', 'Replace the last step');
     expect(changes).toMatchObject({ ok: true, queued: true, plan: { status: 'changes_requested' } });
     expect(queued[0]).toMatchObject({
-      metadata: { proteusEvent: 'plan_feedback', proteusMode: 'plan', decision: 'request_changes' },
+      metadata: { kinuEvent: 'plan_feedback', kinuMode: 'plan', decision: 'request_changes' },
       idempotencyKey: `plan:${first.id}:1:request_changes:1`,
     });
     const changeTurn = queued[0];
@@ -162,7 +162,7 @@ describe('Plan mode tool lifecycle', () => {
     const approval = await agent.decidePlanReview(first.id, 2, 'approve');
     expect(approval).toMatchObject({ ok: true, queued: true, plan: { status: 'approved' } });
     expect(queued[1]).toMatchObject({
-      metadata: { proteusEvent: 'plan_approved', proteusMode: 'build', decision: 'approve' },
+      metadata: { kinuEvent: 'plan_approved', kinuMode: 'build', decision: 'approve' },
       idempotencyKey: `plan:${first.id}:2:approve:1`,
     });
     const approvalTurn = queued[1];
@@ -206,7 +206,7 @@ describe('Plan mode tool lifecycle', () => {
     setMode(agent, 'build');
     expect(turnWorkMode(agent)).toBe('plan');
     setActorField(agent, '_activeProgrammaticUserMessage', {
-      metadata: { proteusEvent: 'plan_approved', proteusMode: 'build' },
+      metadata: { kinuEvent: 'plan_approved', kinuMode: 'build' },
     });
     expect(turnWorkMode(agent)).toBe('build');
     setActorField(agent, '_activeProgrammaticUserMessage', null);

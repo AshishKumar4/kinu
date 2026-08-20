@@ -99,7 +99,7 @@ export async function runAgentWorker(opts: AgentWorkerOptions): Promise<SolverRe
   const { ctx } = opts;
   const home = opts.state === 'shared'
     ? (opts.sharedHome ?? (() => { throw new Error('shared-state solver needs a sharedHome'); })())
-    : ctx.proteusHome;
+    : ctx.kinuHome;
   const workspaceName = opts.state === 'shared' ? 'bench' : `bench-${ctx.task.id}`;
 
   const input = {
@@ -134,10 +134,10 @@ export interface PiWorkerOptions {
 export function runPiWorker(opts: PiWorkerOptions): Promise<SolverResult> {
   return spawnWorker({
     script: join(opts.repoRoot, 'scripts', 'bench-pi-worker.ts'),
-    home: opts.ctx.proteusHome,
+    home: opts.ctx.kinuHome,
     ctx: opts.ctx,
     input: {
-      agentDir: join(opts.ctx.proteusHome, 'pi-agent'),
+      agentDir: join(opts.ctx.kinuHome, 'pi-agent'),
       asks: opts.asks,
       removeAfterAsk: opts.removeAfterAsk,
       maxTokens: opts.ctx.budget.maxTokens,
@@ -195,10 +195,10 @@ export function createPanelSolver(opts: PanelSolverOptions): Solver {
     async solve(ctx: SolverContext): Promise<SolverResult> {
       return spawnWorker({
         script: join(opts.repoRoot, 'scripts', 'bench-panel-worker.ts'),
-        home: ctx.proteusHome,
+        home: ctx.kinuHome,
         ctx,
         input: {
-          dbPath: join(ctx.proteusHome, `panel-${ctx.task.id}`, 'agent.db'),
+          dbPath: join(ctx.kinuHome, `panel-${ctx.task.id}`, 'agent.db'),
           workspaceName: `panel-${ctx.task.id}`,
           purpose: 'Fix defects in a TypeScript repository so its own test suite and typecheck pass.',
           ask: ctx.task.prompt,

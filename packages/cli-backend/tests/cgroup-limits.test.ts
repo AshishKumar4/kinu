@@ -12,7 +12,7 @@ const roots: string[] = [];
 
 /** A cgroupfs fixture: paths relative to the mount, contents verbatim. */
 function cgroupfs(files: Record<string, string>): string {
-  const root = mkdtempSync(join(tmpdir(), 'proteus-cgroup-'));
+  const root = mkdtempSync(join(tmpdir(), 'kinu-cgroup-'));
   roots.push(root);
   for (const [relative, content] of Object.entries(files)) {
     const path = join(root, relative);
@@ -24,7 +24,7 @@ function cgroupfs(files: Record<string, string>): string {
 
 /** A /proc/self/cgroup fixture. Its own file, outside the mount. */
 function procSelf(content: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'proteus-procself-'));
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-procself-'));
   roots.push(dir);
   const path = join(dir, 'cgroup');
   writeFileSync(path, content);

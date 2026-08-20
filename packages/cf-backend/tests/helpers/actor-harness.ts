@@ -174,7 +174,7 @@ function emptyWorkspaceSession() {
  *  present-but-inert: deps construction captures them; using them throws. */
 function makeEnv(): Env {
   const bindings = {
-    PROTEUS_MAX_STEPS: '10',
+    KINU_MAX_STEPS: '10',
     LOADER: { get: () => { throw new Error('harness LOADER: codemode is not executable under bun'); } },
     NIMBUS_SESSION: emptyWorkspaceSession(),
     // The platform gateway is the harness's model provider: a parseable gateway
@@ -238,7 +238,7 @@ export function orchestratorHarness(): ActorHarness<HarnessOrchestratorAgent> {
 export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
   const harness = instantiate(HarnessSubordinateAgent, new Database(':memory:'));
   Object.defineProperty(harness.agent, 'messages', {
-    value: [{ role: 'user', metadata: { proteusEvent: 'subordinate_task' } }],
+    value: [{ role: 'user', metadata: { kinuEvent: 'subordinate_task' } }],
     configurable: true,
   });
   ensureActorSchema(harness.agent);

@@ -8,7 +8,7 @@ import {
   buildDrainBatch, COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OVERFLOW_RETRY_EVENT,
   WORKSPACE_CREATED_EVENT, workspaceGenesisSignal,
 } from '@kinu/core';
-import type { JsonValue, ProteusEvent } from '@kinu/core';
+import type { JsonValue, KinuEvent } from '@kinu/core';
 import {
   applySignalCard, classifyProgrammaticTurn, eventVariantLabel, messageSignalId,
   parseDrainedEvents, parseSignalCardEvent, type SignalCard,
@@ -16,14 +16,14 @@ import {
 
 describe('programmatic turn provenance', () => {
   test('reactor drains and background-job wakes are not the user talking', () => {
-    expect(classifyProgrammaticTurn({ proteusEvent: 'event_drain', drainTurnId: 't1' }))
+    expect(classifyProgrammaticTurn({ kinuEvent: 'event_drain', drainTurnId: 't1' }))
       .toEqual({ kind: 'event_drain' });
-    expect(classifyProgrammaticTurn({ proteusEvent: 'background_job', kind: 'research', status: 'failed' }))
+    expect(classifyProgrammaticTurn({ kinuEvent: 'background_job', kind: 'research', status: 'failed' }))
       .toEqual({ kind: 'background_job', jobKind: 'research', status: 'failed' });
   });
 
   test('a background-job wake without its kind/status still classifies', () => {
-    expect(classifyProgrammaticTurn({ proteusEvent: 'background_job' }))
+    expect(classifyProgrammaticTurn({ kinuEvent: 'background_job' }))
       .toEqual({ kind: 'background_job', jobKind: 'task', status: 'completed' });
   });
 
@@ -31,16 +31,16 @@ describe('programmatic turn provenance', () => {
     // `mcp` is the operator driving an MCP client, and its producer stamps that
     // (cf-backend/src/orchestrator.ts runTaskFromMcp). It is also read
     // correctly off the pre-stamp rows, which carry only the event name.
-    expect(classifyProgrammaticTurn({ proteusEvent: 'mcp', proteusAuthor: 'operator' })).toBeNull();
-    expect(classifyProgrammaticTurn({ proteusEvent: 'mcp' })).toBeNull();
+    expect(classifyProgrammaticTurn({ kinuEvent: 'mcp', kinuAuthor: 'operator' })).toBeNull();
+    expect(classifyProgrammaticTurn({ kinuEvent: 'mcp' })).toBeNull();
     // No markers at all, whatever the id: the operator typed it.
     expect(classifyProgrammaticTurn(undefined)).toBeNull();
     expect(classifyProgrammaticTurn({})).toBeNull();
     expect(classifyProgrammaticTurn('event_drain')).toBeNull();
-    expect(classifyProgrammaticTurn({ proteusMode: 'build' }, 'XV4blLw0hI10XYRG')).toBeNull();
+    expect(classifyProgrammaticTurn({ kinuMode: 'build' }, 'XV4blLw0hI10XYRG')).toBeNull();
     // A steer re-run as its own turn goes through the programmatic funnel and
     // gets its id prefix, so the stamp is the only thing keeping it a bubble.
-    expect(classifyProgrammaticTurn({ proteusAuthor: 'operator' }, 'programmatic:abc')).toBeNull();
+    expect(classifyProgrammaticTurn({ kinuAuthor: 'operator' }, 'programmatic:abc')).toBeNull();
   });
 
   test('a harness event with no card of its own is still not the owner', () => {
@@ -49,25 +49,25 @@ describe('programmatic turn provenance', () => {
     // on the owner's live workspaces: `fork_interrupted` rows reading "23
     // head(s) across 6 fork run(s) were still marked running…" in
     // sunlit-stone-4a20, stone-ash-71f2 and principal-machine-f1296946.
-    expect(classifyProgrammaticTurn({ proteusEvent: FORK_INTERRUPTED_SIGNAL, heads: 23 }))
+    expect(classifyProgrammaticTurn({ kinuEvent: FORK_INTERRUPTED_SIGNAL, heads: 23 }))
       .toEqual({ kind: 'system_event', event: 'fork_interrupted' });
     // The other three the allowlist missed. `take_pick` and `overflow_retry`
     // were called the operator's own words here and are not: the take
     // continuation speaks ABOUT the user in the third person
     // (mcts/takes.ts buildTakeContinuationPrompt) and the overflow retry is
     // harness prose about a compaction (turn-failure.ts OVERFLOW_RETRY_TEXT).
-    expect(classifyProgrammaticTurn({ proteusEvent: COMPLETION_GATE_EVENT }))
+    expect(classifyProgrammaticTurn({ kinuEvent: COMPLETION_GATE_EVENT }))
       .toEqual({ kind: 'system_event', event: 'completion_gate' });
-    expect(classifyProgrammaticTurn({ proteusEvent: 'take_pick' }))
+    expect(classifyProgrammaticTurn({ kinuEvent: 'take_pick' }))
       .toEqual({ kind: 'system_event', event: 'take_pick' });
-    expect(classifyProgrammaticTurn({ proteusEvent: OVERFLOW_RETRY_EVENT }))
+    expect(classifyProgrammaticTurn({ kinuEvent: OVERFLOW_RETRY_EVENT }))
       .toEqual({ kind: 'system_event', event: 'overflow_retry' });
     // An event name nobody has written yet is covered the day it is added —
     // that is the whole reason the default is inverted.
-    expect(classifyProgrammaticTurn({ proteusEvent: 'a_kind_invented_tomorrow' }))
+    expect(classifyProgrammaticTurn({ kinuEvent: 'a_kind_invented_tomorrow' }))
       .toEqual({ kind: 'system_event', event: 'a_kind_invented_tomorrow' });
     // Stamped harness with no event name at all still loses the bubble.
-    expect(classifyProgrammaticTurn({ proteusAuthor: 'harness' }))
+    expect(classifyProgrammaticTurn({ kinuAuthor: 'harness' }))
       .toEqual({ kind: 'system_event', event: 'system' });
   });
 
@@ -78,7 +78,7 @@ describe('programmatic turn provenance', () => {
   test('the workspace\'s own first turn is not the owner speaking', () => {
     const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
     expect(genesis).not.toBeNull();
-    expect(classifyProgrammaticTurn({ proteusEvent: genesis!.kind, signalId: 'sig-1' }))
+    expect(classifyProgrammaticTurn({ kinuEvent: genesis!.kind, signalId: 'sig-1' }))
       .toEqual({ kind: 'workspace_created' });
     expect(genesis!.kind).toBe(WORKSPACE_CREATED_EVENT);
   });
@@ -98,7 +98,7 @@ const EVENT_BASE = {
   dedupe_key: null,
 } as const;
 
-function event<Event extends ProteusEvent>(value: Event): Event {
+function event<Event extends KinuEvent>(value: Event): Event {
   return value;
 }
 
@@ -125,7 +125,7 @@ describe('drained event parsing', () => {
       id: 'ev-1',
       ingress: 'subordinate',
       variant: 'subordinate_report',
-      payload: { from_subordinate: 'surface-auditor', status: 'progress', task: 'Audit the CLI', content: 'Found 3 gaps', proteus_mode: 'build' },
+      payload: { from_subordinate: 'surface-auditor', status: 'progress', task: 'Audit the CLI', content: 'Found 3 gaps', kinu_mode: 'build' },
     })])!;
     expect(parseDrainedEvents(batch.text)).toEqual([{
       variant: 'subordinate_report',
@@ -161,7 +161,7 @@ describe('drained event parsing', () => {
       id: 'p1', ingress: 'peer_async', variant: 'peer_agent',
       payload: {
         from_agent_name: 'atlas', from_user_id: 'u1', topic: 'schema', body: 'which shape?',
-        sender_event_id: 'out-1', reply_expected: true, proteus_mode: 'build',
+        sender_event_id: 'out-1', reply_expected: true, kinu_mode: 'build',
       },
     })])!;
     const [parsed] = parseDrainedEvents(batch.text);
@@ -192,7 +192,7 @@ describe('drained event parsing', () => {
       payload: {
         from_workspace: 'atlas', kind: 'task' as const, body: 'check the CLI',
         inherited_context: 'Context line one.\nContext line two.',
-        proteus_mode: 'build',
+        kinu_mode: 'build',
       },
     })])!;
     const [parsed] = parseDrainedEvents(batch.text);
@@ -217,7 +217,7 @@ describe('event variant labels', () => {
 describe('the card lifecycle', () => {
   const opened = (id: string, over: { readonly text?: string } = {}) => ({
     type: 'signal_card', id, state: 'pending',
-    metadata: { proteusEvent: 'event_drain' }, text: '1 event arrived', ...over,
+    metadata: { kinuEvent: 'event_drain' }, text: '1 event arrived', ...over,
   });
   const apply = (events: JsonValue[]): readonly SignalCard[] =>
     events.reduce<readonly SignalCard[]>((cards, event) => {
@@ -228,7 +228,7 @@ describe('the card lifecycle', () => {
   test('delivery opens the card; consumption moves the SAME one', () => {
     const cards = apply([opened('s1'), { type: 'signal_card', id: 's1', state: 'shown' }]);
     expect(cards).toEqual([{
-      id: 's1', metadata: { proteusEvent: 'event_drain' }, text: '1 event arrived', state: 'shown',
+      id: 's1', metadata: { kinuEvent: 'event_drain' }, text: '1 event arrived', state: 'shown',
     }]);
   });
 
@@ -269,7 +269,7 @@ describe('the card lifecycle', () => {
   });
 
   test('the message a queued signal became names the card it belongs to', () => {
-    expect(messageSignalId({ proteusEvent: 'event_drain', signalId: 's1' })).toBe('s1');
+    expect(messageSignalId({ kinuEvent: 'event_drain', signalId: 's1' })).toBe('s1');
     // A turn the operator typed belongs to no card.
     expect(messageSignalId({})).toBeNull();
     expect(messageSignalId(undefined)).toBeNull();

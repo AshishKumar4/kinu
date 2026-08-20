@@ -65,9 +65,9 @@ export function buildProgram(): Command {
 
   // Shared LLM options
   const llmOpts = (cmd: Command) => cmd
-    .option('--model <id>', 'Model ID (env: PROTEUS_MODEL)')
-    .option('--base-url <url>', 'LLM API base URL (env: PROTEUS_BASE_URL)')
-    .option('--auth <header>', 'Auth header value (env: PROTEUS_AUTH)');
+    .option('--model <id>', 'Model ID (env: KINU_MODEL)')
+    .option('--base-url <url>', 'LLM API base URL (env: KINU_BASE_URL)')
+    .option('--auth <header>', 'Auth header value (env: KINU_AUTH)');
 
   // ── Account ────────────────────────────────────────────────────
 
@@ -484,7 +484,7 @@ export function buildProgram(): Command {
     .command('uninstall')
     .helpGroup(THIS_COMPUTER)
     .description('Remove the installed Kinu command')
-    .option('--purge', 'Also remove ~/.proteus data')
+    .option('--purge', 'Also remove ~/.kinu data')
     .action(wrapAction(uninstallCommand));
 
   return program;

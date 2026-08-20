@@ -68,7 +68,7 @@ const liveTest = test.skipIf(!TARGET);
 const HOSTED = TARGET?.via === 'worker-proxy' ? TARGET : null;
 if (TARGET && !HOSTED) {
   console.warn('[skip] Live Smoke (hosted) — the resolved target is an AI Gateway, which fronts a '
-    + 'model but no Kinu deployment. Set PROTEUS_ORIGIN + PROTEUS_TOKEN to reach the worker.');
+    + 'model but no Kinu deployment. Set KINU_ORIGIN + KINU_TOKEN to reach the worker.');
 }
 const hostedTest = test.skipIf(!HOSTED);
 

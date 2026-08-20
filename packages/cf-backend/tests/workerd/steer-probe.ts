@@ -83,7 +83,7 @@ export class SteerProbeDO extends Think<Cloudflare.Env> {
       id: steerId,
       role: 'user' as const,
       parts: [{ type: 'text' as const, text }],
-      metadata: { proteusSteer: true },
+      metadata: { kinuSteer: true },
     }]);
   }
 

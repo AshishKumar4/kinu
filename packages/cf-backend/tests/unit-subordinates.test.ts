@@ -66,7 +66,7 @@ describe('subordinate wiring', () => {
 
     expect(actor).toContain('scaffoldPath: this.scaffoldPath()');
     expect(actor).toContain('shellId: this.shellId()');
-    expect(subordinate).toContain('`.proteus/agents/${encodeURIComponent(this.name)}/scaffold/agent.js`');
+    expect(subordinate).toContain('`.kinu/agents/${encodeURIComponent(this.name)}/scaffold/agent.js`');
     expect(subordinate).toContain('protected shellId(): string { return `subordinate:${this.name}`; }');
     expect(subordinate).toContain('renderSoulMarkdown({');
     expect(subordinate).not.toContain('seedSoul(');
@@ -118,7 +118,7 @@ describe('subordinate wiring', () => {
   });
 
   test('manual create and dismiss reconcile the roster from their successful RPC result', () => {
-    const hook = source('hooks/use-proteus.ts');
+    const hook = source('hooks/use-kinu.ts');
     expect(hook).toContain('result.subordinate');
     expect(hook).toContain('entry.name !== result.subordinate.name');
     expect(hook).toContain('entry.name !== result.name');
@@ -128,7 +128,7 @@ describe('subordinate wiring', () => {
   });
 
   test('stale roster reads cannot overwrite a mutation, broadcast, or actor reset', () => {
-    const hook = source('hooks/use-proteus.ts');
+    const hook = source('hooks/use-kinu.ts');
     const refresh = hook.slice(
       hook.indexOf('const refreshSubordinates = useCallback'),
       hook.indexOf('\n\n  useEffect(() => {', hook.indexOf('const refreshSubordinates = useCallback')),

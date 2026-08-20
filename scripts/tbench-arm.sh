@@ -30,30 +30,30 @@ JOB_NAME="tb21-seed${SEED}-evolve${EVOLVE}-${SHA}"
 # forward an operator's ambient endpoint into a scored run. Refuse rather than
 # measure something nobody chose.
 #
-# SET, not non-empty. `PROTEUS_BASE_URL=` defeats the adapter's own default
+# SET, not non-empty. `KINU_BASE_URL=` defeats the adapter's own default
 # (harbor's EnvVar resolves the empty string in preference to it) and then fails
 # 40 trials in with "No credential rule for provider 'custom' at ." — which is
 # what an operator trying to CLEAR the variable actually produces. A guard that
 # measured emptiness would have governed the wrong set.
-# PROTEUS_EVAL_TOKEN belongs to the same set for the same reason, and it is
+# KINU_EVAL_TOKEN belongs to the same set for the same reason, and it is
 # supplied below rather than inherited: a scored run's identity is not a fact
 # about whoever's shell launched it.
-for trap_var in PROTEUS_BASE_URL PROTEUS_AUTH PROTEUS_MODEL PROTEUS_HOME PROTEUS_EVAL_TOKEN; do
+for trap_var in KINU_BASE_URL KINU_AUTH KINU_MODEL KINU_HOME KINU_EVAL_TOKEN; do
   if [ -n "${!trap_var+set}" ]; then
     echo "REFUSING: $trap_var is set in this shell (value: '${!trap_var}'). The" >&2
     echo "adapter resolves its own endpoint, identity and home; an inherited one —" >&2
     echo "empty or not — is an unrecorded variable in a scored run. Unset it, do not" >&2
-    echo "blank it: an empty PROTEUS_BASE_URL overrides the adapter's default." >&2
+    echo "blank it: an empty KINU_BASE_URL overrides the adapter's default." >&2
     exit 2
   fi
 done
 
 # The eval-service credential, from a file only this operator can read. It used
-# to be exported as PROTEUS_TOKEN, which the CLI also reads as a SIGNED-IN
+# to be exported as KINU_TOKEN, which the CLI also reads as a SIGNED-IN
 # SESSION — so whichever account minted the file became the account every scored
 # run acted as. The eval identity has its own variable so that cannot recur, and
 # `bench/model_endpoint.py` reads no other.
-EVAL_TOKEN_FILE="$HOME/.config/proteus/eval-service-token"
+EVAL_TOKEN_FILE="$HOME/.config/kinu/eval-service-token"
 if [ ! -r "$EVAL_TOKEN_FILE" ]; then
   echo "REFUSING: no eval-service credential at $EVAL_TOKEN_FILE." >&2
   echo "Mint one against staging and write it there:" >&2
@@ -61,8 +61,8 @@ if [ ! -r "$EVAL_TOKEN_FILE" ]; then
   echo "  kinu tokens create --name tbench --scopes ai.proxy" >&2
   exit 2
 fi
-PROTEUS_EVAL_TOKEN="$(cat "$EVAL_TOKEN_FILE")"
-export PROTEUS_EVAL_TOKEN
+KINU_EVAL_TOKEN="$(cat "$EVAL_TOKEN_FILE")"
+export KINU_EVAL_TOKEN
 export PATH="$HOME/.local/bin:$PATH"
 export PYTHONPATH="$WORKTREE"
 
@@ -83,7 +83,7 @@ echo "arm evolve=$EVOLVE  model=$MODEL  sha=$SHA  tasks=${#TASKS[@]}  concurrenc
 echo "job=$JOB_NAME  jobs-dir=$JOBS_DIR"
 
 exec harbor run \
-  --agent bench.harbor.proteus_agent:ProteusAgent \
+  --agent bench.harbor.kinu_agent:KinuAgent \
   --path "$CORPUS" \
   "${TASK_FLAGS[@]}" \
   -m "$MODEL" \

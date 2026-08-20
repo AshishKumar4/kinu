@@ -36,14 +36,14 @@ import {
   type SandboxHandle,
 } from '@kinu/core';
 import {
-  CONTAINER_EVENT_HOST, EGRESS_HANDLER, EVENT_HANDLER, type ProteusEgressParams,
+  CONTAINER_EVENT_HOST, EGRESS_HANDLER, EVENT_HANDLER, type KinuEgressParams,
 } from './outbound';
 
 /** The two Container base methods this needs. Narrow, so a test can supply a
  *  recorder and the wiring is checkable without a container. */
 export interface OutboundConfigurable {
-  setOutboundHandler(methodName: string, params: ProteusEgressParams): Promise<void>;
-  setOutboundByHost(hostname: string, methodName: string, params: ProteusEgressParams): Promise<void>;
+  setOutboundHandler(methodName: string, params: KinuEgressParams): Promise<void>;
+  setOutboundByHost(hostname: string, methodName: string, params: KinuEgressParams): Promise<void>;
 }
 
 export interface EgressConfigurationInput {
@@ -68,8 +68,8 @@ export interface EgressConfigurationInput {
 export async function configureContainerEgress(
   sandbox: OutboundConfigurable,
   input: EgressConfigurationInput,
-): Promise<ProteusEgressParams> {
-  const params: ProteusEgressParams = {
+): Promise<KinuEgressParams> {
+  const params: KinuEgressParams = {
     workspaceName: input.workspaceName,
     ownerUserId: input.ownerUserId,
     // A vault binding with no matching grant is not passed to the handler at

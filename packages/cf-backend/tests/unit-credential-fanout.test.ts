@@ -56,7 +56,7 @@ function setup() {
 }
 
 async function call(env: Env, ctx: ExecutionContext, path: string, method: string, body?: JsonValue) {
-  return handleUserRequest(new Request(`https://proteus.example.com/api/user${path}`, {
+  return handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {
     method,
     headers: { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),

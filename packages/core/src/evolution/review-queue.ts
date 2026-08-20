@@ -37,7 +37,7 @@ import { CompletedTurnSchema } from './session-window';
 import { parseJsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
-import { diagnostics, toProteusError, tolerate } from '../obs/index';
+import { diagnostics, toKinuError, tolerate } from '../obs/index';
 
 export function initTurnReviewQueueTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS turn_review_queue (
@@ -146,7 +146,7 @@ export function queueTurnReview(
   } catch (err) {
     diagnostics.failure(
       'evolution.deferred_review_unserializable',
-      toProteusError({ doing: 'serialize a turn for its deferred review', cause: err, otherwise: 'bad_input' }),
+      toKinuError({ doing: 'serialize a turn for its deferred review', cause: err, otherwise: 'bad_input' }),
     );
     return 'unserializable';
   }
@@ -186,7 +186,7 @@ export function takeQueuedTurnReviews(sql: SqlExecutor, limit: number): TakenTur
       dropQueuedTurnReview(sql, row.id);
       diagnostics.failure(
         'evolution.deferred_review_unreadable',
-        toProteusError({
+        toKinuError({
           doing: 'decode a deferred turn review',
           cause: new Error(parsed.issues[0]?.message ?? 'the row is not a CompletedTurn'),
           otherwise: 'bad_input',

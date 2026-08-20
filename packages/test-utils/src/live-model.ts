@@ -4,7 +4,7 @@
  * The four root end-to-end suites each hand-rolled their own `LLM_CONFIG`
  * block: same four env vars, same hardcoded AI Gateway URL carrying one
  * account id, same model literal, four copies. All four then gated on
- * `PROTEUS_AUTH`/`AI_GATEWAY_AUTH` alone, and an AI Gateway token is the one
+ * `KINU_AUTH`/`AI_GATEWAY_AUTH` alone, and an AI Gateway token is the one
  * credential the owner does NOT need — the default model is native Workers AI
  * DeepSeek on his own account. So the suites that prove multi-turn tool
  * calling, memory across a reopen, MCTS evolution and cross-session transfer
@@ -12,7 +12,7 @@
  *
  * Two ways to reach a real model, in preference order:
  *
- *   1. WORKER PROXY — `PROTEUS_ORIGIN` + `PROTEUS_TOKEN`. A Kinu deployment
+ *   1. WORKER PROXY — `KINU_ORIGIN` + `KINU_TOKEN`. A Kinu deployment
  *      fronts a Cloudflare credential at `/api/user/ai/v1`
  *      (cf-backend/src/user/ai-proxy.ts), so the test needs a CLI bearer and no
  *      Cloudflare token at all. This is the cheap path: native Workers AI. The
@@ -23,7 +23,7 @@
  *   2. AI GATEWAY — `AI_GATEWAY_BASE_URL` + `AI_GATEWAY_AUTH`. The pre-existing
  *      path, kept because it reaches models the account proxy does not front.
  *
- * `PROTEUS_BASE_URL`/`PROTEUS_AUTH` remain accepted for (2) because that is the
+ * `KINU_BASE_URL`/`KINU_AUTH` remain accepted for (2) because that is the
  * pair `.env.example` tells a developer to set for the CLI, and the CLI and
  * these suites share one endpoint.
  *
@@ -33,7 +33,7 @@
  *
  * The third outcome is the one that matters: an environment that is HALF-SET, or
  * aimed somewhere it may not go, is a configuration bug and not a skip.
- * `PROTEUS_TOKEN` with no origin used to resolve to an empty header and a silent
+ * `KINU_TOKEN` with no origin used to resolve to an empty header and a silent
  * skip — a green suite that proved nothing, over a machine whose operator
  * believed it was configured. Both return `misconfigured` and the suites throw.
  */
@@ -75,8 +75,8 @@ function first(env: EnvSource, names: readonly string[]): string | undefined {
   return undefined;
 }
 
-/** Bearer-prefix a token unless it already is one — `PROTEUS_AUTH` is
- *  documented with the prefix, `PROTEUS_TOKEN` without it. */
+/** Bearer-prefix a token unless it already is one — `KINU_AUTH` is
+ *  documented with the prefix, `KINU_TOKEN` without it. */
 function bearer(token: string): string {
   return token.startsWith('Bearer ') ? token : `Bearer ${token}`;
 }
@@ -187,18 +187,18 @@ export interface LiveModelSession {
 export function liveModelTarget(suite: string): LiveModelTarget | null {
   // Ambient credentials are NOT consent to spend. These suites are named
   // `*.eval.test.ts`, so a root `bun test` collects them, so the COMMIT tier
-  // collects them — and on a machine that happens to export PROTEUS_BASE_URL /
-  // PROTEUS_AUTH they fired real paid model calls from a git hook (measured:
+  // collects them — and on a machine that happens to export KINU_BASE_URL /
+  // KINU_AUTH they fired real paid model calls from a git hook (measured:
   // 101s and 81s for two tests) and then failed on a remote model's choices. A
   // developer's exported credential is a fact about their shell, never a
   // request to bill the owner's account during a commit.
   //
-  // So a live run requires the eval tier to be DRIVING it. `PROTEUS_EVAL_LIVE`
+  // So a live run requires the eval tier to be DRIVING it. `KINU_EVAL_LIVE`
   // is set by scripts/eval-tier.sh and by nothing else; absent it, the suite
   // skips exactly as it does with no credential at all — and the skip-ratchet
   // gate still requires that skip to be declared, so the suite cannot go quiet.
-  if (process.env['PROTEUS_EVAL_LIVE'] !== '1') {
-    console.warn(`[skip] ${suite} — live evals are opt-in: run 'bun run test:eval' (PROTEUS_EVAL_LIVE=1)`);
+  if (process.env['KINU_EVAL_LIVE'] !== '1') {
+    console.warn(`[skip] ${suite} — live evals are opt-in: run 'bun run test:eval' (KINU_EVAL_LIVE=1)`);
     return null;
   }
   const resolved = resolveLiveModel();
@@ -301,7 +301,7 @@ export function liveChatModel(llm: LLMProviderConfig): LanguageModel {
  * "State the cost per run" cannot be answered by a constant: it depends on how
  * many steps the model chose to take, and these suites let it take up to 500.
  * So every live suite feeds this meter, each suite process appends its own total
- * to `PROTEUS_EVAL_SPEND_FILE`, and the eval tier sums the files into the one
+ * to `KINU_EVAL_SPEND_FILE`, and the eval tier sums the files into the one
  * number a run reports.
  *
  * TWO FEEDS, ONE METER, because there are two kinds of live suite and only two.
@@ -344,7 +344,7 @@ export interface LiveModelSpend {
 }
 
 /** The env var naming the file a suite process appends its total to. */
-export const LIVE_MODEL_SPEND_FILE_ENV = 'PROTEUS_EVAL_SPEND_FILE';
+export const LIVE_MODEL_SPEND_FILE_ENV = 'KINU_EVAL_SPEND_FILE';
 
 // The process's running total. Plain bindings rather than one mutable object, so
 // `usage` keeps its `Usage` type through accumulation and `liveModelSpend()` is
@@ -396,7 +396,7 @@ export function liveModelCallSink(sql: SqlExecutor): ModelCallSink {
 /**
  * The bound on model-call rows read out of one episode's store.
  *
- * An episode is capped at `PROTEUS_MAX_STEPS` model steps (500 by default), and
+ * An episode is capped at `KINU_MAX_STEPS` model steps (500 by default), and
  * every other producer in a workspace fires at most a few times per step, so
  * this is three orders of magnitude above anything one episode can write. It
  * exists so `workspaceSpend`'s window cannot silently truncate an episode into a

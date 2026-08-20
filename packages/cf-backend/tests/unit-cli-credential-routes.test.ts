@@ -86,7 +86,7 @@ function credentialRequest(opts: { token?: string; key?: string; method?: string
     },
   };
   if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
-  return new Request(`https://proteus.example.com${path}`, init);
+  return new Request(`https://kinu.example.com${path}`, init);
 }
 
 describe('CLI provider credentials', () => {

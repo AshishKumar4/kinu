@@ -119,7 +119,7 @@ describe('OwnedModelServices', () => {
     const model = resolved(services.resolveModel('openrouter/anthropic/claude-sonnet-4'));
     expect(model.provider).toBe('openrouter.chat');
     expect(model.modelId).toBe('anthropic/claude-sonnet-4');
-    expect(services.affinityKey).toBe('proteus-research-head');
+    expect(services.affinityKey).toBe('kinu-research-head');
   });
 
   test.each([

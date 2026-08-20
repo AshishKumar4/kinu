@@ -61,7 +61,7 @@ const TARGET = liveModelTarget('Exploration Evals');
 const liveTest = test.skipIf(!TARGET);
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
-const TEST_DIR = join(tmpdir(), 'proteus-eval-exploration-' + String(Date.now()));
+const TEST_DIR = join(tmpdir(), 'kinu-eval-exploration-' + String(Date.now()));
 const DB_PATH = join(TEST_DIR, 'agent.db');
 
 /**

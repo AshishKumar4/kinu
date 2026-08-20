@@ -56,10 +56,10 @@ const FEED_TIMEOUT_MS = 20_000;
  *  scan the scanner actually performed instead of re-deriving one — a second
  *  derivation is a second enumeration, which is what `gate:set-equality` exists
  *  to prevent. */
-export const REPORT_ENV = 'PROTEUS_ADVISORY_REPORT';
+export const REPORT_ENV = 'KINU_ADVISORY_REPORT';
 
 /** Prefix of the one machine-readable stdout line. */
-export const REPORT_SENTINEL = '::proteus-advisory-report::';
+export const REPORT_SENTINEL = '::kinu-advisory-report::';
 
 /* ── Bun's scanner contract ─────────────────────────────────────────────── */
 

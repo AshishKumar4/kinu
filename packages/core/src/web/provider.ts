@@ -178,7 +178,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     const res = await withTimeout((signal) =>
       fetchImpl(endpoint, {
         headers: {
-          'user-agent': 'Mozilla/5.0 (compatible; ProteusAgent/1.0; +https://proteus.dev)',
+          'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
           accept: 'text/html',
         },
         signal,
@@ -218,7 +218,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
             // markdown directly. Non-CF origins ignore it and serve HTML,
             // which we convert below.
             accept: 'text/markdown, text/html;q=0.9, text/plain;q=0.8',
-            'user-agent': 'Mozilla/5.0 (compatible; ProteusAgent/1.0; +https://proteus.dev)',
+            'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
           },
           redirect: 'follow',
           signal,

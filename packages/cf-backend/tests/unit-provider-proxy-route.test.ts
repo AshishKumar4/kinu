@@ -20,8 +20,8 @@ const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
 const AI_TOKEN = `pta_${USER_ID}_${'a'.repeat(44)}`;
 const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 
-const FORWARD_URL = 'https://proteus.example.com/api/user/ai/proxy/forward';
-const CREDENTIALS_URL = 'https://proteus.example.com/api/user/ai/proxy/credentials';
+const FORWARD_URL = 'https://kinu.example.com/api/user/ai/proxy/forward';
+const CREDENTIALS_URL = 'https://kinu.example.com/api/user/ai/proxy/credentials';
 
 const CATALOG = {
   groq: { id: 'groq', name: 'Groq', npm: '@ai-sdk/groq', models: {} },
@@ -89,8 +89,8 @@ function forwardRequest(opts: {
   const token = opts.token === undefined ? SESSION_TOKEN : opts.token;
   const headers = new Headers();
   if (token) headers.set('authorization', `Bearer ${token}`);
-  if (opts.cred) headers.set('x-proteus-proxy-cred', opts.cred);
-  if (opts.target) headers.set('x-proteus-proxy-target', opts.target);
+  if (opts.cred) headers.set('x-kinu-proxy-cred', opts.cred);
+  if (opts.target) headers.set('x-kinu-proxy-target', opts.target);
   headers.set('content-type', 'application/json');
   for (const [name, value] of Object.entries(opts.headers ?? {})) headers.set(name, value);
   const init: RequestInit = { method: opts.method ?? 'POST', headers };
@@ -190,7 +190,7 @@ describe('POST /forward', () => {
       cred: 'openrouter.bearer',
       target: 'https://openrouter.ai/api/v1/chat/completions',
       body: '{"model":"anthropic/claude"}',
-      headers: { 'http-referer': 'https://proteus.example.com' },
+      headers: { 'http-referer': 'https://kinu.example.com' },
     }), env);
 
     expect(res?.status).toBe(200);
@@ -201,9 +201,9 @@ describe('POST /forward', () => {
     expect(seen[0]?.headers.get('authorization')).toBe('Bearer sk-or-real');
     // Attribution and content headers survive; the proxy's own control
     // headers and the caller's Kinu bearer do not.
-    expect(seen[0]?.headers.get('http-referer')).toBe('https://proteus.example.com');
-    expect(seen[0]?.headers.get('x-proteus-proxy-cred')).toBeNull();
-    expect(seen[0]?.headers.get('x-proteus-proxy-target')).toBeNull();
+    expect(seen[0]?.headers.get('http-referer')).toBe('https://kinu.example.com');
+    expect(seen[0]?.headers.get('x-kinu-proxy-cred')).toBeNull();
+    expect(seen[0]?.headers.get('x-kinu-proxy-target')).toBeNull();
   });
 
   test('streams an SSE response through untouched, so usage accounting survives', async () => {

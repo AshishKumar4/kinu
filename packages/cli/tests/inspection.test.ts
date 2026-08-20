@@ -21,7 +21,7 @@ function runCli(home: string, args: string[], extraEnv: Record<string, string> =
     stderr: "pipe",
     env: {
       ...process.env,
-      PROTEUS_HOME: home,
+      KINU_HOME: home,
       ...extraEnv,
     },
   });
@@ -36,7 +36,7 @@ async function runCliServed(home: string, args: string[], extraEnv: Record<strin
     cwd: repoRoot,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, PROTEUS_HOME: home, ...extraEnv },
+    env: { ...process.env, KINU_HOME: home, ...extraEnv },
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -166,7 +166,7 @@ function createPreMissionLocalAgent(home: string, name: string): void {
 
 describe("legacy workspaces stay readable", () => {
   test("kinu list reports a pre-rename workspace's real purpose", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-legacy-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-legacy-"));
     tempDirs.push(home);
     createLegacyLocalAgent(home, "jarvis-d03e0a");
 
@@ -177,7 +177,7 @@ describe("legacy workspaces stay readable", () => {
   });
 
   test("kinu status degrades per field instead of failing", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-legacy-status-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-legacy-status-"));
     tempDirs.push(home);
     createLegacyLocalAgent(home, "jarvis-d03e0a");
 
@@ -190,7 +190,7 @@ describe("legacy workspaces stay readable", () => {
   });
 
   test("a workspace predating the mission column lists without an error", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-pre-mission-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-pre-mission-"));
     tempDirs.push(home);
     createPreMissionLocalAgent(home, "jarvis-d03e0a");
 
@@ -206,7 +206,7 @@ describe("legacy workspaces stay readable", () => {
   });
 
   test("a genuinely unreadable workspace names its cause instead of hiding it", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-unreadable-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-unreadable-"));
     tempDirs.push(home);
     const dir = join(home, "broken-ws");
     mkdirSync(dir, { recursive: true });
@@ -244,7 +244,7 @@ const CLI_SPAWN_TIMEOUT_MS = 30_000;
 
 describe("CLI inspection commands", () => {
   test("inspect local durable state without model credentials", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-inspect-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-inspect-"));
     tempDirs.push(home);
     createLocalAgent(home, "localtest");
 
@@ -270,10 +270,10 @@ describe("CLI inspection commands", () => {
   }, CLI_SPAWN_TIMEOUT_MS);
 
   test("kinu model normalizes specs through the provider resolver", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-model-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-model-"));
     tempDirs.push(home);
     createLocalAgent(home, "localtest");
-    const llmEnv = { PROTEUS_BASE_URL: "http://localhost:1/v1", PROTEUS_AUTH: "Bearer x" };
+    const llmEnv = { KINU_BASE_URL: "http://localhost:1/v1", KINU_AUTH: "Bearer x" };
 
     // Bare model ids get the configured fallback provider, exactly like
     // /model inside a live chat session (one normalizer, no drift).
@@ -292,7 +292,7 @@ describe("CLI inspection commands", () => {
   }, CLI_SPAWN_TIMEOUT_MS);
 
   test("kinu effort sets workspace and global defaults and appears in status", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-effort-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-effort-"));
     tempDirs.push(home);
     createLocalAgent(home, "localtest");
 
@@ -318,14 +318,14 @@ describe("CLI inspection commands", () => {
   }, CLI_SPAWN_TIMEOUT_MS);
 
   test("kinu model validates known, uncatalogued, and unknown-provider specs", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-model-validation-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-model-validation-"));
     tempDirs.push(home);
     createLocalAgent(home, "localtest");
     const knownSpec = "workers-ai/@cf/moonshotai/kimi-k2.6";
     const llmEnv = {
-      PROTEUS_BASE_URL: "http://localhost:1/v1",
-      PROTEUS_AUTH: "Bearer x",
-      PROTEUS_MODEL: "@cf/moonshotai/kimi-k2.6",
+      KINU_BASE_URL: "http://localhost:1/v1",
+      KINU_AUTH: "Bearer x",
+      KINU_MODEL: "@cf/moonshotai/kimi-k2.6",
     };
 
     const known = runCli(home, ["model", "localtest", knownSpec], llmEnv);
@@ -351,7 +351,7 @@ describe("CLI inspection commands", () => {
   // `jobs` and `triggers` branch on opts.json in their command bodies but were
   // never given the flag, so commander rejected the documented invocation.
   test("jobs and triggers accept --json like every sibling inspector", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-json-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-json-"));
     tempDirs.push(home);
     createLocalAgent(home, "localtest");
 
@@ -393,8 +393,8 @@ describe("kinu events rendering", () => {
     const server = Bun.serve({ port: 0, fetch: () => Response.json({ result }) });
     try {
       return await runCliServed(home, ["events", "cloudtest"], {
-        PROTEUS_TOKEN: "ptc_test",
-        PROTEUS_ORIGIN: `http://localhost:${server.port}`,
+        KINU_TOKEN: "ptc_test",
+        KINU_ORIGIN: `http://localhost:${server.port}`,
       });
     } finally {
       server.stop(true);
@@ -402,7 +402,7 @@ describe("kinu events rendering", () => {
   }
 
   test("a cloud workspace prints the rows a local one prints, character for character", async () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-events-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-events-"));
     tempDirs.push(home);
     createLocalAgent(home, "localtest");
 
@@ -416,7 +416,7 @@ describe("kinu events rendering", () => {
   }, CLI_SPAWN_TIMEOUT_MS);
 
   test("an enveloped answer is refused by name rather than dumped as raw JSON", async () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-events-envelope-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-events-envelope-"));
     tempDirs.push(home);
 
     const enveloped = await eventsAgainstCloud(home, { events: [CLOUD_ROW] });

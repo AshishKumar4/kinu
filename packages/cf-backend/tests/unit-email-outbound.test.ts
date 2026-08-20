@@ -137,7 +137,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
       },
     });
     // The idempotency key rides the wire as a stable Message-ID (SPEC §7.4).
-    expect(sent[0].headers?.['Message-ID']).toMatch(/^<proteus\.[0-9a-f]{64}@agents\.example\.com>$/);
+    expect(sent[0].headers?.['Message-ID']).toMatch(/^<kinu\.[0-9a-f]{64}@agents\.example\.com>$/);
 
     // The channel is settled and an audit row exists.
     expect(replies.findOpenByEvent(eventId)).toBeNull();
@@ -257,7 +257,7 @@ describe('sendOwnerEmail — changelog digests + job completions', () => {
     });
     expect(sent[0].headers?.['Auto-Submitted']).toBe('auto-generated');
     // The idempotency key materializes as a deterministic Message-ID on the wire.
-    expect(sent[0].headers?.['Message-ID']).toMatch(/^<proteus\.[0-9a-f]{64}@agents\.example\.com>$/);
+    expect(sent[0].headers?.['Message-ID']).toMatch(/^<kinu\.[0-9a-f]{64}@agents\.example\.com>$/);
   });
 
   test('skips quietly when the platform email pieces are missing', async () => {

@@ -55,7 +55,7 @@ const TrialSchema = v.object({
       tool_calls: v.optional(v.number()),
       // Named, because "did the mechanism act" is the question an arm's own
       // configuration cannot answer. This is the FILTERED subset — only names in
-      // EVOLUTION_EVENTS (bench/clbench/proteus/events.py) reach it, split from
+      // EVOLUTION_EVENTS (bench/clbench/kinu/events.py) reach it, split from
       // the whole activity channel at bench/harbor/trajectory.py:203-210. The
       // unsplit field is what recorded 7 "evolution events" on an evolve=false
       // trial in 2026-08-10's 2.1 job; every one of them was `bg_job_started`.

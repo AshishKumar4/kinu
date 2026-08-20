@@ -30,7 +30,7 @@ import {
   type OverflowRecoveryDecision,
 } from '../turn-failure';
 import type { SignalDeliverer } from '../types/signals';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 
 /** The recorder slice this spine writes through — structural (both backends
  *  pass their RunEventRecorder). */
@@ -43,7 +43,7 @@ export interface TurnRunRecorder {
  *  not fail a turn. */
 export function openTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   agentId: string;
-  /** What kicked off this run: 'chat' for a real user turn, the proteusEvent
+  /** What kicked off this run: 'chat' for a real user turn, the kinuEvent
    *  name for a programmatic one. */
   causedBy: string;
   userMessage: string;
@@ -60,7 +60,7 @@ export function openTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   } catch (err) {
     diagnostics.failure(
       'turn.start_events_failed',
-      toProteusError({ doing: 'emit the run/turn start events', cause: err, otherwise: 'io' }),
+      toKinuError({ doing: 'emit the run/turn start events', cause: err, otherwise: 'io' }),
       { runId },
     );
   }
@@ -133,7 +133,7 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   } catch (err) {
     diagnostics.failure(
       'turn.end_events_failed',
-      toProteusError({ doing: 'emit the turn/run end events', cause: err, otherwise: 'io' }),
+      toKinuError({ doing: 'emit the turn/run end events', cause: err, otherwise: 'io' }),
       { runId },
     );
   }
@@ -224,7 +224,7 @@ export function applyOverflowRecovery(opts: {
         text: OVERFLOW_RETRY_TEXT,
       }).catch((error) => diagnostics.failure(
         'turn.overflow_retry_enqueue_failed',
-        toProteusError({ doing: 'enqueue the context-overflow retry turn', cause: error, otherwise: 'io' }),
+        toKinuError({ doing: 'enqueue the context-overflow retry turn', cause: error, otherwise: 'io' }),
         { sessionKey: opts.sessionKey },
       ));
     }

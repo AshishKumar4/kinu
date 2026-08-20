@@ -27,7 +27,7 @@ import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry';
 import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow';
 import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store';
 import type { BackendHost } from '../types/backend-host';
-import type { ProteusEvent, ReadableProteusEvent } from '../events/hub/types';
+import type { KinuEvent, ReadableKinuEvent } from '../events/hub/types';
 import type { LexicalHit } from '../memory/hybrid-search';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive';
 import type { ParsedSkill } from '../skills/types';
@@ -140,10 +140,10 @@ function fakeSignalHost(queued: string[], turnInFlight: boolean): BackendHost {
 }
 
 /** Distributes over the event union so a fixture cannot pair a variant with
- *  another variant's payload — the correlation `Partial<ProteusEvent>` loses. */
-type EventFixture = ReadableProteusEvent extends infer E
-  ? E extends ReadableProteusEvent
-    ? { id: string; ingress: ProteusEvent['ingress']; variant: E['variant']; payload: E['payload'] }
+ *  another variant's payload — the correlation `Partial<KinuEvent>` loses. */
+type EventFixture = ReadableKinuEvent extends infer E
+  ? E extends ReadableKinuEvent
+    ? { id: string; ingress: KinuEvent['ingress']; variant: E['variant']; payload: E['payload'] }
     : never
   : never;
 
@@ -152,11 +152,11 @@ const WEBHOOK_PAYLOAD = Object.freeze({
 });
 
 /** The default external event: an authenticated inbound webhook. */
-function webhookEvent(id: string): ProteusEvent {
+function webhookEvent(id: string): KinuEvent {
   return event({ id, ingress: 'webhook_hmac', variant: 'webhook', payload: { ...WEBHOOK_PAYLOAD } });
 }
 
-function event(fixture: EventFixture): ProteusEvent {
+function event(fixture: EventFixture): KinuEvent {
   return {
     trace_id: 'trace',
     caused_by: null,
@@ -800,7 +800,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             id: 'pe1',
             variant: 'peer_agent',
             ingress: 'peer_async',
-            payload: { from_agent_name: 'scout', from_user_id: 'u1', topic: 'status', body: 'status?', sender_event_id: 'se1', reply_expected: true, proteus_mode: 'build' },
+            payload: { from_agent_name: 'scout', from_user_id: 'u1', topic: 'status', body: 'status?', sender_event_id: 'se1', reply_expected: true, kinu_mode: 'build' },
           }),
         ])?.text,
       },

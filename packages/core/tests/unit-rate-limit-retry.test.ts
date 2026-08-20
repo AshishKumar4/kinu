@@ -130,7 +130,7 @@ describe('withRateLimitRetry', () => {
     await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
 
     expect(harness.warnings).toEqual([
-      '[proteus] api.example.com rate-limited — waiting 2s (attempt 1/6)',
+      '[kinu] api.example.com rate-limited — waiting 2s (attempt 1/6)',
     ]);
   });
 });

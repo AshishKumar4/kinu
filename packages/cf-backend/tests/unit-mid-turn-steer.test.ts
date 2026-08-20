@@ -162,7 +162,7 @@ describe('a message typed while the agent is working', () => {
       id: steerFrames(h.frames)[0]!.steerId,
       role: 'user',
       parts: [{ type: 'text', text: 'also check staging' }],
-      metadata: { proteusSteer: true },
+      metadata: { kinuSteer: true },
     }]]);
   });
 
@@ -238,13 +238,13 @@ describe('a steer that never saw a step boundary', () => {
 
     expect(h.enqueued).toEqual([{
       text: 'one more thing',
-      metadata: { proteusAuthor: 'operator' },
+      metadata: { kinuAuthor: 'operator' },
     }]);
-    // NO proteusEvent: every provenance decision downstream reads this as the
+    // NO kinuEvent: every provenance decision downstream reads this as the
     // user's own next message, which is what it is. Stamping an event here
     // would make it a programmatic turn — one-shot surface, no outcome review,
     // a card instead of a bubble.
-    expect(h.enqueued[0]).not.toHaveProperty('metadata.proteusEvent');
+    expect(h.enqueued[0]).not.toHaveProperty('metadata.kinuEvent');
     // And it must SAY it is the operator's, because the enqueue seam gives
     // every row it writes the `programmatic:` id prefix. Left silent, the
     // provenance fallback reads that prefix and files the owner's own sentence

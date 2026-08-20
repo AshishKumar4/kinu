@@ -34,13 +34,13 @@
  *  that went back for one. */
 export const SPILL_DIRS = {
   /** Clamped tool results (tools/clamp.ts). */
-  toolOutput: '.proteus/tool-output',
+  toolOutput: '.kinu/tool-output',
   /** Message-borne bulk: attachments and pasted text (attachment-sanitizer). */
   attachments: 'attachments',
   /** Oversize event payloads (events/hub/content-spill.ts). */
-  eventContent: '.proteus/event-content',
+  eventContent: '.kinu/event-content',
   /** Compaction transcripts (@kinu/compaction stores.ts). */
-  compaction: '.proteus/compaction',
+  compaction: '.kinu/compaction',
 } as const;
 
 const SPILL_DIR_VALUES: readonly string[] = Object.values(SPILL_DIRS);

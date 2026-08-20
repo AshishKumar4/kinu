@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore, buildDrainBatch,
   acceptInboundEmail, inboundEmailDropNotice, normalizeEmailAddress,
-  type EmailIngressDeps, type IncomingEmail, type ProteusEvent, type SqlExec,
+  type EmailIngressDeps, type IncomingEmail, type KinuEvent, type SqlExec,
 } from '@kinu/core';
 import {
   agentEmailAddress, agentNameFromRecipient,
@@ -23,7 +23,7 @@ function makeSql(): SqlExec {
 }
 
 const DOMAIN = 'agents.example.com';
-type EmailEvent = Extract<ProteusEvent, { variant: 'email' }>;
+type EmailEvent = Extract<KinuEvent, { variant: 'email' }>;
 
 function requireEmailEvent(log: EventLog, eventId: string): EmailEvent {
   const event = log.get(eventId);

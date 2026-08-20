@@ -196,7 +196,7 @@ const SRC = join(import.meta.dir, '..', 'src');
 const source = (file: string) => readFileSync(join(SRC, file), 'utf8');
 
 /** Every Durable Object class in the Worker, and the surface it must seal to.
- *  `ProteusSandbox` is the one omission — see the test that pins it. */
+ *  `KinuSandbox` is the one omission — see the test that pins it. */
 const SEALED_CLASSES = [
   { file: 'user/user-do.ts', klass: 'UserDO', constant: 'USER_DO_RPC_SURFACE', surface: USER_DO_RPC_SURFACE },
   { file: 'orchestrator.ts', klass: 'OrchestratorAgent', constant: 'ORCHESTRATOR_RPC_SURFACE', surface: ORCHESTRATOR_RPC_SURFACE },
@@ -248,18 +248,18 @@ describe('every Durable Object that holds something worth stealing is sealed', (
     }
   });
 
-  test('ProteusSandbox is knowingly left open', () => {
+  test('KinuSandbox is knowingly left open', () => {
     // Its whole RPC surface is @cloudflare/sandbox's, which the preview proxy
     // and the executor call broadly; it holds no owner credentials — the
     // sandbox is where untrusted code was always meant to run. Sealing it
     // would mean pinning a third-party API we do not own.
-    const src = source('proteus-sandbox.ts');
-    expect(src).toContain('export class ProteusSandbox extends Sandbox<Env>');
+    const src = source('kinu-sandbox.ts');
+    expect(src).toContain('export class KinuSandbox extends Sandbox<Env>');
     expect(src).not.toContain('sealRpcSurface');
   });
 
   test('no other Durable Object class slipped in unsealed', () => {
-    const known = new Set([...SEALED_CLASSES.map((c) => c.klass), 'ActorAgent', 'ProteusSandbox']);
+    const known = new Set([...SEALED_CLASSES.map((c) => c.klass), 'ActorAgent', 'KinuSandbox']);
     const classes = readdirSync(SRC, { recursive: true, encoding: 'utf8' })
       .filter((f) => f.endsWith('.ts'))
       .flatMap((f) => [...source(f).matchAll(/^export (?:abstract )?class ([A-Za-z0-9_$]+) extends (Agent<|ActorAgent|Think<|Sandbox<)/gm)]

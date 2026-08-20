@@ -42,21 +42,21 @@ const OFFLINE_PROVIDER = {
 };
 
 // This suite wrote 274 of the 283 `agents` entries in the owner's REAL
-// ~/.proteus/config.json before this guard existed. Two independent causes, and
+// ~/.kinu/config.json before this guard existed. Two independent causes, and
 // the assertion answers the one that cannot be fixed from inside this file:
 // `AGENT_HOME` is resolved at MODULE LOAD (config.ts:37), so assigning
-// PROTEUS_HOME in this body is already too late. The only mechanism that can
+// KINU_HOME in this body is already too late. The only mechanism that can
 // set it is scripts/test-preload.ts, and a hand-run `bun test --cwd packages/cli`
 // does not execute a preload — which is exactly how these entries accumulated.
 // So prove the home rather than trust it, and fail before creating anything.
 // Same rule as the bench harness's assert_throwaway_home and the git fixture's
 // toplevel check: state that must not be ambient is asserted at the boundary.
-if (resolve(AGENT_HOME) === resolve(join(homedir(), '.proteus'))
+if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu'))
   || !resolve(AGENT_HOME).startsWith(resolve(tmpdir()))) {
   throw new Error(
     `conformance suite refuses to run against a real Kinu home (${AGENT_HOME}). `
     + 'Run it as `bun test packages/cli/tests/conformance.test.ts` from the repo root so '
-    + 'scripts/test-preload.ts provides a throwaway PROTEUS_HOME.',
+    + 'scripts/test-preload.ts provides a throwaway KINU_HOME.',
   );
 }
 

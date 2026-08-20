@@ -2,10 +2,10 @@ import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValu
 import { tolerate } from '@kinu/core/obs';
 import * as v from 'valibot';
 
-const origin = (process.env.PROTEUS_SMOKE_ORIGIN ?? 'https://staging.kinu.run').replace(/\/+$/, '');
-const agentName = process.env.PROTEUS_SMOKE_AGENT ?? `smoke-workspace-${Date.now().toString(36)}`;
-const mission = process.env.PROTEUS_SMOKE_MISSION ?? `Verify workspace websocket and snapshot ${new Date().toISOString()}`;
-const keepAgent = process.env.PROTEUS_SMOKE_KEEP_AGENT === '1';
+const origin = (process.env.KINU_SMOKE_ORIGIN ?? 'https://staging.kinu.run').replace(/\/+$/, '');
+const agentName = process.env.KINU_SMOKE_AGENT ?? `smoke-workspace-${Date.now().toString(36)}`;
+const mission = process.env.KINU_SMOKE_MISSION ?? `Verify workspace websocket and snapshot ${new Date().toISOString()}`;
+const keepAgent = process.env.KINU_SMOKE_KEEP_AGENT === '1';
 
 function wsOrigin(httpOrigin: string): string {
   if (httpOrigin.startsWith('https://')) return `wss://${httpOrigin.slice('https://'.length)}`;

@@ -185,7 +185,7 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
 
   if (!plan) {
     return (
-      <div data-proteus-plan-review className="h-full grid place-items-center p-8">
+      <div data-kinu-plan-review className="h-full grid place-items-center p-8">
         <div className="max-w-sm text-center">
           <NotePencilIcon size={30} className="mx-auto mb-3 text-muted-foreground" />
           <h3 className="text-sm font-medium text-foreground">No plan submitted yet</h3>
@@ -196,7 +196,7 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
   }
 
   return (
-    <div data-proteus-plan-review className="h-full min-h-0 flex flex-col">
+    <div data-kinu-plan-review className="h-full min-h-0 flex flex-col">
       <div className="shrink-0 flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         <div className="min-w-0 mr-auto">
           <div className="flex items-center gap-2">

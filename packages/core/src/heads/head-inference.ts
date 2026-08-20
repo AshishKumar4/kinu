@@ -39,7 +39,7 @@ import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summ
 import { HeadFileChanges } from './file-changes';
 import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { diagnostics, renderCauseChain, renderThrownChain, toProteusError } from '../obs/index';
+import { diagnostics, renderCauseChain, renderThrownChain, toKinuError } from '../obs/index';
 
 /**
  * The mutable findings a head accumulates as it runs — evidence/decisions
@@ -431,7 +431,7 @@ export interface HeadInferenceDeps {
   capture: HeadCapture;
   /**
    * The step envelope of the turn this head forked, supplied by the backend
-   * because only the backend can read the host setting (`PROTEUS_MAX_STEPS`;
+   * because only the backend can read the host setting (`KINU_MAX_STEPS`;
    * core owns the parser, see resolveMaxSteps). A head is its parent running on
    * the same workspace, so it gets its parent's envelope — not a smaller one
    * derived from a private token pool.
@@ -673,7 +673,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       } catch (err) {
         diagnostics.failure(
           'head.step_trace_failed',
-          toProteusError({ doing: 'record a head step trace', cause: err, otherwise: 'io' }),
+          toKinuError({ doing: 'record a head step trace', cause: err, otherwise: 'io' }),
           { headId: input.id, seq },
         );
       }
@@ -766,7 +766,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // minutes apart read at different depths and the one with the real reason in it
   // was the one nobody had to debug.
   const stopReason = broke
-    ? renderCauseChain(toProteusError({
+    ? renderCauseChain(toKinuError({
       doing: `run agent ${input.id} to a report`, cause: failure, otherwise: 'unavailable',
     }))
     : deps.abortReason?.()

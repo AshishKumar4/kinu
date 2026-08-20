@@ -33,7 +33,7 @@ tester.run("anti-slop/no-untyped-console", noUntypedConsoleRule, {
     { code: "console.log(rows);", filename: "packages/test-utils/src/scratch.ts" },
     // ── The remedy, in both forms.
     {
-      code: "diagnostics.failure('head.score_failed', toProteusError({ doing: 'scoring a head', cause: err, otherwise: 'unavailable' }), { headId });",
+      code: "diagnostics.failure('head.score_failed', toKinuError({ doing: 'scoring a head', cause: err, otherwise: 'unavailable' }), { headId });",
       filename: core,
     },
     { code: "diagnostics.event('sandbox.executor_registered', { transport: 'websocket' });", filename: cf },
@@ -46,17 +46,17 @@ tester.run("anti-slop/no-untyped-console", noUntypedConsoleRule, {
   invalid: [
     // The exact shape the 650-site census found, in each tree the rule covers.
     {
-      code: "console.warn('[proteus] head could not be scored:', outcome.reason);",
+      code: "console.warn('[kinu] head could not be scored:', outcome.reason);",
       filename: core,
       errors: [error],
     },
     {
-      code: "console.error('[proteus] alarm handler failed:', err instanceof Error ? err.message : String(err));",
+      code: "console.error('[kinu] alarm handler failed:', err instanceof Error ? err.message : String(err));",
       filename: cf,
       errors: [error],
     },
     {
-      code: "console.warn(`[proteus] ${message}`);",
+      code: "console.warn(`[kinu] ${message}`);",
       filename: cliBackend,
       errors: [error],
     },

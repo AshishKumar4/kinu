@@ -22,7 +22,7 @@ function liveMessage(id: string): UIMessage {
   return {
     id, role: 'assistant',
     parts: [{ type: 'text', text: id }],
-    metadata: { proteusSignal: `${id}-signal` },
+    metadata: { kinuSignal: `${id}-signal` },
   };
 }
 
@@ -41,7 +41,7 @@ describe('transcript merge', () => {
     expect(merged.map((m) => m.id)).toEqual(['m1', 'm2', 'm3']);
     // The live copy won: the restored copy carries no metadata at all, so a
     // programmatic turn would have lost its card and rendered as a user bubble.
-    expect(merged.find((m) => m.id === 'm2')?.metadata).toEqual({ proteusSignal: 'm2-signal' });
+    expect(merged.find((m) => m.id === 'm2')?.metadata).toEqual({ kinuSignal: 'm2-signal' });
   });
 
   test('a page that re-delivered a row does not render it twice', () => {

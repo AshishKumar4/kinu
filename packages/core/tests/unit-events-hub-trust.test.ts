@@ -80,7 +80,7 @@ describe('deriveEventTrust', () => {
   test('peer_async same-owner → authenticated', () => {
     const d: IngressDescriptor = {
       ingress: 'peer_async', variant: 'peer_agent',
-      payload: { from_agent_name: 'a', from_user_id: 'u', topic: 't', body: {}, sender_event_id: 'ox1', proteus_mode: 'build' },
+      payload: { from_agent_name: 'a', from_user_id: 'u', topic: 't', body: {}, sender_event_id: 'ox1', kinu_mode: 'build' },
       same_owner: true, receiver_grant_present: false,
     };
     expect(deriveEventTrust(d)).toBe('authenticated');
@@ -88,7 +88,7 @@ describe('deriveEventTrust', () => {
   test('peer_async cross-owner with grant → external', () => {
     const d: IngressDescriptor = {
       ingress: 'peer_async', variant: 'peer_agent',
-      payload: { from_agent_name: 'a', from_user_id: 'u', topic: 't', body: {}, sender_event_id: 'ox1', proteus_mode: 'build' },
+      payload: { from_agent_name: 'a', from_user_id: 'u', topic: 't', body: {}, sender_event_id: 'ox1', kinu_mode: 'build' },
       same_owner: false, receiver_grant_present: true,
     };
     expect(deriveEventTrust(d)).toBe('external');
@@ -96,7 +96,7 @@ describe('deriveEventTrust', () => {
   test('peer_async cross-owner without grant rejects at ingress', () => {
     const d: IngressDescriptor = {
       ingress: 'peer_async', variant: 'peer_agent',
-      payload: { from_agent_name: 'a', from_user_id: 'u', topic: 't', body: {}, sender_event_id: 'ox1', proteus_mode: 'build' },
+      payload: { from_agent_name: 'a', from_user_id: 'u', topic: 't', body: {}, sender_event_id: 'ox1', kinu_mode: 'build' },
       same_owner: false, receiver_grant_present: false,
     };
     expect(() => deriveEventTrust(d)).toThrow(IngressRejectedError);

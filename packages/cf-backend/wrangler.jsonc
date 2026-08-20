@@ -103,7 +103,7 @@
       // (keyed by agent name). Binding name MUST be "Sandbox" — the SDK's
       // proxyToSandbox hardcodes `env.Sandbox` lookup (see
       // @cloudflare/sandbox/dist/file-stream-*.js:3448).
-      { "class_name": "ProteusSandbox", "name": "Sandbox" }
+      { "class_name": "KinuSandbox", "name": "Sandbox" }
       //
       // SSH/laptop (user's local machine via WebSocket tunnel):
       //   No binding needed — users run a local daemon. The executor becomes
@@ -115,7 +115,7 @@
   // logs a version mismatch (Sandbox.checkVersionCompatibility). Bump both.
   "containers": [
     {
-      "class_name": "ProteusSandbox",
+      "class_name": "KinuSandbox",
       "image": "docker.io/cloudflare/sandbox:0.12.7",
       "max_instances": 10,
       "instance_type": {
@@ -135,7 +135,7 @@
     {
       "tag": "v1",
       "new_sqlite_classes": [
-        "OrchestratorAgent", "ExplorationAgent", "ProteusSandbox", "UserDO",
+        "OrchestratorAgent", "ExplorationAgent", "KinuSandbox", "UserDO",
         "NimbusSession", "MonitorDO"
       ]
     }
@@ -240,7 +240,7 @@
   // user's Cloudflare OAuth credential so the usage bills to their account.
   "ai": { "binding": "AI" },
   // R2 bucket for sandbox /workspace snapshots (squashfs archives), written and
-  // read by ProteusSandbox. Bucket: `wrangler r2 bucket create kinu-backups`
+  // read by KinuSandbox. Bucket: `wrangler r2 bucket create kinu-backups`
   // (already created). Set an R2 lifecycle rule on the `backups/` prefix to GC
   // archives past their TTL — the SDK enforces TTL at restore time only and
   // never deletes anything itself.
@@ -255,7 +255,7 @@
   //    OWNER SETUP to switch: `wrangler secret put R2_ACCESS_KEY_ID`,
   //    `wrangler secret put R2_SECRET_ACCESS_KEY`, and add
   //    "BACKUP_BUCKET_NAME": "kinu-backups" plus "CLOUDFLARE_ACCOUNT_ID"
-  //    to `vars` below. ProteusSandbox picks the mode up from their presence —
+  //    to `vars` below. KinuSandbox picks the mode up from their presence —
   //    no flag — and the mode is recorded per snapshot, so handles taken in one
   //    mode keep restoring in that mode.
   // NIMBUS_RUNTIME_CACHE is the artifact store a HOSTED workspace installs its
@@ -291,7 +291,7 @@
   // which 23 were test debris (22 `drill*` rows and one `settle-probe`), minted
   // by harnesses driving the owner's signed-in session. So this environment is
   // the eval plane, and `packages/test-utils/src/eval-identity.ts` refuses any
-  // other target unless PROTEUS_EVAL_ALLOW_PROD=1 names the exception.
+  // other target unless KINU_EVAL_ALLOW_PROD=1 names the exception.
   //
   // Three things make it that, and each is pinned by a test in
   // `packages/test-utils/tests/eval-identity.test.ts` so a rename here fails
@@ -352,12 +352,12 @@
           { "class_name": "UserDO", "name": "UserDO" },
           { "class_name": "MonitorDO", "name": "MonitorDO" },
           { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },
-          { "class_name": "ProteusSandbox", "name": "Sandbox" }
+          { "class_name": "KinuSandbox", "name": "Sandbox" }
         ]
       },
       "containers": [
         {
-          "class_name": "ProteusSandbox",
+          "class_name": "KinuSandbox",
           "image": "docker.io/cloudflare/sandbox:0.12.7",
           "max_instances": 5,
           "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
@@ -369,7 +369,7 @@
         {
           "tag": "v1",
           "new_sqlite_classes": [
-            "OrchestratorAgent", "ExplorationAgent", "ProteusSandbox", "UserDO",
+            "OrchestratorAgent", "ExplorationAgent", "KinuSandbox", "UserDO",
             "NimbusSession", "MonitorDO"
           ]
         }
@@ -383,7 +383,7 @@
       "send_email": [{ "name": "EMAIL" }],
       "ai": { "binding": "AI" },
       // BACKUP_BUCKET is staging's OWN bucket. It used to be production's
-      // `proteus-backups`, which meant every /workspace snapshot an eval's
+      // `kinu-backups`, which meant every /workspace snapshot an eval's
       // sandbox took was written into the bucket holding real users' archives —
       // the same class of leak as running the evals against the production
       // origin, by a route nobody was looking at.

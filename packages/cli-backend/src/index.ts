@@ -8,7 +8,7 @@ export {
   type CLIRuntime, type CLIRuntimeConfig, type LocalDb,
 } from './runtime';
 export { createHostCheckpoints, type HostCheckpointsOpts } from './checkpoints';
-export { proteusHome } from './home';
+export { kinuHome } from './home';
 export {
   writeSecretFile, enforceOwnerOnly, ensureSecretDir, SECRET_FILE_MODE, SECRET_DIR_MODE,
 } from './secret-file';

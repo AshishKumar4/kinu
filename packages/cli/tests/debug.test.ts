@@ -37,7 +37,7 @@ function scratch(prefix: string): string {
 function runCli(home: string, args: string[], cwd: string, env: Record<string, string> = {}) {
   return Bun.spawn([process.execPath, cliBin, ...args], {
     cwd,
-    env: { ...process.env, PROTEUS_HOME: home, NO_COLOR: '1', ...env },
+    env: { ...process.env, KINU_HOME: home, NO_COLOR: '1', ...env },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -49,14 +49,14 @@ async function result(proc: ReturnType<typeof runCli>) {
 }
 
 const SECRET_TOKEN = 'sk-ant-api03-thisisaplantedsecretfortest1234567890abcdefgh';
-const SECRET_PROTEUS_TOKEN = 'pta_' + 'x'.repeat(40);
+const SECRET_KINU_TOKEN = 'pta_' + 'x'.repeat(40);
 
 /**
  * A workspace with exactly the shape the investigation needs: two runs (one
  * that backgrounded a call and was then polled anyway — symptom 1 — and a
  * plain one), two head-runs (older + newer, proving `getHeadRuns` orders
  * correctly), and two MCTS searches where the OLDER root has the lower
- * created_at — the precise condition under which use-proteus.ts's client
+ * created_at — the precise condition under which use-kinu.ts's client
  * buildTree() (no root_id scoping, picks whichever depth-0 node sorts first)
  * would show the wrong tree. A secret is planted in a tool result.
  */
@@ -141,7 +141,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
   jobs.create({
     id: 'job-1', kind: 'agents', workMode: 'build',
     label: 'fork(settle=mcts): pick a migration-backfill approach',
-    input: `token=${SECRET_PROTEUS_TOKEN}`, now: 5050,
+    input: `token=${SECRET_KINU_TOKEN}`, now: 5050,
   });
   jobs.settle('job-1', 0, JSON.stringify({ ok: true }), 5050 + 125_000);
   jobs.create({ id: 'job-2', kind: 'agents', workMode: 'build', input: '{}', now: 5060 });
@@ -189,7 +189,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
 
 describe('kinu debug — redaction', () => {
   test('redactSecrets scrubs every planted secret shape', () => {
-    expect(redactSecrets(`bearer ${SECRET_PROTEUS_TOKEN}`)).not.toContain(SECRET_PROTEUS_TOKEN);
+    expect(redactSecrets(`bearer ${SECRET_KINU_TOKEN}`)).not.toContain(SECRET_KINU_TOKEN);
     expect(redactSecrets(SECRET_TOKEN)).not.toContain(SECRET_TOKEN);
     expect(redactSecrets('AKIAABCDEFGHIJKLMNOP')).toBe('[REDACTED]');
     expect(redactSecrets('Authorization: Bearer abcdefghijklmnopqrstuvwxyz')).not.toContain('abcdefghijklmnopqrstuvwxyz');
@@ -201,8 +201,8 @@ describe('kinu debug — redaction', () => {
 
 describe('kinu debug — local backend', () => {
   test('assembles identity, runs, heads, mcts searches and background jobs into one bundle, and never leaks the planted secret', async () => {
-    const home = scratch('proteus-debug-local-');
-    const out = scratch('proteus-debug-local-out-');
+    const home = scratch('kinu-debug-local-');
+    const out = scratch('kinu-debug-local-out-');
     writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
     mkdirSync(join(home, 'invest'), { recursive: true });
     seedInvestigationWorkspace(join(home, 'invest', 'agent.db'));
@@ -241,14 +241,14 @@ describe('kinu debug — local backend', () => {
     expect(r.stdout).toContain('best ↓23 oracle calls');
     expect(r.stdout).toContain('3 row(s) over 1 cell(s)');
     expect(r.stdout).toContain('7 row(s) over 3 cell(s)');
-    expect(r.stdout).not.toContain(SECRET_PROTEUS_TOKEN);
+    expect(r.stdout).not.toContain(SECRET_KINU_TOKEN);
 
     // The bundle file: owner-only permissions, and never the raw secrets —
     // the hard requirement, asserted directly against the written bytes.
     expect(statSync(bundle).mode & 0o777).toBe(0o600);
     const raw = readFileSync(bundle, 'utf8');
     expect(raw).not.toContain(SECRET_TOKEN);
-    expect(raw).not.toContain(SECRET_PROTEUS_TOKEN);
+    expect(raw).not.toContain(SECRET_KINU_TOKEN);
     expect(raw).toContain('[REDACTED]');
 
     const records = raw.trim().split('\n').map((line) => v.parse(
@@ -295,8 +295,8 @@ describe('kinu debug — local backend', () => {
   });
 
   test('--json prints the same investigation summary as machine-readable JSON', async () => {
-    const home = scratch('proteus-debug-json-');
-    const out = scratch('proteus-debug-json-out-');
+    const home = scratch('kinu-debug-json-');
+    const out = scratch('kinu-debug-json-out-');
     writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
     mkdirSync(join(home, 'invest'), { recursive: true });
     seedInvestigationWorkspace(join(home, 'invest', 'agent.db'));
@@ -384,8 +384,8 @@ describe('kinu debug — cloud backend', () => {
       },
     });
 
-    const home = scratch('proteus-debug-cloud-');
-    const out = scratch('proteus-debug-cloud-out-');
+    const home = scratch('kinu-debug-cloud-');
+    const out = scratch('kinu-debug-cloud-out-');
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       origin: `http://127.0.0.1:${server.port}`,
       accessToken: 'ptc_stored_session',
@@ -396,7 +396,7 @@ describe('kinu debug — cloud backend', () => {
     try {
       const bundle = join(out, 'skywriter.debug.jsonl');
       const r = await result(runCli(home, ['debug', 'skywriter', '--out', bundle], repoRoot, {
-        PROTEUS_ORIGIN: `http://127.0.0.1:${server.port}`,
+        KINU_ORIGIN: `http://127.0.0.1:${server.port}`,
       }));
       expect(r.stderr).toBe('');
       expect(r.exitCode).toBe(0);

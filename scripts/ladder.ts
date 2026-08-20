@@ -602,9 +602,9 @@ export const LADDER: readonly Gate[] = [
       + 'its suite ROOT-RELATIVE (`bun test packages/x/`) rather than `--cwd packages/x`: '
       + 'measured 2026-08-17, `--cwd` makes bun read a bunfig.toml from THAT directory, '
       + 'so the root one is not loaded and both `preload` and `pathIgnorePatterns` are '
-      + 'silently dropped. A probe printed `PROTEUS_HOME= undefined` under `--cwd` and a '
+      + 'silently dropped. A probe printed `KINU_HOME= undefined` under `--cwd` and a '
       + 'real temp home root-relative — meaning the throwaway home that exists because '
-      + 'cli-backend once wrote ~580 checkpoint stores into a developer\'s real ~/.proteus '
+      + 'cli-backend once wrote ~580 checkpoint stores into a developer\'s real ~/.kinu '
       + 'was reaching NO per-package gate.',
     blind: 'both backend composition roots, and every subprocess path. It also covers '
       + 'only 3 of the 8 workspace packages — see ROOT_TEST_OMISSIONS in ladder.test.ts, '
@@ -699,7 +699,7 @@ export const LADDER: readonly Gate[] = [
       + 'the "PTY tests need a terminal" exclusion was stale from 5183d69d — and this '
       + 'gate\'s own exit code is the only honest statement of whether it passes. The pass '
       + 'count quoted here for months (295) was 17 tests out of date, and the run that '
-      + 'produced it came from a shell exporting PROTEUS_ORIGIN + PROTEUS_TOKEN, which '
+      + 'produced it came from a shell exporting KINU_ORIGIN + KINU_TOKEN, which '
       + 'silently moved ten of these tests onto their signed-in branch; '
       + 'scripts/test-scratch-home.ts now strips those, so the result no longer depends '
       + 'on whose shell ran it.',

@@ -2,24 +2,24 @@
  * The one place a suite mints a temp directory, and the one place they are
  * collected from.
  *
- * The leak this exists to end, measured 2026-08-17: 8,643 `/tmp/proteus-*`
+ * The leak this exists to end, measured 2026-08-17: 8,643 `/tmp/kinu-*`
  * entries on a developer box after one evening, rising monotonically as suites
  * ran, and `scripts/preflight.ts` could see only 6,102 of them because its
  * prefix catalogue was a hand-written list that every new suite silently grew
  * past. Its own comment already named the failure mode — a prefix missing from
  * the catalogue is "simultaneously uncollected and invisible" — and then the
- * catalogue drifted anyway: `proteus-scaffold-test-`, `proteus-runtimes-`,
- * `proteus-webhook-`, `proteus-vfs-`, `proteus-gepa-`, `proteus-codex-auth-`,
- * `proteus-shared-` and `proteus-mcp-test-` were all minted in-repo and none of
+ * catalogue drifted anyway: `kinu-scaffold-test-`, `kinu-runtimes-`,
+ * `kinu-webhook-`, `kinu-vfs-`, `kinu-gepa-`, `kinu-codex-auth-`,
+ * `kinu-shared-` and `kinu-mcp-test-` were all minted in-repo and none of
  * them were listed.
  *
  * So ownership is structural here rather than clerical:
  *
  *   1. ONE NAMESPACE. `scratchDir('mount-plane')` mints
- *      `proteus-scratch-mount-plane-XXXXXX`, so `proteus-scratch-` alone
+ *      `kinu-scratch-mount-plane-XXXXXX`, so `kinu-scratch-` alone
  *      identifies every directory any suite minted through this module, and the
  *      LABEL says which suite minted it — which the old
- *      `/tmp/proteus-test-63938` never did, and that is why nobody could
+ *      `/tmp/kinu-test-63938` never did, and that is why nobody could
  *      attribute the leak while watching the number rise.
  *   2. ONE RELEASE, in the one place that runs. `scripts/test-preload.ts` is
  *      preloaded into every `bun test` process and registers a `bun:test`
@@ -28,7 +28,7 @@
  *      (measured: both, plus the failing case). What does NOT work, measured
  *      three ways, is `process.on('exit')` — bun's test runner never reaches it,
  *      which is why the first version of this module was a leak with a nicer
- *      name and why `test-preload` had been stranding one PROTEUS_HOME per
+ *      name and why `test-preload` had been stranding one KINU_HOME per
  *      invocation while claiming otherwise. Past SIGKILL nothing can run, and
  *      `scripts/preflight.ts --reclaim` stays the backstop for that.
  *   3. ONE CATALOGUE, read by the collector. `scripts/preflight.ts` imports
@@ -46,8 +46,8 @@ import { join } from 'node:path';
  * `--reclaim` it offers, so anything absent here is invisible to the instrument
  * and never collected.
  *
- * `proteus-` is deliberately coarse: it covers `proteus-scratch-` and every
- * pre-existing suite-specific name in one entry, because a `/tmp/proteus-*`
+ * `kinu-` is deliberately coarse: it covers `kinu-scratch-` and every
+ * pre-existing suite-specific name in one entry, because a `/tmp/kinu-*`
  * directory on any box running this repo is ours by construction and a list of
  * sixty exact spellings is the thing that already drifted. The rest are the
  * gate and harness names that do not carry the project prefix — a fixed set,
@@ -63,7 +63,7 @@ import { join } from 'node:path';
  * begins with any prefix here.
  */
 export const SCRATCH_PREFIXES = [
-  'proteus-',
+  'kinu-',
   'agent-core-',
   'bench-external-',
   'cc-corpus-',
@@ -83,7 +83,7 @@ export const SCRATCH_PREFIXES = [
 ] as const;
 
 /** The namespace every directory minted through {@link scratchDir} carries. */
-export const SCRATCH_ROOT_PREFIX = 'proteus-scratch-';
+export const SCRATCH_ROOT_PREFIX = 'kinu-scratch-';
 
 /** Directories this process minted and still owns. */
 const minted = new Set<string>();
@@ -135,7 +135,7 @@ export function releaseScratch(): number {
  * invocation, and runs even when a test file failed — which is the property
  * this whole module exists to provide. The same measurement explains a leak
  * nobody had attributed: `test-preload` claimed `exit` covered its throwaway
- * PROTEUS_HOME, so it stranded one per `bun test` invocation, 274 of them on
+ * KINU_HOME, so it stranded one per `bun test` invocation, 274 of them on
  * this box, and its 30-minute stale sweeper was that leak being papered over.
  */
 export function scratchDir(label: string): string {
@@ -147,7 +147,7 @@ export function scratchDir(label: string): string {
 /**
  * A path INSIDE a fresh scratch directory — for the callers that need a file
  * that does not exist yet, `dbPath` above all. Hand-rolling this as
- * `/tmp/proteus-test-${performance.now()}.db` is what put 5,489 directories in
+ * `/tmp/kinu-test-${performance.now()}.db` is what put 5,489 directories in
  * `/tmp`: the name was unique, unowned, and unattributable.
  */
 export function scratchPath(label: string, name: string): string {

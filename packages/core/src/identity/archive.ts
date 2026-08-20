@@ -86,7 +86,7 @@ export const WORKSPACE_ARCHIVE_VERSION = 2;
 
 /** File extension the CLI and the browser download use, so an archive is
  *  recognizable as one wherever it is stored. */
-export const WORKSPACE_ARCHIVE_EXTENSION = '.proteus.jsonl';
+export const WORKSPACE_ARCHIVE_EXTENSION = '.kinu.jsonl';
 
 /**
  * Tables an archive never carries. Everything else in the workspace's SQLite
@@ -178,7 +178,7 @@ export interface ArchiveExportOptions {
 
 interface ArchiveHeader {
   t: 'header';
-  proteus_workspace_archive: number;
+  kinu_workspace_archive: number;
   workspace: string;
   source: 'cloud' | 'local';
   exported_at: number;
@@ -234,7 +234,7 @@ const EncodedSqlValueSchema: v.GenericSchema<EncodedSqlValue> = v.union([
 const ArchiveRecordSchema: v.GenericSchema<ArchiveRecord> = v.variant('t', [
   v.object({
     t: v.literal('header'),
-    proteus_workspace_archive: v.number(),
+    kinu_workspace_archive: v.number(),
     workspace: v.string(),
     source: v.picklist(['cloud', 'local']),
     exported_at: v.number(),
@@ -278,7 +278,7 @@ const FIRST_BATCH = 8;
 const MAX_BATCH = 200;
 /** Column the row query adds to carry the keyset position; stripped before a
  *  row is emitted. */
-const ROWID_ALIAS = '__proteus_rowid';
+const ROWID_ALIAS = '__kinu_rowid';
 
 interface SchemaObject {
   kind: SchemaKind;
@@ -414,7 +414,7 @@ export async function readWorkspaceArchivePage(
   } else if (!fileCursor) {
     const header: ArchiveHeader = {
       t: 'header',
-      proteus_workspace_archive: WORKSPACE_ARCHIVE_VERSION,
+      kinu_workspace_archive: WORKSPACE_ARCHIVE_VERSION,
       workspace: opts.workspace,
       source: opts.source,
       exported_at: opts.now ?? Date.now(),
@@ -569,7 +569,7 @@ export async function restoreWorkspaceArchive(
       throw new Error('This file is not a Kinu workspace archive (unparsable line).', { cause: error });
     }
     if (!header) {
-      if (record.t !== 'header' || record.proteus_workspace_archive !== WORKSPACE_ARCHIVE_VERSION) {
+      if (record.t !== 'header' || record.kinu_workspace_archive !== WORKSPACE_ARCHIVE_VERSION) {
         throw new Error(
           `This file is not a Kinu workspace archive v${WORKSPACE_ARCHIVE_VERSION}.`,
         );

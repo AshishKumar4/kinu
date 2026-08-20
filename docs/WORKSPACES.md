@@ -41,7 +41,7 @@ agents are the actors that work inside it.
 ## What this means concretely
 
 - **The name is the workspace's.** The Durable Object address, the sandbox key
-  (`proteus-<name>`), the nimbus session key, the email address
+  (`kinu-<name>`), the nimbus session key, the email address
   (`<name>@EMAIL_DOMAIN`), and the registry row all key on the workspace name.
   The default agent has no separate name. It *is* the workspace's voice.
 - **Ownership is workspace-level.** `workspace_identity.owner_user_id` is the
@@ -73,7 +73,7 @@ agents are the actors that work inside it.
 
     Hosted nodes run over the canonical workspace with actor-private shell
     state and scaffold. `facetRuntime` gives each one a `node:<name>` shell id
-    and a scaffold at `.proteus/nodes/<name>/scaffold/agent.js` over the
+    and a scaffold at `.kinu/nodes/<name>/scaffold/agent.js` over the
     PARENT's file plane (`cf-backend/src/exploration.ts:178-191`). Local nodes
     use private scratch and address the canonical parent through `parent.*`.
     MCTS rollouts use the same facet class in a separate toolless mode and
@@ -123,7 +123,7 @@ agents are the actors that work inside it.
 | Web routes | `/workspace/<name>`, `/api/workspaces/<name>/*`, `/api/user/workspaces` |
 | CLI | `kinu create <name>`, `kinu exec --workspace <name>`, `/api/cli/workspaces/*` |
 | Access-token scopes | `workspace.read`, `workspace.exec` |
-| MCP resources | `proteus://workspace/<name>/{memory,scaffold}` |
+| MCP resources | `kinu://workspace/<name>/{memory,scaffold}` |
 | Identity API (core) | `createWorkspace` / `openWorkspace` / `forkWorkspaceStorage` |
 | Registry (UserDO) | `user_workspaces` + `listWorkspaces` / `hasWorkspace` / … |
 

@@ -66,7 +66,7 @@ export function memoryPorts(): MemoryPorts {
     transcripts: {
       writes,
       // Closure-based (no `this`): the engine passes citablePath around unbound.
-      citablePath: (sessionKey, rangeHash) => `.proteus/compaction/${sessionKey}/${rangeHash}.md`,
+      citablePath: (sessionKey, rangeHash) => `.kinu/compaction/${sessionKey}/${rangeHash}.md`,
       write: async (relativePath, content) => {
         writes.set(relativePath, content);
         return { absolutePath: relativePath };

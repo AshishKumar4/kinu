@@ -93,7 +93,7 @@ export const AGENT_CONFIG_KEYS = {
   memoryVectorBackfillDone: 'memory_vector_backfill_done',
   memoryVectorBackfillCursor: 'memory_vector_backfill_cursor',
   /** Constructions of this agent object, bumped once per activation. The span
-   *  attribute `proteus.isolate_gen` — persisted BECAUSE a boot-time counter
+   *  attribute `kinu.isolate_gen` — persisted BECAUSE a boot-time counter
    *  cannot see a reconstruction that reuses the isolate, which is how a Kinu
    *  fork most commonly dies (`ctx.facets.abort()`). */
   isolateGen: 'isolate_gen',

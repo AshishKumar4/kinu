@@ -36,7 +36,7 @@ let sdkResponse: Response | null = null;
 let sdkRequest: Request | null = null;
 // `mock.module` replaces the whole module for the rest of the run, so the stub
 // has to carry every export the src graph binds — `Sandbox` and `getSandbox`
-// are load-time named imports in proteus-sandbox/orchestrator/runtime, and a
+// are load-time named imports in kinu-sandbox/orchestrator/runtime, and a
 // proxyToSandbox-only stub makes any later import of the Worker entry a
 // load-time SyntaxError.
 mock.module('@cloudflare/sandbox', () => ({
@@ -52,9 +52,9 @@ const { SDK_FORWARD_FAILURE, servePreviewRequest } = await import('../src/previe
 const root = join(import.meta.dir, '..');
 const source = (path: string): string => readFileSync(join(root, path), 'utf8');
 
-const APP = 'https://proteus.example.com';
+const APP = 'https://kinu.example.com';
 const SUFFIX = 'previews.example';
-const PREVIEW_HOST = `8080-proteus-hello-p8080_ab12cd34.${SUFFIX}`;
+const PREVIEW_HOST = `8080-kinu-hello-p8080_ab12cd34.${SUFFIX}`;
 const PREVIEW_URL = `https://${PREVIEW_HOST}/`;
 const OWNER = '0123456789abcdef0123456789abcdef';
 const ENV = {
@@ -202,13 +202,13 @@ describe('preview host resolution', () => {
 
   test('the app host can be the preview suffix without making the app a preview', () => {
     const env = testEnv({
-      CLI_PUBLIC_ORIGIN: 'https://proteus.example.com',
-      PREVIEW_HOST_SUFFIX: 'proteus.example.com',
+      CLI_PUBLIC_ORIGIN: 'https://kinu.example.com',
+      PREVIEW_HOST_SUFFIX: 'kinu.example.com',
     });
-    expect(previewHostSuffix(env)).toBe('proteus.example.com');
-    expect(isPreviewHostRequest(new URL('https://proteus.example.com/'), env)).toBe(false);
+    expect(previewHostSuffix(env)).toBe('kinu.example.com');
+    expect(isPreviewHostRequest(new URL('https://kinu.example.com/'), env)).toBe(false);
     expect(isPreviewHostRequest(
-      new URL('https://8080-proteus-app-p8080_ab12cd34.proteus.example.com/'),
+      new URL('https://8080-kinu-app-p8080_ab12cd34.kinu.example.com/'),
       env,
     )).toBe(true);
   });
@@ -224,8 +224,8 @@ describe('preview host resolution', () => {
 
   test('an app hosted inside the preview zone is still served as the app', () => {
     // The suffix may legitimately be the app's own registrable domain.
-    const env = { CLI_PUBLIC_ORIGIN: 'https://proteus.example.com', PREVIEW_HOST_SUFFIX: 'example.com' };
-    expect(isPreviewHostRequest(new URL('https://proteus.example.com/'), env)).toBe(false);
+    const env = { CLI_PUBLIC_ORIGIN: 'https://kinu.example.com', PREVIEW_HOST_SUFFIX: 'example.com' };
+    expect(isPreviewHostRequest(new URL('https://kinu.example.com/'), env)).toBe(false);
     expect(isPreviewHostRequest(new URL('https://8080-a-b.example.com/'), env)).toBe(true);
   });
 
@@ -249,12 +249,12 @@ describe('serving the preview host', () => {
     sdkRequest = null;
     const res = await servePreviewRequest(new Request(PREVIEW_URL, {
       headers: {
-        cookie: '__Host-proteus_session=owner; guest_session=guest; __Host-proteus_d1_bookmark=bookmark',
+        cookie: '__Host-kinu_session=owner; guest_session=guest; __Host-kinu_d1_bookmark=bookmark',
         authorization: `Bearer pdt_${'a'.repeat(32)}`,
         'proxy-authorization': 'Basic c2VjcmV0',
-        'x-proteus-user-id': OWNER,
-        'x-proteus-auth-scope': 'owner',
-        'x-proteus-internal-ticket': 'secret',
+        'x-kinu-user-id': OWNER,
+        'x-kinu-auth-scope': 'owner',
+        'x-kinu-internal-ticket': 'secret',
         'x-guest-header': 'kept',
       },
     }), testEnv(ENV));
@@ -265,9 +265,9 @@ describe('serving the preview host', () => {
     expect(forwarded.headers.get('cookie')).toBe('guest_session=guest');
     expect(forwarded.headers.get('authorization')).toBeNull();
     expect(forwarded.headers.get('proxy-authorization')).toBeNull();
-    expect(forwarded.headers.get('x-proteus-user-id')).toBeNull();
-    expect(forwarded.headers.get('x-proteus-auth-scope')).toBeNull();
-    expect(forwarded.headers.get('x-proteus-internal-ticket')).toBeNull();
+    expect(forwarded.headers.get('x-kinu-user-id')).toBeNull();
+    expect(forwarded.headers.get('x-kinu-auth-scope')).toBeNull();
+    expect(forwarded.headers.get('x-kinu-internal-ticket')).toBeNull();
     expect(forwarded.headers.get('x-guest-header')).toBe('kept');
   });
 
@@ -356,10 +356,10 @@ describe('serving a Nimbus preview host', () => {
     const response = await handleNimbusPreviewHostRequest(new Request(`${NIMBUS_URL}api/items?x=1`, {
       method: 'POST',
       headers: {
-        cookie: '__Host-proteus_session=owner; guest_session=guest; __Host-proteus_d1_bookmark=bookmark',
+        cookie: '__Host-kinu_session=owner; guest_session=guest; __Host-kinu_d1_bookmark=bookmark',
         authorization: 'Bearer pta_0123456789abcdef0123456789abcdef_secret',
         'proxy-authorization': 'Basic c2VjcmV0',
-        'x-proteus-user-id': OWNER,
+        'x-kinu-user-id': OWNER,
         'x-guest-header': 'kept',
       },
       body: 'payload',
@@ -378,7 +378,7 @@ describe('serving a Nimbus preview host', () => {
     expect(routed.headers.get('cookie')).toBe('guest_session=guest');
     expect(routed.headers.get('authorization')).toBeNull();
     expect(routed.headers.get('proxy-authorization')).toBeNull();
-    expect(routed.headers.get('x-proteus-user-id')).toBeNull();
+    expect(routed.headers.get('x-kinu-user-id')).toBeNull();
     expect(routed.headers.get('x-guest-header')).toBe('kept');
     expect(routed.headers.get('x-nimbus-base')).toBeNull();
   });
@@ -458,7 +458,7 @@ describe('serving a Nimbus preview host', () => {
       headers: {
         upgrade: 'websocket',
         authorization: 'Bearer guest-token',
-        cookie: '__Host-proteus_session=owner; guest_session=guest',
+        cookie: '__Host-kinu_session=owner; guest_session=guest',
         'x-nimbus-preview-capability': 'client-forgery',
       },
     }), env);
@@ -495,7 +495,7 @@ describe('what the app is willing to frame', () => {
   test('accepts a preview hostname', () => {
     expect(isPreviewUrl(PREVIEW_URL, SUFFIX)).toBe(true);
     expect(isPreviewUrl(`${PREVIEW_URL}index.html?x=1`, SUFFIX)).toBe(true);
-    expect(isPreviewUrl(`https://80-proteus-hello-p80_ab12cd34.${SUFFIX}/`, SUFFIX)).toBe(true);
+    expect(isPreviewUrl(`https://80-kinu-hello-p80_ab12cd34.${SUFFIX}/`, SUFFIX)).toBe(true);
     expect(isPreviewUrl(PREVIEW_URL, null)).toBe(false);
   });
 
@@ -504,15 +504,15 @@ describe('what the app is willing to frame', () => {
     expect(isPreviewUrl(`https://user:pw@${PREVIEW_HOST}/`, SUFFIX)).toBe(false);
     // The label has to be the whole first label, not buried in a longer one.
     expect(isPreviewUrl(`https://evil.example/${PREVIEW_HOST}/`, SUFFIX)).toBe(false);
-    expect(isPreviewUrl(`https://x8080-proteus-hello-tok.${SUFFIX}/`, SUFFIX)).toBe(false);
-    expect(isPreviewUrl(`https://8080-proteus.${SUFFIX}/`, SUFFIX)).toBe(false);
+    expect(isPreviewUrl(`https://x8080-kinu-hello-tok.${SUFFIX}/`, SUFFIX)).toBe(false);
+    expect(isPreviewUrl(`https://8080-kinu.${SUFFIX}/`, SUFFIX)).toBe(false);
     expect(isPreviewUrl('https://evil.example/', SUFFIX)).toBe(false);
     expect(isPreviewUrl('javascript:alert(1)', SUFFIX)).toBe(false);
     expect(isPreviewUrl('not a url', SUFFIX)).toBe(false);
-    expect(isPreviewUrl(`https://0-proteus-hello-p0_ab12cd34.${SUFFIX}/`, SUFFIX)).toBe(false);
-    expect(isPreviewUrl(`https://65536-proteus-hello-p65536_ab12cd34.${SUFFIX}/`, SUFFIX)).toBe(false);
-    expect(isPreviewUrl('https://8080-proteus-phish-p8080_ab12cd34.evil.example/', SUFFIX)).toBe(false);
-    expect(isPreviewUrl(`https://8080-proteus-phish-p8080_ab12cd34.nested.${SUFFIX}/`, SUFFIX)).toBe(false);
+    expect(isPreviewUrl(`https://0-kinu-hello-p0_ab12cd34.${SUFFIX}/`, SUFFIX)).toBe(false);
+    expect(isPreviewUrl(`https://65536-kinu-hello-p65536_ab12cd34.${SUFFIX}/`, SUFFIX)).toBe(false);
+    expect(isPreviewUrl('https://8080-kinu-phish-p8080_ab12cd34.evil.example/', SUFFIX)).toBe(false);
+    expect(isPreviewUrl(`https://8080-kinu-phish-p8080_ab12cd34.nested.${SUFFIX}/`, SUFFIX)).toBe(false);
   });
 
   test('accepts isolated Nimbus capability hosts and rejects the removed app-host path', () => {
@@ -534,7 +534,7 @@ describe('what the app is willing to frame', () => {
     expect(extractPreviewUrl('see https://evil.example/8080-a-b/', SUFFIX)).toBeNull();
     expect(extractPreviewUrl('nothing here', SUFFIX)).toBeNull();
     expect(extractPreviewUrl({ url: NIMBUS_URL }, SUFFIX)).toBe(NIMBUS_URL);
-    expect(extractPreviewUrl('https://8080-proteus-phish-p8080_ab12cd34.evil.example/', SUFFIX)).toBeNull();
+    expect(extractPreviewUrl('https://8080-kinu-phish-p8080_ab12cd34.evil.example/', SUFFIX)).toBeNull();
   });
 });
 
@@ -564,7 +564,7 @@ describe('the app document policy', () => {
   });
 
   test('the chat WebSocket survives the connect-src rule', () => {
-    expect(appDocumentCsp(new URL(APP), null)).toContain("connect-src 'self' wss://proteus.example.com");
+    expect(appDocumentCsp(new URL(APP), null)).toContain("connect-src 'self' wss://kinu.example.com");
   });
 
   // KaTeX_Size3-Regular.woff2 is under Vite's inline threshold, so the bundle
@@ -587,7 +587,7 @@ describe('the app document policy', () => {
 });
 
 describe('CSRF on cookie-authenticated requests', () => {
-  const cookie = { cookie: '__Host-proteus_session=abc' };
+  const cookie = { cookie: '__Host-kinu_session=abc' };
   const post = (headers: Record<string, string>) =>
     new Request(`${APP}/api/user/credentials/anthropic`, { method: 'POST', headers, body: '{}' });
 
@@ -691,7 +691,7 @@ describe('worker wiring', () => {
   });
 
   test('the live Outputs poll includes the canonical workspace and sandbox', () => {
-    const hook = source('src/hooks/use-proteus.ts');
+    const hook = source('src/hooks/use-kinu.ts');
     expect(hook).toContain('["workspace", "sandbox"].map');
     expect(hook).toContain('reconcilePreviewPorts(previous, results)');
     expect(hook).toContain('setPreviewError(next.error)');

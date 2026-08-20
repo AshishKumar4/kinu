@@ -194,7 +194,7 @@ export async function receivePeerMessage(
     topic: msg.topic,
     body: msg.body,
     sender_event_id: msg.sender_event_id,
-    proteus_mode: msg.mode,
+    kinu_mode: msg.mode,
     reply_expected: msg.reply_expected ?? false,
   };
   if (bodyPath) Object.assign(payload, { body_path: bodyPath });

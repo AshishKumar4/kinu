@@ -55,7 +55,7 @@ import {
   BATCH_SIZE, CHUNK_SIZE, MAX_TX_BLOB_BYTES, MAX_TX_LOGICAL_ROWS, MAX_TX_SQL_EXECS,
 } from '@nimbus-sh/core/constants.js';
 import { argumentDigest } from '../safety/argument-digest';
-import { ProteusError, refusalOf, type Refusal } from '../obs/error';
+import { KinuError, refusalOf, type Refusal } from '../obs/error';
 import type { Logger } from '../obs/log';
 import type { SwarmCarrySetting, SwarmSettle } from './swarm';
 import { admitsPublication, type PublicationState } from './objective';
@@ -789,7 +789,7 @@ async function reverified(
   member: MergeMember, baseDigest: string, deps: MergeBackDeps,
 ): Promise<MemberVerdict | Refusal> {
   if (!deps.reverify) {
-    return refusalOf(new ProteusError('unavailable',
+    return refusalOf(new KinuError('unavailable',
       `node ${member.nodeId}'s verdict was issued against a base this settle has since changed, and `
       + 'no re-verification is wired, so the verdict cannot be revalidated. A stale verdict never '
       + 'applies: wire a Reverifier over the verifier registry, or merge this member first so its '
@@ -801,7 +801,7 @@ async function reverified(
   // question that was asked. Accepting it would reintroduce the staleness the
   // re-check exists to remove, one level down.
   if (fresh.baseDigest !== baseDigest) {
-    return refusalOf(new ProteusError('unavailable',
+    return refusalOf(new KinuError('unavailable',
       `node ${member.nodeId}'s re-verification returned a verdict bound to a different base than `
       + 'the one it was asked about, so it does not revalidate this apply.'));
   }
@@ -883,7 +883,7 @@ async function applyOne(
         renderThrownChain({ cause: err })
       }. The transaction is all-or-nothing, so nothing of this member landed.`);
     deps.log.failure('swarm.merge_apply_failed',
-      new ProteusError('io', refusal.error, { cause: err instanceof Error ? err : undefined }),
+      new KinuError('io', refusal.error, { cause: err instanceof Error ? err : undefined }),
       { preset: deps.preset, policy, node: member.nodeId, cause: refusal.cause });
     return { kind: 'refused', nodeId: member.nodeId, refusal };
   }
@@ -956,7 +956,7 @@ function refuse(
   reason: 'bad_input' | 'denied' | 'unsupported' | 'unavailable' | 'missing' | 'io',
   message: string,
 ): MergeRefusal {
-  return { ...refusalOf(new ProteusError(reason, message)), cause };
+  return { ...refusalOf(new KinuError(reason, message)), cause };
 }
 
 /* ── `carry` admission at settle ──────────────────────────────────────────── */

@@ -18,7 +18,7 @@ function runProviders(
   args: string[],
   opts: { claude?: 'ready' | 'logged-out'; home: string; env?: Record<string, string> },
 ) {
-  const binDir = mkdtempSync(join(tmpdir(), 'proteus-claude-bin-'));
+  const binDir = mkdtempSync(join(tmpdir(), 'kinu-claude-bin-'));
   tempDirs.push(binDir);
   // Controlled PATH excludes the user's real `claude` so "absent" is honest;
   // /usr/bin + /bin keep `bash`/`env` available for the fake binary's shebang.
@@ -50,8 +50,8 @@ function runProviders(
     env: {
       ...process.env,
       OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', OPENROUTER_API_KEY: '', CODEX_ACCESS_TOKEN: '',
-      PROTEUS_BASE_URL: '', PROTEUS_AUTH: '', PROTEUS_MODEL: '',
-      PATH: path, PROTEUS_HOME: opts.home, NO_COLOR: '1',
+      KINU_BASE_URL: '', KINU_AUTH: '', KINU_MODEL: '',
+      PATH: path, KINU_HOME: opts.home, NO_COLOR: '1',
       ...opts.env,
     },
     stdout: 'pipe',
@@ -65,7 +65,7 @@ function runProviders(
 }
 
 function freshHome(): string {
-  const home = mkdtempSync(join(tmpdir(), 'proteus-providers-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'kinu-providers-home-'));
   tempDirs.push(home);
   return home;
 }

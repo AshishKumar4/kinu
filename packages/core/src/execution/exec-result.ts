@@ -40,7 +40,7 @@
  */
 
 import * as v from 'valibot';
-import { refusalOf, tolerate, type ProteusError } from '../obs/index';
+import { refusalOf, tolerate, type KinuError } from '../obs/index';
 import { parseJsonValue } from '../utils/json';
 
 const ErrorResultSchema = v.object({ error: v.string() });
@@ -77,7 +77,7 @@ export const NO_OUTPUT = '(no output)';
  * `tools/file-tool.ts` returns its refusals and `run`'s escalation paths return
  * theirs.
  */
-export function refusalText(error: ProteusError): string {
+export function refusalText(error: KinuError): string {
   return JSON.stringify(refusalOf(error));
 }
 

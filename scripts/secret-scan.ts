@@ -89,7 +89,7 @@ export const PATTERNS: readonly SecretPattern[] = [
     // let the fragment through twice over. `…`/`...` are benign only when they
     // elide the whole body directly after the prefix, i.e. prose NAMING the
     // shape rather than quoting a value.
-    id: 'proteus-token',
+    id: 'kinu-token',
     regex: /\bp(?:ta|tc|dt)_[0-9a-f]{8,}/g,
     benign: /<your-|\bp(?:ta|tc|dt)_(?:\.\.\.|…)/,
     message: 'Kinu access/CLI/device token (rotate it — a printed-once value that reached a file is compromised)',

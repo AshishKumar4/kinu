@@ -1,4 +1,4 @@
-import type { ConnectionStatus } from "@/hooks/use-proteus";
+import type { ConnectionStatus } from "@/hooks/use-kinu";
 
 const STATUS_MAP = {
   connected:    { dot: "bg-[var(--c-success)]", cls: "p-success", label: "Connected" },

@@ -484,7 +484,7 @@ describe('kinu label mine', () => {
     const result = Bun.spawnSync({
       cmd: [process.execPath, cliBin, 'label', 'score', 'somewhere-else', '--root', newRoot()],
       cwd: repoRoot,
-      env: { ...process.env, NO_COLOR: '1', PROTEUS_HOME: newRoot() },
+      env: { ...process.env, NO_COLOR: '1', KINU_HOME: newRoot() },
     });
     expect(`${result.stdout.toString()}${result.stderr.toString()}`)
       .toContain('is a cloud agent');
@@ -508,7 +508,7 @@ describe('kinu label mine', () => {
     const result = Bun.spawnSync({
       cmd: [process.execPath, cliBin, 'label', 'score', 'demo', '--root', root],
       cwd: repoRoot,
-      env: { ...process.env, NO_COLOR: '1', PROTEUS_HOME: home },
+      env: { ...process.env, NO_COLOR: '1', KINU_HOME: home },
     });
     expect(`${result.stdout.toString()}${result.stderr.toString()}`)
       .toContain('no rule fired on any mined turn');

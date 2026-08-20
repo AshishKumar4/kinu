@@ -1,6 +1,6 @@
 import { checkClaudeAvailability, checkOpenCodeAvailability } from '@kinu/cli-backend';
 import { deleteCloudCredential, listCloudCredentials, type CloudCredentialSummary } from '../cloud-api';
-import { loadConfigFile, resolveCloudSession, updateConfigFile, type ProteusConfig } from '../config';
+import { loadConfigFile, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { authCommand } from './auth';
 import { setupCommand } from './setup';
@@ -28,7 +28,7 @@ interface ParsedProviderArgs {
 }
 
 interface LocalCredential {
-  clear: (providers: NonNullable<ProteusConfig['providers']>) => boolean;
+  clear: (providers: NonNullable<KinuConfig['providers']>) => boolean;
   envVars: string[];
   /** The account-side key the same provider is stored under, when it can be. */
   credKey?: string;
@@ -161,7 +161,7 @@ function parseArgs(actionOrProvider: string | undefined, providerArg: string | u
   return { action: 'connect', provider: normalizeProvider(actionOrProvider) };
 }
 
-/** The credential a provider stores in ~/.proteus/config.json, and the env
+/** The credential a provider stores in ~/.kinu/config.json, and the env
  *  vars that would keep supplying it after the file entry is gone. Providers
  *  absent from this map hold no Kinu-owned credential. */
 const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
@@ -186,13 +186,13 @@ const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
   }],
   ['openai-compatible', {
     clear: (p) => deleteKey(p, 'openaiCompat'),
-    envVars: ['PROTEUS_BASE_URL', 'PROTEUS_AUTH'],
+    envVars: ['KINU_BASE_URL', 'KINU_AUTH'],
     credKey: 'openai-compat.default',
   }],
 ]);
 
-function deleteKey<K extends keyof NonNullable<ProteusConfig['providers']>>(
-  providers: NonNullable<ProteusConfig['providers']>,
+function deleteKey<K extends keyof NonNullable<KinuConfig['providers']>>(
+  providers: NonNullable<KinuConfig['providers']>,
   key: K,
 ): boolean {
   if (providers[key] === undefined) return false;

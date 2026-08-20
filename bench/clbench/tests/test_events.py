@@ -18,7 +18,7 @@ from pathlib import Path
 # adapter, which only imports inside a CL-Bench checkout, and the point of
 # events.py is that it needs nothing.
 _SPEC = importlib.util.spec_from_file_location(
-    "proteus_events", Path(__file__).resolve().parents[1] / "proteus" / "events.py"
+    "kinu_events", Path(__file__).resolve().parents[1] / "kinu" / "events.py"
 )
 assert _SPEC and _SPEC.loader
 events = importlib.util.module_from_spec(_SPEC)
@@ -49,7 +49,7 @@ REAL_TURN = "\n".join(
             "id": "20260727060006-687f10fb",
             "workspace": "clbench",
             "backend": "local",
-            "cwd": "/home/u/.cache/proteus_bench/run_s14u5q8a/work",
+            "cwd": "/home/u/.cache/kinu_bench/run_s14u5q8a/work",
         },
         {"type": "turn_start", "kind": "user", "text": "=== Brief ===\nObjective: ..."},
         {"type": "message_delta", "role": "assistant", "delta": "```json"},
@@ -138,7 +138,7 @@ class UsageReading(unittest.TestCase):
         self.assertNotIn("cacheRead", usage)
         self.assertEqual(sorted(usage), ["input", "output"])
 
-    def test_sums_across_turns_because_proteus_reports_per_turn(self) -> None:
+    def test_sums_across_turns_because_kinu_reports_per_turn(self) -> None:
         turns = [
             {"type": "turn_end", "usage": {"input": 10, "output": 2, "cacheRead": 1}},
             {"type": "turn_end", "usage": {"input": 20, "output": 3, "cacheRead": 4}},

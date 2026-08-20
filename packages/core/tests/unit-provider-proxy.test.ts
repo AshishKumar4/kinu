@@ -57,7 +57,7 @@ describe('provider proxy fetch', () => {
   test('relocates a marked request and swaps in the caller bearer', async () => {
     const { seen, fetch: base } = capture();
     const proxied = createProviderProxyFetch({
-      forwardURL: providerProxyForwardURL('https://proteus.example.com/'),
+      forwardURL: providerProxyForwardURL('https://kinu.example.com/'),
       authorization: 'Bearer ptc_test',
       fetch: base,
     });
@@ -73,7 +73,7 @@ describe('provider proxy fetch', () => {
     });
 
     expect(seen).toHaveLength(1);
-    expect(seen[0]?.url).toBe('https://proteus.example.com/api/user/ai/proxy/forward');
+    expect(seen[0]?.url).toBe('https://kinu.example.com/api/user/ai/proxy/forward');
     const headers = new Headers(seen[0]?.init?.headers);
     expect(headers.get('authorization')).toBe('Bearer ptc_test');
     expect(headers.get(PROXY_CRED_HEADER)).toBe('openrouter.bearer');
@@ -86,7 +86,7 @@ describe('provider proxy fetch', () => {
   test('leaves an unmarked request exactly as it was — a local key still goes direct', async () => {
     const { seen, fetch: base } = capture();
     const proxied = createProviderProxyFetch({
-      forwardURL: 'https://proteus.example.com/api/user/ai/proxy/forward',
+      forwardURL: 'https://kinu.example.com/api/user/ai/proxy/forward',
       authorization: 'Bearer ptc_test',
       fetch: base,
     });
@@ -100,13 +100,13 @@ describe('provider proxy fetch', () => {
   test('attaches session headers to proxied requests', async () => {
     const { seen, fetch: base } = capture();
     const proxied = createProviderProxyFetch({
-      forwardURL: 'https://proteus.example.com/api/user/ai/proxy/forward',
+      forwardURL: 'https://kinu.example.com/api/user/ai/proxy/forward',
       authorization: 'Bearer ptc_test',
-      headers: { 'x-session-affinity': 'proteus-alpha' },
+      headers: { 'x-session-affinity': 'kinu-alpha' },
       fetch: base,
     });
     await proxied('https://openrouter.ai/api/v1/models', { headers: { [PROXY_CRED_HEADER]: 'openrouter.bearer' } });
-    expect(new Headers(seen[0]?.init?.headers).get('x-session-affinity')).toBe('proteus-alpha');
+    expect(new Headers(seen[0]?.init?.headers).get('x-session-affinity')).toBe('kinu-alpha');
   });
 });
 

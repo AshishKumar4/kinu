@@ -11,7 +11,7 @@ import { deriveUserId, verifySession } from './store';
 import type { KvStore } from '../lib/kv';
 import type { AccessTokenScope } from '../cli/access-token-store';
 
-export const SESSION_COOKIE_NAME = '__Host-proteus_session';
+export const SESSION_COOKIE_NAME = '__Host-kinu_session';
 
 export interface AuthIdentity {
   /** Stable Kinu user id. */

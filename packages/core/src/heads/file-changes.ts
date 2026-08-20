@@ -24,7 +24,7 @@
  * guess; {@link HEAD_FILE_CHANGE_PROVENANCE} is the sentence that says so
  * wherever the set is rendered.
  *
- * Actor-private control state is stored beneath `.proteus` and is not part of
+ * Actor-private control state is stored beneath `.kinu` and is not part of
  * the head tool surface.
  */
 

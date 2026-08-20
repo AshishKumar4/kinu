@@ -60,7 +60,7 @@ export const GATE = 'dependency-advisories';
 export const SCANNER_PATH = './scripts/security-scanner.ts';
 
 /** Names the environment variable that records "I know the feed was down". */
-export const UNREACHABLE_ACK = 'PROTEUS_ADVISORY_FEED_BLOCKED';
+export const UNREACHABLE_ACK = 'KINU_ADVISORY_FEED_BLOCKED';
 
 /* ── The wiring ─────────────────────────────────────────────────────────── */
 

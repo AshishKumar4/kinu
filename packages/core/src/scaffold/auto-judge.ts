@@ -30,7 +30,7 @@ import {
   recordShadowEvaluation, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow';
 import { runScaffold, scaffoldEventText, SCAFFOLD_TURN_TIMEOUT_MS, type ScaffoldRunResult } from './executor';
-import { diagnostics, ProteusError, toProteusError } from '../obs/index';
+import { diagnostics, KinuError, toKinuError } from '../obs/index';
 
 /**
  * Structured output of ONE judge call. Deliberately neutral: the judge sees
@@ -194,7 +194,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   } catch (err) {
     diagnostics.failure(
       'scaffold.pending_run_failed',
-      toProteusError({ doing: 'run the pending scaffold for a shadow trial', cause: err, otherwise: 'unavailable' }),
+      toKinuError({ doing: 'run the pending scaffold for a shadow trial', cause: err, otherwise: 'unavailable' }),
     );
     return { skipped: true, reason: 'pending_unreadable' };
   }
@@ -216,7 +216,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   } catch (err) {
     diagnostics.failure(
       'scaffold.judge_failed',
-      toProteusError({ doing: 'judge a shadow trial', cause: err, otherwise: 'unavailable' }),
+      toKinuError({ doing: 'judge a shadow trial', cause: err, otherwise: 'unavailable' }),
     );
     return { skipped: true };
   }
@@ -246,14 +246,14 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
       if (outcome.vetoReason) {
         diagnostics.failure(
           'scaffold.promotion_vetoed',
-          new ProteusError('denied', outcome.vetoReason),
+          new KinuError('denied', outcome.vetoReason),
           { scaffoldVersion: fresh.version, action: outcome.action },
         );
       }
     } catch (err) {
       diagnostics.failure(
         'scaffold.promotion_apply_failed',
-        toProteusError({ doing: 'apply a scaffold promotion decision', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'apply a scaffold promotion decision', cause: err, otherwise: 'io' }),
         { scaffoldVersion: fresh.version, decision },
       );
     }

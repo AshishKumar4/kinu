@@ -17,7 +17,7 @@ import {
   type ApprovalGrant, type ArchiveCursor, type ArchivePage, type JsonValue,
 } from "@kinu/core";
 import { executorLabel } from "@/lib/executors";
-import { useProteus } from "@/hooks/use-proteus";
+import { useKinu } from "@/hooks/use-kinu";
 import {
   listDevices, listDeviceConsents, setDeviceConsentScope,
   type UserDevice, type DeviceConsentScope,
@@ -123,7 +123,7 @@ function FieldState<T>({ field, what, onRetry, children }: {
 
 export default function SettingsPage() {
   const { agentId } = useParams();
-  const state = useProteus(agentId);
+  const state = useKinu(agentId);
   // Stable pieces only — `state` itself is a fresh object every render, so
   // depending on it from load/save creates a self-sustaining refetch loop
   // that clobbers in-progress edits.

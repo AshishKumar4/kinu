@@ -23,7 +23,7 @@ import { getCurrentScaffoldVersion } from '../scaffold/shadow';
 import type { SignalDeliverer } from '../types/signals';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 
 export interface EvolutionChangelogView {
   entries: ChangelogEntry[];
@@ -91,7 +91,7 @@ export async function pickAlternateTake(
   } catch (err) {
     diagnostics.failure(
       'evolution.take_pick_corroboration_failed',
-      toProteusError({ doing: 'corroborate the lesson behind an alternate take', cause: err, otherwise: 'unavailable' }),
+      toKinuError({ doing: 'corroborate the lesson behind an alternate take', cause: err, otherwise: 'unavailable' }),
       { takeId, nodeId },
     );
   }

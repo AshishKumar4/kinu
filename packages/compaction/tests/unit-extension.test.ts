@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import { CONTEXT_CHECKPOINT_PREFIX, type TransformContext } from '@kinu/core';
 import {
   createCompactionExtension,
-  proteusCodec,
+  kinuCodec,
   type CompactionExtensionDeps,
   type CompactionOutcomeEvent,
   type CompactionProfile,
@@ -217,8 +217,8 @@ describe('plan build', () => {
     if (!result) throw new Error('expected a rewrite');
 
     // Shrunk for real, on the codec's own scale.
-    const before = proteusCodec.estimateTurns(proteusCodec.encode(messages));
-    const after = proteusCodec.estimateTurns(proteusCodec.encode(result));
+    const before = kinuCodec.estimateTurns(kinuCodec.encode(messages));
+    const after = kinuCodec.estimateTurns(kinuCodec.encode(result));
     expect(after).toBeLessThan(before * 0.5);
 
     // The raw tail (from the 2nd-from-last user turn) is byte-verbatim.

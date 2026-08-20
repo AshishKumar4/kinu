@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 const repo = (): string => {
-  const directory = mkdtempSync(join(tmpdir(), 'proteus-git-fixture-'));
+  const directory = mkdtempSync(join(tmpdir(), 'kinu-git-fixture-'));
   scratch.push(directory);
   initRepo(directory);
   return directory;
@@ -69,6 +69,6 @@ describe('the git test fixture', () => {
 
   test('the fixture repo carries its own identity, not the developer\'s', () => {
     const target = repo();
-    expect(git(target, 'config', 'user.email').trim()).toBe('proteus@example.invalid');
+    expect(git(target, 'config', 'user.email').trim()).toBe('kinu@example.invalid');
   });
 });

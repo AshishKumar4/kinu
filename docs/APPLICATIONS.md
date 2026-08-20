@@ -93,7 +93,7 @@ The CLI version runs locally with bun:sqlite, providing the same core capabiliti
 kinu create dev-helper --purpose "A TypeScript development assistant"
 kinu chat dev-helper
 # Agent has access to execute_tools, run, file, agents, memory, tasks, web
-# Evolution happens locally; crafted tools persist in ~/.proteus/dev-helper/agent.db
+# Evolution happens locally; crafted tools persist in ~/.kinu/dev-helper/agent.db
 ```
 
 The CLI agent can:

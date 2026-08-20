@@ -25,11 +25,11 @@ import type {
   LLMProviderConfig, CompletedTurn, TurnContinuity, FiberCtx,
   ModelCallSink,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
-  SessionWriter, SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, ProteusExtension,
+  SessionWriter, SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   AgentsForkDeps, AgentsToolDeps,
-  IngressDescriptor, ProteusEvent, EventVariant, MissingCapability,
+  IngressDescriptor, KinuEvent, EventVariant, MissingCapability,
   RunEvent, RunEventInput, RunEventQuery, StepLike,
   ReleaseStore, ReleaseToolDeps, BuiltinToolName,
   FileCheckpoints, FileCheckpointListing, FileRestorePlan, FileRestoreResult,
@@ -114,7 +114,7 @@ import {
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   priceCall, WORKSPACE_RUN_ID,
 } from '@kinu/core';
-import { diagnostics, ProteusError, renderThrownChain, toProteusError } from '@kinu/core/obs';
+import { diagnostics, KinuError, renderThrownChain, toKinuError } from '@kinu/core/obs';
 import { makeSqlExec, type CLIRuntime } from './runtime';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
@@ -411,7 +411,7 @@ export class LocalAgentSession implements BackendHost {
    *  cloud backend registers, over the same shared stores. Registered on
    *  every turn's ExtensionHost in processTurn. */
   private readonly compactionState: CompactionStateStore;
-  private readonly compactionExtension: ProteusExtension;
+  private readonly compactionExtension: KinuExtension;
 
   private skillsVfs: SkillsVfs | null = null;
 
@@ -530,8 +530,8 @@ export class LocalAgentSession implements BackendHost {
         logger: {
           info: (message) => { diagnostics.event('compaction.info', { message }); },
           debug: (message) => { diagnostics.event('compaction.debug', { message }); },
-          warn: (message) => { diagnostics.failure('compaction.degraded', new ProteusError('unavailable', message)); },
-          error: (message) => { diagnostics.failure('compaction.failed', new ProteusError('io', message)); },
+          warn: (message) => { diagnostics.failure('compaction.degraded', new KinuError('unavailable', message)); },
+          error: (message) => { diagnostics.failure('compaction.failed', new KinuError('io', message)); },
         },
       },
       archive: this.compactionState.archive,
@@ -817,11 +817,11 @@ export class LocalAgentSession implements BackendHost {
     return { event_id: id, admitted };
   }
 
-  pendingEvents(limit = 50): ProteusEvent[] {
+  pendingEvents(limit = 50): KinuEvent[] {
     return this.eventLog.pending({ limit });
   }
 
-  listRecentEvents(opts: { variant?: EventVariant; since?: number; limit?: number } = {}): ProteusEvent[] {
+  listRecentEvents(opts: { variant?: EventVariant; since?: number; limit?: number } = {}): KinuEvent[] {
     return this.eventLog.query(opts);
   }
 
@@ -1010,7 +1010,7 @@ export class LocalAgentSession implements BackendHost {
       if (this.ended) return;
       void fn().catch((error) => diagnostics.failure(
         'drain.timer_callback_failed',
-        toProteusError({ doing: 'running the drain-debounce timer callback', cause: error, otherwise: 'io' }),
+        toKinuError({ doing: 'running the drain-debounce timer callback', cause: error, otherwise: 'io' }),
       ));
     }, ms);
   }
@@ -1259,7 +1259,7 @@ export class LocalAgentSession implements BackendHost {
       if (outcome.status === 'rejected') {
         diagnostics.failure(
           'fiber.settle_failed',
-          toProteusError({ doing: 'settling a durable background fiber', cause: outcome.reason, otherwise: 'io' }),
+          toKinuError({ doing: 'settling a durable background fiber', cause: outcome.reason, otherwise: 'io' }),
           { fiber: name },
         );
       }
@@ -1325,7 +1325,7 @@ export class LocalAgentSession implements BackendHost {
       `this machine. Cancel with: kinu jobs ${this.agentName()} cancel <id>.` +
       (roster ? ` Interrupted: ${roster}.` : '');
     this.emit({ type: 'evolution', event: 'bg_jobs_abandoned', message });
-    diagnostics.failure('jobs.abandoned_at_exit', new ProteusError('timeout', message), {
+    diagnostics.failure('jobs.abandoned_at_exit', new KinuError('timeout', message), {
       jobs: interrupted.length,
     });
   }
@@ -1426,7 +1426,7 @@ export class LocalAgentSession implements BackendHost {
       // just failed, so stderr is the only channel left.
       diagnostics.failure(
         'session.event_listener_failed',
-        toProteusError({ doing: 'delivering a session event to the frontend listener', cause: error, otherwise: 'io' }),
+        toKinuError({ doing: 'delivering a session event to the frontend listener', cause: error, otherwise: 'io' }),
         { eventType: event.type },
       );
     }
@@ -1492,7 +1492,7 @@ export class LocalAgentSession implements BackendHost {
         } catch (err) {
           diagnostics.failure(
             'turn.processing_failed',
-            toProteusError({ doing: 'processing a queued turn', cause: err, otherwise: 'io' }),
+            toKinuError({ doing: 'processing a queued turn', cause: err, otherwise: 'io' }),
           );
         } finally {
           item.resolve();
@@ -1549,7 +1549,7 @@ export class LocalAgentSession implements BackendHost {
     catch (err) {
       diagnostics.failure(
         'event.run_row_write_failed',
-        toProteusError({ doing: 'appending a row to the durable run-event log', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'appending a row to the durable run-event log', cause: err, otherwise: 'io' }),
       );
     }
   }
@@ -1599,7 +1599,7 @@ export class LocalAgentSession implements BackendHost {
    * turn that never ran a step was reported as a turn that succeeded.
    */
   private async processTurn(item: QueueItem): Promise<void> {
-    const parsedEvent = v.safeParse(v.string(), item.metadata?.proteusEvent);
+    const parsedEvent = v.safeParse(v.string(), item.metadata?.kinuEvent);
     const event = parsedEvent.success ? parsedEvent.output : undefined;
     this.turnWorkMode = workModeForTurnMetadata(item.metadata);
     this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event });
@@ -1748,7 +1748,7 @@ export class LocalAgentSession implements BackendHost {
     // shift the indices the user-steer drain replays into durable history.
     const extensions = new ExtensionHost()
       .register(this.compactionExtension)
-      .register({ name: 'proteus.steering', prepareStep: (ctx) => this.userSteer.prepareStep(ctx) })
+      .register({ name: 'kinu.steering', prepareStep: (ctx) => this.userSteer.prepareStep(ctx) })
       .register(this.orch.turnExtension);
     const cache = this.cacheIdentity();
     const effort = this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat;
@@ -1785,7 +1785,7 @@ export class LocalAgentSession implements BackendHost {
       turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
       tools: turnTools,
       transformTrigger: measured.trigger,
-      maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
+      maxSteps: resolveMaxSteps(process.env.KINU_MAX_STEPS),
       cache,
       budget: this.budget,
     };
@@ -1892,7 +1892,7 @@ export class LocalAgentSession implements BackendHost {
         error: message,
         lastPromptTokens: this.orch.acc.lastPromptTokens,
         contextWindow,
-        turnWasOverflowRetry: item.metadata?.proteusEvent === OVERFLOW_RETRY_EVENT,
+        turnWasOverflowRetry: item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT,
         state: this.compactionState,
         sessionKey: cache.sessionKey,
         signals: this.orch.signals,
@@ -1994,7 +1994,7 @@ export class LocalAgentSession implements BackendHost {
       this.closeRun(runError ?? message.slice(0, 500));
       diagnostics.failure(
         'turn.finalization_failed',
-        toProteusError({ doing: 'finalizing the turn', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'finalizing the turn', cause: err, otherwise: 'io' }),
       );
       // Any response messages runChat produced remain in live history as a
       // best-effort recovery for later turns in this process. We do not retry
@@ -2040,7 +2040,7 @@ export class LocalAgentSession implements BackendHost {
     this.queue.push({
       text: completionGateText({ task: this.completionGate.task, observed }),
       kind: 'programmatic',
-      metadata: { proteusEvent: COMPLETION_GATE_EVENT },
+      metadata: { kinuEvent: COMPLETION_GATE_EVENT },
       resolve: () => {},
     });
   }
@@ -2080,7 +2080,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Prompt-cache identity for runChat: the resolved provider/model, a stable
    *  per-conversation key (the agent's affinity key + session id — same
-   *  `proteus-<name>` scheme Workers AI affinity pins with), and the agent's
+   *  `kinu-<name>` scheme Workers AI affinity pins with), and the agent's
    *  configured retention. */
   private cacheIdentity(): PromptCacheIdentity {
     const sessionKey = `${agentAffinityKey(this.agentName())}:${this.sessionId}`;
@@ -2181,7 +2181,7 @@ export class LocalAgentSession implements BackendHost {
       }),
       history: context && context.length > 0 ? [...context] : [{ role: 'user', content: task }],
       tools: this.tools,
-      maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
+      maxSteps: resolveMaxSteps(process.env.KINU_MAX_STEPS),
     });
     for await (const value of stream) yield { value: projectJsonValue({ value }) };
   }
@@ -2243,7 +2243,7 @@ export class LocalAgentSession implements BackendHost {
   /** `host.llmStream` — the scaffold's inference bridge (core scaffold-host)
    *  over THIS turn's tool surface. */
   private makeScaffoldLLMStream(model: LanguageModel, turnTools: ToolSet): ScaffoldRunOptions['llmStream'] {
-    return createScaffoldLLMStream({ model, tools: () => turnTools, defaultMaxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS) });
+    return createScaffoldLLMStream({ model, tools: () => turnTools, defaultMaxSteps: resolveMaxSteps(process.env.KINU_MAX_STEPS) });
   }
 
   /** `host.callTool` — dispatch into THIS turn's tool surface by name (core

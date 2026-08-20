@@ -14,7 +14,7 @@
  * SPAWNED `kinu` CLI on a real workspace — `tests/evals/research.eval.ts`
  * and `tests/evals/optimization.eval.ts` through `tests/evals/cli-driver.ts`
  * (`kinu create --mode local`, then `kinu exec --workspace <name>
- * --json`), on the precedent of bench/harbor/proteus_agent.py. Read a failure
+ * --json`), on the precedent of bench/harbor/kinu_agent.py. Read a failure
  * here as "the loop broke"; read a failure there as "the product broke".
  */
 
@@ -64,7 +64,7 @@ const liveTest = test.skipIf(!TARGET);
 
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
-const TEST_DIR = join(tmpdir(), 'proteus-e2e-' + Date.now());
+const TEST_DIR = join(tmpdir(), 'kinu-e2e-' + Date.now());
 const DB_PATH = join(TEST_DIR, 'agent.db');
 
 /** One turn's result, plus the exact message list that turn HANDED THE MODEL. */

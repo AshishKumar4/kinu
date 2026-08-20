@@ -18,7 +18,7 @@ tester.run("anti-slop/no-sentinel-catch", noSentinelCatchRule, {
     "function read() { try { return get(); } catch (error) { throw new Error('read failed', { cause: error }); } }",
     // A non-sentinel return distinguishes failure from success by itself.
     "function read() { try { return get(); } catch (error) { return { ok: false, error }; } }",
-    "function read() { try { return get(); } catch (error) { return err(toProteusError({ cause: error })); } }",
+    "function read() { try { return get(); } catch (error) { return err(toKinuError({ cause: error })); } }",
     // An empty body is no-empty-catch's finding; this rule must not double-report it.
     "try { risky(); } catch {}",
     // Rejection handlers that do something.

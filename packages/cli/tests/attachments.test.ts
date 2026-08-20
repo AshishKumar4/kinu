@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 function makeDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'proteus-attach-'));
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-attach-'));
   tempDirs.push(dir);
   return dir;
 }

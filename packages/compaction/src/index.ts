@@ -12,7 +12,7 @@
  */
 
 export * from '@better-compact/core';
-export { proteusCodec, proteusConventions, proteusSpec, type ToolPairHandle } from './codec';
+export { kinuCodec, kinuConventions, kinuSpec, type ToolPairHandle } from './codec';
 export {
   createCompactionExtension,
   type CompactionExtensionDeps,

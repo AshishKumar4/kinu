@@ -63,7 +63,7 @@ import { SignalDelivery, readSignalId } from './signals';
 import { buildDrainBatch } from '../events/hub/drain';
 import type { EventLog } from '../events/hub/log';
 import type { ExecutionRecoveryRecord } from '../events/types';
-import type { PrepareStepContext, ProteusExtension } from '../extension';
+import type { PrepareStepContext, KinuExtension } from '../extension';
 import type { BackendHost } from '../types/backend-host';
 import type { AgentSignal } from '../types/signals';
 import type { EvolutionEngine } from '../evolution/engine';
@@ -77,7 +77,7 @@ import {
 import { nanoid } from '../utils/nanoid';
 import { workModeForTurnMetadata, type WorkMode } from '../prompting/surface';
 import type { JsonObject } from '../utils/json';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
 
 /**
@@ -169,8 +169,8 @@ export class AgentOrchestrator {
    *  producer feeds. The steer is decided against the step being prepared and
    *  handed straight to it, so it rides the step it was decided on and dies
    *  with it. */
-  readonly turnExtension: ProteusExtension = {
-    name: 'proteus.signals',
+  readonly turnExtension: KinuExtension = {
+    name: 'kinu.signals',
     onToolCall: (ctx) => this.steering.onToolCall(ctx),
     onToolResult: (ctx) => {
       const recovery = this.steering.onToolResult(ctx);
@@ -460,7 +460,7 @@ export class AgentOrchestrator {
     } catch (err) {
       diagnostics.failure(
         'evolution.session_pass_failed',
-        toProteusError({ doing: 'run the session evolution pass', cause: err, otherwise: 'unavailable' }),
+        toKinuError({ doing: 'run the session evolution pass', cause: err, otherwise: 'unavailable' }),
       );
     }
     // Settled either way: retrying the same window forever on a persistent
@@ -504,7 +504,7 @@ export class AgentOrchestrator {
         const abandoned = [...new Set(this.inFlight.values())].join(', ');
         diagnostics.failure(
           'evolution.settle_timed_out',
-          toProteusError({
+          toKinuError({
             doing: 'wait for the turn lane to settle before exit',
             cause: new Error(`still running: ${abandoned}`),
             otherwise: 'timeout',
@@ -551,7 +551,7 @@ export class AgentOrchestrator {
     const tracked = work
       .catch((err) => diagnostics.failure(
         'orchestrator.detached_work_failed',
-        toProteusError({ doing: 'run detached post-turn work', cause: err, otherwise: 'unavailable' }),
+        toKinuError({ doing: 'run detached post-turn work', cause: err, otherwise: 'unavailable' }),
         { work: label },
       ))
       .then(() => { this.inFlight.delete(tracked); });
@@ -576,7 +576,7 @@ export class AgentOrchestrator {
       } catch (err) {
         diagnostics.failure(
           'event.unbind_failed',
-          toProteusError({ doing: 'return a bound event to pending', cause: err, otherwise: 'io' }),
+          toKinuError({ doing: 'return a bound event to pending', cause: err, otherwise: 'io' }),
           { eventId: id },
         );
       }
@@ -610,7 +610,7 @@ export class AgentOrchestrator {
     } catch (err) {
       diagnostics.failure(
         'orchestrator.drain_select_failed',
-        toProteusError({ doing: 'select the pending events for a drain turn', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'select the pending events for a drain turn', cause: err, otherwise: 'io' }),
         { turnId },
       );
       return;
@@ -619,7 +619,7 @@ export class AgentOrchestrator {
     let metadata: JsonObject | undefined;
     if (batch.mode !== null || batch.missions.length > 0) {
       metadata = {};
-      if (batch.mode !== null) metadata.proteusMode = batch.mode;
+      if (batch.mode !== null) metadata.kinuMode = batch.mode;
       if (batch.missions.length > 0) metadata[MISSION_LABELS_METADATA_KEY] = batch.missions;
     }
     const signal: AgentSignal = {

@@ -321,7 +321,7 @@ export const UNCAPTURED: readonly Uncaptured[] = [
       + 'version in packages/cf-backend/package.json. The SDK asks the container for its own '
       + 'SANDBOX_VERSION on every start.',
     evidence: 'a container application is named after its Worker and class — '
-      + '`kinu-proteussandbox` and `kinu-staging-proteussandbox-staging` — and neither exists '
+      + '`kinu-kinusandbox` and `kinu-staging-kinusandbox-staging` — and neither exists '
       + 'until that environment is deployed. The image is reconciled only by a deploy OF THAT '
       + 'ENVIRONMENT, so a version bump lands in one environment and not the other until both '
       + 'are deployed, and Sandbox.checkVersionCompatibility logs the mismatch at container '
@@ -511,7 +511,7 @@ export const SUPPLY = new Map<string, Supply>([
     required: false,
     absent: 'see R2_ACCESS_KEY_ID. A plain var (the account id), not a secret.',
   }],
-  ['PROTEUS_MAX_STEPS', {
+  ['KINU_MAX_STEPS', {
     handling: 'config-var',
     required: false,
     absent: "nothing — core's default per-turn tool-call ceiling applies.",

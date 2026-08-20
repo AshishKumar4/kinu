@@ -4,7 +4,7 @@
 #
 # It CREATES an agent on whatever it is pointed at, so where it points is not a
 # detail. The default is a loopback dev server; a staging origin is the other
-# accepted target, and anything else is refused unless PROTEUS_EVAL_ALLOW_PROD=1
+# accepted target, and anything else is refused unless KINU_EVAL_ALLOW_PROD=1
 # names the exception. The rule and its one implementation live in
 # packages/test-utils/src/eval-identity.ts — this script asks that module rather
 # than keeping a second opinion about which hosts are safe.
@@ -22,7 +22,7 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-BASE_URL="${PROTEUS_BASE_URL:-http://localhost:5173}"
+BASE_URL="${KINU_BASE_URL:-http://localhost:5173}"
 # "Nothing to run against", distinct from both success and failure.
 SKIP_EXIT=2
 

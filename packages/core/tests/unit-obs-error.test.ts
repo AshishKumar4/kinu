@@ -22,10 +22,10 @@ import {
   classifyErrorCode,
   CODE_IS_REFUSAL,
   ERROR_CODES,
-  ProteusError,
+  KinuError,
   refusalOf,
   renderCauseChain,
-  toProteusError,
+  toKinuError,
   type ErrorCode,
 } from '../src/obs/index';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
@@ -82,7 +82,7 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
   });
 
   test('a filesystem absence is `missing`, and a truncated payload is `bad_input`', () => {
-    const enoent = raisedBy(() => { readFileSync('/proteus-does-not-exist/nor-does-this'); });
+    const enoent = raisedBy(() => { readFileSync('/kinu-does-not-exist/nor-does-this'); });
     const malformed = raisedBy(() => { JSON.parse('{"truncated":'); });
     expect(classifyErrorCode({ cause: enoent })).toBe('missing');
     expect(classifyErrorCode({ cause: malformed })).toBe('bad_input');
@@ -199,13 +199,13 @@ describe('the cause chain is the language `%w` and is never broken', () => {
   });
 });
 
-describe('toProteusError', () => {
+describe('toKinuError', () => {
   test('the message is what we were doing, and the detail is on the cause', () => {
     // `new Error('what we were doing', { cause: caught })` — AGENTS.md rule 2.
     // The detail is NOT baked into the message: `renderCauseChain` assembles it
     // once at the display boundary, so nothing renders beneath itself.
-    const cause = raisedBy(() => { readFileSync('/proteus-does-not-exist/manifest.json'); });
-    const wrapped = toProteusError({ doing: 'reading the manifest', cause, otherwise: 'io' });
+    const cause = raisedBy(() => { readFileSync('/kinu-does-not-exist/manifest.json'); });
+    const wrapped = toKinuError({ doing: 'reading the manifest', cause, otherwise: 'io' });
     expect(wrapped.code).toBe('missing');
     expect(wrapped.cause).toBe(cause);
     expect(wrapped.message).toBe('reading the manifest');
@@ -215,11 +215,11 @@ describe('toProteusError', () => {
   });
 
   test('`otherwise` is used only when nothing pinned matched', () => {
-    const unrecognised = toProteusError({
+    const unrecognised = toKinuError({
       doing: 'running a command', cause: new Error('mystery'), otherwise: 'io',
     });
     expect(unrecognised.code).toBe('io');
-    const recognised = toProteusError({
+    const recognised = toKinuError({
       doing: 'running a command', cause: provokeAbort(), otherwise: 'io',
     });
     expect(recognised.code).toBe('cancelled');
@@ -228,15 +228,15 @@ describe('toProteusError', () => {
   test('an already-classified cause keeps its class on the way up', () => {
     // The inner site knew more about the failure than the outer one does.
     // Re-classifying from outside is how a precise `oom` becomes a generic `io`.
-    const inner = new ProteusError('oom', 'Worker exceeded memory limit');
-    const outer = toProteusError({ doing: 'forking a head', cause: inner, otherwise: 'io' });
+    const inner = new KinuError('oom', 'Worker exceeded memory limit');
+    const outer = toKinuError({ doing: 'forking a head', cause: inner, otherwise: 'io' });
     expect(outer.code).toBe('oom');
     expect(renderCauseChain(outer)).toBe('forking a head: Worker exceeded memory limit');
     expect(outer.cause).toBe(inner);
   });
 
   test('a thrown non-Error is still evidence', () => {
-    const wrapped = toProteusError({ doing: 'parsing', cause: 'raw string', otherwise: 'bad_input' });
+    const wrapped = toKinuError({ doing: 'parsing', cause: 'raw string', otherwise: 'bad_input' });
     expect(wrapped.code).toBe('bad_input');
     expect(wrapped.cause).toBe('raw string');
     expect(renderCauseChain(wrapped)).toBe('parsing: raw string');
@@ -248,13 +248,13 @@ describe('the refusal payload', () => {
     // Every seam that shows a tool result to a human or hashes it for steering
     // bounds it to a head slice, and the prose is the long part. Key order is the
     // contract, not a formatting preference.
-    const refusal = refusalOf(new ProteusError('unavailable', 'runtime_not_provisioned'));
+    const refusal = refusalOf(new KinuError('unavailable', 'runtime_not_provisioned'));
     expect(Object.keys(refusal)).toEqual(['reason', 'error']);
     expect(JSON.stringify(refusal)).toStartWith('{"reason":');
   });
 
   test('the whole chain reaches the wire', () => {
-    const failure = toProteusError({
+    const failure = toKinuError({
       doing: 'run `pytest` on sandbox',
       cause: new Error('exec channel closed'),
       otherwise: 'io',

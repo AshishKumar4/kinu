@@ -156,7 +156,7 @@ export interface OwnerCapabilityEnv {
   CREDENTIAL_ENCRYPTION_KEY?: string;
 }
 
-const OWNER_CAPABILITY_LABEL = 'proteus.owner-capability.v1';
+const OWNER_CAPABILITY_LABEL = 'kinu.owner-capability.v1';
 
 /** Derived tokens, cached per secret — the derivation is deterministic, so the
  *  cache holds nothing the process was not already holding. */

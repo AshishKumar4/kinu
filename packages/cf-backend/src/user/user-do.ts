@@ -79,10 +79,10 @@ import {
 } from '@kinu/core';
 import {
   diagnostics,
-  ProteusError,
+  KinuError,
   renderThrownChain,
   tolerate,
-  toProteusError,
+  toKinuError,
 } from '@kinu/core/obs';
 import * as v from 'valibot';
 import { initUserTables } from './schema';
@@ -1364,7 +1364,7 @@ export class UserDO extends Agent<Env> {
     let plaintext: string;
     try { plaintext = await (await this.cipher()).open(this.credentialAad(key), row.value); }
     catch (err) {
-      diagnostics.failure('credential.unreadable', toProteusError({
+      diagnostics.failure('credential.unreadable', toKinuError({
         doing: 'opening a stored credential',
         cause: err,
         otherwise: 'bad_input',
@@ -1377,7 +1377,7 @@ export class UserDO extends Agent<Env> {
     catch {
       diagnostics.failure(
         'credential.malformed',
-        new ProteusError('bad_input', 'a stored credential did not decode as JSON'),
+        new KinuError('bad_input', 'a stored credential did not decode as JSON'),
         { credentialKey: key },
       );
       return null;
@@ -1428,7 +1428,7 @@ export class UserDO extends Agent<Env> {
           );
         } catch (err) {
           clean = false;
-          diagnostics.failure('credential.reseal_failed', toProteusError({
+          diagnostics.failure('credential.reseal_failed', toKinuError({
             doing: 'resealing a stored credential under the current key',
             cause: err,
             otherwise: 'bad_input',
@@ -1446,7 +1446,7 @@ export class UserDO extends Agent<Env> {
           );
         } catch (err) {
           clean = false;
-          diagnostics.failure('mcp.stored_headers_reseal_failed', toProteusError({
+          diagnostics.failure('mcp.stored_headers_reseal_failed', toKinuError({
             doing: "resealing an MCP server's stored headers under the current key",
             cause: err,
             otherwise: 'bad_input',
@@ -1490,7 +1490,7 @@ export class UserDO extends Agent<Env> {
     if (stored === null) return null;
     try { return await (await this.cipher()).open(this.mcpHeadersAad(serverId), stored); }
     catch (err) {
-      diagnostics.failure('mcp.stored_headers_unreadable', toProteusError({
+      diagnostics.failure('mcp.stored_headers_unreadable', toKinuError({
         doing: "opening an MCP server's stored headers",
         cause: err,
         otherwise: 'bad_input',
@@ -1744,7 +1744,7 @@ export class UserDO extends Agent<Env> {
       return next;
     } catch (err) {
       if (err instanceof CloudflareOAuthTokenError && err.oauthError === 'invalid_grant') {
-        diagnostics.failure('credential.cloudflare_refresh_revoked', toProteusError({
+        diagnostics.failure('credential.cloudflare_refresh_revoked', toKinuError({
           doing: 'refreshing the Cloudflare credential',
           cause: err,
           otherwise: 'denied',
@@ -1753,7 +1753,7 @@ export class UserDO extends Agent<Env> {
         await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, rest);
         return 'revoked';
       }
-      diagnostics.failure('credential.cloudflare_refresh_failed', toProteusError({
+      diagnostics.failure('credential.cloudflare_refresh_failed', toKinuError({
         doing: 'refreshing the Cloudflare credential',
         cause: err,
         otherwise: 'unavailable',
@@ -1776,7 +1776,7 @@ export class UserDO extends Agent<Env> {
       await this.writeCredential(CODEX_CRED_KEY, next);
       return next;
     } catch (err) {
-      diagnostics.failure('credential.codex_refresh_failed', toProteusError({
+      diagnostics.failure('credential.codex_refresh_failed', toKinuError({
         doing: 'refreshing the Codex credential',
         cause: err,
         otherwise: 'unavailable',
@@ -1885,7 +1885,7 @@ export class UserDO extends Agent<Env> {
   private userMcp(): MCPClientManager {
     if (this._userMcp) return this._userMcp;
     this.ensureInit();
-    this._userMcp = new MCPClientManager('proteus-user-mcp', '0.1.0', {
+    this._userMcp = new MCPClientManager('kinu-user-mcp', '0.1.0', {
       storage: this.ctx.storage,
       // Override so EVERY server (regardless of when added) uses the same
       // per-user callback URL pattern. The SDK calls this for new connect()s
@@ -1895,7 +1895,7 @@ export class UserDO extends Agent<Env> {
       createAuthProvider: (callbackUrl: string): AgentMcpOAuthProvider =>
         new DurableObjectOAuthClientProvider(
           this.ctx.storage,
-          'proteus-user-mcp',
+          'kinu-user-mcp',
           callbackUrl,
         ),
     });
@@ -1909,9 +1909,9 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'mcp.manage');
     const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
     if (!rows || rows.n === 0) return { servers: 0 };
-    try { await this.userMcp().restoreConnectionsFromStorage('proteus-user-mcp'); }
+    try { await this.userMcp().restoreConnectionsFromStorage('kinu-user-mcp'); }
     catch (err) {
-      diagnostics.failure('mcp.connection_warmup_failed', toProteusError({
+      diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
         doing: 'restoring the user MCP connections on warmup',
         cause: err,
         otherwise: 'unavailable',
@@ -1934,7 +1934,7 @@ export class UserDO extends Agent<Env> {
     // storage failure, not a per-server connection failure — those surface as
     // the row's `status` — so it must not report every server disconnected.
     if (rows.length > 0) {
-      await this.userMcp().restoreConnectionsFromStorage('proteus-user-mcp');
+      await this.userMcp().restoreConnectionsFromStorage('kinu-user-mcp');
     }
     const connections = this._userMcp?.mcpConnections ?? {};
     return rows.map((r): McpServerSummary => {
@@ -1969,7 +1969,7 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Add a new MCP server. `publicOrigin` is the user-facing origin the
-   *  Worker should redirect OAuth callbacks to (e.g. `https://proteus.example`).
+   *  Worker should redirect OAuth callbacks to (e.g. `https://kinu.example`).
    *  The routes layer derives it from the inbound request's `Origin` /
    *  `Host` header — UserDO doesn't see the request. */
   async userMcp_add<McpInput>(
@@ -1999,7 +1999,7 @@ export class UserDO extends Agent<Env> {
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
     const authProvider = new DurableObjectOAuthClientProvider(
-      this.ctx.storage, 'proteus-user-mcp', callbackUrl,
+      this.ctx.storage, 'kinu-user-mcp', callbackUrl,
     );
     authProvider.serverId = id;
 
@@ -2053,7 +2053,7 @@ export class UserDO extends Agent<Env> {
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
     try { await this.userMcp().removeServer(id); }
     catch (err) {
-      diagnostics.failure('mcp.live_server_removal_failed', toProteusError({
+      diagnostics.failure('mcp.live_server_removal_failed', toKinuError({
         doing: 'removing a server from the live MCP manager',
         cause: err,
         otherwise: 'unavailable',
@@ -2125,7 +2125,7 @@ export class UserDO extends Agent<Env> {
     if (p.headers !== undefined) {
       try { await this.reregisterUserMcpServer(id); }
       catch (err) {
-        diagnostics.failure('mcp.header_rotation_reregister_failed', toProteusError({
+        diagnostics.failure('mcp.header_rotation_reregister_failed', toKinuError({
           doing: 'reregistering an MCP server after a header rotation',
           cause: err,
           otherwise: 'unavailable',
@@ -2149,7 +2149,7 @@ export class UserDO extends Agent<Env> {
     const callbackUrl = mgr.listServers().find((s) => s.id === id)?.callback_url ?? '';
     try { await mgr.removeServer(id); }
     catch (err) {
-      diagnostics.failure('mcp.reregister_teardown_failed', toProteusError({
+      diagnostics.failure('mcp.reregister_teardown_failed', toKinuError({
         doing: 'tearing down an MCP connection before reregistering it',
         cause: err,
         otherwise: 'unavailable',
@@ -2159,7 +2159,7 @@ export class UserDO extends Agent<Env> {
     const headerOpts = buildMcpHeaderTransportOpts(parseMcpHeaders(await this.openMcpHeaders(id, row.headers))) ?? {};
     let authProvider: AgentMcpOAuthProvider | undefined;
     if (callbackUrl) {
-      authProvider = new DurableObjectOAuthClientProvider(this.ctx.storage, 'proteus-user-mcp', callbackUrl);
+      authProvider = new DurableObjectOAuthClientProvider(this.ctx.storage, 'kinu-user-mcp', callbackUrl);
       authProvider.serverId = id;
     }
     const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> = {
@@ -2205,11 +2205,11 @@ export class UserDO extends Agent<Env> {
     // Ensure connections are restored. Don't await failures — partial
     // descriptors are better than none.
     try {
-      await this.userMcp().restoreConnectionsFromStorage('proteus-user-mcp');
+      await this.userMcp().restoreConnectionsFromStorage('kinu-user-mcp');
       // Cap at 5s so a single slow server can't block a turn indefinitely.
       await this.userMcp().waitForConnections({ timeout: MCP_WARMUP_TIMEOUT_MS });
     } catch (err) {
-      diagnostics.failure('mcp.descriptor_warmup_failed', toProteusError({
+      diagnostics.failure('mcp.descriptor_warmup_failed', toKinuError({
         doing: 'warming the MCP connections that serve tool descriptors',
         cause: err,
         otherwise: 'unavailable',
@@ -2270,7 +2270,7 @@ export class UserDO extends Agent<Env> {
     const manager = this.userMcp();
     if (wasCold) {
       // Cold start: hydrate the manager before dispatching.
-      try { await manager.restoreConnectionsFromStorage('proteus-user-mcp'); }
+      try { await manager.restoreConnectionsFromStorage('kinu-user-mcp'); }
       catch (err) { throw new Error(`MCP not ready: ${renderThrownChain({ cause: err })}`, { cause: err }); }
     }
     // Type-check the server membership inside our SQL so a stale orchestrator

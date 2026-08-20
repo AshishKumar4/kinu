@@ -1,7 +1,7 @@
 """Kinu as a Continual Learning Bench system.
 
 One benchmark turn is one `kinu exec` — the CLI's headless surface — against
-a local workspace that lives in a throwaway ``PROTEUS_HOME``. Kinu runs its
+a local workspace that lives in a throwaway ``KINU_HOME``. Kinu runs its
 own agentic loop inside that turn (its tools, memory, CraftStore, scaffold);
 the benchmark environment is reached the way every CL-Bench system reaches it,
 by returning one structured action per turn.
@@ -67,12 +67,12 @@ from .events import (
 
 logger = logging.getLogger(__name__)
 
-# The one PROTEUS_HOME rule, shared with the Harbor adapter. Loaded by path
+# The one KINU_HOME rule, shared with the Harbor adapter. Loaded by path
 # because this package is symlinked into a CL-Bench checkout, where `bench` is
 # not importable — the same arrangement bench/harbor/trajectory.py uses to reach
 # the event reader that lives here.
 _ISOLATION_PATH = Path(__file__).resolve().parents[3] / "bench" / "isolation.py"
-_SPEC = importlib.util.spec_from_file_location("proteus_bench_isolation", _ISOLATION_PATH)
+_SPEC = importlib.util.spec_from_file_location("kinu_bench_isolation", _ISOLATION_PATH)
 if _SPEC is None or _SPEC.loader is None:
     raise ImportError(f"Cannot load the benchmark isolation guard from {_ISOLATION_PATH}")
 _isolation = importlib.util.module_from_spec(_SPEC)
@@ -81,13 +81,13 @@ assert_throwaway_home = _isolation.assert_throwaway_home
 
 _MODEL_ENDPOINT_PATH = Path(__file__).resolve().parents[3] / "bench" / "model_endpoint.py"
 _MODEL_ENDPOINT_SPEC = importlib.util.spec_from_file_location(
-    "proteus_bench_model_endpoint", _MODEL_ENDPOINT_PATH
+    "kinu_bench_model_endpoint", _MODEL_ENDPOINT_PATH
 )
 if _MODEL_ENDPOINT_SPEC is None or _MODEL_ENDPOINT_SPEC.loader is None:
     raise ImportError(f"Cannot load benchmark model defaults from {_MODEL_ENDPOINT_PATH}")
 _model_endpoint = importlib.util.module_from_spec(_MODEL_ENDPOINT_SPEC)
 _MODEL_ENDPOINT_SPEC.loader.exec_module(_model_endpoint)
-DEFAULT_PROTEUS_AI_BASE_URL = _model_endpoint.DEFAULT_PROTEUS_AI_BASE_URL
+DEFAULT_KINU_AI_BASE_URL = _model_endpoint.DEFAULT_KINU_AI_BASE_URL
 DEFAULT_WORKERS_AI_MODEL_ID = _model_endpoint.DEFAULT_WORKERS_AI_MODEL_ID
 resolve_bearer_token = _model_endpoint.resolve_bearer_token
 assert_eval_target = _model_endpoint.assert_eval_target
@@ -105,9 +105,9 @@ def _resolve_repo_root(explicit: Optional[str]) -> Path:
     """Locate the Kinu checkout holding the CLI entrypoint.
 
     Defaults to the repo this file lives in, resolved through any symlink —
-    the package is normally linked into ``clbench/src/systems/proteus``.
+    the package is normally linked into ``clbench/src/systems/kinu``.
     """
-    candidate = explicit or os.environ.get("PROTEUS_REPO")
+    candidate = explicit or os.environ.get("KINU_REPO")
     root = (
         Path(candidate).expanduser().resolve()
         if candidate
@@ -116,7 +116,7 @@ def _resolve_repo_root(explicit: Optional[str]) -> Path:
     if not (root / "packages" / "cli" / "bin" / "cli.ts").is_file():
         raise FileNotFoundError(
             f"No Kinu CLI at {root}/packages/cli/bin/cli.ts. "
-            "Pass repo_root, or set PROTEUS_REPO to the Kinu checkout."
+            "Pass repo_root, or set KINU_REPO to the Kinu checkout."
         )
     return root
 
@@ -141,16 +141,16 @@ def _resolve_api_key(provider: str, base_url: str, api_key_env: Optional[str]) -
     )
 
 
-@register_system("proteus")
-class ProteusSystem(ContinualLearningSystem):
+@register_system("kinu")
+class KinuSystem(ContinualLearningSystem):
     """Kinu driven one benchmark turn at a time through `kinu exec`."""
 
     def __init__(
         self,
         model: str = DEFAULT_WORKERS_AI_MODEL_ID,
-        base_url: str = DEFAULT_PROTEUS_AI_BASE_URL,
+        base_url: str = DEFAULT_KINU_AI_BASE_URL,
         provider: str = "workers-ai",
-        name: str = "proteus",
+        name: str = "kinu",
         timeout: int = 900,
         auto_evolve: bool = True,
         persist_workspace: bool = True,
@@ -183,7 +183,7 @@ class ProteusSystem(ContinualLearningSystem):
         self._repo_root = _resolve_repo_root(repo_root)
         self._auth_header = f"Bearer {_resolve_api_key(provider, base_url, api_key_env)}"
 
-        self._root = Path(create_run_workspace("proteus_bench"))
+        self._root = Path(create_run_workspace("kinu_bench"))
         self._workspace_ready = False
         self._clear_interaction_state()
 
@@ -191,7 +191,7 @@ class ProteusSystem(ContinualLearningSystem):
 
     @property
     def _home(self) -> Path:
-        """Throwaway PROTEUS_HOME: config, workspace database, durable state."""
+        """Throwaway KINU_HOME: config, workspace database, durable state."""
         return Path(assert_throwaway_home(str(self._root / "home")))
 
     @property
@@ -202,12 +202,12 @@ class ProteusSystem(ContinualLearningSystem):
     def _env(self) -> dict[str, str]:
         """A clean environment: the operator's own Kinu home can never leak
         into a measured run, and the key travels here rather than on argv."""
-        env = {k: v for k, v in os.environ.items() if not k.startswith("PROTEUS_")}
+        env = {k: v for k, v in os.environ.items() if not k.startswith("KINU_")}
         env["HOME"] = str(self._home)
-        env["PROTEUS_HOME"] = str(self._home)
-        env["PROTEUS_BASE_URL"] = self._base_url
-        env["PROTEUS_MODEL"] = self._model
-        env["PROTEUS_AUTH"] = self._auth_header
+        env["KINU_HOME"] = str(self._home)
+        env["KINU_BASE_URL"] = self._base_url
+        env["KINU_MODEL"] = self._model
+        env["KINU_AUTH"] = self._auth_header
         env["CI"] = "1"
         return env
 
@@ -401,7 +401,7 @@ class ProteusSystem(ContinualLearningSystem):
         return Response(
             action=action,
             metadata={
-                "system_type": "proteus",
+                "system_type": "kinu",
                 "model": self._model,
                 "provider": self._provider,
                 "interaction_count": self._interaction_count,
@@ -462,7 +462,7 @@ class ProteusSystem(ContinualLearningSystem):
 
     def get_run_artifacts(self) -> dict[str, Any]:
         return {
-            "artifact_type": "proteus",
+            "artifact_type": "kinu",
             "model": self._model,
             "provider": self._provider,
             "auto_evolve": self._auto_evolve,

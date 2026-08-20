@@ -305,7 +305,7 @@ advances that baseline, so work finished before the owner first opens Output is
 still shown. Read and snapshot failures stay visible.
 
 Preview discovery asks the `workspace` and `sandbox` providers for their exposed
-ports (`cf-backend/src/hooks/use-proteus.ts:860-882`). A transport failure keeps
+ports (`cf-backend/src/hooks/use-kinu.ts:860-882`). A transport failure keeps
 the last known result and shows the error. A successful empty result is the
 authority to remove an old preview
 (`cf-backend/src/lib/preview-ports.ts:25-29`).
@@ -325,7 +325,7 @@ authority to remove an old preview
   removed from the namespace (`core/src/tools/registry.ts:377-380`,
   `core/src/prompting/surface.ts:26-28`). The axis is `WorkMode`, either `plan`
   or `build`, and it propagates to delegation, background jobs and exploration.
-  A background job carries `proteusMode: job.workMode`, and an autonomous wake
+  A background job carries `kinuMode: job.workMode`, and an autonomous wake
   never weakens a Plan turn into a build one
   (`core/src/prompting/surface.ts:85-89`). A head or a subordinate under Plan
   reports research back to its parent instead of owning the `submit_plan`

@@ -243,7 +243,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // ── the workspace filesystem ──
     // The local CLI retains the embedded SQLite workspace. Hosted actors use
     // NIMBUS_SESSION directly and never create this second filesystem.
-    proteus_workspace_generation: NIMBUS_BASE,
+    kinu_workspace_generation: NIMBUS_BASE,
     // The filesystem itself. This is the exact set NimbusWorkspace.destroy()
     // drops — the namespace the library commits to owning inside a host's
     // database — so an addition here is a signal that the dependency changed

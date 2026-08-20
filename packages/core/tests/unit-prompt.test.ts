@@ -505,7 +505,7 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('no release overlay survives: nothing could ever stamp it', () => {
-    // `release` was a PromptMode value with no producer. `proteusMode` is
+    // `release` was a PromptMode value with no producer. `kinuMode` is
     // written in exactly three places (the composer's Plan/Build choice, the
     // plan-approval turn, and jobs/runner.ts from `background_jobs.work_mode`,
     // which store.ts coerces to plan|build), and no event name maps to it.
@@ -891,13 +891,13 @@ describe('buildSystemPromptSync', () => {
 
   test('a background-job wake reaches the resume guidance even though it also carries a work mode', () => {
     // The regression this pins. jobs/runner.ts stamps BOTH
-    // `proteusEvent: 'background_job'` and `proteusMode: job.workMode` on the
+    // `kinuEvent: 'background_job'` and `kinuMode: job.workMode` on the
     // wake, and `background_jobs.work_mode` is NOT NULL — so under the old
     // single-`mode` precedence the work mode always won and this guidance,
     // written to stop the agent re-doing or polling settled work, never
     // reached a model on the real wake path. Provenance is now read from the
     // event alone, so the wake carries the overlay AND its permission.
-    const wake = { proteusEvent: 'background_job', proteusMode: 'build' };
+    const wake = { kinuEvent: 'background_job', kinuMode: 'build' };
     expect(turnProvenanceForMetadata(wake)).toBe('background_resume');
     expect(workModeForTurnMetadata(wake)).toBe('build');
 
@@ -910,7 +910,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('fetch the referenced job result first');
 
     // A Plan job's wake keeps BOTH: the resume overlay and the read-only bar.
-    const planWake = { proteusEvent: 'background_job', proteusMode: 'plan' };
+    const planWake = { kinuEvent: 'background_job', kinuMode: 'plan' };
     const planPrompt = buildSystemPromptSync(rt, {
       provenance: turnProvenanceForMetadata(planWake),
       workMode: workModeForTurnMetadata(planWake),
@@ -920,19 +920,19 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('the two axes are read from different metadata keys and neither can suppress the other', () => {
-    expect(turnProvenanceForMetadata({ proteusEvent: 'event_drain' })).toBe('chat');
+    expect(turnProvenanceForMetadata({ kinuEvent: 'event_drain' })).toBe('chat');
     expect(turnProvenanceForMetadata(null)).toBe('chat');
     expect(turnProvenanceForMetadata({})).toBe('chat');
     // A timer fire is published as an EVENT and drains as `event_drain`; no
-    // timer- or cron-named proteusEvent exists, which is why the cron overlay
+    // timer- or cron-named kinuEvent exists, which is why the cron overlay
     // is gone rather than kept as a branch nothing can enter.
-    expect(turnProvenanceForMetadata({ proteusEvent: 'timer_cron' })).toBe('chat');
+    expect(turnProvenanceForMetadata({ kinuEvent: 'timer_cron' })).toBe('chat');
 
-    expect(workModeForTurnMetadata({ proteusMode: 'plan' })).toBe('plan');
-    expect(workModeForTurnMetadata({ proteusMode: 'build' })).toBe('build');
+    expect(workModeForTurnMetadata({ kinuMode: 'plan' })).toBe('plan');
+    expect(workModeForTurnMetadata({ kinuMode: 'build' })).toBe('build');
     // Only the exact 'plan' string raises the bar — an old or foreign client
     // cannot invent a mode, and cannot lower one either.
-    expect(workModeForTurnMetadata({ proteusMode: 'invalid' })).toBe('build');
+    expect(workModeForTurnMetadata({ kinuMode: 'invalid' })).toBe('build');
     expect(workModeForTurnMetadata(null)).toBe('build');
   });
 

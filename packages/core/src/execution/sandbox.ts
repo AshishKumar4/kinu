@@ -21,7 +21,7 @@ import { isAbortError, raceAbort } from '@kinu/agent-utils';
 import type { ExecutorProvider, ExecutorCapability } from './types';
 import { readExecSignal } from './signal';
 import { formatExecResult, refusalText } from './exec-result';
-import { diagnostics, ProteusError, renderThrownChain, toProteusError } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, toKinuError } from '../obs/index';
 import type { VFS } from '../types/primitives';
 import { makeVfsError } from '../vfs/errno';
 import { shellQuote } from '../utils/shell';
@@ -137,13 +137,13 @@ export function isSandboxTransientError(error: Error | string): boolean {
  * configured` is not a failure to `isFailingResultText`, so an escalation into an
  * unconfigured sandbox was recorded as a clean `ok` call.
  */
-const NOT_CONFIGURED_REFUSAL = refusalText(new ProteusError('unavailable', NOT_CONFIGURED));
+const NOT_CONFIGURED_REFUSAL = refusalText(new KinuError('unavailable', NOT_CONFIGURED));
 
 /** `unsupported`, not `unavailable`: the container IS here and its exec and file
  *  surfaces work in full — what is missing is a zone to mint preview hostnames
  *  on. No retry reaches a `PREVIEW_HOST_SUFFIX` that was never set, and that
  *  permanence is the whole distinction between the two codes. */
-const PREVIEWS_REFUSAL = refusalText(new ProteusError('unsupported', PREVIEWS_NOT_CONFIGURED));
+const PREVIEWS_REFUSAL = refusalText(new KinuError('unsupported', PREVIEWS_NOT_CONFIGURED));
 
 /**
  * Classify a failure raised by the container's own RPC.
@@ -159,11 +159,11 @@ const PREVIEWS_REFUSAL = refusalText(new ProteusError('unsupported', PREVIEWS_NO
  * A cause the classifier recognises keeps its own code: an abort, a timeout or the
  * memory wall is more precise than either answer here.
  */
-function sandboxFailure(input: { doing: string; cause: unknown }): ProteusError {
+function sandboxFailure(input: { doing: string; cause: unknown }): KinuError {
   const transient = isSandboxTransientError(
     input.cause instanceof Error ? input.cause : String(input.cause),
   );
-  return toProteusError({ ...input, otherwise: transient ? 'unavailable' : 'io' });
+  return toKinuError({ ...input, otherwise: transient ? 'unavailable' : 'io' });
 }
 
 /**
@@ -226,7 +226,7 @@ export function createSandboxExecutor(
         if (!handle) return NOT_CONFIGURED_REFUSAL;
         const command = parseInput(StringSchema, { value: args[0] });
         if (command === undefined) {
-          return refusalText(new ProteusError('bad_input', 'sandbox exec: command must be a string'));
+          return refusalText(new KinuError('bad_input', 'sandbox exec: command must be a string'));
         }
         const signal = readExecSignal({ context: args[1] });
         try {
@@ -250,7 +250,7 @@ export function createSandboxExecutor(
         if (!handle) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'sandbox readFile: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'sandbox readFile: path must be a string'));
         }
         try {
           const r = await withSandboxRetry(() => touch(() => handle.readFile(path)));
@@ -258,7 +258,7 @@ export function createSandboxExecutor(
           // `io` is all the evidence supports: `missing` would claim the path is
           // absent when a permission or a decode failure exits the same way.
           if (r.exitCode && r.exitCode !== 0) {
-            return refusalText(new ProteusError('io', `sandbox readFile ${path}: exit ${r.exitCode}`));
+            return refusalText(new KinuError('io', `sandbox readFile ${path}: exit ${r.exitCode}`));
           }
           return r.content ?? '';
         } catch (err) {
@@ -273,10 +273,10 @@ export function createSandboxExecutor(
         const path = parseInput(StringSchema, { value: args[0] });
         const content = parseInput(StringSchema, { value: args[1] });
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'sandbox writeFile: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'sandbox writeFile: path must be a string'));
         }
         if (content === undefined) {
-          return refusalText(new ProteusError('bad_input', 'sandbox writeFile: content must be a string'));
+          return refusalText(new KinuError('bad_input', 'sandbox writeFile: content must be a string'));
         }
         try {
           await withSandboxRetry(() => touch(() => handle.writeFile(path, content)));
@@ -292,7 +292,7 @@ export function createSandboxExecutor(
         if (!handle) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(OptionalStringSchema, { value: args[0] });
         if (args[0] !== undefined && path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'sandbox listFiles: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'sandbox listFiles: path must be a string'));
         }
         try {
           const r = await withSandboxRetry(() => touch(() => handle.listFiles(path ?? '/', { recursive: false })));
@@ -321,7 +321,7 @@ export function createSandboxExecutor(
         if (!handle) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'sandbox deleteFile: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'sandbox deleteFile: path must be a string'));
         }
         try {
           await withSandboxRetry(() => touch(() => Promise.resolve(handle.deleteFile(path))));
@@ -340,7 +340,7 @@ export function createSandboxExecutor(
         // — the one thing a caller that could not be asked must never say
         // (AGENTS.md: an empty read is distinguishable from a failed read).
         if (path === undefined) {
-          return refusalText(new ProteusError('bad_input', 'sandbox exists: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'sandbox exists: path must be a string'));
         }
         const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${JSON.stringify(path)} && echo true || echo false`)));
         const out = (res.stdout ?? res.output ?? '').trim();
@@ -361,7 +361,7 @@ export function createSandboxExecutor(
         const p = parseInput(PortSchema, { value: args[0] });
         const name = parseInput(OptionalStringSchema, { value: args[1] });
         if (p === undefined) {
-          return refusalText(new ProteusError('bad_input', `sandbox exposePort: invalid port ${String(args[0])}`));
+          return refusalText(new KinuError('bad_input', `sandbox exposePort: invalid port ${String(args[0])}`));
         }
         // Pre-flight: verify a server is listening on the port inside the
         // container. Without this we hand back a preview URL that 502s
@@ -389,7 +389,7 @@ export function createSandboxExecutor(
             // never provisioned one, and `missing` is not a refusal at all, so it
             // would land a correct decline in the candidate-defect part of the
             // census (read-models/tool-failures.ts).
-            return refusalText(new ProteusError('bad_input',
+            return refusalText(new KinuError('bad_input',
               `nothing is listening on port ${p} inside the sandbox. `
               + `Start your server FIRST, then call sandbox.exposePort. Examples:\n`
               + `  • Static site (HTML/CSS/JS): `
@@ -406,7 +406,7 @@ export function createSandboxExecutor(
           // happy path on a probe glitch.
           diagnostics.failure(
             'sandbox.port_probe_failed',
-            toProteusError({ doing: 'probe a sandbox port before exposing it', cause: err, otherwise: 'unavailable' }),
+            toKinuError({ doing: 'probe a sandbox port before exposing it', cause: err, otherwise: 'unavailable' }),
             { port: p },
           );
         }
@@ -426,7 +426,7 @@ export function createSandboxExecutor(
         if (!handle) return NOT_CONFIGURED_REFUSAL;
         const port = parseInput(PortSchema, { value: args[0] });
         if (port === undefined) {
-          return refusalText(new ProteusError('bad_input', `sandbox unexposePort: invalid port ${String(args[0])}`));
+          return refusalText(new KinuError('bad_input', `sandbox unexposePort: invalid port ${String(args[0])}`));
         }
         try {
           await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(port))));

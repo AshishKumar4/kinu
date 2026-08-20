@@ -25,7 +25,7 @@
  *
  * WHY THE SPAWNED CLI. The agent under eval is the `kinu` process a user
  * runs — `kinu create --mode local`, then `kinu exec --workspace <name>
- * --json`, per bench/harbor/proteus_agent.py. The instrument sits either side
+ * --json`, per bench/harbor/kinu_agent.py. The instrument sits either side
  * of that process: the task's seed files are written into the workspace BEFORE
  * the child starts, and the verifier measures the workspace the child left
  * behind AFTER it exits. Both halves go through the OPENED runtime
@@ -95,7 +95,7 @@ function corpusCase(id: string): EvalCase {
 
 const CASE = corpusCase(TASK_ID);
 
-const TIER: EvalTier = process.env.PROTEUS_EVAL_TIER === 'pro' ? 'pro' : 'flash';
+const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
 const LLM: LLMProviderConfig = TARGET === null
   ? UNCONFIGURED_LLM
   : { ...TARGET.llm, model: EVAL_MODELS[TIER] };

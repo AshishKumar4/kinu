@@ -166,7 +166,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
 }
 
 function cliRequest(path: string, init: RequestInit = {}) {
-  return new Request(`https://proteus.example.com${path}`, {
+  return new Request(`https://kinu.example.com${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${TOKEN}`,

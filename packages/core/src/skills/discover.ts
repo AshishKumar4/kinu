@@ -10,7 +10,7 @@
 import { parseSkillFile } from './parse';
 import { BUILTIN_SKILLS } from './builtins';
 import { SKILLS_DIR, type ParsedSkill } from './types';
-import { diagnostics, renderThrownChain, toProteusError } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /** Minimal VFS shape — duck-typed against any file view. */
 export interface SkillsVfs {
@@ -36,7 +36,7 @@ export async function discoverSkills(
   const dir = opts.skillsDir ?? SKILLS_DIR;
   const onErr = opts.onParseError ?? ((file, err) => diagnostics.failure(
     'skills.parse_failed',
-    toProteusError({ doing: 'parse a skill file', cause: err, otherwise: 'bad_input' }),
+    toKinuError({ doing: 'parse a skill file', cause: err, otherwise: 'bad_input' }),
     { file },
   ));
 

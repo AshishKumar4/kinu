@@ -383,8 +383,8 @@ TS=$(date +%s)
 BODY='{"hello":"world"}'
 SIG=$(printf "%s.%s" "$TS" "$BODY" | openssl dgst -sha256 -hmac "${result.secret ?? "<your-secret>"}" -hex | cut -d' ' -f2)
 curl -X POST '${url}' \\
-  -H "x-proteus-timestamp: $TS" \\
-  -H "x-proteus-signature: $SIG" \\
+  -H "x-kinu-timestamp: $TS" \\
+  -H "x-kinu-signature: $SIG" \\
   -H "content-type: application/json" \\
   -d "$BODY"`
     : result.auth_mode === "bearer"

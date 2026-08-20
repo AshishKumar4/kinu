@@ -11,7 +11,7 @@
  * or break the CLI.
  */
 import { VERSION } from './display';
-import { loadConfigFile, updateConfigFile, type ProteusConfig } from './config';
+import { loadConfigFile, updateConfigFile, type KinuConfig } from './config';
 import * as v from 'valibot';
 import { classify, renderThrownChain, tolerateAsync } from '@kinu/core/obs';
 
@@ -74,7 +74,7 @@ export async function fetchServedVersion(
 }
 
 export interface NoticeContext {
-  config: Pick<ProteusConfig, 'origin' | 'updateCheck' | 'updateCheckedAt'>;
+  config: Pick<KinuConfig, 'origin' | 'updateCheck' | 'updateCheckedAt'>;
   isTTY: boolean;
   now: number;
 }

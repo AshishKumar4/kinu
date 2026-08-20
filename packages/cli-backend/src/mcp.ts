@@ -73,7 +73,7 @@ export async function connectMcpServers(
   const diagnostics: McpConnectionDiagnostic[] = [];
 
   for (const [serverName, cfg] of Object.entries(servers)) {
-    const client = new Client({ name: 'proteus-cli', version: '0.1.0' });
+    const client = new Client({ name: 'kinu-cli', version: '0.1.0' });
     let stderr = '';
     try {
       const transport = new StdioClientTransport({

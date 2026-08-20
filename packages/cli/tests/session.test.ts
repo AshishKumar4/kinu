@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 function tempSessionDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "proteus-session-"));
+  const dir = mkdtempSync(join(tmpdir(), "kinu-session-"));
   tempDirs.push(dir);
   return dir;
 }

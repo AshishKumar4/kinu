@@ -14,7 +14,7 @@ import { tolerate } from '@kinu/core/obs';
 import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
 
-const ORIGIN = 'https://proteus.example.com';
+const ORIGIN = 'https://kinu.example.com';
 const tempDirs: string[] = [];
 
 interface InstallSandbox {
@@ -49,7 +49,7 @@ async function installScript(): Promise<string> {
 /** A sandbox HOME plus stub curl/bun/ln so the script runs without network
  *  or system side effects. The stub curl "downloads" a stub kinu shim. */
 function makeSandbox(): InstallSandbox {
-  const home = mkdtempSync(join(tmpdir(), 'proteus-install-test-'));
+  const home = mkdtempSync(join(tmpdir(), 'kinu-install-test-'));
   tempDirs.push(home);
   const stubBin = join(home, 'stub-bin');
   mkdirSync(stubBin);
@@ -97,7 +97,7 @@ function runHeadlessInstall(script: string, home: string, stubBin: string): Prom
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         HOME: home,
-        PROTEUS_HOME: join(home, '.proteus'),
+        KINU_HOME: join(home, '.kinu'),
         PATH: `${stubBin}:/usr/bin:/bin`,
         SHELL: '/bin/bash',
       },
@@ -151,7 +151,7 @@ describe('install.sh terminal handling', () => {
     // best-effort `stty sane` when the child dies mid-prompt.
     expect(script).toContain('"$@" < /dev/tty');
     expect(script).toContain('stty sane < /dev/tty 2>/dev/null || true');
-    expect(script).toContain('run_on_tty "$BIN_PATH" setup --origin "$PROTEUS_ORIGIN" --account-only');
+    expect(script).toContain('run_on_tty "$BIN_PATH" setup --origin "$KINU_ORIGIN" --account-only');
     expect(script).toContain('run_on_tty "$BIN_PATH" connect');
     // Children that are not interactive must not inherit the script stream:
     // under curl|bash a stdin-reading child would eat unread script bytes.
@@ -182,7 +182,7 @@ describe('install.sh terminal handling', () => {
       env: {
         ...process.env,
         HOME: home,
-        PROTEUS_HOME: join(home, '.proteus'),
+        KINU_HOME: join(home, '.kinu'),
         PATH: `${stubBin}:/usr/bin:/bin`,
         SHELL: '/bin/bash',
       },

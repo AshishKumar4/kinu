@@ -41,8 +41,8 @@ function envAfterPreload(env: Record<string, string>) {
 }
 
 const SIGNED_IN_SHELL = {
-  PROTEUS_ORIGIN: 'https://staging.kinu.run',
-  PROTEUS_TOKEN: 'ptc_ambient_from_a_previous_command',
+  KINU_ORIGIN: 'https://staging.kinu.run',
+  KINU_TOKEN: 'ptc_ambient_from_a_previous_command',
 };
 
 describe('the rule', () => {
@@ -59,24 +59,24 @@ describe('the rule', () => {
     // left, and this set is the contract two runners depend on.
     expect([...AMBIENT_CREDENTIAL_ENV].sort()).toEqual([
       'AI_GATEWAY_AUTH', 'AI_GATEWAY_BASE_URL', 'AI_GATEWAY_MODEL',
-      'PROTEUS_AUTH', 'PROTEUS_BASE_URL', 'PROTEUS_MODEL', 'PROTEUS_ORIGIN', 'PROTEUS_TOKEN',
+      'KINU_AUTH', 'KINU_BASE_URL', 'KINU_MODEL', 'KINU_ORIGIN', 'KINU_TOKEN',
     ]);
   });
 
   test('it reports what it took and leaves everything else alone', () => {
-    const env = { ...SIGNED_IN_SHELL, PROTEUS_HOME: '/tmp/scratch', PATH: '/usr/bin' };
-    expect([...stripAmbientCredentials(env)].sort()).toEqual(['PROTEUS_ORIGIN', 'PROTEUS_TOKEN']);
-    expect(Object.keys(env).sort()).toEqual(['PATH', 'PROTEUS_HOME']);
-    expect(env.PROTEUS_HOME).toBe('/tmp/scratch');
+    const env = { ...SIGNED_IN_SHELL, KINU_HOME: '/tmp/scratch', PATH: '/usr/bin' };
+    expect([...stripAmbientCredentials(env)].sort()).toEqual(['KINU_ORIGIN', 'KINU_TOKEN']);
+    expect(Object.keys(env).sort()).toEqual(['KINU_HOME', 'PATH']);
+    expect(env.KINU_HOME).toBe('/tmp/scratch');
   });
 
   test('an exported-but-empty variable is removed, not left as an empty string', () => {
-    // `PROTEUS_BASE_URL=` is what someone trying to CLEAR the variable produces,
+    // `KINU_BASE_URL=` is what someone trying to CLEAR the variable produces,
     // and an empty string is not absence: scripts/tbench-arm.sh refuses on
     // exactly this shape because the adapter resolves the empty value in
     // preference to its own default. Presence is the test, never truthiness.
-    const env = { PROTEUS_BASE_URL: '', PROTEUS_AUTH: 'Bearer x' };
-    expect([...stripAmbientCredentials(env)].sort()).toEqual(['PROTEUS_AUTH', 'PROTEUS_BASE_URL']);
+    const env = { KINU_BASE_URL: '', KINU_AUTH: 'Bearer x' };
+    expect([...stripAmbientCredentials(env)].sort()).toEqual(['KINU_AUTH', 'KINU_BASE_URL']);
     expect(Object.keys(env)).toEqual([]);
   });
 
@@ -95,12 +95,12 @@ describe('the wiring', () => {
     for (const name of AMBIENT_CREDENTIAL_ENV) expect(env[name]).toBeUndefined();
     // And the isolation it already had is still in place, so this case cannot
     // pass by having broken the throwaway home instead.
-    expect(env.PROTEUS_HOME).toMatch(/proteus-test-home-/);
+    expect(env.KINU_HOME).toMatch(/kinu-test-home-/);
   });
 
   test('the eval tier keeps them, because it is the one that consented', () => {
-    const env = envAfterPreload({ ...SIGNED_IN_SHELL, PROTEUS_EVAL_LIVE: '1' });
-    expect(env.PROTEUS_ORIGIN).toBe(SIGNED_IN_SHELL.PROTEUS_ORIGIN);
-    expect(env.PROTEUS_TOKEN).toBe(SIGNED_IN_SHELL.PROTEUS_TOKEN);
+    const env = envAfterPreload({ ...SIGNED_IN_SHELL, KINU_EVAL_LIVE: '1' });
+    expect(env.KINU_ORIGIN).toBe(SIGNED_IN_SHELL.KINU_ORIGIN);
+    expect(env.KINU_TOKEN).toBe(SIGNED_IN_SHELL.KINU_TOKEN);
   });
 });

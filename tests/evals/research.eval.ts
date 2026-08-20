@@ -17,11 +17,11 @@
  * agent through a SHIPPED surface, and driving the session class directly would
  * skip the CLI's own turn assembly, its client seam, and — the part this family
  * is ABOUT — MCP config resolution: a user's servers reach the agent because
- * `resolveMcpServers()` reads the `mcpServers` block of ~/.proteus/config.json
+ * `resolveMcpServers()` reads the `mcpServers` block of ~/.kinu/config.json
  * (cli/src/config.ts:513-515) and `LocalAgentClient` connects them
  * (cli/src/local-agent-client.ts:103, :270-271). A suite that hands
  * `connectMcp` its servers itself proves none of that. `tests/evals/cli-driver.ts`
- * is the glue, and bench/harbor/proteus_agent.py is its precedent.
+ * is the glue, and bench/harbor/kinu_agent.py is its precedent.
  *
  * WHY MCP AND NOT WORKSPACE FILES OR A WEB FIXTURE. The owner's design names
  * MCP as the channel, and the plumbing is real product surface with no live
@@ -95,7 +95,7 @@ const EPISODE_TIMEOUT_MS = 900_000;
  *  it and the credential-free fixture test connects the identical entry. */
 const MCP_SERVERS = { [SERVER_NAME]: { command: 'bun', args: [SERVER_PATH] } } as const;
 
-const TIER: EvalTier = process.env.PROTEUS_EVAL_TIER === 'pro' ? 'pro' : 'flash';
+const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
 const LLM: LLMProviderConfig = TARGET === null
   ? UNCONFIGURED_LLM
   : { ...TARGET.llm, model: EVAL_MODELS[TIER] };

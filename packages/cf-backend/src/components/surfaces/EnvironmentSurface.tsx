@@ -41,7 +41,7 @@ import {
   partitionCapabilities, pickDefaultExecutor,
   type ExecutorInfo,
 } from "@/lib/executors";
-import type { ExecutorOutput } from "@/hooks/use-proteus";
+import type { ExecutorOutput } from "@/hooks/use-kinu";
 import { FilesPane } from "@/components/FilesPane";
 import { ExecutorTerminal } from "@/components/ExecutorTerminal";
 import { listDevices, type UserDevice } from "@/lib/user-api";

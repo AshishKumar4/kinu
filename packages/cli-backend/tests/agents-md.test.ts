@@ -8,7 +8,7 @@ import { discoverAgentsMd } from '../src/agents-md';
 
 const roots: string[] = [];
 function makeTree(): string {
-  const root = mkdtempSync(join(tmpdir(), 'proteus-agentsmd-'));
+  const root = mkdtempSync(join(tmpdir(), 'kinu-agentsmd-'));
   roots.push(root);
   return root;
 }

@@ -73,7 +73,7 @@ type BranchRpcArgs = ExploreBranchArgs | ReflectBranchArgs;
  * `basePath` is the agent database's path with `.db` removed — the directory a
  * branch's own store goes next to. NULL when this runtime has no such
  * directory: an in-memory agent database is a SQLite sentinel, not a path, and
- * a branch child process needs a real file to open (`PROTEUS_PARENT_DB` below).
+ * a branch child process needs a real file to open (`KINU_PARENT_DB` below).
  * Joining onto the sentinel is what created a literal `:memory:/branches`
  * directory in the primary checkout and 15 worktrees — and an empty directory
  * is invisible to `git status`, which is why sixteen "clean" trees held one.
@@ -95,7 +95,7 @@ export function createBranchSpawner(
     // Created HERE, by the first branch that needs somewhere to put its
     // database — not when the spawner is built. Building one is what every
     // `createCLIRuntime` does, MCTS or not, so the eager mkdir wrote a
-    // directory per runtime: measured 107 new `/tmp/proteus-test-<n>/branches`
+    // directory per runtime: measured 107 new `/tmp/kinu-test-<n>/branches`
     // from one `bun test packages/cli-backend/` run, none of them ever used and
     // none of them removed.
     mkdirSync(branchRoot, { recursive: true });
@@ -106,15 +106,15 @@ export function createBranchSpawner(
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      PROTEUS_LLM_NAME: config.llm.name,
-      PROTEUS_BASE_URL: config.llm.baseURL,
-      PROTEUS_AUTH: config.llm.headers.Authorization ?? config.llm.headers.authorization ?? '',
-      PROTEUS_MODEL: config.llm.model,
-      PROTEUS_LLM_HEADERS: JSON.stringify(config.llm.headers),
-      PROTEUS_PROVIDER_CREDENTIALS: JSON.stringify(branchSafeCredentials(config.providerCredentials)),
-      PROTEUS_PARENT_DB: `${basePath}.db`,
+      KINU_LLM_NAME: config.llm.name,
+      KINU_BASE_URL: config.llm.baseURL,
+      KINU_AUTH: config.llm.headers.Authorization ?? config.llm.headers.authorization ?? '',
+      KINU_MODEL: config.llm.model,
+      KINU_LLM_HEADERS: JSON.stringify(config.llm.headers),
+      KINU_PROVIDER_CREDENTIALS: JSON.stringify(branchSafeCredentials(config.providerCredentials)),
+      KINU_PARENT_DB: `${basePath}.db`,
     };
-    if (config.codexConfigPath) env.PROTEUS_CONFIG_PATH = config.codexConfigPath;
+    if (config.codexConfigPath) env.KINU_CONFIG_PATH = config.codexConfigPath;
 
     const child = fork(workerPath, [dbPath], {
       stdio: 'pipe',

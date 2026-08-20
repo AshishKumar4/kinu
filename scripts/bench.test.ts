@@ -321,7 +321,7 @@ describe('artifact retention — a scored run leaves evidence or it does not run
 
   test('refuses every swept root, because that is how the R3 evidence was lost', () => {
     const runRoot = tempDir('bench-retention-run-');
-    for (const swept of ['/tmp/proteus-bench', '/var/tmp/proteus-bench', '/dev/shm/proteus-bench', join(tmpdir(), 'x')]) {
+    for (const swept of ['/tmp/kinu-bench', '/var/tmp/kinu-bench', '/dev/shm/kinu-bench', join(tmpdir(), 'x')]) {
       expect(() => resolveRoot(swept, undefined, runRoot)).toThrow(/which is swept/);
       expect(() => resolveRoot(undefined, swept, runRoot)).toThrow(/which is swept/);
     }
@@ -412,14 +412,14 @@ describe('artifact retention — a scored run leaves evidence or it does not run
     const result = Bun.spawnSync([
       'bun', join(REPO_ROOT, 'scripts', 'bench.ts'), 'validate',
       '--run-root', tempDir('bench-retention-e2e-'),
-      '--artifacts', join(tmpdir(), 'proteus-bench-swept'),
+      '--artifacts', join(tmpdir(), 'kinu-bench-swept'),
       '--limit', '1',
     ], { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' });
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain('which is swept');
     // Nothing ran: the refusal is at argument parsing, ahead of the first sandbox.
     expect(result.stderr.toString()).not.toContain('Validating');
-    expect(existsSync(join(tmpdir(), 'proteus-bench-swept'))).toBe(false);
+    expect(existsSync(join(tmpdir(), 'kinu-bench-swept'))).toBe(false);
   });
 });
 
@@ -532,17 +532,17 @@ describe('assertScratchRoot — the isolation promise, in code', () => {
 });
 
 describe('sandboxEnv', () => {
-  test('strips inherited PROTEUS_* and redirects HOME to the attempt', () => {
-    process.env.PROTEUS_HOME = '/real/home/.proteus';
-    process.env.PROTEUS_AUTH = 'secret';
+  test('strips inherited KINU_* and redirects HOME to the attempt', () => {
+    process.env.KINU_HOME = '/real/home/.kinu';
+    process.env.KINU_AUTH = 'secret';
     try {
       const env = sandboxEnv('/attempt/home');
-      expect(env.PROTEUS_HOME).toBe('/attempt/home');
+      expect(env.KINU_HOME).toBe('/attempt/home');
       expect(env.HOME).toBe('/attempt/home');
-      expect(env.PROTEUS_AUTH).toBeUndefined();
+      expect(env.KINU_AUTH).toBeUndefined();
     } finally {
-      delete process.env.PROTEUS_HOME;
-      delete process.env.PROTEUS_AUTH;
+      delete process.env.KINU_HOME;
+      delete process.env.KINU_AUTH;
     }
   });
 });
@@ -618,13 +618,13 @@ describe('createAttemptSandbox', () => {
     sandbox.dispose();
   });
 
-  test('each attempt gets its own PROTEUS_HOME, and it is not the real one', () => {
+  test('each attempt gets its own KINU_HOME, and it is not the real one', () => {
     const runRoot = tempDir('bench-home-');
     const one = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a4', prepare });
     const two = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a5', prepare });
-    expect(one.proteusHome).not.toBe(two.proteusHome);
-    expect(one.proteusHome.startsWith(runRoot)).toBe(true);
-    expect(one.proteusHome).not.toContain(join(homedir(), '.proteus'));
+    expect(one.kinuHome).not.toBe(two.kinuHome);
+    expect(one.kinuHome.startsWith(runRoot)).toBe(true);
+    expect(one.kinuHome).not.toContain(join(homedir(), '.kinu'));
     one.dispose();
     two.dispose();
   });
@@ -1009,7 +1009,7 @@ describe('panel arms — only the provider list may differ', () => {
 });
 
 describe('the evolution-event vocabulary does not drift across languages', () => {
-  // bench/clbench/proteus/events.py must know which activity-channel events are
+  // bench/clbench/kinu/events.py must know which activity-channel events are
   // really evolution, and it cannot import TypeScript. So the set is duplicated
   // once, deliberately, and this is the gate that stops the copy from rotting.
   // Without it, an event type added to core would silently stop counting as
@@ -1030,7 +1030,7 @@ describe('the evolution-event vocabulary does not drift across languages', () =>
     const direct = ['scaffold_promotion', 'scaffold_rollback'];
     for (const name of direct) expect(session).toContain(`'${name}'`);
 
-    const python = readSource('bench/clbench/proteus/events.py');
+    const python = readSource('bench/clbench/kinu/events.py');
     const block = /EVOLUTION_EVENTS = frozenset\(\{([\s\S]*?)\}\)/.exec(python);
     expect(block).not.toBeNull();
     const fromPython = [...block![1]!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]!);
@@ -1051,7 +1051,7 @@ describe('the evolution-event vocabulary does not drift across languages', () =>
       mcp: 'packages/cf-backend/src/actor-agent.ts',
     };
     const block = /EVOLUTION_EVENTS = frozenset\(\{([\s\S]*?)\}\)/
-      .exec(readSource('bench/clbench/proteus/events.py'))![1]!;
+      .exec(readSource('bench/clbench/kinu/events.py'))![1]!;
     for (const [notEvolution, emitter] of Object.entries(emitters)) {
       expect(block).not.toContain(`"${notEvolution}"`);
       expect(readSource(emitter)).toContain(`'${notEvolution}'`);

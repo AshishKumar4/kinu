@@ -561,7 +561,7 @@ function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
 }
 
 /** Group the flat, unscoped node list `getMctsTree` returns into one summary
- *  per root_id — the fix for the client bug in use-proteus.ts's `buildTree`,
+ *  per root_id — the fix for the client bug in use-kinu.ts's `buildTree`,
  *  which picks whichever depth-0 node sorts first (oldest by created_at) and
  *  silently drops every node not reachable from it. Nodes with a null
  *  root_id (legacy rows) are grouped under the sentinel key so they are

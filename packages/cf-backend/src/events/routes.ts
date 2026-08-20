@@ -18,7 +18,7 @@
  *
  * `createDurableWebhook` is gated behind a fresh-auth (step-up) check: the
  * incoming request must carry a session auth time within the last 5 minutes.
- * The auth middleware forwards this as `x-proteus-auth-time`.
+ * The auth middleware forwards this as `x-kinu-auth-time`.
  */
 
 import { getAgentByName } from 'agents';
@@ -43,7 +43,7 @@ const RequestCfSchema = v.object({
 });
 
 function requestAuthTimeMs(request: Request): number | null {
-  const forwarded = Number(request.headers.get('x-proteus-auth-time') ?? '');
+  const forwarded = Number(request.headers.get('x-kinu-auth-time') ?? '');
   if (Number.isFinite(forwarded) && forwarded > 0) return forwarded;
   return null;
 }
@@ -145,8 +145,8 @@ async function handleWebhookDelivery(
     delivery_id: request.headers.get('idempotency-key')
       ?? request.headers.get('x-delivery-id')
       ?? null,
-    hmac_signature: request.headers.get('x-proteus-signature'),
-    hmac_timestamp: request.headers.get('x-proteus-timestamp'),
+    hmac_signature: request.headers.get('x-kinu-signature'),
+    hmac_timestamp: request.headers.get('x-kinu-timestamp'),
     bearer_header: request.headers.get('authorization'),
     content_type: request.headers.get('content-type'),
     now: Date.now(),

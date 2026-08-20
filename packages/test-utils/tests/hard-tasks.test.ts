@@ -56,7 +56,7 @@ let ctx: VerifierContext;
 let db: Database;
 
 beforeAll(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'proteus-hard-tasks-'));
+  dir = mkdtempSync(join(tmpdir(), 'kinu-hard-tasks-'));
   const dbPath = join(dir, 'agent.db');
   db = new Database(dbPath);
   db.exec('PRAGMA journal_mode = WAL');

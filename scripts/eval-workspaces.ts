@@ -92,13 +92,13 @@ function credentials(options: Options): AccountAccess {
     }
   }
   if (!options.origin) {
-    throw new Error('no eval credential and no --origin. Set PROTEUS_EVAL_TOKEN to read the eval '
+    throw new Error('no eval credential and no --origin. Set KINU_EVAL_TOKEN to read the eval '
       + "account, or pass --origin to read the signed-in session's account.");
   }
   const session = resolveCloudSession();
   if (!session) {
-    throw new Error(`no credential for ${options.origin}: neither PROTEUS_EVAL_TOKEN nor a `
-      + 'signed-in CLI session. Run `kinu auth` or export PROTEUS_EVAL_TOKEN.');
+    throw new Error(`no credential for ${options.origin}: neither KINU_EVAL_TOKEN nor a `
+      + 'signed-in CLI session. Run `kinu auth` or export KINU_EVAL_TOKEN.');
   }
   return { origin: options.origin, token: session.token, via: 'signed-in session' };
 }
@@ -137,14 +137,14 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
     lines.push('Nothing to clean.');
     return lines;
   }
-  // ONE line to approve and run. `proteus workspace delete` rather than a raw
+  // ONE line to approve and run. `kinu workspace delete` rather than a raw
   // DELETE loop because it also prunes the local config reference, which a bare
   // API call leaves behind; it takes one name at a time, hence the loop. The
   // origin is carried explicitly so the command cannot land on a different
   // account than the list above was read from.
   lines.push('To remove them, run:');
-  lines.push(`  PROTEUS_ORIGIN=${origin} sh -c 'for w in ${evalRows.map((a) => a.name).join(' ')};`
-    + " do proteus workspace delete -y \"$w\"; done'");
+  lines.push(`  KINU_ORIGIN=${origin} sh -c 'for w in ${evalRows.map((a) => a.name).join(' ')};`
+    + " do kinu workspace delete -y \"$w\"; done'");
   return lines;
 }
 

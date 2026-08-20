@@ -19,7 +19,7 @@ import { JsonValueSchema, type JsonValue } from '@kinu/core';
 import * as v from 'valibot';
 import { createBranchSpawner } from '../src/branch-process';
 
-const dir = mkdtempSync(join(tmpdir(), 'proteus-branch-test-'));
+const dir = mkdtempSync(join(tmpdir(), 'kinu-branch-test-'));
 const workerPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'branch-worker.ts');
 let child: ChildProcess | null = null;
 
@@ -80,7 +80,7 @@ const LANGUAGES: [string, ...string[]] = ['typescript'];
 
 /**
  * An OpenAI-compatible endpoint standing in for the provider a branch resolves
- * (`PROTEUS_BASE_URL` + `workers-ai` is the CLI's local-gateway path). It records
+ * (`KINU_BASE_URL` + `workers-ai` is the CLI's local-gateway path). It records
  * every request body the worker's provider stack actually sent, and `reply` lets a
  * test answer the way a failing upstream does.
  */

@@ -177,7 +177,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
 }
 
 function req(token: string, path: string, init: RequestInit = {}) {
-  return new Request(`https://proteus.example.com${path}`, {
+  return new Request(`https://kinu.example.com${path}`, {
     ...init,
     headers: { authorization: `Bearer ${token}`, ...init.headers },
   });

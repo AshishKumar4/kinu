@@ -39,9 +39,9 @@
  *      reused after the alarm returns throws (`unsupported`) instead of quietly
  *      parenting new work under a finished span. This is the one an `await` on a
  *      floating promise would otherwise defeat.
- *   3. EVERY SPAN NAMES ITS INVOCATION. `proteus.invocation` is minted at the
+ *   3. EVERY SPAN NAMES ITS INVOCATION. `kinu.invocation` is minted at the
  *      entry point from a counter that lives in memory and is NEVER persisted, so
- *      it restarts at 1 after a cold start; `proteus.isolate_gen` is persisted and
+ *      it restarts at 1 after a cold start; `kinu.isolate_gen` is persisted and
  *      bumped per construction, so it does NOT. Together the pair is a positive
  *      discontinuity signal rather than an inferred one: same gen + different
  *      invocation is one isolate serving two invocations (the alarm-on-a-live-
@@ -54,14 +54,14 @@
  * point, so a continuation running after the invocation would still find a
  * parent. Passing the handle down is the enforcement.
  */
-import { ProteusError } from './error';
+import { KinuError } from './error';
 import {
   renderSelfPath, type ScopedSpan, type SpanOpenAttributes, type Tracer,
 } from './tracer';
 
 /** Span attribute holding the in-memory invocation counter. Not persisted, by
  *  design — see mechanism 3. */
-export const SPAN_ATTR_INVOCATION = 'proteus.invocation';
+export const SPAN_ATTR_INVOCATION = 'kinu.invocation';
 
 /**
  * How the runtime entered the object. It prefixes the root span's name because
@@ -77,7 +77,7 @@ export interface TracedInvocation {
   /**
    * Opens a span nested inside this invocation's root span.
    *
-   * Throws `ProteusError('unsupported')` once the invocation has settled. That is
+   * Throws `KinuError('unsupported')` once the invocation has settled. That is
    * a programming error, not a runtime condition — it means a span was opened
    * from work that escaped its invocation, and the span it would have produced
    * would have claimed coverage of time nobody measured.
@@ -130,7 +130,7 @@ export function createAgentTracing(deps: {
       const handle: TracedInvocation = {
         span<U>(childName: string, childFn: (span: ScopedSpan) => U): U {
           if (!live) {
-            throw new ProteusError(
+            throw new KinuError(
               'unsupported',
               `span ${JSON.stringify(childName)} was opened after ${kind} invocation `
                 + `${String(ordinal)} settled — the work escaped its invocation, so the span `

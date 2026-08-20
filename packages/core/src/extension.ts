@@ -6,7 +6,7 @@
  * engine (`runChat` in chat.ts, the CLI path) and the cloud DO's Think hook
  * bridge (cf-backend `OrchestratorAgent` — beforeTurn/beforeStep/
  * beforeToolCall/afterToolCall/onChatResponse map onto this contract).
- * Plugin/host code registers a {@link ProteusExtension} on an
+ * Plugin/host code registers a {@link KinuExtension} on an
  * {@link ExtensionHost}, and the engine drives every registered extension's
  * lifecycle hooks + folds its contributed tools into the single turn ToolSet.
  * Internal consumers (the CLI backend's steering drain) ride the SAME host, so
@@ -18,7 +18,7 @@
 
 import type { ModelMessage, ToolSet } from 'ai';
 import type { JsonObject } from './utils/json';
-import { diagnostics, toProteusError } from './obs/index';
+import { diagnostics, toKinuError } from './obs/index';
 
 export interface TurnStartContext {
   readonly system: string;
@@ -83,7 +83,7 @@ export interface TransformContext {
  * A unit of turn observation/extension. Every hook is optional. Implement only
  * what you need and register it on an {@link ExtensionHost}.
  */
-export interface ProteusExtension {
+export interface KinuExtension {
   /** Stable identifier — surfaced in errors (e.g. tool-name collisions). */
   readonly name: string;
   /** Fires once before the model is streamed. */
@@ -119,10 +119,10 @@ export interface ProteusExtension {
  * for the life of a turn (or longer) and passed to `runChat`.
  */
 export class ExtensionHost {
-  private readonly extensions: ProteusExtension[] = [];
+  private readonly extensions: KinuExtension[] = [];
 
   /** Register an extension. Returns `this` for chaining. */
-  register(ext: ProteusExtension): this {
+  register(ext: KinuExtension): this {
     this.extensions.push(ext);
     return this;
   }
@@ -185,7 +185,7 @@ export class ExtensionHost {
       } catch (err) {
         diagnostics.failure(
           'extension.transform_context_failed',
-          toProteusError({ doing: 'run an extension transformContext hook', cause: err, otherwise: 'io' }),
+          toKinuError({ doing: 'run an extension transformContext hook', cause: err, otherwise: 'io' }),
           { extension: ext.name },
         );
       }

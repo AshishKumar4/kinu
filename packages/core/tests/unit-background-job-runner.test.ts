@@ -107,7 +107,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0].text).toContain(id);
     expect(enqueued[0].text).toContain('completed');
-    expect(enqueued[0].metadata?.proteusEvent).toBe('background_job');
+    expect(enqueued[0].metadata?.kinuEvent).toBe('background_job');
     expect(enqueued[0].metadata?.status).toBe('completed');
     expect(stashes).toEqual([
       { phase: 'running', jobId: id, kind: 'think' },
@@ -379,7 +379,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     expect(seenMode).toBe('plan');
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0].metadata?.status).toBe('completed');
-    expect(enqueued[0].metadata?.proteusMode).toBe('plan');
+    expect(enqueued[0].metadata?.kinuMode).toBe('plan');
     expect(notified).toEqual([{ id: 'jr', status: 'completed' }]);
     expect(logs.find((l) => l.e === 'bg_job_resume')).toBeTruthy();
   });

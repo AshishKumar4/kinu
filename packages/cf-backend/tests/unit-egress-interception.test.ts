@@ -14,7 +14,7 @@ import {
 } from '@kinu/core';
 import type { EgressInjectionResult } from '../src/user/egress-vault';
 import type { OutboundHandlerContext } from '@cloudflare/containers';
-import type { ProteusEgressParams } from '../src/egress/outbound';
+import type { KinuEgressParams } from '../src/egress/outbound';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
 
@@ -36,7 +36,7 @@ const root = new URL('../', import.meta.url).pathname;
 /** The handler context the SDK passes: `containerId` and `className` are
  *  platform-supplied, `params` is whatever the owning DO configured. */
 function ctx(params: OutboundHandlerContext['params']): OutboundHandlerContext {
-  return { containerId: 'container-1', className: 'ProteusSandbox', params };
+  return { containerId: 'container-1', className: 'KinuSandbox', params };
 }
 const read = (path: string): string => readFileSync(`${root}${path}`, 'utf8');
 
@@ -45,8 +45,8 @@ const PLACEHOLDER = `${EGRESS_PLACEHOLDER_PREFIX}${'Q'.repeat(43)}`;
 const BINDING: EgressSecretBinding = {
   id: 'stripe', label: 'Stripe', host: 'api.stripe.com', placeholder: PLACEHOLDER,
 };
-const PARAMS: ProteusEgressParams = {
-  workspaceName: 'proteus-main', ownerUserId: 'user-1', bindings: [BINDING],
+const PARAMS: KinuEgressParams = {
+  workspaceName: 'kinu-main', ownerUserId: 'user-1', bindings: [BINDING],
 };
 
 /** An `Env` whose UserDO answers the one vault call, and nothing else.
@@ -183,12 +183,12 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
 
 describe('what the container is configured with', () => {
   test('only GRANTED bindings are passed, so an ungranted placeholder is never learned', async () => {
-    const calls: { host?: string; method: string; params: ProteusEgressParams }[] = [];
+    const calls: { host?: string; method: string; params: KinuEgressParams }[] = [];
     const params = await configureContainerEgress({
       setOutboundHandler: async (method, p) => { calls.push({ method, params: p }); },
       setOutboundByHost: async (host, method, p) => { calls.push({ host, method, params: p }); },
     }, {
-      workspaceName: 'proteus-main',
+      workspaceName: 'kinu-main',
       ownerUserId: 'user-1',
       vault: [BINDING, { id: 'prod-db', label: 'Prod DB', host: 'db.internal', placeholder: `${EGRESS_PLACEHOLDER_PREFIX}${'Z'.repeat(43)}` }],
       grants: [{ rule: 'egress-secret:stripe', executor: 'sandbox' }],
@@ -274,7 +274,7 @@ describe('the posture the whole design rests on', () => {
   });
 
   test('the container class denies non-HTTP egress and intercepts HTTPS', () => {
-    const source = read('src/proteus-sandbox.ts');
+    const source = read('src/kinu-sandbox.ts');
     expect(source).toContain('enableInternet = false');
     // The SDK does NOT default this on, whatever its docs say.
     expect(source).toContain('interceptHttps = true');

@@ -288,7 +288,7 @@ async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<voi
  *  and `CC-CORPUS-*.md` for a run deliberately pointed at the repo. */
 function defaultCorpusDir(): string {
   const cache = process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache');
-  return join(cache, 'proteus', 'cc-corpus');
+  return join(cache, 'kinu', 'cc-corpus');
 }
 
 function corpusReportPath(opts: LabelOpts): string {

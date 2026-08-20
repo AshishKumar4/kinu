@@ -30,7 +30,7 @@ function fakeWs() {
 }
 
 function setup(opts = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'proteus-daemon-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-'));
   const work = path.join(root, 'project');
   fs.mkdirSync(work, { recursive: true });
   const ctx = { checkpoints: createCheckpoints({ base: path.join(root, 'shadow'), keep: opts.keep, gitBin: opts.gitBin }) };
@@ -229,7 +229,7 @@ describe('daemon toolchain probe', () => {
 
   /** A PATH directory holding executables named `names`. */
   function pathWith(names) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proteus-which-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-which-'));
     for (const name of names) {
       fs.writeFileSync(path.join(dir, name), '#!/bin/sh\n', { mode: 0o755 });
     }
@@ -251,7 +251,7 @@ describe('daemon toolchain probe', () => {
   });
 
   test('a non-executable file of the right name is not a binary on PATH', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proteus-which-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-which-'));
     fs.writeFileSync(path.join(dir, 'python3'), 'not a program', { mode: 0o644 });
     try {
       const ws = fakeWs();

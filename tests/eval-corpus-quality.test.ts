@@ -184,17 +184,17 @@ describe('a run that attempted nothing writes no record at all', () => {
     transcripts, repoRoot: join(import.meta.dirname, '..'),
   });
 
-  /** The destination named explicitly, so an exported `PROTEUS_EVAL_RECORD` in
+  /** The destination named explicitly, so an exported `KINU_EVAL_RECORD` in
    *  the shell running the suite cannot decide where this writes. */
   function publishTo(dir: string, observations: readonly EvalObservation[]) {
     const out = join(dir, 'run-record.json');
-    const before = process.env.PROTEUS_EVAL_RECORD;
-    process.env.PROTEUS_EVAL_RECORD = out;
+    const before = process.env.KINU_EVAL_RECORD;
+    process.env.KINU_EVAL_RECORD = out;
     try {
       return { out, record: publishRunRecord(inputs(dir, observations)) };
     } finally {
-      if (before === undefined) delete process.env.PROTEUS_EVAL_RECORD;
-      else process.env.PROTEUS_EVAL_RECORD = before;
+      if (before === undefined) delete process.env.KINU_EVAL_RECORD;
+      else process.env.KINU_EVAL_RECORD = before;
     }
   }
 

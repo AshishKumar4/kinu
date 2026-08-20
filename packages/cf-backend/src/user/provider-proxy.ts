@@ -12,8 +12,8 @@
  * Worker, exactly as the DO-backed cloud path does — the raw value never
  * travels to the client in either direction.
  *
- * The client names the credential (`x-proteus-proxy-cred`) and the upstream URL
- * (`x-proteus-proxy-target`); this route decides whether that URL is one the
+ * The client names the credential (`x-kinu-proxy-cred`) and the upstream URL
+ * (`x-kinu-proxy-target`); this route decides whether that URL is one the
  * credential may be spent on, by resolving the provider's own base URL and
  * checking the target against it — same https origin, under that path, and one
  * of the inference endpoints (`proxyTargetAllowed`). Without the origin check

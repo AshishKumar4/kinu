@@ -23,7 +23,7 @@ import {
 } from "@phosphor-icons/react";
 import type { ChangelogEntry, ChangelogEntryKind, DiffLine } from "@kinu/core";
 import type { Rpc } from "@/lib/protocol";
-import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-proteus";
+import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, describeError, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines, timeAgo } from "./shared";

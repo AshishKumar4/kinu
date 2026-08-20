@@ -110,7 +110,7 @@ export function mockAgentsSdk(): void {
        *  (`agents/dist/index.js:4205`: `[...this._parentPath, { className:
        *  this.constructor.name, name: this.name }]`) rather than approximated,
        *  because the tracing seam renders it into every span's
-       *  `proteus.self_path` and it is the ONLY discriminator that exists — a
+       *  `kinu.self_path` and it is the ONLY discriminator that exists — a
        *  facet's `ctx.id` reports under its root's `durableObjectId`. A
        *  stand-in that answered `[]` would make every span read `root`, which
        *  is the one value that cannot occur in production. Top-level here, so
@@ -252,8 +252,8 @@ export function renderNativeSpanTree(): string {
     nativeSpans.forEach((span, index) => {
       if (span.parent !== parent) return;
       const shown = [...span.attributes]
-        .filter(([key]) => key !== 'proteus.self_path')
-        .map(([key, value]) => `${key.replace('proteus.', '')}=${String(value)}`)
+        .filter(([key]) => key !== 'kinu.self_path')
+        .map(([key, value]) => `${key.replace('kinu.', '')}=${String(value)}`)
         .join(' ');
       lines.push(`${'  '.repeat(depth)}${span.name}${shown === '' ? '' : `  [${shown}]`}`);
       walk(index, depth + 1);

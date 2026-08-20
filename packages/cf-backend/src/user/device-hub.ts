@@ -22,7 +22,7 @@ import {
   deviceToolchainAnswer, freshDeviceToolchain,
   type DeviceToolchain, type JsonValue, type TunnelSocket,
 } from '@kinu/core';
-import { diagnostics, ProteusError, toProteusError } from '@kinu/core/obs';
+import { diagnostics, KinuError, toKinuError } from '@kinu/core/obs';
 import * as v from 'valibot';
 
 /** WebSocket.OPEN is 1 across every implementation. */
@@ -164,14 +164,14 @@ export class DeviceSocketHub {
         timeoutMs: PROBE_TIMEOUT_MS,
       });
       const parsed = v.safeParse(WhichResultSchema, answered);
-      if (!parsed.success) throw new ProteusError('io', 'device answered `which` with an unreadable payload');
+      if (!parsed.success) throw new KinuError('io', 'device answered `which` with an unreadable payload');
       present = parsed.output.present;
     } catch (err) {
       // A daemon too old to know the method says so in its error frame, and that
       // is a durable property of this connection — record it and stop asking.
       // Every other failure (a timeout, a dropped socket, a payload we could not
       // read) is transient: leave the record untouched so the next turn re-asks.
-      const failure = toProteusError({ doing: 'probe the device toolchain', cause: err, otherwise: 'io' });
+      const failure = toKinuError({ doing: 'probe the device toolchain', cause: err, otherwise: 'io' });
       if (isDeviceUnknownMethodError(err)) this.recordProbe(deviceId, PROBE_UNANSWERABLE);
       diagnostics.failure('device.toolchain_probe_failed', failure, { device: deviceId });
       return null;

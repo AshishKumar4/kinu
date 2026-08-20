@@ -24,7 +24,7 @@ import type { BenchTask } from './types';
 /** Committed salt. Changing it re-rolls every task's assignment and invalidates
  *  historical sealed results — the manifest hash in each report is what makes
  *  such a change visible rather than silent. */
-export const SEAL_SALT = 'proteus-bench-seal-v1';
+export const SEAL_SALT = 'kinu-bench-seal-v1';
 
 /** Half the corpus is held out. With a small corpus a smaller held-out share
  *  would resolve nothing at all. */

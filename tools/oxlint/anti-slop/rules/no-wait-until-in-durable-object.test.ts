@@ -32,7 +32,7 @@ tester.run("anti-slop/no-wait-until-in-durable-object", noWaitUntilInDurableObje
       code: `class Orchestrator extends Agent<Env> {
   private scheduleTimerAt(ts: number): void {
     this.ctx.waitUntil(this.armTimer(ts).catch((err) => {
-      console.error('[proteus] timer arm failed:', err instanceof Error ? err.message : String(err));
+      console.error('[kinu] timer arm failed:', err instanceof Error ? err.message : String(err));
     }));
   }
 }`,

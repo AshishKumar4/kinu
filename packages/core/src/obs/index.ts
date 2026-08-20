@@ -10,7 +10,7 @@
  * assertable without a runtime. Neither half depends on the other: `ScopedSpan.fail` takes a native
  * `Error`, so no error taxonomy has to exist before a span can record a failure.
  *
- * `error` is the CLASSIFICATION — `ErrorCode`, `ProteusError` and the refusal payload a tool puts on
+ * `error` is the CLASSIFICATION — `ErrorCode`, `KinuError` and the refusal payload a tool puts on
  * its own result — and `log` is the typed logger, whose reserved-field ban is a type rather than a
  * convention. Those two are one pair: `Logger.failure` requires a classified error, so a log line
  * that reports a failure cannot omit which kind it was.
@@ -45,11 +45,11 @@ export {
   classifyErrorCode,
   CODE_IS_REFUSAL,
   ERROR_CODES,
-  ProteusError,
+  KinuError,
   refusalOf,
   renderCauseChain,
   renderThrownChain,
-  toProteusError,
+  toKinuError,
   type ErrorCode,
   type Refusal,
 } from './error';

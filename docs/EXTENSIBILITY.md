@@ -13,11 +13,11 @@ altitude.
 | **`ModelProvider`** | `core/providers/types.ts` | `packages/core/src/providers/` (runtime-agnostic) and `packages/cf-backend/src/providers/` (CF-specific) | A new LLM backend | Anthropic direct, Google Gemini, Groq, Bedrock, local Ollama |
 | **`ExplorationStrategy`** | `core/strategy/types.ts` | `packages/core/src/strategy/` | A search or sampling policy over candidate continuations | MCTS, Heads, Tree-of-Thoughts, Graph-of-Thoughts, Reflexion-rollouts |
 | **`ActorAgent`** | `cf-backend/src/actor-agent.ts` | `packages/cf-backend/src/` | A new *kind of agent* running the full turn loop | OrchestratorAgent, SubordinateAgent |
-| **`ProteusExtension`** | `core/extension.ts` | any package | Per-turn observation and light rewriting | compaction, event injection, CLI steering |
+| **`KinuExtension`** | `core/extension.ts` | any package | Per-turn observation and light rewriting | compaction, event injection, CLI steering |
 
 The first two are registries. They hold implementations and no state, with
 per-call state flowing through `ProviderDeps` and `StrategyContext`.
-`ActorAgent` is class-level. `ProteusExtension` is per-turn, and
+`ActorAgent` is class-level. `KinuExtension` is per-turn, and
 [EXTENSIONS.md](./EXTENSIONS.md) documents it on its own.
 
 ## Registration is not reachability
@@ -277,7 +277,7 @@ handicap, and a context-discipline scaffold would lose every trial.
 `low | medium | high` is the one dial. It is user-settable per workspace through
 the `/effort` slash command or `kinu effort <name> [level]`, stored as
 `agent_config.reasoning_effort`, with a CLI-side default in
-`~/.proteus/config.json`. `reasoningEffortOptions(effort, providerFamily)` in
+`~/.kinu/config.json`. `reasoningEffortOptions(effort, providerFamily)` in
 `core/strategy/effort.ts` translates it to each family's native knob.
 
 | Family | Emitted `providerOptions` |

@@ -44,7 +44,7 @@ import {
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { scratchPath } from '@kinu/test-utils';
 
-const SESSION = 'proteus-itest:default';
+const SESSION = 'kinu-itest:default';
 const silentLogger: Logger = { info() {}, debug() {}, warn() {}, error() {} };
 
 /** One user→assistant→tool exchange with a fat tool output. */
@@ -214,7 +214,7 @@ describe('default compaction over the real storage plane', () => {
     // The reference message cites the transcript path the plan persisted.
     const snapshot = await state.plans.load(SESSION);
     if (!snapshot) throw new Error('expected a persisted plan snapshot');
-    expect(snapshot.transcriptRelativePath.startsWith('.proteus/compaction/')).toBe(true);
+    expect(snapshot.transcriptRelativePath.startsWith('.kinu/compaction/')).toBe(true);
     expect(plannedJson).toContain(snapshot.transcriptRelativePath);
 
     // Durable persistence is a real row in agent.db, not memory.

@@ -30,7 +30,7 @@ import {
   type JsonValue,
   type LLMProviderConfig,
 } from '@kinu/core';
-import { diagnostics, ProteusError, renderThrownChain } from '@kinu/core/obs';
+import { diagnostics, KinuError, renderThrownChain } from '@kinu/core/obs';
 import * as v from 'valibot';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver';
 import { createFileCodexAuthStore } from './codex-auth-store';
@@ -39,7 +39,7 @@ const dbPath = process.argv[2];
 if (!dbPath) {
   diagnostics.failure(
     'branch.worker_missing_db_path',
-    new ProteusError('bad_input', 'branch worker started without a database path'),
+    new KinuError('bad_input', 'branch worker started without a database path'),
   );
   process.exit(1);
 }
@@ -76,25 +76,25 @@ const branchWorkerEnvelopeSchema = v.object({ method: v.string() });
 const BRANCH_METHODS = new Set<string>(['explore', 'reflect']);
 
 const llmConfig: LLMProviderConfig = {
-  name: process.env.PROTEUS_LLM_NAME ?? 'workers-ai',
-  baseURL: process.env.PROTEUS_BASE_URL ?? '',
-  headers: readJson(stringMapSchema, process.env.PROTEUS_LLM_HEADERS) ?? {
-    Authorization: process.env.PROTEUS_AUTH ?? '',
+  name: process.env.KINU_LLM_NAME ?? 'workers-ai',
+  baseURL: process.env.KINU_BASE_URL ?? '',
+  headers: readJson(stringMapSchema, process.env.KINU_LLM_HEADERS) ?? {
+    Authorization: process.env.KINU_AUTH ?? '',
   },
-  model: process.env.PROTEUS_MODEL ?? DEFAULT_WORKERS_AI_MODEL_ID,
+  model: process.env.KINU_MODEL ?? DEFAULT_WORKERS_AI_MODEL_ID,
 };
 
 const credentials: LocalProviderCredentials = readJson(
   localProviderCredentialsSchema,
-  process.env.PROTEUS_PROVIDER_CREDENTIALS,
+  process.env.KINU_PROVIDER_CREDENTIALS,
 ) ?? {};
 if (process.env.CODEX_ACCESS_TOKEN) credentials.codexAccessToken = process.env.CODEX_ACCESS_TOKEN;
 
 const modelResolver = createLocalModelResolver({
   llm: llmConfig,
   credentials,
-  codexAuthStore: process.env.PROTEUS_CONFIG_PATH
-    ? createFileCodexAuthStore(process.env.PROTEUS_CONFIG_PATH)
+  codexAuthStore: process.env.KINU_CONFIG_PATH
+    ? createFileCodexAuthStore(process.env.KINU_CONFIG_PATH)
     : undefined,
 });
 
@@ -112,7 +112,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS traces (
 // initAgentConfigTable), so a failure here is a broken parent, not an old one.
 let craftedTools: ExploreToolHint[] = [];
 let parentDb: Database | null = null;
-const parentDbPath = process.env.PROTEUS_PARENT_DB;
+const parentDbPath = process.env.KINU_PARENT_DB;
 if (parentDbPath) {
   parentDb = new Database(parentDbPath, { readonly: true });
   craftedTools = parentDb.query<ExploreToolHint, []>('SELECT name, description FROM crafted_tools').all();

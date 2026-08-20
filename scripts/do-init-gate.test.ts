@@ -107,7 +107,7 @@ describe('DO init-gate purity', () => {
 // method still cannot await (it is not async), and what it returns must be
 // bounded.
 describe('DO init-gate purity — container-start hook', () => {
-  const CORRECT = `export class ProteusSandbox extends Sandbox<Env> {
+  const CORRECT = `export class KinuSandbox extends Sandbox<Env> {
     onStart(): Promise<void> {
       return withContainerStartDeadline('x', 25_000, () => this.start(), () => {});
     }
@@ -118,7 +118,7 @@ describe('DO init-gate purity — container-start hook', () => {
   });
 
   test('`: void` is the violation here — it detaches the work the gate must hold', () => {
-    const detached = `export class ProteusSandbox extends Sandbox<Env> {
+    const detached = `export class KinuSandbox extends Sandbox<Env> {
       onStart(): void {
         void withContainerStartDeadline('x', 1, () => this.start(), () => {});
       }
@@ -128,7 +128,7 @@ describe('DO init-gate purity — container-start hook', () => {
   });
 
   test('unbounded work is a violation even with the right annotation', () => {
-    const unbounded = `export class ProteusSandbox extends Sandbox<Env> {
+    const unbounded = `export class KinuSandbox extends Sandbox<Env> {
       onStart(): Promise<void> {
         return this.restoreWorkspace();
       }
@@ -138,7 +138,7 @@ describe('DO init-gate purity — container-start hook', () => {
   });
 
   test('`async` is still a violation — it is how an unbounded await gets in', () => {
-    const widened = `export class ProteusSandbox extends Sandbox<Env> {
+    const widened = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
         await withContainerStartDeadline('x', 1, () => this.start(), () => {});
       }
@@ -151,7 +151,7 @@ describe('DO init-gate purity — container-start hook', () => {
 
   test('the narrowing is keyed on the base class, not on the file or the name', () => {
     // Same method body, a different `extends`: held to the per-request rule.
-    const impostor = `export class ProteusSandbox extends ActorAgent {
+    const impostor = `export class KinuSandbox extends ActorAgent {
       onStart(): Promise<void> {
         return withContainerStartDeadline('x', 1, () => this.start(), () => {});
       }
@@ -173,8 +173,8 @@ describe('DO init-gate purity, against the real tree', () => {
     const { inspected } = audit(SOURCES);
     expect(inspected.map((i) => `${i.owner}:${i.hook}`).sort()).toEqual([
       'ExplorationAgent:per-request',
+      'KinuSandbox:container-start',
       'OrchestratorAgent:per-request',
-      'ProteusSandbox:container-start',
       'SubordinateAgent:per-request',
     ]);
   });
@@ -199,7 +199,7 @@ describe('DO init-gate purity, against the real tree', () => {
   test('cut the wire: unbounding the real container hook goes red', () => {
     // The restore is the reason this hook may hold the gate at all. Take its
     // budget away against the real file and the gate must say so.
-    const file = 'packages/cf-backend/src/proteus-sandbox.ts';
+    const file = 'packages/cf-backend/src/kinu-sandbox.ts';
     const real = SOURCES.get(file);
     expect(real).toBeDefined();
 
@@ -208,12 +208,12 @@ describe('DO init-gate purity, against the real tree', () => {
     );
     expect(unbounded).not.toBe(real);
     const { violations } = auditFile(file, unbounded);
-    expect(violations.map((v) => v.owner)).toEqual(['ProteusSandbox']);
+    expect(violations.map((v) => v.owner)).toEqual(['KinuSandbox']);
     expect(violations[0]!.reason).toContain('must route its work through');
   });
 
   test('cut the wire: detaching the real container hook goes red', () => {
-    const file = 'packages/cf-backend/src/proteus-sandbox.ts';
+    const file = 'packages/cf-backend/src/kinu-sandbox.ts';
     const real = SOURCES.get(file);
     const detached = real!.replace('onStart(): Promise<void> {', 'onStart(): void {');
     expect(detached).not.toBe(real);

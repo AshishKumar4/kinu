@@ -93,7 +93,7 @@ afterEach(() => {
 });
 
 /** Local one-shot commands auto-start the scheduler daemon inside
- *  PROTEUS_HOME; kill it before the temp home disappears under it. */
+ *  KINU_HOME; kill it before the temp home disappears under it. */
 function stopLocalDaemon(home: string): void {
   const pidfile = tolerate(() => readFileSync(join(home, "daemon.pid"), "utf-8"), "enoent");
   if (pidfile === undefined) return;
@@ -103,7 +103,7 @@ function stopLocalDaemon(home: string): void {
 
 function runCli(args: string[], opts: { home?: string; stdin?: string; env?: Record<string, string> } = {}) {
   const env = { ...process.env, ...opts.env };
-  if (opts.home) env.PROTEUS_HOME = opts.home;
+  if (opts.home) env.KINU_HOME = opts.home;
   return Bun.spawnSync({
     cmd: [process.execPath, cliBin, ...args],
     cwd: repoRoot,
@@ -119,7 +119,7 @@ async function runCliAsync(
   opts: { home?: string; stdin?: string; env?: Record<string, string> } = {},
 ) {
   const env = { ...process.env, ...opts.env };
-  if (opts.home) env.PROTEUS_HOME = opts.home;
+  if (opts.home) env.KINU_HOME = opts.home;
   const proc = Bun.spawn({
     cmd: [process.execPath, cliBin, ...args],
     cwd: repoRoot,
@@ -138,7 +138,7 @@ async function runCliAsync(
 
 function runCliInPty(args: string[], opts: { home: string; stdin?: string }) {
   const command = [
-    `PROTEUS_HOME=${shellQuote(opts.home)}`,
+    `KINU_HOME=${shellQuote(opts.home)}`,
     shellQuote(process.execPath),
     shellQuote(cliBin),
     ...args.map(shellQuote),
@@ -164,10 +164,10 @@ function shellQuote(value: string): string {
 
 describe("CLI behavior", () => {
   test("setup --account-only with an existing account does not enter the local model wizard", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-setup-account-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-setup-account-"));
     tempDirs.push(home);
     writeConfig(home, {
-      origin: "https://proteus.example.com",
+      origin: "https://kinu.example.com",
       accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
       user: { id: "user_123", email: "ashish@example.com" },
     });
@@ -184,10 +184,10 @@ describe("CLI behavior", () => {
   });
 
   test("interactive setup can be rerun and reaches provider choices", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-setup-rerun-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-setup-rerun-"));
     tempDirs.push(home);
     writeConfig(home, {
-      origin: "https://proteus.example.com",
+      origin: "https://kinu.example.com",
       accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
       user: { id: "user_123", email: "ashish@example.com" },
     });
@@ -205,10 +205,10 @@ describe("CLI behavior", () => {
   });
 
   test("setup --local-model keeps local provider setup explicit", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-setup-local-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-setup-local-"));
     tempDirs.push(home);
     writeConfig(home, {
-      origin: "https://proteus.example.com",
+      origin: "https://kinu.example.com",
       accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
       user: { id: "user_123", email: "ashish@example.com" },
     });
@@ -222,10 +222,10 @@ describe("CLI behavior", () => {
   });
 
   test("provider list summarizes connected providers without leaking credentials", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-providers-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-providers-"));
     tempDirs.push(home);
     writeConfig(home, {
-      origin: "https://proteus.example.com",
+      origin: "https://kinu.example.com",
       accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
       user: { id: "user_123", email: "ashish@example.com" },
       model: "codex/gpt-5.5",
@@ -278,10 +278,10 @@ describe("CLI behavior", () => {
   });
 
   test("no-name chat can select a configured cloud agent", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-chat-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-chat-"));
     tempDirs.push(home);
     writeConfig(home, {
-      origin: "https://proteus.example.com",
+      origin: "https://kinu.example.com",
       accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
       agents: {
         jarvis: {
@@ -307,7 +307,7 @@ describe("CLI behavior", () => {
 
 describe("kinu exec (headless)", () => {
   test("requires a task prompt and exits nonzero", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-usage-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-usage-"));
     tempDirs.push(home);
 
     const proc = runCli(["exec"], { home });
@@ -316,7 +316,7 @@ describe("kinu exec (headless)", () => {
   });
 
   test("demands --workspace when several workspaces are configured", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-agents-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-agents-"));
     tempDirs.push(home);
     const stamp = new Date(0).toISOString();
     writeConfig(home, {
@@ -338,14 +338,14 @@ describe("kinu exec (headless)", () => {
   // spawned CLI binary against a mock OpenAI-compatible endpoint — proving
   // exit codes and the line-delimited JSON event shape end to end.
   test("runs a local workspace end-to-end with --json, resumable sessions, and honest exit codes", async () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-smoke-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-smoke-"));
     tempDirs.push(home);
     const server = startMockLlm("Hello from mock.");
     try {
       const env = {
-        PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
-        PROTEUS_AUTH: "Bearer mock",
-        PROTEUS_MODEL: "mock-model",
+        KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
+        KINU_AUTH: "Bearer mock",
+        KINU_MODEL: "mock-model",
       };
 
       const created = await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke test agent"], { home, env });
@@ -413,21 +413,21 @@ describe("kinu exec (headless)", () => {
   }, 120_000);
 
   test("exits nonzero when the model endpoint fails", async () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-fail-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-fail-"));
     tempDirs.push(home);
     const good = startMockLlm("ok");
     const bad = startFailingLlm();
     try {
       const goodEnv = {
-        PROTEUS_BASE_URL: `http://127.0.0.1:${good.port}`,
-        PROTEUS_AUTH: "Bearer mock",
-        PROTEUS_MODEL: "mock-model",
+        KINU_BASE_URL: `http://127.0.0.1:${good.port}`,
+        KINU_AUTH: "Bearer mock",
+        KINU_MODEL: "mock-model",
       };
       expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env: goodEnv })).exitCode).toBe(0);
 
       const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello"], {
         home,
-        env: { ...goodEnv, PROTEUS_BASE_URL: `http://127.0.0.1:${bad.port}` },
+        env: { ...goodEnv, KINU_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });
       expect(proc.exitCode).toBe(1);
       const events = toText(proc.stdout).trim().split("\n").map(parseJsonObject);
@@ -441,14 +441,14 @@ describe("kinu exec (headless)", () => {
   // --no-auto-evolve is the switch a paired benchmark arm needs: the same
   // workspace and the same turn, with the evolution machinery off.
   test("--no-auto-evolve runs the turn normally on a local workspace", async () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-noevolve-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-noevolve-"));
     tempDirs.push(home);
     const server = startMockLlm("Hello from mock.");
     try {
       const env = {
-        PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
-        PROTEUS_AUTH: "Bearer mock",
-        PROTEUS_MODEL: "mock-model",
+        KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
+        KINU_AUTH: "Bearer mock",
+        KINU_MODEL: "mock-model",
       };
       expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
@@ -466,11 +466,11 @@ describe("kinu exec (headless)", () => {
   // Reaching this rejection proves the flag is threaded all the way into the
   // AgentClient factory rather than parsed and dropped.
   test("--no-auto-evolve is rejected for cloud workspaces", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-noevolve-cloud-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-noevolve-cloud-"));
     tempDirs.push(home);
     const stamp = new Date(0).toISOString();
     writeConfig(home, {
-      origin: "https://proteus.example.com",
+      origin: "https://kinu.example.com",
       accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
       agents: {
         jarvis: { name: "jarvis", mode: "cloud", cloudName: "jarvis", createdAt: stamp, updatedAt: stamp },
@@ -489,7 +489,7 @@ describe("kinu exec (headless)", () => {
 // Zero nudges were observable across a whole ten-task run as a result.
 describe("kinu exec --json — the delegation nudge is observable from outside", () => {
   test("a turn reports both steering rows it wrote — the step-0 hint and the reactive nudge — with trigger and conversion", async () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-nudge-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-nudge-"));
     tempDirs.push(home);
     // Three failures from the same tool is the `repeated_failure` trigger; an
     // unregistered runtime fails deterministically without touching a shell.
@@ -500,9 +500,9 @@ describe("kinu exec --json — the delegation nudge is observable from outside",
     );
     try {
       const env = {
-        PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
-        PROTEUS_AUTH: "Bearer mock",
-        PROTEUS_MODEL: "mock-model",
+        KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
+        KINU_AUTH: "Bearer mock",
+        KINU_MODEL: "mock-model",
       };
       expect((await runCliAsync(["create", "nudgey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
@@ -543,12 +543,12 @@ describe("kinu exec --json — the delegation nudge is observable from outside",
   }, 120_000);
 });
 
-// What a turn cost is priced OUTSIDE this repo: bench/clbench/proteus/events.py
+// What a turn cost is priced OUTSIDE this repo: bench/clbench/kinu/events.py
 // reads this stream and CL-Bench prices what it says. So "the provider measured
 // nothing" and "the provider measured zero" must not arrive as the same bytes.
 describe("kinu exec --json — the turn-end usage payload", () => {
   test("carries no usage at all when the provider reported none", async () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-unmetered-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-unmetered-"));
     tempDirs.push(home);
     // The one difference from the metered smoke above: no `usage` block on the
     // completion — which @ai-sdk/openai-compatible turns into an all-undefined
@@ -556,9 +556,9 @@ describe("kinu exec --json — the turn-end usage payload", () => {
     const server = startMockLlm("Hello from mock.", null);
     try {
       const env = {
-        PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
-        PROTEUS_AUTH: "Bearer mock",
-        PROTEUS_MODEL: "mock-model",
+        KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
+        KINU_AUTH: "Bearer mock",
+        KINU_MODEL: "mock-model",
       };
       expect((await runCliAsync(["create", "quiet", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
@@ -738,7 +738,7 @@ function startEmptyModelMenuOrigin() {
 
 describe("kinu create — an unusable model is named at creation", () => {
   test("warns when the workspace's model has no connected provider", async () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-create-unusable-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-create-unusable-"));
     tempDirs.push(home);
     const origin = startEmptyModelMenuOrigin();
     try {
@@ -748,15 +748,15 @@ describe("kinu create — an unusable model is named at creation", () => {
         user: { id: "user_123", email: "ashish@example.com" },
       });
 
-      // Any ambient credential path — a BYO key, or the PROTEUS_BASE_URL /
-      // PROTEUS_MODEL direct-endpoint override another test file sets on this
+      // Any ambient credential path — a BYO key, or the KINU_BASE_URL /
+      // KINU_MODEL direct-endpoint override another test file sets on this
       // process — would supply a working provider and correctly suppress the
       // warning. The subprocess starts without them.
       const proc = await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
         home,
         env: {
           OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "", OPENROUTER_API_KEY: "",
-          PROTEUS_BASE_URL: "", PROTEUS_AUTH: "", PROTEUS_MODEL: "",
+          KINU_BASE_URL: "", KINU_AUTH: "", KINU_MODEL: "",
         },
       });
 
@@ -770,16 +770,16 @@ describe("kinu create — an unusable model is named at creation", () => {
   }, 120_000);
 
   test("stays quiet when the model resolves through a working provider", async () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-create-usable-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-create-usable-"));
     tempDirs.push(home);
     const server = startMockLlm("ok");
     try {
       const proc = await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
         home,
         env: {
-          PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
-          PROTEUS_AUTH: "Bearer mock",
-          PROTEUS_MODEL: "mock-model",
+          KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
+          KINU_AUTH: "Bearer mock",
+          KINU_MODEL: "mock-model",
         },
       });
 
@@ -800,21 +800,21 @@ describe("kinu exec — provider failures are legible and actionable", () => {
   };
 
   test("renders the provider's own words once, with the command that resolves it", async () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-provider-err-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-provider-err-"));
     tempDirs.push(home);
     const good = startMockLlm("ok");
     const bad = startInBandErrorLlm(BILLING_ERROR);
     try {
       const env = {
-        PROTEUS_BASE_URL: `http://127.0.0.1:${good.port}`,
-        PROTEUS_AUTH: "Bearer mock",
-        PROTEUS_MODEL: "mock-model",
+        KINU_BASE_URL: `http://127.0.0.1:${good.port}`,
+        KINU_AUTH: "Bearer mock",
+        KINU_MODEL: "mock-model",
       };
       expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
       const proc = await runCliAsync(["exec", "--workspace", "smokey", "Say hello"], {
         home,
-        env: { ...env, PROTEUS_BASE_URL: `http://127.0.0.1:${bad.port}` },
+        env: { ...env, KINU_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });
 
       const output = `${toText(proc.stdout)}${toText(proc.stderr)}`;
@@ -829,21 +829,21 @@ describe("kinu exec — provider failures are legible and actionable", () => {
   }, 120_000);
 
   test("--json carries the guidance as a field, not just as terminal decoration", async () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-provider-err-json-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-provider-err-json-"));
     tempDirs.push(home);
     const good = startMockLlm("ok");
     const bad = startInBandErrorLlm(BILLING_ERROR);
     try {
       const env = {
-        PROTEUS_BASE_URL: `http://127.0.0.1:${good.port}`,
-        PROTEUS_AUTH: "Bearer mock",
-        PROTEUS_MODEL: "mock-model",
+        KINU_BASE_URL: `http://127.0.0.1:${good.port}`,
+        KINU_AUTH: "Bearer mock",
+        KINU_MODEL: "mock-model",
       };
       expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
       const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello"], {
         home,
-        env: { ...env, PROTEUS_BASE_URL: `http://127.0.0.1:${bad.port}` },
+        env: { ...env, KINU_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });
 
       expect(proc.exitCode).toBe(1);
@@ -869,7 +869,7 @@ describe("kinu exec — provider failures are legible and actionable", () => {
 describe("kinu exec — stdin must not hang a scripted run", () => {
   test("returns promptly when argv carries the prompt and stdin stays open", async () => {
     const cli = join(import.meta.dir, "..", "bin", "cli.ts");
-    const home = mkdtempSync(join(tmpdir(), "proteus-stdin-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-stdin-"));
     const started = Date.now();
     // stdin: 'pipe', never written to and never closed — exactly what a harness
     // that inherits an idle stdin hands the process.
@@ -877,7 +877,7 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
       stdin: "pipe",
       stdout: "ignore",
       stderr: "ignore",
-      env: { ...process.env, PROTEUS_HOME: home },
+      env: { ...process.env, KINU_HOME: home },
     });
     await proc.exited;
     rmSync(home, { recursive: true, force: true });
@@ -888,12 +888,12 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
 
   test("a pipe that starts delivering within the grace is read to EOF — bytes are never dropped", async () => {
     const cli = join(import.meta.dir, "..", "bin", "cli.ts");
-    const home = mkdtempSync(join(tmpdir(), "proteus-stdin-"));
+    const home = mkdtempSync(join(tmpdir(), "kinu-stdin-"));
     const proc = Bun.spawn(["bun", cli, "exec", "--workspace", "nonexistent", "hello"], {
       stdin: "pipe",
       stdout: "ignore",
       stderr: "pipe",
-      env: { ...process.env, PROTEUS_HOME: home },
+      env: { ...process.env, KINU_HOME: home },
     });
     // First chunk inside the grace window, second well past it: the old
     // whole-read race resolved '' at 250ms and dropped BOTH chunks silently.

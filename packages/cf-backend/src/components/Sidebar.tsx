@@ -20,7 +20,7 @@ import { BrainIcon, PlusIcon, GearIcon, GithubLogoIcon, TrashIcon, SignOutIcon, 
 import { Button } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
-import { useWorkspaceRpc } from "../hooks/use-proteus";
+import { useWorkspaceRpc } from "../hooks/use-kinu";
 import { useTheme, toggleMode, togglePalette } from "../hooks/use-theme";
 import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 import { ModeToggle, PaletteToggle } from "./theme-toggle";
@@ -38,7 +38,7 @@ const WorkspaceActivityEventSchema = v.object({
   unseenChangelog: v.number(),
 });
 
-// Route families in App.tsx that mount a live useProteus/useAgent socket for
+// Route families in App.tsx that mount a live useKinu/useAgent socket for
 // :agentId. Deleting that agent must first navigate away from ALL of them —
 // a still-mounted socket auto-reconnects and resurrects the destroyed DO.
 const WORKSPACE_SCOPED_SECTIONS = ["workspace", "mcts", "settings", "triggers"];
@@ -160,8 +160,8 @@ export default function Sidebar() {
       const { name, running, unseenChangelog } = parsed.output;
       setActivity((prev) => ({ ...prev, [name]: { running, unseenChangelog } }));
     };
-    window.addEventListener("proteus:workspace-activity", h);
-    return () => window.removeEventListener("proteus:workspace-activity", h);
+    window.addEventListener("kinu:workspace-activity", h);
+    return () => window.removeEventListener("kinu:workspace-activity", h);
   }, []);
 
   // Re-sync when route changes (so a freshly-created workspace appears).
@@ -170,8 +170,8 @@ export default function Sidebar() {
   // Re-sync when the active workspace AI-renames itself after its first turn.
   useEffect(() => {
     const h = () => refreshWorkspaces();
-    window.addEventListener("proteus:workspace-renamed", h);
-    return () => window.removeEventListener("proteus:workspace-renamed", h);
+    window.addEventListener("kinu:workspace-renamed", h);
+    return () => window.removeEventListener("kinu:workspace-renamed", h);
   }, [refreshWorkspaces]);
 
   useEffect(() => {

@@ -131,7 +131,7 @@ describe('swarm-node facet spawn', () => {
     const node = await spawnNodeFacet(host, spec, {
       ownerUserId: 'user-1',
       capabilityToken: 'pwc_parent',
-      sharedParent: 'proteus-main',
+      sharedParent: 'kinu-main',
     });
 
     expect(methods(calls)).toEqual(['subAgent', 'setOwner', 'setSharedParent', 'initNode']);
@@ -140,7 +140,7 @@ describe('swarm-node facet spawn', () => {
     expect(calls[1]?.args).toEqual(['user-1', 'pwc_parent']);
     // The ROOT workspace, unchanged: a node's file plane is the origin's, and the
     // search it reports to runs there.
-    expect(calls[2]?.args).toEqual(['proteus-main']);
+    expect(calls[2]?.args).toEqual(['kinu-main']);
     // The spec crosses the RPC whole — the loop's every input is data.
     expect(calls[3]?.args).toEqual([spec]);
     expect(node.id).toBe('node-1');
@@ -149,7 +149,7 @@ describe('swarm-node facet spawn', () => {
   test('a node RECLAIMS its facet when run() settles, and only EVICTS on abort()', async () => {
     const { host, calls } = makeHost();
     const node = await spawnNodeFacet(host, nodeSpec(), {
-      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main',
     });
     calls.length = 0;
 
@@ -166,7 +166,7 @@ describe('swarm-node facet spawn', () => {
   test('a crashed node still reclaims its storage, and the run error reaches the caller', async () => {
     const { host, calls } = makeHost({ runAsNodeRejects: true });
     const node = await spawnNodeFacet(host, nodeSpec(), {
-      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main',
     });
     calls.length = 0;
 
@@ -177,7 +177,7 @@ describe('swarm-node facet spawn', () => {
   test('a reclamation failure is reported, never masked by the settled result', async () => {
     const { host } = makeHost({ deleteSubAgentThrows: true });
     const node = await spawnNodeFacet(host, nodeSpec(), {
-      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'kinu-main',
     });
 
     // The quota this leaks into overflows as an uncatchable reset, so a settled

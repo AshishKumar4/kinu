@@ -49,10 +49,10 @@ const MAX_SNAPSHOT_FILES = 400;
 const MAX_CHANGESET_BODY_CHARS = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
 
 const SNAPSHOT_IGNORED_DIRECTORIES = new Set([
-  '.git', '.proteus', '.cache', '.mypy_cache', '.pnpm-store', '.pytest_cache', '.venv',
+  '.git', '.kinu', '.cache', '.mypy_cache', '.pnpm-store', '.pytest_cache', '.venv',
   '__pycache__', 'node_modules', 'venv',
 ]);
-const NOT_GIT_REPO = '__PROTEUS_NOT_GIT_REPO__';
+const NOT_GIT_REPO = '__KINU_NOT_GIT_REPO__';
 
 export function initWorkspaceBaselineTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline (

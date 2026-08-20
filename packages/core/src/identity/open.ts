@@ -22,7 +22,7 @@ import {
 } from './inline-primitives';
 import { createVercelAILLM } from '../llm';
 import { buildRuntime } from '../runtime-builder';
-import { diagnostics, ProteusError } from '../obs/index';
+import { diagnostics, KinuError } from '../obs/index';
 
 export interface WorkspaceResumeConfig {
   llm: LLMProviderConfig;
@@ -88,7 +88,7 @@ export async function openWorkspace(db: AgentDatabase, config: WorkspaceResumeCo
   for (const fiber of orphanedFibers) {
     diagnostics.failure(
       'fiber.orphan_cleared',
-      new ProteusError('cancelled', 'a fiber left running by a previous session was discarded'),
+      new KinuError('cancelled', 'a fiber left running by a previous session was discarded'),
       { fiberId: fiber.id, fiber: fiber.name },
     );
     void sql`DELETE FROM fibers WHERE id = ${fiber.id}`;

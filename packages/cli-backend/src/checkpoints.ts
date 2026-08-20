@@ -19,7 +19,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs, existsSync, statSync } from 'node:fs';
 import { homedir, devNull, tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
-import { proteusHome } from './home';
+import { kinuHome } from './home';
 import {
   DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT,
   CHECKPOINT_REF_PREFIX as REF_PREFIX, CHECKPOINT_WORKDIR_MARKER as WORKDIR_MARKER,
@@ -58,7 +58,7 @@ const UNSNAPSHOTTABLE = new Set([tmpdir(), '/tmp', '/var/tmp'].map((dir) => reso
 
 export interface HostCheckpointsOpts {
   agent: string;
-  /** Shadow store root. Default: $PROTEUS_HOME/checkpoints */
+  /** Shadow store root. Default: $KINU_HOME/checkpoints */
   base?: string;
   /** Checkpoints kept per working directory. Default: DEFAULT_CHECKPOINT_KEEP. */
   keep?: number;
@@ -76,7 +76,7 @@ interface StagedTree { tree: string; unreadable: string[] }
 
 export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoints {
   const agent = opts.agent.replace(/[^A-Za-z0-9_-]/g, '_');
-  const base = opts.base ?? join(proteusHome(), 'checkpoints');
+  const base = opts.base ?? join(kinuHome(), 'checkpoints');
   const agentBase = join(base, agent);
   const keep = Math.max(1, opts.keep ?? DEFAULT_CHECKPOINT_KEEP);
   const gitBin = opts.gitBin ?? 'git';
@@ -95,9 +95,9 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     env.GIT_CONFIG_SYSTEM = devNull;
     env.GIT_CONFIG_NOSYSTEM = '1';
     env.GIT_AUTHOR_NAME = 'Kinu Checkpoint';
-    env.GIT_AUTHOR_EMAIL = 'checkpoints@proteus.local';
+    env.GIT_AUTHOR_EMAIL = 'checkpoints@kinu.local';
     env.GIT_COMMITTER_NAME = 'Kinu Checkpoint';
-    env.GIT_COMMITTER_EMAIL = 'checkpoints@proteus.local';
+    env.GIT_COMMITTER_EMAIL = 'checkpoints@kinu.local';
     // Pinned so git's own diagnostics are the strings `diagnoseStaging` parses:
     // a localized `warning: could not open directory` would read as an
     // unexplained failure and fail the mutation it precedes.

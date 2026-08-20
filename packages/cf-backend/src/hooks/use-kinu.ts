@@ -49,12 +49,12 @@ export interface ExecutorOutput {
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
-export interface ProteusActorAddress {
+export interface KinuActorAddress {
   workspace: string;
   subordinate?: string;
 }
 
-const ProteusActorAddressSchema = v.object({
+const KinuActorAddressSchema = v.object({
   workspace: v.string(),
   subordinate: v.optional(v.string()),
 });
@@ -455,15 +455,15 @@ export function useWorkspaceRpc(agentId: string) {
  * Full agent hook for WorkspacePage — connects to a specific DO instance.
  * Fetches all surface data via @callable RPCs on connect.
  */
-export function useProteus(target?: string | ProteusActorAddress) {
+export function useKinu(target?: string | KinuActorAddress) {
   const targetString = v.safeParse(v.string(), target);
-  const targetAddress = v.safeParse(ProteusActorAddressSchema, target);
+  const targetAddress = v.safeParse(KinuActorAddressSchema, target);
   const workspace = targetString.success
     ? targetString.output
     : targetAddress.success ? targetAddress.output.workspace : undefined;
   const subordinate = targetAddress.success ? targetAddress.output.subordinate : undefined;
-  const actorAddress = useMemo<ProteusActorAddress>(() => {
-    const address: ProteusActorAddress = { workspace: workspace || "default" };
+  const actorAddress = useMemo<KinuActorAddress>(() => {
+    const address: KinuActorAddress = { workspace: workspace || "default" };
     if (subordinate) address.subordinate = subordinate;
     return address;
   }, [workspace, subordinate]);
@@ -633,7 +633,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
         if (displayName?.trim()) {
           setAgentStatus((prev) => prev ? { ...prev, displayName } : prev);
         }
-        window.dispatchEvent(new CustomEvent("proteus:workspace-renamed"));
+        window.dispatchEvent(new CustomEvent("kinu:workspace-renamed"));
       } else if (data?.type === "cf_agent_stream_resuming") {
         resumedRequestIds.current.add(data.id);
       } else if (data?.type === "cf_agent_use_chat_response" && data.error === true && data.done === true) {
@@ -1128,7 +1128,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
     ];
     if (parts.length === 0) return;
     setChatError(null);
-    sendMessage({ role: "user", parts, metadata: { proteusMode: mode } });
+    sendMessage({ role: "user", parts, metadata: { kinuMode: mode } });
   }, [sendMessage]);
 
   /**

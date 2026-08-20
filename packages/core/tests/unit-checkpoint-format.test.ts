@@ -108,8 +108,8 @@ describe('checkpointRefTimestampMs', () => {
 
 describe('store-format constants pinned by the pc-agent daemon mirror', () => {
   test('ref prefix and workdir marker are the documented literals', () => {
-    expect(CHECKPOINT_REF_PREFIX).toBe('refs/proteus');
-    expect(CHECKPOINT_WORKDIR_MARKER).toBe('PROTEUS_WORKDIR');
+    expect(CHECKPOINT_REF_PREFIX).toBe('refs/kinu');
+    expect(CHECKPOINT_WORKDIR_MARKER).toBe('KINU_WORKDIR');
   });
 
   test('excludes cover the generated trees a snapshot must never capture', () => {

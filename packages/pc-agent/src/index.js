@@ -8,7 +8,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawn, spawnSync, execFileSync } = require('node:child_process');
 
-const CONFIG_PATH = path.join(os.homedir(), '.proteus', 'device.json');
+const CONFIG_PATH = path.join(os.homedir(), '.kinu', 'device.json');
 
 /** Drain window after an exec'd command's own exit, before we stop reading the
  *  pipes an orphaned grandchild may still hold. Mirrors EXITED_COMMAND_DRAIN_MS
@@ -43,10 +43,10 @@ function runCommand(cmd, args) {
 // through both engines) so a machine's checkpoints are one format regardless
 // of which side wrote them:
 //
-//   ~/.proteus/checkpoints/<agent>/<sha256(dir)[:16]>/   — bare GIT_DIR
-//     PROTEUS_WORKDIR                                    — the target dir
+//   ~/.kinu/checkpoints/<agent>/<sha256(dir)[:16]>/   — bare GIT_DIR
+//     KINU_WORKDIR                                    — the target dir
 //     info/exclude                                       — default excludes
-//     refs/proteus/<ms13>-<seq>                          — one ref per snapshot
+//     refs/kinu/<ms13>-<seq>                          — one ref per snapshot
 //
 // Invisible infrastructure: mutating RPC frames (exec/writeFile) may carry a
 // `checkpoint` hint — the daemon snapshots the target dir before executing,
@@ -55,8 +55,8 @@ function runCommand(cmd, args) {
 // anything.
 
 const CHECKPOINTS_UNAVAILABLE_NO_GIT = 'checkpoints unavailable: git not found';
-const REF_PREFIX = 'refs/proteus';
-const WORKDIR_MARKER = 'PROTEUS_WORKDIR';
+const REF_PREFIX = 'refs/kinu';
+const WORKDIR_MARKER = 'KINU_WORKDIR';
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
 const CHECKPOINT_EXCLUDES = [
@@ -115,7 +115,7 @@ function reasonWithSkips(reason, unreadable) {
 }
 
 function createCheckpoints(opts = {}) {
-  const base = opts.base || path.join(os.homedir(), '.proteus', 'checkpoints');
+  const base = opts.base || path.join(os.homedir(), '.kinu', 'checkpoints');
   const keep = Math.max(1, opts.keep || 50);
   const gitBin = opts.gitBin || 'git';
   let gitAvailable = null;
@@ -132,9 +132,9 @@ function createCheckpoints(opts = {}) {
     env.GIT_CONFIG_SYSTEM = os.devNull;
     env.GIT_CONFIG_NOSYSTEM = '1';
     env.GIT_AUTHOR_NAME = 'Kinu Checkpoint';
-    env.GIT_AUTHOR_EMAIL = 'checkpoints@proteus.local';
+    env.GIT_AUTHOR_EMAIL = 'checkpoints@kinu.local';
     env.GIT_COMMITTER_NAME = 'Kinu Checkpoint';
-    env.GIT_COMMITTER_EMAIL = 'checkpoints@proteus.local';
+    env.GIT_COMMITTER_EMAIL = 'checkpoints@kinu.local';
     // So `diagnoseStaging` parses git's own words rather than a translation of
     // them: a localized warning would read as an unexplained staging failure.
     env.LC_ALL = 'C';

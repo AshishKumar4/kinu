@@ -12,7 +12,7 @@ tester.run("anti-slop/require-cause-on-rethrow", requireCauseOnRethrowRule, {
   valid: [
     "try { g(); } catch (error) { throw new Error('failed', { cause: error }); }",
     "try { g(); } catch (error) { throw new Error('failed', { cause }); }",
-    "try { g(); } catch (error) { throw new ProteusError('storage_unavailable', 'reading', { cause: error }); }",
+    "try { g(); } catch (error) { throw new KinuError('storage_unavailable', 'reading', { cause: error }); }",
     "try { g(); } catch (error) { throw new errors.WrappedError('failed', { cause: error }); }",
     // A bare rethrow preserves the chain by definition.
     "try { g(); } catch (error) { throw error; }",
@@ -24,7 +24,7 @@ tester.run("anti-slop/require-cause-on-rethrow", requireCauseOnRethrowRule, {
     // Not an error construction.
     "try { g(); } catch (error) { throw new Redirect('/login'); }",
     // A thrown non-construction expression.
-    "try { g(); } catch (error) { throw toProteusError({ cause: error }); }",
+    "try { g(); } catch (error) { throw toKinuError({ cause: error }); }",
   ],
   invalid: [
     {
@@ -39,7 +39,7 @@ tester.run("anti-slop/require-cause-on-rethrow", requireCauseOnRethrowRule, {
     },
     {
       name: "subclass without a cause",
-      code: "try { g(); } catch (error) { throw new ProteusError('internal', 'reading'); }",
+      code: "try { g(); } catch (error) { throw new KinuError('internal', 'reading'); }",
       errors: [missing],
     },
     {

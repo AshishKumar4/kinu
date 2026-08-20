@@ -43,14 +43,14 @@ import type { ExecOutcome } from '../execution/exec-result';
 import { formatExecResult } from '../execution/exec-result';
 import { clampToolResult } from '../tools/clamp';
 
-/** `proteusEvent` on the turn the gate enqueues — its provenance in the run
+/** `kinuEvent` on the turn the gate enqueues — its provenance in the run
  *  log, and how the turn pump recognises the confirming turn as its own. */
 export const COMPLETION_GATE_EVENT = 'completion_gate';
 
 /** Marks the turn as runtime-authored, exactly as the mid-turn steering splice
  *  does: the model must never read a harness check as something the user typed. */
 export const COMPLETION_GATE_HEADER =
-  '[Runtime check — a mechanical gate from the Kinu harness, not written by the user.]';
+  '[Runtime check — a mechanical gate from Kinu, not written by the user.]';
 
 /**
  * What the harness looks at: where it is, what is there, and what changed —

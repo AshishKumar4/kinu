@@ -78,7 +78,7 @@ async function runWorker(verifierRetry: boolean): Promise<{
     };
     const proc = Bun.spawn(['bun', join(REPO_ROOT, 'scripts', 'bench-pi-worker.ts')], {
       cwd: dir,
-      env: { ...process.env, HOME: home, PROTEUS_HOME: home },
+      env: { ...process.env, HOME: home, KINU_HOME: home },
       stdin: Buffer.from(JSON.stringify(input)),
       stdout: 'pipe',
       stderr: 'pipe',

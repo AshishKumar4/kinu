@@ -261,8 +261,8 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
  *
  * The DO backend resolves model specs through UserDO-scoped credentials. The
  * CLI has no UserDO, so this adapter supplies the same registry contract from
- * local config/env credentials while preserving the advanced PROTEUS_BASE_URL /
- * PROTEUS_AUTH path as a direct OpenAI-compatible endpoint.
+ * local config/env credentials while preserving the advanced KINU_BASE_URL /
+ * KINU_AUTH path as a direct OpenAI-compatible endpoint.
  */
 export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalModelResolver {
   const registry = createProviderRegistry();
@@ -275,7 +275,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   });
 
   const cloud = opts.cloud;
-  // An explicit direct endpoint (PROTEUS_BASE_URL → llm.name workers-ai) keeps
+  // An explicit direct endpoint (KINU_BASE_URL → llm.name workers-ai) keeps
   // precedence over the signed-in proxy; the proxy-derived llm config (its
   // baseURL IS the proxy) registers through the cloud providers below instead.
   const llmIsCloudProxy = cloud !== undefined
@@ -447,7 +447,7 @@ function createGatewayBackedProvider(opts: {
     label: opts.label,
     defaultModel: opts.defaultModel,
     isAvailable: () => !!opts.llm.baseURL && Object.keys(opts.llm.headers).length > 0,
-    unavailableReason: () => 'PROTEUS_BASE_URL and PROTEUS_AUTH are required for the local gateway provider.',
+    unavailableReason: () => 'KINU_BASE_URL and KINU_AUTH are required for the local gateway provider.',
     async listModels(deps): Promise<ModelInfo[]> {
       const fallback: ModelInfo[] = [{ id: opts.defaultModel, label: opts.defaultModel, capabilities: ['tools', 'streaming'] }];
       if (!opts.catalogProviderId) return fallback;

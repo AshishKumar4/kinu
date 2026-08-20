@@ -84,8 +84,8 @@ function executable(path: string, source: string): void {
 function commandStub(name: string): string {
   return `#!/usr/bin/bash
 command_line="${name} $*"
-printf '%s\\n' "$command_line" >> "$PROTEUS_DEPLOY_GATE_LOG"
-if [ "$PROTEUS_DEPLOY_FAIL" = "$command_line" ]; then
+printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
+if [ "$KINU_DEPLOY_FAIL" = "$command_line" ]; then
   exit 47
 fi
 exit 0
@@ -93,7 +93,7 @@ exit 0
 }
 
 function runDeploy(failingGate: string, dirty = false) {
-  const fixture = mkdtempSync(join(tmpdir(), "proteus-deploy-gate-"));
+  const fixture = mkdtempSync(join(tmpdir(), "kinu-deploy-gate-"));
   temporaryDirectories.push(fixture);
   const log = join(fixture, "events.log");
 
@@ -115,20 +115,20 @@ function runDeploy(failingGate: string, dirty = false) {
   executable(join(fixture, "git"), `#!/usr/bin/bash
 if [ "$3" = "rev-parse" ]; then
   printf 'testsha\\n'
-elif [ "$3" = "status" ] && [ "$PROTEUS_DEPLOY_DIRTY" = "1" ]; then
+elif [ "$3" = "status" ] && [ "$KINU_DEPLOY_DIRTY" = "1" ]; then
   printf ' M source.ts\\n'
 fi
 exit 0
 `);
   executable(join(fixture, "bunx"), `#!/usr/bin/bash
-printf 'MUTATE bunx %s\\n' "$*" >> "$PROTEUS_DEPLOY_GATE_LOG"
+printf 'MUTATE bunx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
 exit 86
 `);
   executable(join(fixture, "npx"), `#!/usr/bin/bash
 if [ "$*" = "wrangler whoami" ]; then
   exit 0
 fi
-printf 'MUTATE npx %s\\n' "$*" >> "$PROTEUS_DEPLOY_GATE_LOG"
+printf 'MUTATE npx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
 exit 87
 `);
 
@@ -137,9 +137,9 @@ exit 87
     env: {
       ...process.env,
       PATH: `${fixture}:/usr/bin:/bin`,
-      PROTEUS_DEPLOY_FAIL: failingGate,
-      PROTEUS_DEPLOY_GATE_LOG: log,
-      PROTEUS_DEPLOY_DIRTY: dirty ? "1" : "0",
+      KINU_DEPLOY_FAIL: failingGate,
+      KINU_DEPLOY_GATE_LOG: log,
+      KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       SKIP_E2E: "1",
     },
     stdout: "pipe",

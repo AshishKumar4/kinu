@@ -176,7 +176,7 @@ import {
   type PromptCacheStrategy,
 } from "@kinu/core";
 import type { CodemodeProvider, DeferredApprovalChannel } from "@kinu/core";
-import { diagnostics, ProteusError, toProteusError, tolerate } from "@kinu/core/obs";
+import { diagnostics, KinuError, toKinuError, tolerate } from "@kinu/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserCaller } from "./user/workspace-capability";
 import { sha256Hex } from "./lib/crypto";
@@ -462,7 +462,7 @@ export abstract class ActorAgent extends Think<Env> {
         const stub = await this.subAgent(facet, entry.name);
         await stub.installWorkspaceCapability(token);
       } catch (err) {
-        diagnostics.failure('capability.subordinate_push_failed', toProteusError({
+        diagnostics.failure('capability.subordinate_push_failed', toKinuError({
           doing: 'pushing the workspace capability token to a subordinate',
           cause: err,
           otherwise: 'unavailable',
@@ -779,7 +779,7 @@ export abstract class ActorAgent extends Think<Env> {
     }, input, Date.now());
   }
 
-  override maxSteps = resolveMaxSteps(this.env.PROTEUS_MAX_STEPS);
+  override maxSteps = resolveMaxSteps(this.env.KINU_MAX_STEPS);
 
   private readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
@@ -827,7 +827,7 @@ export abstract class ActorAgent extends Think<Env> {
           try {
             await this.compactionState.plans.save(this.name, null);
           } catch (err) {
-            diagnostics.failure('compaction.reset_failed', toProteusError({
+            diagnostics.failure('compaction.reset_failed', toKinuError({
               doing: 'clearing the persisted compaction plan after clear-history',
               cause: err,
               otherwise: 'io',
@@ -845,7 +845,7 @@ export abstract class ActorAgent extends Think<Env> {
     // drain replays into durable history (the same ordering the CLI's
     // ExtensionHost uses).
     this.extensions.register({
-      name: 'proteus.user-steer',
+      name: 'kinu.user-steer',
       prepareStep: (ctx) => this.userSteer.prepareStep(ctx),
     });
     // The orchestrator's per-turn extension: the turn steering's observation
@@ -853,7 +853,7 @@ export abstract class ActorAgent extends Think<Env> {
     // through closures because `orch` is built lazily and this runs in the
     // constructor.
     this.extensions.register({
-      name: 'proteus.signals',
+      name: 'kinu.signals',
       onToolCall: (ctx) => this.orch.turnExtension.onToolCall?.(ctx),
       onToolResult: (ctx) => this.orch.turnExtension.onToolResult?.(ctx),
       prepareStep: (ctx) => this.orch.turnExtension.prepareStep?.(ctx),
@@ -936,9 +936,9 @@ export abstract class ActorAgent extends Think<Env> {
       id: steer.id ?? `steer-${nanoid(12)}`,
       role: 'user' as const,
       parts: [{ type: 'text' as const, text: steer.text }],
-      metadata: { proteusSteer: true },
+      metadata: { kinuSteer: true },
     }))).catch((err) =>
-      diagnostics.failure('steer.persist_failed', toProteusError({
+      diagnostics.failure('steer.persist_failed', toKinuError({
         doing: 'persisting a mid-turn steer as a durable user row',
         cause: err,
         otherwise: 'io',
@@ -983,7 +983,7 @@ export abstract class ActorAgent extends Think<Env> {
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
     })
       .catch((err) =>
-        diagnostics.failure('steer.rerun_failed', toProteusError({
+        diagnostics.failure('steer.rerun_failed', toKinuError({
           doing: 'enqueuing leftover steers as their own user turn',
           cause: err,
           otherwise: 'io',
@@ -1066,11 +1066,11 @@ export abstract class ActorAgent extends Think<Env> {
       // are shared verbatim with `cli-backend/src/local-session.ts`, which adapts the same
       // `@better-compact/core` Logger port to the same outcomes. One query reads both backends.
       warn: (message, data) => {
-        diagnostics.failure('compaction.degraded', new ProteusError('unavailable', message));
+        diagnostics.failure('compaction.degraded', new KinuError('unavailable', message));
         this.logActivity('compaction_warn', compactionLogDetail(message, data));
       },
       error: (message, data) => {
-        diagnostics.failure('compaction.failed', new ProteusError('io', message));
+        diagnostics.failure('compaction.failed', new KinuError('io', message));
         this.logActivity('compaction_error', compactionLogDetail(message, data));
       },
     };
@@ -1134,7 +1134,7 @@ export abstract class ActorAgent extends Think<Env> {
             try {
               if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'tool_call_end', ...ev });
             } catch (err) {
-              diagnostics.failure('event.tool_call_end_emit_failed', toProteusError({
+              diagnostics.failure('event.tool_call_end_emit_failed', toKinuError({
                 doing: 'recording a tool_call_end run event',
                 cause: err,
                 otherwise: 'io',
@@ -1145,7 +1145,7 @@ export abstract class ActorAgent extends Think<Env> {
             try {
               if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', ...ev });
             } catch (err) {
-              diagnostics.failure('event.step_finish_emit_failed', toProteusError({
+              diagnostics.failure('event.step_finish_emit_failed', toKinuError({
                 doing: 'recording a step_finish run event',
                 cause: err,
                 otherwise: 'io',
@@ -1175,7 +1175,7 @@ export abstract class ActorAgent extends Think<Env> {
         try {
           if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'budget_exhausted', ...refusal });
         } catch (err) {
-          diagnostics.failure('event.budget_exhausted_emit_failed', toProteusError({
+          diagnostics.failure('event.budget_exhausted_emit_failed', toKinuError({
             doing: 'recording a budget_exhausted run event',
             cause: err,
             otherwise: 'io',
@@ -1291,7 +1291,7 @@ export abstract class ActorAgent extends Think<Env> {
       await this.orch.settleEvolution();
       await this.orch.runDueSessionEvolution();
     })
-      .catch((err) => diagnostics.failure('evolution.settle_failed', toProteusError({
+      .catch((err) => diagnostics.failure('evolution.settle_failed', toKinuError({
         doing: 'settling the turn and session evolution lanes',
         cause: err,
         otherwise: 'unavailable',
@@ -1516,7 +1516,7 @@ export abstract class ActorAgent extends Think<Env> {
           void this.keepAliveWhile(() => new Promise<void>((resolve) => {
             setTimeout(() => {
               fn().catch((err) =>
-                diagnostics.failure('drain.timer_callback_failed', toProteusError({
+                diagnostics.failure('drain.timer_callback_failed', toKinuError({
                   doing: 'running the debounced event drain',
                   cause: err,
                   otherwise: 'io',
@@ -1524,7 +1524,7 @@ export abstract class ActorAgent extends Think<Env> {
               ).finally(resolve);
             }, ms);
           })).catch((err) =>
-            diagnostics.failure('drain.timer_keepalive_failed', toProteusError({
+            diagnostics.failure('drain.timer_keepalive_failed', toKinuError({
               doing: 'holding the actor alive across the drain debounce window',
               cause: err,
               otherwise: 'io',
@@ -1648,7 +1648,7 @@ export abstract class ActorAgent extends Think<Env> {
       if (usd !== undefined) event.usd = usd;
       this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, event);
     } catch (err) {
-      diagnostics.failure('event.model_call_emit_failed', toProteusError({
+      diagnostics.failure('event.model_call_emit_failed', toKinuError({
         doing: 'recording a model_call run event',
         cause: err,
         otherwise: 'io',
@@ -1755,7 +1755,7 @@ export abstract class ActorAgent extends Think<Env> {
         nodeCount: nodes.length, nodes,
       }));
     } catch (err) {
-      diagnostics.failure('mcts.progress_broadcast_failed', toProteusError({
+      diagnostics.failure('mcts.progress_broadcast_failed', toKinuError({
         doing: 'pushing an MCTS search tree to connected surfaces',
         cause: err,
         otherwise: 'io',
@@ -2517,7 +2517,7 @@ export abstract class ActorAgent extends Think<Env> {
       this.logActivity("gettools_end", `rebuilt — ${Object.keys(tools).length} tools`);
       return tools;
     } catch (err) {
-      diagnostics.failure('tool.surface_build_failed', toProteusError({
+      diagnostics.failure('tool.surface_build_failed', toKinuError({
         doing: 'assembling the turn tool surface',
         cause: err,
         otherwise: 'io',
@@ -2658,14 +2658,14 @@ export abstract class ActorAgent extends Think<Env> {
    */
   async nodeArbitrate(nodeId: string, proposal: BranchProposal): Promise<BranchDecision> {
     return await this.tracing.invocation('rpc', 'swarm.arbitrate', async (_invocation, span) => {
-      span.setAttribute('proteus.node_id', nodeId);
+      span.setAttribute('kinu.node_id', nodeId);
       const arbiter = this.nodeArbiters.get(nodeId);
       if (!arbiter) {
         // `budget-exhausted` rather than a sixth policy value: the vocabulary is
         // closed on purpose, and this IS that fact — a settled search has no
         // remaining children, so none can be reserved. The prose carries the
         // detail, and the prose is what the node reads.
-        span.setAttribute('proteus.arbiter_registered', false);
+        span.setAttribute('kinu.arbiter_registered', false);
         return {
           kind: 'refused',
           policy: 'budget-exhausted',
@@ -2673,9 +2673,9 @@ export abstract class ActorAgent extends Think<Env> {
             + 'reserved. Finish your own task and report.',
         };
       }
-      span.setAttribute('proteus.arbiter_registered', true);
+      span.setAttribute('kinu.arbiter_registered', true);
       const decision = await arbiter(proposal);
-      span.setAttribute('proteus.decision', decision.kind);
+      span.setAttribute('kinu.decision', decision.kind);
       return decision;
     });
   }
@@ -2746,7 +2746,7 @@ export abstract class ActorAgent extends Think<Env> {
       if (!runId) return;
       this.eventRecorder.emit(runId, headPhaseRunEvent(event));
     } catch (err) {
-      diagnostics.failure('event.head_phase_emit_failed', toProteusError({
+      diagnostics.failure('event.head_phase_emit_failed', toKinuError({
         doing: 'recording a head split/merge phase run event',
         cause: err,
         otherwise: 'io',
@@ -2786,7 +2786,7 @@ export abstract class ActorAgent extends Think<Env> {
     let watermark: number;
     try { watermark = await userDOStub.userMcp_updatedAt(caller); }
     catch (err) {
-      diagnostics.failure('mcp.watermark_fetch_failed', toProteusError({
+      diagnostics.failure('mcp.watermark_fetch_failed', toKinuError({
         doing: 'reading the user MCP configuration watermark from UserDO',
         cause: err,
         otherwise: 'unavailable',
@@ -2818,7 +2818,7 @@ export abstract class ActorAgent extends Think<Env> {
         source: `MCP server "${u.server}"`, reason: u.reason,
       }));
     } catch (err) {
-      diagnostics.failure('mcp.descriptor_fetch_failed', toProteusError({
+      diagnostics.failure('mcp.descriptor_fetch_failed', toKinuError({
         doing: 'fetching the user MCP tool descriptors from UserDO',
         cause: err,
         otherwise: 'unavailable',
@@ -3003,7 +3003,7 @@ export abstract class ActorAgent extends Think<Env> {
     let mcpTools: ToolSet = {};
     try { mcpTools = await this.buildUserMcpTools(); }
     catch (err) {
-      diagnostics.failure('mcp.tool_surface_failed', toProteusError({
+      diagnostics.failure('mcp.tool_surface_failed', toKinuError({
         doing: 'building the user MCP tool adapters for this turn',
         cause: err,
         otherwise: 'unavailable',
@@ -3029,7 +3029,7 @@ export abstract class ActorAgent extends Think<Env> {
       const status = await this.rt.deviceTransport.refreshStatus();
       deviceNotice = observeDevicePresence(this.config, status).notice;
     } catch (err) {
-      diagnostics.failure('device.status_refresh_failed', toProteusError({
+      diagnostics.failure('device.status_refresh_failed', toKinuError({
         doing: 'refreshing the device hub presence for this turn',
         cause: err,
         otherwise: 'unavailable',
@@ -3252,7 +3252,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** Whether the in-flight turn was injected programmatically (an event drain,
    *  a background-job wake, an overflow retry) — a queued signal stamps
-   *  proteusEvent metadata on the saved user message; real chat messages carry
+   *  kinuEvent metadata on the saved user message; real chat messages carry
    *  none. */
   protected lastUserTurnIsProgrammatic(): boolean {
     return this.turnUserMessageEvent(null) !== null;
@@ -3269,7 +3269,7 @@ export abstract class ActorAgent extends Think<Env> {
     // count. A CLI one-shot invocation against this workspace stamps `oneShot`
     // on the request body (readTurnContinuity → 'independent_task'). A turn a
     // queued signal drove — an event drain, a background-job wake, a timer, an
-    // overflow retry — carries `proteusEvent` metadata on the message that
+    // overflow retry — carries `kinuEvent` metadata on the message that
     // drives it, the same discriminator every other programmatic-turn decision
     // reads. Continuity alone would miss the whole autonomous population,
     // which is the population the one-shot policy was measured on.
@@ -3277,14 +3277,14 @@ export abstract class ActorAgent extends Think<Env> {
     return programmatic || this._turnContinuity === 'independent_task' ? 'one-shot' : 'interactive';
   }
 
-  /** The turn's proteusEvent metadata value — from the active programmatic
+  /** The turn's kinuEvent metadata value — from the active programmatic
    *  message when one drove the turn, else the last durable user message.
    *  Null for real chat turns. */
   protected turnUserMessageEvent(programmaticUserMessage: { metadata?: unknown } | null): string | null {
     const metadata = programmaticUserMessage ? programmaticUserMessage.metadata : this.turnUserMetadata();
     const parsed = v.safeParse(JsonObjectSchema, metadata);
     if (!parsed.success) return null;
-    return v.is(v.string(), parsed.output.proteusEvent) ? parsed.output.proteusEvent : null;
+    return v.is(v.string(), parsed.output.kinuEvent) ? parsed.output.kinuEvent : null;
   }
 
   /** What the turn may do. Plan is explicit user intent on the driving
@@ -3309,7 +3309,7 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** What this turn was started BY: the metadata on the message that drives it
-   *  — a signal's `proteusEvent` / `signalId` / mission labels, or nothing at
+   *  — a signal's `kinuEvent` / `signalId` / mission labels, or nothing at
    *  all for a chat turn the operator typed. */
   protected turnUserMetadata(): JsonObject | undefined {
     const source = this.messages.filter(m => m.role === 'user').at(-1);
@@ -3448,7 +3448,7 @@ export abstract class ActorAgent extends Think<Env> {
         `Snapshot at interruption: ${summary}\n`,
       );
     } catch (err) {
-      diagnostics.failure('fiber.recovery_failed', toProteusError({
+      diagnostics.failure('fiber.recovery_failed', toKinuError({
         doing: 'handling a fiber recovered after eviction',
         cause: err,
         otherwise: 'io',

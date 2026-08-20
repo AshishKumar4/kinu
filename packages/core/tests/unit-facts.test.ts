@@ -64,7 +64,7 @@ describe('agent_facts', () => {
 
   test('JSON values round-trip', () => {
     const { facts } = createTestFactsStore();
-    const value = { project: 'proteus', stage: 'audit', open_tasks: 3 };
+    const value = { project: 'kinu', stage: 'audit', open_tasks: 3 };
     facts.upsert('current', value);
     const f = facts.recall('current');
     expect(f?.value).toEqual(value);

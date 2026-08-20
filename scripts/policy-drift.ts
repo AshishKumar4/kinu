@@ -11,7 +11,7 @@
  *
  * `RETRY_BASE_MS` is declared three times in this tree: `5_000` in
  * `core/src/events/ingress/peer.ts`, `30_000` in `cf-backend/src/email/outbox.ts`,
- * `1_000` in `cf-backend/src/hooks/use-proteus.ts`. `RETRY_MAX_MS` is declared
+ * `1_000` in `cf-backend/src/hooks/use-kinu.ts`. `RETRY_MAX_MS` is declared
  * three times: `3_600_000` twice and `30_000` once. Every one of them carries a
  * comment, and every comment describes its own value, so a reader who greps the
  * name and reads the first hit gets a CONFIDENT WRONG ANSWER about what the

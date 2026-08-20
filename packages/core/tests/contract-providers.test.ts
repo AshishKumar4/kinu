@@ -113,7 +113,7 @@ describe('OpenRouter provider contract', () => {
       [OPENROUTER_CRED_KEY]: { headers: { Authorization: 'Bearer sk-or-test' } },
     }, mock.fetch);
     const provider = createOpenRouterProvider({
-      refererURL: 'https://proteus.test',
+      refererURL: 'https://kinu.test',
       appTitle: 'Kinu-Contract-Test',
     });
     const model = provider.createModel('anthropic/claude-3.5-sonnet', deps);
@@ -123,7 +123,7 @@ describe('OpenRouter provider contract', () => {
     const req = mock.requests[0];
     expect(req.url).toContain('openrouter.ai/api/v1');
     expect(req.headers['authorization']).toBe('Bearer sk-or-test');
-    expect(req.headers['http-referer']).toBe('https://proteus.test');
+    expect(req.headers['http-referer']).toBe('https://kinu.test');
     expect(req.headers['x-title']).toBe('Kinu-Contract-Test');
   });
 });

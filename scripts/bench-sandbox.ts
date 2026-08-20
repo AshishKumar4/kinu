@@ -65,8 +65,8 @@ export function assertScratchRoot(runRoot: string, repoRoot: string): void {
 export interface AttemptSandbox {
   /** The repo copy the solver edits and the checks run against. */
   dir: string;
-  /** This attempt's PROTEUS_HOME. Never the real one. */
-  proteusHome: string;
+  /** This attempt's KINU_HOME. Never the real one. */
+  kinuHome: string;
   dispose(): void;
 }
 
@@ -122,8 +122,8 @@ export function createAttemptSandbox(opts: CreateSandboxOptions): AttemptSandbox
   const base = join(opts.runRoot, 'attempts', opts.attemptId);
   rmSync(base, { recursive: true, force: true });
   const dir = join(base, 'repo');
-  const proteusHome = join(base, 'home');
-  mkdirSync(proteusHome, { recursive: true });
+  const kinuHome = join(base, 'home');
+  mkdirSync(kinuHome, { recursive: true });
 
   const repo = resolve(opts.repoRoot);
   const excluded = new Set([
@@ -145,7 +145,7 @@ export function createAttemptSandbox(opts: CreateSandboxOptions): AttemptSandbox
 
   opts.prepare(dir);
 
-  return { dir, proteusHome, dispose: () => rmSync(base, { recursive: true, force: true }) };
+  return { dir, kinuHome, dispose: () => rmSync(base, { recursive: true, force: true }) };
 }
 
 export function applyPatch(dir: string, patch: string, opts: { reverse: boolean }): void {
@@ -211,23 +211,23 @@ function walkMatching(root: string, pattern: string): string[] {
   return out;
 }
 
-/** The environment a check runs in. PROTEUS_* is stripped so a stray variable
+/** The environment a check runs in. KINU_* is stripped so a stray variable
  *  from the operator's shell cannot reach into a scored run, and HOME points at
  *  the attempt so nothing lands in the real one. */
-export function sandboxEnv(proteusHome: string): NodeJS.ProcessEnv {
+export function sandboxEnv(kinuHome: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, val] of Object.entries(process.env)) {
     if (val === undefined) continue;
-    if (k.startsWith('PROTEUS_') || k === 'HOME') continue;
+    if (k.startsWith('KINU_') || k === 'HOME') continue;
     env[k] = val;
   }
-  env.HOME = proteusHome;
-  env.PROTEUS_HOME = proteusHome;
+  env.HOME = kinuHome;
+  env.KINU_HOME = kinuHome;
   env.CI = '1';
   return env;
 }
 
-function runCheck(check: BenchCheck, dir: string, proteusHome: string): Promise<CheckOutcome> {
+function runCheck(check: BenchCheck, dir: string, kinuHome: string): Promise<CheckOutcome> {
   const [cmd, ...args] = check.command;
   if (!cmd) throw new Error(`bench check ${check.id} has no command`);
   const started = Date.now();
@@ -236,7 +236,7 @@ function runCheck(check: BenchCheck, dir: string, proteusHome: string): Promise<
       cmd, args,
       {
         cwd: check.cwd ? join(dir, check.cwd) : dir,
-        env: sandboxEnv(proteusHome),
+        env: sandboxEnv(kinuHome),
         timeout: check.timeoutMs ?? 180_000,
         maxBuffer: 32 * 1024 * 1024,
       },
@@ -274,7 +274,7 @@ export async function scoreSandbox(
   restoreGuarded(sandbox.dir, repoRoot, task.guarded);
   const checks: CheckOutcome[] = [];
   for (const check of task.checks) {
-    const outcome = await runCheck(check, sandbox.dir, sandbox.proteusHome);
+    const outcome = await runCheck(check, sandbox.dir, sandbox.kinuHome);
     checks.push(outcome);
     if (!outcome.passed) break;
   }

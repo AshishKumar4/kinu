@@ -78,7 +78,7 @@ const ObservedSchema = v.object({
 type Observed = v.InferOutput<typeof ObservedSchema>;
 
 function observeAfterLoading(specifier: string): Observed {
-  const dir = mkdtempSync(join(tmpdir(), 'proteus-init-order-'));
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-init-order-'));
   try {
     const probe = join(dir, 'probe.mjs');
     // The first import is the whole experiment; the two below it read constants

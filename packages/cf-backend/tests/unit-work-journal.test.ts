@@ -12,7 +12,7 @@ import type { AgentTaskTree, ChangelogEntry } from '@kinu/core';
 import type { BackgroundJob } from '../src/lib/protocol';
 import { buildJournal } from '../src/components/surfaces/WorkTab';
 import { CHANGELOG_REVALIDATE_MS } from '../src/components/surfaces/changelog-entries';
-import { LIVE_DATA_REFRESH_MS } from '../src/hooks/use-proteus';
+import { LIVE_DATA_REFRESH_MS } from '../src/hooks/use-kinu';
 
 function job(over: Partial<BackgroundJob> & { id: string }): BackgroundJob {
   return {

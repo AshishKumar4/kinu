@@ -30,12 +30,12 @@ const storedCodexCredentialSchema = v.object({
   metadata: v.optional(JsonObjectSchema),
 });
 type StoredCodexCredential = v.InferOutput<typeof storedCodexCredentialSchema>;
-const proteusConfigSchema = v.objectWithRest({
+const kinuConfigSchema = v.objectWithRest({
   providers: v.optional(v.objectWithRest({
     codex: v.optional(storedCodexCredentialSchema),
   }, JsonValueSchema)),
 }, JsonValueSchema);
-type ProteusConfigFile = v.InferOutput<typeof proteusConfigSchema>;
+type KinuConfigFile = v.InferOutput<typeof kinuConfigSchema>;
 
 export interface LocalCodexAuthStore {
   hasCredential(): boolean;
@@ -142,13 +142,13 @@ function credentialToConfig(credential: OAuthCredential): StoredCodexCredential 
  * but does not parse propagates: reading it as empty would make `save` overwrite
  * every provider credential in it with only the one being saved.
  */
-function readConfig(configPath: string): ProteusConfigFile {
+function readConfig(configPath: string): KinuConfigFile {
   const raw = tolerate(() => readFileSync(configPath, 'utf-8'), 'enoent');
   if (raw === undefined) return {};
-  return v.parse(proteusConfigSchema, JSON.parse(raw));
+  return v.parse(kinuConfigSchema, JSON.parse(raw));
 }
 
-function writeConfig(configPath: string, config: ProteusConfigFile): void {
+function writeConfig(configPath: string, config: KinuConfigFile): void {
   writeSecretFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 

@@ -310,7 +310,7 @@ describe('turn-pipeline correctness wiring', () => {
       );
       if (!Reflect.set(harness.agent, '_cachedMessages', [{
         id: 'u-1', role: 'user', parts: [{ type: 'text', text: `${mode} this` }],
-        metadata: { proteusMode: mode },
+        metadata: { kinuMode: mode },
       }])) throw new Error('failed to seed the harness message array');
       return harness;
     }
@@ -432,7 +432,7 @@ describe('turn-pipeline correctness wiring', () => {
     // Permission, provenance and stance are three independent facts and cf
     // must pass all three: forcing them through one `mode` is what kept the
     // background-resume overlay off every real wake (jobs/runner.ts stamps
-    // proteusEvent AND proteusMode, and the work mode used to win).
+    // kinuEvent AND kinuMode, and the work mode used to win).
     const beforeTurn = actor.slice(
       actor.indexOf('const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {'),
       actor.indexOf('this.recordSystemPromptHash(systemOverride)'),

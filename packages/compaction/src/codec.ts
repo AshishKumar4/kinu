@@ -72,7 +72,7 @@ export interface ToolPairHandle {
   result?: ToolResultPart;
 }
 
-const TOOL_PAIR_HANDLE = Symbol('proteus-tool-pair');
+const TOOL_PAIR_HANDLE = Symbol('kinu-tool-pair');
 
 interface StoredToolPairHandle extends ToolPairHandle {
   [TOOL_PAIR_HANDLE]: true;
@@ -86,7 +86,7 @@ type ToolItem = Extract<Item, { kind: 'tool' }>;
 const ESTIMATED_MEDIA_CHARS = 4_800;
 const TRANSCRIPT_PREVIEW_CHARS = 20_000;
 
-export const proteusCodec: Codec<ModelMessage> = {
+export const kinuCodec: Codec<ModelMessage> = {
   encode(messages) {
     const claimKey = keyDeduper();
     return groupMessages(messages).map((group) => encodeGroup(group, claimKey));
@@ -137,7 +137,7 @@ export const proteusCodec: Codec<ModelMessage> = {
   },
 };
 
-export const proteusConventions: Conventions = {
+export const kinuConventions: Conventions = {
   // Skill bodies used to enter history as `skills` tool read/invoke outputs
   // (active skills render in the system prefix, outside messages), so the
   // skills stage pruned those loaded copies first — cheaply re-fetchable
@@ -168,9 +168,9 @@ export const proteusConventions: Conventions = {
   // so the stages that would need them find nothing to act on.
 };
 
-export const proteusSpec: LadderSpec = {
-  codec: proteusCodec,
-  conventions: proteusConventions,
+export const kinuSpec: LadderSpec = {
+  codec: kinuCodec,
+  conventions: kinuConventions,
   stages: [
     skillsStage,
     supersedeReadsStage,

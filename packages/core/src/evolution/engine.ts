@@ -109,7 +109,7 @@ const GeneralizedToolSchema = v.object({
 });
 import { runMCTS } from '../mcts/engine';
 import { createAgentConfigStore, initAgentConfigTable, type AgentConfigStore } from '../config/store';
-import { diagnostics, toProteusError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 
 /** The archive context handed to the proposal prompt: which version the
  *  proposal branches from + the variants it may cite as stepping stones. */
@@ -542,7 +542,7 @@ export class EvolutionEngine {
     if (outcome !== 'queued') {
       diagnostics.failure(
         'evolution.turn_review_not_deferred',
-        toProteusError({
+        toKinuError({
           doing: 'defer a turn review for the next host',
           cause: new Error(outcome === 'queue_full'
             ? `the review queue is full (${countQueuedTurnReviews(this.rt.storage.sql)} owed) — nothing has drained it`
@@ -590,7 +590,7 @@ export class EvolutionEngine {
         }
         diagnostics.failure(
           'evolution.deferred_review_failed',
-          toProteusError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
+          toKinuError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
           { reviewId: row.id },
         );
         continue;
@@ -771,7 +771,7 @@ export class EvolutionEngine {
     } catch (err) {
       diagnostics.failure(
         'evolution.shadow_trial_drain_failed',
-        toProteusError({ doing: 'drain the due shadow trials', cause: err, otherwise: 'unavailable' }),
+        toKinuError({ doing: 'drain the due shadow trials', cause: err, otherwise: 'unavailable' }),
       );
     }
   }

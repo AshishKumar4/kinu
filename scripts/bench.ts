@@ -142,7 +142,7 @@ export function parseCommon(args: Map<string, string>): CommonOptions {
 }
 
 /** Provider config for the agent variants, taken from BENCH_* rather than
- *  PROTEUS_* so an operator's ambient environment — which may point at their
+ *  KINU_* so an operator's ambient environment — which may point at their
  *  real workspaces — can never be what a scored run talks to. */
 function benchLLM(): LLMProviderConfig {
   const baseURL = process.env.BENCH_BASE_URL;
@@ -391,7 +391,7 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
     const result = await solver.solve({
       task,
       sandboxDir: sandbox.dir,
-      proteusHome: sandbox.proteusHome,
+      kinuHome: sandbox.kinuHome,
       budget: common.budget,
       signal: budget.signal,
       seed: common.seed,
@@ -442,7 +442,7 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
 }
 
 /** Both variants on one task, order randomized from the seed, each in its own
- *  sandbox and its own PROTEUS_HOME — so no memory, CraftStore, or scaffold
+ *  sandbox and its own KINU_HOME — so no memory, CraftStore, or scaffold
  *  state from one variant can reach the next. */
 async function runPair(
   task: BenchTask,

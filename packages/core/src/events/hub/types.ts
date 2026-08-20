@@ -1,7 +1,7 @@
 /**
  * Kinu EventsHub — shared types.
  *
- * The whole hub traffics in `ProteusEvent`. New entry points add new variants
+ * The whole hub traffics in `KinuEvent`. New entry points add new variants
  * to the discriminated union; older code keeps working because every variant
  * shares the same `BaseEvent` skeleton.
  *
@@ -185,7 +185,7 @@ export interface PeerAgentPayload {
    *  the body outgrows the brief budget. The brief's slice plus this path is
    *  the reference-plus-digest pair the receiving turn reads back. */
   body_path?: string;
-  proteus_mode: WorkMode;
+  kinu_mode: WorkMode;
 }
 
 export interface FileChangedPayload {
@@ -203,7 +203,7 @@ export interface SubordinateTaskPayload {
   deliverable?: string;
   deadline_hint?: string;
   inherited_context?: string;
-  proteus_mode: WorkMode;
+  kinu_mode: WorkMode;
 }
 
 /** The three things a subordinate can report. One declaration: the event
@@ -226,7 +226,7 @@ export interface SubordinateReportPayload {
    *  report outgrows the brief budget — without it the parent's turn would
    *  see only the brief's slice and the rest would be unreachable. */
   content_path?: string;
-  proteus_mode: WorkMode;
+  kinu_mode: WorkMode;
 }
 
 export interface EmailAttachmentMeta {
@@ -303,7 +303,7 @@ export interface BaseEvent {
 
 type ReadableEventBase = BaseEvent & { payload_visibility: 'full' | 'redact' };
 
-export type ReadableProteusEvent =
+export type ReadableKinuEvent =
   | (ReadableEventBase & { variant: 'chat'; payload: ChatPayload })
   | (ReadableEventBase & { variant: 'webhook'; payload: WebhookPayload })
   | (ReadableEventBase & { variant: 'process_done'; payload: ProcessDonePayload })
@@ -321,12 +321,12 @@ export type ReadableProteusEvent =
 /** Hash/HMAC/opaque policies intentionally replace the domain payload. Keeping
  * that fact in the type prevents routing code from treating an envelope or a
  * digest as the original event body. */
-export type ProtectedProteusEvent = BaseEvent & {
+export type ProtectedKinuEvent = BaseEvent & {
   payload_visibility: 'hash' | 'hmac' | 'opaque_handle';
   payload: JsonValue;
 };
 
-export type ProteusEvent = ReadableProteusEvent | ProtectedProteusEvent;
+export type KinuEvent = ReadableKinuEvent | ProtectedKinuEvent;
 
 // ── Ingress descriptor (the only way to construct events) ────────
 
@@ -493,7 +493,7 @@ export type RevisitCondition =
 
 /** The kinds of rows in `agent_log`. Discriminated by `kind`. */
 export type AgentLogKind =
-  | 'event'             // a ProteusEvent
+  | 'event'             // a KinuEvent
   | 'phase'             // phase transition
   | 'step'              // one LLM step
   | 'tool_call'         // a tool invocation

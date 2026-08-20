@@ -1,17 +1,17 @@
 """Harbor agent adapter — runs Kinu inside a Harbor task container.
 
-    PYTHONPATH=<proteus-repo> harbor run \
-        --agent bench.harbor.proteus_agent:ProteusAgent \
+    PYTHONPATH=<kinu-repo> harbor run \
+        --agent bench.harbor.kinu_agent:KinuAgent \
         --path ./terminal-bench-2.1 \
         --ak evolve=false \
         --allow-agent-host staging.kinu.run
 
 The adapter defaults to native Workers AI DeepSeek V4 Pro 0813 through the
 STAGING deployment's inference proxy, as the ``eval-service`` account. Export
-``PROTEUS_EVAL_TOKEN`` before launching Harbor; a long-lived token needs the
+``KINU_EVAL_TOKEN`` before launching Harbor; a long-lived token needs the
 ``ai.proxy`` scope. No signed-in session is read, and a run aimed at production
-is refused unless ``PROTEUS_EVAL_ALLOW_PROD=1`` names the exception — see
-``bench/model_endpoint.py``. ``-m`` and ``PROTEUS_BASE_URL`` remain explicit
+is refused unless ``KINU_EVAL_ALLOW_PROD=1`` names the exception — see
+``bench/model_endpoint.py``. ``-m`` and ``KINU_BASE_URL`` remain explicit
 override surfaces for comparison runs.
 
 ``./terminal-bench-2.1`` is the corpus of record: 2.0 is kept alongside as
@@ -20,14 +20,14 @@ new runs measure. Each corpus carries a ``corpus.json`` and every trial logs and
 records which one it ran (see ``bench/harbor/corpus.py``).
 
 Glue only: the adapter installs the CLI, creates a local workspace, and hands
-the task instruction to ``proteus exec``. It changes nothing about how the
+the task instruction to ``kinu exec``. It changes nothing about how the
 agent reasons — the only knob it exposes is ``evolve``, the switch a paired
 evolving/non-evolving comparison needs.
 
 Two things it is deliberate about. The run environment travels into the
 container as a file, not as ``exec -e KEY=VALUE`` — Harbor renders per-exec env
 onto the ``docker compose`` command line, where anything on the host can read
-the model credential out of ``ps``. And ``PROTEUS_HOME`` is set explicitly to a
+the model credential out of ``ps``. And ``KINU_HOME`` is set explicitly to a
 path under the agent install root, checked by ``bench.isolation``, so the
 container's own home is never what a trial writes into.
 """
@@ -47,12 +47,12 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.env import parse_bool_env_value
 
-from bench.harbor.build import REPO_ROOT, build_proteus_binary
+from bench.harbor.build import REPO_ROOT, build_kinu_binary
 from bench.harbor.corpus import CorpusIdentity, resolve_for_trial
 from bench.harbor.trajectory import build_trajectory, read_events, read_grading
 from bench.isolation import assert_throwaway_home
 from bench.model_endpoint import (
-    DEFAULT_PROTEUS_AI_BASE_URL,
+    DEFAULT_KINU_AI_BASE_URL,
     DEFAULT_WORKERS_AI_MODEL_ID,
     assert_eval_target,
     provider_for_base_url,
@@ -60,37 +60,37 @@ from bench.model_endpoint import (
 )
 
 INSTALL_ROOT = PurePosixPath("/installed-agent")
-INSTALL_PATH = INSTALL_ROOT / "proteus"
-#: The trial's PROTEUS_HOME. One per container, and a container is one trial —
+INSTALL_PATH = INSTALL_ROOT / "kinu"
+#: The trial's KINU_HOME. One per container, and a container is one trial —
 #: fixed rather than randomized so a resumed trial finds the state it left.
-HOME_PATH = INSTALL_ROOT / "proteus-home"
+HOME_PATH = INSTALL_ROOT / "kinu-home"
 #: The run environment, sourced by every Kinu invocation. Never on argv.
-ENV_PATH = INSTALL_ROOT / "proteus.env"
-LOG_NAME = "proteus.jsonl"
-STDERR_LOG_NAME = "proteus-stderr.txt"
-CREATE_LOG_NAME = "proteus-create.txt"
+ENV_PATH = INSTALL_ROOT / "kinu.env"
+LOG_NAME = "kinu.jsonl"
+STDERR_LOG_NAME = "kinu-stderr.txt"
+CREATE_LOG_NAME = "kinu-create.txt"
 #: The turn_outcomes read taken after the turn. A benchmark cannot ask a person
 #: whether the turn was any good, so whether the turn was GRADED AT ALL is the
 #: measurement that decides if this trial's arm state means anything.
-ALIGNMENT_NAME = "proteus-alignment.json"
+ALIGNMENT_NAME = "kinu-alignment.json"
 
-DEFAULT_BASE_URL = DEFAULT_PROTEUS_AI_BASE_URL
+DEFAULT_BASE_URL = DEFAULT_KINU_AI_BASE_URL
 DEFAULT_WORKSPACE = "harbor"
 DEFAULT_MISSION = (
     "Complete software engineering tasks in this container's working directory."
 )
 
 
-class ProteusAgent(BaseInstalledAgent):
-    """Kinu, driven headlessly through ``proteus exec`` in local mode."""
+class KinuAgent(BaseInstalledAgent):
+    """Kinu, driven headlessly through ``kinu exec`` in local mode."""
 
     SUPPORTS_ATIF: bool = True
 
     ENV_VARS = [
         EnvVar(
             "base_url",
-            env="PROTEUS_BASE_URL",
-            env_fallback="PROTEUS_BASE_URL",
+            env="KINU_BASE_URL",
+            env_fallback="KINU_BASE_URL",
             default=DEFAULT_BASE_URL,
         ),
     ]
@@ -101,7 +101,7 @@ class ProteusAgent(BaseInstalledAgent):
         evolve: Any = True,
         workspace: str = DEFAULT_WORKSPACE,
         mission: str = DEFAULT_MISSION,
-        proteus_repo: str | None = None,
+        kinu_repo: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -111,7 +111,7 @@ class ProteusAgent(BaseInstalledAgent):
         self._evolve = parse_bool_env_value(evolve, name="evolve", default=True)
         self._workspace = workspace
         self._mission = mission
-        self._repo_root = Path(proteus_repo).resolve() if proteus_repo else REPO_ROOT
+        self._repo_root = Path(kinu_repo).resolve() if kinu_repo else REPO_ROOT
         self._corpus_identity: CorpusIdentity | None = None
         # Resolved eagerly so a misconfigured job fails before it builds a
         # container and installs into it.
@@ -120,7 +120,7 @@ class ProteusAgent(BaseInstalledAgent):
     @staticmethod
     @override
     def name() -> str:
-        return "proteus"
+        return "kinu"
 
     @override
     def get_version_command(self) -> str | None:
@@ -129,7 +129,7 @@ class ProteusAgent(BaseInstalledAgent):
     @override
     async def install(self, environment: BaseEnvironment) -> None:
         # `/installed-agent` is created by BaseInstalledAgent.setup() as root.
-        binary = await build_proteus_binary(self._repo_root)
+        binary = await build_kinu_binary(self._repo_root)
         await environment.upload_file(binary, str(INSTALL_PATH))
         await self.exec_as_root(environment, command=f"chmod 0755 {INSTALL_PATH}")
         await self.exec_as_agent(environment, command=f"{INSTALL_PATH} --version")
@@ -137,9 +137,9 @@ class ProteusAgent(BaseInstalledAgent):
     def _resolve_run_env(self) -> dict[str, str]:
         """The environment every Kinu invocation in the container runs under.
 
-        Kinu reads ``PROTEUS_BASE_URL``/``PROTEUS_AUTH``/``PROTEUS_MODEL`` as
-        a direct-endpoint override, which needs no ``~/.proteus/config.json``
-        and no account — exactly what a throwaway container wants. ``PROTEUS_HOME``
+        Kinu reads ``KINU_BASE_URL``/``KINU_AUTH``/``KINU_MODEL`` as
+        a direct-endpoint override, which needs no ``~/.kinu/config.json``
+        and no account — exactly what a throwaway container wants. ``KINU_HOME``
         completes it: without one, everything durable a trial writes lands in
         whatever home the container user happens to have.
         """
@@ -153,14 +153,14 @@ class ProteusAgent(BaseInstalledAgent):
         # The override is read from the LAUNCHING shell (os.environ, the default)
         # rather than from the trial's rendered vars: consenting to production is
         # an operator's act, not a per-trial parameter.
-        assert_eval_target(env["PROTEUS_BASE_URL"])
-        auth = self._get_env("PROTEUS_AUTH")
+        assert_eval_target(env["KINU_BASE_URL"])
+        auth = self._get_env("KINU_AUTH")
         if not auth:
             credential_env = {
                 name: value
                 for name in (
-                    "PROTEUS_EVAL_TOKEN",
-                    "PROTEUS_HOME",
+                    "KINU_EVAL_TOKEN",
+                    "KINU_HOME",
                     "CLOUDFLARE_API_TOKEN",
                     "OPENROUTER_API_KEY",
                     "OPENAI_API_KEY",
@@ -169,14 +169,14 @@ class ProteusAgent(BaseInstalledAgent):
                 if (value := self._get_env(name)) is not None
             }
             token = resolve_bearer_token(
-                env["PROTEUS_BASE_URL"],
-                provider_for_base_url(env["PROTEUS_BASE_URL"]),
+                env["KINU_BASE_URL"],
+                provider_for_base_url(env["KINU_BASE_URL"]),
                 environ=credential_env,
             )
             auth = f"Bearer {token}"
-        env["PROTEUS_AUTH"] = auth
-        env["PROTEUS_MODEL"] = self.model_name
-        env["PROTEUS_HOME"] = assert_throwaway_home(str(HOME_PATH))
+        env["KINU_AUTH"] = auth
+        env["KINU_MODEL"] = self.model_name
+        env["KINU_HOME"] = assert_throwaway_home(str(HOME_PATH))
         return env
 
     async def _place_run_env(self, environment: BaseEnvironment) -> None:
@@ -260,7 +260,7 @@ class ProteusAgent(BaseInstalledAgent):
         )
 
         evolve_flag = "" if self._evolve else "--no-auto-evolve "
-        # `</dev/null` is required, not defensive: `proteus exec` folds piped
+        # `</dev/null` is required, not defensive: `kinu exec` folds piped
         # stdin into the prompt, so an open stdin would block the turn forever.
         # stderr goes to its own file rather than into the pipe: a tool result
         # longer than PIPE_BUF can be interleaved with a diagnostic line, and a

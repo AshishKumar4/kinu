@@ -203,7 +203,7 @@ an addition to it means the dependency changed its storage contract. The set is
 `inodes`, `file_chunks`, `content_lifecycle`, `vfs_schema_migrations`,
 `vfs_append_receipts`, `vfs_append_writer_state`, `vfs_append_module_state`,
 `vfs_append_pid_revocations`, `vfs_append_acked_gaps`, plus Kinu's own
-`proteus_workspace_generation`. All ten are declared present on the CLI root and
+`kinu_workspace_generation`. All ten are declared present on the CLI root and
 absent on both hosted roots.
 
 Three properties follow from that layout, and none of them was true of the old

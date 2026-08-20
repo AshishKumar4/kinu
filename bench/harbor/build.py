@@ -28,7 +28,7 @@ _build_lock = asyncio.Lock()
 _built: dict[Path, Path] = {}
 
 
-async def build_proteus_binary(repo_root: Path) -> Path:
+async def build_kinu_binary(repo_root: Path) -> Path:
     """Compile the CLI once per process and return the binary's host path.
 
     Concurrent trials share one build: the compile is deterministic for a given
@@ -48,7 +48,7 @@ def _compile(repo_root: Path) -> Path:
     if not entrypoint.exists():
         raise FileNotFoundError(
             f"Kinu CLI entrypoint not found at {entrypoint}. "
-            "Point the agent at a Kinu checkout with proteus_repo=<path>."
+            "Point the agent at a Kinu checkout with kinu_repo=<path>."
         )
     if shutil.which("bun") is None:
         raise RuntimeError(

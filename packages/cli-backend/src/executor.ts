@@ -118,7 +118,7 @@ async function runToCompletion(
   extension: string,
   timeoutMs: number,
 ): Promise<{ exitCode: number; stdout: string; stderr: string; error?: string }> {
-  const stem = join(tmpdir(), `proteus-exec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const stem = join(tmpdir(), `kinu-exec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const tmpFile = `${stem}${extension}`;
   const outFile = `${stem}.out`;
   const errFile = `${stem}.err`;

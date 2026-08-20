@@ -16,7 +16,7 @@
 //   bun scripts/eval.ts --model <spec> --baseline-model <spec> --out out.json
 //
 // Model resolution reuses the CLI's local resolver, so any provider the CLI can
-// reach works (env keys, ~/.proteus config, or the signed-in Cloudflare proxy).
+// reach works (env keys, ~/.kinu config, or the signed-in Cloudflare proxy).
 // With nothing configured it fails with an honest message — no hardcoded keys.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -52,7 +52,7 @@ export interface EvalOptions {
 export function parseArgs(argv: string[]): EvalOptions {
   const opts: EvalOptions = {
     corpus: DEFAULT_CORPUS,
-    model: process.env.PROTEUS_MODEL ?? process.env.EVAL_MODEL ?? null,
+    model: process.env.KINU_MODEL ?? process.env.EVAL_MODEL ?? null,
     baselineModel: null,
     judgeModel: process.env.EVAL_JUDGE_MODEL ?? null,
     threshold: process.env.EVAL_MIN_SCORE ? Number(process.env.EVAL_MIN_SCORE) : DEFAULT_QUALITY_THRESHOLD,
@@ -88,7 +88,7 @@ const USAGE = `Kinu single-shot model A/B
 Usage: bun scripts/eval.ts --baseline-model <spec> [options]
 
   --corpus <path>          JSONL corpus (default: tests/eval/corpus/seed.jsonl)
-  --model <spec>           Candidate model (default: PROTEUS_MODEL / resolver default)
+  --model <spec>           Candidate model (default: KINU_MODEL / resolver default)
   --baseline-model <spec>  Baseline model. REQUIRED to differ from the candidate:
                            a model judged against itself is not an A/B.
   --judge-model <spec>     Judge model (default: candidate model)
@@ -220,7 +220,7 @@ async function main(): Promise<void> {
   }
 
   // Reuse the CLI's model resolver — throws an honest "no LLM configured"
-  // message when neither env keys, ~/.proteus config, nor a signed-in session
+  // message when neither env keys, ~/.kinu config, nor a signed-in session
   // are present. Never hardcode a key.
   let resolver;
   try {

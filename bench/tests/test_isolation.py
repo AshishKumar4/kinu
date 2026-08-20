@@ -1,4 +1,4 @@
-"""Tests for the shared PROTEUS_HOME guard.
+"""Tests for the shared KINU_HOME guard.
 
 Run from the repo root with no dependencies and no benchmark harness installed:
 
@@ -28,7 +28,7 @@ assert_throwaway_home = isolation.assert_throwaway_home
 
 class ThrowawayHomeTest(unittest.TestCase):
     def test_refuses_an_unset_home(self) -> None:
-        # The defect this guard exists for: no PROTEUS_HOME means ~/.proteus.
+        # The defect this guard exists for: no KINU_HOME means ~/.kinu.
         for empty in ("", "   ", None):
             with self.assertRaises(ValueError) as caught:
                 assert_throwaway_home(empty)  # type: ignore[arg-type]
@@ -38,7 +38,7 @@ class ThrowawayHomeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "absolute"):
             assert_throwaway_home("scratch/home")
 
-    def test_refuses_the_real_proteus_home(self) -> None:
+    def test_refuses_the_real_kinu_home(self) -> None:
         with self.assertRaisesRegex(ValueError, "real Kinu home"):
             assert_throwaway_home(isolation.REAL_HOME)
         with self.assertRaisesRegex(ValueError, "real Kinu home"):
@@ -61,8 +61,8 @@ class ThrowawayHomeTest(unittest.TestCase):
 
     def test_accepts_the_container_path_the_harbor_adapter_uses(self) -> None:
         self.assertEqual(
-            assert_throwaway_home("/installed-agent/proteus-home"),
-            "/installed-agent/proteus-home",
+            assert_throwaway_home("/installed-agent/kinu-home"),
+            "/installed-agent/kinu-home",
         )
 
 

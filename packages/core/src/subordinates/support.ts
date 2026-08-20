@@ -512,7 +512,7 @@ export function admitSubordinateTask(log: EventLog, input: {
     from_workspace: fromWorkspace,
     kind: input.kind,
     body,
-    proteus_mode: input.mode,
+    kinu_mode: input.mode,
   };
   if (deliverable) Object.assign(payload, { deliverable });
   if (deadlineHint) Object.assign(payload, { deadline_hint: deadlineHint });
@@ -637,7 +637,7 @@ export function admitSubordinateReport(log: EventLog, input: {
     from_subordinate: fromSubordinate,
     status: input.status,
     content,
-    proteus_mode: input.mode,
+    kinu_mode: input.mode,
   };
   if (task) Object.assign(payload, { task });
   if (input.contentPath) Object.assign(payload, { content_path: input.contentPath });
