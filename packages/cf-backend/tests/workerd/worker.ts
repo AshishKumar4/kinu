@@ -56,7 +56,7 @@ function retainViaWaitUntil(state: DurableObjectState, work: Promise<void>): voi
  */
 export class RetentionDO extends DurableObject<Cloudflare.Env> {
   /** The work every arm below performs. Mirrors `OrchestratorAgent.armTimer`:
-   *  a storage write that Proteus's own wake-up depends on. */
+   *  a storage write that Kinu's own wake-up depends on. */
   private async armTimer(delayMs: number): Promise<void> {
     await scheduler.wait(delayMs);
     await this.ctx.storage.put(ARMED, Date.now());
@@ -364,7 +364,7 @@ export interface AlarmReport {
 /**
  * Defect surface 5 — the Durable Object alarm, actually fired.
  *
- * WHAT PRODUCTION STAKES ON IT. Proteus owns no `alarm()` of its own: there are
+ * WHAT PRODUCTION STAKES ON IT. Kinu owns no `alarm()` of its own: there are
  * zero `setAlarm`/`deleteAlarm` calls and zero `alarm()` overrides in
  * `packages/cf-backend/src`. Every wake rides the installed SDK's
  * `cf_agents_schedules` table through `this.schedule(...)`, and `armTimer`

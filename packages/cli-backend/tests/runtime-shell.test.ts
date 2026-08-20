@@ -56,7 +56,7 @@ describe('createHostShell', () => {
   test('a backgrounded child does not keep the host process alive', async () => {
     // The other half of the same contract, and the half only a real process can
     // answer: even once `exec` has returned, an un-unref'd child handle or a
-    // still-open pipe keeps node's event loop alive, so a one-shot `proteus
+    // still-open pipe keeps node's event loop alive, so a one-shot `kinu
     // exec` that started a server would refuse to exit until the server died.
     const script = `
       import { createHostShell } from ${JSON.stringify(new URL('../src/runtime.js', import.meta.url).pathname)};

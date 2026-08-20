@@ -1,5 +1,5 @@
 // BackendHost — the COMPLETE loop-level contract a backend fulfills so the
-// shared core agent (AgentOrchestrator) hosts ALL of Proteus's functionality,
+// shared core agent (AgentOrchestrator) hosts ALL of Kinu's functionality,
 // regardless of platform. It pairs with AgentRuntime (the resource primitives):
 //
 //   AgentRuntime  → storage / memory / executor / llm / schedule / identity /

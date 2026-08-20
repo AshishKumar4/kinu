@@ -100,7 +100,7 @@ describe('release sql store', () => {
       },
     });
 
-    const binding = store.upsertSourceBinding({ kind: 'local', label: 'Proteus checkout', localRoot: '/home/user/Proteus' });
+    const binding = store.upsertSourceBinding({ kind: 'local', label: 'Kinu checkout', localRoot: '/home/user/Kinu' });
     const change = store.createChange('jarvis', { bindingId: binding.id, userPrompt: 'Make the workspace denser' });
     store.transitionChange(change.id, 'planning');
     store.transitionChange(change.id, 'patching');

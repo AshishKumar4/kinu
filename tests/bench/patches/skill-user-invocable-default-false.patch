@@ -8,6 +8,6 @@ index 1c8ff7d..43d7c85 100644
      : fm.user_invocable !== undefined  ? Boolean(fm.user_invocable)
 -    : true;
 +    : false;
-   // auto_activate is the Proteus-only keyword-fire flag. We force it false
+   // auto_activate is the Kinu-only keyword-fire flag. We force it false
    // when the author asked us not to model-invoke — the two contradict
    // otherwise.

@@ -198,7 +198,7 @@ declares the exact set. That set is what `NimbusWorkspace.destroy()` drops, and
 an addition to it means the dependency changed its storage contract:
 `inodes`, `file_chunks`, `content_lifecycle`, `vfs_schema_migrations`,
 `vfs_append_receipts`, `vfs_append_writer_state`, `vfs_append_module_state`,
-`vfs_append_pid_revocations`, `vfs_append_acked_gaps`, plus Proteus's own
+`vfs_append_pid_revocations`, `vfs_append_acked_gaps`, plus Kinu's own
 `proteus_workspace_generation`. All ten are declared present on the CLI root and
 absent on both hosted roots.
 
@@ -249,8 +249,8 @@ creates and owns:
 - `cf_agents_context_blocks`: LLM-writable memory context blocks
 - `cf_agents_search_entries`: the session's own search index
 
-Proteus reads through `this.messages` and never writes these directly. The
-`messages` table in the ER diagram above is Proteus's own flattened projection,
+Kinu reads through `this.messages` and never writes these directly. The
+`messages` table in the ER diagram above is Kinu's own flattened projection,
 which is what `messages_fts` and the outcome joins read.
 
 ## The rest of the schema
@@ -308,9 +308,9 @@ narrative over it.
 `initWorkspaceSchema()` (`core/src/identity/workspace-schema.ts`) is the one
 answer to which tables a workspace has. Every composition root calls it: the
 orchestrator DO's `ensureSchema()`, the subordinate DO's, `openWorkspaceCLI`,
-the local session constructor, and `proteus create`. It used to be four
+the local session constructor, and `kinu create`. It used to be four
 disagreeing lists, and the disagreements were real bugs. `craft_scores` was
-never created except by `proteus create`, so every EMA read on a workspace
+never created except by `kinu create`, so every EMA read on a workspace
 opened any other way silently no-opped.
 
 The pass runs in this order:

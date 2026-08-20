@@ -3,7 +3,7 @@
 //
 // We spawn `claude -p "<prompt>" --output-format stream-json` with tools OFF so
 // it behaves as a single-turn chat completion. The binary holds and refreshes
-// the subscription OAuth itself — Proteus never reads ~/.claude credentials nor
+// the subscription OAuth itself — Kinu never reads ~/.claude credentials nor
 // calls api.anthropic.com directly. That is what keeps this compliant: the
 // official client is the auth boundary.
 //
@@ -216,9 +216,9 @@ interface ClaudePrompt {
 
 /** Build the `claude -p` invocation. System turns map to --system-prompt; the
  *  conversation is flattened into the prompt arg with role labels so multi-turn
- *  context (including prior tool results, surfaced by Proteus's own loop as
+ *  context (including prior tool results, surfaced by Kinu's own loop as
  *  assistant/tool text) is carried faithfully. Tools are OFF — this provider is
- *  just the brain; Proteus's execute_tools/run loop wraps it. */
+ *  just the brain; Kinu's execute_tools/run loop wraps it. */
 export function buildClaudePrompt(options: LanguageModelV2CallOptions): ClaudePrompt {
   const systemParts: string[] = [];
   const turns: string[] = [];

@@ -1,5 +1,5 @@
 /**
- * Mission budget governor — the outer integral over Proteus's call-scoped budgets.
+ * Mission budget governor — the outer integral over Kinu's call-scoped budgets.
  *
  * Every existing budget is scoped to ONE call: a fork's `budget`/`wall_clock_ms`,
  * MCTS's `maxCostUSD` pre-run estimate gate, a head's 5-minute default. A cron

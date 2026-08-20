@@ -6,7 +6,7 @@
  *
  * Aliases / compat:
  *   - `allowed-tools` ⟷ `allowed_tools`         (Claude Code uses hyphen; Hermes uses snake)
- *   - `auto_activate` ⟷ `autoActivate`           (Proteus extension)
+ *   - `auto_activate` ⟷ `autoActivate`           (Kinu extension)
  *   - `disable-model-invocation` ⟷ `disable_model_invocation` (Anthropic uses hyphen)
  *   - `user-invocable` ⟷ `user_invocable`       (Anthropic uses hyphen)
  *
@@ -96,7 +96,7 @@ export function parseSkillFile(
   const allowed_tools = asStringArray(fm['allowed-tools'] ?? fm.allowed_tools ?? []);
   const keywords = asStringArray(fm.keywords ?? []).map(k => k.toLowerCase());
 
-  // Behavioral gates — Anthropic-spec fields that Proteus now honors.
+  // Behavioral gates — Anthropic-spec fields that Kinu now honors.
   // `disable-model-invocation: true` forces `auto_activate` off regardless of
   // frontmatter (the LLM cannot trigger this skill via description match or
   // keyword fire). Explicit user invocation still works (subject to
@@ -109,7 +109,7 @@ export function parseSkillFile(
     fm['user-invocable'] !== undefined ? Boolean(fm['user-invocable'])
     : fm.user_invocable !== undefined  ? Boolean(fm.user_invocable)
     : true;
-  // auto_activate is the Proteus-only keyword-fire flag. We force it false
+  // auto_activate is the Kinu-only keyword-fire flag. We force it false
   // when the author asked us not to model-invoke — the two contradict
   // otherwise.
   const auto_activate_raw = Boolean(fm.auto_activate ?? fm.autoActivate ?? false);

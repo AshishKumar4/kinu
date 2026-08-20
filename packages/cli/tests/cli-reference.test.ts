@@ -23,7 +23,7 @@ describe('docs/CLI.md', () => {
     const entries = commandEntries(buildProgram());
     expect(entries.length).toBeGreaterThan(40);
     for (const entry of entries) {
-      expect(doc).toContain(`### proteus ${entry.term}`);
+      expect(doc).toContain(`### kinu ${entry.term}`);
       for (const option of entry.command.options.filter((o) => !o.hidden)) {
         expect(doc).toContain(`\`${option.flags}\``);
       }

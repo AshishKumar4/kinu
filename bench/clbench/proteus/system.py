@@ -1,7 +1,7 @@
-"""Proteus as a Continual Learning Bench system.
+"""Kinu as a Continual Learning Bench system.
 
-One benchmark turn is one `proteus exec` — the CLI's headless surface — against
-a local workspace that lives in a throwaway ``PROTEUS_HOME``. Proteus runs its
+One benchmark turn is one `kinu exec` — the CLI's headless surface — against
+a local workspace that lives in a throwaway ``PROTEUS_HOME``. Kinu runs its
 own agentic loop inside that turn (its tools, memory, CraftStore, scaffold);
 the benchmark environment is reached the way every CL-Bench system reaches it,
 by returning one structured action per turn.
@@ -15,14 +15,14 @@ is two claims and they need separating:
   one system per instance, so each gets its own home. ``persist_workspace``
   additionally controls the *within-run* case, so a stateful rollout can be
   re-run with the workspace reset at every instance boundary.
-* **Self-evolution** — ``auto_evolve`` maps to ``proteus exec
+* **Self-evolution** — ``auto_evolve`` maps to ``kinu exec
   --no-auto-evolve``, which turns off turn- and session-level evolution while
   leaving durable state intact. Persistent state without evolution is the
   control that says how much of any gain is evolution rather than memory.
 
 ``single_conversation`` is the direct analogue of the Codex adapter's flag: the
 CLI session id is captured from the first turn and replayed with ``--resume``
-so Proteus sees its own prior turns, not just the task's latest observation.
+so Kinu sees its own prior turns, not just the task's latest observation.
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ _DEFAULT_PURPOSE = (
 
 
 def _resolve_repo_root(explicit: Optional[str]) -> Path:
-    """Locate the Proteus checkout holding the CLI entrypoint.
+    """Locate the Kinu checkout holding the CLI entrypoint.
 
     Defaults to the repo this file lives in, resolved through any symlink —
     the package is normally linked into ``clbench/src/systems/proteus``.
@@ -114,14 +114,14 @@ def _resolve_repo_root(explicit: Optional[str]) -> Path:
     )
     if not (root / "packages" / "cli" / "bin" / "cli.ts").is_file():
         raise FileNotFoundError(
-            f"No Proteus CLI at {root}/packages/cli/bin/cli.ts. "
-            "Pass repo_root, or set PROTEUS_REPO to the Proteus checkout."
+            f"No Kinu CLI at {root}/packages/cli/bin/cli.ts. "
+            "Pass repo_root, or set PROTEUS_REPO to the Kinu checkout."
         )
     return root
 
 
 def _resolve_api_key(provider: str, base_url: str, api_key_env: Optional[str]) -> str:
-    """Read the provider key from the environment, else the Proteus config.
+    """Read the provider key from the environment, else the Kinu config.
 
     Never accepted as a system param and never passed on argv — a benchmark
     config is a committed file and a command line is world-readable.
@@ -136,7 +136,7 @@ def _resolve_api_key(provider: str, base_url: str, api_key_env: Optional[str]) -
 
 @register_system("proteus")
 class ProteusSystem(ContinualLearningSystem):
-    """Proteus driven one benchmark turn at a time through `proteus exec`."""
+    """Kinu driven one benchmark turn at a time through `kinu exec`."""
 
     def __init__(
         self,
@@ -193,7 +193,7 @@ class ProteusSystem(ContinualLearningSystem):
         return self._root / "work"
 
     def _env(self) -> dict[str, str]:
-        """A clean environment: the operator's own Proteus home can never leak
+        """A clean environment: the operator's own Kinu home can never leak
         into a measured run, and the key travels here rather than on argv."""
         env = {k: v for k, v in os.environ.items() if not k.startswith("PROTEUS_")}
         env["HOME"] = str(self._home)
@@ -249,11 +249,11 @@ class ProteusSystem(ContinualLearningSystem):
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"proteus create failed ({result.returncode}): "
+                f"kinu create failed ({result.returncode}): "
                 f"{(result.stderr or result.stdout).strip()[:500]}"
             )
         self._workspace_ready = True
-        logger.info("Proteus workspace ready at %s", self._home / _WORKSPACE_NAME)
+        logger.info("Kinu workspace ready at %s", self._home / _WORKSPACE_NAME)
 
     def _destroy_workspace(self) -> None:
         """Stop the workspace daemon and delete every trace of the run's state."""
@@ -261,7 +261,7 @@ class ProteusSystem(ContinualLearningSystem):
             try:
                 self._run_cli(["daemon", "stop"], timeout=30)
             except (subprocess.SubprocessError, OSError) as exc:
-                logger.warning("Could not stop the Proteus daemon: %s", exc)
+                logger.warning("Could not stop the Kinu daemon: %s", exc)
         shutil.rmtree(self._home, ignore_errors=True)
         shutil.rmtree(self._cwd, ignore_errors=True)
         self._workspace_ready = False
@@ -292,7 +292,7 @@ class ProteusSystem(ContinualLearningSystem):
     def _run_turn(self, prompt: str) -> list[dict[str, Any]]:
         self._ensure_workspace()
         logger.info(
-            "proteus exec (interaction %d, prompt %d chars, resume=%s)",
+            "kinu exec (interaction %d, prompt %d chars, resume=%s)",
             self._interaction_count + 1,
             len(prompt),
             self._session_id if self._single_conversation else None,
@@ -305,20 +305,20 @@ class ProteusSystem(ContinualLearningSystem):
         if resumed:
             self._session_id = resumed
 
-        # `proteus exec` exits 1 whenever any tool call in the turn failed, even
+        # `kinu exec` exits 1 whenever any tool call in the turn failed, even
         # when the turn still produced its answer. Treat a stream that reached
         # an assistant message as a turn; only a stream that never did is fatal.
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[:500]
             if has_answer(events):
                 logger.warning(
-                    "proteus exec exited %d after a completed turn: %s",
+                    "kinu exec exited %d after a completed turn: %s",
                     result.returncode,
                     detail,
                 )
             else:
                 raise RuntimeError(
-                    f"proteus exec failed ({result.returncode}): {detail}"
+                    f"kinu exec failed ({result.returncode}): {detail}"
                 )
         return events
 

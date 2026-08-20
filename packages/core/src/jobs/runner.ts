@@ -25,7 +25,7 @@ import { diagnostics, renderThrownChain, toProteusError } from '../obs/index';
 /** The terminal error a non-recoverable job records when it is interrupted by a
  *  DO eviction (no durable checkpoint / not safe to re-run).
  *
- *  Proteus stamps this itself because `do.evict.no_signal` says the platform
+ *  Kinu stamps this itself because `do.evict.no_signal` says the platform
  *  delivers nothing: a `running` row with nothing in this isolate owning it IS
  *  an orphan, whatever became of the fiber, and that inference is the only
  *  evidence available. */
@@ -101,7 +101,7 @@ export interface BackgroundJobRunnerDeps {
   /** How long work may run before it detaches, and how long teardown waits on
    *  it — the surface's policy, resolved per read. A thunk because the surface
    *  is not always session-scoped: the CLI pins one policy per process, but a
-   *  cf workspace DO serves human-watched web chat, one-shot `proteus exec`
+   *  cf workspace DO serves human-watched web chat, one-shot `kinu exec`
    *  invocations, and unwatched email/timer/peer drains through the SAME
    *  runner, so only the turn in flight knows which it is. Read at threshold
    *  time. Defaults to the interactive policy. */

@@ -82,7 +82,7 @@ export interface VectorSearchHit {
 }
 
 /**
- * VectorStore — the high-level API the rest of Proteus consumes.
+ * VectorStore — the high-level API the rest of Kinu consumes.
  *
  * One implementation: CloudflareVectorStore (wraps Vectorize + an Embedder).
  * Future: in-memory store for tests, R2-backed store for cold storage, etc.

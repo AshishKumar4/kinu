@@ -325,7 +325,7 @@ function DevicesCard() {
         {rosterErr && <div className="text-xs p-danger">{rosterErr}</div>}
         {devices && devices.length > 0 && !devices.some((d) => d.connected) && (
           <p className="p-meta p-text-3">
-            Offline device? Restart the daemon on that machine with <code className="font-mono p-fill px-1 rounded-sm">proteus connect</code>.
+            Offline device? Restart the daemon on that machine with <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code>.
           </p>
         )}
         {lapsingDevices(devices).length > 0 && (
@@ -357,7 +357,7 @@ function DevicesCard() {
               <button onClick={() => setInstall(null)} className="p-text-3 hover:p-text">Done</button>
             </div>
             <p className="p-meta p-text-3 mt-1 flex items-center gap-1.5">
-              <WarningIcon size={11} /> Device secrets are written locally by <code className="font-mono">proteus connect</code>; they are not shown in this command.
+              <WarningIcon size={11} /> Device secrets are written locally by <code className="font-mono">kinu connect</code>; they are not shown in this command.
             </p>
           </div>
         )}
@@ -593,7 +593,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
   return (
     <div className="space-y-3">
       <p className="text-xs p-text-2">
-        Use your ChatGPT subscription as Proteus's chat backend.
+        Use your ChatGPT subscription as Kinu's chat backend.
         Authorize a device once. Every agent you create can pick a Codex model afterward.
       </p>
       <button

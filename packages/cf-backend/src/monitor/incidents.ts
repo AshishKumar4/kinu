@@ -24,7 +24,7 @@ import * as v from 'valibot';
 /** The From identity of alert mail. A dot is not legal in a workspace name, so
  *  this address can never be confused for a workspace's mission inbox. */
 const MONITOR_SENDER = 'ops.monitor';
-const MONITOR_DISPLAY_NAME = 'Proteus Monitor';
+const MONITOR_DISPLAY_NAME = 'Kinu Monitor';
 
 const MONITOR_INCIDENTS_DDL = `
 CREATE TABLE IF NOT EXISTS monitor_incidents (
@@ -200,7 +200,7 @@ function recoveredNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
  *  worth reading at 2am. */
 const IMPACT = new Map([
   ['health', 'the API is down, or the worker and its assets are from different deploys.'],
-  ['downloads', 'a new install and every `proteus update` fail on the checksum.'],
+  ['downloads', 'a new install and every `kinu update` fail on the checksum.'],
   ['login', 'nobody can sign in to the web app.'],
 ]);
 

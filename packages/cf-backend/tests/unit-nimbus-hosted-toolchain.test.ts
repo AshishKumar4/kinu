@@ -1,12 +1,12 @@
 /**
  * What the HOSTED Nimbus session's toolchain actually is, and where it stops.
  *
- * Proteus's deployed workspace is `@nimbus-sh/worker`'s session Durable Object,
+ * Kinu's deployed workspace is `@nimbus-sh/worker`'s session Durable Object,
  * reached through `@nimbus-sh/sdk`. Its extra commands are registered by
  * `initSession` — `git` at dist/session/init.js:457, `npm` at :1927, `npx` at
  * :2311, `node` at :698, `bun` at :847 — and none of them needs a runtime
  * catalog. The interpreter runtimes DO: `nimbus install` reads them out of R2
- * through `env.NIMBUS_RUNTIME_CACHE`, and Proteus does not bind that bucket.
+ * through `env.NIMBUS_RUNTIME_CACHE`, and Kinu does not bind that bucket.
  *
  * These tests pin both halves of that, because both are claims the capability
  * declarations make to the model:

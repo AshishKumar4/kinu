@@ -8,12 +8,12 @@
  *      Workspace or Sandbox preview and nothing else.
  *   2. /pc/* — PC agent WebSocket tunnel + install endpoint.
  *   3. /login, /auth/*, /logout, /api/auth/* — OAuth/OIDC app auth.
- *   4. / — public landing page when no Proteus session is present.
- *   5. /install, /install.sh, /downloads/proteus, /api/cli/* — CLI install/auth/API.
+ *   4. / — public landing page when no Kinu session is present.
+ *   5. /install, /install.sh, /downloads/kinu, /api/cli/* — CLI install/auth/API.
  *   6. /api/health — public build-info endpoint (no auth).
  *   6b. /mcp/v1/* — MCP server; CLI-bearer-token or session auth + ownership
  *       enforced inside (external MCP clients can't do browser OAuth).
- *   7. AUTH GATE — every other request needs a Proteus browser session
+ *   7. AUTH GATE — every other request needs a Kinu browser session
  *      (or DEV_USER_EMAIL in local/staging dev).
  *   8. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
  *   9. /api/workspaces/<name>/* — owner check via UserDO.hasWorkspace.
@@ -317,10 +317,10 @@ function isPublishedHost(url: URL, env: Env): boolean {
 /**
  * Redirect cleartext to HTTPS.
  *
- * Nothing upstream does this: the zone carries no "Always Use HTTPS" rule and a
- * Workers custom domain does not add one, so plain-HTTP requests reach the
- * Worker and are answered in the clear. Measured against production on
- * 2026-08-16 — `http://proteus.ashishkumarsingh.com/install.sh` returned 200
+ * Nothing upstream does this: a zone carries no "Always Use HTTPS" rule by
+ * default and a Workers custom domain does not add one, so plain-HTTP requests
+ * reach the Worker and are answered in the clear. Measured against the
+ * then-production origin on 2026-08-16: `http://<host>/install.sh` returned 200
  * and baked an `http://` download origin into the script it hands to `sh`.
  * `url.protocol` is the client-facing scheme at this edge, confirmed by that
  * same probe, so no `CF-Visitor` parsing is involved.
@@ -386,7 +386,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   const appAuthResp = await handleAuthRequest(request, env, ctx);
   if (appAuthResp) return appAuthResp;
 
-  // 4. Public landing page for visitors with no Proteus session.
+  // 4. Public landing page for visitors with no Kinu session.
   const landingResp = await handleLandingRequest(request, env);
   if (landingResp) return landingResp;
 

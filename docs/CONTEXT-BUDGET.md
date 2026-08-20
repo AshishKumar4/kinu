@@ -71,7 +71,7 @@ tightened, so the fact reaches the model where it is actionable and costs
 nothing on the turns that never reach the floor.
 
 This is RLMEnv's "the root sees a bounded slice of REPL output per iteration"
-made deterministic at the seam Proteus already owned, with no new subsystem,
+made deterministic at the seam Kinu already owned, with no new subsystem,
 mode or flag.
 
 ## The counters

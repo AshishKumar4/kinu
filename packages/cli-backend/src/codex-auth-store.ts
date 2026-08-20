@@ -86,7 +86,7 @@ async function refreshUnderLock(
       return latest;
     }
     const refreshToken = latest?.refreshToken ?? original.refreshToken;
-    if (!refreshToken) throw new Error('Codex session expired. Run: proteus setup');
+    if (!refreshToken) throw new Error('Codex session expired. Run: kinu setup');
     const refreshed = await createCodexOAuthClient(fetchFn).refresh(refreshToken);
     const credential: OAuthCredential = {
       kind: 'oauth',

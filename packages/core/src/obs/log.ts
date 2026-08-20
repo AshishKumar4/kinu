@@ -208,7 +208,7 @@ interface LogLine {
  * for an event, `console.error` for a failure, to keep the platform's severity
  * filter working — is gone deliberately. STDOUT IS NOT FREE IN THE CLI PROCESS:
  * `cli/src/acp/agent.ts` carries ACP JSON-RPC on it, `cli-backend/src/executor.ts`
- * carries one `{ok,result}` line, and `proteus exec --json` carries the event
+ * carries one `{ok,result}` line, and `kinu exec --json` carries the event
  * JSONL. A `Logger.event` on stdout is a protocol corruption in all three, and
  * `core` is imported by every one of them, so a split sink makes the safety of a
  * log line depend on which package the call happens to sit in — a rule to
@@ -257,7 +257,7 @@ export function createConsoleLogger(): Logger {
  * source of truth for all CLI visual output", every one of its 479 `console.*`
  * calls carries chalk styling (`OK`, `ERR`, `WARN`, `DIM`, `MUTED`), and
  * `printError` writes styled prose to stderr because a human is reading it. A
- * user running `proteus list` expects a rendered table; emitting
+ * user running `kinu list` expects a rendered table; emitting
  * `{"event":"workspace.listed","fields":{}}` in its place is not better
  * traceability, it is a broken CLI. So the ban this file's rule enforces
  * allowlists `packages/cli/src`, and the three genuine diagnostics that were

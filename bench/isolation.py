@@ -1,4 +1,4 @@
-"""The isolation boundary every benchmark launch of Proteus stands on.
+"""The isolation boundary every benchmark launch of Kinu stands on.
 
 ``packages/cli-backend/src/home.ts`` resolves everything a local run writes —
 config, workspace databases, sessions, shadow-git checkpoints — under
@@ -23,7 +23,7 @@ import os
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-#: Where Proteus keeps real state when nothing overrides it.
+#: Where Kinu keeps real state when nothing overrides it.
 REAL_HOME = os.path.join(os.path.expanduser("~"), ".proteus")
 
 
@@ -36,7 +36,7 @@ def assert_throwaway_home(home: str) -> str:
 
     Refuses the three ways a run reaches the operator's own files: an empty or
     relative path (which is the silent fallback to ``~/.proteus``), a path at or
-    under the real Proteus home, and a path inside this checkout.
+    under the real Kinu home, and a path inside this checkout.
 
     Container paths pass the last two trivially, which is correct rather than
     vacuous — a trial's home is disposable because its container is. What the
@@ -55,7 +55,7 @@ def assert_throwaway_home(home: str) -> str:
     resolved = os.path.normpath(raw)
     if _within(REAL_HOME, resolved):
         raise ValueError(
-            f"PROTEUS_HOME {resolved} is the real Proteus home — a benchmark "
+            f"PROTEUS_HOME {resolved} is the real Kinu home — a benchmark "
             "must use a throwaway home so it can neither read nor write real state."
         )
     if _within(REPO_ROOT, resolved):

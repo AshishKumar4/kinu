@@ -86,11 +86,9 @@ const EnvironmentSchema = v.object({
   ai: v.optional(v.object({ binding: v.string() })),
   worker_loaders: v.optional(v.array(v.object({ binding: v.string() }))),
   r2_buckets: v.optional(v.array(v.object({ binding: v.string(), bucket_name: v.string() }))),
-  d1_databases: v.optional(v.array(v.object({
+  kv_namespaces: v.optional(v.array(v.object({
     binding: v.string(),
-    database_name: v.string(),
-    database_id: v.optional(v.string()),
-    migrations_dir: v.optional(v.string()),
+    id: v.string(),
   }))),
   vectorize: v.optional(v.array(v.object({ binding: v.string(), index_name: v.string() }))),
 });
@@ -105,9 +103,9 @@ type WranglerEnvironment = v.InferOutput<typeof EnvironmentSchema>;
 /* ── The shapes ───────────────────────────────────────────────────────── */
 
 export type ResourceKind =
-  | 'account' | 'd1' | 'd1-migrations' | 'r2' | 'vectorize' | 'ai-gateway'
+  | 'account' | 'kv' | 'r2' | 'vectorize' | 'ai-gateway'
   | 'worker' | 'durable-object' | 'container' | 'custom-domain' | 'zone-route'
-  | 'wildcard-dns' | 'cron' | 'binding' | 'email-routing';
+  | 'wildcard-dns' | 'dns-record' | 'cron' | 'binding' | 'email-routing';
 
 /** How a resource comes into existence. This is the whole of provision's plan
  *  and the whole of teardown's: `wrangler-cli` is what provision creates,
@@ -123,7 +121,7 @@ export interface BindingRef {
 }
 
 export interface Resource {
-  /** Stable and dotted: `d1.proteus-auth`. The id every report keys on. */
+  /** Stable and dotted: `r2.kinu-backups`. The id every report keys on. */
   readonly id: string;
   readonly kind: ResourceKind;
   /** The cloud-side name, as the platform knows it. */
@@ -253,7 +251,7 @@ export const UNCAPTURED: readonly Uncaptured[] = [
     check: 'npx wrangler whoami',
   },
   {
-    what: 'The AI Gateway named `proteus-ai-gateway`. It exists only as a substring of the '
+    what: 'The AI Gateway named `kinu-ai-gateway`. It exists only as a substring of the '
       + '`AI_GATEWAY_URL` var — no binding, no config key, nothing typed.',
     evidence: 'wrangler 4.97 has no `ai-gateway` command (measured against `wrangler --help`), '
       + 'and the wrangler OAuth session carries no `aig` scope, so '
@@ -262,71 +260,93 @@ export const UNCAPTURED: readonly Uncaptured[] = [
     check: 'https://dash.cloudflare.com/?to=/:account/ai/ai-gateway',
   },
   {
-    what: "The Vectorize index's GEOMETRY. `wrangler.jsonc` names `proteus-memory` and stops "
-      + 'there; creating it needs `--dimensions` and `--metric`, and an index created with the '
-      + 'wrong dimension count accepts the binding and rejects every insert.',
+    what: "The Vectorize indexes' GEOMETRY. `wrangler.jsonc` names `kinu-memory` and "
+      + '`kinu-memory-staging` and stops there; creating an index needs `--dimensions` and '
+      + '`--metric`, and one created at the wrong dimension count accepts the binding and '
+      + 'rejects every insert.',
     evidence: 'the dimension is a literal in the embedder construction in '
       + `${EMBEDDER_SOURCE} and the metric appears only in a wrangler.jsonc COMMENT. `
       + '`vectorizeGeometry()` reads the dimension back out of the embedder rather than '
       + 'restating it, so the two cannot drift.',
-    check: 'npx wrangler vectorize info proteus-memory',
+    check: 'npx wrangler vectorize list',
   },
   {
-    what: 'The proxied wildcard DNS record `*.proteus` on the zone. The `pattern + zone_name` '
-      + 'route form matches requests; it does not make the hostname resolve. Without the record '
-      + 'every Workspace and Sandbox preview URL is NXDOMAIN while the route reads as present.',
+    what: 'The proxied DNS records the `pattern + zone_name` routes need. Production takes a '
+      + 'wildcard `*` record for every preview hostname; staging takes a single `staging` '
+      + 'record for its own origin. A route matches a request that arrives — it does not make '
+      + 'the hostname resolve, so without the records every preview URL and the whole staging '
+      + 'deployment are NXDOMAIN while both routes read as present.',
     evidence: 'wrangler has no DNS command at all, and the zone DNS API answers 403 code 10000 '
       + 'under the wrangler OAuth token — so this is invisible to every credential a deploy has. '
-      + 'Verification here resolves a hostname under the suffix instead.',
-    check: 'dig +short probe.proteus.ashishkumarsingh.com',
+      + 'Verification here resolves a hostname against each record instead.',
+    check: 'dig +short probe.kinu.run staging.kinu.run',
   },
   {
-    what: 'The ZONE. `zone_name: "ashishkumarsingh.com"` assumes a zone already on the account, '
-      + 'already active, and already the one the custom domain lands in. Nothing creates it and '
+    what: 'The ZONE. `zone_name: "kinu.run"` assumes a zone already on the account, already '
+      + 'active, and already the one the custom domain lands in. Nothing here creates it and '
       + 'nothing checks it is the right one.',
-    evidence: 'the only zone reference in the manifest is that string; the zone id it resolves '
-      + 'to (6fe16a3a25c46bb975b15e75ea57a0fe) appears nowhere in the repository.',
+    evidence: 'verified against the API on 2026-08-20 — zone 6c181c0cb19bef416fcc7f1fef7f6993, '
+      + 'active since 2026-08-18, on the same account as the Worker '
+      + '(f44999d1ddda7012e9a87729eba250f1), which a custom domain requires rather than merely '
+      + 'prefers, and holding ZERO DNS records, so every record this deployment needs is '
+      + 'created rather than contended. Universal SSL covers `kinu.run` and `*.kinu.run` — the '
+      + 'app host, every preview host and staging — so no Advanced Certificate Manager is '
+      + 'needed. A preview suffix one label deeper would need one.',
     check: 'npx wrangler email routing list',
   },
   {
     what: 'Email Routing onboarding for the Mission Inbox: MX records, a verified destination '
       + 'address, and a rule that delivers mail for `EMAIL_DOMAIN` to this Worker. The '
-      + '`send_email` binding covers OUTBOUND only.',
-    evidence: 'measured 2026-08-18 — Email Routing and Email Sending are both enabled on '
-      + '`ashishkumarsingh.com`, and its catch-all FORWARDS TO A GMAIL ADDRESS. The three custom '
-      + 'rules point at the `personal-website` Worker. NO rule delivers to `proteus`, so inbound '
-      + 'agent mail does not arrive today even though the binding, the var and the `email()` '
-      + 'handler are all present and correct.',
-    check: 'npx wrangler email routing rules list ashishkumarsingh.com',
+      + '`send_email` binding covers OUTBOUND only, and Email Sending is a separate onboarding '
+      + 'step on the same zone.',
+    evidence: 'measured 2026-08-20 — `kinu.run` carries this product and nothing else, and held '
+      + 'no DNS records at all, so there are no MX records, no destination address and no '
+      + 'rules: inbound agent mail does not arrive today even though the binding, the var and '
+      + 'the `email()` handler are all present and correct. Nothing else on the zone competes '
+      + 'for its mail, so the catch-all is free to deliver everything to this Worker.',
+    check: 'npx wrangler email routing rules list kinu.run',
   },
   {
     what: 'The OAuth applications at Google, GitHub and Cloudflare — client ids, client secrets '
-      + 'and the exact redirect URLs. Created on three other websites, outside Cloudflare '
-      + 'entirely.',
+      + 'and the exact redirect URLs, which name `https://kinu.run`. Created on three other '
+      + 'websites, outside Cloudflare entirely.',
     evidence: 'docs/DEPLOYMENT.md § OAuth Setup lists the redirect URLs and the Cloudflare '
-      + 'scope set; `wrangler secret list` on production shows CLOUDFLARE_OAUTH_CLIENT_SECRET '
-      + 'present and the Google and GitHub secrets ABSENT, so those two providers are invisible '
-      + 'on /login right now.',
+      + 'scope set. Secrets are per-Worker and this Worker name has never been deployed, so it '
+      + 'carries none: /login offers no provider at all until the Cloudflare client secret is '
+      + 'installed.',
     check: 'npx wrangler secret list --format json',
   },
   {
     what: 'The sandbox container image being pullable, and equal to the `@cloudflare/sandbox` '
       + 'version in packages/cf-backend/package.json. The SDK asks the container for its own '
       + 'SANDBOX_VERSION on every start.',
-    evidence: 'measured 2026-08-18 — `proteus-proteussandbox` runs '
-      + '`docker.io/cloudflare/sandbox:0.12.7` and matches, while '
-      + '`proteus-staging-proteussandbox-staging` still runs 0.11.0 against a staging manifest '
-      + 'that declares 0.12.7. The container image is only reconciled by a deploy of THAT '
-      + 'environment.',
+    evidence: 'a container application is named after its Worker and class — '
+      + '`kinu-proteussandbox` and `kinu-staging-proteussandbox-staging` — and neither exists '
+      + 'until that environment is deployed. The image is reconciled only by a deploy OF THAT '
+      + 'ENVIRONMENT, so a version bump lands in one environment and not the other until both '
+      + 'are deployed, and Sandbox.checkVersionCompatibility logs the mismatch at container '
+      + 'start rather than failing the deploy.',
     check: 'npx wrangler containers list --json',
   },
   {
-    what: 'An R2 lifecycle rule on the `backups/` prefix. The wrangler.jsonc comment asks for '
-      + 'one; the Sandbox SDK enforces snapshot TTL at restore time only and never deletes '
-      + 'anything, so without the rule the bucket grows without bound.',
+    what: 'An R2 lifecycle rule on the `backups/` prefix of each backup bucket. The '
+      + 'wrangler.jsonc comment asks for one; the Sandbox SDK enforces snapshot TTL at restore '
+      + 'time only and never deletes anything, so without the rule a bucket grows without bound.',
     evidence: 'lifecycle rules are not expressible in wrangler.jsonc — they are a per-bucket '
       + 'setting reached through `wrangler r2 bucket lifecycle`.',
-    check: 'npx wrangler r2 bucket lifecycle list proteus-backups',
+    check: 'npx wrangler r2 bucket lifecycle list kinu-backups',
+  },
+  {
+    what: 'The KV namespace TITLES. `wrangler.jsonc` binds AUTH_KV by namespace id, and the '
+      + '`kv_namespaces` block has no title field at all — so `kinu-auth` and '
+      + '`kinu-auth-staging`, the names an operator reads and types, exist only in the account '
+      + 'and in the command that created them.',
+    evidence: 'a `kv_namespaces` entry carries `binding`, `id`, `preview_id` and `remote` and '
+      + 'nothing else (wrangler/config-schema.json), while `wrangler kv namespace list` returns '
+      + 'id and title together — which is how verification reports a title for a namespace the '
+      + 'manifest can only name by id. Titles are also not unique per account, so a title is '
+      + 'not a thing anything may key on.',
+    check: 'npx wrangler kv namespace list',
   },
 ];
 
@@ -339,14 +359,14 @@ export const UNCAPTURED: readonly Uncaptured[] = [
  * is not in a list is indistinguishable from a pass.
  */
 export const UNOBSERVABLE = new Map<string, string>([
-  ['cron.proteus */15 * * * *',
+  ['cron.kinu */15 * * * *',
     'wrangler 4.97 can WRITE a Worker\'s triggers (`wrangler triggers deploy`) and has no command '
     + 'that reads them back; `deployments status` and `versions view` carry bindings and no '
     + 'schedule. `wrangler deploy` sets it from `triggers.crons` on every deploy, so it is '
     + 'reconciled rather than drifting — but nothing here can say so. Check it in the dashboard '
     + 'under the Worker\'s Settings → Triggers, or by watching for a MonitorDO probe within 15 '
     + 'minutes of a deploy.'],
-  ['ai-gateway.proteus-ai-gateway',
+  ['ai-gateway.kinu-ai-gateway',
     'wrangler 4.97 exposes no `ai-gateway` command and the wrangler OAuth session has no `aig` '
     + 'scope (403 code 10000 against the REST API, measured 2026-08-18). Check it in the '
     + 'dashboard: https://dash.cloudflare.com/?to=/:account/ai/ai-gateway'],
@@ -484,7 +504,7 @@ export const SUPPLY = new Map<string, Supply>([
   ['BACKUP_BUCKET_NAME', {
     handling: 'config-var',
     required: false,
-    absent: 'see R2_ACCESS_KEY_ID. A plain var (`proteus-backups`), not a secret.',
+    absent: 'see R2_ACCESS_KEY_ID. A plain var (`kinu-backups`), not a secret.',
   }],
   ['CLOUDFLARE_R2_ACCOUNT_ID', {
     handling: 'config-var',
@@ -545,7 +565,7 @@ interface Draft {
 
 function environmentRow(key: string, topName: string, config: WranglerEnvironment): InfraEnvironment {
   const bindings = [
-    ...(config.d1_databases ?? []).map((d) => d.binding),
+    ...(config.kv_namespaces ?? []).map((k) => k.binding),
     ...(config.r2_buckets ?? []).map((r) => r.binding),
     ...(config.vectorize ?? []).map((x) => x.binding),
     ...(config.durable_objects?.bindings ?? []).map((d) => d.name),
@@ -575,28 +595,24 @@ function draftsFor(
   const worker = environment.workerName;
   const drafts: Draft[] = [];
 
-  for (const database of config.d1_databases ?? []) {
+  for (const namespace of config.kv_namespaces ?? []) {
     drafts.push({
-      kind: 'd1',
-      name: database.database_name,
-      origin: 'wrangler-cli',
-      binding: database.binding,
-      purpose: 'browser OAuth identities, sessions, one-time OAuth state and CLI approval state',
-      holds: 'every signed-in identity and every live session. Deleting it signs out every user '
-        + 'and orphans every UserDO keyed by the ids it assigned.',
-      create: ['d1', 'create', database.database_name],
-      destroy: ['d1', 'delete', database.database_name, '-y'],
+      kind: 'kv',
+      // The id, not the binding: both environments bind AUTH_KV, and calling
+      // them one resource is how a staging teardown deletes production's.
+      name: namespace.id,
+      origin: 'manual',
+      binding: namespace.binding,
+      purpose: 'browser sessions, one-time OAuth state and CLI approval state — all of it '
+        + 'expiring, none of it a source of truth',
+      holds: 'every live session and every CLI approval in flight. Deleting it signs everyone '
+        + 'out; it orphans nothing, because identities live in their own UserDO.',
+      manual: 'run `wrangler kv namespace create <title>` and paste the id it prints into '
+        + 'wrangler.jsonc. Not automated here: KV titles are not unique, so a second run makes '
+        + 'a second namespace instead of finding the first. The titles this deployment uses are '
+        + 'in UNCAPTURED — the config cannot carry them.',
+      destroy: ['kv', 'namespace', 'delete', '--namespace-id', namespace.id, '-y'],
     });
-    if (database.migrations_dir !== undefined) {
-      drafts.push({
-        kind: 'd1-migrations',
-        name: database.database_name,
-        origin: 'wrangler-cli',
-        purpose: `the schema in ${database.migrations_dir}, applied to ${database.database_name}`,
-        required: true,
-        create: ['d1', 'migrations', 'apply', database.database_name, '--remote'],
-      });
-    }
   }
 
   for (const bucket of config.r2_buckets ?? []) {
@@ -680,24 +696,43 @@ function draftsFor(
       });
       continue;
     }
+    const host = route.pattern.replace(/^\*\./u, '').replace(/\/.*$/u, '');
+    const wildcard = route.pattern.startsWith('*.');
     drafts.push({
       kind: 'zone-route',
       name: route.pattern,
       origin: 'wrangler-deploy',
       required: true,
-      purpose: 'preview capability hostnames — one per exposed Workspace or Sandbox port',
+      purpose: wildcard
+        ? 'preview capability hostnames — one per exposed Workspace or Sandbox port'
+        : `the ${host} origin, taken as a route rather than a custom domain so that an exact `
+          + 'hostname outranks the wildcard route covering it',
     });
     // The route matches; it does not resolve. The record it needs is the single
     // most invisible prerequisite production has.
-    const host = route.pattern.replace(/^\*\./u, '').replace(/\/.*$/u, '');
+    if (wildcard) {
+      drafts.push({
+        kind: 'wildcard-dns',
+        name: `*.${host}`,
+        origin: 'manual',
+        required: true,
+        purpose: `the proxied wildcard record the ${route.pattern} route needs to resolve`,
+        manual: `create a proxied wildcard DNS record for *.${host} on the zone. wrangler has no `
+          + 'DNS command and cannot read the zone either — see UNCAPTURED.',
+      });
+      continue;
+    }
     drafts.push({
-      kind: 'wildcard-dns',
-      name: `*.${host}`,
+      kind: 'dns-record',
+      name: host,
       origin: 'manual',
       required: true,
-      purpose: `the proxied wildcard record the ${route.pattern} route needs to resolve`,
-      manual: `create a proxied wildcard DNS record for *.${host} on the zone. wrangler has no `
-        + 'DNS command and cannot read the zone either — see UNCAPTURED.',
+      purpose: `the proxied record the ${route.pattern} route needs to resolve`,
+      manual: `create a proxied DNS record for ${host} on the zone — any target, orange cloud `
+        + 'on, because the route is what answers. `custom_domain: true` would create it and is '
+        + 'deliberately not used: it would put this claim and the wildcard route on two '
+        + 'mechanisms whose relative precedence Cloudflare documents only for identical '
+        + 'hostnames. wrangler has no DNS command — see UNCAPTURED.',
     });
   }
 
@@ -772,11 +807,11 @@ function draftsFor(
 /**
  * The whole inventory, merged across environments.
  *
- * Merging is the point of this function rather than a detail of it: two
- * environments share `proteus-backups` and `nimbus-runtime-cache`, so a teardown
- * that treated resources as per-environment would delete production's bucket out
- * from under staging. `boundBy` records every holder, and `exclusiveTo` is what
- * teardown is allowed to act on.
+ * Merging is the point of this function rather than a detail of it: both
+ * environments bind `nimbus-runtime-cache`, so a teardown that treated resources
+ * as per-environment would delete staging's runtime store along with production.
+ * `boundBy` records every holder, and `exclusiveTo` is what teardown is allowed
+ * to act on.
  */
 export function deriveInfrastructure(
   configPath = WRANGLER_CONFIG,

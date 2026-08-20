@@ -65,7 +65,7 @@ export interface CLIRuntimeConfig {
   /**
    * Where the HOST plane is rooted — the `laptop` executor and the checkpointed
    * host shell behind it, i.e. the developer's own filesystem. Defaults to
-   * `process.cwd()`, where `proteus` was invoked.
+   * `process.cwd()`, where `kinu` was invoked.
    *
    * `null` withholds the plane entirely, and that is the only isolation there
    * is: `laptop.writeFile` resolves an ABSOLUTE path straight through and

@@ -103,7 +103,7 @@ const EXEC_REASON_BY_EXIT = new Map([
  *
  * Its own bucket, and not part of `broke`, because it is neither a tool defect
  * nor anything the model did wrong: Nimbus supports installable runtimes
- * (`preinstall`/`install`/`ensure`) and Proteus never asks for one, so `bun`,
+ * (`preinstall`/`install`/`ensure`) and Kinu never asks for one, so `bun`,
  * `npm`, `git`, `python3`, `sh`, `bash`, `make`, `tsc` and `jq` all exit 127 in
  * every workspace the agent has ever had. Measured through the agent's own
  * `run` tool over 19 commands: only `node` (v20.0.0, /usr/local/bin/node) and
@@ -150,7 +150,7 @@ export interface ToolFailure {
    * workspace does not have (exit 127, {@link RUNTIME_ABSENT_REASON}), or a
    * runtime that was never provisioned (`unavailable`).
    *
-   * A PLATFORM gap in both spellings — Proteus never asks Nimbus to install a
+   * A PLATFORM gap in both spellings — Kinu never asks Nimbus to install a
    * runtime, and it never pre-provisions a sandbox — so it is neither a tool
    * defect nor the work failing, which is why it is its own part of the census
    * and reads as "runtime absent" in the eval report.

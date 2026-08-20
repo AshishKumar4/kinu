@@ -14,14 +14,14 @@ describe('guideFailure', () => {
 
   test('points a credential rejection at provider connect', () => {
     expect(guideFailure(new Error('401 Unauthorized: invalid_api_key')).hint)
-      .toContain('proteus provider connect');
+      .toContain('kinu provider connect');
   });
 
   test('points a billing failure at the account, not at the credential', () => {
     const guided = guideFailure('Your account is not active. (billing_not_active)');
 
     expect(guided.hint).toContain('billing or quota');
-    expect(guided.hint).toContain('proteus provider');
+    expect(guided.hint).toContain('kinu provider');
   });
 
   test('points an unknown model at the model picker', () => {
@@ -37,7 +37,7 @@ describe('guideFailure', () => {
   });
 
   test('leaves an error that already names its own commands alone', () => {
-    const own = 'No LLM configured.\n  Run proteus auth to use your Cloudflare AI, run proteus setup …';
+    const own = 'No LLM configured.\n  Run kinu auth to use your Cloudflare AI, run kinu setup …';
 
     expect(guideFailure(new Error(own)).hint).toBeUndefined();
   });

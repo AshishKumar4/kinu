@@ -134,7 +134,7 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
 }
 
 /**
- * The Nimbus shell as a Proteus `Shell`.
+ * The Nimbus shell as a Kinu `Shell`.
  *
  * No `cwd` is passed per command on purpose: the shell owns its own working
  * directory, so `cd` persists across calls the way it does in a terminal.

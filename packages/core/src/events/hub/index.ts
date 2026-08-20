@@ -1,5 +1,5 @@
 /**
- * Proteus EventsHub — barrel export.
+ * Kinu EventsHub — barrel export.
  *
  * Public surface for the @kinu/core consumer (cf-backend or future
  * adapters). The hub is composed of two layers:

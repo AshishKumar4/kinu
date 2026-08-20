@@ -6,7 +6,7 @@
 // "barely succeeds" sweet spot (success rate ~0.3–0.7) — too-easy doesn't
 // teach, too-hard doesn't either.
 //
-// In Proteus: read the CraftStore + recent turn outcomes, ask an LLM to
+// In Kinu: read the CraftStore + recent turn outcomes, ask an LLM to
 // propose 3–5 next tasks, filter by predicted-learnability, persist as
 // `proposed_tasks`. The user (or an autonomous loop) picks one and runs it.
 

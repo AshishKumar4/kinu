@@ -1,5 +1,5 @@
 /**
- * Proteus agent hooks — useAgent() + useAgentChat() from Agents SDK.
+ * Kinu agent hooks — useAgent() + useAgentChat() from Agents SDK.
  */
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
@@ -111,7 +111,7 @@ export interface WorkspaceSnapshot {
    *  its own tree, so first paint draws every tree rather than only the newest.
    *  One row per fork, so nothing here can be re-associated wrongly. */
   exploration: Page<ExplorationCanvasRun>;
-  /** Still returned by the server for `proteus inspect`; no UI reads it. */
+  /** Still returned by the server for `kinu inspect`; no UI reads it. */
   timeline: TimelineSpan[];
   executors: ExecutorInfo[];
   executorOutputs: Array<{ name: string; outputs: ExecutorOutput[] }>;
@@ -507,7 +507,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // Background jobs (auto-detached >30s tool calls) — single source for the
   // Work surface's Now half and its journal.
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
-  // Dashboards Proteus published for this workspace — the agent-authored tabs
+  // Dashboards Kinu published for this workspace — the agent-authored tabs
   // at the right of the work-surface strip. Refreshed with the rest of the
   // live data, because publishing one is a mid-turn `workspace.createView`.
   const [agentViews, setAgentViews] = useState<AgentViewSummary[]>([]);

@@ -5,7 +5,7 @@
  * These exist because of a real outage: a deploy that skipped `scripts/deploy.sh`
  * shipped a `dist/client` with no `downloads/`, and the SPA fallback answered
  * every missing asset with `200 index.html`. `curl install.sh | bash` and
- * `proteus update` died on a checksum mismatch for days, and the way we found
+ * `kinu update` died on a checksum mismatch for days, and the way we found
  * out was by running the install ourselves. Each probe below is one thing a
  * user does that was broken then and would be broken again:
  *
@@ -57,9 +57,9 @@ export interface ProbeDeps {
 
 const TIMEOUT_MS = 10_000;
 
-const SOURCE_ARCHIVE = '/downloads/proteus-source.tar.gz';
-const SOURCE_CHECKSUM = '/downloads/proteus-source.tar.gz.sha256';
-const VERSION_MANIFEST = '/downloads/proteus-version.json';
+const SOURCE_ARCHIVE = '/downloads/kinu-source.tar.gz';
+const SOURCE_CHECKSUM = '/downloads/kinu-source.tar.gz.sha256';
+const VERSION_MANIFEST = '/downloads/kinu-version.json';
 
 export async function runSyntheticProbes(deps: ProbeDeps): Promise<ProbeOutcome[]> {
   return [
@@ -183,7 +183,7 @@ async function probeLogin(deps: ProbeDeps): Promise<ProbeOutcome> {
   }
   if (response.status !== 200) return fail(`GET /login returned HTTP ${response.status}`);
   const body = await response.text();
-  if (!body.includes('Sign in to Proteus')) {
+  if (!body.includes('Sign in to Kinu')) {
     return fail('GET /login did not render the sign-in page');
   }
   if (!body.includes('href="/auth/')) {

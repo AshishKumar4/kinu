@@ -53,7 +53,7 @@
  *    clone over quota surfaces, where a retry cannot help because the quota does
  *    not free itself, and that entry states a generic internal-storage reset must
  *    not be filed as merely unavailable storage. `do.reset.transient` does not
- *    list it. Proteus has no clone path today (zero `ctx.facets.clone(` call
+ *    list it. Kinu has no clone path today (zero `ctx.facets.clone(` call
  *    sites outside the catalog), so the string is unreachable here either way —
  *    but the divergence from the SDK is deliberate, not an oversight.
  *

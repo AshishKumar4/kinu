@@ -3,7 +3,7 @@
  *
  * Self-Harness's loop is mine-weaknesses → propose-minimal-edit → validate;
  * GSME keys its quality-diversity archive on (WHERE × WHY) pathology cells.
- * Proteus already mines (`turn_outcomes`) and validates (shadow + gates), but
+ * Kinu already mines (`turn_outcomes`) and validates (shadow + gates), but
  * the middle was untyped: proposals were free-form prose, so nothing could
  * say which failure a version was FOR, and nothing could notice the archive
  * piling into one failure mode while others went unexplored.

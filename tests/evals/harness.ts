@@ -8,7 +8,7 @@
  * CLOSES, from `closeTurnRun` (core/src/orchestrator/turn-lifecycle.ts:64-116).
  * A bare `generateText` call never closes a turn, so a harness built on one
  * would report a zero denominator for all eight scorers and read as a pass. This
- * is the same spine `proteus exec` uses, with no subprocess and no stdout
+ * is the same spine `kinu exec` uses, with no subprocess and no stdout
  * parsing.
  *
  * WHY IT SEEDS THE VFS AND NOT THE DISK. The workspace filesystem is durable
@@ -431,7 +431,7 @@ export function requireVerifierShell(taskId: string, rt: AgentRuntime): Shell {
  *
  * WHY IT OPENS THE WORKSPACE INSTEAD OF RUNNING THE ONE `createWorkspace`
  * RETURNS. `createWorkspace` is the BIRTH path — production calls it once, from
- * `proteus agent create` (cli/src/agent-create.ts:187), and the runtime it hands
+ * `kinu agent create` (cli/src/agent-create.ts:187), and the runtime it hands
  * back is what `cli-backend/src/open.ts:49-50` calls "degraded inline
  * VFS/Memory/Executor". Every surface that actually RUNS a turn — the chat
  * client, the daemon, `evolve` — goes through `openWorkspaceCLI`, which builds

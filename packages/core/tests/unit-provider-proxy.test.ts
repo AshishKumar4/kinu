@@ -1,6 +1,6 @@
 // Behavior tests for the general provider proxy's client half — the wire
 // contract that lets a machine holding no secret drive a provider whose key
-// lives in the owner's Proteus account.
+// lives in the owner's Kinu account.
 //
 // Contract under test:
 //   - a proxied AuthResolution carries a marker, never secret material

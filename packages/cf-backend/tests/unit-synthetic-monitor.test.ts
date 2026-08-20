@@ -39,15 +39,15 @@ function site(broken: Partial<Record<string, () => Response>> = {}): ProbeDeps['
     switch (path) {
       case '/api/health':
         return Response.json({ ok: true, sha: SHA, version: '0.1.0' });
-      case '/downloads/proteus-version.json':
+      case '/downloads/kinu-version.json':
         return Response.json({ version: '0.1.0', sha: SHA, builtAt: '2026-08-07T00:00:00Z' });
-      case '/downloads/proteus-source.tar.gz':
+      case '/downloads/kinu-source.tar.gz':
         return new Response(TARBALL);
-      case '/downloads/proteus-source.tar.gz.sha256':
-        return new Response(`${await tarballSha()}  proteus-source.tar.gz\n`);
+      case '/downloads/kinu-source.tar.gz.sha256':
+        return new Response(`${await tarballSha()}  kinu-source.tar.gz\n`);
       case '/login':
         return new Response(
-          '<html><title>Sign in to Proteus</title><a class="provider" href="/auth/github/start">Continue</a></html>',
+          '<html><title>Sign in to Kinu</title><a class="provider" href="/auth/github/start">Continue</a></html>',
           { headers: { 'content-type': 'text/html' } },
         );
       default:
@@ -78,14 +78,14 @@ describe('synthetic probes', () => {
   });
 
   test('the SPA shell impersonating a checksum is caught', async () => {
-    const outcomes = await probe({ '/downloads/proteus-source.tar.gz.sha256': spaFallback });
+    const outcomes = await probe({ '/downloads/kinu-source.tar.gz.sha256': spaFallback });
     expect(outcome(outcomes, 'downloads').ok).toBe(false);
     expect(outcome(outcomes, 'downloads').detail).toContain('not a sha256 line');
   });
 
   test('a tarball that does not match its checksum is caught', async () => {
     const outcomes = await probe({
-      '/downloads/proteus-source.tar.gz': () => new Response(new TextEncoder().encode('a different build')),
+      '/downloads/kinu-source.tar.gz': () => new Response(new TextEncoder().encode('a different build')),
     });
     expect(outcome(outcomes, 'downloads').ok).toBe(false);
     expect(outcome(outcomes, 'downloads').detail).toContain('install and update are both refusing');
@@ -113,7 +113,7 @@ describe('synthetic probes', () => {
 
   test('a sign-in page with no provider is caught', async () => {
     const outcomes = await probe({
-      '/login': () => new Response('<html><title>Sign in to Proteus</title><p>No OAuth providers</p></html>'),
+      '/login': () => new Response('<html><title>Sign in to Kinu</title><p>No OAuth providers</p></html>'),
     });
     expect(outcome(outcomes, 'login').ok).toBe(false);
     expect(outcome(outcomes, 'login').detail).toContain('nobody can sign in');
@@ -182,7 +182,7 @@ describe('alert fatigue', () => {
     expect(l.sent[0]!.subject).toContain('downloads is failing');
     expect(l.sent[0]!.text).toContain('checksum mismatch');
     // The alert says what a user hits, and what to do about it.
-    expect(l.sent[0]!.text).toContain('proteus update');
+    expect(l.sent[0]!.text).toContain('kinu update');
     expect(l.sent[0]!.text).toContain('scripts/deploy.sh');
 
     // Nine more ticks over the next two hours: still broken, still one email.

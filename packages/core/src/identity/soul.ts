@@ -10,7 +10,7 @@
  * Its MISSION, separately, is a column on `workspace_identity`. That is not a
  * second copy of the document — it is the one line a listing needs, maintained
  * by {@link writeSoul} and by nothing else. The alternative was to boot a whole
- * filesystem to render `proteus list`, which both costs a filesystem per
+ * filesystem to render `kinu list`, which both costs a filesystem per
  * workspace listed and MUTATES each one on the way past (the process-generation
  * counter advances on every open). A listing must not do either.
  */
@@ -22,7 +22,7 @@ import type { SqlExecutor, VFS } from '../types/primitives';
 export const SOUL_PATH = 'SOUL.md';
 
 /** Missions the renderer writes when a workspace was created without one.
- *  They describe Proteus itself, so nothing workspace-specific — a title, a
+ *  They describe Kinu itself, so nothing workspace-specific — a title, a
  *  summary — can be derived from them. */
 const PLACEHOLDER_MISSIONS = [
   'Help the user by reading real context, using available tools, coordinating parallel heads for breadth and hiring subordinates for multi-part or long-running work, saving durable facts and memory, and improving reusable capabilities over time.',
@@ -30,9 +30,9 @@ const PLACEHOLDER_MISSIONS = [
 ] as const;
 
 export const DEFAULT_SOUL_MD = [
-  '# Proteus',
+  '# Kinu',
   '',
-  'Proteus is a self-evolving agent runtime.',
+  'Kinu is a self-evolving agent runtime.',
   '',
   '## Mission',
   '',
@@ -86,7 +86,7 @@ export function workspaceGenesisSignal(mission: string | null | undefined): Agen
 }
 
 function normalizeName(name: string): string {
-  return name.trim().replace(/\s+/g, ' ') || 'Proteus';
+  return name.trim().replace(/\s+/g, ' ') || 'Kinu';
 }
 
 function normalizeMission(mission?: string): string {
@@ -133,7 +133,7 @@ export function summarizeSoul(markdown: string | null | undefined, maxLength = 2
  * The soul document, or null when the workspace has none.
  *
  * Reads the file, so it needs a filesystem — which every caller inside a turn
- * has. A read-only inspection (`proteus list`, `proteus status`) deliberately
+ * has. A read-only inspection (`kinu list`, `kinu status`) deliberately
  * does not call this: it reads {@link readMission} instead.
  *
  * "No soul" is asked, not caught: a workspace whose SOUL.md is unreadable for

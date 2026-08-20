@@ -231,11 +231,11 @@ export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKe
   }
   if (status === 'pending') return { status: 'pending' };
   if (status === 'consumed') {
-    return { status: 'expired', message: 'CLI auth token was already delivered. Run proteus auth again if it was not saved.' };
+    return { status: 'expired', message: 'CLI auth token was already delivered. Run kinu auth again if it was not saved.' };
   }
   if (!row.user_id || !row.user_email) {
     await session.prepare(`UPDATE cli_auth_requests SET status = 'expired', token_exp = NULL WHERE device_hash = ?`).bind(hash).run();
-    return { status: 'expired', message: 'CLI auth approval is incomplete. Run proteus auth again.' };
+    return { status: 'expired', message: 'CLI auth approval is incomplete. Run kinu auth again.' };
   }
 
   const consumed = await session.prepare(
@@ -245,7 +245,7 @@ export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKe
       RETURNING origin, device_name, user_id, user_email`,
   ).bind(hash).first<{ origin: string; device_name: string; user_id: string; user_email: string }>();
   if (!consumed) {
-    return { status: 'expired', message: 'CLI auth token was already delivered. Run proteus auth again if it was not saved.' };
+    return { status: 'expired', message: 'CLI auth token was already delivered. Run kinu auth again if it was not saved.' };
   }
 
   // SAFETY: Env.UserDO is generated from the UserDO binding, whose stubs implement UserDO RPC methods.
@@ -299,7 +299,7 @@ export async function approveCliAuth(
   }
   if (status !== 'pending') {
     await session.prepare(`UPDATE cli_auth_requests SET status = 'expired', token_exp = NULL WHERE user_code = ?`).bind(code).run();
-    throw new CliAuthCodeError('CLI auth code expired. Run proteus auth again.');
+    throw new CliAuthCodeError('CLI auth code expired. Run kinu auth again.');
   }
 
   // SAFETY: Env.UserDO is generated from the UserDO binding, whose stubs implement UserDO RPC methods.

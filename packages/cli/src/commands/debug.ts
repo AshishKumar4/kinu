@@ -1,5 +1,5 @@
 /**
- * `proteus debug <name>` — the debugging control plane.
+ * `kinu debug <name>` — the debugging control plane.
  *
  * The gap this closes: every datum a real investigation needs already has a
  * read model (getWorkspaceSnapshot, getRunTimeline, the run_events ledger,
@@ -14,7 +14,7 @@
  * carries `root_id`) for the RPCs this command needed and that did not
  * already exist.
  *
- * `proteus export` already gives a complete, portable, byte-for-byte dump of
+ * `kinu export` already gives a complete, portable, byte-for-byte dump of
  * a workspace (every table, schema + rows) — the right tool for backup and
  * restore. This is deliberately NOT another one: it does not touch the raw
  * archive at all, and instead calls the assembled READ MODELS the rest of
@@ -386,14 +386,14 @@ function parseLocal<T>(schema: v.GenericSchema<T>, input: { value: unknown }): T
 
 // ── Redaction ────────────────────────────────────────────────────
 
-/** Proteus's own bearer-token shapes (pta_ access, ptc_ session, pdt_
+/** Kinu's own bearer-token shapes (pta_ access, ptc_ session, pdt_
  *  device — cli/access-token-store.ts, auth-store.ts, user-do.ts) plus the
  *  common provider-key and generic key=secret shapes. One function, applied
  *  to every string leaf written into the bundle — not a per-table allowlist,
  *  because a secret can land in free text (a tool result, a pasted token in
  *  chat) that no schema marks as sensitive. */
 const SECRET_PATTERNS: RegExp[] = [
-  /\bpt[a-z]_[A-Za-z0-9_-]{16,}\b/g, // Proteus session/access/device tokens
+  /\bpt[a-z]_[A-Za-z0-9_-]{16,}\b/g, // Kinu session/access/device tokens
   /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, // Anthropic
   /\bsk-[A-Za-z0-9]{20,}\b/g, // OpenAI-shaped
   /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
@@ -437,7 +437,7 @@ interface BundleWriter {
 }
 
 /** Appends NDJSON to `path`, one record at a time — never holds the bundle
- *  in memory, matching the append-per-page pattern `proteus export` uses.
+ *  in memory, matching the append-per-page pattern `kinu export` uses.
  *  Owner-only permissions: the bundle carries chat transcripts, tool-call
  *  results and memory content, redacted for known secret shapes but not
  *  guaranteed secret-free (see redactSecrets) — it should not default to

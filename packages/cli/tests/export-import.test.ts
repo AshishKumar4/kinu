@@ -1,8 +1,8 @@
 /**
- * `proteus export` / `proteus import` end to end, as a user runs them.
+ * `kinu export` / `kinu import` end to end, as a user runs them.
  *
  * The load-bearing claim is one format: a CLOUD workspace exported over the
- * paged RPC restores through the SAME `proteus import` a local export does,
+ * paged RPC restores through the SAME `kinu import` a local export does,
  * with its content intact. Both directions run the real CLI binary against a
  * throwaway PROTEUS_HOME — the cloud side against a stub origin that answers
  * the export RPC out of a real SQLite workspace.
@@ -77,7 +77,7 @@ function restoredDb(home: string, name: string): Database {
   return new Database(join(home, name, 'agent.db'), { readonly: true });
 }
 
-describe('proteus export / import', () => {
+describe('kinu export / import', () => {
   test('a local workspace round-trips through an archive', async () => {
     const home = scratch('proteus-export-local-');
     const out = scratch('proteus-export-out-');

@@ -92,7 +92,7 @@ describe('D1-backed browser auth store', () => {
     expect(verified.identity?.userId).toBe(created.identity.userId);
   });
 
-  test('verified email link reuses the same Proteus user across providers', async () => {
+  test('verified email link reuses the same Kinu user across providers', async () => {
     const { db, env } = setupEnv();
     const first = await createSession(env, profile('cloudflare', 'cf-user-1', 'person@example.com'));
     const second = await createSession(env, profile('google', 'google-user-1', 'PERSON@example.com'));

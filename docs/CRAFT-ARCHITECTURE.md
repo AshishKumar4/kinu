@@ -1,4 +1,4 @@
-# Proteus Crafted-Tool Architecture — Prior-Art Comparison
+# Kinu Crafted-Tool Architecture — Prior-Art Comparison
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
@@ -7,7 +7,7 @@
 Three user-visible failures motivated this analysis. All three are described as
 they stood at commit `2641c96`, the commit immediately before Phase A.
 
-1. **Same-turn invisibility loop.** The LLM called `workspace.createTool("double", ..., "(n) => n*2")`, which reported `ok: true`, then immediately called `codemode.double(7)` and got an empty result (or a `Tool "double" not found` error). The frozen provider snapshot inside `@cloudflare/codemode`'s `createCodeTool` was the root cause; Proteus worked around it with a bespoke `LiveCraftedExecutor` in `packages/cf-backend/src/crafted-tool-registry.ts` that reimplemented the sandbox module from scratch.
+1. **Same-turn invisibility loop.** The LLM called `workspace.createTool("double", ..., "(n) => n*2")`, which reported `ok: true`, then immediately called `codemode.double(7)` and got an empty result (or a `Tool "double" not found` error). The frozen provider snapshot inside `@cloudflare/codemode`'s `createCodeTool` was the root cause; Kinu worked around it with a bespoke `LiveCraftedExecutor` in `packages/cf-backend/src/crafted-tool-registry.ts` that reimplemented the sandbox module from scratch.
 2. **Opaque errors.** Crafted-tool failures reached the LLM as bare `.message` strings, from `crafted-tool-registry.ts` and from the CF-side `craft-executor.ts` that commit still carried. No stack, no tool name, no structured payload.
 3. **No workspace/codemode cross-scope from inside a crafted tool.** Each crafted tool ran as its own child Worker with `const fn = (${code})` and no ambient `workspace` / `codemode` bindings, so a crafted tool could not call `workspace.readFile`, could not call another crafted tool, and had no standard globals beyond what workerd injects.
 
@@ -23,7 +23,7 @@ the tree is the CLI's.
 A production reference implementation solves (1)–(3) almost for free by adopting
 a *preamble-injection* pattern on top of upstream codemode's
 `DynamicWorkerExecutor`. Sections 1–4 describe that reference design; §5
-describes Proteus's pre-refactor state; §6–§9 cover the delta, the phased
+describes Kinu's pre-refactor state; §6–§9 cover the delta, the phased
 upgrade and what remains open.
 
 ## 1. Reference Execution Harness
@@ -49,7 +49,7 @@ The reference implementation defers the sandbox Worker module to upstream `@clou
 
 ## 3. Reference Tool Registry
 
-The reference treats the SQL `CraftStore` as the single source of truth, with no in-memory mirror. Proteus adopted the pattern and both of its backends now follow it.
+The reference treats the SQL `CraftStore` as the single source of truth, with no in-memory mirror. Kinu adopted the pattern and both of its backends now follow it.
 
 - **No in-memory mutation cache.** `craft_tool` → `store.create()` → SQL `INSERT`.
 - **Same-turn visibility via re-read, not via mutation.** The executor calls `craftStore.list()` fresh on every `execute()`. There is no registry and no subscription, just a query per call. On CF that read is `selectInjectableCraftedTools`, which also applies `filterByEffectiveScore`. That is the same EMA cutoff core's tool builder applies, so the advertised set and the callable set cannot disagree.
@@ -85,16 +85,16 @@ const injected = code.replace(
 
 Normalization of stored code is a single `.trim()`. No semicolon stripping, no declaration→expression rewriting, no parenthesization. The stored form is already a legal expression because the `craft_tool` signature gate enforces it.
 
-**Proteus's shipped version diverges from both snippets above, and the divergence is the point of each change.**
+**Kinu's shipped version diverges from both snippets above, and the divergence is the point of each change.**
 
 - `buildToolsPreamble` wraps every body in an IIFE that re-throws with `craftFailureMarker(name)` prefixed, so a failure names the tool that raised it and the in-episode fitness signal can score the right artifact. The body sits alone between parentheses on its own lines, because a model-authored body ending in a `//` comment would otherwise swallow the rest of the wrapper and turn the whole preamble into a syntax error.
 - `injectPreamble` does not splice. It normalizes with codemode's own `normalizeCode` and then WRAPS: `async () => { <preamble>return await (<normalized>)(); }`. The regex splice silently dropped the preamble whenever the model's code was not already an `async (…) => {` arrow, which is exactly what `BUILTIN_TOOL_SPECS.execute_tools.example` teaches and what `normalizeCode` wraps for you. On every such call the whole crafted-tool surface was undefined with no error naming why.
 
 Both functions live in `cf-backend/src/crafted-tool-registry.ts` and are exported, so their behaviour is testable without a sandbox.
 
-## 5. Proteus Pre-Phase-A State
+## 5. Kinu Pre-Phase-A State
 
-Direct reading of the Proteus tree at the commit immediately preceding Phase A (`2641c96`). Paths are relative to the repo root and describe the tree **as it was then**; the notes say where each one went.
+Direct reading of the Kinu tree at the commit immediately preceding Phase A (`2641c96`). Paths are relative to the repo root and describe the tree **as it was then**; the notes say where each one went.
 
 ### 5.1 Files observed
 
@@ -124,11 +124,11 @@ The reason cited in the header comment was that codemode's DWE sanitizes dispatc
 
 ### 5.4 Signature
 
-Proteus did NOT enforce a signature. `workspace.createTool` accepted arbitrary `code: string` and stored it. The child-Worker wrapper was `const fn = (${code});`, so any expression that parenthesized cleanly was accepted: arrow functions, function expressions, IIFEs.
+Kinu did NOT enforce a signature. `workspace.createTool` accepted arbitrary `code: string` and stored it. The child-Worker wrapper was `const fn = (${code});`, so any expression that parenthesized cleanly was accepted: arrow functions, function expressions, IIFEs.
 
 ### 5.5 Same-turn visibility (pre-refactor)
 
-Proteus implemented same-turn visibility via an **in-memory live registry** whose `fns` dict was mutated synchronously by `workspace.createTool`:
+Kinu implemented same-turn visibility via an **in-memory live registry** whose `fns` dict was mutated synchronously by `workspace.createTool`:
 
 - `onToolRegistered` hook on the inline executor.
 - CF runtime forwarded the hook to the orchestrator.
@@ -140,7 +140,7 @@ All five links are gone. `PreambleCraftedExecutor` reads `craftStore.list()` at 
 
 ### 5.6 Error format (pre-refactor)
 
-Proteus also returned string-form errors, consistently: bare `err.message` at every layer. No stack, no `toolName`. Phase B replaced this on the CF path with the flat envelope in §7.
+Kinu also returned string-form errors, consistently: bare `err.message` at every layer. No stack, no `toolName`. Phase B replaced this on the CF path with the flat envelope in §7.
 
 ### 5.7 In-sandbox cross-namespace access from crafted tool bodies
 
@@ -152,16 +152,16 @@ Crafted tools were surfaced ONLY inside `execute_tools` as `codemode.*`. They we
 
 ## 6. Delta Table
 
-| Dimension | Reference impl | Proteus (pre-refactor) | Gap | Fix |
+| Dimension | Reference impl | Kinu (pre-refactor) | Gap | Fix |
 |---|---|---|---|---|
-| Sandbox harness ownership | Upstream `DynamicWorkerExecutor({ loader })`, module source from codemode unmodified. | Custom `LiveCraftedExecutor` hand-rolling Proxies, log capture, timeout, error envelope. It reimplemented the codemode sandbox module inside Proteus's tree. | ~130 LOC that duplicate upstream and drift on every codemode release. | Delete the hand-rolled executor module. Delegate to `DynamicWorkerExecutor` and inject a `const tools = {...}` preamble instead. |
+| Sandbox harness ownership | Upstream `DynamicWorkerExecutor({ loader })`, module source from codemode unmodified. | Custom `LiveCraftedExecutor` hand-rolling Proxies, log capture, timeout, error envelope. It reimplemented the codemode sandbox module inside Kinu's tree. | ~130 LOC that duplicate upstream and drift on every codemode release. | Delete the hand-rolled executor module. Delegate to `DynamicWorkerExecutor` and inject a `const tools = {...}` preamble instead. |
 | Crafted-tool signature enforcement | Hard gate: must start with `async` and include `=>`. | None. `String(code)` accepted as-is, wrapped as `const fn = (${code})`. Any expression flies. | Invalid code is only caught at child-Worker compile time, as a runtime error on first call. | Validate at `workspace.createTool` time; reject with an actionable message before the write. |
 | In-sandbox `workspace.*` access from crafted tool body | Free, because `workspace` is a Proxy in the enclosing arrow's lexical scope and crafted code runs inline as `tools.<name>` in the same arrow. | Absent. Crafted code ran in a per-tool child Worker with `const fn = (${code});` only. No `workspace` binding. | Crafted tools could not compose with workspace primitives at all. | Same fix as harness: move crafted tools to the preamble inside the main sandbox arrow, so `workspace` is lexically in scope. |
 | In-sandbox `codemode.*` access from crafted tool body | Free, because the `codemode` Proxy is also lexically in scope inside the arrow. | Absent for the same reason. | Crafted tools could not call host tools. | Same fix; one change unlocks both namespaces. |
 | In-sandbox `fetch` / `crypto` / standard globals | Whatever codemode's sandbox grants (no `fetch` by default; `crypto` available as a workerd global). | Per-tool child Worker got workerd defaults with `globalOutbound: null`, so no outbound `fetch`. Standard globals (crypto, URL) present. | Parity on most axes, but less flexible: each tool got its own Worker, paying cold-start and LOADER cache cost. | After delegating to DWE, globals match the reference exactly. `globalOutbound: null` can be set as a DWE option. |
 | Error format | Bare string `err.message` propagated to the LLM. | Bare string `err.message` at every layer. | Matches the reference, but the project wants structured `{error, stack, toolName}` and neither produces it. | Wrap the executor result with a structured envelope on the way back to the tool-output channel. Include `toolName` from the dispatcher and `stack` from `err.stack`. |
 | Logs surfaced to LLM | Yes. The codemode module rebinds console and returns `logs` on `CodemodeResult`. | Partial. The `LiveCraftedExecutor`-built module captured logs; the per-tool child Worker did not. | Logs inside a crafted-tool body were dropped on the floor. | Once crafted tools run as preamble inside the DWE arrow, upstream console rebinding captures them automatically. |
-| Same-turn visibility mechanism | Re-read `craftStore.getAll()` on every `execute()`. SQL is the source of truth. No in-memory mirror. | In-memory `CraftedToolRegistry.fns` dict mutated synchronously by `onToolRegistered`, re-synced from SQL at each `getTools()` rebuild. | Proteus carried a dual store (SQL + registry) with cache-coherence rules. The reference has one store. | After Phase A, delete the registry and read the craft store at preamble-build time, which is the same pattern. |
+| Same-turn visibility mechanism | Re-read `craftStore.getAll()` on every `execute()`. SQL is the source of truth. No in-memory mirror. | In-memory `CraftedToolRegistry.fns` dict mutated synchronously by `onToolRegistered`, re-synced from SQL at each `getTools()` rebuild. | Kinu carried a dual store (SQL + registry) with cache-coherence rules. The reference has one store. | After Phase A, delete the registry and read the craft store at preamble-build time, which is the same pattern. |
 | Dual surfacing (top-level AI SDK tools) | No. Only `tools.<name>` inside codemode. | No. Only `codemode.<name>`. Description matched. | Matches the reference. | No change (Phase E covers the optional inverse). |
 | Normalization of stored code | `.trim()` only. No decl→expr rewrite, because the signature gate makes it unnecessary. | None. Raw `String(code)` stored. | Pre-refactor relied on `const fn = (${code})` to implicitly parenthesize arbitrary expressions, so function declarations and statement-form code silently failed. | After Phase D's signature gate, `.trim()` is sufficient because only arrow-form code passes. |
 

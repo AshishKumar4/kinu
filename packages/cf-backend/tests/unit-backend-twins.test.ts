@@ -9,7 +9,7 @@
  * worked on Y backend" defects were exactly a twin whose halves drifted — and
  * the halves need not even disagree loudly: emitHeadPhase fanned the same
  * split out to one place on cf and two on the CLI, where the second reached
- * no reader and duplicated the first in `proteus exec --json`.
+ * no reader and duplicated the first in `kinu exec --json`.
  *
  * A shared NAME does not always mean unshared logic, though: once a driver is
  * hoisted, both backends keep the method as a transport over the one core
@@ -89,7 +89,7 @@ const KNOWN_TWINS: readonly string[] = [
   // (schema_version, dedupe_key, reply_channel) before it leaves the
   // workspace. Both answer a bare list — the shape is NOT part of the
   // divergence, and was only ever divergent by accident: cf wrapped its rows in
-  // `{ events: [...] }` and `proteus inspect events` silently stopped
+  // `{ events: [...] }` and `kinu inspect events` silently stopped
   // formatting them. A core symbol here would be a passthrough, and `.query` is
   // too generic a name for the delegation check to prove anything with. Not
   // expected to shrink.

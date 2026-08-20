@@ -9,8 +9,8 @@
  * lives here once.
  *
  * Auth modes:
- *   hmac    `X-Proteus-Signature` = HMAC-SHA256(secret, `<ts>.<body>`), with
- *           `X-Proteus-Timestamp` inside a ±5 minute window (replay bound).
+ *   hmac    `X-Kinu-Signature` = HMAC-SHA256(secret, `<ts>.<body>`), with
+ *           `X-Kinu-Timestamp` inside a ±5 minute window (replay bound).
  *   bearer  `Authorization: Bearer <secret>`, compared in constant time.
  *   mtls    the edge verified a client certificate; no secret is involved.
  */

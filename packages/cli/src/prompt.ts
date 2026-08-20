@@ -4,7 +4,7 @@
  * No readline and no raw mode, ever: readline (terminal mode) flips the TTY
  * into raw mode (ECHO and ISIG off) and then relies on the event loop to
  * deliver key bytes. On macOS, kqueue cannot poll the /dev/tty device, so
- * under the installer (`proteus setup </dev/tty`) Bun never delivered a
+ * under the installer (`kinu setup </dev/tty`) Bun never delivered a
  * single key: frozen question, no echo, and a dead Ctrl+C. Instead, prompts
  * do a blocking read(2) on the terminal fd in the driver's canonical mode —
  * the kernel handles echo, line editing, and keeps ISIG so Ctrl+C always
@@ -52,7 +52,7 @@ export function canPrompt(): boolean {
  *  refuse with instructions instead of rendering a frozen screen. */
 export function requireInteractiveTerminal(): void {
   if (process.stdin.isTTY && process.stdout.isTTY) return;
-  throw new Error('The Proteus TUI needs an interactive terminal. Re-run from a terminal, or use proteus run/exec (or chat --classic) for non-interactive use.');
+  throw new Error('The Kinu TUI needs an interactive terminal. Re-run from a terminal, or use kinu run/exec (or chat --classic) for non-interactive use.');
 }
 
 /** Blocking canonical-mode line read: each read(2) returns at most one line,

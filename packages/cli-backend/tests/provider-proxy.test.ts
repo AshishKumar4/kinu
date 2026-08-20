@@ -32,7 +32,7 @@ function completion(content: string, promptTokens: number): Response {
   });
 }
 
-/** A fetch standing in for the whole network: the Proteus worker's credential
+/** A fetch standing in for the whole network: the Kinu worker's credential
  *  listing and forward route (which dispatches on the target header exactly as
  *  the real route does), models.dev, and the providers themselves. */
 function networkFetch(opts: {
@@ -143,10 +143,10 @@ describe('web-UI-connected providers reach local agents', () => {
     const providers = await resolver.listProviders();
     const openrouter = providers.find((p) => p.id === 'openrouter');
     expect(openrouter?.available).toBe(false);
-    expect(openrouter?.unavailableReason).toContain('Proteus account');
+    expect(openrouter?.unavailableReason).toContain('Kinu account');
 
     const menu = await resolver.listModels();
-    expect(menu.failures.some((f) => f.provider === 'openrouter' && f.reason.includes('Proteus account'))).toBe(true);
+    expect(menu.failures.some((f) => f.provider === 'openrouter' && f.reason.includes('Kinu account'))).toBe(true);
     // The signed-out placeholders and every other provider are still there.
     expect(providers.length).toBeGreaterThan(3);
   });
@@ -167,6 +167,6 @@ describe('what an unreachable account does and does not claim', () => {
     const resolver = resolverWith(networkFetch({ credentialsStatus: 503 }));
     const codex = (await resolver.listProviders()).find((p) => p.id === 'codex');
     expect(codex?.available).toBe(false);
-    expect(codex?.unavailableReason).not.toContain('Proteus account');
+    expect(codex?.unavailableReason).not.toContain('Kinu account');
   });
 });

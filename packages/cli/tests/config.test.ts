@@ -29,7 +29,7 @@ describe("CLI config safety", () => {
     expect(() => validateAliasName("jarvis-2")).not.toThrow();
     expect(() => validateAliasName("../outside")).toThrow("Alias must");
     expect(() => validateAliasName("bad/name")).toThrow("Alias must");
-    expect(() => validateAliasName("proteus")).toThrow("reserved");
+    expect(() => validateAliasName("kinu")).toThrow("reserved");
   });
 
   test("honors PROTEUS_HOME before falling back to the OS home", () => {
@@ -77,7 +77,7 @@ describe("CLI config safety", () => {
     expect(out.config).toMatchObject({ model: "openai/gpt-5.5", reasoningEffort: "high" });
     // A config file with one invalid field is reported, not silently replaced by
     // defaults: defaulting would discard the whole file and read as a first run.
-    expect(out.invalidRejection).toContain('is not a valid Proteus config');
+    expect(out.invalidRejection).toContain('is not a valid Kinu config');
   });
 });
 
@@ -181,16 +181,16 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
     expect(out).toMatchObject({ name: "openai-compat", baseURL: "https://gateway.example/v1" });
   });
 
-  test("signed out (or expired) with nothing configured points at proteus auth", () => {
+  test("signed out (or expired) with nothing configured points at kinu auth", () => {
     const signedOut = runResolveLLM({});
-    expect(signedOut).toMatchObject({ error: expect.stringContaining("proteus auth") });
+    expect(signedOut).toMatchObject({ error: expect.stringContaining("kinu auth") });
 
     const expired = runResolveLLM({
       origin: CLOUD_ORIGIN,
       accessToken: CLOUD_TOKEN,
       tokenExpiresAt: new Date(Date.now() - 60_000).toISOString(),
     });
-    expect(expired).toMatchObject({ error: expect.stringContaining("proteus auth") });
+    expect(expired).toMatchObject({ error: expect.stringContaining("kinu auth") });
   });
 });
 

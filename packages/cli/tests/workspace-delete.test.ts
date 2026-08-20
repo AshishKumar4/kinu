@@ -17,7 +17,7 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe('proteus workspace delete', () => {
+describe('kinu workspace delete', () => {
   test('deletes with the stored session token and prunes the cloud config entry', async () => {
     const seen: Array<{ path: string; method: string; authorization: string | null }> = [];
     const server = Bun.serve({

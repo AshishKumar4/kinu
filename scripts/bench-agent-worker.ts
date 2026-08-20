@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// One Proteus session, in its own process — one ask for a defect task, a whole
+// One Kinu session, in its own process — one ask for a defect task, a whole
 // episode sequence for a long-horizon continuation task.
 //
 // A subprocess is not incidental here — it is what makes the isolation real.

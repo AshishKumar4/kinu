@@ -1,9 +1,9 @@
 /**
  * Encryption at rest for the credential store.
  *
- * Every token Proteus MINTS is stored as a SHA-256 hash — cli tokens, device
+ * Every token Kinu MINTS is stored as a SHA-256 hash — cli tokens, device
  * tokens, workspace capabilities, connect tickets. The third-party secrets
- * Proteus holds on the owner's behalf cannot be hashed, because they have to
+ * Kinu holds on the owner's behalf cannot be hashed, because they have to
  * be replayed outbound, so they were the one thing in the DO written in the
  * clear. This module is the missing half: a sealed envelope around
  * `user_credentials.value`, keyed from a Worker secret rather than from the

@@ -59,7 +59,7 @@ describe('Plan mode browser contract', () => {
     expect(output).toContain('executorLabel(p.executor)');
   });
 
-  test('reuses the supported Plannotator primitives inside Proteus ownership', () => {
+  test('reuses the supported Plannotator primitives inside Kinu ownership', () => {
     expect(review).toContain('@plannotator/ui/components/Viewer');
     expect(review).toContain('@plannotator/ui/components/AnnotationPanel');
     expect(review).toContain('exportAnnotations(blocks, annotations');
@@ -88,7 +88,7 @@ describe('Plan mode browser contract', () => {
     expect(css).not.toContain('@import "@plannotator/ui/theme"');
   });
 
-  test('the patched document viewer excludes diagram engines from Proteus', () => {
+  test('the patched document viewer excludes diagram engines from Kinu', () => {
     const viewer = readFileSync(join(import.meta.dir, '../../../node_modules/@plannotator/ui/components/Viewer.tsx'), 'utf8');
     const patch = readFileSync(join(import.meta.dir, '../../../patches/@plannotator%2Fui@0.30.0.patch'), 'utf8');
     for (const feature of ['Tater', 'Attachments', 'QuickLabel', 'Pinpoint', 'Vim', 'Graphviz', 'Mermaid']) {

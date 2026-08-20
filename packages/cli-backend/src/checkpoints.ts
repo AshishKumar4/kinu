@@ -94,9 +94,9 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     env.GIT_CONFIG_GLOBAL = devNull;
     env.GIT_CONFIG_SYSTEM = devNull;
     env.GIT_CONFIG_NOSYSTEM = '1';
-    env.GIT_AUTHOR_NAME = 'Proteus Checkpoint';
+    env.GIT_AUTHOR_NAME = 'Kinu Checkpoint';
     env.GIT_AUTHOR_EMAIL = 'checkpoints@proteus.local';
-    env.GIT_COMMITTER_NAME = 'Proteus Checkpoint';
+    env.GIT_COMMITTER_NAME = 'Kinu Checkpoint';
     env.GIT_COMMITTER_EMAIL = 'checkpoints@proteus.local';
     // Pinned so git's own diagnostics are the strings `diagnoseStaging` parses:
     // a localized `warning: could not open directory` would read as an

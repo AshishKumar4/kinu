@@ -12,7 +12,7 @@ import * as v from 'valibot';
  * Sandbox-container previews therefore get a host of their own, one per
  * exposed port: `<port>-<sandbox>-<token>.<PREVIEW_HOST_SUFFIX>`. That is the
  * @cloudflare/sandbox SDK's native scheme — `exposePort` mints the URL and
- * `proxyToSandbox` routes it back — so Proteus derives no hostnames itself.
+ * `proxyToSandbox` routes it back — so Kinu derives no hostnames itself.
  * Everything under the suffix except the app's own host serves previews and
  * nothing else: no SPA, no login, no OAuth callback, so no session cookie is
  * ever minted there for hostile HTML to steal, and `__Host-`-prefixed cookies
@@ -147,7 +147,7 @@ function validPort(value: string | undefined): boolean {
  * https URL whose leading hostname label is a complete
  * `<port>-<sandbox>-<token>` triple. Host allow-listing is the CSP's job
  * (`frame-src`), because only the server knows the configured suffix; this
- * rejects the shapes that never come from Proteus at all.
+ * rejects the shapes that never come from Kinu at all.
  */
 export function isPreviewUrl(value: string, configuredSuffix: string | null = browserPreviewHostSuffix()): boolean {
   if (!URL.canParse(value)) return false;

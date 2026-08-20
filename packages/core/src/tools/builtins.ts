@@ -542,7 +542,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           runtime: runtimeKey,
           message:
             runtimeKey === 'laptop'
-              ? 'The "laptop" runtime requires the Proteus PC daemon. Ask the user to install it from the Executors tab.'
+              ? 'The "laptop" runtime requires the Kinu PC daemon. Ask the user to install it from the Executors tab.'
               : runtimeKey === 'sandbox'
                 ? 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use — retry.'
                 : `Runtime "${runtimeKey}" is not registered.`,

@@ -41,7 +41,7 @@ export const SURFACES = ["Output", "Work", "Releases", "Exploration", "Agent", "
  *  than a place to work in it, so it sits apart at the right of the strip and
  *  carries no label. */
 export const ACTIVITY_SURFACE = "Activity";
-/** Tabs Proteus wrote. Namespaced rather than mixed into the tuple above so a
+/** Tabs Kinu wrote. Namespaced rather than mixed into the tuple above so a
  *  view can never collide with a host surface by picking its name, and so
  *  every render path can tell the two apart without a lookup. */
 export type AgentViewSurfaceKind = `view:${string}`;
@@ -94,7 +94,7 @@ export interface WorkSurfaceProps {
   pendingActions: PendingAction[];
   /** The changelog was seen inside Work — zero the unseen count upstream. */
   onChangelogSeen?: () => void;
-  /** Dashboards Proteus published for this workspace. Appended after the host
+  /** Dashboards Kinu published for this workspace. Appended after the host
    *  surfaces, in their own marked group. */
   agentViews?: AgentViewSummary[];
   rpc: Rpc;
@@ -114,7 +114,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
   return (
     <div className="@container flex flex-col h-full">
       {/* Activity sits OUTSIDE the scrolling strip. It used to be pinned right
-          by `ml-auto`, which worked only while the tabs fit; once Proteus can
+          by `ml-auto`, which worked only while the tabs fit; once Kinu can
           append its own, the strip overflows and an `ml-auto` button scrolls
           away with everything else. */}
       <div className="border-b p-border shrink-0 flex items-stretch">
@@ -143,7 +143,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               </button>
             );
           })}
-        {/* Proteus's own tabs, after ours and behind a divider. The sparkle is
+        {/* Kinu's own tabs, after ours and behind a divider. The sparkle is
             the marker: a tab in this group is agent-authored, and the divider
             is what stops it reading as one more thing we shipped. Titles are
             validated in core against RESERVED_VIEW_TITLES, so none of them can
@@ -155,7 +155,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           const kind = agentViewSurface(view.slug);
           return (
             <button key={view.slug} onClick={() => onSurface(kind)}
-              title={`${view.title} — written by Proteus`}
+              title={`${view.title} — written by Kinu`}
               aria-current={surface === kind ? "true" : undefined}
               className={`${tabCls} ${surface === kind ? "p-tab-active" : ""}`}>
               <SparkleIcon size={14} />

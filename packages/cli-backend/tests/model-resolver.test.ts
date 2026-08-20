@@ -442,8 +442,8 @@ describe('createLocalModelResolver — signed out', () => {
     for (const id of ['workers-ai', 'my-gateway']) {
       const provider = providers.find((p) => p.id === id);
       expect(provider?.available).toBe(false);
-      expect(provider?.unavailableReason).toContain('proteus auth');
+      expect(provider?.unavailableReason).toContain('kinu auth');
     }
-    expect(() => resolver.resolveModel('my-gateway/openai/gpt-4.1')).toThrow(/proteus auth/);
+    expect(() => resolver.resolveModel('my-gateway/openai/gpt-4.1')).toThrow(/kinu auth/);
   });
 });

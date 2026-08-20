@@ -365,7 +365,7 @@ export const PLATFORM_CATALOG = {
       + 'OR ISOLATE IDENTITY. do.facet.abort_reuses_isolate is the case that breaks the naive '
       + 'version: an abort rejects pending RPCs and kills in-flight work while KEEPING the same '
       + 'isolate, so a boot-derived generation shows no discontinuity across the most common way '
-      + 'a Proteus head dies. Facet SQLite survives reset and eviction, so a persisted counter '
+      + 'a Kinu head dies. Facet SQLite survives reset and eviction, so a persisted counter '
       + 'increments on every genuine re-construction including a post-abort re-get. The two '
       + 'implementations are indistinguishable on a happy-path probe and differ exactly here.',
   },
@@ -387,7 +387,7 @@ export const PLATFORM_CATALOG = {
         context: 'thrown into the caller',
         message: "Durable Object's isolate exceeded its memory limit and was reset",
       },
-      { context: 'Nimbus clone failure surfaced to Proteus', message: 'Worker exceeded memory limit' },
+      { context: 'Nimbus clone failure surfaced to Kinu', message: 'Worker exceeded memory limit' },
     ],
     firstPartySignal: true,
     notes:
@@ -658,7 +658,7 @@ export const PLATFORM_CATALOG = {
       + 'ctx.waitUntil(p) and a bare floating p are the same code path in an actor. '
       + 'worker.wait_until.grace_ms is the NON-ACTOR branch of IncomingRequest::drain and does not '
       + 'apply here at all; what actually becomes of the promise is '
-      + 'do.background_task.cancelled_on_reset. Proteus shipped this exact mistake: scheduleTimerAt '
+      + 'do.background_task.cancelled_on_reset. Kinu shipped this exact mistake: scheduleTimerAt '
       + 'held the arm of the object\'s own wake-up row with waitUntil under a docstring claiming '
       + 'the write "lands even if the caller\'s invocation ends first", and the only failure path '
       + 'was a console line. anti-slop/no-wait-until-in-durable-object now rejects the call '
@@ -788,7 +788,7 @@ export const PLATFORM_CATALOG = {
     firstPartySignal: true,
     notes:
       'Stronger than the claim it was probed against: a Module cannot cross ANY boundary, '
-      + 'including a same-isolate structuredClone. Proteus paid for this independently — the '
+      + 'including a same-isolate structuredClone. Kinu paid for this independently — the '
       + 'device-tunnel upgrade path passed a WebSocket as a DO-RPC argument and 500\'d every '
       + 'daemon connect in production (packages/cf-backend/tests/unit-device-hub.test.ts:3-5).',
   },
@@ -948,7 +948,7 @@ export const PLATFORM_CATALOG = {
       + 'restored. The number is right, it is now sourced from the page Cloudflare publishes, '
       + 'AND it has an independent probe behind it — do.storage.sync_kv measured the value cap '
       + 'at roughly 2,200,000 bytes against workerd util/sqlite.c++:1362-1380. So the one lost '
-      + 'claim that mattered is the one claim that is now over-evidenced, and nothing in Proteus '
+      + 'claim that mattered is the one claim that is now over-evidenced, and nothing in Kinu '
       + 'needs the dossier. '
       + 'The whole chat transcript, plan documents and MCTS search nodes persist as rows here. '
       + 'The agents SDK truncates a chat message to its own ROW_MAX_BYTES guard beneath this, '
@@ -1042,7 +1042,7 @@ export const PLATFORM_CATALOG = {
       + 'a copy-on-write clone consumes its FULL logical bytes against it with no CoW credit, '
       + 'so an O(1) clone is free in time and not in quota. Causality was established by '
       + 'freeing 5 GiB and retrying successfully '
-      + '(~/Nimbus/scratchpad/do-sqlite-fork-feasibility.md §4). Every Proteus fork and '
+      + '(~/Nimbus/scratchpad/do-sqlite-fork-feasibility.md §4). Every Kinu fork and '
       + 'subordinate is a facet, so this is one shared 10 GB across a whole exploration tree — '
       + 'and see do.storage.size_is_per_object, because NOTHING on the platform reports the '
       + 'shared total. Accounting is LOGICAL rather than physical: a 1.058 GB facet cloned nine '
@@ -1059,7 +1059,7 @@ export const PLATFORM_CATALOG = {
       + 'unavailable-storage and left there: quota exhaustion is decidable in advance. '
       + 'BUT NONE OF THAT DESCRIBES PROTEUS TODAY, and reading it as though it did is the error '
       + 'this paragraph previously invited. There is NO clone path here — zero `ctx.facets.clone(` '
-      + 'call sites outside this file — so a Proteus fork copies nothing: it shares the parent\'s '
+      + 'call sites outside this file — so a Kinu fork copies nothing: it shares the parent\'s '
       + 'Nimbus file plane and gets an EMPTY private SQLite of 4096 bytes. The clone arithmetic is '
       + 'preventive only. And for the facet leak below, bytes are NOT the binding constraint: see '
       + 'do.facet.count, which is reached roughly an order of magnitude sooner.',
@@ -1404,7 +1404,7 @@ export const PLATFORM_CATALOG = {
 
   // ── Durable Object facets ─────────────────────────────────────────────
   //
-  // Every Proteus fork and subordinate is a FACET, not its own Durable Object:
+  // Every Kinu fork and subordinate is a FACET, not its own Durable Object:
   // the agents SDK spawns them through `subAgent()` -> `ctx.facets.get()`. So
   // the entries below are not exotica — they are the substrate the whole
   // exploration topology runs on, and none of them was known here before.
@@ -1491,7 +1491,7 @@ export const PLATFORM_CATALOG = {
     firstPartySignal: false,
     notes:
       'Probe verbatim: `[rekey=false] phase1 boot=g6vaa659 held=128 -> abort -> re-get '
-      + 'boot=g6vaa659 held=128 (same isolate)`. This is the most common way a Proteus head dies '
+      + 'boot=g6vaa659 held=128 (same isolate)`. This is the most common way a Kinu head dies '
       + '— facet-spawn.ts calls it on every head abort, every spawn-bootstrap failure and every '
       + 'MCTS branch teardown — and it means an abort neither frees the retained memory nor '
       + 'produces any boot-level discontinuity. Two consequences: '
@@ -1524,7 +1524,7 @@ export const PLATFORM_CATALOG = {
     notes:
       'This is the FIRST-HAND 32 MiB figure, and it retires the unsourced one: rpc.arg_bytes '
       + 'asserted the same number for ordinary Workers RPC citing nothing, and here the '
-      + 'runtime says it in its own words for the facet path Proteus actually uses.',
+      + 'runtime says it in its own words for the facet path Kinu actually uses.',
     conflictsWith: ['rpc.arg_bytes'],
   },
 
@@ -1826,7 +1826,7 @@ export const PLATFORM_CATALOG = {
     observable: [],
     firstPartySignal: false,
     notes:
-      'A CORRECTNESS TRAP FOR ANY PER-AGENT VIEW, not just for tracing. Proteus spawns every '
+      'A CORRECTNESS TRAP FOR ANY PER-AGENT VIEW, not just for tracing. Kinu spawns every '
       + 'subordinate and every exploration head as a facet, so an id-keyed roster, an id-keyed '
       + 'log field or an id-keyed UI grouping silently collapses the whole tree into one '
       + 'orchestrator. Correlate on selfPath. This is the "correct, wired, dead" shape at the '
@@ -1846,7 +1846,7 @@ export const PLATFORM_CATALOG = {
     observable: [],
     firstPartySignal: false,
     notes:
-      'Probed with the exact spawn shape Proteus uses, so heads, subordinates and MCTS branches '
+      'Probed with the exact spawn shape Kinu uses, so heads, subordinates and MCTS branches '
       + 'are NOT invisible to the native tracer — which makes the owner\'s repeated '
       + '"I cannot see what the forks are doing" a wiring problem rather than a platform one. '
       + 'One direction is still open and it is the direction that matters: whether ROOT to FACET '
@@ -1976,7 +1976,7 @@ export const PLATFORM_CATALOG = {
     firstPartySignal: true,
     notes:
       'Cloudflare states this keeps connections alive without waking the Durable Object. '
-      + 'Proteus keeps its sockets warm with a JSON `{type:"ping"}` message instead, which is '
+      + 'Kinu keeps its sockets warm with a JSON `{type:"ping"}` message instead, which is '
       + 'not a control frame: it costs a wake, an invocation and a CPU budget reset on every '
       + 'open connection every 25 s, against the unsourced threshold in '
       + 'edge.websocket_idle_reap_ms. Recorded, not changed — the fix belongs to whoever owns '

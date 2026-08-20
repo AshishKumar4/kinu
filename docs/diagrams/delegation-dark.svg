@@ -3,7 +3,7 @@
        is the same geometry under a different :root palette, and the README picks
        between the two with <picture>. Everything below the palette block must
        stay byte-identical in both, so edit them together. -->
-  <title id="t">Proteus delegation model</title>
+  <title id="t">Kinu delegation model</title>
   <desc id="d">A running turn calls one agents tool with seven actions. Two of them spawn: swarm runs a configured tree search that settles back into this turn, and hire creates a persistent subordinate agent that outlives the turn and reports back as an event. A swarm’s candidates are scored by the verifier the caller declared in its own objective rather than judged by a model, and each of its nodes is a full agent running the same turn loop the caller runs. The remaining actions talk to agents that already exist: subordinates in this workspace, or the owner’s other workspaces as peers.</desc>
   <style>
     :root {

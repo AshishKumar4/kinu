@@ -447,7 +447,7 @@ export function createCFRuntime(
       budget: () => access.acc?.().context,
     },
   }));
-  // Register Sandbox executor — Proteus's primary remote exec surface.
+  // Register Sandbox executor — Kinu's primary remote exec surface.
   // Backed by @cloudflare/sandbox: one Linux container per agent, keyed
   // by the agent's stable name. `PREVIEW_HOST_SUFFIX` is the zone the SDK
   // builds preview URLs on — `<port>-<sandbox>-<token>.<suffix>`, routed back
@@ -860,7 +860,7 @@ function createDualPathLLM(
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       try {
-        const reg = actorProviderRegistry(agent, env, actor, 'Proteus');
+        const reg = actorProviderRegistry(agent, env, actor, 'Kinu');
         const spec = reg.normalizeSpecSync(readStoredModelSpec(sql));
         const result = await generateText({
           model: reg.resolveModel(spec), prompt,
@@ -914,7 +914,7 @@ function createFastLLM(
   // now, and a captured registry could not see a provider connected since — which
   // is the liveness this factory's own docstring promises.
   const selected = () => {
-    const registry = actorProviderRegistry(agent, env, actor, 'Proteus (fast)');
+    const registry = actorProviderRegistry(agent, env, actor, 'Kinu (fast)');
     return {
       registry,
       ...selectFastModel({
@@ -963,7 +963,7 @@ function createJudgeLLM(
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       const config = createAgentConfigStore(sql);
-      const registry = actorProviderRegistry(agent, env, actor, 'Proteus (judge)');
+      const registry = actorProviderRegistry(agent, env, actor, 'Kinu (judge)');
       const { spec } = await resolveJudgeModelSelection({
         registry,
         reviewSpec: config.getReviewModel(),
@@ -1104,7 +1104,7 @@ function createInlineBranch(agent: AgentHost, env: Env): BranchHandle {
   const reg = createAgentProviderRegistry({
     env,
     userDO: null,
-    appTitle: 'Proteus (inline branch)',
+    appTitle: 'Kinu (inline branch)',
     workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
   });
   const spec = reg.normalizeSpecSync(null);

@@ -202,16 +202,16 @@ export function describeEnsembleGap(gap: EnsembleGap): string {
       return 'no classifier-graded turns yet — the classifier grades a turn once the user follows up';
     case 'no_gold_labels':
       return 'no hand labels yet, so there is nothing to check the panel against — draw a set with ' +
-        '`proteus label export <agent>`, fill it in, then `proteus label ingest <agent> <file>`';
+        '`kinu label export <agent>`, fill it in, then `kinu label ingest <agent> <file>`';
     case 'no_usable_labels':
       return 'every turn the panel covered was hand-labeled `unclear`, so none of them settles anything — ' +
-        'label more turns with `proteus label export <agent>`';
+        'label more turns with `kinu label export <agent>`';
     case 'too_few_judges':
       return 'an ensemble needs two models from different vendors and this deployment has ' +
         (gap.judges.length === 0 ? 'none connected' : `only ${gap.judges.join(', ')}`) +
         ' — connect a second vendor, or name both judges explicitly';
     case 'not_run':
-      return 'the panel has not judged these turns yet — run `proteus label ensemble <agent>`';
+      return 'the panel has not judged these turns yet — run `kinu label ensemble <agent>`';
   }
 }
 
@@ -240,7 +240,7 @@ function goldLabeledItems(universe: ReadonlyArray<UniverseRow>, sql: SqlExecutor
  * Choosing WHICH models judge is free — a spec is a string. Turning a spec into
  * a judge resolves a model, which reaches the signed-in session and the stored
  * provider keys. Collapsing the two put that credential requirement ahead of
- * both free preconditions below, so `proteus label ensemble` answered "Not
+ * both free preconditions below, so `kinu label ensemble` answered "Not
  * authenticated" to a workspace whose real missing step was hand labels, and to
  * a one-model panel that could never have run at all. The order is decided here,
  * once, for every backend.

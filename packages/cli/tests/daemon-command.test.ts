@@ -1,5 +1,5 @@
 /**
- * `proteus daemon` lifecycle against a throwaway PROTEUS_HOME. The daemon is a
+ * `kinu daemon` lifecycle against a throwaway PROTEUS_HOME. The daemon is a
  * real detached process, so these run the CLI end to end: the pidfile is the
  * daemon's own and it unlinks it on exit, which is exactly what restart has to
  * sequence correctly.
@@ -66,7 +66,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 10_000): Promise<vo
   }
 }
 
-describe('proteus daemon restart', () => {
+describe('kinu daemon restart', () => {
   test('replaces a running daemon and waits for the old process to exit', () => {
     const home = makeHome();
     expect(runDaemon(home, 'start').exitCode).toBe(0);
@@ -108,7 +108,7 @@ describe('proteus daemon restart', () => {
   });
 });
 
-describe('proteus daemon logs', () => {
+describe('kinu daemon logs', () => {
   test('caps an oversized log at startup and still shows the history', async () => {
     const home = makeHome();
     const logPath = join(home, 'daemon.log');
@@ -128,7 +128,7 @@ describe('proteus daemon logs', () => {
   });
 });
 
-describe('proteus daemon stop', () => {
+describe('kinu daemon stop', () => {
   test('reports the stopped pid, clears the pidfile, and is honest when nothing runs', () => {
     const home = makeHome();
     runDaemon(home, 'start');

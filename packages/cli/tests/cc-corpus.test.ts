@@ -7,7 +7,7 @@
  * Fixtures rather than the owner's real transcripts: the real ones are private,
  * they change under the test, and none of the shapes below can be asserted
  * against them without pinning the owner's own history into the repository.
- * The real corpus is what `proteus label mine` reports; this is what proves the
+ * The real corpus is what `kinu label mine` reports; this is what proves the
  * reader is reading it correctly.
  *
  * Also asserts the one thing the corpus's privacy actually rests on: that the
@@ -421,7 +421,7 @@ describe('mined artifacts cannot be committed', () => {
 
 // ── The command the owner types ──────────────────────────────────
 
-describe('proteus label mine', () => {
+describe('kinu label mine', () => {
   test('reports the corpus and its caveats, without a model', () => {
     const root = newRoot();
     new Session()
@@ -446,7 +446,7 @@ describe('proteus label mine', () => {
     expect(stdout).toContain('| interrupted | corrected | 1 | 1 |');
     expect(stdout).toContain('| approved | accepted | 1 | 1 |');
     expect(stdout).toContain('2 labeled');
-    expect(stdout).toContain('proteus label score <agent>');
+    expect(stdout).toContain('kinu label score <agent>');
     expect(Bun.file(out).size).toBeGreaterThan(0);
   });
 

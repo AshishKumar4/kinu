@@ -2,7 +2,7 @@
  * Mechanical turn steering — the harness saying, IN the turn, the one thing it
  * can see about the turn that the model cannot.
  *
- * Everything here exists because prose does not work. Proteus's doctrine tells
+ * Everything here exists because prose does not work. Kinu's doctrine tells
  * the model to delegate on breadth and on doubt, and to stop and re-read when a
  * command keeps failing; across a 10-task Terminal-Bench slice the model
  * delegated on 0 tasks with that doctrine written in, and re-ran the same
@@ -66,7 +66,7 @@
  * hint at step 0 and, twenty-five steps later, the recovery steer for the
  * shape the hint failed to prevent. One shared slot would have cost either the
  * recovery steer on the session's first turn — the only turn a one-shot
- * `proteus exec` run has — or the count of hints that did NOT convert, which
+ * `kinu exec` run has — or the count of hints that did NOT convert, which
  * is the number the whole comparison rests on.
  *
  * Every steer is a HINT. The message says so, nothing gates on it, and the
@@ -170,7 +170,7 @@ const DELEGATION_TOOL: BuiltinToolName = 'agents';
  *  turn context blocks do: the model must never read a harness steer as
  *  something the user typed. */
 export const TURN_STEERING_HEADER =
-  '[Runtime steering — a mechanical nudge from the Proteus harness, not written by the user.]';
+  '[Runtime steering — a mechanical nudge from the Kinu harness, not written by the user.]';
 
 function repeatedCallText(tool: string, args: string, calls: number): string {
   return `\`${tool}\` has run ${calls} times with the same arguments and returned the same output every time — ${args}. `

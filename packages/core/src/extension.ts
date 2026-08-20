@@ -1,5 +1,5 @@
 /**
- * Proteus extension seam — the small, stable public API for observing and
+ * Kinu extension seam — the small, stable public API for observing and
  * extending a turn without importing engine internals.
  *
  * This is the one hook path BOTH backends' turn loops fire: the shared chat

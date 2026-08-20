@@ -14,7 +14,7 @@ export async function workspaceDeleteCommand(name: string, opts: { yes?: boolean
     if (!canPrompt()) {
       throw new Error('Workspace deletion requires confirmation. Re-run with --yes in a non-interactive environment.');
     }
-    console.log(DIM(`Deletion is permanent. Keep a copy first: proteus export ${target.cloudName}`));
+    console.log(DIM(`Deletion is permanent. Keep a copy first: kinu export ${target.cloudName}`));
     if (!(await confirm(`Permanently delete cloud workspace "${target.cloudName}"?`, false))) {
       console.log(DIM('Workspace deletion cancelled.'));
       return;

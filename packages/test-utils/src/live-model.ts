@@ -13,9 +13,9 @@
  * Two ways to reach a real model, in preference order:
  *
  *   1. WORKER PROXY — `PROTEUS_ORIGIN` + `PROTEUS_TOKEN`. A deployed or preview
- *      Proteus worker fronts the owner's Cloudflare credential at
+ *      Kinu worker fronts the owner's Cloudflare credential at
  *      `/api/user/ai/v1` (cf-backend/src/user/ai-proxy.ts), so the test needs a
- *      CLI bearer and no Cloudflare token at all. `proteus tokens create
+ *      CLI bearer and no Cloudflare token at all. `kinu tokens create
  *      --scope ai.proxy` mints one. This is the cheap path: native Workers AI.
  *   2. AI GATEWAY — `AI_GATEWAY_BASE_URL` + `AI_GATEWAY_AUTH`. The pre-existing
  *      path, kept because it reaches models the account proxy does not front.
@@ -92,8 +92,8 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
     return {
       kind: 'misconfigured',
       reason: `${LIVE_MODEL_ENV.token} is set but ${LIVE_MODEL_ENV.origin} is not. `
-        + 'A CLI bearer names no target: set the deployed or preview worker origin '
-        + '(e.g. https://proteus-staging.<subdomain>.workers.dev).',
+        + 'A CLI bearer names no target: set the deployed worker origin '
+        + '(e.g. https://staging.kinu.run).',
     };
   }
   if (origin && token) {
@@ -167,7 +167,7 @@ export interface LiveModelSession {
  *
  * WHY THIS EXISTS. `resolveLiveModel` reads the environment and nothing else,
  * and nothing ever populated it. So on the one machine that holds a credential —
- * the owner's, signed in with `proteus auth` — `bun run test:eval` printed
+ * the owner's, signed in with `kinu auth` — `bun run test:eval` printed
  * `target: none`, all six live suites skipped, the ratchet proved the skips were
  * declared, and the tier reported `TOTAL: 0 model call(s)`. A deploy gate
  * (`scripts/deploy.sh`: "Behavioural evals") that has never once called a model

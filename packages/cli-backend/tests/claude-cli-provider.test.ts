@@ -400,7 +400,7 @@ describe('buildClaudePrompt', () => {
   });
 });
 
-// ─── composition with Proteus's tool loop ────────────────────────────────────
+// ─── composition with Kinu's tool loop ────────────────────────────────────
 
 describe('claude-cli provider — tool loop composition', () => {
   test('the model is a drop-in LanguageModel for the ai-SDK tool loop', async () => {
@@ -419,7 +419,7 @@ describe('claude-cli provider — tool loop composition', () => {
     expect(result.text).toBe('Working on it.');
   });
 
-  test('a LocalAgentSession turn on claude/* runs Proteus\'s loop with the model answering', async () => {
+  test('a LocalAgentSession turn on claude/* runs Kinu\'s loop with the model answering', async () => {
     const openaiLlm: LLMProviderConfig = {
       name: 'openai', baseURL: 'https://api.openai.com/v1', headers: { Authorization: 'Bearer sk' }, model: 'gpt-4o-mini',
     };

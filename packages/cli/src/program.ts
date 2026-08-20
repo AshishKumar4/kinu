@@ -57,7 +57,7 @@ export function buildProgram(): Command {
   const program = new Command();
 
   program
-    .name('proteus')
+    .name('kinu')
     .description('Create and chat with self-evolving agent workspaces')
     .version(VERSION, '-v, --version')
     .addHelpCommand(false);
@@ -74,14 +74,14 @@ export function buildProgram(): Command {
     .command('setup')
     .helpGroup(ACCOUNT)
     .description('Connect your account; optionally configure local-only model credentials')
-    .option('--origin <url>', 'Proteus app origin')
+    .option('--origin <url>', 'Kinu app origin')
     .option('--provider <name>', 'Provider: codex, openai, openrouter, anthropic, openai-compatible, skip')
     .option('--model <id>', 'Default model for the selected provider')
     .option('--local-model', 'Configure credentials for local-only agents')
-    .option('--local', 'Keep the provider key on this machine instead of your Proteus account')
+    .option('--local', 'Keep the provider key on this machine instead of your Kinu account')
     .option('-y, --yes', 'Accept recommended setup choices where possible')
     .option('--skip-cloud', 'Skip account sign-in')
-    .addOption(new Option('--account-only', 'Only complete Proteus account sign-in').hideHelp())
+    .addOption(new Option('--account-only', 'Only complete Kinu account sign-in').hideHelp())
     .action(wrapAction(setupCommand));
 
   program
@@ -89,30 +89,30 @@ export function buildProgram(): Command {
     .alias('providers')
     .helpGroup(ACCOUNT)
     .description('List, connect, or disconnect model and account providers')
-    .option('--origin <url>', 'Proteus app origin')
+    .option('--origin <url>', 'Kinu app origin')
     .option('--model <id>', 'Default model for the selected provider')
-    .option('--local', 'Keep the provider key on this machine instead of your Proteus account')
+    .option('--local', 'Keep the provider key on this machine instead of your Kinu account')
     .action(wrapAction(providersCommand));
 
   program
     .command('auth')
     .helpGroup(ACCOUNT)
-    .description('Sign the CLI into your Proteus account')
-    .option('--origin <url>', 'Proteus app origin')
+    .description('Sign the CLI into your Kinu account')
+    .option('--origin <url>', 'Kinu app origin')
     .action(wrapAction(authCommand));
 
   program
     .command('whoami')
     .helpGroup(ACCOUNT)
-    .description('Show the signed-in Proteus account')
-    .option('--origin <url>', 'Proteus app origin')
+    .description('Show the signed-in Kinu account')
+    .option('--origin <url>', 'Kinu app origin')
     .action(wrapAction(whoamiCommand));
 
   program
     .command('logout')
     .helpGroup(ACCOUNT)
-    .description('Sign out of the Proteus CLI')
-    .option('--origin <url>', 'Proteus app origin')
+    .description('Sign out of the Kinu CLI')
+    .option('--origin <url>', 'Kinu app origin')
     .action(wrapAction(logoutCommand));
 
   program
@@ -134,7 +134,7 @@ export function buildProgram(): Command {
       .option('--purpose <text>', 'Mission — what this workspace is for (seeds SOUL.md)')
       .option('--mode <mode>', 'Workspace mode: cloud or local')
       .option('--alias <name>', 'Create an executable alias command')
-      .option('--origin <url>', 'Proteus app origin for first-use sign-in')
+      .option('--origin <url>', 'Kinu app origin for first-use sign-in')
       .option('--no-alias-shim', 'Do not create an alias shim'),
   ).action(wrapAction(createCommand));
 
@@ -460,21 +460,21 @@ export function buildProgram(): Command {
   program
     .command('doctor')
     .helpGroup(THIS_COMPUTER)
-    .description('Inspect local Proteus CLI installation state')
+    .description('Inspect local Kinu CLI installation state')
     .action(wrapAction(doctorCommand));
 
   program
     .command('update [target]')
     .helpGroup(THIS_COMPUTER)
-    .description('Update the installed Proteus command')
-    .option('--origin <url>', 'Proteus app origin')
+    .description('Update the installed Kinu command')
+    .option('--origin <url>', 'Kinu app origin')
     .option('--force', 'Reinstall even if already current')
     .action(wrapAction(updateCommand));
 
   program
     .command('uninstall')
     .helpGroup(THIS_COMPUTER)
-    .description('Remove the installed Proteus command')
+    .description('Remove the installed Kinu command')
     .option('--purge', 'Also remove ~/.proteus data')
     .action(wrapAction(uninstallCommand));
 

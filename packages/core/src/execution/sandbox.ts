@@ -43,7 +43,7 @@ interface SandboxExposeOptions {
  *
  * The SDK's `exposePort` enables in-container port forwarding, stores a secret
  * token in DO storage, and returns the preview URL it serves that port on:
- * `https://<port>-<sandbox>-<token>.<previewHostSuffix>`. Proteus hands that
+ * `https://<port>-<sandbox>-<token>.<previewHostSuffix>`. Kinu hands that
  * URL straight through — the Worker routes it back with the SDK's own
  * `proxyToSandbox` (packages/cf-backend/src/preview-proxy.ts).
  */
@@ -130,7 +130,7 @@ export function isSandboxTransientError(error: Error | string): boolean {
  * `run` tool already spells `unavailable` when a runtime is not registered
  * (tools/builtins.ts, `runtime_not_provisioned`), and one fact given two codes
  * splits one platform gap across two parts of the census. It lands in
- * `runtimeMissing`, whose definition is exactly this — an environment Proteus
+ * `runtimeMissing`, whose definition is exactly this — an environment Kinu
  * never provisioned, neither a defect in the tool nor the work failing.
  *
  * It used to land nowhere at all: prose beginning `Sandbox executor not
@@ -151,7 +151,7 @@ const PREVIEWS_REFUSAL = refusalText(new ProteusError('unsupported', PREVIEWS_NO
  * `TRANSIENT_MARKERS` is ADMISSION CONTROL, not a broken tool: 503 at the ten-
  * instance concurrency ceiling, 429 on the container start-rate burst, and the
  * eviction disconnect window. `withSandboxRetry` has already spent its three
- * attempts before anything reaches here, so what is left is a container Proteus
+ * attempts before anything reaches here, so what is left is a container Kinu
  * could not get — `unavailable`, the same code an unprovisioned runtime gets, in
  * the platform part of the census. Calling it `io` would count the platform's own
  * capacity ceiling as a candidate defect in this tool.
@@ -385,7 +385,7 @@ export function createSandboxExecutor(
             // `bad_input`, and it is the honest one of three near misses. Nothing
             // was tried, and what must change is the caller's own request — start
             // the server, then ask again. `unavailable` would file a container
-            // that is up and healthy under the platform gap that means Proteus
+            // that is up and healthy under the platform gap that means Kinu
             // never provisioned one, and `missing` is not a refusal at all, so it
             // would land a correct decline in the candidate-defect part of the
             // census (read-models/tool-failures.ts).

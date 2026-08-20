@@ -41,7 +41,7 @@ function envAfterPreload(env: Record<string, string>) {
 }
 
 const SIGNED_IN_SHELL = {
-  PROTEUS_ORIGIN: 'https://proteus-staging.example.workers.dev',
+  PROTEUS_ORIGIN: 'https://staging.kinu.run',
   PROTEUS_TOKEN: 'ptc_ambient_from_a_previous_command',
 };
 

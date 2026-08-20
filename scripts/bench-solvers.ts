@@ -259,7 +259,7 @@ async function spawnWorker(opts: {
   return result;
 }
 
-/** The real thing: one Proteus turn against the sandbox, in its own process. */
+/** The real thing: one Kinu turn against the sandbox, in its own process. */
 export function createAgentSolver(opts: AgentSolverOptions): Solver {
   return {
     id: opts.id,

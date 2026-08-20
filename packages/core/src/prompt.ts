@@ -1,6 +1,6 @@
 /**
  * Canonical system-prompt builder. Both CF and CLI surfaces call this so the
- * model sees one backend-agnostic Proteus contract, with backend/model/mode
+ * model sees one backend-agnostic Kinu contract, with backend/model/mode
  * details layered in only when they are actually true for the current turn.
  */
 
@@ -215,8 +215,8 @@ function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): 
         return '- **sandbox.*** / `runtime: "sandbox"`: a full Linux container with its own CPU, memory and disk — heavier installs, longer-running processes, large clones and builds, bulk data, and user-visible port-listening apps. It provisions on first use, so moving a job here the moment it outgrows the workspace is the normal step.';
       case 'laptop':
         return backend === 'cli-local'
-          ? '- **laptop.*** / `runtime: "laptop"`: the local machine the Proteus CLI is running on — direct access, no tunnel or consent prompt.'
-          : "- **laptop.*** / `runtime: \"laptop\"`: the user's OWN PC, connected through the Proteus device tunnel. Use it when the task targets local files, local commands, or the user's desktop environment. Its first use asks the user for consent — that prompt is expected, not an error.";
+          ? '- **laptop.*** / `runtime: "laptop"`: the local machine the Kinu CLI is running on — direct access, no tunnel or consent prompt.'
+          : "- **laptop.*** / `runtime: \"laptop\"`: the user's OWN PC, connected through the Kinu device tunnel. Use it when the task targets local files, local commands, or the user's desktop environment. Its first use asks the user for consent — that prompt is expected, not an error.";
       default:
         return `- **${exec.name}.***: available executor namespace.`;
   }
@@ -225,7 +225,7 @@ function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): 
 /** A registered-but-offline laptop is still listed (the user can bring it
  *  back), unlike other unavailable executors, which are omitted entirely. */
 function renderOfflineLaptopLine(): string {
-  return '- **laptop** / `runtime: "laptop"` (registered, currently OFFLINE): the user\'s own PC is registered but not connected right now. Do not call it; if the user wants it used, tell them to run `proteus connect` on their machine.';
+  return '- **laptop** / `runtime: "laptop"` (registered, currently OFFLINE): the user\'s own PC is registered but not connected right now. Do not call it; if the user wants it used, tell them to run `kinu connect` on their machine.';
 }
 
 function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {

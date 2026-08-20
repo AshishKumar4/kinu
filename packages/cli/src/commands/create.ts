@@ -37,7 +37,7 @@ export async function createCommand(name: string | undefined, opts: {
       if (alias) console.log(`${DIM('Alias:')} ${ACCENT(alias)} ${DIM(created.aliasPath ?? '')}`);
       const hint = pathHint();
       if (hint) console.log(DIM(hint));
-      console.log(`\n${DIM('Run:')} ${ACCENT(alias || `proteus run ${name}`)} ${DIM('"do something"')}\n`);
+      console.log(`\n${DIM('Run:')} ${ACCENT(alias || `kinu run ${name}`)} ${DIM('"do something"')}\n`);
     } catch (err) {
       spinner.fail('Create failed');
       printFailure(err);
@@ -70,7 +70,7 @@ async function warnUnusableModel(opts: ModelWarningInput): Promise<void> {
   const unusable = await findUnusableModel(opts);
   if (!unusable) return;
   console.log(`\n${WARN('!')} ${unusable.spec} ${DIM('has no connected provider.')} ${unusable.reason}`);
-  console.log(DIM(`  Connect one with: proteus provider connect <provider>, then set the model with /model in chat.`));
+  console.log(DIM(`  Connect one with: kinu provider connect <provider>, then set the model with /model in chat.`));
 }
 
 async function resolveMode(raw: string | undefined, interactive: boolean): Promise<AgentMode> {

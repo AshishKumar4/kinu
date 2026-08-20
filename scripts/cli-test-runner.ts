@@ -67,14 +67,14 @@ async function testCreate() {
   try {
     await createCommand(AGENT_NAME, { mode: "local", purpose: "E2E test agent for automated testing" });
   } catch (error) {
-    fail("proteus create", errorMessage(error));
+    fail("kinu create", errorMessage(error));
     return;
   }
 
   if (existsSync(dbPath)) {
-    pass("proteus create", `agent.db created`);
+    pass("kinu create", `agent.db created`);
   } else {
-    fail("proteus create", "agent.db not found");
+    fail("kinu create", "agent.db not found");
   }
 
   // Duplicate should fail
@@ -93,9 +93,9 @@ async function testCreate() {
   }
 
   if (dupFailed) {
-    pass("proteus create (duplicate rejected)", "correctly refused");
+    pass("kinu create (duplicate rejected)", "correctly refused");
   } else {
-    fail("proteus create (duplicate rejected)", "no error for duplicate");
+    fail("kinu create (duplicate rejected)", "no error for duplicate");
   }
 }
 
@@ -113,15 +113,15 @@ async function testList() {
     console.log = origLog;
 
     if (output.includes(AGENT_NAME)) {
-      pass("proteus list", `found '${AGENT_NAME}' in listing`);
+      pass("kinu list", `found '${AGENT_NAME}' in listing`);
     } else if (output.length > 0) {
-      pass("proteus list", `output received (${output.length} chars)`);
+      pass("kinu list", `output received (${output.length} chars)`);
     } else {
-      fail("proteus list", "empty output");
+      fail("kinu list", "empty output");
     }
   } catch (error) {
     console.log = origLog;
-    fail("proteus list", errorMessage(error));
+    fail("kinu list", errorMessage(error));
   }
 }
 
@@ -140,15 +140,15 @@ async function testStatus() {
 
     const lower = output.toLowerCase();
     if (lower.includes("purpose") || output.includes(AGENT_NAME) || lower.includes("scaffold")) {
-      pass("proteus status", "shows agent info");
+      pass("kinu status", "shows agent info");
     } else if (output.length > 0) {
-      pass("proteus status", `output received (${output.length} chars)`);
+      pass("kinu status", `output received (${output.length} chars)`);
     } else {
-      fail("proteus status", "empty output");
+      fail("kinu status", "empty output");
     }
   } catch (error) {
     console.log = origLog;
-    fail("proteus status", errorMessage(error));
+    fail("kinu status", errorMessage(error));
   }
 }
 
@@ -163,34 +163,34 @@ async function testExportImport() {
   try {
     await exportCommand(AGENT_NAME, { output: exportPath });
   } catch (error) {
-    fail("proteus export", errorMessage(error));
+    fail("kinu export", errorMessage(error));
     return;
   }
 
   if (existsSync(exportPath)) {
     const size = statSync(exportPath).size;
     if (size > 0) {
-      pass("proteus export", `${size} bytes`);
+      pass("kinu export", `${size} bytes`);
     } else {
-      fail("proteus export", "file is empty");
+      fail("kinu export", "file is empty");
     }
   } else {
-    fail("proteus export", "file not created");
+    fail("kinu export", "file not created");
   }
 
   // Import
   try {
     await importCommand(exportPath, { name: IMPORT_NAME });
   } catch (error) {
-    fail("proteus import", errorMessage(error));
+    fail("kinu import", errorMessage(error));
     return;
   }
 
   const importedDb = join(AGENT_HOME, IMPORT_NAME, "agent.db");
   if (existsSync(importedDb)) {
-    pass("proteus import", `imported as '${IMPORT_NAME}'`);
+    pass("kinu import", `imported as '${IMPORT_NAME}'`);
   } else {
-    fail("proteus import", "agent.db not found after import");
+    fail("kinu import", "agent.db not found after import");
   }
 }
 
@@ -256,7 +256,7 @@ async function testDbIntegrity() {
 // ── Main ─────────────────────────────────────────────────────────
 
 async function main() {
-  console.log("Proteus CLI E2E Tests");
+  console.log("Kinu CLI E2E Tests");
   console.log(`Agent: ${AGENT_NAME}`);
   console.log("────────────────────────────────────");
 

@@ -39,14 +39,14 @@ export async function authCommand(opts: { origin?: string }): Promise<void> {
     return;
   }
 
-  throw new Error('CLI auth expired. Run proteus auth again.');
+  throw new Error('CLI auth expired. Run kinu auth again.');
 }
 
 export async function whoamiCommand(opts: { origin?: string }): Promise<void> {
   const config = loadConfigFile();
   const origin = defaultOrigin(opts);
   const token = config.accessToken;
-  if (!token) throw new Error('Not authenticated. Run: proteus auth');
+  if (!token) throw new Error('Not authenticated. Run: kinu auth');
   const result = await whoami(origin, token);
   console.log(`${ACCENT(result.user.email)} ${DIM(result.user.id)}`);
 }

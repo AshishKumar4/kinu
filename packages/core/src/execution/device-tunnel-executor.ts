@@ -42,7 +42,7 @@ import {
 
 const NOT_CONNECTED =
   'No device connected. Connect your machine once at the user level ' +
-  '(Devices / Executors tab → "Connect a device", or run the Proteus CLI: `proteus connect`).';
+  '(Devices / Executors tab → "Connect a device", or run the Kinu CLI: `kinu connect`).';
 
 /** True by construction rather than by probe — properties of this executor's
  *  own wiring, which no answer from the machine could confirm or deny. Read the
@@ -144,7 +144,7 @@ export function createDeviceTunnelExecutor(
     if (s.registered) {
       return {
         configured: true, available: false, active: false, status: 'disconnected',
-        reason: 'Device registered but offline — the user can reconnect it with `proteus connect`.',
+        reason: 'Device registered but offline — the user can reconnect it with `kinu connect`.',
       };
     }
     return { configured: false, available: false, active: false, status: 'not_configured' };

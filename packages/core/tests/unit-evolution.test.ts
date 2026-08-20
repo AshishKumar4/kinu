@@ -403,7 +403,7 @@ describe('EvolutionEngine — Session-level', () => {
     const window = session([makeTurn(), makeTurn(), makeTurn()]);
 
     // Five windows, each closed by a DIFFERENT engine instance — one per
-    // `proteus exec` process, or one per Durable Object lifetime.
+    // `kinu exec` process, or one per Durable Object lifetime.
     const events: EvolutionEvent[] = [];
     for (let i = 0; i < 5; i++) {
       const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 5, lifetimeMCTSBudget: 1, lifetimeMCTSBranches: 1 });

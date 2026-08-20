@@ -114,7 +114,7 @@ describe('OpenRouter provider contract', () => {
     }, mock.fetch);
     const provider = createOpenRouterProvider({
       refererURL: 'https://proteus.test',
-      appTitle: 'Proteus-Contract-Test',
+      appTitle: 'Kinu-Contract-Test',
     });
     const model = provider.createModel('anthropic/claude-3.5-sonnet', deps);
     await call(model);
@@ -124,7 +124,7 @@ describe('OpenRouter provider contract', () => {
     expect(req.url).toContain('openrouter.ai/api/v1');
     expect(req.headers['authorization']).toBe('Bearer sk-or-test');
     expect(req.headers['http-referer']).toBe('https://proteus.test');
-    expect(req.headers['x-title']).toBe('Proteus-Contract-Test');
+    expect(req.headers['x-title']).toBe('Kinu-Contract-Test');
   });
 });
 
@@ -189,7 +189,7 @@ describe('Codex provider contract', () => {
       [CODEX_CRED_KEY]: {
         headers: {
           Authorization: 'Bearer codex-token',
-          'User-Agent': 'codex_cli_rs/0.0.0 (Proteus Agent)',
+          'User-Agent': 'codex_cli_rs/0.0.0 (Kinu Agent)',
           originator: 'codex_cli_rs',
           'ChatGPT-Account-ID': 'acct-test-123',
         },

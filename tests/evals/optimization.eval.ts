@@ -23,8 +23,8 @@
  * textbook Boyer–Moore pairing ≈0.93), matching the handed reference scores 0,
  * and a wrong answer scores 0 whatever it cost. Solvable, not vacuous.
  *
- * WHY THE SPAWNED CLI. The agent under eval is the `proteus` process a user
- * runs — `proteus create --mode local`, then `proteus exec --workspace <name>
+ * WHY THE SPAWNED CLI. The agent under eval is the `kinu` process a user
+ * runs — `kinu create --mode local`, then `kinu exec --workspace <name>
  * --json`, per bench/harbor/proteus_agent.py. The instrument sits either side
  * of that process: the task's seed files are written into the workspace BEFORE
  * the child starts, and the verifier measures the workspace the child left
@@ -301,11 +301,11 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
     // the run, and holding a torn episode to the threshold would report an
     // agent failure for a harness one.
     expect(child.timedOut,
-      `the child \`proteus exec\` was killed at ${String(EPISODE_TIMEOUT_MS)}ms — a hung episode, `
+      `the child \`kinu exec\` was killed at ${String(EPISODE_TIMEOUT_MS)}ms — a hung episode, `
       + `not a missed threshold${child.stderr.trim() === '' ? '' : `; stderr: ${child.stderr.trim()}`}`)
       .toBe(false);
     expect(child.exitCode,
-      'the child `proteus exec` exited non-zero, so the episode never completed'
+      'the child `kinu exec` exited non-zero, so the episode never completed'
       + `${child.stderr.trim() === '' ? '' : `; stderr: ${child.stderr.trim()}`}`)
       .toBe(0);
     // A trajectory that produced nothing is `inert`, never a zero on the bar.

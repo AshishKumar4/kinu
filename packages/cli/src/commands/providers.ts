@@ -36,12 +36,12 @@ interface LocalCredential {
 
 const CLAUDE_INSTALL_HINT = 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup';
 const CLAUDE_LOGIN_HINT = 'Run `claude` once to sign in to your Claude subscription.';
-const CLAUDE_READY = 'Claude subscription ready — use proteus create --model claude/claude-opus-4-x';
+const CLAUDE_READY = 'Claude subscription ready — use kinu create --model claude/claude-opus-4-x';
 
 export async function providersCommand(actionOrProvider: string | undefined, providerArg: string | undefined, opts: {
   origin?: string;
   model?: string;
-  /** Keep the secret on this machine instead of the Proteus account. */
+  /** Keep the secret on this machine instead of the Kinu account. */
   local?: boolean;
 }): Promise<void> {
   const { action, provider, raw } = parseArgs(actionOrProvider, providerArg);
@@ -97,7 +97,7 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
 /** Claude subscription "connect" is a status check, not a credential we store:
  *  the official `claude` binary owns its own Claude Code login. We probe PATH +
  *  `claude auth status` and print the next step. LOCAL ONLY — cloud agents need
- *  an Anthropic API key (proteus provider connect anthropic), not this. */
+ *  an Anthropic API key (kinu provider connect anthropic), not this. */
 async function connectClaude(): Promise<void> {
   console.log('');
   console.log(ACCENT('Claude subscription (via Claude Code)'));
@@ -126,7 +126,7 @@ async function connectOpenCode(opts: { model?: string }): Promise<void> {
   console.log('');
   if (avail.binary && avail.authenticated) {
     console.log(`${OK('✓')} opencode detected and authenticated`);
-    console.log(DIM('Run `proteus provider connect opencode` to configure, or `proteus setup --provider opencode`.'));
+    console.log(DIM('Run `kinu provider connect opencode` to configure, or `kinu setup --provider opencode`.'));
     // Delegate to the full setup flow for model discovery + config write.
     await setupCommand({ provider: 'opencode', model: opts.model, localModel: true, skipCloud: true });
   } else if (avail.binary) {
@@ -140,7 +140,7 @@ async function connectOpenCode(opts: { model?: string }): Promise<void> {
 }
 
 const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
-const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `proteus setup` again.';
+const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `kinu setup` again.';
 
 function parseArgs(actionOrProvider: string | undefined, providerArg: string | undefined): ParsedProviderArgs {
   if (!actionOrProvider) return { action: 'list' };
@@ -163,7 +163,7 @@ function parseArgs(actionOrProvider: string | undefined, providerArg: string | u
 
 /** The credential a provider stores in ~/.proteus/config.json, and the env
  *  vars that would keep supplying it after the file entry is gone. Providers
- *  absent from this map hold no Proteus-owned credential. */
+ *  absent from this map hold no Kinu-owned credential. */
 const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
   ['codex', {
     clear: (p) => deleteKey(p, 'codex'),
@@ -202,7 +202,7 @@ function deleteKey<K extends keyof NonNullable<ProteusConfig['providers']>>(
 
 /** The model-spec prefixes a provider serves — a default model left pointing
  *  at a disconnected provider is exactly the "no connected provider" trap
- *  `proteus create` warns about, so the pointer goes with the credential. */
+ *  `kinu create` warns about, so the pointer goes with the credential. */
 const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
   ['codex', ['codex/']],
   ['openai', ['openai/']],
@@ -217,23 +217,23 @@ const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
 /**
  * The inverse of `provider connect`: remove the stored credential.
  *
- * Only the providers Proteus stores a credential FOR can be disconnected
- * here. The Proteus account is `proteus logout`, and the two subscription
- * bridges (claude, opencode) are other tools' logins — Proteus holds nothing
+ * Only the providers Kinu stores a credential FOR can be disconnected
+ * here. The Kinu account is `kinu logout`, and the two subscription
+ * bridges (claude, opencode) are other tools' logins — Kinu holds nothing
  * to delete, and saying so beats pretending the command did something.
  */
 async function disconnectProvider(provider: ProviderName): Promise<void> {
   console.log('');
   if (provider === 'cloudflare') {
-    console.log(`${WARN('!')} The Cloudflare/Workers AI connection rides your Proteus account.`);
-    console.log(DIM('  Sign out with: proteus logout'));
-    console.log(DIM('  To disconnect Cloudflare itself, revoke it in your Proteus account settings.'));
+    console.log(`${WARN('!')} The Cloudflare/Workers AI connection rides your Kinu account.`);
+    console.log(DIM('  Sign out with: kinu logout'));
+    console.log(DIM('  To disconnect Cloudflare itself, revoke it in your Kinu account settings.'));
     return;
   }
   if (provider === 'claude' || provider === 'opencode') {
     const tool = provider === 'claude' ? 'Claude Code' : 'opencode';
     const command = provider === 'claude' ? 'claude logout' : 'opencode auth logout';
-    console.log(`${WARN('!')} Proteus stores no ${tool} credential — it drives the ${tool} login.`);
+    console.log(`${WARN('!')} Kinu stores no ${tool} credential — it drives the ${tool} login.`);
     console.log(DIM(`  Sign out of ${tool} itself: ${command}`));
     clearDefaultModelFor(provider);
     return;
@@ -255,10 +255,10 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
   if (cloud && credential.credKey) {
     try {
       await deleteCloudCredential(cloud.origin, cloud.token, credential.credKey);
-      console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from your Proteus account.`);
+      console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from your Kinu account.`);
       removed = true;
     } catch (e) {
-      console.log(`${WARN('!')} Could not reach your Proteus account: ${renderThrownChain({ cause: e })}`);
+      console.log(`${WARN('!')} Could not reach your Kinu account: ${renderThrownChain({ cause: e })}`);
     }
   }
 
@@ -283,15 +283,15 @@ async function disconnectAccountProvider(name: string): Promise<void> {
   const cloud = resolveCloudSession();
   console.log('');
   if (!cloud) {
-    throw new Error(`Unknown provider "${name}". Sign in with \`proteus auth\` to disconnect a provider held by your account.`);
+    throw new Error(`Unknown provider "${name}". Sign in with \`kinu auth\` to disconnect a provider held by your account.`);
   }
   const credKey = `${name.trim().toLowerCase()}.bearer`;
   const connected = (await listCloudCredentials(cloud.origin, cloud.token)).some((c) => c.key === credKey);
   if (!connected) {
-    throw new Error(`Neither this machine nor your Proteus account has a "${name}" credential. Run \`proteus provider list\` to see what is connected.`);
+    throw new Error(`Neither this machine nor your Kinu account has a "${name}" credential. Run \`kinu provider list\` to see what is connected.`);
   }
   await deleteCloudCredential(cloud.origin, cloud.token, credKey);
-  console.log(`${OK('✓')} Removed the ${ACCENT(name)} credential from your Proteus account.`);
+  console.log(`${OK('✓')} Removed the ${ACCENT(name)} credential from your Kinu account.`);
   clearDefaultModelPrefixes([`${name}/`]);
 }
 
@@ -382,15 +382,15 @@ async function printProviders(): Promise<void> {
   };
 
   console.log('');
-  console.log(ACCENT('Proteus providers'));
+  console.log(ACCENT('Kinu providers'));
   console.log('');
 
   if (config.accessToken) {
-    connected('Proteus account', config.user?.email);
+    connected('Kinu account', config.user?.email);
     console.log(`    ${DIM('Cloud workspaces use your Cloudflare Workers AI quota when Cloudflare sign-in granted AI permissions.')}`);
     console.log(`    ${DIM('Signed-in local workspaces reach the same Workers AI through the proxy, with no key on this machine.')}`);
   } else {
-    missing('Proteus account', 'proteus provider connect cloudflare');
+    missing('Kinu account', 'kinu provider connect cloudflare');
   }
   if ('unreachable' in account) {
     console.log(`    ${WARN('!')} Could not read the keys stored in your account (${account.unreachable}).`);
@@ -400,27 +400,27 @@ async function printProviders(): Promise<void> {
   const claude = await checkClaudeAvailability();
   if (claude.binary && claude.loggedIn) connected('Claude subscription', 'claude/claude-opus-4-x');
   else if (claude.binary) missing('Claude subscription', CLAUDE_LOGIN_HINT);
-  else missing('Claude subscription', 'proteus provider connect claude');
+  else missing('Claude subscription', 'kinu provider connect claude');
 
   const providers = config.providers ?? {};
   if (providers.codex?.accessToken || providers.codex?.refreshToken) connected('Codex', currentModel(config.model, 'codex'));
-  else missing('Codex', 'proteus provider connect codex');
+  else missing('Codex', 'kinu provider connect codex');
 
   provider('OpenAI', {
     localKey: Boolean(providers.openai?.apiKey), credKey: 'openai.bearer',
-    model: currentModel(config.model, 'openai'), hint: 'proteus provider connect openai',
+    model: currentModel(config.model, 'openai'), hint: 'kinu provider connect openai',
   });
   provider('OpenRouter', {
     localKey: Boolean(providers.openrouter?.apiKey), credKey: 'openrouter.bearer',
-    model: currentModel(config.model, 'openrouter'), hint: 'proteus provider connect openrouter',
+    model: currentModel(config.model, 'openrouter'), hint: 'kinu provider connect openrouter',
   });
   provider('Anthropic', {
     localKey: Boolean(providers.anthropic?.apiKey), credKey: 'anthropic.bearer',
-    model: currentModel(config.model, 'anthropic'), hint: 'proteus provider connect anthropic',
+    model: currentModel(config.model, 'anthropic'), hint: 'kinu provider connect anthropic',
   });
   provider('OpenAI-compatible', {
     localKey: Boolean(providers.openaiCompat?.default), credKey: 'openai-compat.default',
-    model: currentModel(config.model, 'openai-compat'), hint: 'proteus provider connect openai-compatible',
+    model: currentModel(config.model, 'openai-compat'), hint: 'kinu provider connect openai-compatible',
   });
 
   // Everything else the account holds — the models.dev tail connected in the
@@ -433,12 +433,12 @@ async function printProviders(): Promise<void> {
   const oc = await checkOpenCodeAvailability();
   if (oc.binary && oc.authenticated) connected('OpenCode', currentModel(config.model, 'opencode'));
   else if (oc.binary) missing('OpenCode', LOGIN_HINT_OPENCODE);
-  else missing('OpenCode', 'proteus provider connect opencode');
+  else missing('OpenCode', 'kinu provider connect opencode');
 
   console.log('');
-  console.log(DIM('  Keys connect to your Proteus account by default — no copy on this disk.'));
-  console.log(DIM('  Keep one here instead: proteus provider connect <name> --local'));
-  console.log(DIM('  Remove a stored credential: proteus provider disconnect <name>'));
+  console.log(DIM('  Keys connect to your Kinu account by default — no copy on this disk.'));
+  console.log(DIM('  Keep one here instead: kinu provider connect <name> --local'));
+  console.log(DIM('  Remove a stored credential: kinu provider disconnect <name>'));
   console.log('');
 }
 

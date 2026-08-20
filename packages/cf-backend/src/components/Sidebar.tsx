@@ -2,7 +2,7 @@
  * Left sidebar — ChatGPT/Codex-style.
  *
  *   ┌─────────────────┐
- *   │ ◉  Proteus      │
+ *   │ ◉  Kinu      │
  *   │ + New workspace │
  *   │ ─── Agents ───  │
  *   │ ● refactor-X    │
@@ -213,7 +213,7 @@ export default function Sidebar() {
         <div className="flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2 px-2 py-1.5 rounded-lg p-card-hover transition-colors">
             <BrainIcon size={22} weight="duotone" className="p-accent" />
-            <span className="font-medium tracking-tight">Proteus</span>
+            <span className="font-medium tracking-tight">Kinu</span>
           </Link>
           <a
             href="https://github.com/AshishKumar4/Proteus"

@@ -28,7 +28,7 @@ planned work and nothing in it was abandoned. Four items need naming.
 
 ## One canonical workspace, explicit external environments
 
-Proteus has one workspace file and execution plane. On Cloudflare that plane is
+Kinu has one workspace file and execution plane. On Cloudflare that plane is
 the workspace's authoritative `NIMBUS_SESSION`. On the CLI it is the local
 workspace. The `file` tool, `run` with its default runtime, `Storage.vfs` and
 the `workspace.*` codemode namespace all address the same native paths and the
@@ -318,7 +318,7 @@ authority to remove an old preview
 - A device operation requires an owner-scoped capability and a consent check.
 - A preview host is validated against the configured suffix and against its
   provider capability before an iframe or an external link is offered.
-- Nimbus preview routing strips Proteus credentials from the request and
+- Nimbus preview routing strips Kinu credentials from the request and
   authenticates a random, revocable port capability before guest code is reached
   (`cf-backend/src/nimbus-route.ts:125-143`, `lib/nimbus-preview-host.ts`).
 - Workspace ownership is established before any Nimbus-backed file operation.

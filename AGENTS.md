@@ -1,4 +1,4 @@
-# Proteus — Agent Development Guide
+# Kinu — Agent Development Guide
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
@@ -90,7 +90,7 @@ A fresh worktree has no `node_modules`. **Run `bash scripts/setup-worktree.sh` i
 it — once — before anything else.**
 
 Do NOT symlink or copy the main checkout's `node_modules` wholesale. Everything
-inside it, `@proteus` included, then resolves through the main checkout, so
+inside it, the workspace scope included, then resolves through the main checkout, so
 `@kinu/core` is *main's* core: cross-package tests and `bun run check` run
 green against source nobody edited, and the branch under test is never loaded.
 That has silently cost us a bench run (solver edits graded as if never made),
@@ -221,7 +221,7 @@ packages/
   cli/          CLI frontend (commander-based)
   cli-backend/  CLI-specific backend (bun:sqlite, Node vm)
 tests/          E2E tests (run from repo root)
-bench/clbench/  Proteus as a system for the external Continual Learning Bench
+bench/clbench/  Kinu as a system for the external Continual Learning Bench
 ```
 
 ### cf-backend Architecture
@@ -329,7 +329,7 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
 
 - OrchestratorAgent extends `ActorAgent`, which extends `Think<Env>` from `@cloudflare/think`
 - Think extends the SDK's `Agent` directly and adds the agentic loop, the turn
-  lifecycle hooks, sessions and fibers. Proteus overrides the loop's inputs
+  lifecycle hooks, sessions and fibers. Kinu overrides the loop's inputs
   (`getModel` / `getSystemPrompt` / `getTools` / `beforeTurn`) and leaves Think's
   own workspace, skills, actions, channels and scheduled tasks unused
 - `getModel()` resolves from `agent_config` table, default: `@cf/deepseek-ai/deepseek-v4-pro-0813` (`DEFAULT_WORKERS_AI_MODEL_ID` in `@kinu/core`)

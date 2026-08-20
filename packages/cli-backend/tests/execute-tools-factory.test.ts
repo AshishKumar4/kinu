@@ -1,6 +1,6 @@
 // The Node `execute_tools` factory runs the model's code in-process. Two
 // behaviours it must match the CF codemode sandbox on: capture console.* (so it
-// never leaks to the CLI's stdout, which under `proteus exec --json` IS the
+// never leaks to the CLI's stdout, which under `kinu exec --json` IS the
 // event stream) and return it as `logs`; and implicit-return a trailing bare
 // expression so the model gets its value instead of undefined. Code is
 // multi-line — one statement per line — as the model actually writes it, which
@@ -60,7 +60,7 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
   test('calling the native `run` tool from inside execute_tools gets an actionable hint, not a bare ReferenceError', async () => {
     const out = await makeTool()({ code: 'return await run({ runtime: "sandbox", command: "ls" });' });
     expect(out.error).toContain('run is not defined');
-    expect(out.error).toContain('"run" is a native Proteus tool, not a codemode member');
+    expect(out.error).toContain('"run" is a native Kinu tool, not a codemode member');
     // Where the capability actually is now comes from TOOL_REACH, so the
     // pointer is the namespace rather than one hand-picked member — and it is
     // right for all eight native tools instead of only `run`.
@@ -70,7 +70,7 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
   test('an unrelated ReferenceError for a name that is not a native tool stays a bare message', async () => {
     const out = await makeTool()({ code: 'return totallyUndefinedThing;' });
     expect(out.error).toContain('totallyUndefinedThing is not defined');
-    expect(out.error).not.toContain('native Proteus tool');
+    expect(out.error).not.toContain('native Kinu tool');
   });
 });
 

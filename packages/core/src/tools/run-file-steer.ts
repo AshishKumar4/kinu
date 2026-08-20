@@ -8,7 +8,7 @@
  * reads until much later — and it is up against a habit: across 789 `run`
  * calls in the preserved tb20/tb21 trajectories, 25% carried a heredoc, 36
  * used `sed -i`, and 104 ran an inline interpreter. Prose is the wrong
- * instrument for a habit that strong; Proteus's own telemetry puts written
+ * instrument for a habit that strong; Kinu's own telemetry puts written
  * doctrine at roughly 0% conversion and a mechanical splice at ~24%, which is
  * why turn-steering.ts and the completion gate exist. This is the same move
  * for the same reason, at the one place the trigger is observable: the command
@@ -81,7 +81,7 @@ export function handRolledFileWrite(command: string): string | null {
 /** The note for one writeMethod, prepended to the command's own output. */
 export function fileToolSteer(command: string): string | null {
   const writeMethod = handRolledFileWrite(command);
-  return writeMethod === null ? null : `[Proteus note: that command used ${writeMethod}. `
+  return writeMethod === null ? null : `[Kinu note: that command used ${writeMethod}. `
     + 'The `file` tool changes files by exact text match and refuses when its anchor is missing or occurs more than once, '
     + 'where a shell rewrite lands either way and reports success. This command ran as written; reach for `file` for the next edit.]';
 }

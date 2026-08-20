@@ -1,5 +1,5 @@
 /**
- * `proteus exec` must EXIT.
+ * `kinu exec` must EXIT.
  *
  * This is the assertion the whole suite structurally could not make. Every
  * other test of the one-shot path runs in-process and awaits a promise, so it
@@ -161,7 +161,7 @@ function heartbeatCommand(home: string, path: string, seconds: number): string {
     + ` echo $! > ${join(home, HEARTBEAT_PID)}; echo server-started`;
 }
 
-describe("proteus exec — a one-shot run terminates", () => {
+describe("kinu exec — a one-shot run terminates", () => {
   test("a turn that backgrounds a long-lived process still exits, and leaves it running", async () => {
     const home = newHome();
     const beat = join(home, "heartbeat.log");

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * WebSocket latency test — measures the full path through Proteus:
+ * WebSocket latency test — measures the full path through Kinu:
  * WS connect → send message → first chunk received → complete.
  *
  * Connects to the agent's WebSocket the same way the UI does,
@@ -174,7 +174,7 @@ async function measureChatLatency(message: string): Promise<TimingResult> {
 
 async function main() {
   console.log("╔══════════════════════════════════════════════════════════════╗");
-  console.log("║  Proteus WebSocket Latency Test                             ║");
+  console.log("║  Kinu WebSocket Latency Test                             ║");
   console.log("╚══════════════════════════════════════════════════════════════╝\n");
   console.log(`Target: ${BASE_URL}`);
   console.log(`Agent:  ${AGENT_NAME}`);

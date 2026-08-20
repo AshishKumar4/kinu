@@ -88,7 +88,7 @@ function createLocalAgent(home: string, name: string): void {
   `);
   db.run("INSERT INTO workspace_identity (id, name, mission, created_at) VALUES (?, ?, ?, ?)",
     ["agent-1", name, "Test purpose", 1]);
-  // `proteus memory` reassembles the document from MemoryStore's index of it,
+  // `kinu memory` reassembles the document from MemoryStore's index of it,
   // which is a table this read-only path can open (see local-inspection.ts).
   db.exec(`CREATE TABLE memory_chunks (
     id TEXT PRIMARY KEY, path TEXT NOT NULL, start_line INTEGER, end_line INTEGER,
@@ -165,7 +165,7 @@ function createPreMissionLocalAgent(home: string, name: string): void {
 }
 
 describe("legacy workspaces stay readable", () => {
-  test("proteus list reports a pre-rename workspace's real purpose", () => {
+  test("kinu list reports a pre-rename workspace's real purpose", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-legacy-"));
     tempDirs.push(home);
     createLegacyLocalAgent(home, "jarvis-d03e0a");
@@ -176,7 +176,7 @@ describe("legacy workspaces stay readable", () => {
     expect(list.stdout.toString()).not.toContain("(error reading)");
   });
 
-  test("proteus status degrades per field instead of failing", () => {
+  test("kinu status degrades per field instead of failing", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-legacy-status-"));
     tempDirs.push(home);
     createLegacyLocalAgent(home, "jarvis-d03e0a");
@@ -237,7 +237,7 @@ describe("legacy workspaces stay readable", () => {
   });
 });
 
-/** Every test here spawns real `proteus` processes (several of them, some
+/** Every test here spawns real `kinu` processes (several of them, some
  *  reaching the live model catalog), so the 5s default is not a meaningful
  *  budget — matching the import-hygiene probe's explicit allowance. */
 const CLI_SPAWN_TIMEOUT_MS = 30_000;
@@ -269,7 +269,7 @@ describe("CLI inspection commands", () => {
     expect(executors.stdout.toString()).toContain("laptop");
   }, CLI_SPAWN_TIMEOUT_MS);
 
-  test("proteus model normalizes specs through the provider resolver", () => {
+  test("kinu model normalizes specs through the provider resolver", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-model-"));
     tempDirs.push(home);
     createLocalAgent(home, "localtest");
@@ -291,7 +291,7 @@ describe("CLI inspection commands", () => {
       .toBe("workers-ai/@cf/meta/llama-3.1-8b-instruct");
   }, CLI_SPAWN_TIMEOUT_MS);
 
-  test("proteus effort sets workspace and global defaults and appears in status", () => {
+  test("kinu effort sets workspace and global defaults and appears in status", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-effort-"));
     tempDirs.push(home);
     createLocalAgent(home, "localtest");
@@ -317,7 +317,7 @@ describe("CLI inspection commands", () => {
     expect(invalid.stderr.toString()).toContain("low, medium, or high");
   }, CLI_SPAWN_TIMEOUT_MS);
 
-  test("proteus model validates known, uncatalogued, and unknown-provider specs", () => {
+  test("kinu model validates known, uncatalogued, and unknown-provider specs", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-model-validation-"));
     tempDirs.push(home);
     createLocalAgent(home, "localtest");
@@ -337,7 +337,7 @@ describe("CLI inspection commands", () => {
     expect(uncatalogued.exitCode).toBe(0);
     expect(uncatalogued.stdout.toString()).toContain("not in the model catalog");
     expect(uncatalogued.stdout.toString()).toContain("Close matches: workers-ai/");
-    expect(uncatalogued.stdout.toString()).toContain("proteus chat localtest");
+    expect(uncatalogued.stdout.toString()).toContain("kinu chat localtest");
     expect(uncatalogued.stdout.toString()).toContain("/model");
     expect(uncatalogued.stdout.toString()).toContain("set workers-ai/@cf/meta/not-real");
 
@@ -364,7 +364,7 @@ describe("CLI inspection commands", () => {
 });
 
 /**
- * `proteus events` renders the same rows whichever backend holds the workspace.
+ * `kinu events` renders the same rows whichever backend holds the workspace.
  *
  * It did not: cf's `listRecentEvents` answered `{ events: [...] }` where every
  * sibling list read answered a bare array, the row formatter's array parse
@@ -376,7 +376,7 @@ describe("CLI inspection commands", () => {
  * actor in cf-backend's unit-inspect-row-shapes.test.ts; here it buys the half
  * a type could not — what the user actually sees.
  */
-describe("proteus events rendering", () => {
+describe("kinu events rendering", () => {
   /** The orchestrator's projection of the one event `createLocalAgent` seeds. */
   const CLOUD_ROW = {
     id: "event-1", trace_id: "trace-1", caused_by: null, ingress: "chat_ws",

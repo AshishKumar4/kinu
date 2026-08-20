@@ -2,7 +2,7 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Every Proteus agent is reachable by email. Mail to `<workspace-name>@EMAIL_DOMAIN`
+Every Kinu agent is reachable by email. Mail to `<workspace-name>@EMAIL_DOMAIN`
 wakes the agent for a turn, and the agent's answer comes back as a real reply
 on the same thread. Evolution Changelog digests and background-job completions
 arrive in the owner's inbox over the same outbound path, and
@@ -86,7 +86,7 @@ Notes:
   in `core/src/events/hub/types.ts` (`EmailAttachmentMeta`).
 - A body larger than the brief budget is spilled to a workspace path, so the
   woken turn can read the whole message it was woken by.
-- RFC 3834 auto-replies and bulk mail are dropped inbound. Proteus auto-replies
+- RFC 3834 auto-replies and bulk mail are dropped inbound. Kinu auto-replies
   on-thread, so admitting another machine's vacation responder would loop the
   two forever.
 
@@ -108,37 +108,32 @@ pieces below exist, and skip quietly otherwise.
 ## One-time owner setup, required before anything works
 
 The code ships inert. Without these steps no mail arrives and outbound sends
-skip quietly. Current config expects `EMAIL_DOMAIN =
-proteus.ashishkumarsingh.com` (wrangler.jsonc `vars`); change it there if you
-pick a different domain.
+skip quietly. Current config expects `EMAIL_DOMAIN = kinu.run`
+(wrangler.jsonc `vars`); change it there if you pick a different domain.
 
 1. **Enable Email Routing for the domain** (receiving MX records).
-   - Dashboard: zone `ashishkumarsingh.com` → **Email** → **Email Routing** →
-     enable. For the `proteus.` subdomain specifically, add it under
-     **Email Routing → Settings → Subdomains**. If your plan's dashboard does
-     not offer subdomain routing, either set `EMAIL_DOMAIN` to the zone apex
-     `ashishkumarsingh.com` or use a dedicated zone.
-   - CLI alternative: `npx wrangler email routing enable <domain>` then
-     `npx wrangler email routing dns get <domain>` to verify records.
+   - Dashboard: zone `kinu.run` → **Email** → **Email Routing** → enable.
+   - CLI alternative: `npx wrangler email routing enable kinu.run` then
+     `npx wrangler email routing dns get kinu.run` to verify records.
 2. **Onboard the same domain for Email Sending** (SPF/DKIM for outbound):
    ```bash
-   npx wrangler email sending enable proteus.ashishkumarsingh.com
-   npx wrangler email sending dns get proteus.ashishkumarsingh.com   # verify
+   npx wrangler email sending enable kinu.run
+   npx wrangler email sending dns get kinu.run   # verify
    ```
 3. **Point the catch-all routing rule at the Worker.** It has to be a catch-all,
    because each agent has its own local part.
    - Dashboard: **Email Routing → Routing rules → Catch-all address** →
-     action **Send to a Worker** → `proteus`.
+     action **Send to a Worker** → `kinu`.
    - CLI alternative: `npx wrangler email routing rules create` (see
      `npx wrangler email routing rules --help` for the worker action flags).
 4. **Deploy.** The `send_email` binding and the `EMAIL_DOMAIN` var are already in
    wrangler.jsonc, so this is `bun run deploy` from the repo root.
 5. **Verify.** From your login email, send a message to
-   `<workspace-name>@proteus.ashishkumarsingh.com`. The agent's timeline shows an
+   `<workspace-name>@kinu.run`. The agent's timeline shows an
    `email` event, a turn runs, and a threaded reply lands back in your inbox.
    Mail from any other address must be dropped.
 
-Staging (`proteus-staging`) has the binding for parity but no `EMAIL_DOMAIN`,
+Staging (`kinu-staging`) has the binding for parity but no `EMAIL_DOMAIN`,
 so the Mission Inbox stays off there.
 
 ## Tests

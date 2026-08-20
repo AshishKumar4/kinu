@@ -2,7 +2,7 @@
  * The promotion gate's trials are OFFLINE.
  *
  * A shadow trial is a whole candidate turn plus two judge calls. It used to run
- * on the lane the finished turn was still holding — a `proteus exec` process
+ * on the lane the finished turn was still holding — a `kinu exec` process
  * waited it out before it could exit, and a Durable Object ran a second full
  * inference beside the next request. What a turn owes the gate is now one row;
  * the rollout happens on the cadence lane.

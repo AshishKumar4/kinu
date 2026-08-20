@@ -40,7 +40,7 @@
  *   • An allowlist at the dispatch boundary is what `cli/rpc-gate.ts` does for
  *     the WebSocket transport, because the agents SDK routes those frames
  *     through `onMessage` and there is a place to stand. Native Workers RPC has
- *     no such hook: resolution happens inside the runtime, before any Proteus
+ *     no such hook: resolution happens inside the runtime, before any Kinu
  *     code runs. The allowlist survives — it is the `surface` argument here —
  *     but enforcement has to be reachability, not interception.
  *
@@ -49,7 +49,7 @@
  * and a name that is not reachable at all is denied by the runtime anyway. The
  * corollary is that adopting an SDK feature whose protocol runs over a stub
  * means adding its names — the agents SDK's agent-tool adapter
- * (`startAgentToolRun` and friends), which Proteus does not use, is the one
+ * (`startAgentToolRun` and friends), which Kinu does not use, is the one
  * such feature deliberately left off every surface.
  */
 
@@ -100,7 +100,7 @@ export const PLATFORM_RPC_SURFACE: readonly string[] = [
  * `_cf_invokeSubAgent`, `_cf_invokeSubAgentPath` and `_cf_invokeStubMethod`
  * take a method NAME and call it on the receiver, which would re-open
  * everything this module closes. They are only used by `getSubAgentByName` and
- * by `parentAgent()` from a facet nested two deep; Proteus uses neither.
+ * by `parentAgent()` from a facet nested two deep; Kinu uses neither.
  */
 export const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
   '_cf_acquireFacetKeepAlive',

@@ -2,7 +2,7 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-All notable changes to Proteus are recorded here. The format follows
+All notable changes to Kinu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -308,7 +308,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ## [0.2.0] — 2026-08-07
 
-The first versioned release. Proteus sat on a frozen `0.1.0` for four months
+The first versioned release. Kinu sat on a frozen `0.1.0` for four months
 while the system was built out, so the entries below are reconstructed from git
 history and grouped by **arc** rather than per commit — there is no earlier
 release to diff against. Versioning discipline (see the release checklist at the

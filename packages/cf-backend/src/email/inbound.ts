@@ -37,7 +37,7 @@ export function agentEmailAddress(agentName: string, emailDomain: string): strin
 }
 
 /**
- * RFC 3834 auto-reply / bulk-mail detection. Since Proteus auto-replies
+ * RFC 3834 auto-reply / bulk-mail detection. Since Kinu auto-replies
  * on-thread, admitting another machine's auto-reply (a vacation responder, or
  * a second agent) would loop the two forever — so these are dropped inbound.
  * Adopted from the Agents SDK's `isAutoReplyEmail`.

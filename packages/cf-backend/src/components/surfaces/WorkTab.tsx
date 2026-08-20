@@ -310,7 +310,7 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
       setDecided(decision === "denied"
         ? "Denied. The agent will be told, and nothing runs."
         : decision === "always"
-          ? "Approved, and Proteus will stop asking about these checks on that environment. It runs when the agent picks the decision up."
+          ? "Approved, and Kinu will stop asking about these checks on that environment. It runs when the agent picks the decision up."
           : "Approved. It runs when the agent picks the decision up.");
     } catch (e) {
       const message = renderThrownChain({ cause: e });

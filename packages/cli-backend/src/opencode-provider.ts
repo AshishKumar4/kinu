@@ -1,4 +1,4 @@
-// OpenCode bridge provider (LOCAL ONLY) — lets Proteus local agents reuse the
+// OpenCode bridge provider (LOCAL ONLY) — lets Kinu local agents reuse the
 // model providers and auth tokens configured in a locally-installed opencode
 // CLI. No separate proxy daemon is needed: this provider reads opencode's
 // auth.json at request time, resolves the remote config for upstream provider
@@ -36,7 +36,7 @@ const DEFAULT_OPENCODE_BIN = 'opencode';
 const CONFIG_TTL_MS = 60_000;
 
 const INSTALL_HINT = 'Install opencode: https://opencode.ai';
-const LOGIN_HINT = 'Run `opencode auth login` to authenticate, then run `proteus setup` again.';
+const LOGIN_HINT = 'Run `opencode auth login` to authenticate, then run `kinu setup` again.';
 
 const openCodeAuthSchema = v.record(v.string(), v.object({
   type: v.string(),

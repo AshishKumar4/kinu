@@ -178,7 +178,7 @@ describe("CLI behavior", () => {
 
     expect(proc.exitCode).toBe(0);
     expect(stderr).toBe("");
-    expect(stdout).toContain("Proteus account ready");
+    expect(stdout).toContain("Kinu account ready");
     expect(stdout).not.toContain("Local model provider");
     expect(stdout).not.toContain("OpenAI API key");
   });
@@ -198,7 +198,7 @@ describe("CLI behavior", () => {
     expect(proc.exitCode).toBe(0);
     expect(stdout).toContain("Local model provider");
     // Native Workers AI is the recommendation and the default answer; Skip is 8.
-    expect(stdout).toContain("1 Cloudflare Workers AI through your Proteus account");
+    expect(stdout).toContain("1 Cloudflare Workers AI through your Kinu account");
     expect(stdout).toContain("(recommended)");
     expect(stdout).toContain("Choice [1]");
     expect(stdout).toContain("Skipped local model setup");
@@ -239,8 +239,8 @@ describe("CLI behavior", () => {
     const stdout = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
-    expect(stdout).toContain("Proteus providers");
-    expect(stdout).toContain("Proteus account");
+    expect(stdout).toContain("Kinu providers");
+    expect(stdout).toContain("Kinu account");
     expect(stdout).toContain("Codex");
     expect(stdout).toContain("OpenAI");
     expect(stdout).not.toContain("sk-secret");
@@ -253,7 +253,7 @@ describe("CLI behavior", () => {
 
     expect(proc.exitCode).toBe(0);
     expect(stdout).toContain("Usage:");
-    expect(stdout).toContain("proteus <command>");
+    expect(stdout).toContain("kinu <command>");
   });
 
   test("subcommand help reaches the selected command instead of root help", () => {
@@ -261,7 +261,7 @@ describe("CLI behavior", () => {
     const out = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
-    expect(out).toContain("Usage: proteus run");
+    expect(out).toContain("Usage: kinu run");
     expect(out).toContain("--mode <mode>");
     expect(out).not.toContain("Self-evolving AI agent with MCTS exploration");
   });
@@ -271,7 +271,7 @@ describe("CLI behavior", () => {
     const out = toText(proc.stdout);
 
     expect(proc.exitCode).toBe(0);
-    expect(out).toContain("Usage: proteus chat");
+    expect(out).toContain("Usage: kinu chat");
     expect(out).toContain("--resume");
     expect(out).toContain("--session <idOrPath>");
     expect(out).toContain("--fork <idOrPath>");
@@ -305,7 +305,7 @@ describe("CLI behavior", () => {
   });
 });
 
-describe("proteus exec (headless)", () => {
+describe("kinu exec (headless)", () => {
   test("requires a task prompt and exits nonzero", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-usage-"));
     tempDirs.push(home);
@@ -487,7 +487,7 @@ describe("proteus exec (headless)", () => {
 // the program, and it was measurable only from the run_events table inside the
 // agent's database — which a benchmark container deletes with the container.
 // Zero nudges were observable across a whole ten-task run as a result.
-describe("proteus exec --json — the delegation nudge is observable from outside", () => {
+describe("kinu exec --json — the delegation nudge is observable from outside", () => {
   test("a turn reports both steering rows it wrote — the step-0 hint and the reactive nudge — with trigger and conversion", async () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-nudge-"));
     tempDirs.push(home);
@@ -546,7 +546,7 @@ describe("proteus exec --json — the delegation nudge is observable from outsid
 // What a turn cost is priced OUTSIDE this repo: bench/clbench/proteus/events.py
 // reads this stream and CL-Bench prices what it says. So "the provider measured
 // nothing" and "the provider measured zero" must not arrive as the same bytes.
-describe("proteus exec --json — the turn-end usage payload", () => {
+describe("kinu exec --json — the turn-end usage payload", () => {
   test("carries no usage at all when the provider reported none", async () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-unmetered-"));
     tempDirs.push(home);
@@ -721,7 +721,7 @@ function startInBandErrorLlm(payload: JsonValue) {
   return { port: server.port!, stop: () => server.stop(true) };
 }
 
-/** The Proteus worker as far as the CLI's provider registry cares: a model
+/** The Kinu worker as far as the CLI's provider registry cares: a model
  *  menu. An empty one is a signed-in account whose Cloudflare AI was never
  *  granted — the case that produced a workspace nothing could run. */
 function startEmptyModelMenuOrigin() {
@@ -736,7 +736,7 @@ function startEmptyModelMenuOrigin() {
   return { port: server.port!, stop: () => server.stop(true) };
 }
 
-describe("proteus create — an unusable model is named at creation", () => {
+describe("kinu create — an unusable model is named at creation", () => {
   test("warns when the workspace's model has no connected provider", async () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-create-unusable-"));
     tempDirs.push(home);
@@ -763,7 +763,7 @@ describe("proteus create — an unusable model is named at creation", () => {
       expect(proc.exitCode).toBe(0);
       const stdout = toText(proc.stdout);
       expect(stdout).toContain("has no connected provider");
-      expect(stdout).toContain("proteus provider connect");
+      expect(stdout).toContain("kinu provider connect");
     } finally {
       origin.stop();
     }
@@ -794,7 +794,7 @@ describe("proteus create — an unusable model is named at creation", () => {
 // A provider rejection used to reach the terminal twice — once as the AI SDK's
 // default `console.error(rawPayload)` dump, once as our own `error
 // [object Object]` — and never said which command fixed it.
-describe("proteus exec — provider failures are legible and actionable", () => {
+describe("kinu exec — provider failures are legible and actionable", () => {
   const BILLING_ERROR: JsonObject = {
     error: { message: "Your account is not active.", type: "invalid_request_error", code: "billing_not_active" },
   };
@@ -821,7 +821,7 @@ describe("proteus exec — provider failures are legible and actionable", () => 
       expect(proc.exitCode).toBe(1);
       expect(output).not.toContain("[object Object]");
       expect(output.split("Your account is not active.").length - 1).toBe(1);
-      expect(output).toContain("proteus provider");
+      expect(output).toContain("kinu provider");
     } finally {
       good.stop();
       bad.stop();
@@ -854,7 +854,7 @@ describe("proteus exec — provider failures are legible and actionable", () => 
       })[0];
       expect(error).toBeDefined();
       expect(error?.message).toContain("Your account is not active.");
-      expect(error?.hint).toContain("proteus provider");
+      expect(error?.hint).toContain("kinu provider");
     } finally {
       good.stop();
       bad.stop();
@@ -862,11 +862,11 @@ describe("proteus exec — provider failures are legible and actionable", () => 
   }, 120_000);
 });
 
-// `proteus exec "prompt"` blocked on stdin until EOF whenever stdin was not a
+// `kinu exec "prompt"` blocked on stdin until EOF whenever stdin was not a
 // TTY. A harness or CI runner that spawns the CLI with an inherited, idle pipe
 // never sends EOF, so every scripted use hung forever and needed a `</dev/null`
 // incantation to work. Measured before the fix: the full 15s timeout; after: ~0.6s.
-describe("proteus exec — stdin must not hang a scripted run", () => {
+describe("kinu exec — stdin must not hang a scripted run", () => {
   test("returns promptly when argv carries the prompt and stdin stays open", async () => {
     const cli = join(import.meta.dir, "..", "bin", "cli.ts");
     const home = mkdtempSync(join(tmpdir(), "proteus-stdin-"));

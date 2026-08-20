@@ -17,7 +17,7 @@ export const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 export const CODEX_ISSUER = 'https://auth.openai.com';
 export const CODEX_DEVICE_PORTAL = `${CODEX_ISSUER}/codex/device`;
 export const CODEX_TOKEN_URL = `${CODEX_ISSUER}/oauth/token`;
-export const CODEX_USER_AGENT = 'codex_cli_rs/0.0.0 (Proteus Agent)';
+export const CODEX_USER_AGENT = 'codex_cli_rs/0.0.0 (Kinu Agent)';
 export const CODEX_ORIGINATOR = 'codex_cli_rs';
 
 const DEVICE_CODE_URL = `${CODEX_ISSUER}/api/accounts/deviceauth/usercode`;

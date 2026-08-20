@@ -1,6 +1,6 @@
 /**
  * Command modules must not capture the terminal at import time: every CLI
- * invocation (including the installer's `proteus setup`) imports the command
+ * invocation (including the installer's `kinu setup`) imports the command
  * graph, so an eagerly-loaded TUI library that touches stdin or termios would
  * starve simple prompts. opentui therefore loads only behind dynamic imports
  * on the TUI launch paths, and importing the command graph must leave

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Official Pi coding-agent baseline. It uses Pi's SDK session and native
-// read/bash/edit/write tools, with no Proteus runtime or hand-built agent loop.
+// read/bash/edit/write tools, with no Kinu runtime or hand-built agent loop.
 import { rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {

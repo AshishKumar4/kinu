@@ -89,7 +89,7 @@ export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
 }
 
 /**
- * `proteus exec` — the headless face of the one-shot run machinery. Built for
+ * `kinu exec` — the headless face of the one-shot run machinery. Built for
  * CI: no prompts of any kind (device consents are denied, fail closed, with
  * pre-authorization instructions), `--json` streams line-delimited events,
  * and the exit code is honest — 0 only when the turn completed without
@@ -98,7 +98,7 @@ export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
 export async function execCommand(promptParts: string[], opts: ExecOptions): Promise<void> {
   const rawPrompt = await buildPrompt(promptParts);
   if (!rawPrompt) {
-    throw new Error('A task prompt is required. Usage: proteus exec "task" [--workspace <name>] [--json]');
+    throw new Error('A task prompt is required. Usage: kinu exec "task" [--workspace <name>] [--json]');
   }
   const target = resolveAgentTarget(resolveExecWorkspaceName(opts.workspace));
   const failed = await runOneShot(target, rawPrompt, {
@@ -142,13 +142,13 @@ function resolveExecWorkspaceName(explicit?: string): string {
   const agents = listConfiguredAgentRefs();
   if (agents.length === 1) return agents[0]!.name;
   throw new Error(agents.length === 0
-    ? 'No workspaces configured. Create one with: proteus create <name>, or pass --workspace <name>.'
+    ? 'No workspaces configured. Create one with: kinu create <name>, or pass --workspace <name>.'
     : `Multiple workspaces configured — pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
 }
 
 /**
- * The single one-shot run path behind `proteus run <name> "prompt"` and
- * `proteus exec`: resolve attachments, stream the turn through the
+ * The single one-shot run path behind `kinu run <name> "prompt"` and
+ * `kinu exec`: resolve attachments, stream the turn through the
  * AgentClient seam, watch device consents (interactively or fail-closed),
  * and report whether anything failed.
  */
@@ -604,7 +604,7 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
     // accumulator builds steps from SDK results, so optional properties are
     // present-and-`undefined` (`toolCallId`, `providerMetadata`), which JSON has
     // no representation for. Validating instead of projecting threw ValiError
-    // inside the listener, so `proteus exec --json` printed a valibot stack to
+    // inside the listener, so `kinu exec --json` printed a valibot stack to
     // stderr mid-run while still exiting 0.
     case 'run-event':
       return [{ type: 'run_event', event: projectJsonValue({ value: event.event }) }];
@@ -672,11 +672,11 @@ async function readOptionalStdin(): Promise<string> {
 /**
  * Assemble the turn prompt from argv and, where it makes sense, stdin.
  *
- * When argv carries no prompt, stdin IS the prompt (`cat notes | proteus exec`)
+ * When argv carries no prompt, stdin IS the prompt (`cat notes | kinu exec`)
  * and waiting for EOF is correct. When argv already carries one, stdin is
  * supplementary context — and waiting on it hangs forever against a pipe that
  * is open but idle, which is exactly what a harness or CI runner inherits.
- * That hang made every scripted use of `proteus exec` require a `</dev/null`
+ * That hang made every scripted use of `kinu exec` require a `</dev/null`
  * incantation to work at all.
  */
 async function buildPrompt(parts: string[]): Promise<string> {

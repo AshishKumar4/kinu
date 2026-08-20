@@ -161,7 +161,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
     const model = createAnthropicProvider().createModel('claude-opus-4-7', deps);
     await drain({
       model,
-      system: 'You are Proteus.',
+      system: 'You are Kinu.',
       history: [...HISTORY],
       tools: chatTools(retention),
       maxSteps: 3,
@@ -181,7 +181,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
     // System prompt is a cache-eligible block with the end-of-system breakpoint.
     const system = field(body, 'system', SystemBlocksSchema);
     expect(system[system.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
-    expect(system.map((block) => block.text).join('')).toBe('You are Proteus.');
+    expect(system.map((block) => block.text).join('')).toBe('You are Kinu.');
 
     // The tool-surface breakpoint (fold of the old cf-backend anthropic-cache.ts).
     const tools = field(body, 'tools', ToolBlocksSchema);

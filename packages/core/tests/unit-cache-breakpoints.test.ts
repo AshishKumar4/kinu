@@ -114,10 +114,10 @@ describe('resolvePromptCacheStrategy', () => {
 
 describe('cacheableSystem', () => {
   test('anthropic: system becomes a SystemModelMessage carrying the breakpoint', () => {
-    const s = cacheableSystem('You are Proteus.', { kind: 'anthropic' });
+    const s = cacheableSystem('You are Kinu.', { kind: 'anthropic' });
     expect(s).toEqual({
       role: 'system',
-      content: 'You are Proteus.',
+      content: 'You are Kinu.',
       providerOptions: { anthropic: { cacheControl: EPHEMERAL } },
     });
   });

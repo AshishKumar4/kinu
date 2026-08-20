@@ -39,7 +39,7 @@ import { TASK_OUTCOME, isCovariateRow } from './eval-outcome';
 
 /**
  * The two DeepSeek arms, verified against the account's own model list rather
- * than assumed. `proteus`'s default is the pro id; the flash id is NOT derivable
+ * than assumed. `kinu`'s default is the pro id; the flash id is NOT derivable
  * from it — the suffixes differ (`-0813` vs `-0731`) — so it is recorded here
  * having been read from the live catalogue:
  *

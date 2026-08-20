@@ -80,7 +80,7 @@ describe('the mission a read-only listing reads', () => {
     await seedSoul(vfs, sql, { name: 'atlas', mission: 'ship the thing' });
 
     // A second handle that never builds a workspace filesystem: exactly what
-    // `proteus list` has, and what stops a listing from writing to every
+    // `kinu list` has, and what stops a listing from writing to every
     // workspace it walks past.
     const listing = makeSql(db);
     expect(readMission(listing)).toBe('ship the thing');

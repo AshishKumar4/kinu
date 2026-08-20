@@ -86,7 +86,7 @@ describe('createDeviceTunnelExecutor', () => {
 
     expect(connected.getStatus?.()).toMatchObject({ available: true, configured: true, status: 'active' });
     expect(offline.getStatus?.()).toMatchObject({ available: false, configured: true, status: 'disconnected' });
-    expect(offline.getStatus?.()?.reason).toContain('proteus connect');
+    expect(offline.getStatus?.()?.reason).toContain('kinu connect');
     expect(none.getStatus?.()).toMatchObject({ available: false, configured: false, status: 'not_configured' });
   });
 
@@ -107,9 +107,9 @@ describe('createDeviceTunnelExecutor', () => {
     // alone is what let this ship as a value no reader could see was a failure.
     expect(JSON.parse(String(fromHub))).toMatchObject({ reason: 'unavailable' });
     expect(JSON.parse(String(fromTunnel))).toMatchObject({ reason: 'unavailable' });
-    expect(fromHub).toContain('proteus connect');
-    expect(fromTunnel).toContain('proteus connect');
-    await expect(createDeviceTunnelExecutor(hubRejects).connect()).rejects.toThrow('proteus connect');
+    expect(fromHub).toContain('kinu connect');
+    expect(fromTunnel).toContain('kinu connect');
+    await expect(createDeviceTunnelExecutor(hubRejects).connect()).rejects.toThrow('kinu connect');
   });
 
   test('a non-connection failure is classified, and keeps its own message', async () => {

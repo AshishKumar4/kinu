@@ -3,7 +3,7 @@
 //
 // Both used to be fields on the AgentOrchestrator instance. That works only
 // while the instance outlives the turns it is counting, and neither backend
-// guarantees that: `proteus exec` is one process per turn (so the N-turn
+// guarantees that: `kinu exec` is one process per turn (so the N-turn
 // cadence was unreachable and every turn was graded by the session-end
 // constant), and a Durable Object is evicted between requests (so a
 // low-traffic agent loses the same state, just more slowly).
@@ -20,7 +20,7 @@
 //
 // A window is CLAIMED for a session-evolution pass and settled only once that
 // pass has run (`claim()` → `settle()`), never closed up front. That is what
-// lets a host decline to wait for the pass: a `proteus exec` process that
+// lets a host decline to wait for the pass: a `kinu exec` process that
 // exits, or an interactive session the user quits mid-cycle, leaves its turns
 // in the window for the next host that can afford the work — rather than
 // consuming them for a pass that was killed halfway.

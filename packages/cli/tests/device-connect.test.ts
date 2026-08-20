@@ -332,7 +332,7 @@ describe('classic cloud chat connect prompt', () => {
     expect(await waitForPidExit(daemonPid)).toBe(true);
   }, 20_000);
 
-  test('non-interactive stdin prints the proteus connect instruction instead', async () => {
+  test('non-interactive stdin prints the kinu connect instruction instead', async () => {
     const stub = startStubCloud({ devices: () => [] });
     const home = makeHome(cloudAgentConfig(stub.origin));
     const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
@@ -351,7 +351,7 @@ describe('classic cloud chat connect prompt', () => {
       proc.exited,
     ]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('No PC is connected for device access. Connect one with: proteus connect');
+    expect(stdout).toContain('No PC is connected for device access. Connect one with: kinu connect');
     expect(stub.hits.register).toBe(0);
   });
 });

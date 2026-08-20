@@ -2,7 +2,7 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus evolves across four timescales. Each one runs independently, and shorter
+Kinu evolves across four timescales. Each one runs independently, and shorter
 timescales feed data to longer ones. The engine is
 `core/src/evolution/engine.ts`. The shortest timescale is the only one that
 ticks inside a single long autonomous turn, and it has two channels:
@@ -186,10 +186,10 @@ the interval around the wrong answer.
 with a few hand labels:
 
 ```
-proteus label export <agent>            # draws ~100 turns into a file
+kinu label export <agent>            # draws ~100 turns into a file
 $EDITOR <agent>-calibration.txt         # one letter per turn (~30-45 min)
-proteus label ingest <agent> <file>     # validates, then stores
-proteus label report <agent>            # what the labels established
+kinu label ingest <agent> <file>     # validates, then stores
+kinu label report <agent>            # what the labels established
 ```
 
 `DEFAULT_LABEL_BUDGET` is 100 (`core/src/evolution/calibration.ts:120`), and the
@@ -210,7 +210,7 @@ Rogan–Gladen, `θ̂ = (p̂ + q̂₀ − 1)/(q̂₁ + q̂₀ − 1)`, with the 
 propagating all three uncertainties. Over the population the labels came from,
 that is algebraically the same estimate as the stratified PPI form.
 
-`proteus alignment <agent>` always prints the corrected block beneath K_align.
+`kinu alignment <agent>` always prints the corrected block beneath K_align.
 With no labels it reads `uncalibrated`, rather than letting the reader assume
 the classifier and the truth agree.
 
@@ -222,7 +222,7 @@ cost that quietly stops being paid. `core/src/evolution/ensemble.ts` asks
 whether that job can be handed over, and answers with a measurement.
 
 ```
-proteus label ensemble <agent>          # two cross-family judges, same turns
+kinu label ensemble <agent>          # two cross-family judges, same turns
 ```
 
 Both judges see exactly what the human file showed, because the same
@@ -533,4 +533,4 @@ This table is one of four sources the Run Timeline read model merges
 `run_events` log, the MCTS `search_nodes` tree, and detached background jobs.
 The merge is server-side, and nothing in it is backend-shaped, so a timeline is
 a capability any backend has rather than one the Durable Object grew.
-`proteus status` reads the same table locally.
+`kinu status` reads the same table locally.

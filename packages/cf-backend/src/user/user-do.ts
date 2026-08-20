@@ -1,5 +1,5 @@
 /**
- * UserDO — per-user Durable Object. Keyed by the stable Proteus userId.
+ * UserDO — per-user Durable Object. Keyed by the stable Kinu userId.
  * OAuth identities are mapped by the D1 auth store before requests reach this DO.
  *
  * Owns:
@@ -144,7 +144,7 @@ const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
  *  and needs no client support: every successful verification pushes the
  *  window out again (see `verifyDeviceToken`), so this is an idle timeout —
  *  a machine that stops connecting for this long must be re-linked with
- *  `proteus connect`, and one that keeps connecting never is. */
+ *  `kinu connect`, and one that keeps connecting never is. */
 const DEVICE_TOKEN_IDLE_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
@@ -266,7 +266,7 @@ export function parseCliAgentConnectTicketUserId(ticket: string): string | null 
 
 function cleanCliTokenLabel(label?: string): string {
   const trimmed = (label ?? '').trim().replace(/\s+/g, ' ');
-  return trimmed ? trimmed.slice(0, 80) : 'Proteus CLI';
+  return trimmed ? trimmed.slice(0, 80) : 'Kinu CLI';
 }
 
 function parseCapabilityList(value: string): string[] {
@@ -822,7 +822,7 @@ export class UserDO extends Agent<Env> {
   // ── Connected devices (user-level laptop/PC tunnel hub) ──────────────
   //
   // The reverse-WS tunnel from a user's machine terminates HERE, not on a
-  // specific agent — so one `proteus connect` lets every one of the user's
+  // specific agent — so one `kinu connect` lets every one of the user's
   // agents reach the device. The worker forwards the daemon's upgrade Request
   // to this DO (a WebSocket itself cannot cross the RPC boundary) and the
   // socket is accepted inside fetch() as a hibernatable WebSocket owned by

@@ -1,7 +1,7 @@
 // Local workspaces created before mission-derived titling still show their raw
 // directory name. Opening one heals it: the deterministic title lands before
 // the client is handed back, the model call runs behind it, and both the agent
-// database and ~/.proteus/config.json (what `proteus list` reads) end up with
+// database and ~/.proteus/config.json (what `kinu list` reads) end up with
 // the same title. The decision itself is proven in @kinu/core.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

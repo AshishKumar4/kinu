@@ -2,9 +2,9 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-## 1. What Proteus Is
+## 1. What Kinu Is
 
-Proteus is a general-purpose AI agent that improves itself over time. It:
+Kinu is a general-purpose AI agent that improves itself over time. It:
 
 - **Searches a tree of agents** against an objective the caller declares, and scores every candidate by running that objective's verifier
 - **Learns reusable tools** from successful conversations and applies them in future ones
@@ -14,7 +14,7 @@ Proteus is a general-purpose AI agent that improves itself over time. It:
 
 ```mermaid
 graph LR
-    subgraph "Proteus"
+    subgraph "Kinu"
         B1[Learned Tools<br/>CraftStore + EMA scoring] --> B2[Persistent Memory<br/>FTS5 search + reflections]
         B2 --> B3[Tree swarm<br/>candidates measured by a verifier]
         B3 --> B4[Self-Modifying Scaffold<br/>4-gate validated]
@@ -34,7 +34,7 @@ Evolution happens at three timescales simultaneously, each feeding into the next
 
 ## 2. Web Version Applications
 
-The web version runs on Cloudflare Workers with Durable Objects, accessible at [proteus.ashishkumarsingh.com](https://proteus.ashishkumarsingh.com).
+The web version runs on Cloudflare Workers with Durable Objects, accessible at [kinu.run](https://kinu.run).
 
 ### Research Platform & Live Demo
 
@@ -59,7 +59,7 @@ Each workspace is a Durable Object with its own SQLite database, hosting its def
 - **Crafted tools** — reusable code patterns extracted from successful problem-solving
 - **Scaffold improvements** — the agent's own execution logic gets better over time
 
-A Proteus agent that helped you debug TypeScript yesterday remembers the patterns it learned and applies them today.
+A Kinu agent that helped you debug TypeScript yesterday remembers the patterns it learned and applies them today.
 
 ### Multi-Model Comparison
 
@@ -94,8 +94,8 @@ The CLI version runs locally with bun:sqlite, providing the same core capabiliti
 ### Local Development Agent
 
 ```bash
-proteus create dev-helper --purpose "A TypeScript development assistant"
-proteus chat dev-helper
+kinu create dev-helper --purpose "A TypeScript development assistant"
+kinu chat dev-helper
 # Agent has access to execute_tools, run, file, agents, memory, tasks, web
 # Evolution happens locally — crafted tools persist in ~/.proteus/dev-helper/agent.db
 ```
@@ -110,13 +110,13 @@ The CLI agent can:
 
 ```bash
 # Night job: run evolution cycle
-proteus evolve dev-helper --budget 5
+kinu evolve dev-helper --budget 5
 
 # Export agent state for sharing
-proteus export dev-helper -o dev-helper-v2.agent.db
+kinu export dev-helper -o dev-helper-v2.agent.db
 
 # Import on another machine
-proteus import dev-helper-v2.agent.db --name dev-helper
+kinu import dev-helper-v2.agent.db --name dev-helper
 ```
 
 Agent state is a single SQLite file. Export, backup, version control, and share agents like code artifacts.
@@ -167,7 +167,7 @@ graph TB
         AC[AlphaCode<br/>Li 2022]
     end
 
-    subgraph "Proteus (this work)"
+    subgraph "Kinu (this work)"
         P[Combines all three<br/>+ CI-gated Lean models<br/>+ persistent state<br/>+ scaffold mutation]
     end
 
@@ -190,7 +190,7 @@ graph TB
 | **Self-Refine** (Madaan 2023) | No | No | Iterative refinement | No | No |
 | **OMNI** (Zhang 2024) | Tool creation | No | Yes | No | No |
 | **Tree of Thoughts** (Yao 2023) | No | BFS/DFS | No | No | No |
-| **Proteus** | CraftStore + EMA | Tree swarm + MCTS | Scaffold mutation | 330 theorems over 43 abstract-model requirements; 1 documented SQLite assumption | DO SQLite |
+| **Kinu** | CraftStore + EMA | Tree swarm + MCTS | Scaffold mutation | 330 theorems over 43 abstract-model requirements; 1 documented SQLite assumption | DO SQLite |
 
 ### Design choices
 
@@ -220,7 +220,7 @@ the orchestrator.
 
 - **Turn-level** works well — pattern extraction fires reliably after an accepted turn that used tools
 - **Session-level** needs 5 turns *and* a turn that errored or drew negative feedback; scaffold mutation additionally needs 3+ conversations
-- **Lifetime** fires every 5 closed session windows (`lifetimeEvolutionInterval: 5`), which is 25 turns; `proteus evolve` runs a search on demand
+- **Lifetime** fires every 5 closed session windows (`lifetimeEvolutionInterval: 5`), which is 25 turns; `kinu evolve` runs a search on demand
 - The LLM's ability to generalize tool patterns into reusable code is inconsistent
 
 ### Evaluation exists; coverage is thin
@@ -255,7 +255,7 @@ id rather than only through the recent-run window.
 
 ### Preview-site Isolation
 
-Capability hosts already isolate preview origins and strip Proteus credentials.
+Capability hosts already isolate preview origins and strip Kinu credentials.
 Complete cookie-site isolation between sibling previews additionally requires a
 preview suffix on a Public Suffix List boundary; that is a DNS/domain deployment
 prerequisite rather than an application fallback.

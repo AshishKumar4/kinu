@@ -289,7 +289,7 @@ export function readFileSlice(
   if (kept === 0) {
     // One line, on its own, larger than the whole budget. Show its head and
     // name the way to get the rest: the same workspace.readFile-inside-
-    // execute_tools recipe every other oversize payload in Proteus uses.
+    // execute_tools recipe every other oversize payload in Kinu uses.
     const line = requested[0] ?? '';
     return {
       output:

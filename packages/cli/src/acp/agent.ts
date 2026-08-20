@@ -1,9 +1,9 @@
 /**
- * The Agent Client Protocol adapter — Proteus spoken to Zed, JetBrains,
+ * The Agent Client Protocol adapter — Kinu spoken to Zed, JetBrains,
  * neovim, Marimo and anything else that drives an ACP agent.
  *
  * This is a translation layer and nothing more. An ACP session IS an
- * AgentClient (the same one `proteus chat` drives), so delegation, crafted
+ * AgentClient (the same one `kinu chat` drives), so delegation, crafted
  * tools, checkpoints and evolution all ride the normal turn pipeline; the only
  * thing here is the mapping between ACP's shapes and the client's event
  * stream. There is deliberately no second agent loop.
@@ -40,7 +40,7 @@ export interface AcpAgentDeps {
   version: string;
 }
 
-/** Proteus's builtin tools, mapped to the kind ACP clients use to pick an icon
+/** Kinu's builtin tools, mapped to the kind ACP clients use to pick an icon
  *  and a presentation. Crafted and MCP tools fall through to 'other'.
  *
  *  `skills` and `release` are not in this map on purpose: neither is a tool
@@ -113,7 +113,7 @@ const OUTCOME_BY_OPTION = new Map<string, ShellApprovalOutcome>([
   ['deny', 'deny'],
 ]);
 
-/** One live ACP session: the Proteus client plus the per-turn state the
+/** One live ACP session: the Kinu client plus the per-turn state the
  *  translation needs. */
 class AcpSession {
   readonly id: SessionId;
@@ -187,7 +187,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
           toolCallId: event.toolCallId,
           title: toolTitle(event.toolName, event.args),
           kind: toolKind(event.toolName, event.args),
-          // Proteus emits the call at dispatch, so it is already running.
+          // Kinu emits the call at dispatch, so it is already running.
           status: 'in_progress',
           rawInput: event.args,
         };
@@ -222,7 +222,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
         // Closing releases the workspace db handle and the MCP servers.
         sessionCapabilities: { close: {} },
       },
-      // Proteus authenticates through `proteus auth`, not through the editor.
+      // Kinu authenticates through `kinu auth`, not through the editor.
       authMethods: [],
     }))
 

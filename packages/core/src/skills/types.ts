@@ -1,5 +1,5 @@
 /**
- * Proteus skills — Claude-Code / Hermes-compatible SKILL.md files stored
+ * Kinu skills — Claude-Code / Hermes-compatible SKILL.md files stored
  * in the agent's VFS at `/workspace/skills/<name>.md`.
  *
  * A skill is natural-language workflow instructions with a typed front-
@@ -75,7 +75,7 @@ export interface ParsedSkill {
 }
 
 export type SkillSource =
-  /** Shipped with Proteus core (built-in skills). */
+  /** Shipped with Kinu core (built-in skills). */
   | 'builtin'
   /** Discovered in the agent's VFS at /workspace/skills/. */
   | 'vfs'

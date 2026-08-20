@@ -70,7 +70,7 @@ export interface FileCheckpointEntry {
  * an empty list was read as a claim about the turn. A caller that has
  * `availability.available === false` can say the true thing — and `reason`
  * already carries it, e.g. `no device connected — connect one with
- * `proteus connect``.
+ * `kinu connect``.
  */
 export interface FileCheckpointListing {
   availability: CheckpointAvailability;

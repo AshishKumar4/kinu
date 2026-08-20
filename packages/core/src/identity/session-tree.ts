@@ -8,7 +8,7 @@
  * `agents`' `AgentSessionProvider` — carries the same edges, defaults a missing
  * parent to the latest leaf so no message is ever edgeless, and already exposes
  * `getHistory(leafId)`, `getBranches(messageId)`, `getLatestLeaf()` and
- * `getPathLength(leafId)`. Proteus called none of those. The tree was written,
+ * `getPathLength(leafId)`. Kinu called none of those. The tree was written,
  * indexed, and dead.
  *
  * Two consequences, both of which the operator hit:
@@ -38,7 +38,7 @@ import { uiMessageText } from '../utils/ui-message';
 
 /**
  * Bound on an ancestry walk, and the cycle guard. Matches the bound `agents`'
- * own `getPathLength` uses on the same edges, so a Proteus walk and an SDK walk
+ * own `getPathLength` uses on the same edges, so a Kinu walk and an SDK walk
  * stop in the same place on a pathological chain.
  */
 export const SESSION_TREE_MAX_DEPTH = 10_000;

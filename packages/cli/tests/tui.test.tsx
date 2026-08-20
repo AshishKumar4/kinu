@@ -453,7 +453,7 @@ describe('CLI TUI layout', () => {
           initial,
           afterDigits: selected(),
           openedByDigits: action,
-          header: rowWith('Proteus workspaces'),
+          header: rowWith('Kinu workspaces'),
         };
         mockInput.pressArrow('down');
         await waitFor('the down arrow to move the selection', () => selected() !== initial, 200);
@@ -485,7 +485,7 @@ describe('CLI TUI layout', () => {
       expect(observed.finalAction).toEqual({ type: 'exit' });
       // The home header renders the one VERSION, which is why the version test
       // no longer greps home-app.tsx for the literal.
-      expect(observed.header).toBe(`Proteus workspaces · cli ${VERSION}`);
+      expect(observed.header).toBe(`Kinu workspaces · cli ${VERSION}`);
     } finally {
       rmSync(run.home, { recursive: true, force: true });
     }

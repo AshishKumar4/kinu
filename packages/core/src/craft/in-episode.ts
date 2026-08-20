@@ -16,7 +16,7 @@
  *
  *   STRONG   An environment-supplied verifier the agent did not author — a
  *            repo's own test suite, a benchmark's grader. This is the only
- *            thing that can say the artifact did the RIGHT thing. Proteus has
+ *            thing that can say the artifact did the RIGHT thing. Kinu has
  *            one in the sealed bench and NONE in production, because every
  *            command a production agent runs is a command it chose. Nothing
  *            here pretends otherwise.

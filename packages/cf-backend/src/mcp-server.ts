@@ -1,5 +1,5 @@
 /**
- * Proteus MCP server surface.
+ * Kinu MCP server surface.
  *
  *   GET /mcp/v1/<agentName> / POST / DELETE → MCP streamable-HTTP transport
  *
@@ -7,7 +7,7 @@
  * straight to this handler, bypassing the browser-session gate external
  * clients can never pass):
  *   • `Authorization: Bearer ptc_…` — the caller's CLI token (the per-user
- *     credential external MCP clients obtain via `proteus auth`).
+ *     credential external MCP clients obtain via `kinu auth`).
  *   • Otherwise the browser session / DEV_USER_EMAIL identity.
  * Every request then runs the same ownership claim as the rest of the
  * per-agent API (registry membership + claimOwner).
@@ -16,15 +16,15 @@
  * "WebStandardStreamableHTTPServerTransport" pattern in
  * external/agents/examples/mcp-server). Each request:
  *   1. Builds a fresh McpServer instance
- *   2. Registers Proteus tools that proxy back to the OrchestratorAgent DO
+ *   2. Registers Kinu tools that proxy back to the OrchestratorAgent DO
  *      by `agentName` via getAgentByName (using @callable RPCs already
  *      defined on the orchestrator)
  *   3. Connects the transport, handles the request, returns the response
  *
- * This makes Proteus a real MCP server — external clients (Cursor, Claude
+ * This makes Kinu a real MCP server — external clients (Cursor, Claude
  * Code, browser AI, other agents) can connect, list tools, invoke them,
  * read memory, trigger splits, manage scaffold versions. The distribution
- * play: Proteus becomes a tool other agents can use, not just a chat app.
+ * play: Kinu becomes a tool other agents can use, not just a chat app.
  *
  * v1 read tools:
  *   • search_memory      — FTS over agent memory
@@ -485,7 +485,7 @@ async function authenticateMcpCaller(request: Request, env: Env): Promise<{ user
     if (result.identity.kind !== 'session') {
       // Scoped CI access tokens are CLI-API-only; the MCP surface stays
       // bound to interactive session tokens.
-      return withCors(Response.json({ error: 'MCP requires an interactive CLI session token. Sign in with: proteus auth' }, { status: 403 }));
+      return withCors(Response.json({ error: 'MCP requires an interactive CLI session token. Sign in with: kinu auth' }, { status: 403 }));
     }
     return { userId: result.identity.userId };
   }

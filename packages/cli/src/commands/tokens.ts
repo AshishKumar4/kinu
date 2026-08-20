@@ -1,7 +1,7 @@
 /**
- * `proteus tokens` — manage long-lived, scoped CI access tokens (`pta_…`).
+ * `kinu tokens` — manage long-lived, scoped CI access tokens (`pta_…`).
  * Minting requires an interactive session signed in within the step-up
- * window, so a stale terminal gets pointed back at `proteus auth`.
+ * window, so a stale terminal gets pointed back at `kinu auth`.
  */
 import {
   createCliAccessToken,
@@ -22,7 +22,7 @@ export async function tokensCommand(action: string | undefined, name: string | u
   if (sub === 'list') return listTokens(opts);
   if (sub === 'create') return createToken(name, opts);
   if (sub === 'revoke') return revokeToken(name ?? opts.name);
-  throw new Error('Usage: proteus tokens [list | create --name <name> --scopes <scopes> | revoke <name>]');
+  throw new Error('Usage: kinu tokens [list | create --name <name> --scopes <scopes> | revoke <name>]');
 }
 
 async function listTokens(opts: TokensOpts): Promise<void> {
@@ -33,7 +33,7 @@ async function listTokens(opts: TokensOpts): Promise<void> {
     return;
   }
   if (tokens.length === 0) {
-    console.log(DIM('No access tokens. Create one with: proteus tokens create --name ci --scopes workspace.exec,workspace.read'));
+    console.log(DIM('No access tokens. Create one with: kinu tokens create --name ci --scopes workspace.exec,workspace.read'));
     return;
   }
   for (const token of tokens) {
@@ -44,7 +44,7 @@ async function listTokens(opts: TokensOpts): Promise<void> {
 
 async function createToken(positionalName: string | undefined, opts: TokensOpts): Promise<void> {
   const name = opts.name ?? positionalName;
-  if (!name) throw new Error('Token name required: proteus tokens create --name ci --scopes workspace.exec,workspace.read');
+  if (!name) throw new Error('Token name required: kinu tokens create --name ci --scopes workspace.exec,workspace.read');
   const scopes = (opts.scopes ?? '').split(/[\s,]+/).filter(Boolean);
   if (scopes.length === 0) throw new Error('Scopes required: --scopes workspace.exec,workspace.read');
 
@@ -60,11 +60,11 @@ async function createToken(positionalName: string | undefined, opts: TokensOpts)
   console.log('');
   console.log(WARN('This token is shown once — store it as a CI secret now.'));
   console.log(DIM('Use it headlessly:'));
-  console.log(DIM(`  PROTEUS_TOKEN=${created.token.slice(0, 12)}… proteus exec --workspace <name> --json "task"`));
+  console.log(DIM(`  PROTEUS_TOKEN=${created.token.slice(0, 12)}… kinu exec --workspace <name> --json "task"`));
 }
 
 async function revokeToken(ref: string | undefined): Promise<void> {
-  if (!ref) throw new Error('Token name required: proteus tokens revoke <name>');
+  if (!ref) throw new Error('Token name required: kinu tokens revoke <name>');
   const auth = requireAuthConfig();
   await revokeCliAccessToken(auth.origin, auth.token, ref);
   console.log(`${OK('✓')} Access token ${ACCENT(ref)} revoked`);

@@ -1,5 +1,5 @@
 /**
- * The agent's tracing seam: the only way a Proteus agent opens a span.
+ * The agent's tracing seam: the only way a Kinu agent opens a span.
  *
  * SHARED, not cf-only, and the split is the answer to "is tracing hosted-only".
  * This file takes a `Tracer`, an `isolateGen` and a `selfPath` and owns the

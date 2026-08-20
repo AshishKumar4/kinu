@@ -63,8 +63,8 @@ describe('OwnedModelServices', () => {
     const actor = source('actor-agent.ts');
     const exploration = source('exploration.ts');
 
-    expect(actor).toContain("appTitle: 'Proteus',\n    ownerRequired: true,");
-    expect(exploration).toContain("appTitle: 'Proteus (exploration)',\n    ownerRequired: false,");
+    expect(actor).toContain("appTitle: 'Kinu',\n    ownerRequired: true,");
+    expect(exploration).toContain("appTitle: 'Kinu (exploration)',\n    ownerRequired: false,");
     expect(actor).toContain('return this.ownedModelServices.providerRegistry();');
     expect(actor).toContain('return this.ownedModelServices.getWebSearchProvider();');
     expect(actor).toContain('this.ownedModelServices.invalidate();');
@@ -76,7 +76,7 @@ describe('OwnedModelServices', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(),
       agentName: () => 'actor',
-      appTitle: 'Proteus',
+      appTitle: 'Kinu',
       ownerRequired: true,
       getOwnerUserId: () => null,
       getUserCaller: async () => await testOwner(),
@@ -91,7 +91,7 @@ describe('OwnedModelServices', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(fakeUserDO(), platformGatewayEnv()),
       agentName: () => 'head',
-      appTitle: 'Proteus (exploration)',
+      appTitle: 'Kinu (exploration)',
       ownerRequired: false,
       getOwnerUserId: () => null,
       getUserCaller: async () => await testOwner(),
@@ -110,7 +110,7 @@ describe('OwnedModelServices', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(),
       agentName: () => 'research-head',
-      appTitle: 'Proteus (exploration)',
+      appTitle: 'Kinu (exploration)',
       ownerRequired: false,
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => 'owner-1',
@@ -123,8 +123,8 @@ describe('OwnedModelServices', () => {
   });
 
   test.each([
-    ['Proteus', 'actor'],
-    ['Proteus (exploration)', 'head'],
+    ['Kinu', 'actor'],
+    ['Kinu (exploration)', 'head'],
   ])('preserves OpenRouter X-Title %s', async (appTitle, agentName) => {
     const mock = createMockFetch([
       { match: 'openrouter.ai', respond: { status: 200, body: { choices: [] } } },
@@ -170,7 +170,7 @@ describe('OwnedModelServices', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(fakeUserDO({ 'tavily': { Authorization: 'Bearer tavily-token' } })),
       agentName: () => 'head',
-      appTitle: 'Proteus (exploration)',
+      appTitle: 'Kinu (exploration)',
       ownerRequired: false,
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => owner,

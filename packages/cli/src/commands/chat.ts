@@ -24,7 +24,7 @@ export async function chatCommand(name: string | undefined, opts: {
     }
     const agents = listKnownAgents();
     if (agents.length === 0) {
-      printError('No workspaces found.', 'Run proteus in a terminal to create one from a mission.');
+      printError('No workspaces found.', 'Run kinu in a terminal to create one from a mission.');
       process.exit(1);
     }
     if (agents.length === 1) {
@@ -44,7 +44,7 @@ export async function chatCommand(name: string | undefined, opts: {
   }
 
   if (!resolveAgentRef(name) && !existsSync(agentDbPath(name))) {
-    printError(`Workspace "${name}" not found.`, `Create it with: proteus create ${name}`);
+    printError(`Workspace "${name}" not found.`, `Create it with: kinu create ${name}`);
     process.exit(1);
   }
 

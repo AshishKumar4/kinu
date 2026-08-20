@@ -2,7 +2,7 @@
  * Workspace capability tokens + the taint registry — the UserDO's caller
  * boundary.
  *
- * Every secret a Proteus user owns (provider credentials, MCP servers, the
+ * Every secret a Kinu user owns (provider credentials, MCP servers, the
  * physical-machine tunnel, the release ledger) lives in their UserDO,
  * and until now any holder of a UserDO stub reached all of it. This module is
  * the attenuation primitive: a workspace Durable Object proves WHICH workspace
@@ -31,7 +31,7 @@
  *     than saying so.
  *
  * What the boundary buys is unchanged and still the point: the *tool surface* —
- * the part of Proteus an injected prompt can steer — reaches the UserDO only
+ * the part of Kinu an injected prompt can steer — reaches the UserDO only
  * through code that presents a workspace token, and is therefore attenuated by
  * tier no matter which tool gate someone forgets.
  */

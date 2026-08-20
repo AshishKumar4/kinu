@@ -4,12 +4,12 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 /**
  * Transport security at the Worker entry.
  *
- * Both gaps this covers were live in production on 2026-08-16:
- * `http://proteus.ashishkumarsingh.com/api/health` answered 200 in cleartext,
- * and no HTTPS response carried `Strict-Transport-Security`. Cloudflare does
- * not close either one for this zone — there is no "Always Use HTTPS" rule and
- * a Workers custom domain does not add one — so the Worker is the only place
- * that can, and these are the behaviours that prove it does.
+ * Both gaps this covers were live against the then-production origin on
+ * 2026-08-16: `http://<host>/api/health` answered 200 in cleartext, and no
+ * HTTPS response carried `Strict-Transport-Security`. Cloudflare closes neither
+ * by default — a zone has no "Always Use HTTPS" rule unless one is added, and a
+ * Workers custom domain does not add one — so the Worker is the only place that
+ * can, and these are the behaviours that prove it does.
  *
  * Everything here goes through the real `server.ts` fetch entry rather than the
  * helpers, because the ordering is the substance: the redirect has to happen
@@ -27,6 +27,10 @@ const APP_HOST = 'app.example.com';
 /** Production shape: the preview suffix IS the app host, so every preview
  *  hostname is a strict subdomain of it (wrangler.jsonc PREVIEW_HOST_SUFFIX). */
 const PREVIEW_HOST = `3000-workspace-tok.${APP_HOST}`;
+/** Reachable over TLS but not claimed: neither the canonical origin nor under
+ *  the preview suffix. Proves the upgrade and the pin follow what this
+ *  deployment declares itself to be, not any host that arrives encrypted. */
+const FOREIGN_HOST = 'unrelated.example.net';
 const HSTS = 'max-age=31536000; includeSubDomains';
 
 function harness(assetResponse: () => Response) {
@@ -123,6 +127,23 @@ describe('HTTPS responses are pinned', () => {
     // rebuilt into a new Response, so the pin must skip it entirely.
     expect(response).toBe(upgrade);
     expect(response.headers.get('strict-transport-security')).toBeNull();
+  });
+});
+
+describe('a host this deployment does not claim is left alone', () => {
+  test('it is neither upgraded off cleartext nor pinned', async () => {
+    const { env, ctx } = harness(script);
+    const cleartext = await worker.fetch(
+      new Request(`http://${FOREIGN_HOST}/assets/main.js`), env, ctx,
+    );
+    const secure = await worker.fetch(
+      new Request(`https://${FOREIGN_HOST}/assets/main.js`), env, ctx,
+    );
+
+    // Not a 301: the redirect would send a browser to a hostname this
+    // deployment never claimed, and the pin would outlive the claim by a year.
+    expect(cleartext.status).toBe(200);
+    expect(secure.headers.get('strict-transport-security')).toBeNull();
   });
 });
 

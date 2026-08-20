@@ -4,12 +4,12 @@
  * The raw `activity_log` dump that used to close this panel is gone. Event
  * name + detail + ms is telemetry, and everything in it a person should read
  * already lands in chat, in the Work tab's journal, or in the meters above —
- * the same argument that retired the Run Timeline. `proteus debug` prints the
+ * the same argument that retired the Run Timeline. `kinu debug` prints the
  * rows for anyone who wants them; the table and its RPC are untouched.
  *
  * Provider-reported tokens and cache reads are authoritative and labelled
  * `API`. Category attribution uses the exact composed-content character counts
- * Proteus measures locally. Providers do not report per-category tokens, so
+ * Kinu measures locally. Providers do not report per-category tokens, so
  * this surface never invents them. Anything the backend could not source
  * renders as an em dash and a reason, never as a plausible zero.
  *
@@ -243,7 +243,7 @@ function Breakdown({ context }: { context: ContextComposition | null }) {
       </table>
 
       <p className="text-[10px] p-text-3 leading-relaxed mt-2.5 pt-2.5 border-t p-border">
-        These rows are exact character counts for the prompt content Proteus composed. Cloudflare
+        These rows are exact character counts for the prompt content Kinu composed. Cloudflare
         reports the request&apos;s total tokens but not how those tokens divide across sections, so no
         per-section token counts are inferred.
       </p>
@@ -458,7 +458,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                 )}
                 <th
                   className="text-right font-normal pb-1 w-16"
-                  title="Priced from the models.dev catalog by Proteus, not reported by any provider. Absent means unpriced, never free."
+                  title="Priced from the models.dev catalog by Kinu, not reported by any provider. Absent means unpriced, never free."
                 >USD</th>
               </tr>
             </thead>
@@ -498,7 +498,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
             <Num className="p-text-2">{fmtPct(reported, reported === 1 ? 0 : 1)}</Num> of the{" "}
             {coverage.calls} known call{coverage.calls === 1 ? "" : "s"} reported usage.{" "}
             {reported === 1
-              ? "Every producer Proteus can see measured what it spent."
+              ? "Every producer Kinu can see measured what it spent."
               : `The other ${coverage.calls - coverage.measured} spent tokens nothing counted — unmeasured, not free.`}
             {caveat === null
               && " Nothing qualifies these totals: they are the workspace's whole spend over its whole log."}
@@ -576,7 +576,7 @@ const shareOfTokens = (tokens: number | undefined, measured: number | undefined)
 
 /**
  * The numeric cells every spend row carries, in provenance order: what the
- * provider measured, then what Proteus derived.
+ * provider measured, then what Kinu derived.
  *
  * Shared by the producer rows and the total so a floor can never be marked in
  * one and swallowed in the other. `className` carries the row's emphasis and is

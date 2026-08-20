@@ -1,7 +1,7 @@
 /**
  * ACP ContentBlock[] <-> the AgentPrompt the chat surfaces already build.
  *
- * ACP clients send a prompt as typed blocks; Proteus turns take text plus
+ * ACP clients send a prompt as typed blocks; Kinu turns take text plus
  * data-URL PromptFiles (what @path mentions produce). Editors put the open
  * buffer in `resource` blocks and pasted screenshots in `image` blocks, so
  * both have to survive the crossing.

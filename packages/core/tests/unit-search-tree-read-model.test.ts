@@ -79,7 +79,7 @@ describe('readLatestSearchTree', () => {
   });
 });
 
-// One node in full — the projection `proteus inspect mcts <id>` renders, which
+// One node in full — the projection `kinu inspect mcts <id>` renders, which
 // existed once per backend under two names until it moved here. These pin the
 // three things the two copies each restated: the ancestry order, the child
 // ordering, and that a cyclic parent chain terminates instead of hanging.

@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 /**
  * Latency baseline test — measures time-to-first-chunk for the platform default
- * via the AI Gateway directly, bypassing all Proteus/Think/DO overhead.
+ * via the AI Gateway directly, bypassing all Kinu/Think/DO overhead.
  *
  * Usage: AI_GATEWAY_AUTH='Bearer <token>' bun scripts/latency-test.ts
  *
  * Reads AI_GATEWAY_URL from packages/cf-backend/.dev.vars. The token is this
  * script's own: it speaks raw HTTPS, so it cannot use the Workers AI binding the
- * Worker itself reaches the gateway through. Proteus needs no such token.
+ * Worker itself reaches the gateway through. Kinu needs no such token.
  */
 
 import { readFileSync } from "fs";
@@ -33,7 +33,7 @@ if (!GATEWAY_URL || !GATEWAY_AUTH) {
   process.exit(1);
 }
 
-// The full Proteus system prompt (same as orchestrator.ts getSystemPrompt)
+// The full Kinu system prompt (same as orchestrator.ts getSystemPrompt)
 const FULL_SYSTEM_PROMPT = `A self-evolving coding assistant with MCTS exploration and durable skill evolution.
 
 ## Tools (5 tools)
@@ -75,7 +75,7 @@ Full-text search over long-term memory. Quick recall — no code needed.
 Your capabilities improve automatically via CraftStore — good patterns become codemode.* APIs inside execute_tools.
 Summarize what you did after using tools.`;
 
-// Tool schemas that Proteus registers (execute_tools, run, explore, save_note, search_memory)
+// Tool schemas that Kinu registers (execute_tools, run, explore, save_note, search_memory)
 const TOOL_SCHEMAS = [
   {
     type: "function" as const,
@@ -296,7 +296,7 @@ async function measureStreaming(opts: {
 
 async function main() {
   console.log("╔══════════════════════════════════════════════════════════════╗");
-  console.log("║  Proteus Latency Baseline — Direct AI Gateway Tests         ║");
+  console.log("║  Kinu Latency Baseline — Direct AI Gateway Tests         ║");
   console.log("╚══════════════════════════════════════════════════════════════╝\n");
   console.log(`Gateway: ${GATEWAY_URL.slice(0, 50)}...`);
   console.log(`Model:   ${MODEL}`);

@@ -2,7 +2,7 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus carries a large self-evolution machine with no measured effect attached
+Kinu carries a large self-evolution machine with no measured effect attached
 to it. Measured 2026-08-19: 15,645 lines of non-test TypeScript across
 `core/src/evolution`, `core/src/mcts`, `core/src/scaffold` and `core/src/craft`,
 plus a Lean corpus of 330 theorems and 43 requirements with 0 `sorry`. No
@@ -257,7 +257,7 @@ budget either. It cannot breach, and it cannot be declared inside the envelope.
 
 The token and call totals come from one attempt-local inference proxy
 (`scripts/bench-inference-proxy.ts`) rather than from the root chat session.
-Every model config Proteus hands to a head, MCTS branch, judge, fast model,
+Every model config Kinu hands to a head, MCTS branch, judge, fast model,
 subagent or subprocess points to that proxy. Pi uses the same proxy. A successful
 provider response with no usage invalidates the attempt instead of being counted
 as free compute.
@@ -483,8 +483,8 @@ the interval spans zero, and "the stateful arm did WORSE" when it is negative.
 | `noisy:<rate>` | none | seeded synthetic solver with a known success rate |
 | `pi:vanilla` | yes | official Pi SDK session with its native `read`, `bash`, `edit` and `write` tools (V0) |
 | `pi:retry` | yes | the same Pi session plus one retry carrying machine-verifier failures (V1) |
-| `agent` | yes | Proteus from a fresh v0 workspace per task |
-| `agent-evolving` | yes | Proteus with evolution live, state carried across the sequence |
+| `agent` | yes | Kinu from a fresh v0 workspace per task |
+| `agent-evolving` | yes | Kinu with evolution live, state carried across the sequence |
 | `panel:self` | yes | one head split of `BENCH_PANEL_SIZE` heads (default 3, range 2–6), every head on the analyst model, merged by `synthesize` |
 | `panel:mixed` | yes | the same split with one configured provider per head, one per vendor family |
 
@@ -519,7 +519,7 @@ bench-only development dependency. It uses `createAgentSession`, an in-memory
 `SessionManager`, an attempt-private agent directory, and only Pi's native coding
 tools. It does not call the CLI or TUI, import private TUI paths, or copy Pi's
 loop into this repository. Both Pi arms use the same model, wall-clock limit,
-token limit, sandbox and final machine scorer as Proteus. V1 may spend its
+token limit, sandbox and final machine scorer as Kinu. V1 may spend its
 remaining budget on one verifier retry, and it does not receive a larger budget.
 
 ## Mandatory stability pilot
@@ -579,8 +579,8 @@ meter.
 A fresh full `bench validate` against the exact final source is mandatory before
 each live experiment. The immutable run artifact, source manifest and commit
 identify whether that prerequisite was met for a particular tree. Live-model
-evidence remains pending for the Pi-versus-Proteus stability pilot and matched
-comparison, and for the `agent`-versus-`agent-evolving` run. The Proteus gain and
+evidence remains pending for the Pi-versus-Kinu stability pilot and matched
+comparison, and for the `agent`-versus-`agent-evolving` run. The Kinu gain and
 its difference from Pi therefore remain unmeasured.
 
 At a dispersion of 0.20, the 69-task sealed split resolves roughly 15pp. Reaching
@@ -609,7 +609,7 @@ Before spending model tokens:
 `DEFAULT_ATTEMPT_BUDGET` is 600,000 tokens and 600,000 ms wall clock per attempt
 (`core/src/bench/types.ts`, read 2026-08-19). The wall-clock half is the measured
 turn envelope `TURN_WALL_CLOCK_ENVELOPE_MS`, raised from 300,000 ms because an
-attempt is one whole Proteus turn and turns were measured at up to 509 s. At
+attempt is one whole Kinu turn and turns were measured at up to 509 s. At
 those limits:
 
 | run | attempts | tokens at most | serial wall clock at most |
@@ -626,38 +626,38 @@ live-model calls have been made for this integration.
 
 ## The Harbor adapter for external benchmarks
 
-The internal corpus measures Proteus against seeded defects in this repo, which
+The internal corpus measures Kinu against seeded defects in this repo, which
 is a closed loop of our tasks and our checks. `bench/harbor/` is the other half.
 It is a [Harbor](https://github.com/laude-institute/harbor) agent adapter that
-runs Proteus inside somebody else's task containers, scored by somebody else's
+runs Kinu inside somebody else's task containers, scored by somebody else's
 verifier. DeepSWE and Terminal-Bench are the two corpora it has been pointed at.
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"          # harbor
 export PYTHONPATH="$PWD"                      # so harbor can import bench.harbor
 # Mint once from a fresh interactive sign-in, then load it from your secret store.
-# proteus tokens create --name harbor --scopes ai.proxy
+# kinu tokens create --name harbor --scopes ai.proxy
 export PROTEUS_TOKEN=pta_…
 
 harbor run \
   --agent bench.harbor.proteus_agent:ProteusAgent \
   --path ./deep-swe -i <task-name> \
   --ak evolve=false \
-  --allow-agent-host proteus.ashishkumarsingh.com \
+  --allow-agent-host kinu.run \
   --jobs-dir /tmp/harbor-jobs -n 1 -y
 ```
 
 `--ak evolve=true|false` is the experiment. It holds the adapter, the task and
 the model fixed, and turns the three-timescale evolution machinery on or off. It
-reaches `proteus exec --no-auto-evolve`, which is the CLI's switch over the
+reaches `kinu exec --no-auto-evolve`, which is the CLI's switch over the
 `EvolutionEngine`'s `enabled` flag, the same one `agent` versus `agent-evolving`
 flips internally.
 
 Other kwargs are `workspace` (workspace name, default `harbor`), `mission` (the
 workspace's opening mission) and `proteus_repo` (which checkout to build from).
 The default model is native Workers AI `@cf/deepseek-ai/deepseek-v4-pro-0813`,
-reached through Proteus's signed-in `/api/user/ai/v1` proxy with `PROTEUS_TOKEN`,
-or the session from `proteus auth`. A long-lived access token needs the
+reached through Kinu's signed-in `/api/user/ai/v1` proxy with `PROTEUS_TOKEN`,
+or the session from `kinu auth`. A long-lived access token needs the
 `ai.proxy` scope. A direct Cloudflare endpoint uses `CLOUDFLARE_API_TOKEN`, and
 explicit BYO runs can still set `PROTEUS_BASE_URL`, `PROTEUS_AUTH` and `-m`
 together.
@@ -699,7 +699,7 @@ and a launcher that skips it fails loudly.
 environment as `docker compose exec -e KEY=VALUE`, which publishes the value to
 every `ps` on the host and to Harbor's own command log. So the adapter uploads
 the run environment into the container as `/installed-agent/proteus.env`, mode
-0600 and owned by the agent user, and wraps every Proteus invocation in `set -a;
+0600 and owned by the agent user, and wraps every Kinu invocation in `set -a;
 . /installed-agent/proteus.env; set +a;`. The command line names the path and
 nothing else. There is no second way for the adapter to pass configuration, so
 there is no second way for a key to leak back onto argv.
@@ -709,7 +709,7 @@ there is no second way for a key to leak back onto argv.
 DeepSWE task images declare `allow_internet = false`, and the install phase runs
 under the environment baseline, before `--allow-agent-host` opens anything.
 Nothing can be downloaded inside the container, which rules out fetching bun and
-the Proteus sources there.
+the Kinu sources there.
 
 Instead `bun build --compile` turns the CLI into one self-contained x86-64 binary
 on the host, with the bun runtime and `bun:sqlite` embedded, and the adapter
@@ -718,10 +718,10 @@ whatever a registry serves. The agent phase still needs `--allow-agent-host` for
 the model endpoint.
 
 Inside the container the adapter creates a fresh local workspace per trial and
-hands the task instruction to `proteus exec --json`, teed to
+hands the task instruction to `kinu exec --json`, teed to
 `/logs/agent/proteus.jsonl`. `populate_context_post_run` converts that stream to
 an ATIF `trajectory.json` and reports the turn's token usage. `cost_usd` stays
-unset, because Proteus reports tokens and not prices.
+unset, because Kinu reports tokens and not prices.
 
 Reading the stream is `bench/clbench/proteus/events.py`, one reader for the CLI's
 event contract, shared with the CL-Bench adapter. A change to the event shape
@@ -812,4 +812,4 @@ $0.61 of model spend for the four runs, including one capped probe. Both DeepSWE
 arms finished their turn on their own, with no timeout and no error, and failed
 the task's own tests. That is a real result rather than an instrument failure. At
 n=1 per arm it says nothing about the gain, and nothing here is a measurement of
-Proteus yet.
+Kinu yet.

@@ -419,7 +419,7 @@ describe('auth and desktop security invariants', () => {
     expect(installPage?.headers.get('content-type')).toContain('text/html');
     expect(installPage?.headers.get('content-security-policy')).toContain('https://static.cloudflareinsights.com');
     const html = await installPage!.text();
-    expect(html).toContain('Install Proteus CLI');
+    expect(html).toContain('Install Kinu CLI');
     expect(html).toContain('curl -fsSL');
     expect(html).toContain('https://proteus.example.com/install.sh');
     expect(html).toContain('| bash');
@@ -447,13 +447,13 @@ describe('auth and desktop security invariants', () => {
   });
 
   test('CLI shim does not hardcode GitHub archive directory names and verifies the source checksum by default', async () => {
-    const shim = await handleCliRequest(new Request('https://proteus.example.com/downloads/proteus'), PUBLIC_ROUTE_ENV);
+    const shim = await handleCliRequest(new Request('https://proteus.example.com/downloads/kinu'), PUBLIC_ROUTE_ENV);
     expect(shim?.status).toBe(200);
     const script = await shim!.text();
     expect(script).toContain('SRC_DIR="$SOURCE_ROOT/current"');
-    expect(script).toContain('https://proteus.example.com/downloads/proteus-source.tar.gz');
+    expect(script).toContain('https://proteus.example.com/downloads/kinu-source.tar.gz');
     expect(script).not.toContain('github.com');
-    expect(script).not.toContain('Proteus-main');
+    expect(script).not.toContain('Kinu-main');
     // Default verification fetches the published .sha256 asset; the env var
     // is only a pin override.
     expect(script).toContain('"$TARBALL_URL.sha256"');
@@ -463,7 +463,7 @@ describe('auth and desktop security invariants', () => {
     expect(syntaxCheck.exitCode).toBe(0);
 
     const shimHead = await handleCliRequest(
-      new Request('https://proteus.example.com/downloads/proteus', { method: 'HEAD' }),
+      new Request('https://proteus.example.com/downloads/kinu', { method: 'HEAD' }),
       PUBLIC_ROUTE_ENV,
     );
     expect(shimHead?.status).toBe(200);

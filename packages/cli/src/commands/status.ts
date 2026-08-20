@@ -36,7 +36,7 @@ export async function statusCommand(name: string): Promise<void> {
   name = target.localName;
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
-    printError(`Workspace "${name}" not found.`, `Create it with: proteus create ${name}`);
+    printError(`Workspace "${name}" not found.`, `Create it with: kinu create ${name}`);
     process.exit(1);
   }
 

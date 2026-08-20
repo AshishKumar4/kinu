@@ -1,5 +1,5 @@
 /**
- * Canonical tool registry — the single source of truth for Proteus's built-in
+ * Canonical tool registry — the single source of truth for Kinu's built-in
  * tool names, how the model REACHES each of them, and their descriptions.
  * Consumed by:
  *   - tools/builtins.ts      (factory for the built-in ToolSet)

@@ -161,7 +161,7 @@ function systemCapturingModel(answer: string, sink: (system: string) => void): T
  *  runtime factory's parameter. */
 function workspaceRuntime() {
   const db = new Database(':memory:');
-  // The agent DB carries a messages table in production (created on `proteus
+  // The agent DB carries a messages table in production (created on `kinu
   // create`); the runtime factory doesn't, so provision it for the test.
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
@@ -569,7 +569,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(system).toBeDefined();
     const text = String(system!.content);
     expect(text).toContain('laptop.*');
-    expect(text).toContain('the local machine the Proteus CLI is running on');
+    expect(text).toContain('the local machine the Kinu CLI is running on');
     expect(text).not.toContain('device tunnel');
     expect(text).not.toContain('asks the user for consent');
     expect(text).not.toContain('OFFLINE');
@@ -1354,7 +1354,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('settleBackgroundWork drives a detached job\'s wake turn to completion', async () => {
-    // The bug this pins: a one-shot `proteus exec` used to close right after the
+    // The bug this pins: a one-shot `kinu exec` used to close right after the
     // user turn, cutting off the wake turn a backgrounded job triggers (its
     // turn-start streamed, its turn-end never did). settleBackgroundWork drains
     // the fiber AND the wake turn it enqueues before the caller closes.
@@ -1378,7 +1378,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('settleBackgroundWork gives up on work that never settles, and leaves it running', async () => {
-    // The regression this pins: `proteus exec` detaches a server-style `run`
+    // The regression this pins: `kinu exec` detaches a server-style `run`
     // (a VM, a package server, a training job), the agent correctly ends its
     // turn, and the process then blocked on Promise.allSettled over a fiber
     // that never settles — 6.4 of 16.2 agent-hours of dead idle across a
@@ -1439,8 +1439,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(message).toContain('mcts: edit the target file');
     expect(message).toContain('local scheduler daemon');
     expect(message).toContain('writes files');
-    expect(message).toMatch(/proteus jobs \S+ cancel <id>/);
-    // The event stream alone is not enough: `proteus exec`'s human renderer
+    expect(message).toMatch(/kinu jobs \S+ cancel <id>/);
+    // The event stream alone is not enough: `kinu exec`'s human renderer
     // drops evolution events, so the operator has to hear it on stderr — the
     // one channel every surface shows and no NDJSON consumer parses.
     expect(stderrLines.some((line) => line.includes('bgjob-quiet'))).toBe(true);
@@ -1742,7 +1742,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     await session.end();
   });
 
-  // `proteus exec` is one process per turn. The evolution window and the turn
+  // `kinu exec` is one process per turn. The evolution window and the turn
   // awaiting its verdict therefore have to outlive the session object, or
   // headless usage never reaches the reflection cadence and every turn is
   // graded by the same constant.
@@ -2870,7 +2870,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
   });
 
   test('a turn that dies before its stream exists still terminates: error, turn-end, run_end', async () => {
-    // The regression this pins: 2 of ~7 `proteus exec` runs ended mid-turn with
+    // The regression this pins: 2 of ~7 `kinu exec` runs ended mid-turn with
     // no error event, no turn_end, no run_end and no final message, correlating
     // with heavy provider 429s — and exited 0. Everything before the turn's own
     // stream (model resolution, skills, the system prompt) sat OUTSIDE any

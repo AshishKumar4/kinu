@@ -79,8 +79,8 @@ async function proxyChatCompletion(request: Request, env: Env, userDO: DurableOb
     getAuth: createUserDOAuthResolver({ stub: userDO, caller: await ownerCaller(env) }),
     placeholder: PROXY_PLACEHOLDER,
     missingCredentialMessage: workersAI
-      ? 'Connect Cloudflare in your Proteus user settings before using Workers AI models.'
-      : 'Connect Cloudflare and select an AI Gateway in your Proteus user settings before using my-gateway models.',
+      ? 'Connect Cloudflare in your Kinu user settings before using Workers AI models.'
+      : 'Connect Cloudflare and select an AI Gateway in your Kinu user settings before using my-gateway models.',
     requestHeaders: affinityHeader(request),
     mapError: (res, resolved) => mapGatewayError(res, model, resolved.headers['cf-aig-gateway-id']),
   });

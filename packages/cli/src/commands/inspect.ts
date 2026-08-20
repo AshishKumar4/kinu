@@ -375,7 +375,7 @@ function printData(data: JsonValue, opts: InspectOpts): void {
  *  five local twins — answers with a bare list of rows, so anything else is the
  *  backend and this formatter disagreeing, and it says so. Dumping the raw JSON
  *  instead is how `listRecentEvents`' `{ events: [...] }` envelope shipped:
- *  `proteus inspect events` rendered unformatted against a cloud workspace and
+ *  `kinu inspect events` rendered unformatted against a cloud workspace and
  *  formatted against a local one, with nothing red anywhere. An empty list is a
  *  different answer and keeps its own line. */
 function printRows(data: JsonValue, opts: InspectOpts, format: (item: JsonValue) => string): void {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the full Proteus test suite with coverage.
+# Run the full Kinu test suite with coverage.
 #
 # Usage:
 #   bash scripts/test.sh                    # unit + integration
@@ -21,7 +21,7 @@ for arg in "$@"; do
   esac
 done
 
-echo "→ Proteus test suite"
+echo "→ Kinu test suite"
 echo "  flags:    ${FLAGS[*]:-(none)}"
 echo "  patterns: ${PATTERNS[*]:-(all)}"
 echo

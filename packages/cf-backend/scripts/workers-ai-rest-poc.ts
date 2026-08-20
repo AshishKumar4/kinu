@@ -55,7 +55,7 @@ const response = await fetch(endpoint, {
     messages: [
       {
         role: "user",
-        content: "Reply with exactly: Proteus Workers AI REST POC OK",
+        content: "Reply with exactly: Kinu Workers AI REST POC OK",
       },
     ],
     max_tokens: 32,

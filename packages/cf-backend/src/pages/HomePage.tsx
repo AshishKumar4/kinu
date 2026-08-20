@@ -44,7 +44,7 @@ export default function HomePage() {
               <BrainIcon size={23} weight="duotone" className="p-accent" />
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-medium uppercase tracking-[0.18em] p-accent">Proteus</p>
+              <p className="text-xs font-medium uppercase tracking-[0.18em] p-accent">Kinu</p>
               <h1 className="mt-1 text-3xl font-semibold leading-tight tracking-normal p-text sm:text-4xl">
                 What is this workspace for?
               </h1>

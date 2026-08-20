@@ -1,5 +1,5 @@
 /**
- * Agent View — a dashboard Proteus wrote, drawn entirely by this file.
+ * Agent View — a dashboard Kinu wrote, drawn entirely by this file.
  *
  * The agent supplies a JSON spec (validated in core, twice: when it publishes
  * and again when the orchestrator reads the live file). Everything below turns
@@ -14,7 +14,7 @@
  *     below, it cannot render — and it cannot reach the switch, because the
  *     core schema rejected it at write time.
  *  2. A view is visibly the agent's. The provenance strip is not decoration:
- *     the owner must never have to guess whether a panel is ours or Proteus's,
+ *     the owner must never have to guess whether a panel is ours or Kinu's,
  *     because the approval, consent and audit surfaces that ARE ours are the
  *     ones worth impersonating.
  */
@@ -322,7 +322,7 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
           scrolled away by the view's own content — see the file header. */}
       <div className="flex items-center gap-2 flex-wrap">
         <SparkleIcon size={14} className="p-text-3" />
-        <span className="p-eyebrow p-text-3">Written by Proteus</span>
+        <span className="p-eyebrow p-text-3">Written by Kinu</span>
         <span className="p-text-3 text-xs">·</span>
         <span className="text-sm font-medium p-text">{spec?.title ?? slug}</span>
         {version !== null && <span className="text-[10px] p-text-3 p-num">v{version}</span>}
@@ -355,7 +355,7 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
               the remedy gets its own line rather than running into it. */}
           <div className="space-y-1 min-w-0">
             <p className="break-words">{error}</p>
-            <p className="opacity-80">Revert it from the Evolution Changelog, or ask Proteus to rewrite it.</p>
+            <p className="opacity-80">Revert it from the Evolution Changelog, or ask Kinu to rewrite it.</p>
           </div>
         </div>
       )}
@@ -374,7 +374,7 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
           <EmptyState
             icon={<SparkleIcon size={28} />}
             title="This view is empty"
-            hint="Ask Proteus to publish a dashboard here."
+            hint="Ask Kinu to publish a dashboard here."
           />
         )}
     </div>

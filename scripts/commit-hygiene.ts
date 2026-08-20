@@ -289,7 +289,7 @@ export const NARRATION: readonly Narration[] = [
   {
     pattern: /\b(?:of|than|is|was) mine\b/gi,
     names: 'a comparison against the author\'s own prior work',
-    instead: 'compare the two designs by what they do. `proteus label mine` is a subcommand and '
+    instead: 'compare the two designs by what they do. `kinu label mine` is a subcommand and '
       + 'is not matched.',
     prose: true,
   },

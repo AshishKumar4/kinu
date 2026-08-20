@@ -229,7 +229,7 @@ function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestI
     }
   }
 
-  const instructions = instructionParts.join('\n\n').trim() || 'You are Proteus, a helpful coding agent.';
+  const instructions = instructionParts.join('\n\n').trim() || 'You are Kinu, a helpful coding agent.';
   return {
     ...init,
     body: JSON.stringify({

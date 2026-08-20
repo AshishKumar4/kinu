@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * proteus CLI — create, chat with, and evolve persistent AI agents.
+ * kinu CLI — create, chat with, and evolve persistent AI agents.
  */
 
 import { buildProgram } from '../src/program';
@@ -34,7 +34,7 @@ if (topLevelArgs.length === 1 && (topLevelArgs[0] === '--help' || topLevelArgs[0
 
 program.parse();
 
-// Once-a-day "newer Proteus available" notice. Fire-and-forget and fail-soft:
+// Once-a-day "newer Kinu available" notice. Fire-and-forget and fail-soft:
 // it never blocks the command, and shouldCheckForUpdate suppresses it in
 // non-TTY runs (CI, pipes, --json), when opted out, and within 24h.
 void runStartupUpdateCheck({ log: (line) => console.error(DIM(line)) });

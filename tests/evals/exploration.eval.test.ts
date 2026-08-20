@@ -130,7 +130,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     mkdirSync(TEST_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
-    // Birth, then OPEN — the same two steps production takes (`proteus agent
+    // Birth, then OPEN — the same two steps production takes (`kinu agent
     // create` then every running surface). The runtime `createWorkspace`
     // returns is what open.ts:49-50 calls "degraded inline
     // VFS/Memory/Executor", and its `spawnBranch` is a HARDCODED MOCK whose

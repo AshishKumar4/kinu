@@ -3,8 +3,8 @@
  * manifest declares, idempotently, and say what it could not do.
  *
  * WHAT IT DOES AND DELIBERATELY DOES NOT. It creates the account-level resources
- * `wrangler deploy` binds and cannot create for itself: D1 databases and their
- * schema, R2 buckets, the Vectorize index. It does NOT deploy the Worker.
+ * `wrangler deploy` binds and cannot create for itself: R2 buckets and the
+ * Vectorize indexes. It does NOT deploy the Worker.
  * `bun run deploy` is the only production deploy path — a bare `wrangler deploy`
  * skips the asset check and the post-deploy smoke gate, and production has
  * already shipped that way once — so provisioning composes with that command
@@ -13,7 +13,7 @@
  * THE TWO PASSES ARE STATED, NOT HIDDEN. `wrangler secret put` needs the Worker
  * to exist, so on an empty account the order is necessarily:
  *
- *     bun run infra:provision     storage, schema, and the manual worklist
+ *     bun run infra:provision     storage, and the manual worklist
  *     bun run deploy              the Worker, its DO namespaces, container,
  *                                 routes and cron
  *     bun run infra:provision     the secrets, now that there is a Worker
@@ -37,8 +37,8 @@
 import { createInterface } from 'node:readline/promises';
 import { randomBytes } from 'node:crypto';
 import {
-  type Observation, authenticated, d1, d1MigrationsApplied, deployment, r2, secretNames,
-  vectorize, why, wrangler,
+  type Observation, authenticated, deployment, kvNamespace, r2, secretNames, vectorize, why,
+  wrangler,
 } from './infra-cloudflare';
 import {
   type InfraEnvironment, type Resource, SUPPLY, UNCAPTURED, deriveInfrastructure, requiredIn,
@@ -67,10 +67,9 @@ interface Step {
 /** Whether an existing resource is really there, per kind. Provision and verify
  *  ask the same questions of the same seam — a provisioner with its own idea of
  *  "exists" is a second answer nothing compares. */
-function look(resource: Resource, environment: InfraEnvironment): Observation {
+function look(resource: Resource): Observation {
   switch (resource.kind) {
-    case 'd1': return d1(resource.name);
-    case 'd1-migrations': return d1MigrationsApplied(resource.name, environment.wranglerEnv);
+    case 'kv': return kvNamespace(resource.name);
     case 'r2': return r2(resource.name);
     case 'vectorize': {
       const geometry = vectorizeGeometry();
@@ -124,7 +123,7 @@ export function plan(
 }
 
 function ensure(resource: Resource, environment: InfraEnvironment): Step {
-  const decision = plan(resource, look(resource, environment), environment.wranglerEnv);
+  const decision = plan(resource, look(resource), environment.wranglerEnv);
   if (decision.action === 'skip') return { id: resource.id, outcome: 'existed', detail: decision.detail };
   if (decision.action === 'refuse') return { id: resource.id, outcome: 'refused', detail: decision.detail };
   const run = wrangler(decision.argv, 300_000);
@@ -226,18 +225,17 @@ async function main(): Promise<number> {
   }
 
   const infrastructure = deriveInfrastructure();
-  console.log(`${BOLD}Proteus infrastructure provisioning${NC}`);
+  console.log(`${BOLD}Kinu infrastructure provisioning${NC}`);
   console.log(`Account:      ${infrastructure.accountId}`);
   console.log(`Environments: ${infrastructure.environments.map((environment) => environment.key).join(', ')}`);
 
   const steps: Step[] = [];
   const done = new Set<string>();
 
-  console.log(`\n${BOLD}Storage and schema${NC} — what wrangler can create, in dependency order`);
-  // D1 before its migrations, everything before the Worker binds it. The order
-  // is the resource order out of the manifest, which is already the order the
-  // sections appear in: databases, then their migrations, then buckets, then the
-  // index.
+  console.log(`\n${BOLD}Storage${NC} — what wrangler can create, in dependency order`);
+  // Everything before the Worker binds it. The order is the resource order out
+  // of the manifest, which is already the order the sections appear in: buckets,
+  // then the indexes.
   for (const environment of infrastructure.environments) {
     for (const resource of infrastructure.resources) {
       if (resource.origin !== 'wrangler-cli') continue;

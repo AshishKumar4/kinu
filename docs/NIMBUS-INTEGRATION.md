@@ -56,13 +56,13 @@ through any one of them is immediately visible through the others.
 `createCFRuntime()` (`runtime.ts:312`) adapts the Nimbus SDK handle into the
 Core interfaces:
 
-| Proteus surface | Nimbus authority |
+| Kinu surface | Nimbus authority |
 |---|---|
 | `Storage.vfs` | `box.files` through `nimbusSessionFiles()` |
 | `Shell` and `run` | `box.exec()` through `nimbusSessionShell()` |
 | `workspace.*` | `createNimbusWorkspaceExecutor()` |
 | background processes | `box.startProcess()` and `box.processes` |
-| live previews | `box.ports`, wrapped by the Proteus capability host |
+| live previews | `box.ports`, wrapped by the Kinu capability host |
 | runtime install and list | `box.runtimes` when `NIMBUS_RUNTIME_CACHE` is bound |
 
 The Cloudflare backend registers the provider only as `workspace`
@@ -99,7 +99,7 @@ Nimbus process creation is non-blocking and returns a live PID. Process state,
 logs, signals, ports, and runtime availability come from Nimbus rather than
 from a frontend inference.
 
-Exposing a port returns a random per-registration capability. Proteus encodes
+Exposing a port returns a random per-registration capability. Kinu encodes
 the session, the port, the capability, and an HMAC in a dedicated preview
 hostname under `PREVIEW_HOST_SUFFIX`. The edge validates that hostname before
 routing. An unexpose clears the capability, and exposing the same port again
@@ -117,7 +117,7 @@ The preview edge:
 - forwards HTTP bodies with the Worker stream contract;
 - supports ordinary WebSocket upgrades and the Vite/Cirrus HMR path;
 - sends `/assets/*` through the Worker, so preview assets cannot fall into the
-  Proteus SPA asset handler. `run_worker_first: true` in
+  Kinu SPA asset handler. `run_worker_first: true` in
   `packages/cf-backend/wrangler.jsonc` puts the Worker ahead of asset routing.
 
 The production suffix is an ordinary subdomain suffix and not a Public Suffix

@@ -11,9 +11,9 @@
  * shipped agent works.
  *
  * WHAT COVERS THAT GAP: the eval tier's shipped-surface arms, which drive the
- * SPAWNED `proteus` CLI on a real workspace — `tests/evals/research.eval.ts`
+ * SPAWNED `kinu` CLI on a real workspace — `tests/evals/research.eval.ts`
  * and `tests/evals/optimization.eval.ts` through `tests/evals/cli-driver.ts`
- * (`proteus create --mode local`, then `proteus exec --workspace <name>
+ * (`kinu create --mode local`, then `kinu exec --workspace <name>
  * --json`), on the precedent of bench/harbor/proteus_agent.py. Read a failure
  * here as "the loop broke"; read a failure there as "the product broke".
  */
@@ -201,7 +201,7 @@ describe('E2E Lifecycle', () => {
     // evolution` below could never pass on it, and did not, for as long as this
     // suite had a credential. `openWorkspaceCLI` builds `createCLIRuntime`,
     // which registers the real branch spawner, and is the same spine
-    // `proteus exec` runs.
+    // `kinu exec` runs.
     await createWorkspace(db, { name: 'e2e-test', purpose: 'A coding assistant that helps write TypeScript.', llm: LLM_CONFIG });
     // The whole schema from the one function that declares it, replacing three
     // hand-picked init calls. They omitted `initShadowTables`, so

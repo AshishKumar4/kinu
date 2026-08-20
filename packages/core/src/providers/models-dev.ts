@@ -176,9 +176,9 @@ const COMPAT_ENDPOINT_SUPPLEMENT: CompatEndpointIndex = {
 };
 
 /**
- * The base URL Proteus can drive with a plain API key through the
+ * The base URL Kinu can drive with a plain API key through the
  * openai-compat path, or null when the provider needs a bespoke SDK
- * (`npm` is not an OpenAI-surface package) or an endpoint Proteus cannot
+ * (`npm` is not an OpenAI-surface package) or an endpoint Kinu cannot
  * construct (no `api`, or an `api` with `${…}` account placeholders).
  */
 export function modelsDevCompatBaseURL(provider: ModelsDevProviderInfo): string | null {

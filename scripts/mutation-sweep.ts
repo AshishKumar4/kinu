@@ -162,7 +162,7 @@ function git(...args: readonly string[]): string {
  *
  * The main checkout is shared: other agents, other suites and the editor all read it.
  * A worktree is one branch's own tree, and `setup-worktree.sh` has already given it
- * its own `@proteus` scope, so a mutation there is visible to this process only.
+ * its own workspace scope, so a mutation there is visible to this process only.
  */
 function requireOwnWorktree(): void {
   const tree = git('rev-parse', '--show-toplevel');
@@ -173,8 +173,8 @@ function requireOwnWorktree(): void {
       + 'suite and editor reads. In-place mutation in a shared tree makes a test fail for '
       + 'a reason that is not in the code, and every concurrent suite overlapping the '
       + 'window reports a meaningless green or a misattributed red. Run this in a worktree:'
-      + '\n  git worktree add ../Proteus-sweep -b test/my-sweep main'
-      + '\n  cd ../Proteus-sweep && bash scripts/setup-worktree.sh',
+      + '\n  git worktree add ../Kinu-sweep -b test/my-sweep main'
+      + '\n  cd ../Kinu-sweep && bash scripts/setup-worktree.sh',
     );
   }
 }

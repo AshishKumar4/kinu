@@ -1,7 +1,11 @@
 {
-  "name": "proteus",
+  "name": "kinu",
   "account_id": "f44999d1ddda7012e9a87729eba250f1",
-  "workers_dev": true,
+  // No workers.dev origin. `kinu.run` is the ONLY hostname this deployment
+  // answers on, which is what lets transport security key on one canonical
+  // origin instead of a set, and leaves no unbranded second origin serving
+  // the same app under a different cookie site.
+  "workers_dev": false,
   "main": "src/server.ts",
   "compatibility_date": "2025-12-01",
   // `experimental` is a dev-only umbrella flag that the deploy API rejects
@@ -44,11 +48,32 @@
   // Main site served by the custom domain. Workspace and Sandbox previews get an
   // isolated capability hostname each under PREVIEW_HOST_SUFFIX below.
   // custom_domain: true tells wrangler to auto-create the DNS record on
-  // deploy. Without it, the `pattern + zone_id` form requires a pre-existing
+  // deploy. Without it, the `pattern + zone_name` form requires a pre-existing
   // proxied DNS record on the zone (manual setup via the dashboard).
+  //
+  // ONE app origin. Verified against the API on 2026-08-20 before wiring
+  // anything: zone `6c181c0cb19bef416fcc7f1fef7f6993`, active since 2026-08-18,
+  // on THIS Worker's account (f44999d1ddda7012e9a87729eba250f1) — a custom
+  // domain cannot cross accounts, so that check is the precondition, not a
+  // formality. The zone held zero DNS records, so `custom_domain: true` creates
+  // the apex record rather than competing with one.
+  //
+  // The preview wildcard is `*.kinu.run`, ONE label deep, which is exactly what
+  // this zone's Universal SSL certificate covers alongside the apex. A deeper
+  // suffix (`*.preview.kinu.run`) would need Advanced Certificate Manager, and
+  // HSTS `includeSubDomains` from the apex would then pin preview hostnames
+  // that have no certificate at all. One label is the shape that is free AND
+  // safe, so the app host is also the preview suffix.
+  //
+  // `staging.kinu.run` is claimed by env.staging as a ROUTE rather than a custom
+  // domain, precisely because it sits under this wildcard: route matching picks
+  // the most specific pattern, so an exact hostname beats `*.kinu.run/*`, while
+  // custom-domain-versus-route precedence is documented only for the SAME
+  // hostname and would be an assumption here. The cost is a proxied DNS record
+  // for that name created by hand — see docs/DEPLOYMENT.md.
   "routes": [
-    { "pattern": "proteus.ashishkumarsingh.com", "custom_domain": true },
-    { "pattern": "*.proteus.ashishkumarsingh.com/*", "zone_name": "ashishkumarsingh.com" }
+    { "pattern": "kinu.run", "custom_domain": true },
+    { "pattern": "*.kinu.run/*", "zone_name": "kinu.run" }
   ],
   // The Worker runs first for every request. Asset routing is path-only, so an
   // `/assets/*` bypass would also intercept preview apps' own asset paths
@@ -64,14 +89,14 @@
     "bindings": [
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
       // Per-user DO: profile + agent registry + credentials + defaults.
-      // Keyed by stable Proteus userId assigned by AUTH_DB.
+      // Keyed by stable Kinu userId assigned by AUTH_DB.
       { "class_name": "UserDO", "name": "UserDO" },
       // Synthetic monitoring — one instance ("site"), driven by the cron
       // trigger below. Holds open incidents (so an outage alerts once, not
       // every tick) and the alert outbox.
       { "class_name": "MonitorDO", "name": "MonitorDO" },
       // Nimbus SDK session DO. Used directly through Nimbus.fromEnv() — no
-      // endpoint/token secrets are required for Proteus's built-in Nimbus
+      // endpoint/token secrets are required for Kinu's built-in Nimbus
       // executor.
       { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },
       // Sandbox — @cloudflare/sandbox DO + Container. One container per agent
@@ -100,21 +125,19 @@
       }
     }
   ],
+  // This worker name has never been deployed, so it has no class-registration
+  // history: every SQLite-backed DO class is new under one tag. The sequence
+  // becomes append-only from the FIRST deploy onwards — a later class gets its
+  // own tag, and this one is never edited again. `ExplorationAgent` is here
+  // without a binding above because it is reached as a facet of
+  // OrchestratorAgent rather than by name.
   "migrations": [
-    // Production's DO classes were registered together under v1 before launch.
-    // Keep this sequence stable; named environments below declare their own
-    // deployed class-registration history.
     {
       "tag": "v1",
-      "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent", "ProteusSandbox", "UserDO"]
-    },
-    {
-      "tag": "v2",
-      "new_sqlite_classes": ["NimbusSession"]
-    },
-    {
-      "tag": "v3",
-      "new_sqlite_classes": ["MonitorDO"]
+      "new_sqlite_classes": [
+        "OrchestratorAgent", "ExplorationAgent", "ProteusSandbox", "UserDO",
+        "NimbusSession", "MonitorDO"
+      ]
     }
   ],
   // Synthetic monitoring. Every 15 minutes the worker probes its own public
@@ -132,9 +155,9 @@
   //
   // PREVIEW_HOST_SUFFIX is the zone Workspace and Sandbox previews are served
   // under. Each exposed port gets its own capability hostname: the Sandbox SDK
-  // mints its host shape and Proteus binds Nimbus ports to their session
+  // mints its host shape and Kinu binds Nimbus ports to their session
   // capabilities. Every host under the suffix except this Worker's own serves
-  // previews and NOTHING else — no SPA, no login — so no Proteus session ever
+  // previews and NOTHING else — no SPA, no login — so no Kinu session ever
   // exists on them.
   //
   // A hostname per port isolates origin-scoped storage and same-origin fetch
@@ -142,35 +165,30 @@
   // lib/preview-origin.ts.
   //
   // SECURITY PREREQUISITE: sibling origins are not sibling cookie sites unless
-  // this suffix is itself on the Public Suffix List. The current
-  // `proteus.ashishkumarsingh.com` suffix is not, so JavaScript can still set a
-  // Domain cookie across previews. A dedicated PSL-backed suffix is required
-  // before this can be claimed as hostile-preview cookie isolation.
+  // this suffix is itself on the Public Suffix List. `kinu.run` is not, so
+  // JavaScript can still set a Domain cookie across previews. A PSL-backed
+  // suffix is required before this can be claimed as hostile-preview cookie
+  // isolation.
   //
-  // Previews are ON, served under `proteus.ashishkumarsingh.com` via the
-  // proxied wildcard `*.proteus` CNAME on the zone plus the matching route
-  // above. `custom_domain: true` cannot express a wildcard host, which is why
-  // the preview route uses the `pattern + zone_name` form against a DNS record
-  // created by hand.
+  // Previews are ON, served under `kinu.run` via the proxied wildcard `*` record
+  // on the zone plus the matching route above. `custom_domain: true` cannot
+  // express a wildcard host, which is why the preview route uses the
+  // `pattern + zone_name` form against a DNS record created by hand.
   //
-  // A second-level wildcard works here, contrary to the usual Universal SSL
-  // limit: the certificate Cloudflare serves for this zone lists
-  // `*.proteus.ashishkumarsingh.com` in its SANs, verified against the live
-  // endpoint. So no Advanced Certificate Manager and no `AAAA * 100::` record
-  // were needed. Re-check the SAN list before moving previews to another zone,
-  // because a deeper wildcard is not covered by default.
+  // The suffix IS the app host, one label above every preview hostname. That is
+  // the only depth this zone's Universal SSL certificate covers, and HSTS is
+  // sent with `includeSubDomains` from the apex — so a deeper suffix would pin
+  // browsers to hostnames with no certificate. The bare zone wildcard is also
+  // safe to claim here in a way it was not on a shared personal zone: kinu.run
+  // carries this product and nothing else, so every subdomain SHOULD reach this
+  // Worker, and anything that should not gets a more specific route, which is
+  // exactly how env.staging takes `staging.kinu.run`.
   //
-  // Scoping previews to the `proteus` subtree rather than `*.<zone>/*` is
-  // deliberate: a route on the bare zone wildcard would claim every subdomain
-  // of `ashishkumarsingh.com`, so anything not separately routed would start
-  // hitting this Worker. The session cookie is `__Host-` prefixed and so is
-  // host-only regardless, but the narrower claim is the one to keep.
-  //
-    // Setting this empty means previews are unavailable: exposePort tells the
-    // agent so instead of handing back a URL that cannot resolve. It does NOT
-    // disable either executor.
+  // Setting this empty means previews are unavailable: exposePort tells the
+  // agent so instead of handing back a URL that cannot resolve. It does NOT
+  // disable either executor.
   "vars": {
-    "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
+    "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway/workers-ai/v1",
     // Container control plane. Both getSandbox call sites pass `transport: "rpc"`
     // explicitly and that is what actually switches an EXISTING sandbox — the SDK
     // persists transport in the sandbox object's storage and a stored value beats
@@ -181,9 +199,9 @@
     // Sandbox SDK majors") and 1.0 drops the knob entirely, so `rpc` is both the
     // measured-better and the only surviving path.
     "SANDBOX_TRANSPORT": "rpc",
-    "PREVIEW_HOST_SUFFIX": "proteus.ashishkumarsingh.com",
-    "CLI_PUBLIC_ORIGIN": "https://proteus.ashishkumarsingh.com",
-    "CLI_APPROVAL_ORIGIN": "https://proteus.ashishkumarsingh.com",
+    "PREVIEW_HOST_SUFFIX": "kinu.run",
+    "CLI_PUBLIC_ORIGIN": "https://kinu.run",
+    "CLI_APPROVAL_ORIGIN": "https://kinu.run",
     "CLOUDFLARE_OAUTH_CLIENT_ID": "457ce8fea9fb4e89d4a6df3a71cdf875",
     // Scopes default to CLOUDFLARE_WORKERS_AI_SCOPES (lib/cloudflare-oauth.ts);
     // set CLOUDFLARE_OAUTH_SCOPES here only to override that one source.
@@ -192,7 +210,7 @@
     // Mission Inbox mail domain: <agent-name>@EMAIL_DOMAIN. Takes effect only
     // after the one-time Email Routing / Email Sending setup in
     // docs/EMAIL-INGRESS.md is done for this domain.
-    "EMAIL_DOMAIN": "proteus.ashishkumarsingh.com",
+    "EMAIL_DOMAIN": "kinu.run",
     // Where synthetic-monitoring alerts land. Same mail path as the Mission
     // Inbox, so it works exactly when outbound email does.
     "OPS_ALERT_EMAIL": "me@ashishkumarsingh.com",
@@ -222,7 +240,7 @@
   // user's Cloudflare OAuth credential so the usage bills to their account.
   "ai": { "binding": "AI" },
   // R2 bucket for sandbox /workspace snapshots (squashfs archives), written and
-  // read by ProteusSandbox. Bucket: `wrangler r2 bucket create proteus-backups`
+  // read by ProteusSandbox. Bucket: `wrangler r2 bucket create kinu-backups`
   // (already created). Set an R2 lifecycle rule on the `backups/` prefix to GC
   // archives past their TTL — the SDK enforces TTL at restore time only and
   // never deletes anything itself.
@@ -236,7 +254,7 @@
   //    with copy-on-write, which is constant work regardless of archive size.
   //    OWNER SETUP to switch: `wrangler secret put R2_ACCESS_KEY_ID`,
   //    `wrangler secret put R2_SECRET_ACCESS_KEY`, and add
-  //    "BACKUP_BUCKET_NAME": "proteus-backups" plus "CLOUDFLARE_ACCOUNT_ID"
+  //    "BACKUP_BUCKET_NAME": "kinu-backups" plus "CLOUDFLARE_ACCOUNT_ID"
   //    to `vars` below. ProteusSandbox picks the mode up from their presence —
   //    no flag — and the mode is recorded per snapshot, so handles taken in one
   //    mode keep restoring in that mode.
@@ -249,7 +267,7 @@
   // `NIMBUS_RUNTIME_CACHE binding missing`, which is why a hosted `python3` was
   // 127 while the local CLI (which ships the runtimes as npm packages) worked.
   "r2_buckets": [
-    { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" },
+    { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-backups" },
     { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" }
   ],
   // D1 auth/session store. Browser auth reads use D1 Sessions API so Cloudflare
@@ -267,22 +285,35 @@
   // CloudflareVectorStore so search_memory / searchMemoryHybrid return
   // RRF-merged FTS5 + Vectorize hits (384-dim to match the Workers AI embedder).
   "vectorize": [
-    { "binding": "MEMORY_VECTORS", "index_name": "proteus-memory" }
+    { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory" }
   ],
   // ── Staging environment (headless testing) ──────────────────────
-  // A second deployment on *.workers.dev for testing think/tools directly
-  // without production OAuth secrets in the way. Differences from prod: a distinct
-  // worker name (`proteus-staging`) — which gives it ISOLATED Durable Object
-  // namespaces, so staging never touches prod data — no custom-domain route,
-  // and `DEV_USER_EMAIL` set, so authenticateRequest() (auth/session.ts)
-  // synthesizes a fixed dev identity and the worker is reachable headlessly.
-  // Fully specified because wrangler does not inherit
-  // bindings/vars into named environments. Deploy: `wrangler deploy --env staging`.
+  // A second deployment for testing think/tools directly without production
+  // OAuth secrets in the way, and the ONLY target tests and evals are allowed to
+  // run against. Differences from prod: a distinct worker name
+  // (`kinu-staging`) — which gives it ISOLATED Durable Object namespaces, so
+  // staging never touches prod data — its own hostname, no previews, and
+  // `DEV_USER_EMAIL` set, so authenticateRequest() (auth/session.ts)
+  // synthesizes a fixed eval-service identity and the worker is reachable
+  // headlessly. Fully specified because wrangler does not inherit bindings/vars
+  // into named environments. Deploy: `wrangler deploy --env staging`.
+  //
+  // `staging.kinu.run` is a ROUTE, not a custom domain, and `workers_dev` is off.
+  // The route form is what makes precedence unambiguous against production's
+  // `*.kinu.run/*` preview wildcard: the most specific pattern wins, and an
+  // exact hostname is more specific than a wildcard. It needs a proxied DNS
+  // record for that name, created by hand — `custom_domain: true` would create
+  // the record for us but puts the two claims on different mechanisms whose
+  // relative precedence Cloudflare documents only for identical hostnames.
+  // workers.dev is off because a second origin on a worker that synthesizes an
+  // identity from DEV_USER_EMAIL is an auth bypass reachable at a guessable name.
   "env": {
     "staging": {
-      "name": "proteus-staging",
-      "workers_dev": true,
-      "routes": [],
+      "name": "kinu-staging",
+      "workers_dev": false,
+      "routes": [
+        { "pattern": "staging.kinu.run", "zone_name": "kinu.run" }
+      ],
       "main": "src/server.ts",
       "compatibility_date": "2025-12-01",
       "compatibility_flags": ["nodejs_compat"],
@@ -318,12 +349,16 @@
           "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
         }
       ],
+      // Same reasoning as production's: `kinu-staging` has never been deployed
+      // either, so one tag registers the lot.
       "migrations": [
-        { "tag": "v1", "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent"] },
-        { "tag": "v2", "new_sqlite_classes": ["ProteusSandbox"] },
-        { "tag": "v3", "new_sqlite_classes": ["UserDO"] },
-        { "tag": "v4", "new_sqlite_classes": ["NimbusSession"] },
-        { "tag": "v5", "new_sqlite_classes": ["MonitorDO"] }
+        {
+          "tag": "v1",
+          "new_sqlite_classes": [
+            "OrchestratorAgent", "ExplorationAgent", "ProteusSandbox", "UserDO",
+            "NimbusSession", "MonitorDO"
+          ]
+        }
       ],
       // No cron trigger and no OPS_ALERT_EMAIL here: staging has no OAuth
       // providers and no mail route, so the probes would report a site that
@@ -337,7 +372,7 @@
       // and immutable, so there is nothing to keep separate per environment, and
       // parity here is what makes a staging `python3` prove the hosted path.
       "r2_buckets": [
-        { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" },
+        { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-backups" },
         { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" }
       ],
       "d1_databases": [
@@ -349,7 +384,7 @@
         }
       ],
       "vars": {
-        "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
+        "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway/workers-ai/v1",
         // Staging is workers.dev only, and workers.dev has no wildcard
         // subdomains, so it cannot host previews at all — the SDK rejects
         // `.workers.dev` outright. Previews are off here until staging
@@ -366,12 +401,12 @@
   // ── OPTIONAL: Vectorize binding for semantic memory ─────────────
   //
   // First create the index:
-  //   wrangler vectorize create proteus-memory \
+  //   wrangler vectorize create kinu-memory \
   //     --dimensions=384 --metric=cosine
   //
   // Then add the binding:
   //   ,"vectorize": [
-  //     { "binding": "MEMORY_VECTORS", "index_name": "proteus-memory" }
+  //     { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory" }
   //   ]
   //
   // Once present, runtime.ts auto-detects it and constructs

@@ -1,18 +1,18 @@
 /**
- * `proteus label` — the hand-labeling flow that measures the turn-outcome
+ * `kinu label` — the hand-labeling flow that measures the turn-outcome
  * classifier, and the bias-corrected numbers it buys.
  *
  * Three steps, in order: draw a file, fill it in, hand it back.
  *
- *   proteus label export <agent>          # writes a file of turns to judge
+ *   kinu label export <agent>          # writes a file of turns to judge
  *   $EDITOR <file>                        # one letter per turn
- *   proteus label ingest <agent> <file>   # validates and stores
- *   proteus label report <agent>          # what the labels established
+ *   kinu label ingest <agent> <file>   # validates and stores
+ *   kinu label report <agent>          # what the labels established
  *
  * And then, once labels exist, the question of whether that has to be done by
  * hand every time:
  *
- *   proteus label ensemble <agent>        # two LLM judges re-do the same turns
+ *   kinu label ensemble <agent>        # two LLM judges re-do the same turns
  *
  * which scores a cross-family panel against those labels and says plainly
  * whether it may stand in for the owner next time. It refuses to run before
@@ -21,8 +21,8 @@
  *
  * And, off to one side, a free second opinion on the same raters:
  *
- *   proteus label mine                    # weak-label the owner's CC history
- *   proteus label score <agent>           # run both raters over it
+ *   kinu label mine                    # weak-label the owner's CC history
+ *   kinu label score <agent>           # run both raters over it
  *
  * which mines the owner's own Claude Code transcripts for turns their BEHAVIOUR
  * already labeled — interrupts, refused tools, re-pasted requests — and scores
@@ -65,7 +65,7 @@ interface LabelOpts {
   limit?: string;
 }
 
-const USAGE = 'Usage: proteus label <export|ingest|ensemble|report|mine|score> [agent] [file]';
+const USAGE = 'Usage: kinu label <export|ingest|ensemble|report|mine|score> [agent] [file]';
 
 const TurnOutcomeSchema = v.picklist([
   'accepted', 'corrected', 'frustrated', 'abandoned',
@@ -190,9 +190,9 @@ async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
   console.log('  1. Open it and put one letter after each `verdict:` —');
   console.log(DIM('       a accepted   c corrected   f frustrated   b abandoned   ? unclear'));
   console.log(DIM('     In vim: /^verdict:  then  n  to step, then  A <letter> Esc.'));
-  console.log(`  2. ${ACCENT(`proteus label ingest ${target.requestedName} ${path}`)}`);
-  console.log(`  3. ${ACCENT(`proteus label report ${target.requestedName}`)}`);
-  console.log(DIM(`     …and ${`proteus label ensemble ${target.requestedName}`} to find out whether two models`));
+  console.log(`  2. ${ACCENT(`kinu label ingest ${target.requestedName} ${path}`)}`);
+  console.log(`  3. ${ACCENT(`kinu label report ${target.requestedName}`)}`);
+  console.log(DIM(`     …and ${`kinu label ensemble ${target.requestedName}`} to find out whether two models`));
   console.log(DIM('     could have done this for you next time.'));
   console.log('');
   console.log(DIM("The classifier's own verdicts are not in the file on purpose — seeing them"));
@@ -202,7 +202,7 @@ async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
 // ── ingest ───────────────────────────────────────────────────────
 
 async function ingestLabels(target: AgentTarget, file: string | undefined, opts: LabelOpts): Promise<void> {
-  if (!file) throw new Error('Usage: proteus label ingest <agent> <file>');
+  if (!file) throw new Error('Usage: kinu label ingest <agent> <file>');
   const path = resolve(file);
   const parsed = parseLabelingFile(readFileSync(path, 'utf8'));
 
@@ -341,7 +341,7 @@ async function mineCorpus(opts: LabelOpts): Promise<void> {
     return;
   }
   console.log(DIM(`Score the classifier and the panel against these with:  ` +
-    `proteus label score <agent>  (${report.stats.labeled} labeled turns available)`));
+    `kinu label score <agent>  (${report.stats.labeled} labeled turns available)`));
 }
 
 /** Labeled turns scored per run when the owner does not say. Small on purpose:
@@ -409,7 +409,7 @@ async function reportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
   console.log(renderEnsembleReport(ensemble));
 }
 
-/** The calibration report for either backend. Shared with `proteus alignment`,
+/** The calibration report for either backend. Shared with `kinu alignment`,
  *  which renders the same block beneath K_align. */
 export async function fetchReport(target: AgentTarget): Promise<CalibrationReport> {
   return target.mode === 'cloud'

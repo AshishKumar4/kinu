@@ -1,8 +1,8 @@
-# Testing Proteus
+# Testing Kinu
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus runs most of its tests on Bun, across the shared core, the Cloudflare
+Kinu runs most of its tests on Bun, across the shared core, the Cloudflare
 backend, the local backend and the CLI. Two things Bun cannot do have their own
 runners: the Durable Object suites run under vitest inside workerd, and the
 behavioural eval arms run under vitest. The two UI gates run under `bun test`
@@ -108,7 +108,7 @@ Two suites are not measured today, so do not quote a test count for either:
 `bun test packages/cli/tests` used to depend on whose shell ran it.
 `resolveCloudSession()` prefers `PROTEUS_TOKEN` over the config file and
 `resolveCloudOrigin()` prefers `PROTEUS_ORIGIN` over it, so a shell that had run
-`proteus chat` or `bun run test:eval` moved thirteen tests across six files onto
+`kinu chat` or `bun run test:eval` moved thirteen tests across six files onto
 their signed-in branch, even though each had built an isolated `PROTEUS_HOME`
 holding no session. Measured 2026-08-19 at `3ec8eded`, one variable pair changed
 and nothing else (`packages/test-utils/src/ambient-env.ts:12-25`):
@@ -143,7 +143,7 @@ Read the next paragraph before running that.
 **It spends your money without being asked to.** If the environment names no
 model target, `scripts/eval-tier.sh` borrows the signed-in CLI session via
 `scripts/eval-credentials.ts`. That is the same `~/.proteus/config.json`
-credential `proteus chat` uses. On any machine that has run `proteus auth`,
+credential `kinu chat` uses. On any machine that has run `kinu auth`,
 `bun run test:eval` bills the token owner's Cloudflare account. That is
 deliberate. The tier previously asked for two environment variables nothing on
 the owner's own machine ever exported, so it ran to completion reporting
@@ -204,7 +204,7 @@ and something can miss.
 #### The two new families drive the SPAWNED CLI
 
 The research and optimization arms do not build a runtime and call into it.
-They run `proteus create <name> --mode local`, then `proteus exec --workspace
+They run `kinu create <name> --mode local`, then `kinu exec --workspace
 <name> --json`, in a scratch `PROTEUS_HOME`, and judge the child's own event
 stream plus the ledgers in `$home/<workspace>/agent.db`. The glue is
 `tests/evals/cli-driver.ts`; the precedent is `bench/harbor/proteus_agent.py`.
@@ -328,7 +328,7 @@ steps now completing in 437 s and 456 s. Do not derive a post-fix cost from it.
 
 The research and optimization rows were measured on 2026-08-20 against
 `@cf/deepseek-ai/deepseek-v4-flash-0731` through the worker proxy, each arm a
-single agent episode driven as the SPAWNED `proteus` CLI. Both passed on that
+single agent episode driven as the SPAWNED `kinu` CLI. Both passed on that
 run. What the episodes did, from their own run records:
 
 - **research** — 2 turns, 6 tool calls, ALL SIX to the controlled archive, 4
@@ -469,7 +469,7 @@ Either pair, and an explicit one is never overridden:
 
 ```bash
 PROTEUS_ORIGIN=… PROTEUS_TOKEN=…            # deployed/preview worker proxy; mint with
-                                            #   proteus tokens create --scope ai.proxy
+                                            #   kinu tokens create --scope ai.proxy
 AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the proxy does not front
 ```
 

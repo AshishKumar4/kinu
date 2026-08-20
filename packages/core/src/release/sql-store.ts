@@ -329,7 +329,7 @@ export class ReleaseStore {
   upsertSourceBinding(input: ReleaseSourceInput & { id?: string }): ReleaseSource {
     const kind = input.kind;
     if (kind !== 'local' && kind !== 'github') throw new Error('source binding kind must be local or github');
-    const label = cleanLabel(input.label, 'Proteus source');
+    const label = cleanLabel(input.label, 'Kinu source');
     const id = input.id && /^psb-[A-Za-z0-9_-]{6,64}$/.test(input.id) ? input.id : this.makeId('psb', 10);
     const repoUrl = cleanOptional(input.repoUrl);
     const defaultBranch = cleanOptional(input.defaultBranch) ?? 'main';

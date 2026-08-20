@@ -267,7 +267,7 @@ function CalibrationNote({ report }: { report: CalibrationReport }) {
       <div className="text-[10px] p-text-3">
         <span className="p-warning">{reason}.</span>
         {" The rate above is what the classifier counted, not a measured one. "}
-        Check ~100 turns by hand with <span className="font-mono">proteus label export</span>.
+        Check ~100 turns by hand with <span className="font-mono">kinu label export</span>.
       </div>
     );
   }

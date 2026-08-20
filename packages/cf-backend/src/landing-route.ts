@@ -26,7 +26,7 @@ function landingResponse(origin: string): Response {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Proteus</title>
+  <title>Kinu</title>
   <link rel="icon" type="image/svg+xml" href="/assets/proteus-icon.svg" />
   <style>
     :root {
@@ -284,7 +284,7 @@ function landingResponse(origin: string): Response {
   <canvas id="field" aria-hidden="true"></canvas>
   <div class="shell">
     <header>
-      <a class="brand" href="/" aria-label="Proteus home"><span class="mark">P</span><span>Proteus</span></a>
+      <a class="brand" href="/" aria-label="Kinu home"><span class="mark">K</span><span>Kinu</span></a>
       <nav>
         <a class="icon" href="https://github.com/AshishKumar4/Proteus" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository"><svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></a>
         <a class="link" href="#install" data-install-toggle aria-expanded="false">Install CLI</a>
@@ -294,7 +294,7 @@ function landingResponse(origin: string): Response {
     <main>
       <section class="hero" aria-labelledby="hero-title">
         <p class="eyebrow">Persistent agents for serious work</p>
-        <h1 id="hero-title">Proteus</h1>
+        <h1 id="hero-title">Kinu</h1>
         <p class="lede">Create AI agents that keep state across sessions, work from the dashboard or terminal, and run on your own computer when local access matters.</p>
         <div class="actions">
           <a class="button primary" href="/login">Sign in</a>
@@ -307,12 +307,12 @@ function landingResponse(origin: string): Response {
           </div>
           <p class="install-note">Run it in a terminal. The installer sets up the CLI and starts the browser sign-in flow.</p>
         </div>
-        <div class="capabilities" aria-label="Proteus capabilities">
+        <div class="capabilities" aria-label="Kinu capabilities">
           <div class="cell"><strong>Cloud persistence</strong><span>Agents live beyond a browser tab with durable memory, background work, and event-driven triggers.</span></div>
           <div class="cell"><strong>Local backend</strong><span>Run fully local agents from the CLI, on the same core runtime as cloud agents.</span></div>
           <div class="cell"><strong>Desktop execution</strong><span>Connect your machine so agents can run commands, read files, and serve previews on it.</span></div>
         </div>
-        <div class="workflow" aria-label="Ways to work with Proteus">
+        <div class="workflow" aria-label="Ways to work with Kinu">
           <article>
             <h2>Dashboard for persistent agents</h2>
             <p>Use the web app for long-running agents, settings, credentials, triggers, release review, and workspace state.</p>
@@ -325,7 +325,7 @@ function landingResponse(origin: string): Response {
       </section>
     </main>
     <footer>
-      <a href="https://github.com/AshishKumar4/Proteus" target="_blank" rel="noopener noreferrer">Proteus on GitHub</a>
+      <a href="https://github.com/AshishKumar4/Proteus" target="_blank" rel="noopener noreferrer">Kinu on GitHub</a>
       <span>Durable agents, local execution, and user-controlled automation.</span>
     </footer>
   </div>

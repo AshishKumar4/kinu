@@ -1,4 +1,4 @@
-"""Reading what `proteus exec --json` and `proteus alignment --json` hand back.
+"""Reading what `kinu exec --json` and `kinu alignment --json` hand back.
 
 This is the contract between two repos, so it lives on its own with no
 CL-Bench imports and is covered by `bench/clbench/tests` — a silent change to
@@ -89,7 +89,7 @@ class TurnGrading:
     """How many of this trial's turns reached a verdict, from the ledger that
     owns the answer rather than from the prose the activity channel carries.
 
-    ``proteus alignment --json`` reads ``turn_outcomes``, the table
+    ``kinu alignment --json`` reads ``turn_outcomes``, the table
     ``packages/core/src/evolution/outcomes.ts`` writes. A benchmark container
     holds no person, so ``user_graded`` is 0 by construction and
     ``execution_graded`` — rows the ENVIRONMENT graded — is the number that says
@@ -156,7 +156,7 @@ def assistant_text(events: list[Event]) -> str:
         if event.get("type") == "message_end"
     ]
     if not texts:
-        raise ValueError("No assistant message in proteus exec output")
+        raise ValueError("No assistant message in kinu exec output")
     return texts[-1]
 
 
@@ -222,7 +222,7 @@ def _reported_fields(usage: dict[str, Any]) -> Usage:
 def turn_usage(events: list[Event]) -> Usage:
     """Token usage, summed over every `turn_end` in the stream.
 
-    Proteus reports per turn rather than cumulatively, so these add rather than
+    Kinu reports per turn rather than cumulatively, so these add rather than
     delta. ``input`` is cache-inclusive and ``cacheRead`` is its cache-read
     share, which is the convention CL-Bench's ``build_usage_event`` prices
     against.
@@ -254,7 +254,7 @@ def sum_usages(usages: list[Usage]) -> Usage:
 def had_error(events: list[Event]) -> bool:
     """Whether any turn in the stream reported an error.
 
-    Advisory only: `proteus exec` reports an error — and exits nonzero — when
+    Advisory only: `kinu exec` reports an error — and exits nonzero — when
     any tool call in the turn failed, even when the turn still produced its
     answer, so this cannot stand in for "the turn failed".
     """
@@ -288,7 +288,7 @@ def run_events(events: list[Event], *kinds: str) -> list[Event]:
 
 
 def tool_calls(events: list[Event]) -> list[str]:
-    """Names of the tools Proteus called, in order."""
+    """Names of the tools Kinu called, in order."""
     return [
         str(event.get("toolName", ""))
         for event in events

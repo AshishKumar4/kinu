@@ -93,11 +93,11 @@
   },
   {
     "key": "tests/live-smoke.test.ts › Live Smoke — one real turn per backend › hosted backend: one real turn through the deployed worker",
-    "reason": "needs the DEPLOYED worker, not merely a model: it creates a throwaway cloud agent, drives ONE turn through the OrchestratorAgent Durable Object over the same ticket-authenticated websocket `proteus chat` uses, asserts a real tool call and reads the durable write back out of the DO, then deletes the agent. There is no offline substitute — the claim under test is that the deployment runs a turn, and workerd conformance suites prove the DO in isolation, not the thing that is deployed. Measured at 16.5s. Runs in the eval tier with PROTEUS_ORIGIN + PROTEUS_TOKEN, or with any signed-in `proteus auth` session."
+    "reason": "needs the DEPLOYED worker, not merely a model: it creates a throwaway cloud agent, drives ONE turn through the OrchestratorAgent Durable Object over the same ticket-authenticated websocket `kinu chat` uses, asserts a real tool call and reads the durable write back out of the DO, then deletes the agent. There is no offline substitute — the claim under test is that the deployment runs a turn, and workerd conformance suites prove the DO in isolation, not the thing that is deployed. Measured at 16.5s. Runs in the eval tier with PROTEUS_ORIGIN + PROTEUS_TOKEN, or with any signed-in `kinu auth` session."
   },
   {
     "key": "tests/live-smoke.test.ts › Live Smoke — one real turn per backend › cli backend: one real turn through the local session spine",
-    "reason": "needs a live model: drives ONE turn through the same LocalAgentSession spine as `proteus exec` and asserts a real tool call plus a durable messages row. A mock model chooses no tools, so both assertions would be vacuous against one — 'does the agent reach for a tool' IS the measurement. Measured at 15.3s. Runs in the eval tier."
+    "reason": "needs a live model: drives ONE turn through the same LocalAgentSession spine as `kinu exec` and asserts a real tool call plus a durable messages row. A mock model chooses no tools, so both assertions would be vacuous against one — 'does the agent reach for a tool' IS the measurement. Measured at 15.3s. Runs in the eval tier."
   },
   {
     "key": "tests/evals/behaviour.eval.ts › Agent behaviour over the run-event ledger",

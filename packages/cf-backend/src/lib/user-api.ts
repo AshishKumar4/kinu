@@ -1,5 +1,5 @@
 /**
- * Typed client for the `/api/user/*` HTTP API. The Proteus browser session is
+ * Typed client for the `/api/user/*` HTTP API. The Kinu browser session is
  * attached automatically by the HttpOnly cookie (or local dev's DEV_USER_EMAIL
  * is synthesized server-side), so these fetches are bare.
  */

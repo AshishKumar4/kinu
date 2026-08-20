@@ -1,4 +1,4 @@
-# Proteus CLI reference
+# Kinu CLI reference
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 >
@@ -8,7 +8,7 @@
 Create and chat with self-evolving agent workspaces.
 
 ```
-proteus <command> [options]
+kinu <command> [options]
 ```
 
 ## Commands
@@ -17,131 +17,131 @@ proteus <command> [options]
 
 | Command | What it does |
 | --- | --- |
-| [`proteus setup`](#proteus-setup) | Connect your account; optionally configure local-only model credentials |
-| [`proteus provider [action] [name]`](#proteus-provider-action-name) | List, connect, or disconnect model and account providers |
-| [`proteus auth`](#proteus-auth) | Sign the CLI into your Proteus account |
-| [`proteus whoami`](#proteus-whoami) | Show the signed-in Proteus account |
-| [`proteus logout`](#proteus-logout) | Sign out of the Proteus CLI |
-| [`proteus tokens [action] [name]`](#proteus-tokens-action-name) | Manage long-lived CI access tokens (list, create, revoke) |
+| [`kinu setup`](#kinu-setup) | Connect your account; optionally configure local-only model credentials |
+| [`kinu provider [action] [name]`](#kinu-provider-action-name) | List, connect, or disconnect model and account providers |
+| [`kinu auth`](#kinu-auth) | Sign the CLI into your Kinu account |
+| [`kinu whoami`](#kinu-whoami) | Show the signed-in Kinu account |
+| [`kinu logout`](#kinu-logout) | Sign out of the Kinu CLI |
+| [`kinu tokens [action] [name]`](#kinu-tokens-action-name) | Manage long-lived CI access tokens (list, create, revoke) |
 
 ### Workspaces
 
 | Command | What it does |
 | --- | --- |
-| [`proteus create [name]`](#proteus-create-name) | Create a new workspace |
-| [`proteus list`](#proteus-list) | List all workspaces |
-| [`proteus status <name>`](#proteus-status-name) | Show workspace state and evolution history |
-| [`proteus workspace delete <name>`](#proteus-workspace-delete-name) | Permanently delete a cloud workspace |
-| [`proteus alias <workspace> [alias]`](#proteus-alias-workspace-alias) | Create an executable command alias for a workspace |
-| [`proteus unalias <alias>`](#proteus-unalias-alias) | Remove an executable command alias |
-| [`proteus aliases`](#proteus-aliases) | List configured workspace aliases |
-| [`proteus export <name>`](#proteus-export-name) | Back up a workspace (local or cloud) to a portable archive |
-| [`proteus import <file>`](#proteus-import-file) | Restore a workspace archive into a local workspace |
+| [`kinu create [name]`](#kinu-create-name) | Create a new workspace |
+| [`kinu list`](#kinu-list) | List all workspaces |
+| [`kinu status <name>`](#kinu-status-name) | Show workspace state and evolution history |
+| [`kinu workspace delete <name>`](#kinu-workspace-delete-name) | Permanently delete a cloud workspace |
+| [`kinu alias <workspace> [alias]`](#kinu-alias-workspace-alias) | Create an executable command alias for a workspace |
+| [`kinu unalias <alias>`](#kinu-unalias-alias) | Remove an executable command alias |
+| [`kinu aliases`](#kinu-aliases) | List configured workspace aliases |
+| [`kinu export <name>`](#kinu-export-name) | Back up a workspace (local or cloud) to a portable archive |
+| [`kinu import <file>`](#kinu-import-file) | Restore a workspace archive into a local workspace |
 
 ### Running
 
 | Command | What it does |
 | --- | --- |
-| [`proteus run <name> [prompt...]`](#proteus-run-name-prompt) | Run a workspace once, or open chat when no prompt is provided |
-| [`proteus chat [name]`](#proteus-chat-name) | Interactive conversation with a workspace |
-| [`proteus acp <name>`](#proteus-acp-name) | Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim) |
-| [`proteus exec [prompt...]`](#proteus-exec-prompt) | Run one workspace task headlessly and exit (CI-friendly; executor passthrough lives under `executors`) |
-| [`proteus executors <name> [executor] [command...]`](#proteus-executors-name-executor-command) | List executors, or run a command in one |
-| [`proteus sessions [workspace]`](#proteus-sessions-workspace) | List recorded CLI sessions |
-| [`proteus stop <name>`](#proteus-stop-name) | Stop current cloud work or cancel local background jobs |
+| [`kinu run <name> [prompt...]`](#kinu-run-name-prompt) | Run a workspace once, or open chat when no prompt is provided |
+| [`kinu chat [name]`](#kinu-chat-name) | Interactive conversation with a workspace |
+| [`kinu acp <name>`](#kinu-acp-name) | Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim) |
+| [`kinu exec [prompt...]`](#kinu-exec-prompt) | Run one workspace task headlessly and exit (CI-friendly; executor passthrough lives under `executors`) |
+| [`kinu executors <name> [executor] [command...]`](#kinu-executors-name-executor-command) | List executors, or run a command in one |
+| [`kinu sessions [workspace]`](#kinu-sessions-workspace) | List recorded CLI sessions |
+| [`kinu stop <name>`](#kinu-stop-name) | Stop current cloud work or cancel local background jobs |
 
 ### Configure
 
 | Command | What it does |
 | --- | --- |
-| [`proteus model <name> [spec]`](#proteus-model-name-spec) | Show or change a workspace model |
-| [`proteus effort <name> [level]`](#proteus-effort-name-level) | Show or change workspace reasoning effort (low, medium, high) |
-| [`proteus tools <name>`](#proteus-tools-name) | List a workspace tool surface |
-| [`proteus triggers <name> [action] [value]`](#proteus-triggers-name-action-value) | List, schedule, cancel, or create workspace triggers |
-| [`proteus webhook <name> <label>`](#proteus-webhook-name-label) | Create a durable webhook trigger for a cloud workspace |
+| [`kinu model <name> [spec]`](#kinu-model-name-spec) | Show or change a workspace model |
+| [`kinu effort <name> [level]`](#kinu-effort-name-level) | Show or change workspace reasoning effort (low, medium, high) |
+| [`kinu tools <name>`](#kinu-tools-name) | List a workspace tool surface |
+| [`kinu triggers <name> [action] [value]`](#kinu-triggers-name-action-value) | List, schedule, cancel, or create workspace triggers |
+| [`kinu webhook <name> <label>`](#kinu-webhook-name-label) | Create a durable webhook trigger for a cloud workspace |
 
 ### Inspect & evolve
 
 | Command | What it does |
 | --- | --- |
-| [`proteus evolve <name>`](#proteus-evolve-name) | Trigger an MCTS evolution cycle |
-| [`proteus jobs <name> [action] [id]`](#proteus-jobs-name-action-id) | List or cancel background jobs |
-| [`proteus state <name>`](#proteus-state-name) | Show the durable workspace state snapshot |
-| [`proteus memory <name> [query...]`](#proteus-memory-name-query) | Read or search workspace memory |
-| [`proteus events <name>`](#proteus-events-name) | List recent workspace events |
-| [`proteus timeline <name>`](#proteus-timeline-name) | List the run/evolution/MCTS timeline |
-| [`proteus mcts <name> [nodeId]`](#proteus-mcts-name-nodeid) | Inspect MCTS search history |
-| [`proteus heads <name>`](#proteus-heads-name) | Inspect parallel reasoning branch runs |
-| [`proteus debug <name>`](#proteus-debug-name) | Fetch everything about a workspace into one bundle: identity, messages, runs and their events, heads, MCTS searches, background jobs, evolution state, memory and facts |
-| [`proteus gepa <name> [runId]`](#proteus-gepa-name-runid) | Inspect GEPA optimization runs, or run a pass with --run |
-| [`proteus alignment <name>`](#proteus-alignment-name) | K_align: correction rate per 100 graded turns, by scaffold version, with 95% intervals |
-| [`proteus label [action] [name] [file]`](#proteus-label-action-name-file) | Hand-label turn outcomes (export \| ingest \| ensemble \| report) to measure and correct the classifier; mine \| score for the free behavioural corpus |
-| [`proteus release <name>`](#proteus-release-name) | Inspect the governed release lane: sources, changes, checks, approvals, deployments |
+| [`kinu evolve <name>`](#kinu-evolve-name) | Trigger an MCTS evolution cycle |
+| [`kinu jobs <name> [action] [id]`](#kinu-jobs-name-action-id) | List or cancel background jobs |
+| [`kinu state <name>`](#kinu-state-name) | Show the durable workspace state snapshot |
+| [`kinu memory <name> [query...]`](#kinu-memory-name-query) | Read or search workspace memory |
+| [`kinu events <name>`](#kinu-events-name) | List recent workspace events |
+| [`kinu timeline <name>`](#kinu-timeline-name) | List the run/evolution/MCTS timeline |
+| [`kinu mcts <name> [nodeId]`](#kinu-mcts-name-nodeid) | Inspect MCTS search history |
+| [`kinu heads <name>`](#kinu-heads-name) | Inspect parallel reasoning branch runs |
+| [`kinu debug <name>`](#kinu-debug-name) | Fetch everything about a workspace into one bundle: identity, messages, runs and their events, heads, MCTS searches, background jobs, evolution state, memory and facts |
+| [`kinu gepa <name> [runId]`](#kinu-gepa-name-runid) | Inspect GEPA optimization runs, or run a pass with --run |
+| [`kinu alignment <name>`](#kinu-alignment-name) | K_align: correction rate per 100 graded turns, by scaffold version, with 95% intervals |
+| [`kinu label [action] [name] [file]`](#kinu-label-action-name-file) | Hand-label turn outcomes (export \| ingest \| ensemble \| report) to measure and correct the classifier; mine \| score for the free behavioural corpus |
+| [`kinu release <name>`](#kinu-release-name) | Inspect the governed release lane: sources, changes, checks, approvals, deployments |
 
 ### This computer
 
 | Command | What it does |
 | --- | --- |
-| [`proteus connect`](#proteus-connect) | Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days) |
-| [`proteus desktop [action]`](#proteus-desktop-action) | Connect or inspect the local desktop execution daemon |
-| [`proteus daemon [action] [workspace]`](#proteus-daemon-action-workspace) | Manage the local scheduler daemon: start, stop, restart, status, logs, tick |
-| [`proteus doctor`](#proteus-doctor) | Inspect local Proteus CLI installation state |
-| [`proteus update [target]`](#proteus-update-target) | Update the installed Proteus command |
-| [`proteus uninstall`](#proteus-uninstall) | Remove the installed Proteus command |
+| [`kinu connect`](#kinu-connect) | Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days) |
+| [`kinu desktop [action]`](#kinu-desktop-action) | Connect or inspect the local desktop execution daemon |
+| [`kinu daemon [action] [workspace]`](#kinu-daemon-action-workspace) | Manage the local scheduler daemon: start, stop, restart, status, logs, tick |
+| [`kinu doctor`](#kinu-doctor) | Inspect local Kinu CLI installation state |
+| [`kinu update [target]`](#kinu-update-target) | Update the installed Kinu command |
+| [`kinu uninstall`](#kinu-uninstall) | Remove the installed Kinu command |
 
 ## Reference
 
-### proteus setup
+### kinu setup
 
 Connect your account; optionally configure local-only model credentials.
 
 | Option | What it does |
 | --- | --- |
-| `--origin <url>` | Proteus app origin |
+| `--origin <url>` | Kinu app origin |
 | `--provider <name>` | Provider: codex, openai, openrouter, anthropic, openai-compatible, skip |
 | `--model <id>` | Default model for the selected provider |
 | `--local-model` | Configure credentials for local-only agents |
-| `--local` | Keep the provider key on this machine instead of your Proteus account |
+| `--local` | Keep the provider key on this machine instead of your Kinu account |
 | `-y, --yes` | Accept recommended setup choices where possible |
 | `--skip-cloud` | Skip account sign-in |
 
-### proteus provider [action] [name]
+### kinu provider [action] [name]
 
 List, connect, or disconnect model and account providers.
 
-Also: `proteus providers`
+Also: `kinu providers`
 
 | Option | What it does |
 | --- | --- |
-| `--origin <url>` | Proteus app origin |
+| `--origin <url>` | Kinu app origin |
 | `--model <id>` | Default model for the selected provider |
-| `--local` | Keep the provider key on this machine instead of your Proteus account |
+| `--local` | Keep the provider key on this machine instead of your Kinu account |
 
-### proteus auth
+### kinu auth
 
-Sign the CLI into your Proteus account.
-
-| Option | What it does |
-| --- | --- |
-| `--origin <url>` | Proteus app origin |
-
-### proteus whoami
-
-Show the signed-in Proteus account.
+Sign the CLI into your Kinu account.
 
 | Option | What it does |
 | --- | --- |
-| `--origin <url>` | Proteus app origin |
+| `--origin <url>` | Kinu app origin |
 
-### proteus logout
+### kinu whoami
 
-Sign out of the Proteus CLI.
+Show the signed-in Kinu account.
 
 | Option | What it does |
 | --- | --- |
-| `--origin <url>` | Proteus app origin |
+| `--origin <url>` | Kinu app origin |
 
-### proteus tokens [action] [name]
+### kinu logout
+
+Sign out of the Kinu CLI.
+
+| Option | What it does |
+| --- | --- |
+| `--origin <url>` | Kinu app origin |
+
+### kinu tokens [action] [name]
 
 Manage long-lived CI access tokens (list, create, revoke).
 
@@ -151,7 +151,7 @@ Manage long-lived CI access tokens (list, create, revoke).
 | `--scopes <scopes>` | Comma-separated scopes: workspace.exec, workspace.read |
 | `--json` | Print raw JSON |
 
-### proteus create [name]
+### kinu create [name]
 
 Create a new workspace.
 
@@ -160,17 +160,17 @@ Create a new workspace.
 | `--purpose <text>` | Mission — what this workspace is for (seeds SOUL.md) |
 | `--mode <mode>` | Workspace mode: cloud or local |
 | `--alias <name>` | Create an executable alias command |
-| `--origin <url>` | Proteus app origin for first-use sign-in |
+| `--origin <url>` | Kinu app origin for first-use sign-in |
 | `--no-alias-shim` | Do not create an alias shim |
 | `--model <id>` | Model ID (env: PROTEUS_MODEL) |
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
 
-### proteus list
+### kinu list
 
 List all workspaces.
 
-### proteus status <name>
+### kinu status <name>
 
 Show workspace state and evolution history.
 
@@ -180,7 +180,7 @@ Show workspace state and evolution history.
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
 
-### proteus workspace delete <name>
+### kinu workspace delete <name>
 
 Permanently delete a cloud workspace.
 
@@ -188,19 +188,19 @@ Permanently delete a cloud workspace.
 | --- | --- |
 | `-y, --yes` | Skip the confirmation prompt |
 
-### proteus alias <workspace> [alias]
+### kinu alias <workspace> [alias]
 
 Create an executable command alias for a workspace.
 
-### proteus unalias <alias>
+### kinu unalias <alias>
 
 Remove an executable command alias.
 
-### proteus aliases
+### kinu aliases
 
 List configured workspace aliases.
 
-### proteus export <name>
+### kinu export <name>
 
 Back up a workspace (local or cloud) to a portable archive.
 
@@ -208,7 +208,7 @@ Back up a workspace (local or cloud) to a portable archive.
 | --- | --- |
 | `-o, --output <file>` | Output file path |
 
-### proteus import <file>
+### kinu import <file>
 
 Restore a workspace archive into a local workspace.
 
@@ -216,7 +216,7 @@ Restore a workspace archive into a local workspace.
 | --- | --- |
 | `-n, --name <name>` | Workspace name (default: the name recorded in the archive) |
 
-### proteus run <name> [prompt...]
+### kinu run <name> [prompt...]
 
 Run a workspace once, or open chat when no prompt is provided.
 
@@ -234,7 +234,7 @@ Run a workspace once, or open chat when no prompt is provided.
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
 
-### proteus chat [name]
+### kinu chat [name]
 
 Interactive conversation with a workspace.
 
@@ -251,7 +251,7 @@ Interactive conversation with a workspace.
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
 
-### proteus acp <name>
+### kinu acp <name>
 
 Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim).
 
@@ -263,7 +263,7 @@ Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovi
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
 
-### proteus exec [prompt...]
+### kinu exec [prompt...]
 
 Run one workspace task headlessly and exit (CI-friendly; executor passthrough lives under `executors`).
 
@@ -280,7 +280,7 @@ Run one workspace task headlessly and exit (CI-friendly; executor passthrough li
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
 
-### proteus executors <name> [executor] [command...]
+### kinu executors <name> [executor] [command...]
 
 List executors, or run a command in one.
 
@@ -288,7 +288,7 @@ List executors, or run a command in one.
 | --- | --- |
 | `--json` | Print raw JSON |
 
-### proteus sessions [workspace]
+### kinu sessions [workspace]
 
 List recorded CLI sessions.
 
@@ -298,7 +298,7 @@ List recorded CLI sessions.
 | `--path` | Show session file paths |
 | `--show <idOrPath>` | Show a specific session path |
 
-### proteus stop <name>
+### kinu stop <name>
 
 Stop current cloud work or cancel local background jobs.
 
@@ -306,7 +306,7 @@ Stop current cloud work or cancel local background jobs.
 | --- | --- |
 | `--json` | Print raw JSON |
 
-### proteus model <name> [spec]
+### kinu model <name> [spec]
 
 Show or change a workspace model.
 
@@ -316,11 +316,11 @@ Show or change a workspace model.
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
 
-### proteus effort <name> [level]
+### kinu effort <name> [level]
 
 Show or change workspace reasoning effort (low, medium, high).
 
-### proteus tools <name>
+### kinu tools <name>
 
 List a workspace tool surface.
 
@@ -330,7 +330,7 @@ List a workspace tool surface.
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
 
-### proteus triggers <name> [action] [value]
+### kinu triggers <name> [action] [value]
 
 List, schedule, cancel, or create workspace triggers.
 
@@ -345,7 +345,7 @@ List, schedule, cancel, or create workspace triggers.
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
 
-### proteus webhook <name> <label>
+### kinu webhook <name> <label>
 
 Create a durable webhook trigger for a cloud workspace.
 
@@ -357,7 +357,7 @@ Create a durable webhook trigger for a cloud workspace.
 | `--rate-limit <n>` | Webhook deliveries per minute |
 | `--json` | Print raw JSON |
 
-### proteus evolve <name>
+### kinu evolve <name>
 
 Trigger an MCTS evolution cycle.
 
@@ -370,7 +370,7 @@ Trigger an MCTS evolution cycle.
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
 
-### proteus jobs <name> [action] [id]
+### kinu jobs <name> [action] [id]
 
 List or cancel background jobs.
 
@@ -381,7 +381,7 @@ List or cancel background jobs.
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |
 
-### proteus state <name>
+### kinu state <name>
 
 Show the durable workspace state snapshot.
 
@@ -389,7 +389,7 @@ Show the durable workspace state snapshot.
 | --- | --- |
 | `--json` | Print raw JSON |
 
-### proteus memory <name> [query...]
+### kinu memory <name> [query...]
 
 Read or search workspace memory.
 
@@ -398,7 +398,7 @@ Read or search workspace memory.
 | `--limit <n>` | Search result limit |
 | `--json` | Print raw JSON |
 
-### proteus events <name>
+### kinu events <name>
 
 List recent workspace events.
 
@@ -409,7 +409,7 @@ List recent workspace events.
 | `--limit <n>` | Event limit |
 | `--json` | Print raw JSON |
 
-### proteus timeline <name>
+### kinu timeline <name>
 
 List the run/evolution/MCTS timeline.
 
@@ -418,7 +418,7 @@ List the run/evolution/MCTS timeline.
 | `--limit <n>` | Timeline row limit |
 | `--json` | Print raw JSON |
 
-### proteus mcts <name> [nodeId]
+### kinu mcts <name> [nodeId]
 
 Inspect MCTS search history.
 
@@ -426,7 +426,7 @@ Inspect MCTS search history.
 | --- | --- |
 | `--json` | Print raw JSON |
 
-### proteus heads <name>
+### kinu heads <name>
 
 Inspect parallel reasoning branch runs.
 
@@ -435,7 +435,7 @@ Inspect parallel reasoning branch runs.
 | `--limit <n>` | Run limit |
 | `--json` | Print raw JSON |
 
-### proteus debug <name>
+### kinu debug <name>
 
 Fetch everything about a workspace into one bundle: identity, messages, runs and their events, heads, MCTS searches, background jobs, evolution state, memory and facts.
 
@@ -446,7 +446,7 @@ Fetch everything about a workspace into one bundle: identity, messages, runs and
 | `--limit <n>` | Row limit for the smaller sections (messages, jobs, facts, ...) |
 | `--json` | Print the assembled summary as JSON instead of a human report |
 
-### proteus gepa <name> [runId]
+### kinu gepa <name> [runId]
 
 Inspect GEPA optimization runs, or run a pass with --run.
 
@@ -459,7 +459,7 @@ Inspect GEPA optimization runs, or run a pass with --run.
 | `--limit <n>` | Run limit |
 | `--json` | Print raw JSON |
 
-### proteus alignment <name>
+### kinu alignment <name>
 
 K_align: correction rate per 100 graded turns, by scaffold version, with 95% intervals.
 
@@ -467,7 +467,7 @@ K_align: correction rate per 100 graded turns, by scaffold version, with 95% int
 | --- | --- |
 | `--json` | Print raw JSON |
 
-### proteus label [action] [name] [file]
+### kinu label [action] [name] [file]
 
 Hand-label turn outcomes (export | ingest | ensemble | report) to measure and correct the classifier; mine | score for the free behavioural corpus.
 
@@ -482,7 +482,7 @@ Hand-label turn outcomes (export | ingest | ensemble | report) to measure and co
 | `--limit <n>` | Labeled turns to put to the raters (score; default: 25) |
 | `--json` | Print raw JSON |
 
-### proteus release <name>
+### kinu release <name>
 
 Inspect the governed release lane: sources, changes, checks, approvals, deployments.
 
@@ -491,7 +491,7 @@ Inspect the governed release lane: sources, changes, checks, approvals, deployme
 | `--limit <n>` | Change limit |
 | `--json` | Print raw JSON |
 
-### proteus connect
+### kinu connect
 
 Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days).
 
@@ -499,7 +499,7 @@ Link this computer as the desktop execution daemon (the link renews itself while
 | --- | --- |
 | `--label <name>` | Device label |
 
-### proteus desktop [action]
+### kinu desktop [action]
 
 Connect or inspect the local desktop execution daemon.
 
@@ -507,26 +507,26 @@ Connect or inspect the local desktop execution daemon.
 | --- | --- |
 | `--label <name>` | Device label |
 
-### proteus daemon [action] [workspace]
+### kinu daemon [action] [workspace]
 
 Manage the local scheduler daemon: start, stop, restart, status, logs, tick.
 
-### proteus doctor
+### kinu doctor
 
-Inspect local Proteus CLI installation state.
+Inspect local Kinu CLI installation state.
 
-### proteus update [target]
+### kinu update [target]
 
-Update the installed Proteus command.
+Update the installed Kinu command.
 
 | Option | What it does |
 | --- | --- |
-| `--origin <url>` | Proteus app origin |
+| `--origin <url>` | Kinu app origin |
 | `--force` | Reinstall even if already current |
 
-### proteus uninstall
+### kinu uninstall
 
-Remove the installed Proteus command.
+Remove the installed Kinu command.
 
 | Option | What it does |
 | --- | --- |
@@ -539,7 +539,7 @@ These apply to every command.
 | Variable | What it does |
 | --- | --- |
 | `PROTEUS_HOME` | Workspace + config directory (default ~/.proteus) |
-| `PROTEUS_ORIGIN` | Proteus app origin |
+| `PROTEUS_ORIGIN` | Kinu app origin |
 | `PROTEUS_TOKEN` | Account access token (CI) |
 | `PROTEUS_MODEL` | Default model ID |
 | `PROTEUS_BASE_URL` | LLM API base URL |
@@ -548,11 +548,11 @@ These apply to every command.
 ## Examples
 
 ```bash
-proteus setup
-proteus provider connect codex
-proteus create jarvis --mode cloud --alias jarvis
+kinu setup
+kinu provider connect codex
+kinu create jarvis --mode cloud --alias jarvis
 jarvis "review this repo"
-proteus sessions jarvis
-proteus daemon status
-proteus connect
+kinu sessions jarvis
+kinu daemon status
+kinu connect
 ```

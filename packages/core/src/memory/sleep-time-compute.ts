@@ -9,7 +9,7 @@
 // next turn starts from a denser, cleaner state. The user never waits for this
 // — it runs fire-and-forget after the turn completes.
 //
-// Proteus implements this as a sibling of the detached outcome review
+// Kinu implements this as a sibling of the detached outcome review
 // (`AgentOrchestrator`'s detached `engine.reviewTurn`) — same forked pattern, additional work.
 // The keyed world model is its lever; long-conversation summarization is owned
 // by Session compaction (configureSession), so there is no parallel prose summary.

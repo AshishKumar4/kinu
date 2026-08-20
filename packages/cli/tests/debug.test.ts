@@ -1,4 +1,4 @@
-// `proteus debug <name>` — the debugging control plane. Covers both
+// `kinu debug <name>` — the debugging control plane. Covers both
 // backends (a hand-seeded local workspace, and a stub cloud origin), the
 // exact scenario the read-vs-write MCTS investigation turns on (two search
 // runs, the older one sorting first by created_at — reproducing what the
@@ -187,7 +187,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
   db.close();
 }
 
-describe('proteus debug — redaction', () => {
+describe('kinu debug — redaction', () => {
   test('redactSecrets scrubs every planted secret shape', () => {
     expect(redactSecrets(`bearer ${SECRET_PROTEUS_TOKEN}`)).not.toContain(SECRET_PROTEUS_TOKEN);
     expect(redactSecrets(SECRET_TOKEN)).not.toContain(SECRET_TOKEN);
@@ -199,7 +199,7 @@ describe('proteus debug — redaction', () => {
   });
 });
 
-describe('proteus debug — local backend', () => {
+describe('kinu debug — local backend', () => {
   test('assembles identity, runs, heads, mcts searches and background jobs into one bundle, and never leaks the planted secret', async () => {
     const home = scratch('proteus-debug-local-');
     const out = scratch('proteus-debug-local-out-');
@@ -334,7 +334,7 @@ describe('proteus debug — local backend', () => {
   });
 });
 
-describe('proteus debug — cloud backend', () => {
+describe('kinu debug — cloud backend', () => {
   test('walks the same sections over RPC, using the newly-exposed getRunEvents/listRuns/getMctsSearchRuns', async () => {
     const calls: string[] = [];
     const server = Bun.serve({

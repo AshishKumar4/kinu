@@ -1,5 +1,5 @@
 // Route-level behavior for the CLI's provider-credential surface — what lets
-// `proteus provider connect` put a key in the owner's account instead of on
+// `kinu provider connect` put a key in the owner's account instead of on
 // that machine's disk.
 //
 // Contract under test:

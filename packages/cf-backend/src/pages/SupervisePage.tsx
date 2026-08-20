@@ -432,9 +432,9 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
   );
 }
 
-/* Step-up auth: creating a durable webhook requires a fresh Proteus browser
+/* Step-up auth: creating a durable webhook requires a fresh Kinu browser
  * session (≤5 min since login). On the step-up 401 we send the user through
- * Proteus login and return here. */
+ * Kinu login and return here. */
 function CreateWebhookModal({ agentName, onClose, onCreated }: {
   agentName: string;
   onClose: () => void;

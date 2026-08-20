@@ -1,7 +1,7 @@
 /**
  * @kinu/compaction — the staged context-pruning compaction engine.
  *
- * One deep module: the published better-compact ladder core, the Proteus
+ * One deep module: the published better-compact ladder core, the Kinu
  * ModelMessage codec, the
  * `createCompactionExtension` factory whose `transformContext` runs the
  * ladder, the archive manifest that makes its citable transcripts navigable

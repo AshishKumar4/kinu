@@ -1,5 +1,5 @@
 /**
- * The single source of truth for where local Proteus state lives.
+ * The single source of truth for where local Kinu state lives.
  *
  * PROTEUS_HOME is the isolation boundary: point it somewhere else and NOTHING
  * a local run writes may land in the real home. It lives here rather than in

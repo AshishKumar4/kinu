@@ -2,7 +2,7 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus is a self-evolving agent **workspace**. You create a workspace (a durable
+Kinu is a self-evolving agent **workspace**. You create a workspace (a durable
 container with its own filesystem, execution environments, and sessions) and its
 agent answers chat, runs tools, searches a tree of agent nodes against an
 objective you declare, learns reusable tools, and can rewrite its own agentic
@@ -168,7 +168,7 @@ owns no loop of its own (`core/src/heads/head-inference.ts`). One implementation
 therefore holds the stall watchdog, the dead-stream detection, the mid-step
 abort, the step-boundary pruning and the unpaired-tool-call repair for both. The
 cloud actor is the exception because its loop belongs to Think. The vendor
-drives the steps and Proteus binds to the hooks below. A node registers no
+drives the steps and Kinu binds to the hooks below. A node registers no
 extensions, so compaction and signal delivery belong to an actor's turn and
 never to a node's.
 
@@ -200,7 +200,7 @@ flowchart TB
 
 What the boxes are:
 
-| Think hook | Proteus binding | Module |
+| Think hook | Kinu binding | Module |
 |---|---|---|
 | `beforeTurn` | `emitTurnStart`, then the awaited `transformContext` chain; the turn-local tail is appended **after** the transform; tools folded into `activeTools` | `orchestrator.ts`, `core/src/extension.ts` |
 | `beforeStep` | `composePrepareStep` — extension chain, then step-pruning, then the dynamic-context weave, cache-breakpoint markers last | `core/src/prompting/prepare-step.ts` |
@@ -213,7 +213,7 @@ The two default registrants attach at construction on both backends:
 
 - **Compaction** (`@kinu/compaction`, `createCompactionExtension`) is the
   default `transformContext`: the vendored better-compact staged-pruning ladder
-  (`compaction/src/engine/`) plus the Proteus codec (`compaction/src/codec.ts`,
+  (`compaction/src/engine/`) plus the Kinu codec (`compaction/src/codec.ts`,
   AI-SDK `ModelMessage[]` ⇄ ladder `Turn[]`). It runs once per turn assembly over
   shared stores — raw transcripts in the canonical workspace VFS, the replayable plan + the
   measured token trigger in one `compaction_state` row. The trigger is 85% of
@@ -222,7 +222,7 @@ The two default registrants attach at construction on both backends:
   system prompt), and the rungs run cheapest-first: **superseded ephemeral
   context** → skills → superseded reads → error inputs → old tool output →
   reasoning → remaining tool output → assistant runs → prefix summary. The first
-  rung is Proteus's own (`relieveEphemeralPressure`): a superseded
+  rung is Kinu's own (`relieveEphemeralPressure`): a superseded
   `<dynamic_context>` block is stale by definition and re-derivable from live
   state, so it is the cheapest thing in the request to give up. Being woven per
   model step, it is also the one thing a ladder stage can never see. What
@@ -404,9 +404,9 @@ graph TB
     subgraph pkgs["packages/"]
         Core["core/<br/>turn pipeline + ExtensionHost, canonical VFS,<br/>ExecutionRouter, swarm engine, MCTS, EvolutionEngine,<br/>CraftStore, scaffold, eight builtin tools, EventLog"]
         Utils["agent-utils/<br/>MemoryStore (FTS5) · CraftStore (FTS5)<br/>VFS types · path addressing · abort helpers"]
-        Compact["compaction/<br/>vendored better-compact ladder + Proteus codec"]
+        Compact["compaction/<br/>vendored better-compact ladder + Kinu codec"]
         CF["cf-backend/<br/>ActorAgent → OrchestratorAgent + SubordinateAgent,<br/>ExplorationAgent (Facets), UserDO, React UI"]
-        CLI["cli/<br/>proteus create/chat/exec/evolve/…"]
+        CLI["cli/<br/>kinu create/chat/exec/evolve/…"]
         CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
         PC["pc-agent/<br/>reverse-WS device daemon → laptop.*"]
         TU["test-utils/<br/>shared test fakes + fixtures"]
@@ -487,7 +487,7 @@ Two policies live at this seam and apply to every provider:
   throwing.
 
 **Reasoning effort** is user-settable rather than baked in: `/effort` in chat or
-`proteus effort <workspace> <level>` stores `reasoning_effort` in the workspace's
+`kinu effort <workspace> <level>` stores `reasoning_effort` in the workspace's
 `agent_config`, with `~/.proteus/config.json` holding the CLI-side default for
 new workspaces. `core/src/strategy/effort.ts` maps the level onto each provider
 family's native knob — `reasoning_effort` for Workers AI, `reasoningEffort` for

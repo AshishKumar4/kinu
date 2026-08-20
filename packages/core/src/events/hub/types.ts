@@ -1,5 +1,5 @@
 /**
- * Proteus EventsHub — shared types.
+ * Kinu EventsHub — shared types.
  *
  * The whole hub traffics in `ProteusEvent`. New entry points add new variants
  * to the discriminated union; older code keeps working because every variant

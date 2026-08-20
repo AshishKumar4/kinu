@@ -91,7 +91,7 @@ function blockEquals(prints: ReadonlyArray<string>, a: number, b: number, length
 // ── Backtracking ─────────────────────────────────────────────────
 
 /**
- * Path effects readable from a call's arguments. Proteus has no file tool —
+ * Path effects readable from a call's arguments. Kinu has no file tool —
  * files are touched from code-mode (`workspace.readFile` / `workspace.writeFile`,
  * the documented VFS surface) and from `run` shell commands, so those two
  * vocabularies are what a trace can actually show. Deliberately narrow: a

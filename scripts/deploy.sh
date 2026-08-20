@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proteus deploy pipeline — THE deploy path. `bun run deploy` runs this.
+# Kinu deploy pipeline — THE deploy path. `bun run deploy` runs this.
 #
 # Deploying any other way is how production once shipped without the CLI
 # download assets: the site was fine, but /downloads/* answered with the SPA
@@ -16,11 +16,11 @@
 # `wrangler deploy --dry-run`, 2026-08-07):
 #   - The vite plugin writes packages/cf-backend/.wrangler/deploy/config.json,
 #     and `wrangler deploy` DOES follow it (the command declares
-#     useConfigRedirectIfAvailable) — it deploys dist/proteus/wrangler.json.
+#     useConfigRedirectIfAvailable) — it deploys dist/kinu/wrangler.json.
 #   - That generated config's assets.directory is "../client", and the user
 #     config's is "dist/client". Both resolve to the SAME directory:
 #     packages/cf-backend/dist/client. There is one assets dir, not two.
-#   - dist/proteus/assets/ is NOT an assets dir. It is the worker bundle's
+#   - dist/kinu/assets/ is NOT an assets dir. It is the worker bundle's
 #     code-split chunk output, which wrangler attaches as worker modules.
 #     Writing downloads there publishes nothing.
 # Step 3 asserts this from wrangler's own output rather than trusting it.
@@ -38,14 +38,14 @@ RED='\033[0;31m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# ── Locate Proteus root ──────────────────────────────────────────
+# ── Locate Kinu root ──────────────────────────────────────────
 PROTEUS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$PROTEUS_ROOT" || { echo -e "${RED}Cannot cd to Proteus root${NC}"; exit 1; }
+cd "$PROTEUS_ROOT" || { echo -e "${RED}Cannot cd to Kinu root${NC}"; exit 1; }
 
 export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-f44999d1ddda7012e9a87729eba250f1}"
 
 # Captured during deploy for final summary
-PROTEUS_URL="https://proteus.ashishkumarsingh.com/"
+PROTEUS_URL="https://kinu.run/"
 PROTEUS_VERSION=""
 # The one directory wrangler publishes as static assets (see header).
 PROTEUS_ASSETS_DIR="$PROTEUS_ROOT/packages/cf-backend/dist/client"
@@ -80,9 +80,9 @@ run_required_gate() {
   fi
 }
 
-echo -e "${BOLD}Proteus Deploy Pipeline${NC}"
+echo -e "${BOLD}Kinu Deploy Pipeline${NC}"
 echo "========================"
-echo "Proteus root: $PROTEUS_ROOT"
+echo "Kinu root: $PROTEUS_ROOT"
 echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
 echo "Build sha:    $PROTEUS_SHA"
 if [ -n "$(git -C "$PROTEUS_ROOT" status --porcelain 2>/dev/null)" ]; then
@@ -115,9 +115,9 @@ fi
 # not a build or publish operation. Do it before verification when a checkout
 # has not been prepared yet; never let deploy update the lockfile.
 if [ ! -d "$PROTEUS_ROOT/node_modules" ]; then
-  echo "Installing Proteus dependencies (root node_modules missing)..."
+  echo "Installing Kinu dependencies (root node_modules missing)..."
   bun install --frozen-lockfile \
-    || { echo -e "${RED}bun install failed in Proteus${NC}"; exit 1; }
+    || { echo -e "${RED}bun install failed in Kinu${NC}"; exit 1; }
 fi
 
 # ── Step 1: Required pre-deploy gates ────────────────────────────
@@ -197,9 +197,9 @@ run_required_gate "Declared infrastructure exists and is bound" bun run gate:inf
 echo ""
 echo -e "${GREEN}All required pre-deploy gates passed.${NC}"
 
-# ── Step 2: Build Proteus ────────────────────────────────────────
+# ── Step 2: Build Kinu ────────────────────────────────────────
 echo ""
-echo -e "${BOLD}Step 2: Building Proteus${NC}"
+echo -e "${BOLD}Step 2: Building Kinu${NC}"
 cd "$PROTEUS_ROOT/packages/cf-backend" || { echo -e "${RED}cannot cd to cf-backend${NC}"; exit 1; }
 
 # Build the client bundle into dist/client (used by wrangler's assets directive).
@@ -217,7 +217,7 @@ bash "$PROTEUS_ROOT/scripts/build-cli-source-archive.sh" || { echo -e "${RED}CLI
 # Nothing may reach production without the three CLI download assets sitting in
 # the directory wrangler publishes. A deploy missing them bricks every fresh
 # install and update.
-for asset in proteus-source.tar.gz proteus-source.tar.gz.sha256 proteus-version.json; do
+for asset in kinu-source.tar.gz kinu-source.tar.gz.sha256 kinu-version.json; do
   if [ ! -s "$PROTEUS_ASSETS_DIR/downloads/$asset" ]; then
     echo -e "${RED}❌ Missing build output: $PROTEUS_ASSETS_DIR/downloads/$asset${NC}"
     exit 1
@@ -225,19 +225,19 @@ for asset in proteus-source.tar.gz proteus-source.tar.gz.sha256 proteus-version.
 done
 echo -e "${GREEN}✅ CLI download assets staged in $PROTEUS_ASSETS_DIR/downloads${NC}"
 
-# ── Step 3: Deploy Proteus ───────────────────────────────────────
+# ── Step 3: Deploy Kinu ───────────────────────────────────────
 echo ""
-echo -e "${BOLD}Step 3: Deploying Proteus${NC}"
+echo -e "${BOLD}Step 3: Deploying Kinu${NC}"
 PROTEUS_DEPLOY_LOG="$(mktemp -t proteus-deploy.XXXXXX.log)"
 echo ""
 echo "Running: npx wrangler deploy (log → $PROTEUS_DEPLOY_LOG)"
 echo ""
 if npx wrangler deploy 2>&1 | tee "$PROTEUS_DEPLOY_LOG"; then
   echo ""
-  echo -e "${GREEN}Proteus deploy succeeded.${NC}"
+  echo -e "${GREEN}Kinu deploy succeeded.${NC}"
 else
   echo ""
-  echo -e "${RED}Proteus deploy failed — see log above.${NC}"
+  echo -e "${RED}Kinu deploy failed — see log above.${NC}"
   exit 1
 fi
 
@@ -246,7 +246,7 @@ PROTEUS_VERSION="$(grep -oE 'Version ID:[[:space:]]*[a-f0-9-]+' "$PROTEUS_DEPLOY
 # Verify wrangler echoed the Sandbox binding (proves @cloudflare/sandbox is wired).
 # Binding name is "Sandbox" (capital S) — the SDK hardcodes env.Sandbox lookup.
 if grep -qE 'ProteusSandbox' "$PROTEUS_DEPLOY_LOG"; then
-  echo -e "${GREEN}✅ Proteus bound Sandbox (ProteusSandbox DO + Container)${NC}"
+  echo -e "${GREEN}✅ Kinu bound Sandbox (ProteusSandbox DO + Container)${NC}"
 else
   echo -e "${RED}❌ wrangler output did not mention the Sandbox binding${NC}"
   echo "   Check that packages/cf-backend/wrangler.jsonc includes:"
@@ -279,20 +279,20 @@ sleep 10
 
 SMOKE_FAIL=0
 
-# Proteus (production route).
+# Kinu (production route).
 LIVE_STATUS=$(curl -so /dev/null -w '%{http_code}' --max-time 15 "$PROTEUS_URL" 2>/dev/null || echo "000")
 if [ "$LIVE_STATUS" = "200" ]; then
-  echo -e "${GREEN}✅ Proteus live site returns 200${NC} ($PROTEUS_URL)"
+  echo -e "${GREEN}✅ Kinu live site returns 200${NC} ($PROTEUS_URL)"
 else
-  echo -e "${RED}❌ Proteus live site returns $LIVE_STATUS${NC} ($PROTEUS_URL)"
+  echo -e "${RED}❌ Kinu live site returns $LIVE_STATUS${NC} ($PROTEUS_URL)"
   SMOKE_FAIL=1
 fi
 
 LIVE_HTML=$(curl -s --max-time 15 "$PROTEUS_URL" 2>/dev/null)
 if echo "$LIVE_HTML" | grep -qi 'proteus'; then
-  echo -e "${GREEN}✅ Proteus live site serves Proteus app${NC}"
+  echo -e "${GREEN}✅ Kinu live site serves Kinu app${NC}"
 else
-  echo -e "${RED}❌ Proteus live site content missing 'Proteus'${NC}"
+  echo -e "${RED}❌ Kinu live site content missing 'Kinu'${NC}"
   SMOKE_FAIL=1
 fi
 
@@ -317,54 +317,54 @@ else
 fi
 
 # The §0 regression: this asset once came back as the SPA shell wearing an
-# application/json content-type, so `proteus update` could never see a version.
+# application/json content-type, so `kinu update` could never see a version.
 VERSION_SHA=""
 for _try in 1 2 3 4 5 6 7 8; do
-  VERSION_SHA=$(curl -fsSL --max-time 15 "${PROTEUS_URL}downloads/proteus-version.json?smoke=$_try" 2>/dev/null | json_field sha)
+  VERSION_SHA=$(curl -fsSL --max-time 15 "${PROTEUS_URL}downloads/kinu-version.json?smoke=$_try" 2>/dev/null | json_field sha)
   [ "$VERSION_SHA" = "$PROTEUS_SHA" ] && break
   sleep 15
 done
 if [ "$VERSION_SHA" = "$PROTEUS_SHA" ]; then
-  echo -e "${GREEN}✅ Published proteus-version.json is real JSON for this build${NC}"
+  echo -e "${GREEN}✅ Published kinu-version.json is real JSON for this build${NC}"
 else
-  echo -e "${RED}❌ Published proteus-version.json sha is '${VERSION_SHA:-<unparseable>}', expected '$PROTEUS_SHA'${NC}"
+  echo -e "${RED}❌ Published kinu-version.json sha is '${VERSION_SHA:-<unparseable>}', expected '$PROTEUS_SHA'${NC}"
   SMOKE_FAIL=1
 fi
 
-CLI_SHIM=$(curl -s --max-time 15 "${PROTEUS_URL}downloads/proteus" 2>/dev/null)
-if echo "$CLI_SHIM" | grep -q 'downloads/proteus-source.tar.gz' && ! echo "$CLI_SHIM" | grep -q 'github.com'; then
-  echo -e "${GREEN}✅ Proteus CLI shim uses deployed source archive${NC}"
+CLI_SHIM=$(curl -s --max-time 15 "${PROTEUS_URL}downloads/kinu" 2>/dev/null)
+if echo "$CLI_SHIM" | grep -q 'downloads/kinu-source.tar.gz' && ! echo "$CLI_SHIM" | grep -q 'github.com'; then
+  echo -e "${GREEN}✅ Kinu CLI shim uses deployed source archive${NC}"
 else
-  echo -e "${RED}❌ Proteus CLI shim is not using the deployed source archive${NC}"
+  echo -e "${RED}❌ Kinu CLI shim is not using the deployed source archive${NC}"
   SMOKE_FAIL=1
 fi
 
-CLI_ARCHIVE_TMP="$(mktemp -t proteus-cli-source.XXXXXX.tar.gz)"
-CLI_ARCHIVE_LIST="$(mktemp -t proteus-cli-source.XXXXXX.list)"
+CLI_ARCHIVE_TMP="$(mktemp -t kinu-cli-source.XXXXXX.tar.gz)"
+CLI_ARCHIVE_LIST="$(mktemp -t kinu-cli-source.XXXXXX.list)"
 CLI_ARCHIVE_OK=0
 for attempt in 1 2 3 4 5 6; do
-  if curl -fsSL --max-time 30 "${PROTEUS_URL}downloads/proteus-source.tar.gz" -o "$CLI_ARCHIVE_TMP" \
+  if curl -fsSL --max-time 30 "${PROTEUS_URL}downloads/kinu-source.tar.gz" -o "$CLI_ARCHIVE_TMP" \
     && tar -tzf "$CLI_ARCHIVE_TMP" > "$CLI_ARCHIVE_LIST" \
-    && grep -Fq 'proteus/packages/cli/src/commands/setup.ts' "$CLI_ARCHIVE_LIST"; then
+    && grep -Fq 'kinu/packages/cli/src/commands/setup.ts' "$CLI_ARCHIVE_LIST"; then
     CLI_ARCHIVE_OK=1
     break
   fi
   [ "$attempt" = "6" ] || sleep 5
 done
 if [ "$CLI_ARCHIVE_OK" = "1" ]; then
-  echo -e "${GREEN}✅ Proteus CLI source archive is downloadable${NC}"
+  echo -e "${GREEN}✅ Kinu CLI source archive is downloadable${NC}"
   # The CLI shim verifies this checksum by default — a stale/missing .sha256
   # bricks installs and updates, so the deploy gate checks it too.
-  PUBLISHED_SHA="$(curl -fsSL --max-time 15 "${PROTEUS_URL}downloads/proteus-source.tar.gz.sha256" 2>/dev/null | awk '{print $1}')"
+  PUBLISHED_SHA="$(curl -fsSL --max-time 15 "${PROTEUS_URL}downloads/kinu-source.tar.gz.sha256" 2>/dev/null | awk '{print $1}')"
   ACTUAL_SHA="$(sha256sum "$CLI_ARCHIVE_TMP" | awk '{print $1}')"
   if [ -n "$PUBLISHED_SHA" ] && [ "$PUBLISHED_SHA" = "$ACTUAL_SHA" ]; then
-    echo -e "${GREEN}✅ Proteus CLI source checksum matches the published .sha256${NC}"
+    echo -e "${GREEN}✅ Kinu CLI source checksum matches the published .sha256${NC}"
   else
     echo -e "${RED}❌ Published source checksum is missing or does not match the archive${NC}"
     SMOKE_FAIL=1
   fi
 else
-  echo -e "${RED}❌ Proteus CLI source archive is missing or invalid${NC}"
+  echo -e "${RED}❌ Kinu CLI source archive is missing or invalid${NC}"
   SMOKE_FAIL=1
 fi
 rm -f "$CLI_ARCHIVE_TMP" "$CLI_ARCHIVE_LIST"
@@ -379,8 +379,8 @@ fi
 echo ""
 echo -e "${BOLD}Deploy complete.${NC}"
 echo "================================="
-echo "Proteus:  $PROTEUS_URL"
+echo "Kinu:  $PROTEUS_URL"
 echo "          version ${PROTEUS_VERSION:-unknown}"
 echo "          build   $PROTEUS_SHA"
 echo ""
-echo -e "${GREEN}✅ Proteus Worker deployed and verified.${NC}"
+echo -e "${GREEN}✅ Kinu Worker deployed and verified.${NC}"

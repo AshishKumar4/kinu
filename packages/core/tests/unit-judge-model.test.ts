@@ -133,7 +133,7 @@ describe('selectEnsembleJudges', () => {
   test('named judges win outright, without an availability query or a spec resolution', async () => {
     // Both are credentialed reads: `candidates` lists the registry, and
     // resolving the chat spec reaches the signed-in session and the stored keys.
-    // `proteus label ensemble --models <one-model>` printed "not authenticated"
+    // `kinu label ensemble --models <one-model>` printed "not authenticated"
     // and exited 1 for a panel that was never going to run, because the caller
     // computed `chatSpec` eagerly as an argument. A named panel must consult
     // neither.

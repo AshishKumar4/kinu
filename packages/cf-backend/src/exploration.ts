@@ -111,7 +111,7 @@ export class ExplorationAgent extends Agent<Env> {
   private readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
     agentName: () => this.name,
-    appTitle: 'Proteus (exploration)',
+    appTitle: 'Kinu (exploration)',
     ownerRequired: false,
     getOwnerUserId: () => this.identity.ownerUserId(),
     getUserCaller: async () => {

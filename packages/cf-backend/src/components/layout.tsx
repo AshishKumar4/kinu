@@ -32,7 +32,7 @@ export default function Layout() {
           </button>
           <Link to="/" className="flex items-center gap-2 rounded-md px-2 py-1.5">
             <BrainIcon size={21} weight="duotone" className="p-accent" />
-            <span className="font-medium tracking-tight">Proteus</span>
+            <span className="font-medium tracking-tight">Kinu</span>
           </Link>
         </div>
         <div className="flex items-center gap-1">

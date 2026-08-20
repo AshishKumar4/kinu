@@ -1,5 +1,5 @@
 /**
- * The real engine ports over Proteus's shared storage primitives.
+ * The real engine ports over Kinu's shared storage primitives.
  *
  * Both backends expose the SAME two primitives — a workspace filesystem whose
  * filesystem is Nimbus (DO storage on cf, agent.db on cli) and a

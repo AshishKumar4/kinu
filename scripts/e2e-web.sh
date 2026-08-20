@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proteus Web E2E tests — exercises the real agent via HTTP + WebSocket.
+# Kinu Web E2E tests — exercises the real agent via HTTP + WebSocket.
 # Requires the local dev server (wrangler/vite) running on localhost:5173.
 set -uo pipefail
 
@@ -16,7 +16,7 @@ AGENT_NAME="e2e-$(date +%s)"
 # "Nothing to run against", distinct from both success and failure.
 SKIP_EXIT=2
 
-echo -e "${BOLD}Proteus Web E2E Tests${NC}"
+echo -e "${BOLD}Kinu Web E2E Tests${NC}"
 echo "Target: $BASE_URL"
 echo "Agent:  $AGENT_NAME"
 echo ""

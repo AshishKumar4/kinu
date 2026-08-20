@@ -52,5 +52,5 @@ export function git(repo: string, ...args: readonly string[]): string {
 export function initRepo(repo: string): void {
   git(repo, 'init', '-q');
   git(repo, 'config', 'user.email', 'proteus@example.invalid');
-  git(repo, 'config', 'user.name', 'Proteus Test');
+  git(repo, 'config', 'user.name', 'Kinu Test');
 }

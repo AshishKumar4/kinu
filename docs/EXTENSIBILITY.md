@@ -1,4 +1,4 @@
-# Proteus extensibility
+# Kinu extensibility
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
@@ -7,7 +7,7 @@ provider, an exploration strategy, an actor kind, or a turn extension.
 
 ## The seams
 
-Proteus exposes four seams, so a new idea plugs in at the right altitude.
+Kinu exposes four seams, so a new idea plugs in at the right altitude.
 
 | Seam | Interface | Lives in | Adds | Example use cases |
 |---|---|---|---|---|
@@ -274,7 +274,7 @@ handicap, and a context-discipline scaffold would lose every trial.
 ## Reasoning-effort budgets
 
 `low | medium | high` is the one dial. It is user-settable per workspace through
-the `/effort` slash command or `proteus effort <name> [level]`, stored as
+the `/effort` slash command or `kinu effort <name> [level]`, stored as
 `agent_config.reasoning_effort`, with a CLI-side default in
 `~/.proteus/config.json`. `reasoningEffortOptions(effort, providerFamily)` in
 `core/strategy/effort.ts` translates it to each family's native knob.

@@ -190,8 +190,8 @@ describe('running the panel', () => {
     expect(run).toBeNull();
     expect(gap?.kind).toBe('no_gold_labels');
     const said = describeEnsembleGap(gap!);
-    expect(said).toContain('proteus label export');
-    expect(said).toContain('proteus label ingest');
+    expect(said).toContain('kinu label export');
+    expect(said).toContain('kinu label ingest');
   });
 
   test('refuses on an empty ledger, and refuses to be a panel of one', async () => {
@@ -421,13 +421,13 @@ describe('an unmeasured panel', () => {
     expect(renderEnsembleReport(ensembleReport(sql))).toContain('no classifier-graded turns yet');
 
     seedLedger(sql, { accepted: 8, corrected: 2 });
-    expect(renderEnsembleReport(ensembleReport(sql))).toContain('proteus label export');
+    expect(renderEnsembleReport(ensembleReport(sql))).toContain('kinu label export');
 
     labelAll(sql, () => 'accepted');
     const unrun = ensembleReport(sql);
     expect(unrun.standIn).toBeNull();
     expect(unrun.gap?.kind).toBe('not_run');
-    expect(renderEnsembleReport(unrun)).toContain('proteus label ensemble');
+    expect(renderEnsembleReport(unrun)).toContain('kinu label ensemble');
   });
 
   test('every turn hand-labeled unclear is named as such, not called a failure', async () => {

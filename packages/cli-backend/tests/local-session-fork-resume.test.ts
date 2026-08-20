@@ -57,7 +57,7 @@ const RATIONALE = 'four angles on the research question';
 
 /** A workspace a previous process left mid-fork: four head rows still marked
  *  `running`, and the fork's background job already `cancelled by operator` —
- *  exactly what `proteus stop` / the repair path writes, from another process,
+ *  exactly what `kinu stop` / the repair path writes, from another process,
  *  with nothing left to settle the heads. */
 function interruptedWorkspace() {
   const db = new Database(':memory:');

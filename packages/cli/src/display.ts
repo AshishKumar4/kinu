@@ -13,7 +13,7 @@ import cliPackage from '../package.json' with { type: 'json' };
 
 // ── Brand ────────────────────────────────────────────────────────
 
-const BRAND = chalk.bold.cyan('🔱 Proteus');
+const BRAND = chalk.bold.cyan('🔱 Kinu');
 const VERSION = cliPackage.version;
 const DIM = chalk.dim;
 const ACCENT = chalk.cyan;
@@ -124,7 +124,7 @@ export function printCreatedCard(name: string, purpose: string, model: string, d
   console.log(boxRow(L('Model:'), MUTED(model), w));
   console.log(boxRow(L('Database:'), MUTED(dbPath), w));
   console.log(boxBot(w));
-  console.log(`\n${DIM('Start chatting:')} ${ACCENT(`proteus chat ${name}`)}\n`);
+  console.log(`\n${DIM('Start chatting:')} ${ACCENT(`kinu chat ${name}`)}\n`);
 }
 
 // ── Agent status card ────────────────────────────────────────────
@@ -179,7 +179,7 @@ export function printAgentList(agents: Array<{
   dbSize?: number;
 }>): void {
   if (agents.length === 0) {
-    console.log(`\n${DIM('No workspaces found.')} Create one with: ${ACCENT('proteus create <name>')}\n`);
+    console.log(`\n${DIM('No workspaces found.')} Create one with: ${ACCENT('kinu create <name>')}\n`);
     return;
   }
 
@@ -188,7 +188,7 @@ export function printAgentList(agents: Array<{
   console.log('');
 
   // Adaptive column widths. NAME is an IDENTIFIER: it is what the user pastes
-  // into `proteus debug <name>`, so it is never clipped — a silently truncated
+  // into `kinu debug <name>`, so it is never clipped — a silently truncated
   // name is a different valid-looking name, and one such clip sent a session
   // chasing a phantom "not in your registry" defect. PURPOSE is prose and
   // absorbs the squeeze instead.
@@ -309,10 +309,10 @@ export function formatFailure(error: ProviderFailure): string {
 const UNGROUPED_HEADING = 'Other commands:';
 
 /** Environment variables that apply to every command. Per-command options are
- *  deliberately not repeated here — `proteus <command> --help` owns those. */
+ *  deliberately not repeated here — `kinu <command> --help` owns those. */
 export const GLOBAL_ENVIRONMENT: ReadonlyArray<readonly [string, string]> = [
   ['PROTEUS_HOME', 'Workspace + config directory (default ~/.proteus)'],
-  ['PROTEUS_ORIGIN', 'Proteus app origin'],
+  ['PROTEUS_ORIGIN', 'Kinu app origin'],
   ['PROTEUS_TOKEN', 'Account access token (CI)'],
   ['PROTEUS_MODEL', 'Default model ID'],
   ['PROTEUS_BASE_URL', 'LLM API base URL'],
@@ -320,13 +320,13 @@ export const GLOBAL_ENVIRONMENT: ReadonlyArray<readonly [string, string]> = [
 ];
 
 export const HELP_EXAMPLES: ReadonlyArray<string> = [
-  'proteus setup',
-  'proteus provider connect codex',
-  'proteus create jarvis --mode cloud --alias jarvis',
+  'kinu setup',
+  'kinu provider connect codex',
+  'kinu create jarvis --mode cloud --alias jarvis',
   'jarvis "review this repo"',
-  'proteus sessions jarvis',
-  'proteus daemon status',
-  'proteus connect',
+  'kinu sessions jarvis',
+  'kinu daemon status',
+  'kinu connect',
 ];
 
 export interface HelpEntry {
@@ -385,7 +385,7 @@ export function renderHelp(program: Command): string {
     `${BRAND} ${DIM(`v${VERSION}`)}`,
     DIM(program.description()),
     '',
-    `${chalk.bold('Usage:')}  proteus <command> [options]`,
+    `${chalk.bold('Usage:')}  ${program.name()} <command> [options]`,
   ];
 
   const headings = [...new Set(entries.map((e) => e.heading))];
@@ -398,7 +398,7 @@ export function renderHelp(program: Command): string {
 
   lines.push('', chalk.bold('Options:'));
   lines.push(...helpRow(DIM('-v, --version'), 13, 'Print the installed version', termColumn, width));
-  lines.push(...helpRow(DIM('-h, --help'), 10, 'Show this help; `proteus <command> --help` for one command', termColumn, width));
+  lines.push(...helpRow(DIM('-h, --help'), 10, `Show this help; \`${program.name()} <command> --help\` for one command`, termColumn, width));
 
   lines.push('', chalk.bold('Environment:'));
   for (const [name, description] of GLOBAL_ENVIRONMENT) {

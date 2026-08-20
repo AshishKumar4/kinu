@@ -302,7 +302,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'context-assembly/system-prefix',
         asserts: 'the full cacheable prefix, byte for byte, for a representative CF turn',
         observe: (s) => s.buildSystemPromptSync({
-          soulOverride: 'You are Proteus.',
+          soulOverride: 'You are Kinu.',
           availableTools: [...BUILTIN_TOOLS],
           executors: EXECUTORS,
           backend: 'cf',
@@ -319,7 +319,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'the same active skill set renders identically however it was activated (cache prefix survives)',
         observe: (s) => {
           const base = {
-            soulOverride: 'You are Proteus.',
+            soulOverride: 'You are Kinu.',
             // Arbitrary valid tool — this probe exercises activation-reason
             // stability, not the tool it happens to advertise. `skills` left
             // the native surface; `memory` fills the same placeholder role.
@@ -346,7 +346,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: (s) => {
           const section = (id: string, provider: string) => {
             const prompt = s.buildSystemPromptSync({
-              soulOverride: 'You are Proteus.',
+              soulOverride: 'You are Kinu.',
               availableTools: ['run', 'agents', 'memory'],
               backend: 'cf',
               model: { id, provider },

@@ -50,7 +50,7 @@
 #                                         the model is native Workers AI and no
 #                                         Cloudflare token touches this machine.
 #                                         Mint one with:
-#                                           proteus tokens create --scope ai.proxy
+#                                           kinu tokens create --scope ai.proxy
 #   AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH an AI Gateway, for models the account
 #                                         proxy does not front. PROTEUS_BASE_URL
 #                                         + PROTEUS_AUTH are accepted as the same
@@ -61,13 +61,13 @@
 #                                         not silently on a different path.
 #
 # Neither set? This script borrows the SIGNED-IN CLI session — the same
-# `~/.proteus/config.json` credential `proteus chat` uses — via
+# `~/.proteus/config.json` credential `kinu chat` uses — via
 # scripts/eval-credentials.ts. That is the fix for a measured defect, not a
 # convenience: the tier asked for two env vars that nothing on the owner's own
 # machine ever exported, so this deploy gate ran to completion reporting
 # `TOTAL: 0 model call(s)` and every live suite skipped. An explicit
 # PROTEUS_TOKEN or AI_GATEWAY_AUTH is never overridden. It follows that on a
-# machine that has run `proteus auth`, `bun run test:eval` SPENDS — see
+# machine that has run `kinu auth`, `bun run test:eval` SPENDS — see
 # docs/TESTING.md for what that costs.
 #
 # With no credential ANYWHERE, this script still runs and still passes: every

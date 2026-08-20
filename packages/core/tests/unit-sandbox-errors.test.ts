@@ -29,7 +29,7 @@ describe('explainNativeToolReferenceError', () => {
         expect(out).toBe(`${name} is not defined`);
         continue;
       }
-      expect(out).toContain(`"${name}" is a native Proteus tool, not a codemode member`);
+      expect(out).toContain(`"${name}" is a native Kinu tool, not a codemode member`);
       expect(out).toContain(`Call \`${name}\` directly as its own top-level tool call`);
       expect(out).toContain(`through the \`${namespace}\` namespace`);
     }

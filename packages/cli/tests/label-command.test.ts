@@ -1,5 +1,5 @@
 /**
- * `proteus label` end to end, against a local workspace whose true outcomes
+ * `kinu label` end to end, against a local workspace whose true outcomes
  * are known by construction.
  *
  * The real binary is spawned for every step, so this covers what the owner
@@ -98,7 +98,7 @@ function fillFile(path: string, truth: World['truth'], answer = (t: string): str
   writeFileSync(path, filled.join('\n'));
 }
 
-describe('proteus label', () => {
+describe('kinu label', () => {
   test('export → fill → ingest → report, and the corrected rate finds the truth the raw one missed', () => {
     const { home, truth } = seedWorkspace('demo');
     const file = join(home, 'calib.txt');
@@ -228,8 +228,8 @@ describe('proteus label', () => {
     const early = runCli(home, ['label', 'ensemble', 'demo', '--models', 'anthropic/claude-fable-5,codex/gpt-5.6-sol']);
     expect(early.exitCode).toBe(0);
     expect(early.stdout).toContain('did not run');
-    expect(early.stdout).toContain('proteus label export');
-    expect(early.stdout).toContain('proteus label ingest');
+    expect(early.stdout).toContain('kinu label export');
+    expect(early.stdout).toContain('kinu label ingest');
 
     runCli(home, ['label', 'export', 'demo', '--out', file]);
     fillFile(file, truth);
@@ -247,6 +247,6 @@ describe('proteus label', () => {
     const { home } = seedWorkspace('demo');
     expect(runCli(home, ['label', 'summarise', 'demo']).stdout)
       .toContain('use export, ingest, ensemble, report, mine, or score');
-    expect(runCli(home, ['label', 'ingest', 'demo']).stdout).toContain('proteus label ingest <agent> <file>');
+    expect(runCli(home, ['label', 'ingest', 'demo']).stdout).toContain('kinu label ingest <agent> <file>');
   });
 });

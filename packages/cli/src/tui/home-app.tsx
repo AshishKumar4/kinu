@@ -169,9 +169,9 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
     setBusy(true);
     setError(null);
     try {
-      if (setupRequired) throw new Error('Run proteus setup to connect your account or a local model provider.');
-      if (mode === 'cloud' && !cloudReady) throw new Error('Sign in first with proteus auth, then create a cloud workspace.');
-      if (mode === 'local' && !localReady) throw new Error('Connect a local provider with proteus provider connect, or switch to cloud after sign-in.');
+      if (setupRequired) throw new Error('Run kinu setup to connect your account or a local model provider.');
+      if (mode === 'cloud' && !cloudReady) throw new Error('Sign in first with kinu auth, then create a cloud workspace.');
+      if (mode === 'local' && !localReady) throw new Error('Connect a local provider with kinu provider connect, or switch to cloud after sign-in.');
       // Cloud naming is server-side (async display-name generation after
       // create); only local agents need a locally generated identity.
       const identity = mode === 'local' ? await suggestAgentIdentityFromMission(mission, opts) : undefined;
@@ -261,7 +261,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
     >
       <box style={{ width: panelWidth, marginBottom: 1 }}>
         <text>
-          <strong fg={tuiColors.accentStrong}>Proteus</strong>{' '}
+          <strong fg={tuiColors.accentStrong}>Kinu</strong>{' '}
           <span fg={tuiColors.muted}>workspaces · cli {VERSION}</span>
         </text>
       </box>
@@ -284,7 +284,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
           <strong fg={tuiColors.textStrong}>{agents.length === 0 ? 'What is this workspace for?' : 'Open a workspace, or start a new one'}</strong>{'\n'}
           <span fg={tuiColors.muted}>
             {setupRequired
-              ? 'Connect Proteus once, then this screen can create and open workspaces directly.'
+              ? 'Connect Kinu once, then this screen can create and open workspaces directly.'
               : agents.length === 0
               ? "Describe what the workspace is for. It becomes the workspace's SOUL.md and its name; nothing runs until you send the first message."
               : 'Select a workspace, or write a mission to create a new one.'}
@@ -294,9 +294,9 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
         {setupRequired && (
           <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1, border: true, borderStyle: 'single', borderColor: tuiColors.borderSubtle, paddingLeft: 1, paddingRight: 1 }}>
             <text><strong fg={tuiColors.text}>Setup required</strong></text>
-            <text><span fg={tuiColors.muted}>  proteus setup</span> <span fg={tuiColors.text}>connect account and optional local provider</span></text>
-            <text><span fg={tuiColors.muted}>  proteus auth</span>  <span fg={tuiColors.text}>connect cloud workspaces only</span></text>
-            <text><span fg={tuiColors.muted}>  proteus provider connect codex</span> <span fg={tuiColors.text}>connect local model access</span></text>
+            <text><span fg={tuiColors.muted}>  kinu setup</span> <span fg={tuiColors.text}>connect account and optional local provider</span></text>
+            <text><span fg={tuiColors.muted}>  kinu auth</span>  <span fg={tuiColors.text}>connect cloud workspaces only</span></text>
+            <text><span fg={tuiColors.muted}>  kinu provider connect codex</span> <span fg={tuiColors.text}>connect local model access</span></text>
           </box>
         )}
 
@@ -576,7 +576,7 @@ async function loadHomeModelCatalog(mode: AgentMode, opts: HomeTuiOptions): Prom
 
 async function loadCloudHomeModels(originOverride: string | undefined) {
   const config = loadConfigFile();
-  if (!config.accessToken) throw new Error('Sign in with proteus auth to browse cloud models.');
+  if (!config.accessToken) throw new Error('Sign in with kinu auth to browse cloud models.');
   return listCloudAvailableModels(resolveCloudOrigin({ origin: originOverride }), config.accessToken);
 }
 

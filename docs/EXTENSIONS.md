@@ -1,4 +1,4 @@
-# Proteus turn extensions
+# Kinu turn extensions
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 

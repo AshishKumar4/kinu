@@ -39,7 +39,7 @@
 //     `settleEvolution()` does NOT join it. It is only ever STARTED by a host
 //     that can afford to finish it: a long-lived CLI session, the Durable
 //     Object (which holds itself open with keepAlive), or the local scheduler
-//     daemon. A `oneShot` host — one `proteus exec` process per task — never
+//     daemon. A `oneShot` host — one `kinu exec` process per task — never
 //     starts it at all, so it can never land on that process's wall clock.
 //     The scaffold shadow trial is here, not on the turn lane: a candidate
 //     rollout is a whole extra turn plus two judge calls, and charging that to
@@ -85,7 +85,7 @@ import { TURN_WALL_CLOCK_ENVELOPE_MS } from '../config';
  * the user read the previous answer and then replied — or an independent task
  * invocation that merely happens to be the next thing this workspace saw.
  *
- * `proteus exec` / `proteus run` are one process per task: the process that
+ * `kinu exec` / `kinu run` are one process per task: the process that
  * streamed the previous answer has already exited, and the next invocation's
  * prompt was written without seeing it. Grading a turn from such a prompt is
  * what made EVERY headless turn read as `accepted` — the classifier counts
@@ -135,7 +135,7 @@ export interface AgentOrchestratorDeps {
   /** Turns between session-level reflections (default
    *  DEFAULT_SESSION_REFLECTION_INTERVAL). */
   sessionReflectionInterval?: number;
-  /** This host runs ONE task turn and exits (`proteus exec` / `proteus run`),
+  /** This host runs ONE task turn and exits (`kinu exec` / `kinu run`),
    *  so it cannot finish the cadence lane and never STARTS it — see the exit
    *  contract above. Its window stays open and the local scheduler daemon runs
    *  the pass. Purely about what this PROCESS can afford; whether a turn can be
@@ -235,7 +235,7 @@ export class AgentOrchestrator {
   }
 
   /** The window and the turn awaiting its review — durable, because neither
-   *  backend's instance outlives them (`proteus exec` is one process per turn;
+   *  backend's instance outlives them (`kinu exec` is one process per turn;
    *  a Durable Object is evicted between requests). */
   private get window() {
     return this.deps.engine.sessionWindow;
@@ -329,7 +329,7 @@ export class AgentOrchestrator {
    *   • a `'conversation'` user turn waits for the user's next message;
    *   • a programmatic turn (reactor / job wake) has no user behind it;
    *   • an `'independent_task'` turn has no follow-up either — the next
-   *     `proteus exec` invocation is a different task written by a caller who
+   *     `kinu exec` invocation is a different task written by a caller who
    *     never saw this answer.
    * The last two are reviewed here and now, on the execution signal the turn
    * itself carries (errors, tool outcomes), and are never parked awaiting a

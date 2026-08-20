@@ -1,5 +1,5 @@
 /**
- * One formatter, one shape — what every `proteus inspect` list read must answer
+ * One formatter, one shape — what every `kinu inspect` list read must answer
  * with.
  *
  * The CLI renders five lists (events, timeline, heads, gepa, executors) through
@@ -7,7 +7,7 @@
  * with `JsonArraySchema`. A producer that answers with an ENVELOPE therefore
  * does not fail: it silently stops being formatted. `listRecentEvents` returned
  * `{ events: [...] }` while its four siblings returned bare arrays, so
- * `proteus inspect events` printed raw JSON against a cloud workspace and
+ * `kinu inspect events` printed raw JSON against a cloud workspace and
  * formatted rows against a local one, and nothing was red.
  *
  * Nothing type-level would have caught it — the method declared no return type,
@@ -99,7 +99,7 @@ function orchestratorWithOneEvent(): HarnessOrchestratorAgent {
   return agent;
 }
 
-describe('proteus inspect list reads', () => {
+describe('kinu inspect list reads', () => {
   test('the formatter is fed by exactly the reads this gate exercises', () => {
     expect(cloudRowReads(readFileSync(INSPECT_SOURCE, 'utf8'))).toEqual([...ROW_READS]);
   });
